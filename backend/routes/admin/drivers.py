@@ -407,8 +407,13 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any]):
     try:
         await db_supabase.update_one("drivers", {"id": driver_id}, filtered)
     except Exception as e:
-        logger.error(f"Failed to update driver {driver_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to update driver: {e}") from e
+        # B-P3-leak-cleanup: full traceback to logs, generic detail
+        # to client. Supabase / postgrest errors carry table internals.
+        logger.exception(f"Failed to update driver {driver_id}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to update driver.",
+        ) from e
     return {"message": "Driver updated", "updated_fields": list(filtered.keys())}
 
 
@@ -436,8 +441,13 @@ async def admin_verify_driver(driver_id: str, req: DriverVerifyRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to update driver {driver_id} verify flag: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to update driver: {e}") from e
+        # B-P3-leak-cleanup: full traceback to logs, generic detail
+        # to client.
+        logger.exception(f"Failed to update driver {driver_id} verify flag")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to update driver.",
+        ) from e
     # G4: Notify the driver via push so they know their verification status
     # changed without having to manually check the Documents screen.
     try:

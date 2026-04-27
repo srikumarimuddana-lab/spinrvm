@@ -5,6 +5,7 @@ This module implements CRUD operations for corporate accounts that can be used
 for business rides and expense management.
 """
 
+import logging
 from datetime import datetime
 from typing import List, Optional
 
@@ -25,18 +26,20 @@ from db_supabase import (  # noqa: E402
 from db_supabase import (  # noqa: E402
     update_corporate_account as db_update_corporate_account,
 )
-from dependencies import get_admin_user
+from dependencies import get_admin_user  # noqa: E402
 from schemas.corporate import (  # noqa: E402
     CompanyStatus,
     CompanyStatusTransition,
     KYBReviewDecision,
     SizeTier,
 )
-from schemas.corporate import (
+from schemas.corporate import (  # noqa: E402
     CorporateAccountResponse as CorporateAccountDetailResponse,
 )
 from settings_loader import get_app_settings  # noqa: E402
 from validators import sanitize_string, validate_email, validate_id, validate_phone  # noqa: E402
+
+logger = logging.getLogger(__name__)
 
 # Alias for backward compatibility
 get_current_admin = get_admin_user
@@ -102,9 +105,16 @@ async def get_corporate_accounts(
             rows = [r for r in rows if bool(r.get("is_active")) == is_active]
         return rows
     except Exception as e:
+        # B-P3-leak-cleanup: Postgres error strings carry constraint
+        # names + table internals (e.g. unique-constraint violations
+        # name the column). logger.exception preserves the full
+        # traceback server-side; the framework sanitiser would scrub
+        # this 5xx detail anyway, but cleaning it up at the source
+        # avoids the next contributor copying the leak pattern.
+        logger.exception("Failed to fetch corporate accounts")
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to fetch corporate accounts: {str(e)}",
+            detail="Failed to fetch corporate accounts.",
         ) from e
 
 
@@ -215,8 +225,10 @@ async def create_corporate_account(
         created_account = await insert_corporate_account(account.model_dump())
         return created_account
     except Exception as e:
+        logger.exception("Failed to create corporate account")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to create corporate account: {str(e)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create corporate account.",
         ) from e
 
 
@@ -240,8 +252,10 @@ async def get_corporate_account(account_id: str, current_admin: dict = Depends(g
     except HTTPException:
         raise
     except Exception as e:
+        logger.exception("Failed to fetch corporate account")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to fetch corporate account: {str(e)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch corporate account.",
         ) from e
 
 
@@ -286,8 +300,10 @@ async def update_corporate_account(
         updated_account = await db_update_corporate_account(normalized_id, update_data)
         return updated_account
     except Exception as e:
+        logger.exception("Failed to update corporate account")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to update corporate account: {str(e)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update corporate account.",
         ) from e
 
 
@@ -312,8 +328,10 @@ async def delete_corporate_account(account_id: str, current_admin: dict = Depend
         await db_delete_corporate_account(normalized_id)
         return  # 204 No Content
     except Exception as e:
+        logger.exception("Failed to delete corporate account")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to delete corporate account: {str(e)}"
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete corporate account.",
         ) from e
 
 

@@ -1427,8 +1427,16 @@ async def request_payout(req: PayoutRequest, current_user: dict = Depends(get_cu
             status = "completed"
             stripe_payout_id = transfer.id
         except Exception as e:
-            logger.error(f"Stripe transfer failed: {e}")
-            raise HTTPException(status_code=500, detail=f"Payout failed: {str(e)}") from e
+            # B-P3-leak-cleanup: same pattern as the subscription
+            # charge fix — Stripe transfer errors carry account IDs
+            # (acct_…), transfer IDs (tr_…), and bank-account hints
+            # we must not ship. logger.exception captures the full
+            # traceback server-side.
+            logger.exception("Stripe transfer failed for driver payout")
+            raise HTTPException(
+                status_code=500,
+                detail="Payout failed. Please contact support.",
+            ) from e
 
     payout = {
         "id": str(uuid.uuid4()),

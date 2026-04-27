@@ -391,11 +391,20 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
         # of being re-wrapped as a generic 500.
         raise
     except Exception as e:
-        logger.error(f"CRITICAL ERROR IN VERIFY_OTP: {e}")
-        import traceback
-
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Internal Login Error: {str(e)}") from e
+        # B-P3-leak-cleanup: NEVER interpolate {e} into the client-
+        # facing detail. This path is reachable UNAUTHENTICATED, so a
+        # leak here exposes Supabase row IDs, Firebase JWT errors, and
+        # internal stack frames to anyone with internet access. The
+        # framework sanitiser (utils/error_handling.py) already replaces
+        # 5xx detail with "Internal server error", but the manual
+        # str(e) made the leak's intent explicit; clean it up so the
+        # next contributor doesn't copy the pattern. logger.exception
+        # captures the full traceback server-side automatically.
+        logger.exception("CRITICAL ERROR IN VERIFY_OTP")
+        raise HTTPException(
+            status_code=500,
+            detail="Internal Login Error",
+        ) from e
 
 
 class FirebaseAuthRequest(BaseModel):

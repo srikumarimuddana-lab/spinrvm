@@ -158,8 +158,13 @@ async def admin_review_driver_document(document_id: str, review_data: Dict[str, 
     try:
         await db_supabase.update_one("driver_documents", {"id": document_id}, updates)
     except Exception as e:
-        logger.error(f"Failed to update driver_document {document_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to update document: {e}") from e
+        # B-P3-leak-cleanup: full traceback to logs, generic detail
+        # to client. Supabase / postgrest errors carry table internals.
+        logger.exception(f"Failed to update driver_document {document_id}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to update document.",
+        ) from e
 
     # On approval, propagate the expiry to the legacy drivers.* column so the
     # go-online check stops blocking based on stale onboarding-time values.

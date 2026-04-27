@@ -369,7 +369,14 @@ async def admin_logout_all(request: Request, authorization: Optional[str] = Head
             raise HTTPException(status_code=401, detail="Invalid auth scheme")
         payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.ALGORITHM])
     except (ValueError, jwt.InvalidTokenError) as e:
-        raise HTTPException(status_code=401, detail=f"Invalid token: {e}") from e
+        # B-P3-leak-cleanup: JWT library error strings carry hints
+        # about token shape (algorithm, kid, exp, audience). Don't
+        # ship them to the client — log server-side and surface a
+        # generic "Invalid token" so the auth path can't be
+        # fingerprinted by sending malformed tokens and reading the
+        # rejection reasons.
+        logger.warning("Admin auth rejected malformed token", exc_info=e)
+        raise HTTPException(status_code=401, detail="Invalid token") from e
 
     user_id = payload.get("user_id")
     if not user_id or user_id == "admin-001":
@@ -435,7 +442,14 @@ async def change_password(request: Request, body: ChangePasswordRequest, authori
             raise HTTPException(status_code=401, detail="Invalid auth scheme")
         payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.ALGORITHM])
     except (ValueError, jwt.InvalidTokenError) as e:
-        raise HTTPException(status_code=401, detail=f"Invalid token: {e}") from e
+        # B-P3-leak-cleanup: JWT library error strings carry hints
+        # about token shape (algorithm, kid, exp, audience). Don't
+        # ship them to the client — log server-side and surface a
+        # generic "Invalid token" so the auth path can't be
+        # fingerprinted by sending malformed tokens and reading the
+        # rejection reasons.
+        logger.warning("Admin auth rejected malformed token", exc_info=e)
+        raise HTTPException(status_code=401, detail="Invalid token") from e
 
     user_id = payload.get("user_id")
     if not user_id or user_id == "admin-001":

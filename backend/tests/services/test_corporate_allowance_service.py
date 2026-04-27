@@ -37,8 +37,8 @@ async def test_apply_grant_calls_rpc_with_correct_params():
     called_name, called_params = mock_sb.rpc.call_args[0]
     assert called_name == "corporate_allowance_apply_delta"
     assert called_params["p_type"] == "allowance_grant"
-    assert called_params["p_amount"] == 100
-    assert called_params["p_floor"] == -50
+    assert called_params["p_amount"] == "100"
+    assert called_params["p_floor"] == "-50"
 
 
 @pytest.mark.asyncio
@@ -69,7 +69,7 @@ async def test_apply_reset_uses_zero_amount():
         )
     _, params = mock_sb.rpc.call_args[0]
     assert params["p_type"] == "allowance_reset"
-    assert params["p_amount"] == 0
+    assert params["p_amount"] == "0"
 
 
 @pytest.mark.asyncio
@@ -88,4 +88,4 @@ async def test_apply_rollback_positive_delta():
         )
     _, params = mock_sb.rpc.call_args[0]
     assert params["p_type"] == "allowance_rollback"
-    assert params["p_amount"] == 50
+    assert params["p_amount"] == "50"

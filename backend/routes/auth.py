@@ -1,9 +1,10 @@
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import Response
 from pydantic import BaseModel
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -415,6 +416,9 @@ async def firebase_auth_login(request: Request, response: Response, body: Fireba
     except Exception as e:
         raise HTTPException(status_code=401, detail="Invalid Firebase token") from e
 
+    # B-P1-1: audience check is only bypassable when FIREBASE_DRIVER_APP_ID is
+    # unset (dev/test). In production the startup validator guarantees it is set,
+    # so the `if driver_app_id` guard is never false there.
     driver_app_id = settings.FIREBASE_DRIVER_APP_ID
     if driver_app_id and payload.get("aud") != driver_app_id:
         raise HTTPException(status_code=401, detail="Token not issued for driver app")
@@ -445,13 +449,23 @@ async def firebase_auth_login(request: Request, response: Response, body: Fireba
         try:
             await db_supabase.create_user(new_user)
         except Exception as e:
-            logger.warning(f"firebase_auth: could not persist user {uid}: {e}")
+            logger.error(
+                "firebase_auth: could not persist user",
+                extra={"uid": uid},
+                exc_info=True,
+            )
+            raise HTTPException(status_code=503, detail="auth_persist_failed") from e
         user = new_user
     else:
         try:
             await db_supabase.update_one("users", {"id": uid}, {"current_session_id": session_id})
         except Exception as e:
-            logger.warning(f"firebase_auth: could not update session_id for {uid}: {e}")
+            logger.error(
+                "firebase_auth: could not update session_id",
+                extra={"uid": uid},
+                exc_info=True,
+            )
+            raise HTTPException(status_code=503, detail="auth_session_failed") from e
         user["current_session_id"] = session_id
 
     user_id = user["id"]

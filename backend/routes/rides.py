@@ -1173,8 +1173,11 @@ async def get_ride_history(
         "rides",
         {
             "rider_id": current_user["id"],
+            "status": {"$in": ("completed", "cancelled")},
         },
-        limit=2000,
+        order="created_at",
+        desc=True,
+        limit=500,
     )
 
     # Only show rides where a driver was actually assigned and ride started or completed

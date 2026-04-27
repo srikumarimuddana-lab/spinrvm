@@ -186,6 +186,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to import presence sweeper loop: {e}")
 
+    # PIPEDA / CRA retention purge — daily hard-delete/anonymize of expired rows.
+    try:
+        from utils.retention_purge import retention_purge_loop
+
+        _spawn("retention_purge (24h)", retention_purge_loop)
+    except Exception as e:
+        logger.warning(f"Failed to import retention purge loop: {e}")
+
     app.state.background_tasks = background_tasks
 
     # WebSocket pub/sub (audit P0-B3): before this, socket sends were

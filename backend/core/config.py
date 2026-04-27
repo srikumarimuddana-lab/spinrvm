@@ -84,7 +84,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _guard_production_secrets(self) -> "Settings":
-        """Refuse to start in production with known-weak placeholder values."""
+        """Refuse to start in production with known-weak or insufficient secrets."""
         if self.ENV.lower() == "production":
             weak = {
                 "JWT_SECRET": ("your-strong-secret-key",),
@@ -98,6 +98,17 @@ class Settings(BaseSettings):
                         "Set a strong secret in your environment before running in production."
                     )
                     raise ValueError(msg)
+
+            # B-P1-2: HS256 is brute-forceable against short secrets.
+            if len(self.JWT_SECRET) < 32:
+                raise ValueError(f"JWT_SECRET must be ≥32 chars in production (got {len(self.JWT_SECRET)})")
+
+            # B-P1-1: Firebase app IDs must be set so cross-app token replay is impossible.
+            if not self.FIREBASE_DRIVER_APP_ID:
+                raise ValueError("FIREBASE_DRIVER_APP_ID must be set in production")
+            if not self.FIREBASE_RIDER_APP_ID:
+                raise ValueError("FIREBASE_RIDER_APP_ID must be set in production")
+
         return self
 
     @property

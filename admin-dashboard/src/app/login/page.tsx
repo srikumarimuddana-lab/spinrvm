@@ -25,7 +25,7 @@ function sanitizeNextPath(next: string | null): string {
 function LoginForm() {
     const router = useRouter();
     const searchParams = useSearchParams();
-    const { setToken, setUser, scheduleRefresh } = useAuthStore();
+    const { setToken, setUser, scheduleRefresh, setCsrfToken } = useAuthStore();
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
     const [showPassword, setShowPassword] = useState(false);
@@ -40,6 +40,7 @@ function LoginForm() {
             const data = await loginAdminSession(email, password);
 
             setToken(data.token);
+            if ((data as any).csrf_token) setCsrfToken((data as any).csrf_token);
             if (data.access_expires_at) scheduleRefresh(data.access_expires_at);
             setUser({
                 id: data.user.id,

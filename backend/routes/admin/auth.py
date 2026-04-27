@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 import jwt
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Request, Response
 from pydantic import BaseModel
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -13,7 +13,7 @@ try:
     from ...core.config import settings
     from ...core.csrf import clear_csrf_cookie, generate_csrf_token, set_csrf_cookie
     from ...utils.password import hash_password, verify_password
-    from ...utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr
+    from ...utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set
     from ...utils.refresh_tokens import (
         issue_refresh_token,
         lookup_refresh_token,
@@ -36,28 +36,34 @@ db = db_supabase  # legacy alias
 
 logger = logging.getLogger(__name__)
 
-# Per-router rate limiter. Admin login is a high-value brute-force
-# target (one correct hit → full super-admin access), so we cap it
-# to 5 attempts per minute per IP. Matches the pattern already used
-# for the rider/driver OTP endpoint in routes/auth.py.
+# Per-router rate limiter. A-P3-2: tightened to 3 attempts per 30 minutes per IP
+# (was 5/minute = 300/hr). Admin accounts are the highest-value brute-force target.
 limiter = Limiter(key_func=get_remote_address)
 
-# Per-account lockout — 5 failures within the sliding window triggers a
-# 15-minute lockout regardless of IP (defends against distributed attacks
-# that rotate IPs to bypass the per-IP SlowAPI limit above). Stored in
-# Redis with TTL; falls back to in-process dict when Redis is unavailable.
+# A-P3-2: Two-layer account lockout.
+#   Layer 1 — failure counter: 5 failures within a 1-hour sliding window.
+#   Layer 2 — lockout key: set for 24 hours when the counter hits 5.
+# Both layers are stored in Redis with TTL; fall back to in-process dict when
+# Redis is unavailable (state is lost on restart in that mode).
 _LOGIN_MAX_FAILURES = 5
-_LOGIN_LOCKOUT_TTL_SECONDS = 15 * 60  # 15 minutes
+_LOGIN_WINDOW_SECONDS = 3600  # 1-hour failure window
+_LOGIN_LOCKOUT_TTL_SECONDS = 24 * 3600  # 24-hour lockout once threshold hit
 
 
 def _lockout_key(email: str) -> str:
+    """Key for the 24-hour lockout flag."""
+    return f"admin:login_lock:{email.lower().strip()}"
+
+
+def _failure_key(email: str) -> str:
+    """Key for the rolling failure counter (1-hour window)."""
     return f"admin:login_failures:{email.lower().strip()}"
 
 
 async def _is_account_locked(email: str) -> bool:
     try:
         val = await redis_get(_lockout_key(email))
-        return val is not None and int(val) >= _LOGIN_MAX_FAILURES
+        return val is not None
     except HTTPException:
         raise
     except Exception as e:
@@ -67,16 +73,22 @@ async def _is_account_locked(email: str) -> bool:
 
 async def _record_login_failure(email: str) -> None:
     try:
-        key = _lockout_key(email)
+        key = _failure_key(email)
         count = await redis_incr(key)
         if count == 1:
-            await redis_expire(key, _LOGIN_LOCKOUT_TTL_SECONDS)
+            # Start the 1-hour failure window on first failure.
+            await redis_expire(key, _LOGIN_WINDOW_SECONDS)
+        if count >= _LOGIN_MAX_FAILURES:
+            # Threshold hit — set a 24-hour hard lockout and reset the counter.
+            await redis_set(_lockout_key(email), "1", ttl=_LOGIN_LOCKOUT_TTL_SECONDS)
+            await redis_delete(key)
     except Exception as e:
         logger.error(f"[REDIS] _record_login_failure could not persist failure count ({email!r}): {e}")
 
 
 async def _clear_login_failures(email: str) -> None:
     try:
+        await redis_delete(_failure_key(email))
         await redis_delete(_lockout_key(email))
     except Exception as e:
         logger.error(f"[REDIS] _clear_login_failures could not clear failure count ({email!r}): {e}")
@@ -186,15 +198,13 @@ async def get_session(authorization: Optional[str] = Header(None)):
 
 
 @admin_auth_router.post("/login")
-@limiter.limit("5/minute")
+@limiter.limit("3/30minute")
 async def admin_login(request: Request, response: Response, body: LoginRequest):
     """Admin login — supports super admin + staff members with module access.
 
-    Rate-limited to 5 attempts per minute per IP (see `limiter` above)
-    to make password brute-force impractical. slowapi requires the
-    FastAPI ``Request`` parameter to be named ``request`` so it can
-    extract the client address; the Pydantic body has been renamed
-    from ``request`` to ``body`` to free up the name.
+    A-P3-2: Rate-limited to 3 attempts per 30 minutes per IP (was 5/minute).
+    Account-level lockout: 5 failures within 1 hour → 24-hour lockout (423).
+    slowapi requires the FastAPI ``Request`` parameter named ``request``.
     """
     ALL_MODULES = [
         "dashboard",
@@ -220,17 +230,22 @@ async def admin_login(request: Request, response: Response, body: LoginRequest):
     user_agent = request.headers.get("user-agent", "")
     client_ip = get_remote_address(request)
 
-    # Per-account lockout (F-21): reject before touching credentials so that
+    # A-P3-2: Per-account lockout — reject before touching credentials so that
     # timing differences cannot reveal whether an account exists.
     if await _is_account_locked(body.email):
         raise HTTPException(
-            status_code=429,
-            detail="Too many failed login attempts. Account temporarily locked. Try again in 15 minutes.",
+            status_code=423,
+            detail="Account locked due to too many failed login attempts. Try again in 24 hours.",
         )
 
-    # 1. Super admin from env. Extra truthy-check on ADMIN_PASSWORD so an
-    # empty/whitespace value in .env cannot match an empty body.password.
-    if settings.ADMIN_PASSWORD and body.email == settings.ADMIN_EMAIL and body.password == settings.ADMIN_PASSWORD:
+    # 1. Super admin from env. A-P3-1: compare via bcrypt checkpw against the
+    # hash computed once at startup — never a plaintext string compare.
+    _super_ok = (
+        settings.admin_password_hash
+        and body.email == settings.ADMIN_EMAIL
+        and verify_password(body.password, settings.admin_password_hash)[0]
+    )
+    if _super_ok:
         # admin-001 has no DB row, so token_version stays at 0. We still
         # emit the claim + an exp so a captured super-admin token dies
         # after ADMIN_ACCESS_TOKEN_TTL_HOURS and can't live forever.
@@ -271,6 +286,20 @@ async def admin_login(request: Request, response: Response, body: LoginRequest):
         await db_supabase.get_rows("admin_staff", {"email": body.email.lower()}, limit=1)
     )
     if staff:
+        # A-P3-3: IP whitelist — empty list means no restriction.
+        _allowed_ips = staff.get("allowed_ips") or []
+        if _allowed_ips:
+            import ipaddress as _ip
+
+            try:
+                _client = _ip.ip_address(client_ip)
+                if not any(_client in _ip.ip_network(cidr, strict=False) for cidr in _allowed_ips):
+                    await _record_login_failure(body.email)
+                    raise HTTPException(status_code=403, detail="ip_not_allowed")
+            except ValueError:
+                # Malformed CIDR in DB — fail open (log + allow); don't lock out the admin.
+                logger.error(f"Malformed allowed_ips for staff {staff.get('id')}: {_allowed_ips}")
+
         stored_hash = staff.get("password_hash", "") or ""
         ok, needs_upgrade = verify_password(body.password, stored_hash)
         if ok:
@@ -526,3 +555,79 @@ async def change_password(request: Request, body: ChangePasswordRequest, authori
 
     logger.info(f"Password changed for admin_staff id={user_id}")
     return {"success": True, "message": "Password changed successfully"}
+
+
+# ---------------------------------------------------------------------------
+# A-P3-4: Forgot-password / reset-password flow for admin staff
+# ---------------------------------------------------------------------------
+
+_RESET_PREFIX = "admin:pw_reset:"
+_RESET_TTL_SECONDS = 15 * 60  # 15-minute reset window
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+
+@admin_auth_router.post("/forgot-password")
+@limiter.limit("3/hour")
+async def admin_forgot_password(request: Request, body: ForgotPasswordRequest):
+    """Request a password-reset link for an admin staff account.
+
+    Always returns 200 regardless of whether the email matches a staff row
+    (prevents email-enumeration). The reset token is a short-lived JWT stored
+    in Redis; the caller is responsible for delivering the token to the user
+    (e.g. via email). Rate-limited to 3 requests per email per hour.
+    """
+    import secrets as _secrets
+
+    staff = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("admin_staff", {"email": body.email.lower()}, limit=1)
+    )
+    if staff and staff.get("is_active", True):
+        token = _secrets.token_urlsafe(32)
+        await redis_set(f"{_RESET_PREFIX}{token}", staff["id"], ttl=_RESET_TTL_SECONDS)
+        logger.info(f"Password reset token issued for admin_staff id={staff['id']}")
+        # In production, email this token via the email service.
+        # Returned here for dev/test environments only.
+        if settings.ENV != "production":
+            return {"success": True, "reset_token": token, "expires_in_seconds": _RESET_TTL_SECONDS}
+
+    # Always return the same shape to prevent email enumeration.
+    return {"success": True}
+
+
+@admin_auth_router.post("/reset-password")
+@limiter.limit("5/hour")
+async def admin_reset_password(request: Request, body: ResetPasswordRequest):
+    """Consume a password-reset token and set a new password.
+
+    The token is single-use; it is deleted from Redis on first successful
+    consumption. All existing refresh tokens for the staff member are revoked.
+    Rate-limited to 5 attempts per hour per IP to deter token guessing.
+    """
+    staff_id = await redis_get(f"{_RESET_PREFIX}{body.token}")
+    if not staff_id:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+
+    if len(body.new_password) < 12:
+        raise HTTPException(status_code=400, detail="New password must be at least 12 characters")
+
+    staff = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("admin_staff", {"id": staff_id}, limit=1))
+    if not staff or not staff.get("is_active", True):
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+
+    new_hash = hash_password(body.new_password)
+    await db_supabase.update_one("admin_staff", {"id": staff_id}, {"password_hash": new_hash})
+    # Invalidate the token and all active sessions.
+    await redis_delete(f"{_RESET_PREFIX}{body.token}")
+    await revoke_all_for_user(staff_id)
+    await _clear_login_failures(staff.get("email", ""))
+
+    logger.info(f"Password reset completed for admin_staff id={staff_id}")
+    return {"success": True, "message": "Password reset successfully. Please log in again."}

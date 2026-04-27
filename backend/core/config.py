@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     # Admin credentials — no defaults; app refuses to start if unset in production
     ADMIN_EMAIL: str = "admin@spinr.ca"
     ADMIN_PASSWORD: str
+    # A-P3-1: bcrypt hash computed once at startup; plaintext never compared directly.
+    # Set by _guard_production_secrets() via object.__setattr__ so pydantic model
+    # immutability is not violated. Empty string when ADMIN_PASSWORD is absent.
+    admin_password_hash: str = ""
 
     # Rate limiting
     RATE_LIMIT: str = "10/minute"
@@ -84,7 +88,11 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _guard_production_secrets(self) -> "Settings":
-        """Refuse to start in production with known-weak or insufficient secrets."""
+        """Refuse to start in production with known-weak or insufficient secrets.
+        Also hashes ADMIN_PASSWORD with bcrypt once so auth.py never compares plaintext.
+        """
+        import bcrypt as _bcrypt  # local import keeps top-level clean for linters
+
         if self.ENV.lower() == "production":
             weak = {
                 "JWT_SECRET": ("your-strong-secret-key",),
@@ -108,6 +116,12 @@ class Settings(BaseSettings):
                 raise ValueError("FIREBASE_DRIVER_APP_ID must be set in production")
             if not self.FIREBASE_RIDER_APP_ID:
                 raise ValueError("FIREBASE_RIDER_APP_ID must be set in production")
+
+        # A-P3-1: hash ADMIN_PASSWORD with bcrypt cost=12 so auth.py can use
+        # checkpw() instead of a plaintext compare. Runs once at startup.
+        if self.ADMIN_PASSWORD:
+            _hash = _bcrypt.hashpw(self.ADMIN_PASSWORD.encode("utf-8"), _bcrypt.gensalt(rounds=12))
+            object.__setattr__(self, "admin_password_hash", _hash.decode("utf-8"))
 
         return self
 

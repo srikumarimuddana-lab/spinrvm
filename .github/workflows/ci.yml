@@ -386,6 +386,15 @@ jobs:
         working-directory: admin-dashboard
         run: npm run build
 
+      - name: Scan build output for accidentally bundled secrets ([17-5])
+        working-directory: admin-dashboard
+        run: |
+          GITLEAKS_VERSION=8.27.2
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz gitleaks
+          ./gitleaks detect --source .next --no-git --redact --exit-code 1
+          rm gitleaks
+
       - name: Deploy to Vercel
         uses: amondnet/vercel-action@v25
         with:

@@ -44,6 +44,7 @@ function beforeSend(event: Sentry.ErrorEvent): Sentry.ErrorEvent | null {
 // EU DSN host pattern: o<org>.ingest.de.sentry.io
 Sentry.init({
   dsn: process.env.SENTRY_DSN || process.env.NEXT_PUBLIC_SENTRY_DSN,
+  release: process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA,
   // Admin is low-traffic — 100% sampling catches all perf regressions ([21-2]).
   tracesSampleRate: 1.0,
   environment: process.env.NODE_ENV ?? 'development',

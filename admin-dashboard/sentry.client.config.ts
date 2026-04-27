@@ -60,6 +60,9 @@ function beforeSend(event: Sentry.ErrorEvent): Sentry.ErrorEvent | null {
 Sentry.init({
   dsn: process.env.NEXT_PUBLIC_SENTRY_DSN,
 
+  // Vercel injects NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA at build time ([21-6]).
+  release: process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA,
+
   // Admin is low-traffic (<5k req/day) — 100% sampling catches all perf regressions
   // on a surface where slow loads have high operational cost ([21-2]).
   tracesSampleRate: 1.0,

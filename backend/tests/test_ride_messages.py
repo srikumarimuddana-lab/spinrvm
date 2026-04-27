@@ -2,16 +2,17 @@
 Tests for chat message endpoints: GET + POST /rides/{id}/messages.
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import HTTPException
+
+pytestmark = pytest.mark.anyio
 
 
 class TestGetRideMessages:
     """Tests for GET /rides/{ride_id}/messages."""
 
-    @pytest.mark.asyncio
     async def test_rider_can_get_messages(self):
         ride = {"id": "ride_1", "rider_id": "user_1", "driver_id": "driver_1"}
         messages_data = [
@@ -37,7 +38,6 @@ class TestGetRideMessages:
             assert result["success"] is True
             assert len(result["messages"]) == 2
 
-    @pytest.mark.asyncio
     async def test_non_participant_gets_403(self):
         ride = {"id": "ride_1", "rider_id": "user_1", "driver_id": "driver_1"}
 
@@ -51,7 +51,6 @@ class TestGetRideMessages:
                 await get_ride_messages("ride_1", current_user={"id": "stranger"})
             assert exc_info.value.status_code == 403
 
-    @pytest.mark.asyncio
     async def test_ride_not_found_returns_404(self):
         with patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=None)):
             from backend.routes.rides import get_ride_messages
@@ -64,7 +63,6 @@ class TestGetRideMessages:
 class TestSendRideMessage:
     """Tests for POST /rides/{ride_id}/messages."""
 
-    @pytest.mark.asyncio
     async def test_rider_can_send_message(self):
         ride = {"id": "ride_1", "rider_id": "user_1", "driver_id": "driver_1", "status": "in_progress"}
         driver_row = {"id": "driver_1", "user_id": "user_driver_1"}
@@ -83,7 +81,6 @@ class TestSendRideMessage:
             assert result["message"]["sender"] == "rider"
             assert result["message"]["text"] == "I'm at the corner"
 
-    @pytest.mark.asyncio
     async def test_non_participant_gets_403(self):
         ride = {"id": "ride_1", "rider_id": "user_1", "driver_id": "driver_1", "status": "in_progress"}
 
@@ -97,7 +94,6 @@ class TestSendRideMessage:
                 await send_ride_message("ride_1", body, current_user={"id": "stranger"})
             assert exc_info.value.status_code == 403
 
-    @pytest.mark.asyncio
     async def test_ride_not_found_returns_404(self):
         with patch("backend.routes.rides.db.find_one", AsyncMock(return_value=None)):
             from backend.routes.rides import SendMessageRequest, send_ride_message

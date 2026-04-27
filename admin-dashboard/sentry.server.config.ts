@@ -16,6 +16,9 @@ function beforeSend(event: Sentry.ErrorEvent): Sentry.ErrorEvent | null {
   }
   if (event.request?.cookies) event.request.cookies = {};
   if (event.request?.query_string) event.request.query_string = '[Filtered]';
+  if (event.request?.url) {
+    event.request.url = event.request.url.replace(/\/[a-f0-9-]{8,}/gi, '/[id]');
+  }
 
   const PII_KEYS = new Set([
     'email', 'phone', 'phone_number', 'address', 'lat', 'lng',

@@ -135,10 +135,10 @@ Branch: `claude/plan-deferred-tasks-qtT8I`
 
 ## Checklist
 
-- [ ] A-PE-P2-1 Backend HttpOnly cookie (18-2) — ship with A-PE-P1-1
-- [ ] A-PE-P2-2 CSRF double-submit token (23-6)
+- [x] A-PE-P2-1 Backend HttpOnly cookie (18-2) — done; access token set HttpOnly by BFF routes; `document.cookie` writes removed from authStore
+- [x] A-PE-P2-2 CSRF double-submit token (23-6) — already implemented (refresh/route.ts validates csrfCookie === csrfHeader; api.ts sends X-CSRF-Token)
 - [ ] A-PE-P2-3 ESLint 9 → 10 upgrade (19-4)
-- [ ] A-PE-P2-4 uuid 13 → 14 (19-5)
+- [x] A-PE-P2-4 uuid 13 → 14 (19-5) — upgraded to ^14.0.0
 - [ ] A-PE-P2-5 Sentry DSN region / DPA addendum (22-2)
 - [ ] A-PE-P2-6 Structured server-side logging (21-5)
 - [ ] A-PE-P2-7 Branch protection + rollback runbook (17-4)

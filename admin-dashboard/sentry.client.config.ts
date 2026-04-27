@@ -27,6 +27,12 @@ function beforeSend(event: Sentry.ErrorEvent): Sentry.ErrorEvent | null {
     event.request.query_string = '[Filtered]';
   }
 
+  // Scrub dynamic entity IDs from URL paths (PIPEDA — A-PE-P1-3).
+  // e.g. /dashboard/drivers/abc123ef → /dashboard/drivers/[id]
+  if (event.request?.url) {
+    event.request.url = event.request.url.replace(/\/[a-f0-9-]{8,}/gi, '/[id]');
+  }
+
   // Strip known PII keys from all extra/contexts
   const PII_KEYS = new Set([
     'email', 'phone', 'phone_number', 'address', 'lat', 'lng',

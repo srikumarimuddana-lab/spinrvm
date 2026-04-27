@@ -170,7 +170,7 @@ def mock_sms_service() -> MagicMock:
     """Mock SMS service for testing."""
     mock_service = MagicMock()
     mock_service.send = AsyncMock(return_value=True)
-    mock_service.send_otp = AsyncMock(return_value=True)
+    mock_service.send_otp = AsyncMock(return_value={"success": True})
     return mock_service
 
 

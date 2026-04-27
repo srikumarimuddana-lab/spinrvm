@@ -177,7 +177,7 @@ async def list_allowances(
     guard=Depends(require_company_admin),
 ):
     rows = await list_company_allowances(company_id)
-    return rows[skip: skip + limit]
+    return rows[skip : skip + limit]
 
 
 @router.get("/members/{member_id}/allowance")
@@ -290,14 +290,17 @@ async def decide_allowance_request(
         wallet = await get_corporate_wallet_by_company(company_id)
         if not allowance or not wallet:
             raise HTTPException(status_code=409, detail="missing allowance or wallet")
+        amount_raw = request.get("amount")
+        if amount_raw is None:
+            raise HTTPException(status_code=422, detail="allowance request amount is required")
         await apply_grant(
             wallet_id=wallet["id"],
             allowance_id=allowance["id"],
             member_id=request["member_id"],
-            amount=float(request["amount"]),
+            amount=Decimal(str(amount_raw)),
             actor_user_id=guard["user"]["id"],
             notes=f"approved request {request_id}",
-            floor=float(wallet.get("soft_negative_floor", -50)),
+            floor=Decimal(str(wallet.get("soft_negative_floor", "-50"))),
         )
     return await update_allowance_request(
         request_id=request_id,
@@ -468,8 +471,11 @@ async def billing_summary(
     offset = 0
     while True:
         page = await list_company_ride_payment_sources(
-            company_id=company_id, from_iso=from_iso, to_iso=to_iso,
-            limit=page_size, offset=offset,
+            company_id=company_id,
+            from_iso=from_iso,
+            to_iso=to_iso,
+            limit=page_size,
+            offset=offset,
         )
         all_rows.extend(page)
         if len(page) < page_size:
@@ -503,8 +509,11 @@ async def billing_statement(
 
     # Paginated line items for the current page
     line_items = await list_company_ride_payment_sources(
-        company_id=company_id, from_iso=from_iso, to_iso=to_iso,
-        limit=limit, offset=skip,
+        company_id=company_id,
+        from_iso=from_iso,
+        to_iso=to_iso,
+        limit=limit,
+        offset=skip,
     )
 
     # Full-month aggregation (page through all rows so totals are accurate)
@@ -513,8 +522,11 @@ async def billing_statement(
     offset = 0
     while True:
         page = await list_company_ride_payment_sources(
-            company_id=company_id, from_iso=from_iso, to_iso=to_iso,
-            limit=page_size, offset=offset,
+            company_id=company_id,
+            from_iso=from_iso,
+            to_iso=to_iso,
+            limit=page_size,
+            offset=offset,
         )
         all_rows.extend(page)
         if len(page) < page_size:

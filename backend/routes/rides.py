@@ -15,6 +15,7 @@ try:
     from ..dependencies import generate_pickup_otp, get_current_user
     from ..features import calculate_airport_fee, calculate_all_fees, send_push_notification
     from ..geo_utils import calculate_distance, get_service_area_polygon, point_in_polygon
+    from ..models.ride_status import RideStatus
     from ..schemas import CreateRideRequest, DriverPublicView, Ride, RideRatingRequest
     from ..services import DispatchService
     from ..services.dispatch_service import (
@@ -31,6 +32,7 @@ except ImportError:
     from dependencies import generate_pickup_otp, get_current_user
     from features import calculate_airport_fee, calculate_all_fees, send_push_notification
     from geo_utils import calculate_distance, get_service_area_polygon, point_in_polygon
+    from models.ride_status import RideStatus  # noqa: F401
     from schemas import CreateRideRequest, DriverPublicView, Ride, RideRatingRequest
     from services.dispatch_service import (
         DispatchService,
@@ -1388,7 +1390,7 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
         raise HTTPException(status_code=403, detail="Not authorized")
 
     _ride_status = ride.get("status", "")
-    if _ride_status != "completed":
+    if _ride_status != RideStatus.COMPLETED:
         raise HTTPException(
             status_code=409,
             detail=f"Ride is in status '{_ride_status}'; payment requires completed state.",
@@ -1873,7 +1875,11 @@ async def rate_driver(ride_id: str, rating_data: RideRatingRequest, current_user
     if driver:
         # Fetch all rides for this driver to compute precise average
         driver_rides = await db_supabase.get_rows("rides", {"driver_id": driver_id}, limit=1000)
-        rated_rides = [float(r.get("driver_rating")) for r in driver_rides if r.get("driver_rating") is not None]
+        # rider_rating is the per-ride column this endpoint writes; driver_rating
+        # is a synthetic field injected by augmenting helpers and never present
+        # in raw get_rows results — using it made rated_rides always empty.
+        average_rating = driver.get("rating") or 0.0
+        rated_rides = [float(r.get("rider_rating")) for r in driver_rides if r.get("rider_rating") is not None]
 
         if rated_rides:
             average_rating = round(sum(rated_rides) / len(rated_rides), 2)

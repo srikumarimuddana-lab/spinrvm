@@ -213,6 +213,9 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     _admin_roles = {"admin", "super_admin", "operations", "support", "finance", "custom"}
     if payload.get("role") in _admin_roles and payload.get("email"):
         user_id = payload["user_id"]
+        jti = payload.get("jti")
+        if jti and await redis_get(f"admin:revoked:{jti}"):
+            raise HTTPException(status_code=401, detail="ERR_TOKEN_REVOKED")
         if user_id != "admin-001":
             staff_rows = await db_supabase.get_rows("admin_staff", {"id": user_id}, limit=1)
             staff = staff_rows[0] if staff_rows else None

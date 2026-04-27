@@ -5,9 +5,12 @@ import { NextRequest, NextResponse } from "next/server";
  *
  * Strategy:
  *
- *   1. On login success we dual-write the JWT to sessionStorage (for React/api.ts
- *      access) AND to an `admin_token` cookie (for this middleware). The cookie
- *      is path=/ SameSite=Lax and 8-hour Max-Age (standard admin session).
+ *   1. On login success the access token is dual-written: held in Zustand memory
+ *      (for React/api.ts) AND written to an HttpOnly `admin_token` cookie via
+ *      /api/auth/set-cookie (for this middleware, which cannot read JS memory).
+ *      The token is NOT stored in sessionStorage — only the non-sensitive user
+ *      profile (`user`, `isAuthenticated`) is persisted there via Zustand's
+ *      `partialize`. SameSite=Strict, HttpOnly, Secure-in-production.
  *   2. This middleware decodes the JWT and checks the `exp` claim. Expired or
  *      malformed tokens are rejected — the user is redirected to /login.
  *      Full signature verification stays on the backend (Edge Runtime cannot
@@ -17,8 +20,8 @@ import { NextRequest, NextResponse } from "next/server";
  *   4. Public paths are explicitly listed: /login, /register/*, /track/[rideId]
  *      (rider share link), /_next/*, /api/*, and static assets.
  *
- * On logout we delete the cookie AND clear sessionStorage so both sides are in
- * lockstep — see authStore.logout().
+ * On logout the HttpOnly cookie is deleted via DELETE /api/auth/set-cookie and
+ * the Zustand store is reset (user=null, isAuthenticated=false) — see authStore.logout().
  *
  * NOTE: renamed from `middleware` → `proxy` per Next.js 16 convention.
  *

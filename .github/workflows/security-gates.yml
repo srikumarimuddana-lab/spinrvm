@@ -119,7 +119,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install pip-audit
-      - run: pip-audit -r backend/requirements.txt --vulnerability-service osv || true
+      - run: pip-audit -r backend/requirements-locked.txt --vulnerability-service osv || true
 
   yarn-audit:
     name: G4b · yarn audit (JS deps)

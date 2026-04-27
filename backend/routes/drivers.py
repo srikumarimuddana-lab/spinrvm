@@ -1470,8 +1470,16 @@ async def request_payout(
             status = "completed"
             stripe_payout_id = transfer.id
         except Exception as e:
-            logger.error(f"Stripe transfer failed: {e}")
-            raise HTTPException(status_code=500, detail=f"Payout failed: {str(e)}") from e
+            # B-P3-leak-cleanup: same pattern as the subscription
+            # charge fix — Stripe transfer errors carry account IDs
+            # (acct_…), transfer IDs (tr_…), and bank-account hints
+            # we must not ship. logger.exception captures the full
+            # traceback server-side.
+            logger.exception("Stripe transfer failed for driver payout")
+            raise HTTPException(
+                status_code=500,
+                detail="Payout failed. Please contact support.",
+            ) from e
 
     payout = {
         "id": str(uuid.uuid4()),
@@ -3118,8 +3126,21 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
             else:
                 logger.info("Stripe not configured; marking subscription paid without charge")
         except Exception as _stripe_err:
-            logger.error(f"Stripe charge failed for driver {driver['id']}: {_stripe_err}")
-            raise HTTPException(status_code=402, detail=f"Payment failed: {_stripe_err}") from _stripe_err
+            # B-P2-1: NEVER interpolate the underlying exception into the
+            # client-facing detail. Stripe error strings carry charge IDs
+            # (ch_…), customer IDs (cus_…), decline codes, and sometimes
+            # last-4-digits — none of which the rider/driver app should
+            # see. logger.exception captures the full traceback server-
+            # side; the request_id in the response body lets support
+            # correlate against the log entry. This is the canonical
+            # pattern referenced by docs/runbooks/error-responses.md.
+            logger.exception(
+                f"Stripe subscription charge failed for driver {driver['id']}"
+            )
+            raise HTTPException(
+                status_code=402,
+                detail="Payment failed. Please try another payment method or contact support.",
+            ) from _stripe_err
 
     subscription = {
         "id": str(uuid.uuid4()),

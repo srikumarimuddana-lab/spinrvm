@@ -94,11 +94,15 @@
   },
   "overrides": {
     "@types/react": "~19.1.0",
-    "@tootallnate/once": "^3.0.1"
+    "@tootallnate/once": "^3.0.1",
+    "protobufjs": "^7.5.5",
+    "@xmldom/xmldom": "^0.8.13"
   },
   "resolutions": {
     "@types/react": "~19.1.0",
-    "@tootallnate/once": "^3.0.1"
+    "@tootallnate/once": "^3.0.1",
+    "protobufjs": "^7.5.5",
+    "@xmldom/xmldom": "^0.8.13"
   },
   "private": true,
   "packageManager": "yarn@1.22.22"

@@ -142,7 +142,7 @@ async def get_driver_acceptance_rates(
     try:
         drivers = await db.get_rows("drivers", {}, limit=500)
     except Exception as e:
-        logger.error(f"Failed to fetch drivers: {e}")
+        logger.error(f"Failed to fetch drivers: {e}", exc_info=True, extra={"domain": "admin"})
         drivers = []
 
     if service_area_id:
@@ -161,14 +161,14 @@ async def get_driver_acceptance_rates(
                 limit=10000,
             )
         except Exception as e:
-            logger.error(f"Failed to fetch rides for acceptance stats: {e}")
+            logger.error(f"Failed to fetch rides for acceptance stats: {e}", exc_info=True, extra={"domain": "admin"})
 
     users_list: list = []
     if user_ids:
         try:
             users_list = await db.get_rows("users", {"id": {"$in": user_ids}}, limit=len(user_ids))
         except Exception as e:
-            logger.error(f"Failed to fetch users for acceptance stats: {e}")
+            logger.error(f"Failed to fetch users for acceptance stats: {e}", exc_info=True, extra={"domain": "admin"})
 
     rides_by_driver: dict = {}
     for r in all_rides:
@@ -395,5 +395,5 @@ async def get_surge_history(
         filtered.reverse()
         return {"area_id": area_id, "hours": hours, "history": filtered}
     except Exception as e:
-        logger.error(f"Failed to fetch surge history: {e}")
+        logger.error(f"Failed to fetch surge history: {e}", exc_info=True, extra={"domain": "admin"})
         return {"area_id": area_id, "hours": hours, "history": []}

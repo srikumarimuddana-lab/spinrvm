@@ -108,7 +108,7 @@ async def _record_otp_failure(phone: str) -> None:
             )
             logger.warning(f"OTP_LOCKOUT_TRIGGERED phone=...{phone[-4:]} after {count} failures")
     except Exception as e:
-        logger.warning(f"_record_otp_failure: {e}")
+        logger.error(f"_record_otp_failure: {e}", exc_info=True)
 
 
 async def _clear_otp_failures(phone: str) -> None:
@@ -117,7 +117,7 @@ async def _clear_otp_failures(phone: str) -> None:
         await redis_delete(_FAIL_KEY.format(phone))
         await redis_delete(_LOCK_KEY.format(phone))
     except Exception as e:
-        logger.warning(f"_clear_otp_failures: {e}")
+        logger.error(f"_clear_otp_failures: {e}", exc_info=True)
 
 
 def _is_dev_otp_bypass(otp: str) -> bool:
@@ -161,7 +161,7 @@ async def send_otp(request: Request, body: SendOTPRequest):
     try:
         app_settings = await get_app_settings()
     except Exception as e:
-        logger.warning(f"Could not read app_settings from DB: {e}")
+        logger.error(f"Could not read app_settings from DB: {e}", exc_info=True)
 
     twilio_configured = bool(
         app_settings
@@ -237,7 +237,7 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
             if not _hmac.compare_digest(str(expected), str(actual)):
                 otp_record = None
     except Exception as e:
-        logger.warning(f"Could not query OTP from DB: {e}")
+        logger.error(f"Could not query OTP from DB: {e}", exc_info=True)
 
     if not otp_record and _is_dev_otp_bypass(code):
         logger.info("Dev mode: accepting bypass OTP")
@@ -317,7 +317,7 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
                 await db_supabase.update_one("users", {"id": existing_user["id"]}, {"current_session_id": session_id})
                 existing_user["current_session_id"] = session_id
             except Exception as e:
-                logger.warning(f"Could not update session_id for existing user: {e}")
+                logger.error(f"Could not update session_id for existing user: {e}", exc_info=True)
             # Mirror session_id in Redis so revocation propagates instantly across
             # all replicas without waiting for a Postgres read on every request.
             await redis_set(
@@ -342,7 +342,7 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
                 user_obj = UserProfile(**existing_user)
                 logger.info("UserProfile valid")
             except Exception as e:
-                logger.warning(f"UserProfile validation failed, falling back to raw dict: {e}")
+                logger.error(f"UserProfile validation failed, falling back to raw dict: {e}", exc_info=True)
                 user_obj = existing_user
             return _make_auth_response(
                 token,
@@ -618,7 +618,7 @@ async def refresh_access_token(request: Request, body: RefreshRequest):
     try:
         user = await db.find_one("users", {"id": user_id})
     except Exception as e:
-        logger.warning(f"refresh: user lookup failed for {user_id}: {e}")
+        logger.error(f"refresh: user lookup failed for {user_id}: {e}", exc_info=True)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid refresh token")
 
@@ -705,7 +705,9 @@ async def logout_all(request: Request, current_user: dict = Depends(get_current_
         except ImportError:  # pragma: no cover — package-relative fallback
             from socket_manager import manager as ws_manager
         await ws_manager.kick_user(
-            user_id, client_types=["rider", "driver"], reason="logout_all",
+            user_id,
+            client_types=["rider", "driver"],
+            reason="logout_all",
         )
     except Exception as e:
         logger.warning(f"logout-all: WS kick failed for {user_id}: {e}")

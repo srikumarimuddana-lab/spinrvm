@@ -111,3 +111,27 @@ def test_non_corporate_topup_passes_through(test_client):
 
     assert resp.status_code == 200, resp.text
     m_apply.assert_not_awaited()
+
+
+def test_unknown_event_type_not_marked_processed(test_client):
+    # B-P2-2: unknown event types must NOT stamp processed_at so the
+    # nightly reconciliation job can replay them if they later become actionable.
+    event = _event(type="customer.subscription.created", id="evt_unknown")
+    event["data"]["object"] = {}
+
+    with (
+        patch(
+            "routes.webhooks.get_app_settings",
+            AsyncMock(return_value={"stripe_webhook_secret": "whsec_x", "stripe_secret_key": "sk_x"}),
+        ),
+        patch("stripe.Webhook.construct_event", return_value=event),
+        patch("routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+        patch("routes.webhooks.mark_stripe_event_processed", AsyncMock()) as m_mark,
+    ):
+        resp = _post(test_client, event)
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body.get("unhandled") is True
+    assert body["event_id"] == "evt_unknown"
+    m_mark.assert_not_awaited()

@@ -9,7 +9,7 @@ from pydantic import BaseModel
 try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
-    from ...utils.password import hash_password
+    from ...utils.password import hash_password, verify_password
     from ...utils.rate_limiter import admin_staff_delete_limit
     from ...utils.refresh_tokens import revoke_all_for_user
 except ImportError:
@@ -18,6 +18,18 @@ except ImportError:
     from utils.password import hash_password
     from utils.rate_limiter import admin_staff_delete_limit
     from utils.refresh_tokens import revoke_all_for_user
+
+
+def require_role(role: str):
+    """Dependency factory: rejects requests where the actor's role != `role`."""
+
+    async def _dep(admin: dict = Depends(get_admin_user)) -> dict:
+        if admin.get("role") != role:
+            raise HTTPException(status_code=403, detail=f"role_required:{role}")
+        return admin
+
+    return _dep
+
 
 db = db_supabase  # legacy alias
 
@@ -81,6 +93,8 @@ class StaffUpdateRequest(BaseModel):
     role: Optional[str] = None
     modules: Optional[List[str]] = None
     is_active: Optional[bool] = None
+    # A-P3-6: required when promoting a staff member to super_admin
+    password_confirmation: Optional[str] = None
 
 
 @router.get("/staff")
@@ -95,13 +109,11 @@ async def list_staff(admin: dict = Depends(get_admin_user)):
 
 
 @router.post("/staff")
-async def create_staff(req: StaffCreateRequest, admin: dict = Depends(get_admin_user)):
+async def create_staff(req: StaffCreateRequest, admin: dict = Depends(require_role("super_admin"))):
     """Create a new staff member with role-based module access.
 
     Only super_admin can create new staff members.
     """
-    if admin.get("role") != "super_admin":
-        raise HTTPException(status_code=403, detail="Only super admins can create staff")
     # Basic password policy: short passwords defeat bcrypt's cost factor
     # because the keyspace is too small. 12 chars is the floor; operators
     # should pick much longer in practice.
@@ -180,15 +192,28 @@ async def get_staff(staff_id: str):
 
 
 @router.put("/staff/{staff_id}")
-async def update_staff(staff_id: str, req: StaffUpdateRequest, admin: dict = Depends(get_admin_user)):
-    """Update staff member role/modules/status."""
+async def update_staff(staff_id: str, req: StaffUpdateRequest, admin: dict = Depends(require_role("super_admin"))):
+    """Update staff member role/modules/status. Requires super_admin (A-P3-5)."""
     s = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("admin_staff", {"id": staff_id}, limit=1))
     if not s:
         raise HTTPException(status_code=404, detail="Staff member not found")
 
-    if req.role is not None or req.modules is not None:
-        if admin.get("role") != "super_admin":
-            raise HTTPException(status_code=403, detail="Only super admins can modify role or modules")
+    # A-P3-6: promotion to super_admin requires password re-entry.
+    if req.role == "super_admin" and s.get("role") != "super_admin":
+        if not req.password_confirmation:
+            raise HTTPException(status_code=422, detail="password_confirmation required for super_admin promotion")
+        actor_id = admin.get("id")
+        if actor_id and actor_id != "admin-001":
+            actor_row = (lambda _r: _r[0] if _r else None)(
+                await db_supabase.get_rows("admin_staff", {"id": actor_id}, limit=1)
+            )
+            if not actor_row:
+                raise HTTPException(status_code=401, detail="Actor not found")
+            ok, _ = verify_password(req.password_confirmation, actor_row.get("password_hash", ""))
+            if not ok:
+                raise HTTPException(status_code=401, detail="Incorrect password — promotion denied")
+        logger.info(f"super_admin promotion: target={staff_id} actor={actor_id}")
+
     if req.role is not None and req.role != "super_admin" and s.get("role") == "super_admin":
         count = await db_supabase.count_documents("admin_staff", {"role": "super_admin", "is_active": True})
         if count <= 1:
@@ -235,10 +260,8 @@ async def update_staff(staff_id: str, req: StaffUpdateRequest, admin: dict = Dep
 
 @router.delete("/staff/{staff_id}")
 @admin_staff_delete_limit
-async def delete_staff(request: Request, staff_id: str, admin: dict = Depends(get_admin_user)):
-    """Delete a staff member."""
-    if admin.get("role") != "super_admin":
-        raise HTTPException(status_code=403, detail="Only super admins can delete staff")
+async def delete_staff(request: Request, staff_id: str, admin: dict = Depends(require_role("super_admin"))):
+    """Delete a staff member. Requires super_admin (A-P3-5)."""
     if staff_id == admin.get("id"):
         raise HTTPException(status_code=400, detail="Cannot delete your own account")
     s = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("admin_staff", {"id": staff_id}, limit=1))

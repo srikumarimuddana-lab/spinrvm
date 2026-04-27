@@ -191,7 +191,7 @@ async def admin_review_driver_document(
         await db_supabase.update_one("driver_documents", {"id": document_id}, updates)
     except Exception as e:
         logger.error(f"Failed to update driver_document {document_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to update document: {e}") from e
+        raise HTTPException(status_code=500, detail="Document update failed. Please try again.") from e
 
     # On approval, propagate the expiry to the legacy drivers.* column so the
     # go-online check stops blocking based on stale onboarding-time values.
@@ -212,8 +212,13 @@ async def admin_review_driver_document(
                 )
                 if req_row:
                     req_name = req_row.get("name")
-            except Exception:
-                req_name = None
+            except Exception as _req_err:
+                logger.error(
+                    f"document_requirements lookup failed for req_id={existing_req_id!r}",
+                    extra={"req_id": existing_req_id, "document_id": document_id},
+                    exc_info=True,
+                )
+                raise HTTPException(status_code=503, detail="doc_req_unavailable") from _req_err
         if not req_name:
             req_name = existing.get("document_type") or existing.get("requirement_key")
 

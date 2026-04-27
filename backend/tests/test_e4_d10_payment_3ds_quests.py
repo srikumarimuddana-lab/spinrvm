@@ -216,6 +216,14 @@ class TestPayment3DSRetry:
 
         push_calls = []
 
+        # Reload the module BEFORE applying patches so module-level symbols are
+        # fresh (importlib.reload inside the patch block would discard the patches).
+        import importlib
+
+        from backend.utils import payment_retry
+
+        importlib.reload(payment_retry)
+
         with (
             patch.dict(sys.modules, {"stripe": mock_stripe}),
             patch("backend.utils.payment_retry.db.get_rows", AsyncMock(return_value=[ride])),
@@ -229,12 +237,6 @@ class TestPayment3DSRetry:
                 AsyncMock(side_effect=lambda uid, *a, **kw: push_calls.append(uid)),
             ),
         ):
-            # Reload to avoid module caching
-            import importlib
-
-            from backend.utils import payment_retry
-
-            importlib.reload(payment_retry)
             await payment_retry.retry_failed_payments()
 
         assert RIDER_ID in push_calls, "Rider not notified on final payment failure"

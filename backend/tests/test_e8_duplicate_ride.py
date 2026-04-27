@@ -25,6 +25,25 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+
+@pytest.fixture(autouse=True)
+def reset_rate_limiter():
+    """Reset the in-memory SlowAPI rate-limit counters before every test.
+
+    create_ride is decorated with @ride_request_limit (5/minute). Without this
+    reset, the 6 tests in this module collectively hit the limit and the later
+    ones get 429 RateLimitExceeded instead of their expected exceptions.
+    """
+    from backend.utils.rate_limiter import default_limiter
+
+    _storage = default_limiter._storage
+    if hasattr(_storage, "storage"):
+        _storage.storage.clear()
+    if hasattr(_storage, "events"):
+        _storage.events.clear()
+    yield
+
+
 RIDER_ID = "rider_e8"
 RIDE_ID = "ride_e8_001"
 
@@ -195,10 +214,20 @@ class TestIdempotencyKeyGuard:
 
         rider_row = {"id": RIDER_ID, "status": "active", "stripe_customer_id": "cus_x"}
 
+        # NOTE: rides.py sets `db = db_supabase` (legacy alias), so both
+        # names point to the same module object. Patching both separately
+        # causes the second patch to override the first. Use a single mock
+        # with a side_effect that returns None for the rides table lookup
+        # (idempotency check) and rider_row for the users table lookup.
+        async def _find_one(table, query=None, **kwargs):
+            if table == "rides":
+                return None  # idempotency key not found → proceed to 409 check
+            if table == "users":
+                return rider_row
+            return None
+
         with (
-            # find_one returns None (key not found) → proceeds to active-ride check
-            patch("backend.routes.rides.db_supabase.find_one", AsyncMock(return_value=None)),
-            patch("backend.routes.rides.db.find_one", AsyncMock(return_value=rider_row)),
+            patch("backend.routes.rides.db_supabase.find_one", AsyncMock(side_effect=_find_one)),
             # Active ride exists → 409
             patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[_active_ride()])),
             patch("backend.routes.rides.validate_ride_location", return_value=None),

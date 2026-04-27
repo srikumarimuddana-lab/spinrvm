@@ -224,22 +224,24 @@ class TestGetPayoutHistory:
         payouts = [_payout_row(50.00), _payout_row(30.00, "completed")]
         cursor = _SimpleCursor(payouts)
 
-        # The production code calls get_rows twice with different calling conventions:
-        #   1st call (drivers table): result is awaited  → must return a coroutine
-        #   2nd call (payouts table): result is NOT awaited, used as a cursor object
-        # We use a MagicMock whose __call__ returns the right thing per table.
-        # For the awaited drivers call we wrap the list in a coroutine via
-        # an async helper; for the non-awaited payouts call we return the cursor.
-        async def _awaitable_driver():
+        # Production code calls get_rows in two incompatible ways:
+        #   1st call (drivers table): `await get_rows(...)` → needs an awaitable
+        #   2nd call (payouts table): NOT awaited, used as a cursor object
+        #
+        # Strategy: use a plain MagicMock (NOT AsyncMock) so that calling the mock
+        # returns the side_effect value directly. For the awaited "drivers" call,
+        # the side_effect returns a coroutine which `await` will resolve. For the
+        # non-awaited "payouts" call, it returns the cursor object directly.
+        async def _drivers_coro():
             return [driver]
 
-        def _sync_get_rows(table, query=None, **kwargs):
+        def _sync_side_effect(table, query=None, **kwargs):
             if table == "drivers":
-                return _awaitable_driver()
-            # payouts: not awaited — returned as cursor object
-            return cursor
+                return _drivers_coro()  # coroutine: `await mock(...)` resolves to [driver]
+            return cursor  # cursor object: used without await
 
-        with patch("backend.routes.drivers.db_supabase.get_rows", side_effect=_sync_get_rows):
+        mock_get_rows = MagicMock(side_effect=_sync_side_effect)
+        with patch("backend.routes.drivers.db_supabase.get_rows", mock_get_rows):
             result = await get_payout_history(
                 limit=20,
                 offset=0,

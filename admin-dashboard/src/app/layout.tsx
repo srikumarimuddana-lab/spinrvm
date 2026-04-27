@@ -4,11 +4,12 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/toaster";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { ThemeProvider } from "@/components/theme-provider";
-import { Analytics } from "@vercel/analytics/next";
+import { AnalyticsProvider } from "@/components/analytics-provider";
 
 export const metadata: Metadata = {
   title: "Spinr Admin",
   description: "Admin Dashboard for the Spinr Rideshare Platform",
+  robots: { index: false, follow: false },
 };
 
 export default function RootLayout({
@@ -30,7 +31,7 @@ export default function RootLayout({
             </TooltipProvider>
           </SidebarProvider>
         </ThemeProvider>
-        <Analytics />
+        <AnalyticsProvider />
       </body>
     </html>
   );

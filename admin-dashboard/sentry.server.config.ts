@@ -21,6 +21,7 @@ function beforeSend(event: Sentry.ErrorEvent): Sentry.ErrorEvent | null {
     'email', 'phone', 'phone_number', 'address', 'lat', 'lng',
     'latitude', 'longitude', 'token', 'password', 'authorization',
     'full_name', 'first_name', 'last_name',
+    'driver_id', 'rider_id', 'ride_id',
   ]);
   function scrubObj(obj: Record<string, unknown>): void {
     for (const key of Object.keys(obj)) {
@@ -40,8 +41,12 @@ function beforeSend(event: Sentry.ErrorEvent): Sentry.ErrorEvent | null {
 
 Sentry.init({
   dsn: process.env.SENTRY_DSN || process.env.NEXT_PUBLIC_SENTRY_DSN,
-  tracesSampleRate: process.env.NODE_ENV === 'production' ? 0.2 : 1.0,
+  // Match client config: 100% sampling on this low-traffic admin surface.
+  tracesSampleRate: 1.0,
   environment: process.env.NODE_ENV ?? 'development',
+  release: process.env.VERCEL_GIT_COMMIT_SHA || process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA,
   enabled: !!(process.env.SENTRY_DSN || process.env.NEXT_PUBLIC_SENTRY_DSN),
   beforeSend,
 });
+
+Sentry.setTag('surface', 'admin');

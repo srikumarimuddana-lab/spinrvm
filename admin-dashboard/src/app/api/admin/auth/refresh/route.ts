@@ -1,8 +1,8 @@
 import { randomBytes, timingSafeEqual } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 
-// PIPEDA data residency: pin to Canadian (Toronto) region (F-22).
-export const preferredRegion = "iad1";
+// PIPEDA data residency: pin to Canadian (Montreal) Vercel edge region (F-22).
+export const preferredRegion = "yul1";
 
 const BACKEND_URL = (() => {
   const url =
@@ -56,7 +56,12 @@ function verifyCsrf(req: NextRequest): boolean {
 
 export async function POST(req: NextRequest) {
   if (!verifyCsrf(req)) {
-    return NextResponse.json({ detail: "CSRF validation failed" }, { status: 403 });
+    // Clear session cookies on CSRF failure so a logout race (in-flight
+    // silentRefresh fired after logout cleared the in-memory token) does not
+    // leave a live RT cookie in the browser.
+    const res = NextResponse.json({ detail: "CSRF validation failed" }, { status: 403 });
+    clearSessionCookies(res);
+    return res;
   }
 
   const refreshToken = req.cookies.get(RT_COOKIE)?.value;

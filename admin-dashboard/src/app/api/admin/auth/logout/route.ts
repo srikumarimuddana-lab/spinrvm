@@ -1,8 +1,8 @@
 import { timingSafeEqual } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 
-// PIPEDA data residency: pin to Canadian (Toronto) region (F-22).
-export const preferredRegion = "iad1";
+// PIPEDA data residency: pin to Canadian (Montreal) Vercel edge region (F-22).
+export const preferredRegion = "yul1";
 
 const BACKEND_URL = (() => {
   const url =

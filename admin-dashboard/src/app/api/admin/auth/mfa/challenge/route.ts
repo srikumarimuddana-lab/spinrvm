@@ -19,15 +19,14 @@ const BACKEND_URL = (() => {
 
 const RT_COOKIE = "spinr_admin_rt";
 const CSRF_COOKIE = "spinr_admin_csrf";
-// Both cookies live as long as the refresh token so they expire together.
-const SESSION_MAX_AGE = 30 * 24 * 60 * 60; // 30 days — matches backend refresh token TTL
+const SESSION_MAX_AGE = 30 * 24 * 60 * 60;
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
 
   let upstream: Response;
   try {
-    upstream = await fetch(`${BACKEND_URL}/api/admin/auth/login`, {
+    upstream = await fetch(`${BACKEND_URL}/api/admin/auth/mfa/challenge`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -42,20 +41,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(data, { status: upstream.status });
   }
 
-  // Strip the refresh token from the response body — it must never reach
-  // the browser's JS context. We store it in an HttpOnly cookie instead.
+  // Strip the refresh token — must never reach the browser's JS context.
   const { refresh_token, refresh_expires_at: _ignored, ...clientData } = data;
 
+  const csrfToken = randomBytes(32).toString("hex");
+  const res = NextResponse.json(
+    { ...clientData, csrf_token: csrfToken },
+    { status: 200 },
+  );
   const isProduction = process.env.NODE_ENV === "production";
-
-  // Only issue cookies when a real session was created (refresh_token present).
-  // mfa_required responses carry no refresh token, so no cookies are set.
   if (refresh_token) {
-    const csrfToken = randomBytes(32).toString("hex");
-    const res = NextResponse.json(
-      { ...clientData, csrf_token: csrfToken },
-      { status: 200 },
-    );
     res.cookies.set(RT_COOKIE, refresh_token, {
       httpOnly: true,
       sameSite: "strict",
@@ -63,9 +58,6 @@ export async function POST(req: NextRequest) {
       path: "/api/admin/auth",
       maxAge: SESSION_MAX_AGE,
     });
-    // CSRF double-submit cookie: not HttpOnly so JS can read and send as
-    // X-CSRF-Token header. SameSite=Strict means cross-origin requests
-    // can't read it, so the header value proves same-origin intent.
     res.cookies.set(CSRF_COOKIE, csrfToken, {
       httpOnly: false,
       sameSite: "strict",
@@ -73,9 +65,6 @@ export async function POST(req: NextRequest) {
       path: "/api/admin/auth",
       maxAge: SESSION_MAX_AGE,
     });
-    return res;
   }
-
-  // mfa_required path — no session yet, return body only (no cookies).
-  return NextResponse.json(clientData, { status: 200 });
+  return res;
 }

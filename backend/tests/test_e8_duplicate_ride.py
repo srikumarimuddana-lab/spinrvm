@@ -56,9 +56,20 @@ def _body():
 
 
 def _mock_request(idempotency_key: str | None = None):
-    req = MagicMock()
-    req.headers = {"Idempotency-Key": idempotency_key} if idempotency_key else {}
-    return req
+    from starlette.requests import Request as StarletteRequest
+
+    headers = []
+    if idempotency_key:
+        headers = [(b"idempotency-key", idempotency_key.encode())]
+    return StarletteRequest(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/rides",
+            "query_string": b"",
+            "headers": headers,
+        }
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────

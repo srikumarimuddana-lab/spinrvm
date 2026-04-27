@@ -75,6 +75,11 @@ class TestTriggerEmergency:
         async def _ws(message, channel):
             ws_calls.append((channel, message))
 
+        async def _broadcast_to_admins(message):
+            # Simulate admin broadcast — append with an "admin_broadcast" channel
+            # so existing assertions (looking for "admin" in channel) still pass.
+            ws_calls.append(("admin_broadcast", message))
+
         async def _get_rows(table, query, **kwargs):
             if table == "drivers":
                 return [driver_row] if driver_row else []
@@ -89,6 +94,7 @@ class TestTriggerEmergency:
             patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
             patch("backend.routes.rides.db_supabase.insert_one", AsyncMock(side_effect=_insert)),
             patch("backend.routes.rides.manager.send_personal_message", AsyncMock(side_effect=_ws)),
+            patch("backend.routes.rides.manager.broadcast_to_admins", AsyncMock(side_effect=_broadcast_to_admins)),
             patch(
                 "backend.routes.rides.db_supabase.get_user_by_id",
                 AsyncMock(return_value={"first_name": "Test", "last_name": "User"}),

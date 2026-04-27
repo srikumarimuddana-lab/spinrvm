@@ -239,6 +239,10 @@ class TestRoleClaimTampering:
                 "backend.dependencies.db_supabase.get_rows",
                 AsyncMock(return_value=[]),  # no driver row → is_driver = False
             ),
+            patch(
+                "backend.dependencies.db_supabase.get_driver_by_user_id_cached",
+                AsyncMock(return_value=None),  # no driver profile → is_driver = False
+            ),
         ):
             user = await get_current_user(credentials=creds)
 

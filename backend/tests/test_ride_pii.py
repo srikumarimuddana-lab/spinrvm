@@ -135,19 +135,20 @@ class TestRidePIIFiltering:
 
     @pytest.mark.asyncio
     async def test_driver_pii_excluded(self, ride_with_driver):
-        """The response's `driver` object must NOT contain forbidden fields."""
-        with (
-            patch("backend.routes.rides.db") as mock_db,
-            patch("backend.routes.rides.get_current_user", new_callable=AsyncMock) as mock_auth,
-            patch("backend.routes.rides.get_app_settings", new_callable=AsyncMock, return_value={}),
-        ):
-            mock_auth.return_value = {"id": "user_rider_1", "role": "rider"}
-            mock_db.rides.find_one = AsyncMock(return_value=ride_with_driver)
-            mock_db.drivers.find_one = AsyncMock(return_value=FULL_DRIVER_ROW)
+        """The response's `driver` object must NOT contain forbidden fields.
 
+        get_ride uses the flat db_supabase API:
+            db_supabase.get_ride(ride_id)
+            db_supabase.get_driver_by_id(driver_id)
+            db_supabase.get_rows("drivers", {...}) — for is_driver check
+        """
+        with (
+            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride_with_driver)),
+            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=FULL_DRIVER_ROW)),
+        ):
             from backend.routes.rides import get_ride
 
-            # Build a minimal mock request for the Depends chain
             response = await get_ride("ride_1", current_user={"id": "user_rider_1", "role": "rider"})
 
             driver_in_response = response.get("driver", {})
@@ -160,13 +161,10 @@ class TestRidePIIFiltering:
     async def test_allowed_fields_present(self, ride_with_driver):
         """The response's `driver` object contains every allowed field."""
         with (
-            patch("backend.routes.rides.db") as mock_db,
-            patch("backend.routes.rides.get_current_user", new_callable=AsyncMock),
-            patch("backend.routes.rides.get_app_settings", new_callable=AsyncMock, return_value={}),
+            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride_with_driver)),
+            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=FULL_DRIVER_ROW)),
         ):
-            mock_db.rides.find_one = AsyncMock(return_value=ride_with_driver)
-            mock_db.drivers.find_one = AsyncMock(return_value=FULL_DRIVER_ROW)
-
             from backend.routes.rides import get_ride
 
             response = await get_ride("ride_1", current_user={"id": "user_rider_1", "role": "rider"})
@@ -185,13 +183,10 @@ class TestRidePIIFiltering:
             "status": "searching",
         }
         with (
-            patch("backend.routes.rides.db") as mock_db,
-            patch("backend.routes.rides.get_current_user", new_callable=AsyncMock),
-            patch("backend.routes.rides.get_app_settings", new_callable=AsyncMock, return_value={}),
+            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride_no_driver)),
+            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])),
+            patch("backend.routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=None)),
         ):
-            mock_db.rides.find_one = AsyncMock(return_value=ride_no_driver)
-            mock_db.drivers.find_one = AsyncMock(return_value=None)
-
             from backend.routes.rides import get_ride
 
             response = await get_ride("ride_2", current_user={"id": "user_rider_1", "role": "rider"})

@@ -25,7 +25,7 @@ function sanitizeNextPath(next: string | null): string {
 function LoginForm() {
     const router = useRouter();
     const searchParams = useSearchParams();
-    const { setToken, setUser, setRefreshToken, scheduleRefresh } = useAuthStore();
+    const { setToken, setUser, scheduleRefresh } = useAuthStore();
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
     const [showPassword, setShowPassword] = useState(false);
@@ -39,10 +39,7 @@ function LoginForm() {
             // Call the admin login API
             const data = await loginAdminSession(email, password);
 
-            // Store token in memory + cookie, refresh token in sessionStorage.
-            // The access JWT is NOT persisted — only the opaque refresh token is.
             setToken(data.token);
-            setRefreshToken(data.refresh_token);
             if (data.access_expires_at) scheduleRefresh(data.access_expires_at);
             setUser({
                 id: data.user.id,

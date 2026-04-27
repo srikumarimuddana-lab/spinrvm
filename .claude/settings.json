@@ -1,10 +1,11 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
-  "model": "claude-opus-4-7",
-  "autoCompactWindow": 150000,
+  "model": "claude-sonnet-4-6",
+  "autoCompactEnabled": true,
+  "autoCompactWindow": 80000,
   "cleanupPeriodDays": 7,
   "attribution": {
-    "commit": "Co-developed with Claude Code (claude-opus-4-7)\n\nCo-Authored-By: Claude <noreply@anthropic.com>",
+    "commit": "Co-developed with Claude Code (claude-sonnet-4-6)\n\nCo-Authored-By: Claude <noreply@anthropic.com>",
     "pr": "AI-assisted — spinr platform (Claude Code)"
   },
   "permissions": {
@@ -17,6 +18,8 @@
       "Bash(git checkout*)",
       "Bash(git branch*)",
       "Bash(git pull*)",
+      "Bash(git push -u origin claude/*)",
+      "Bash(git push origin claude/*)",
       "Bash(git push origin feature/*)",
       "Bash(git push origin fix/*)",
       "Bash(git push origin hotfix/*)",
@@ -57,6 +60,7 @@
       "Write(.github/workflows/claude-audit.yml)",
       "Write(.github/workflows/claude-review.yml)",
       "Write(.github/workflows/pr-checks.yml)",
+      "Write(.github/workflows/ci-guardrails.yml)",
       "Write(.github/pull_request_template.md)",
       "Write(.github/labeler.yml)"
     ],

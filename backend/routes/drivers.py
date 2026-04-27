@@ -573,7 +573,7 @@ async def register_driver(
                 {"role": "driver", "is_driver": True},
             )
         except Exception as exc:
-            logger.warning(f"register_driver: failed to flip users.role for {user_id}: {exc}")
+            logger.error(f"register_driver: failed to flip users.role for {user_id}: {exc}", exc_info=True)
 
     return serialize_doc(new_driver)
 
@@ -1901,7 +1901,7 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
         asyncio.create_task(match_driver_to_ride(ride_id))
         logger.info(f"Re-matching ride {ride_id} after driver {driver['id']} declined")
     except Exception as e:
-        logger.warning(f"Could not trigger re-matching for ride {ride_id}: {e}")
+        logger.error(f"Could not trigger re-matching for ride {ride_id}: {e}", exc_info=True)
 
     return {"success": True}
 

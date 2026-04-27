@@ -6,7 +6,7 @@ _Update this file at the start of every sprint. Claude loads it via `@.claude/co
 
 Close all P0 security/safety findings across backend, admin, and rider surfaces — HttpOnly token storage, admin TTL reduction, first-rating crash, fare-collection state mismatch, GPS OOM, and SOS silent failure.
 
-**Status (2026-04-27):** All 6 sprint P0s shipped. A-P0-3 has a breadcrumb cap fix in PR #117 (`complete_ride()` limit 10k→1k) but the original architectural concern — Supabase-side aggregation in `maintenance.py` for fleet-wide GPS history — is deferred to next sprint. See *Recently shipped* and *Next sprint candidates* below.
+**Status (2026-04-27):** Sprint COMPLETE. All 6 P0s shipped. All P1/P2 candidates also shipped (B-P1-1 via #124, B-P1-5 via #124, B-P2-1 via #124, B-P2-2 via #124; B-P1-2 and B-P1-6 were already in-place). A-P0-3 GPS OOM fix (Postgres function + migration 54) shipped in #126. Sentry loguru bridge shipped in #126. logger.warning sweep on payment/dispatch/safety paths shipped in #127.
 
 ## In-flight
 
@@ -16,7 +16,7 @@ Close all P0 security/safety findings across backend, admin, and rider surfaces 
 | A-P0-2 | — | shipped (#95/#97) | Admin access token TTL 1 h confirmed end-to-end |
 | B-P0-1 | — | shipped (#117) | `rider_rating` column fix + rolling-average in `rate_driver()` |
 | B-P0-2 | — | shipped (#117) | Supabase-native atomic guard: `db_supabase.update_one` filters on `payment_status="pending"` |
-| A-P0-3 | — | partial (deferred) | `complete_ride()` breadcrumb cap shipped (10k→1k, #117). `maintenance.py` fleet-wide GPS aggregation (limit=100k, Python haversine loop) is the remaining architectural gap — needs Postgres function + migration. |
+| A-P0-3 | — | shipped (#117 + #126) | `complete_ride()` breadcrumb cap (10k→1k) + `compute_driver_phase_distances` Postgres function replaces Python haversine loop in `maintenance.py` |
 | R-P0-1 | — | shipped (#117) | `triggerEmergency` retries 3× (1 s/2 s backoff) before 911 Alert |
 
 ## Blocked
@@ -48,17 +48,22 @@ None currently open in production (pre-launch).
 | #108 | CI error audit system + safeguards (`ci-error-audit.yml`, `ci-guardrails.yml`, `security-gates.yml`, `dependabot-auto-merge.yml`, `pip-compile-check.yml`) | Full audit + block pipeline |
 | #109 | Fix invalid `yyz1` Vercel region → `iad1` | Unblocked Vercel deployments |
 
-## Next sprint candidates (post-A-P0-3)
+## Recently shipped (P1/P2 candidates — now closed)
 
-These are pulled from the 2026-04-26 backend verification rollup and are tracked as P1/P2 NOT FIXED. They do not gate the current P0 sprint but should seed the next.
+| PR | Ticket | What |
+|---|---|---|
+| #124 | B-P1-1 | Firebase audience binding — fail-closed when `FIREBASE_DRIVER_APP_ID` unset |
+| #124 | B-P1-5 | `logger.warning` → `logger.error` + `exc_info=True` across `auth.py` |
+| #124 | B-P2-1 | Corporate allowance `float()` → `Decimal`; `str(amount)` at Supabase RPC boundary |
+| #124 | B-P2-2 | Stripe webhook explicit allowlist replaces bare `else` fallthrough |
+| #126 | A-P0-3 | `compute_driver_phase_distances` Postgres fn + migration 54 + GPS OOM fix in `maintenance.py` |
+| #126 | observability | loguru→Sentry bridge in `server.py` — loguru ERRORs now reach Sentry |
+| #127 | B-P1-5 ext. | `logger.warning` → `logger.error` sweep: `stripe_charge.py`, `payments.py`, `users.py`, `drivers.py` |
+| already in code | B-P1-2 | `JWT_SECRET` length ≥32 enforced in `core/config.py` |
+| already in code | B-P1-6 | Retention purge loop in `core/lifespan.py` + migration 50 |
 
-- **B-P1-1** — Firebase audience binding (`auth.py:401` `verify_id_token` missing `audience=` kwarg)
-- **B-P1-2** — `JWT_SECRET` length ≥32 enforcement (`core/config.py:85-101` only blocks placeholders)
-- **B-P1-5** — `logger.warning` on auth/DB errors (5+ sites in `auth.py`); CLAUDE.md violation
-- **B-P1-6** — Retention purge cron (PIPEDA 2 y / CRA 7 y soft-deleted rows persist indefinitely)
-- **B-P2-2** — Stripe webhook event allowlist (`webhooks.py:216-221` swallows unknown events)
-- **B-P2-1** — Corporate `float()` → `Decimal` (`corporate_company.py:270, 273`)
+## Next sprint candidates
 
-## Sentry alert wiring (post-sprint, high-leverage)
-
-`B-P1-3` (refresh-token reuse cascade) emits a `[REFRESH TOKEN REUSE DETECTED]` ERROR-level log line on every cascade fire — this is the only real-time signal Sentry/PagerDuty can hook into. The cascade itself shipped in #106 but the alert rule has not been verified to be wired. Audit Sentry rules to confirm coverage; estimated ~30 min.
+- **[17-4] Branch protection** (manual — GitHub Settings UI): require PR + 1 review; make `Security gates summary` + `Post guard rail summary` required checks; disable force-push + deletion on `main`.
+- **logger.warning sweep remainder**: `drivers.py` vault-encrypt plaintext fallback (line ~70) — currently warns and stores plaintext when encryption unavailable; should fail closed with 503.
+- **Sentry alert rule**: Now that loguru bridge is live, create a Sentry alert for `REFRESH TOKEN REUSE DETECTED` → PagerDuty. Estimated ~30 min in Sentry UI.

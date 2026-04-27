@@ -81,7 +81,8 @@ async def request_data_export(current_user: dict = Depends(get_current_user)):
         }
         await db_supabase.insert_one("data_export_requests", export_record)
     except Exception as e:
-        logger.warning(f"Could not record data export request: {e}")
+        logger.error(f"Could not record data export request for user {user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=503, detail="data_export_request_failed") from e
     return {
         "success": True,
         "message": "Data export requested. You will receive an email with a download link within 24 hours.",
@@ -259,7 +260,7 @@ async def get_emergency_contacts(current_user: dict = Depends(get_current_user))
             await contacts_cursor.to_list(length=10) if hasattr(contacts_cursor, "to_list") else list(contacts_cursor)
         )
     except Exception as e:
-        logger.warning(f"Could not fetch emergency contacts: {e}")
+        logger.error(f"Could not fetch emergency contacts for user {current_user['id']}: {e}", exc_info=True)
         contacts = []
     return {"contacts": contacts}
 

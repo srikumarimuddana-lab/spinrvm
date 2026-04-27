@@ -27,7 +27,7 @@ Run:
 from __future__ import annotations
 
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -64,10 +64,17 @@ def _body(token: str | None = None):
 
 
 def _request():
-    req = MagicMock()
-    req.headers = {}
-    req.client = MagicMock(host="127.0.0.1")
-    return req
+    from starlette.requests import Request as StarletteRequest
+
+    return StarletteRequest(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/rides",
+            "query_string": b"",
+            "headers": [],
+        }
+    )
 
 
 def _sign_token(

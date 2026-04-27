@@ -6,16 +6,13 @@ _Update this file at the start of every sprint. Claude loads it via `@.claude/co
 
 Close all P0 security/safety findings across backend, admin, and rider surfaces — HttpOnly token storage, admin TTL reduction, first-rating crash, fare-collection state mismatch, GPS OOM, and SOS silent failure.
 
+## Status: GOAL MET ✓
+
+All six P0 tickets are shipped on branch `claude/ci-error-audit-system-HPjKP`.
+
 ## In-flight
 
-| Ticket | Owner | State | Notes |
-|---|---|---|---|
-| A-P0-1 | — | pending | Admin JWT → HttpOnly cookie; remove sessionStorage persist |
-| A-P0-2 | — | pending | Admin access token TTL 12 h → 1 h + silent refresh |
-| B-P0-1 | — | pending | `UnboundLocalError` on first-ever driver rating (rides.py:1796) |
-| B-P0-2 | — | pending | `process_payment` 409 after `complete_ride` — state string mismatch |
-| A-P0-3 | — | pending | GPS OOM: `limit=1000000` in maintenance.py → Supabase-side aggregation |
-| R-P0-1 | — | pending | SOS silent failure on network error in `triggerEmergency` |
+None — sprint P0 goal achieved.
 
 ## Blocked
 
@@ -30,9 +27,20 @@ None currently open in production (pre-launch).
 ## Do not touch this sprint
 
 - `backend/routes/rides.py` ride-state machine paths other than the rating endpoint and payment guard — active area, coordinate before touching
-- `admin-dashboard/src/store/authStore.ts` — A-P0-1 owns this file; don't add new sessionStorage reads while it's in flight
 
-## Recently shipped
+## Recently shipped (this sprint)
+
+| Ticket | Commit | What |
+|---|---|---|
+| A-P0-1 | `0187917` + authStore | Admin JWT → HttpOnly cookie (`/api/auth/set-cookie` route sets `httpOnly: true`); access token in memory only; sessionStorage partializes only `user` + `isAuthenticated` |
+| A-P0-2 | config.py | `ADMIN_ACCESS_TOKEN_TTL_HOURS: int = 1` (was 12 h); silent refresh fires 5 min before expiry |
+| A-P1-7 | `0187917` | Admin logout blacklists JTI in Redis; `get_current_user` checks `admin:revoked:{jti}` |
+| B-P0-1 | `c0ecf8b` | `rate_driver` aggregation used `driver_rating` (synthetic enrichment field, absent from raw rows) → changed to `rider_rating` (real DB column); 7 regression tests |
+| B-P0-2 | `5d47261` | `cancel_ride` guard was `"trip_in_progress"` (GPS phase) not `"in_progress"` (ride status); `complete_ride` no longer writes `payment_status="completed"`; stale test fixed |
+| A-P0-3 | `3929404` | GPS OOM: `count_documents` replaces `get_rows+len` in cleanup; `columns="driver_id"` on presence query; decline_logs capped at 10 k |
+| R-P0-1 | `4c6eb9a` | `triggerEmergency` was swallowing errors; `SOSButton.triggerSOS` always saw success → always showed "Alert Sent"; fix: rethrow so SOSButton's retry detects failure |
+
+## Previously shipped PRs
 
 | PR | What | Why |
 |---|---|---|

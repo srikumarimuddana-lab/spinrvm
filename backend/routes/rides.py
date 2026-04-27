@@ -1576,6 +1576,10 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
         stripe_customer_id = (rider_user or {}).get("stripe_customer_id")
         payment_method_id = ride.get("payment_method_id") or (rider_user or {}).get("default_payment_method")
 
+        if not payment_method_id:
+            await db_supabase.update_ride(ride_id, {"payment_status": "pending"})
+            raise HTTPException(status_code=400, detail="No payment method on file. Please add a card.")
+
         outcome = await charge_ride(
             ride=ride,
             rider_id=current_user["id"],
@@ -1595,22 +1599,28 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
+            await manager.send_personal_message(
+                {"type": "payment_completed", "ride_id": ride_id, "charged_amount": float(total_charge)},
+                f"rider_{current_user['id']}",
+            )
         elif outcome.status == "requires_action":
+            # Off-session charges that require 3DS cannot be completed without rider interaction.
+            # Treat as a payment failure so the rider is prompted to use a different card.
             await db_supabase.update_ride(
                 ride_id,
                 {
-                    "payment_status": "requires_action",
+                    "payment_status": "failed",
                     "payment_intent_id": outcome.payment_intent_id,
-                    "tip_amount": float(tip_amount),
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
-            return {
-                "success": False,
-                "status": "requires_action",
-                "client_secret": outcome.client_secret,
-                "payment_intent_id": outcome.payment_intent_id,
-            }
+            raise HTTPException(
+                status_code=402,
+                detail={
+                    "code": "authentication_required",
+                    "message": "Card requires authentication. Please update your payment method.",
+                },
+            )
         elif outcome.status == "declined":
             await db_supabase.update_ride(
                 ride_id,
@@ -1648,10 +1658,10 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
                 },
             )
             raise HTTPException(
-                status_code=502,
+                status_code=402,
                 detail={
-                    "code": "payment_processor_error",
-                    "message": outcome.error_message or "Payment processor error.",
+                    "code": "payment_error",
+                    "message": outcome.error_message or "Payment could not be processed.",
                 },
             )
 

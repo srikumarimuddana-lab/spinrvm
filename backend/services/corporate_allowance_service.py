@@ -8,7 +8,8 @@ the RPC validates they exist before mutating anything.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from decimal import ROUND_HALF_UP, Decimal
+from typing import Any, Dict, Optional, Union
 
 try:
     from ..db_supabase import run_sync  # type: ignore
@@ -18,26 +19,36 @@ except ImportError:
     from supabase_client import supabase  # type: ignore
 
 
+def _to_numeric_str(v: Union[Decimal, float, int, str]) -> str:
+    """Round to 2 dp and serialise as string for PostgreSQL NUMERIC RPC params.
+
+    supabase-py serialises RPC params via json.dumps; Decimal is not
+    JSON-serialisable, and float(45.57) may produce 45.56999... on some
+    platforms. Passing a string lets Postgres cast to NUMERIC losslessly.
+    """
+    return str(Decimal(str(v)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
 async def _apply(
     *,
     wallet_id: str,
     allowance_id: str,
     member_id: str,
     type_: str,
-    amount: float,
+    amount: Union[Decimal, float, int],
     actor_user_id: Optional[str] = None,
     notes: Optional[str] = None,
-    floor: Optional[float] = None,
+    floor: Optional[Union[Decimal, float, int]] = None,
 ) -> Dict[str, Any]:
     params = {
         "p_wallet_id": wallet_id,
         "p_allowance_id": allowance_id,
         "p_member_id": member_id,
         "p_type": type_,
-        "p_amount": amount,
+        "p_amount": _to_numeric_str(amount),
         "p_actor_user_id": actor_user_id,
         "p_notes": notes,
-        "p_floor": floor,
+        "p_floor": _to_numeric_str(floor) if floor is not None else None,
     }
 
     def _fn():
@@ -55,10 +66,10 @@ async def apply_grant(
     wallet_id: str,
     allowance_id: str,
     member_id: str,
-    amount: float,
+    amount: Union[Decimal, float, int],
     actor_user_id: Optional[str] = None,
     notes: Optional[str] = None,
-    floor: Optional[float] = None,
+    floor: Optional[Union[Decimal, float, int]] = None,
 ) -> Dict[str, Any]:
     if amount <= 0:
         raise ValueError("grant amount must be positive")
@@ -99,7 +110,7 @@ async def apply_rollback(
     wallet_id: str,
     allowance_id: str,
     member_id: str,
-    amount: float,
+    amount: Union[Decimal, float, int],
     actor_user_id: Optional[str] = None,
     notes: Optional[str] = None,
 ) -> Dict[str, Any]:

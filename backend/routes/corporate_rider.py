@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -245,7 +246,7 @@ async def submit_request(
                 amount=body.amount,
                 actor_user_id=current_user["id"],
                 notes=f"auto_approved request {row.get('id', '')}",
-                floor=float(wallet.get("soft_negative_floor", -50)),
+                floor=Decimal(str(wallet.get("soft_negative_floor", -50))),
             )
         return row
     return await insert_allowance_request(

@@ -1513,7 +1513,7 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
                 wallet_id=_corp_wallet["id"],
                 allowance_id=_corp_allowance["id"],
                 member_id=_corp_membership["id"],
-                amount=float(_allowance_debit),
+                amount=_allowance_debit,
                 notes=f"ride:{ride_id}:allowance",
             )
 

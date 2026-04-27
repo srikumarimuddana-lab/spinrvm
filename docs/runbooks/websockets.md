@@ -3,6 +3,20 @@
 **Owner:** `backend` · **Cadence:** Always-on; runbook on contract change
 **Closes:** B-P1-12 (per-user message rate-limit); cross-refs B-P1-11 (token revocation, see `auth-tokens.md`)
 
+> **Recovery note (2026-04-27):** B-P1-11 + B-P1-12 were briefly dropped
+> from the working tree by merge commit `401bd5d` ("resolve 10-file
+> conflict — merge main into review-pending-audits-Pu1aP"). The tests
+> for both pieces survived the merge intact and immediately failed
+> against the dropped code, surfacing the loss. Restored in a follow-
+> up commit by manually re-applying the original diffs from
+> `707da6e` (B-P1-11) and `a96c70d` (B-P1-12) on top of the post-
+> merge file shapes (which had grown new `broadcast_to_admins` /
+> `broadcast_ride_status` / driver-presence handling). All 38 affected
+> tests pass post-restore. If you ever see B-P1-11/12 disappear in a
+> future merge, this is the playbook: read `git show 707da6e` and
+> `git show a96c70d`, apply manually to current shapes, run the
+> two test files to verify.
+
 ---
 
 ## Why This Matters

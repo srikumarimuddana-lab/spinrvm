@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
-from typing import Dict
+from typing import Dict, List, Optional
 
 from fastapi import WebSocket
 from loguru import logger
@@ -12,10 +13,32 @@ except ImportError:
     from logging_utils import diag_logger  # type: ignore
 
 
+# B-P1-12: per-user inbound message rate-limit. The receive loop in
+# routes/websocket.py used to enforce a per-CONNECTION cap (30 msg/s
+# via a closure-scoped timestamp list), which an attacker could side-
+# step by opening N sockets to get N×30 effective throughput. The
+# bucket below aggregates across every WebSocket the user has open on
+# THIS machine; the cap is now ``WS_MAX_MESSAGES_PER_SECOND_PER_USER``.
+#
+# Cross-replica enforcement requires Redis (sliding-window counter
+# keyed on user_id). On a typical Fly affinity-LB deploy a user's
+# sockets are pinned to one machine, so per-machine ≈ per-user. The
+# remaining attack vector — an attacker who can force-balance their
+# sockets across replicas — is bounded by ``replica_count × cap``,
+# which at our current 1-2 replica scale is still the right order of
+# magnitude tighter than the prior per-connection-only cap. Promoting
+# this to Redis is a P3 follow-up tracked in
+# docs/runbooks/websockets.md.
+WS_MAX_MESSAGES_PER_SECOND_PER_USER = 30
+
+
 class ConnectionManager:
     def __init__(self):
         self.active_connections: Dict[str, WebSocket] = {}
         self.driver_locations: Dict[str, Dict] = {}
+        # B-P1-12: per-user inbound msg timestamps. See module-level
+        # comment above for the cross-machine caveat.
+        self._user_msg_timestamps: Dict[str, List[float]] = {}
 
     async def connect(self, websocket: WebSocket, client_id: str):
         # WebSocket is already accepted in the endpoint handler
@@ -35,6 +58,168 @@ class ConnectionManager:
             f"[WS] DISCONNECT client_id={client_id} "
             f"remaining={len(self.active_connections)} "
             f"all_keys={list(self.active_connections.keys())}"
+        )
+        # B-P1-12: drop the user's rate-limit bucket if this was their
+        # last socket on this machine. Without this the dict would grow
+        # unbounded as users come and go (16 bytes per stale empty list,
+        # so not catastrophic, but trivial to bound here).
+        user_id = self._user_id_from_key(client_id)
+        if user_id is not None:
+            self._maybe_drop_user_bucket(user_id)
+
+    @staticmethod
+    def _user_id_from_key(client_id: str) -> Optional[str]:
+        """Parse the ``user_id`` out of a ``{client_type}_{user_id}`` key.
+        Returns None if the key doesn't match the expected shape — defensive
+        only; in practice every key in active_connections is built via
+        ``f"{client_type}_{user['id']}"`` in routes/websocket.py."""
+        for prefix in ("rider_", "driver_", "admin_"):
+            if client_id.startswith(prefix):
+                return client_id[len(prefix) :]
+        return None
+
+    def _has_sockets_for_user(self, user_id: str) -> bool:
+        """True iff at least one ``{rider,driver,admin}_{user_id}`` key
+        is in active_connections. Used to decide whether to evict the
+        per-user msg bucket on disconnect."""
+        for ct in ("rider", "driver", "admin"):
+            if f"{ct}_{user_id}" in self.active_connections:
+                return True
+        return False
+
+    def _maybe_drop_user_bucket(self, user_id: str) -> None:
+        if not self._has_sockets_for_user(user_id):
+            self._user_msg_timestamps.pop(user_id, None)
+
+    def note_user_message(
+        self,
+        user_id: str,
+        *,
+        max_per_second: int = WS_MAX_MESSAGES_PER_SECOND_PER_USER,
+    ) -> bool:
+        """Record an inbound WebSocket message for ``user_id`` against
+        the per-user sliding-window rate limit (B-P1-12).
+
+        Returns True if the message is within budget; False if the user
+        has exceeded ``max_per_second`` messages over the prior 1-second
+        window across ALL their open sockets on this machine. The
+        caller (routes/websocket.py receive loop) emits a typed
+        ``rate_limited`` frame on False and drops the message — the
+        socket is NOT closed, matching the prior per-connection
+        behaviour so a brief burst doesn't tear down a healthy session.
+
+        Synchronous on purpose: ``time.monotonic()`` doesn't need an
+        event loop, which makes this trivially unit-testable without
+        an async harness. Bucket trimming is in-place to avoid GC
+        churn under sustained high message rates from drivers (one
+        location_update per second is the steady state).
+        """
+        now_ts = time.monotonic()
+        cutoff = now_ts - 1.0
+        bucket = self._user_msg_timestamps.get(user_id)
+        if bucket is None:
+            bucket = []
+            self._user_msg_timestamps[user_id] = bucket
+        bucket[:] = [t for t in bucket if t >= cutoff]
+        if len(bucket) >= max_per_second:
+            return False
+        bucket.append(now_ts)
+        return True
+
+    async def disconnect_user(
+        self,
+        user_id: str,
+        *,
+        client_types: Optional[List[str]] = None,
+        reason: str = "token_revoked",
+    ) -> int:
+        """Force-close every LOCAL WebSocket whose key matches user_id (B-P1-11).
+
+        Returns the number of sockets actually closed. ``client_types``
+        defaults to {rider, driver, admin}; pass a narrower list to
+        scope the kick (e.g. ["rider", "driver"] for /auth/logout-all,
+        ["admin"] for /admin/auth/logout-all).
+
+        This only touches sockets on THIS machine. For multi-replica
+        deployments the caller should route through ``kick_user`` (or
+        ``ws_pubsub.publish_kick_user``) so every VM gets the signal.
+
+        We try to send a final ``session_revoked`` frame before closing
+        so the client can surface "you signed out everywhere" rather
+        than a generic disconnect — best-effort only; a dead socket
+        will raise on send and we proceed to close anyway.
+        """
+        types: List[str] = list(client_types) if client_types else ["rider", "driver", "admin"]
+        closed = 0
+        for client_type in types:
+            key = f"{client_type}_{user_id}"
+            ws = self.active_connections.get(key)
+            if ws is None:
+                continue
+            try:
+                await ws.send_json({"type": "session_revoked", "reason": reason})
+            except Exception:  # noqa: S110 — socket may already be dead
+                pass
+            try:
+                # 1008 = "policy violation" per RFC 6455. The reason
+                # string is capped at 123 bytes by the spec; trim
+                # defensively so we never raise a ProtocolError when
+                # the caller passes something verbose.
+                await ws.close(code=1008, reason=(reason or "")[:120])
+            except Exception as e:
+                logger.warning(f"disconnect_user: close failed for {key}: {e}")
+            # Pop unconditionally — the socket is unusable either way,
+            # and a stale entry would let send_personal_message try to
+            # write to a dead handle.
+            self.active_connections.pop(key, None)
+            closed += 1
+        if closed:
+            logger.info(f"disconnect_user: kicked {closed} local socket(s) for user_id={user_id} reason={reason}")
+        # B-P1-12: drop the user's rate-limit bucket if no sockets remain
+        # for this user on this machine. ``client_types`` may have been
+        # narrower than the user's full set (e.g. an admin logout that
+        # only kicks admin sockets), so re-check rather than blindly pop.
+        self._maybe_drop_user_bucket(user_id)
+        return closed
+
+    async def kick_user(
+        self,
+        user_id: str,
+        *,
+        client_types: Optional[List[str]] = None,
+        reason: str = "token_revoked",
+    ) -> int:
+        """Force-disconnect every WS for ``user_id`` across the fleet (B-P1-11).
+
+        Cross-replica: best-effort fan-out via Redis pub/sub when active.
+        Local: always runs (idempotent if pub/sub loops back to us).
+
+        Returns the local-machine kick count. Remote kicks happen
+        asynchronously on the receiving replicas and are not
+        enumerable from here — that's by design, the caller doesn't
+        need to wait for every machine.
+        """
+        types_list: Optional[List[str]] = list(client_types) if client_types else None
+        try:
+            from utils.ws_pubsub import pubsub
+        except ImportError:  # pragma: no cover — package-relative fallback
+            from .utils.ws_pubsub import pubsub  # type: ignore
+        # Fire the cross-replica signal first so other VMs start their
+        # disconnect work in parallel with our local close. publish
+        # is itself best-effort; a False return just means single-machine
+        # mode, which is fine because the local close below covers us.
+        try:
+            await pubsub.publish_kick_user(
+                user_id,
+                client_types=types_list,
+                reason=reason,
+            )
+        except Exception as e:
+            logger.warning(f"kick_user: pub/sub publish failed for {user_id}: {e}")
+        return await self.disconnect_user(
+            user_id,
+            client_types=types_list,
+            reason=reason,
         )
 
     async def send_personal_message(self, message: dict, client_id: str):

@@ -155,13 +155,13 @@ async def _generate_and_store_ride_snapshot(
         return
     try:
         try:
-            from ..utils.route_snapshot import render_ride_snapshot
-            from ..supabase_client import supabase  # type: ignore
             from ..core.config import settings
+            from ..supabase_client import supabase  # type: ignore
+            from ..utils.route_snapshot import render_ride_snapshot
         except ImportError:
-            from utils.route_snapshot import render_ride_snapshot  # type: ignore
-            from supabase_client import supabase  # type: ignore
             from core.config import settings  # type: ignore
+            from supabase_client import supabase  # type: ignore
+            from utils.route_snapshot import render_ride_snapshot  # type: ignore
 
         loop = asyncio.get_event_loop()
         # Tile fetches + PIL rendering are blocking; punt to the executor.
@@ -2977,8 +2977,21 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
             else:
                 logger.info("Stripe not configured; marking subscription paid without charge")
         except Exception as _stripe_err:
-            logger.error(f"Stripe charge failed for driver {driver['id']}: {_stripe_err}")
-            raise HTTPException(status_code=402, detail=f"Payment failed: {_stripe_err}") from _stripe_err
+            # B-P2-1: NEVER interpolate the underlying exception into the
+            # client-facing detail. Stripe error strings carry charge IDs
+            # (ch_…), customer IDs (cus_…), decline codes, and sometimes
+            # last-4-digits — none of which the rider/driver app should
+            # see. logger.exception captures the full traceback server-
+            # side; the request_id in the response body lets support
+            # correlate against the log entry. This is the canonical
+            # pattern referenced by docs/runbooks/error-responses.md.
+            logger.exception(
+                f"Stripe subscription charge failed for driver {driver['id']}"
+            )
+            raise HTTPException(
+                status_code=402,
+                detail="Payment failed. Please try another payment method or contact support.",
+            ) from _stripe_err
 
     subscription = {
         "id": str(uuid.uuid4()),

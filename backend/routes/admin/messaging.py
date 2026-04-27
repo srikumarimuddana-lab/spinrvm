@@ -1,9 +1,10 @@
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 try:
@@ -28,12 +29,58 @@ class CloudMessageRequest(BaseModel):
     scheduled_at: Optional[str] = None
 
 
+async def _fan_out_push(message_id: str, target_users: list, title: str, description: str) -> None:
+    """Fan-out push notifications concurrently and persist final stats to the cloud_messages record."""
+    try:
+        from ...features import send_push_notification
+    except ImportError:
+        from features import send_push_notification
+
+    sem = asyncio.Semaphore(50)
+
+    async def _send_one(uid: str) -> bool:
+        async with sem:
+            try:
+                return bool(await send_push_notification(uid, title, description))
+            except Exception:
+                return False
+
+    uids = [u.get("id") if isinstance(u, dict) else u for u in target_users]
+    uids = [uid for uid in uids if uid]
+
+    results = await asyncio.gather(*[_send_one(uid) for uid in uids], return_exceptions=True)
+    successful = sum(1 for r in results if r is True)
+    failed_count = len(results) - successful
+
+    logger.info(f"Cloud message {message_id} fan-out complete: success={successful} failed={failed_count}")
+
+    try:
+        await db_supabase.update_one(
+            "cloud_messages",
+            {"id": message_id},
+            {"successful": successful, "failed_count": failed_count},
+        )
+    except Exception:
+        logger.error(f"Failed to update cloud_message stats for {message_id}", exc_info=True)
+
+
 # ---------- Cloud Messaging ----------
 
 
 @router.post("/cloud-messaging/send")
-async def admin_send_cloud_message(payload: CloudMessageRequest):
-    """Send or schedule a cloud message to users/drivers."""
+async def admin_send_cloud_message(
+    payload: CloudMessageRequest,
+    background_tasks: BackgroundTasks,
+    response: Response,
+):
+    """Send or schedule a cloud message to users/drivers.
+
+    Immediate sends return 202 Accepted — notifications are fanned out in a
+    background task via asyncio.gather + Semaphore(50) so the event loop is
+    never blocked by thousands of sequential push-notification awaits.
+    Final successful/failed_count figures are written back to the DB record
+    once the background task completes.
+    """
     title = payload.title
     description = payload.description
     audience = payload.audience
@@ -46,8 +93,6 @@ async def admin_send_cloud_message(payload: CloudMessageRequest):
     status = "scheduled" if is_scheduled else "sent"
 
     total_recipients = 1
-    successful = 0
-    failed_count = 0
 
     if audience in ("particular_customer", "particular_driver"):
         total_recipients = len(particular_ids) if particular_ids else 1
@@ -58,30 +103,14 @@ async def admin_send_cloud_message(payload: CloudMessageRequest):
         count = await db_supabase.count_documents("users", {"role": "driver"})
         total_recipients = count if count > 0 else 0
 
+    target_users: list = []
     if not is_scheduled:
-        try:
-            from ...features import send_push_notification
-        except ImportError:
-            from features import send_push_notification
-
-        target_users: list = []
         if audience in ("particular_customer", "particular_driver"):
             target_users = [{"id": uid} for uid in particular_ids]
         elif audience == "customers":
             target_users = await db.get_rows("users", {"role": "rider"}, limit=10000)
         elif audience == "drivers":
             target_users = await db.get_rows("users", {"role": "driver"}, limit=10000)
-
-        for u in target_users:
-            uid = u.get("id") if isinstance(u, dict) else u
-            if uid:
-                ok = await send_push_notification(uid, title, description)
-                if ok:
-                    successful += 1
-                else:
-                    failed_count += 1
-
-        logger.info(f"Cloud message sent to {audience}: {title} (success={successful}, failed={failed_count})")
 
     doc = {
         "id": str(uuid.uuid4()),
@@ -98,8 +127,8 @@ async def admin_send_cloud_message(payload: CloudMessageRequest):
         "sent_at": datetime.now(timezone.utc).isoformat() if not is_scheduled else None,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "total_recipients": total_recipients,
-        "successful": successful,
-        "failed_count": failed_count,
+        "successful": 0,
+        "failed_count": 0,
     }
 
     try:
@@ -110,6 +139,11 @@ async def admin_send_cloud_message(payload: CloudMessageRequest):
             status_code=500,
             detail="Failed to save message. The cloud_messages table may not exist yet. Please run migration 06_cloud_messaging.sql.",
         ) from e
+
+    if not is_scheduled:
+        background_tasks.add_task(_fan_out_push, doc["id"], target_users, title, description)
+        response.status_code = 202
+
     return {"success": True, "message": doc}
 
 

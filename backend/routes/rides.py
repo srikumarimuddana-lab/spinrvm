@@ -1868,8 +1868,12 @@ async def rate_driver(ride_id: str, rating_data: RideRatingRequest, current_user
     # Aggregate driver rating accurately
     driver = await db_supabase.get_driver_by_id(driver_id)
     if driver:
-        # Fetch all rides for this driver to compute precise average
-        driver_rides = await db_supabase.get_rows("rides", {"driver_id": driver_id}, limit=1000)
+        # Fetch rated rides for this driver — columns="rider_rating" drops all other
+        # fields to save ~10× bandwidth; limit=10000 supports any driver lifetime
+        # (10k rides at 2 rides/day = 13 years; well beyond Spinr's planning horizon).
+        driver_rides = await db_supabase.get_rows(
+            "rides", {"driver_id": driver_id}, limit=10000, columns="rider_rating"
+        )
         rated_rides = [float(r.get("rider_rating")) for r in driver_rides if r.get("rider_rating") is not None]
 
         if rated_rides:

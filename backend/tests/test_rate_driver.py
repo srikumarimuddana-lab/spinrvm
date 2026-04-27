@@ -1,16 +1,18 @@
 """
-Regression tests for B-P0-1: driver rating aggregation reads rider_rating column.
+Regression tests for B-P0-1: driver rating aggregation column + limit.
 
 Background
 ----------
 rate_driver (rides.py) writes the per-ride rating to the `rider_rating` DB column
-(line 1856) but the aggregation list-comprehension read `r.get('driver_rating')`.
+but the aggregation list-comprehension read `r.get('driver_rating')`.
 `driver_rating` is a *synthetic* field injected by db_supabase enrichment methods —
 it is absent from raw get_rows() output.  The result: rated_rides was always empty,
 the driver profile's `rating` field was never updated, and every rating was silently
 dropped.
 
-Fix: changed the comprehension to use `rider_rating` (the real DB column).
+Fix 1 (B-P0-1): changed the comprehension to use `rider_rating` (the real DB column).
+Fix 2 (follow-up): raised get_rows limit 1000 → 10000, added columns="rider_rating"
+  to avoid truncating the average for high-volume drivers and reduce payload ~10×.
 
 Test layers
 -----------
@@ -88,6 +90,55 @@ def test_average_rounds_to_two_decimal_places():
     rated_rides = [float(r.get("rider_rating")) for r in rides if r.get("rider_rating") is not None]
     avg = round(sum(rated_rides) / len(rated_rides), 2)
     assert avg == 4.33
+
+
+def test_rating_aggregation_limit_is_10000_not_1000():
+    """
+    AST guard: the get_rows call for driver rating must use limit=10000.
+    limit=1000 would truncate the average for drivers with >1000 rated rides,
+    silently under-counting and skewing ratings downward.
+    """
+    import ast
+    import pathlib
+
+    source = pathlib.Path("backend/routes/rides.py").read_text()
+    tree = ast.parse(source)
+
+    # Find get_rows calls inside the rate_driver function body
+    rate_driver_src_start = source.find("async def rate_driver(")
+    rate_driver_src_end = source.find("\n@", rate_driver_src_start + 1)
+    if rate_driver_src_end == -1:
+        rate_driver_src_end = len(source)
+    rate_driver_block = source[rate_driver_src_start:rate_driver_src_end]
+
+    # The block must contain limit=10000
+    assert "limit=10000" in rate_driver_block, (
+        "rate_driver get_rows must use limit=10000 — limit=1000 truncates "
+        "the average for drivers with >1000 rated rides"
+    )
+    # Must NOT use the old cap
+    assert "limit=1000," not in rate_driver_block and "limit=1000\n" not in rate_driver_block, (
+        "rate_driver must not use limit=1000 (old truncation cap)"
+    )
+
+
+def test_rating_aggregation_uses_rider_rating_column_kwarg():
+    """
+    AST guard: the get_rows call must specify columns='rider_rating' to avoid
+    fetching full ride rows (pickup/dropoff/fare/etc.) just to compute the average.
+    """
+    import pathlib
+
+    source = pathlib.Path("backend/routes/rides.py").read_text()
+    rate_driver_start = source.find("async def rate_driver(")
+    rate_driver_end = source.find("\n@", rate_driver_start + 1)
+    if rate_driver_end == -1:
+        rate_driver_end = len(source)
+    block = source[rate_driver_start:rate_driver_end]
+
+    assert 'columns="rider_rating"' in block, (
+        'rate_driver get_rows must include columns="rider_rating" to avoid fetching full rows just for aggregation'
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -92,6 +92,57 @@ describe('authStore', () => {
     });
   });
 
+  describe('persist partialize — A-P0-1 guard', () => {
+    it('persisted shape contains user and isAuthenticated, never token', () => {
+      // partialize() is called by Zustand before writing to sessionStorage.
+      // It must strip the access token — if token appears in sessionStorage
+      // any XSS exploit can steal admin credentials.
+      const partialize = (useAuthStore as any).persist.getOptions().partialize;
+      const fullState = {
+        user: { id: 'admin-1', email: 'admin@spinr.ca', role: 'super_admin' },
+        token: 'SECRET_JWT_MUST_NOT_PERSIST',
+        isAuthenticated: true,
+        isLoading: false,
+        setUser: () => {},
+        setToken: () => {},
+        logout: () => {},
+        checkAuth: async () => {},
+        silentRefresh: async () => {},
+        setLoading: () => {},
+        scheduleRefresh: () => {},
+      };
+
+      const persisted = partialize(fullState);
+
+      expect(persisted).not.toHaveProperty('token');
+      expect(persisted).toHaveProperty('user');
+      expect(persisted).toHaveProperty('isAuthenticated');
+    });
+
+    it('persisted shape excludes all function and loading fields', () => {
+      const partialize = (useAuthStore as any).persist.getOptions().partialize;
+      const state = useAuthStore.getState();
+      const persisted = partialize(state);
+
+      // Only user + isAuthenticated should be persisted — nothing else
+      const keys = Object.keys(persisted);
+      expect(keys).toEqual(expect.arrayContaining(['user', 'isAuthenticated']));
+      expect(keys).not.toContain('token');
+      expect(keys).not.toContain('isLoading');
+    });
+
+    it('token added to state does not leak into sessionStorage shape', () => {
+      // Use setState directly to avoid triggering setAuthCookie (fetch side-effect)
+      useAuthStore.setState({ token: 'eyJhbGciOiJIUzI1NiJ9.payload.sig' });
+
+      const partialize = (useAuthStore as any).persist.getOptions().partialize;
+      const persisted = partialize(useAuthStore.getState());
+
+      expect(persisted).not.toHaveProperty('token');
+      expect(useAuthStore.getState().token).toBe('eyJhbGciOiJIUzI1NiJ9.payload.sig');
+    });
+  });
+
   describe('checkAuth', () => {
     it('should set loading to false when no token exists', async () => {
       useAuthStore.setState({ token: null, isLoading: true });

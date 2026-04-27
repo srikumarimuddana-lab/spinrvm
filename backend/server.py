@@ -215,6 +215,10 @@ if sentry_dsn:
 
     integrations = [
         FastApiIntegration(transaction_style="url"),
+        # Captures all logger.error() calls as Sentry events, including the
+        # "REFRESH TOKEN REUSE DETECTED" line in utils/refresh_tokens.py.
+        # Sentry alert rule: Issue title contains "REFRESH TOKEN REUSE DETECTED"
+        # → notify via PagerDuty / email. Must be created in the Sentry dashboard.
         LoggingIntegration(event_level="ERROR", breadcrumb_level="WARNING"),
     ]
     if _StarletteMiddleware is not None:
@@ -226,7 +230,8 @@ if sentry_dsn:
         traces_sample_rate=0.1,
         profiles_sample_rate=0.1,
         environment=settings.ENV if hasattr(settings, "ENV") else "production",
-        send_default_pii=True,
+        # PIPEDA: never send IP, cookies, or auth headers to Sentry.
+        send_default_pii=False,
     )
     logger.info("Sentry SDK initialized for error monitoring")
 

@@ -5,9 +5,9 @@ import { NextRequest, NextResponse } from "next/server";
  *
  * Strategy:
  *
- *   1. On login success we dual-write the JWT to sessionStorage (for React/api.ts
- *      access) AND to an `admin_token` cookie (for this middleware). The cookie
- *      is path=/ SameSite=Lax and 8-hour Max-Age (standard admin session).
+ *   1. On login success the Next.js BFF route sets an HttpOnly `admin_token`
+ *      cookie (SameSite=Strict, path=/, 8-hour max-age). JS holds the token
+ *      in Zustand memory for Authorization headers; it never writes cookies.
  *   2. This middleware decodes the JWT and checks the `exp` claim. Expired or
  *      malformed tokens are rejected — the user is redirected to /login.
  *      Full signature verification stays on the backend (Edge Runtime cannot

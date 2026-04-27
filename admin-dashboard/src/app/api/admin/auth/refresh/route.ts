@@ -9,8 +9,10 @@ const BACKEND_URL =
   "http://127.0.0.1:8000";
 
 const RT_COOKIE = "spinr_admin_rt";
+const AT_COOKIE = "admin_token";
 const CSRF_COOKIE = "csrf_token";
 const RT_MAX_AGE = 30 * 24 * 60 * 60;
+const AT_MAX_AGE = 8 * 60 * 60;
 
 function clearRtCookie(res: NextResponse): void {
   res.cookies.set(RT_COOKIE, "", {
@@ -68,6 +70,19 @@ export async function POST(req: NextRequest) {
       secure: process.env.NODE_ENV === "production",
       path: "/api/admin/auth",
       maxAge: RT_MAX_AGE,
+    });
+  }
+  // Rotate the HttpOnly access-token cookie alongside the refresh token.
+  if (clientData.token) {
+    const atMaxAge = clientData.access_expires_at
+      ? Math.max(0, Math.floor((new Date(clientData.access_expires_at).getTime() - Date.now()) / 1000))
+      : AT_MAX_AGE;
+    res.cookies.set(AT_COOKIE, clientData.token, {
+      httpOnly: true,
+      sameSite: "strict",
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+      maxAge: atMaxAge,
     });
   }
   // Rotate the browser-readable csrf_token cookie so the next page-reload

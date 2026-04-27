@@ -112,10 +112,10 @@ Branch: `claude/plan-deferred-tasks-qtT8I`
 
 ## Checklist
 
-- [ ] A-PE-P3-1 Bundle secret scan in CI (17-5)
+- [x] A-PE-P3-1 Bundle secret scan in CI (17-5) — G5b job added to security-gates.yml
 - [x] A-PE-P3-2 NEXT_PUBLIC_API_URL fail-fast (18-4) — done in next.config.ts
-- [ ] A-PE-P3-3 lucide-react upgrade (19-6)
+- [x] A-PE-P3-3 lucide-react upgrade (19-6) — upgraded to ^1.11.0 (latest)
 - [x] A-PE-P3-4 Sentry release tag (21-6) — done; verify in Sentry UI post-deploy
 - [ ] A-PE-P3-5 Vendor register PIPEDA DPA inventory (22-4)
-- [ ] A-PE-P3-6 noopener lint rule (23-10)
-- [ ] A-PE-P3-7 Service worker policy doc (23-9)
+- [x] A-PE-P3-6 noopener lint rule (23-10) — react/jsx-no-target-blank: "error" in eslint.config.mjs
+- [x] A-PE-P3-7 Service worker policy doc (23-9) — created docs/runbooks/admin-pwa.md

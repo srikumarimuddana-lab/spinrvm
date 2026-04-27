@@ -80,6 +80,6 @@ if (event.request?.url) {
 
 ## Checklist
 
-- [ ] A-PE-P1-1 Refresh token to HttpOnly cookie (18-3)
-- [ ] A-PE-P1-2 Cookie SameSite=Strict (18-1)  
-- [ ] A-PE-P1-3 Sentry URL path entity-ID scrub (21-3 extension)
+- [x] A-PE-P1-1 Refresh token to HttpOnly cookie (18-3) — done via BFF `login/route.ts`
+- [x] A-PE-P1-2 Cookie SameSite=Strict (18-1) — done; all BFF routes + authStore use Strict
+- [x] A-PE-P1-3 Sentry URL path entity-ID scrub (21-3 extension) — done in both sentry configs

@@ -1,43 +1,18 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 
-// ── Cookie helpers ───────────────────────────────────────────────
-// The JWT is dual-written to memory (Zustand) AND to an `admin_token`
-// cookie (for the Next.js middleware at src/middleware.ts, which runs on
-// the edge and cannot read sessionStorage). The access token is NOT
-// persisted to sessionStorage — only the opaque refresh token is stored
-// there. On page reload, silentRefresh() exchanges the refresh token for
-// a new short-lived access token before any API calls are made.
-const COOKIE_NAME = 'admin_token';
-const COOKIE_MAX_AGE_SECONDS = 60 * 60 * 8; // 8 hours — standard admin session
+// The access token lives in Zustand memory only (for Authorization headers).
+// The HttpOnly `admin_token` cookie used by Edge middleware (src/proxy.ts) is
+// set and rotated exclusively by the Next.js BFF routes:
+//   POST /api/admin/auth/login   → sets admin_token + spinr_admin_rt
+//   POST /api/admin/auth/refresh → rotates both cookies
+//   POST /api/admin/auth/logout  → clears both cookies
+// JS never writes to document.cookie for auth purposes (A-PE-P2-1).
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 const REFRESH_BEFORE_EXPIRY_MS = 5 * 60 * 1000; // refresh 5 min before access token expires
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes (F-19)
 
 let _refreshTimer: ReturnType<typeof setTimeout> | null = null;
-
-// NOTE (F-02): document.cookie cannot set HttpOnly — the flag is only settable
-// by the server. A full fix requires a Next.js API route (/api/auth/set-cookie)
-// that accepts the token and responds with Set-Cookie: HttpOnly; Secure.
-// Until that API route is implemented, SameSite=Strict reduces XSS exposure
-// by blocking cross-site requests from carrying this cookie.
-function setAuthCookie(token: string) {
-    if (typeof document === 'undefined') return;
-    const secure = typeof window !== 'undefined' && window.location.protocol === 'https:';
-    const parts = [
-        `${COOKIE_NAME}=${encodeURIComponent(token)}`,
-        'path=/',
-        `max-age=${COOKIE_MAX_AGE_SECONDS}`,
-        'SameSite=Strict',
-    ];
-    if (secure) parts.push('Secure');
-    document.cookie = parts.join('; ');
-}
-
-function clearAuthCookie() {
-    if (typeof document === 'undefined') return;
-    document.cookie = `${COOKIE_NAME}=; path=/; max-age=0; SameSite=Strict`;
-}
 
 function cancelRefreshTimer() {
     if (_refreshTimer) {
@@ -144,11 +119,8 @@ export const useAuthStore = create<AuthState>()(
 
             setToken: (token) => {
                 set({ token });
-                if (token) {
-                    setAuthCookie(token);
-                } else {
-                    clearAuthCookie();
-                }
+                // Cookie is set/cleared server-side by the BFF routes — no
+                // document.cookie writes here (A-PE-P2-1).
             },
 
             setCsrfToken: (token) => {
@@ -166,7 +138,6 @@ export const useAuthStore = create<AuthState>()(
             logout: () => {
                 cancelRefreshTimer();
                 stopIdleWatch();
-                clearAuthCookie();
                 const csrfToken = get().csrfToken;
                 set({
                     user: null,
@@ -205,7 +176,6 @@ export const useAuthStore = create<AuthState>()(
                     }
                     const data: { token: string; access_expires_at: string; csrf_token?: string } = await res.json();
                     set({ token: data.token, csrfToken: data.csrf_token ?? null });
-                    setAuthCookie(data.token);
                     scheduleTokenRefresh(data.access_expires_at, get().silentRefresh);
                     startIdleWatch(get().logout);
                 } catch {

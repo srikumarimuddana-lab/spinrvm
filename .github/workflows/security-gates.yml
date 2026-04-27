@@ -142,9 +142,9 @@ jobs:
           else echo "No lockfile in ${{ matrix.module }}"
           fi
 
-  # G5 — Secret scanning
+  # G5 — Secret scanning (git history)
   gitleaks:
-    name: G5 · Gitleaks (secrets)
+    name: G5a · Gitleaks (git history)
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -155,10 +155,37 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # G5b — Scan compiled Next.js bundle for leaked NEXT_PUBLIC_* secrets.
+  # A build-time env var that should have been server-only can slip into
+  # the bundle (e.g. NEXT_PUBLIC_API_KEY) and pass git-history scanning
+  # while still being present in the shipped artefact.
+  bundle-secrets:
+    name: G5b · Gitleaks (admin bundle)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+      - name: Build admin dashboard
+        working-directory: admin-dashboard
+        run: |
+          if [ -f package-lock.json ]; then npm ci; fi
+          npm run build
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8000
+      - name: Scan bundle for secrets
+        uses: gitleaks/gitleaks-action@v2
+        with:
+          args: detect --source admin-dashboard/.next --no-git --redact
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   # Summary job — required check for branch protection once gates are enforced
   summary:
     name: Security gates summary
-    needs: [bandit, eslint-security, semgrep, pip-audit, yarn-audit, gitleaks]
+    needs: [bandit, eslint-security, semgrep, pip-audit, yarn-audit, gitleaks, bundle-secrets]
     if: always()
     runs-on: ubuntu-latest
     steps:

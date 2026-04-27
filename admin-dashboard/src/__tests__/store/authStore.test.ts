@@ -7,10 +7,16 @@ describe('authStore', () => {
     useAuthStore.setState({
       user: null,
       token: null,
+      csrfToken: null,
       isAuthenticated: false,
       isLoading: false,
     });
-    vi.clearAllMocks();
+    // Default: fire-and-forget calls (setAuthCookie, clearAuthCookie) resolve silently.
+    // Tests that need specific response behaviour override with mockResolvedValueOnce.
+    (global.fetch as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({}),
+    });
   });
 
   describe('initial state', () => {
@@ -18,6 +24,7 @@ describe('authStore', () => {
       const state = useAuthStore.getState();
       expect(state.user).toBeNull();
       expect(state.token).toBeNull();
+      expect(state.csrfToken).toBeNull();
       expect(state.isAuthenticated).toBe(false);
     });
   });
@@ -73,12 +80,23 @@ describe('authStore', () => {
     });
   });
 
+  describe('setCsrfToken', () => {
+    it('should store and clear the CSRF token', () => {
+      useAuthStore.getState().setCsrfToken('abc123');
+      expect(useAuthStore.getState().csrfToken).toBe('abc123');
+
+      useAuthStore.getState().setCsrfToken(null);
+      expect(useAuthStore.getState().csrfToken).toBeNull();
+    });
+  });
+
   describe('logout', () => {
-    it('should clear all auth state', () => {
+    it('should clear all auth state including csrfToken', () => {
       // Set up authenticated state
       useAuthStore.setState({
         user: { id: 'admin-1', email: 'admin@spinr.ca', role: 'super_admin' },
         token: 'jwt-token',
+        csrfToken: 'csrf-abc',
         isAuthenticated: true,
       });
 
@@ -87,8 +105,44 @@ describe('authStore', () => {
       const state = useAuthStore.getState();
       expect(state.user).toBeNull();
       expect(state.token).toBeNull();
+      expect(state.csrfToken).toBeNull();
       expect(state.isAuthenticated).toBe(false);
       expect(state.isLoading).toBe(false);
+    });
+  });
+
+  describe('silentRefresh', () => {
+    it('should store new csrf_token from refresh response', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          token: 'new-access-token',
+          access_expires_at: new Date(Date.now() + 900_000).toISOString(),
+          csrf_token: 'new-csrf-token',
+        }),
+      });
+
+      useAuthStore.setState({ csrfToken: 'old-csrf-token', isAuthenticated: true });
+
+      await useAuthStore.getState().silentRefresh();
+
+      const state = useAuthStore.getState();
+      expect(state.token).toBe('new-access-token');
+      expect(state.csrfToken).toBe('new-csrf-token');
+    });
+
+    it('should logout on non-ok refresh response', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+      });
+
+      useAuthStore.setState({ csrfToken: 'csrf-abc', isAuthenticated: true });
+
+      await useAuthStore.getState().silentRefresh();
+
+      expect(useAuthStore.getState().isAuthenticated).toBe(false);
+      expect(useAuthStore.getState().csrfToken).toBeNull();
     });
   });
 

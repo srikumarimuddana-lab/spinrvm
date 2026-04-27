@@ -499,21 +499,30 @@ export const useRideStore = create<RideState>((set, get) => ({
   },
 
   triggerEmergency: async (rideId: string, latitude?: number, longitude?: number) => {
-    try {
-      await api.post(`/rides/${rideId}/emergency`, {
-        message: 'Emergency assistance requested via app button',
-        latitude,
-        longitude
-      });
-    } catch (error: any) {
-      Alert.alert(
-        'Emergency Alert May Not Have Sent',
-        'Could not reach the server. Please call 911 directly.',
-        [{ text: 'Call 911', onPress: () => Linking.openURL('tel:911') }]
-      );
-      // Swallow the error — caller does not need to handle this; the Alert is
-      // the user-facing feedback. Rethrowing would crash uncaught promise chains.
+    const payload = {
+      message: 'Emergency assistance requested via app button',
+      latitude,
+      longitude,
+    };
+    const MAX_ATTEMPTS = 3;
+    let lastError: any;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        await api.post(`/rides/${rideId}/emergency`, payload);
+        return; // success
+      } catch (error: any) {
+        lastError = error;
+        if (attempt < MAX_ATTEMPTS) {
+          await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+        }
+      }
     }
+    // All attempts failed — prompt the user to call 911 directly
+    Alert.alert(
+      'Emergency Alert May Not Have Sent',
+      'Could not reach the server after multiple attempts. Please call 911 directly.',
+      [{ text: 'Call 911', onPress: () => Linking.openURL('tel:911') }]
+    );
   },
 
   fetchSavedAddresses: async () => {

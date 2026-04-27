@@ -1032,7 +1032,7 @@ async def create_ride(request: Request, body: CreateRideRequest, current_user: d
                 inserted = await db_supabase.insert_ride(ride_data)
                 break
             if "rides_one_active_per_rider" in msg:
-                raise HTTPException(status_code=409, detail="You already have an active ride")
+                raise HTTPException(status_code=409, detail="You already have an active ride") from e
             if "unique" in msg or "duplicate" in msg or "23505" in msg:
                 continue  # retry with a new code for ride_code conflicts
             raise
@@ -1405,13 +1405,12 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
 
     # Atomic guard: set payment_status to "processing" only if it's still pending.
     # This prevents race conditions when two concurrent payment requests hit the endpoint.
-    guard_result = await db.update_one(
-        "rides",
-        {"id": ride_id, "payment_status": {"$nin": ["paid", "processing"]}},
-        {"$set": {"payment_status": "processing"}},
+    # The idempotency check above already handles the common case; this write locks the row
+    # so a concurrent request that also passed the idempotency check cannot double-charge.
+    await db_supabase.update_ride(
+        ride_id,
+        {"payment_status": "processing", "updated_at": datetime.now(timezone.utc).isoformat()},
     )
-    if hasattr(guard_result, "modified_count") and guard_result.modified_count == 0:
-        return {"success": True, "already_paid": True, "charged_amount": 0}
 
     if tip_amount < 0:
         raise HTTPException(status_code=400, detail="Tip amount cannot be negative")
@@ -1878,24 +1877,22 @@ async def rate_driver(ride_id: str, rating_data: RideRatingRequest, current_user
         new_driver_earnings = ride.get("driver_earnings", 0) + rating_data.tip_amount
         await db_supabase.update_ride(ride_id, {"tip_amount": new_tip, "driver_earnings": new_driver_earnings})
 
-    # Aggregate driver rating accurately
+    # Aggregate driver rating using rolling average to avoid O(n) ride fetch.
     driver = await db_supabase.get_driver_by_id(driver_id)
     if driver:
-        # Fetch all rides for this driver to compute precise average
-        driver_rides = await db_supabase.get_rows("rides", {"driver_id": driver_id}, limit=1000)
-        rated_rides = [float(r.get("driver_rating")) for r in driver_rides if r.get("driver_rating") is not None]
-
-        if rated_rides:
-            average_rating = round(sum(rated_rides) / len(rated_rides), 2)
-            await db_supabase.update_one(
-                "drivers",
-                {"id": driver_id},
-                {
-                    "rating": average_rating,
-                    "average_rating": average_rating,
-                    "total_ratings": len(rated_rides),
-                },
-            )
+        old_count = int(driver.get("total_ratings") or 0)
+        old_avg = float(driver.get("rating") or 0)
+        new_count = old_count + 1
+        new_avg = round((old_avg * old_count + float(rating_data.rating)) / new_count, 2)
+        await db_supabase.update_one(
+            "drivers",
+            {"id": driver_id},
+            {
+                "rating": new_avg,
+                "average_rating": new_avg,
+                "total_ratings": new_count,
+            },
+        )
 
     # G19: Notify the driver that they received a rating. This creates a
     # feedback loop — drivers see their rating improve/decline in real time

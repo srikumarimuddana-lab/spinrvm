@@ -11,13 +11,20 @@ const BACKEND_URL =
 const securityHeaders = [
   { key: "X-Frame-Options", value: "DENY" },
   { key: "X-Content-Type-Options", value: "nosniff" },
-  { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+  // same-origin prevents driver_id/ride_id leaking in Referer to Stripe/Twilio ([23-5])
+  { key: "Referrer-Policy", value: "same-origin" },
   { key: "X-Permitted-Cross-Domain-Policies", value: "none" },
+  // Disable legacy IE/Edge XSS auditor — it had bypasses and is obsolete ([23-7])
+  { key: "X-XSS-Protection", value: "0" },
   {
     key: "Strict-Transport-Security",
     value: "max-age=63072000; includeSubDomains; preload",
   },
-  { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
+  // Admin uses none of these APIs; block them as defence-in-depth ([23-4])
+  {
+    key: "Permissions-Policy",
+    value: "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()",
+  },
 ];
 
 const nextConfig: NextConfig = {

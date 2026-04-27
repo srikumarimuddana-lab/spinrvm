@@ -209,20 +209,66 @@ async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) 
     """
     Custom handler for rate limit exceeded errors.
 
-    Returns a 429 JSON response with retry information. Previously this
-    returned a plain dict, which Starlette serialised with a 200 status —
-    clients that check `response.status != 429` treated throttled
-    requests as successful. Always return a JSONResponse here so the
-    HTTP status and Retry-After header are set correctly.
+    Emits the response shape pinned by docs/runbooks/rate-limits.md:
+
+      Headers:
+        Retry-After: <seconds>           — RFC 9110, integer seconds
+        RateLimit-Limit: <amount>        — IETF draft-ietf-httpapi-ratelimit-headers
+        RateLimit-Remaining: 0           — always 0 once we're past the limit
+        RateLimit-Reset: <seconds>       — same as Retry-After (delta-seconds form)
+
+      Body:
+        {
+          "error": "rate_limit_exceeded",
+          "message": "...",
+          "retry_after": <seconds>,
+          "limit": <amount> | null,
+          "documentation_url": "..."
+        }
+
+    The previous implementation hard-coded ``Retry-After: 60`` as a
+    sentinel. The 429 fired correctly, but a client looking at the
+    header to decide "wait 60s before retrying" was always told 60s
+    regardless of whether the actual limit was 5/minute or 5/hour.
+    We now read the limit's window size from ``exc.limit.limit`` —
+    a worst-case wait that's guaranteed correct (the bucket will
+    have headroom by then). Computing the *exact* bucket reset time
+    requires probing the storage backend's per-key state, which the
+    slowapi/limits abstraction doesn't expose cheaply; window-size
+    is the standard fallback and what most rate-limit middleware
+    use as Retry-After.
     """
-    # Calculate retry time from the exception
-    retry_after = getattr(exc, "retry_after", 60)
+    retry_after = 60  # safe default if exc.limit is malformed
+    limit_amount: int | None = None
+    try:
+        # exc.limit is a slowapi.wrappers.Limit; the parsed RateLimitItem
+        # is exc.limit.limit (yes, doubly nested — slowapi naming).
+        rl_item = exc.limit.limit
+        retry_after = int(rl_item.get_expiry())
+        limit_amount = int(rl_item.amount)
+    except (AttributeError, TypeError, ValueError) as e:
+        # Never crash the handler — emitting a 429 with a sentinel
+        # Retry-After is strictly better than 500'ing a rate-limited
+        # request. Log loudly so we notice if slowapi changes shape.
+        logger.warning(f"rate_limit_handler: could not derive retry_after/limit ({e})")
+
+    headers: Dict[str, str] = {"Retry-After": str(retry_after)}
+    if limit_amount is not None:
+        # IETF draft-ietf-httpapi-ratelimit-headers (in last call as of
+        # 2026). Even if the draft never RFCs, GitHub/Twitter/Stripe
+        # already emit these and our clients' parsing logic is the
+        # de-facto consumer. RateLimit-Reset uses the delta-seconds
+        # form (same value as Retry-After) per the draft's §5.3.
+        headers["RateLimit-Limit"] = str(limit_amount)
+        headers["RateLimit-Remaining"] = "0"
+        headers["RateLimit-Reset"] = str(retry_after)
 
     logger.warning(
         f"Rate limit exceeded | "
         f"Path: {request.url.path} | "
         f"Method: {request.method} | "
         f"IP: {get_remote_address(request)} | "
+        f"Limit: {limit_amount} | "
         f"Retry-After: {retry_after}s"
     )
 
@@ -232,9 +278,10 @@ async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) 
             "error": "rate_limit_exceeded",
             "message": "Too many requests. Please slow down and try again later.",
             "retry_after": retry_after,
+            "limit": limit_amount,
             "documentation_url": "https://spinr.app/docs/rate-limits",
         },
-        headers={"Retry-After": str(retry_after)},
+        headers=headers,
     )
 
 

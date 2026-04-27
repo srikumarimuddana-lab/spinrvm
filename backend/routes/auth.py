@@ -64,14 +64,27 @@ _LOCK_KEY = "otp_lock:{}"
 
 
 async def _check_otp_lockout(phone: str) -> None:
-    """Raise 429 if phone is currently locked out. Raises 503 on Redis errors (fail closed)."""
+    """Raise 429 if phone is currently locked out. Raises 503 on Redis errors (fail closed).
+
+    B-P1-8: Mirrors the response shape pinned by the slowapi 429 path
+    (utils/rate_limiter.py::rate_limit_exceeded_handler) so mobile
+    clients can use a single 429 parser regardless of which gate
+    (slowapi window or OTP lockout) tripped. RateLimit-* headers per
+    draft-ietf-httpapi-ratelimit-headers; Retry-After per RFC 9110.
+    """
     try:
         locked = await redis_get(_LOCK_KEY.format(phone))
         if locked:
+            retry_after = int(settings.OTP_LOCKOUT_DURATION_SECONDS)
             raise HTTPException(
                 status_code=429,
                 detail="ERR_OTP_LOCKED",
-                headers={"Retry-After": str(settings.OTP_LOCKOUT_DURATION_SECONDS)},
+                headers={
+                    "Retry-After": str(retry_after),
+                    "RateLimit-Limit": str(int(settings.OTP_MAX_FAILURES)),
+                    "RateLimit-Remaining": "0",
+                    "RateLimit-Reset": str(retry_after),
+                },
             )
     except HTTPException:
         raise
@@ -95,7 +108,7 @@ async def _record_otp_failure(phone: str) -> None:
             )
             logger.warning(f"OTP_LOCKOUT_TRIGGERED phone=...{phone[-4:]} after {count} failures")
     except Exception as e:
-        logger.warning(f"_record_otp_failure: {e}")
+        logger.error(f"_record_otp_failure: {e}", exc_info=True)
 
 
 async def _clear_otp_failures(phone: str) -> None:
@@ -148,7 +161,7 @@ async def send_otp(request: Request, body: SendOTPRequest):
     try:
         app_settings = await get_app_settings()
     except Exception as e:
-        logger.warning(f"Could not read app_settings from DB: {e}")
+        logger.error(f"Could not read app_settings from DB: {e}", exc_info=True)
 
     twilio_configured = bool(
         app_settings
@@ -224,7 +237,7 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
             if not _hmac.compare_digest(str(expected), str(actual)):
                 otp_record = None
     except Exception as e:
-        logger.warning(f"Could not query OTP from DB: {e}")
+        logger.error(f"Could not query OTP from DB: {e}", exc_info=True)
 
     if not otp_record and _is_dev_otp_bypass(code):
         logger.info("Dev mode: accepting bypass OTP")
@@ -275,7 +288,7 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
         # Find or create user
         existing_user = None
         try:
-            logger.info(f"Searching for user with phone: {phone}")
+            logger.info(f"Searching for user with phone: ...{phone[-4:]}")
             existing_user = await db_supabase.get_user_by_phone(phone)
             logger.info(f"User search result found: {bool(existing_user)}")
         except Exception as e:
@@ -283,7 +296,10 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
             # wraps the original exception in .details["original"]; str(e)
             # only gives the generic "Database operation failed" message.
             original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
-            logger.error(f"get_user_by_phone failed for {phone}: type={type(e).__name__} msg={e} original={original}")
+            logger.error(
+                f"get_user_by_phone failed for ...{phone[-4:]}: type={type(e).__name__} msg={e} original={original}",
+                exc_info=True,
+            )
             # Refuse to silently fall through to user creation — a DB read
             # failure is NOT the same as "user doesn't exist". Creating a
             # new row here generates duplicate accounts on every retry and
@@ -304,7 +320,7 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
                 await db_supabase.update_one("users", {"id": existing_user["id"]}, {"current_session_id": session_id})
                 existing_user["current_session_id"] = session_id
             except Exception as e:
-                logger.warning(f"Could not update session_id for existing user: {e}")
+                logger.error(f"Could not update session_id for existing user: {e}", exc_info=True)
             # Mirror session_id in Redis so revocation propagates instantly across
             # all replicas without waiting for a Postgres read on every request.
             await redis_set(
@@ -387,11 +403,20 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
         # of being re-wrapped as a generic 500.
         raise
     except Exception as e:
-        logger.error(f"CRITICAL ERROR IN VERIFY_OTP: {e}")
-        import traceback
-
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Internal Login Error: {str(e)}") from e
+        # B-P3-leak-cleanup: NEVER interpolate {e} into the client-
+        # facing detail. This path is reachable UNAUTHENTICATED, so a
+        # leak here exposes Supabase row IDs, Firebase JWT errors, and
+        # internal stack frames to anyone with internet access. The
+        # framework sanitiser (utils/error_handling.py) already replaces
+        # 5xx detail with "Internal server error", but the manual
+        # str(e) made the leak's intent explicit; clean it up so the
+        # next contributor doesn't copy the pattern. logger.exception
+        # captures the full traceback server-side automatically.
+        logger.exception("CRITICAL ERROR IN VERIFY_OTP")
+        raise HTTPException(
+            status_code=500,
+            detail="Internal Login Error",
+        ) from e
 
 
 class FirebaseAuthRequest(BaseModel):
@@ -429,9 +454,13 @@ async def firebase_auth_login(request: Request, body: FirebaseAuthRequest):
     user_agent = request.headers.get("user-agent", "")
     client_ip = get_remote_address(request)
 
-    user = await db_supabase.get_user_by_id(uid)
-    if not user and phone:
-        user = await db_supabase.get_user_by_phone(phone)
+    try:
+        user = await db_supabase.get_user_by_id(uid)
+        if not user and phone:
+            user = await db_supabase.get_user_by_phone(phone)
+    except Exception as e:
+        logger.error(f"firebase_auth: user lookup failed uid={uid}: {e}", exc_info=True)
+        raise HTTPException(status_code=503, detail="auth_lookup_failed") from e
 
     is_new_user = False
     session_id = str(uuid.uuid4())
@@ -540,7 +569,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         current_user["driver_onboarding_detail"] = detail
         current_user["driver_onboarding_next_screen"] = next_screen
     except Exception:
-        logger.warning("Could not derive onboarding status")
+        logger.error("Could not derive onboarding status", exc_info=True)
 
     return UserProfile(**current_user)
 
@@ -596,7 +625,7 @@ async def refresh_access_token(request: Request, body: RefreshRequest):
     try:
         user = await db.find_one("users", {"id": user_id})
     except Exception as e:
-        logger.warning(f"refresh: user lookup failed for {user_id}: {e}")
+        logger.error(f"refresh: user lookup failed for {user_id}: {e}", exc_info=True)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid refresh token")
 
@@ -666,9 +695,29 @@ async def logout_all(request: Request, current_user: dict = Depends(get_current_
     try:
         await db.update_one("users", {"id": user_id}, {"$set": {"token_version": new_version}})
     except Exception as e:
-        logger.warning(f"logout-all: could not bump token_version for {user_id}: {e}")
+        logger.error(f"logout-all: could not bump token_version for {user_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Could not invalidate sessions") from e
 
     revoked = await revoke_all_for_user(user_id)
+
+    # B-P1-11: kick any live WebSocket sockets so the user is logged
+    # out instantly rather than waiting up to 30s for the heartbeat
+    # to re-validate token_version. Best-effort — the heartbeat is
+    # the safety net, so a kick failure here must not fail the
+    # logout-all response. The heartbeat re-read still closes the
+    # socket on its next tick.
+    try:
+        try:
+            from ..socket_manager import manager as ws_manager
+        except ImportError:  # pragma: no cover — package-relative fallback
+            from socket_manager import manager as ws_manager
+        await ws_manager.kick_user(
+            user_id,
+            client_types=["rider", "driver"],
+            reason="logout_all",
+        )
+    except Exception as e:
+        logger.warning(f"logout-all: WS kick failed for {user_id}: {e}")
+
     logger.info(f"logout-all: user={user_id} token_version→{new_version} revoked_refresh={revoked}")
     return {"success": True, "revoked_refresh_tokens": revoked}

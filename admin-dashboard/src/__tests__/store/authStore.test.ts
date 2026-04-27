@@ -1,16 +1,24 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { useAuthStore } from '@/store/authStore';
+import { useAuthStore, _resetAuthInitializedForTesting } from '@/store/authStore';
 
 describe('authStore', () => {
   beforeEach(() => {
+    // Reset per-page-load init guard so initAuth() can be exercised in each test.
+    _resetAuthInitializedForTesting();
     // Reset store state
     useAuthStore.setState({
       user: null,
       token: null,
+      csrfToken: null,
       isAuthenticated: false,
       isLoading: false,
     });
-    vi.clearAllMocks();
+    // Default: fire-and-forget calls (setAuthCookie, clearAuthCookie) resolve silently.
+    // Tests that need specific response behaviour override with mockResolvedValueOnce.
+    (global.fetch as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({}),
+    });
   });
 
   describe('initial state', () => {
@@ -18,6 +26,7 @@ describe('authStore', () => {
       const state = useAuthStore.getState();
       expect(state.user).toBeNull();
       expect(state.token).toBeNull();
+      expect(state.csrfToken).toBeNull();
       expect(state.isAuthenticated).toBe(false);
     });
   });
@@ -73,12 +82,23 @@ describe('authStore', () => {
     });
   });
 
+  describe('setCsrfToken', () => {
+    it('should store and clear the CSRF token', () => {
+      useAuthStore.getState().setCsrfToken('abc123');
+      expect(useAuthStore.getState().csrfToken).toBe('abc123');
+
+      useAuthStore.getState().setCsrfToken(null);
+      expect(useAuthStore.getState().csrfToken).toBeNull();
+    });
+  });
+
   describe('logout', () => {
-    it('should clear all auth state', () => {
+    it('should clear all auth state including csrfToken', () => {
       // Set up authenticated state
       useAuthStore.setState({
         user: { id: 'admin-1', email: 'admin@spinr.ca', role: 'super_admin' },
         token: 'jwt-token',
+        csrfToken: 'csrf-abc',
         isAuthenticated: true,
       });
 
@@ -87,59 +107,108 @@ describe('authStore', () => {
       const state = useAuthStore.getState();
       expect(state.user).toBeNull();
       expect(state.token).toBeNull();
+      expect(state.csrfToken).toBeNull();
       expect(state.isAuthenticated).toBe(false);
       expect(state.isLoading).toBe(false);
     });
   });
 
-  describe('persist partialize — A-P0-1 guard', () => {
-    it('persisted shape contains user and isAuthenticated, never token', () => {
-      // partialize() is called by Zustand before writing to sessionStorage.
-      // It must strip the access token — if token appears in sessionStorage
-      // any XSS exploit can steal admin credentials.
-      const partialize = (useAuthStore as any).persist.getOptions().partialize;
-      const fullState = {
-        user: { id: 'admin-1', email: 'admin@spinr.ca', role: 'super_admin' },
-        token: 'SECRET_JWT_MUST_NOT_PERSIST',
-        isAuthenticated: true,
-        isLoading: false,
-        setUser: () => {},
-        setToken: () => {},
-        logout: () => {},
-        checkAuth: async () => {},
-        silentRefresh: async () => {},
-        setLoading: () => {},
-        scheduleRefresh: () => {},
-      };
+  describe('initAuth', () => {
+    it('should set isLoading=false and unauthenticated when no session cookies exist', async () => {
+      // No CSRF cookie → silentRefresh sends no header → BFF returns 403 → logout()
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+      });
 
-      const persisted = partialize(fullState);
+      await useAuthStore.getState().initAuth();
 
-      expect(persisted).not.toHaveProperty('token');
-      expect(persisted).toHaveProperty('user');
-      expect(persisted).toHaveProperty('isAuthenticated');
-    });
-
-    it('persisted shape excludes all function and loading fields', () => {
-      const partialize = (useAuthStore as any).persist.getOptions().partialize;
       const state = useAuthStore.getState();
-      const persisted = partialize(state);
-
-      // Only user + isAuthenticated should be persisted — nothing else
-      const keys = Object.keys(persisted);
-      expect(keys).toEqual(expect.arrayContaining(['user', 'isAuthenticated']));
-      expect(keys).not.toContain('token');
-      expect(keys).not.toContain('isLoading');
+      expect(state.isAuthenticated).toBe(false);
+      expect(state.isLoading).toBe(false);
+      expect(state.token).toBeNull();
     });
 
-    it('token added to state does not leak into sessionStorage shape', () => {
-      // Use setState directly to avoid triggering setAuthCookie (fetch side-effect)
-      useAuthStore.setState({ token: 'eyJhbGciOiJIUzI1NiJ9.payload.sig' });
+    it('should restore session and populate user when valid cookies exist', async () => {
+      const mockUser = { id: 'admin-1', email: 'admin@spinr.ca', role: 'super_admin' };
+      // First fetch: silentRefresh succeeds
+      // Second fetch: setAuthCookie (fire-and-forget, called inside silentRefresh)
+      // Third fetch: checkAuth succeeds
+      (global.fetch as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            token: 'access-token',
+            access_expires_at: new Date(Date.now() + 900_000).toISOString(),
+            csrf_token: 'new-csrf',
+          }),
+        })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({}) }) // setAuthCookie
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ authenticated: true, user: mockUser }),
+        });
 
-      const partialize = (useAuthStore as any).persist.getOptions().partialize;
-      const persisted = partialize(useAuthStore.getState());
+      await useAuthStore.getState().initAuth();
 
-      expect(persisted).not.toHaveProperty('token');
-      expect(useAuthStore.getState().token).toBe('eyJhbGciOiJIUzI1NiJ9.payload.sig');
+      const state = useAuthStore.getState();
+      expect(state.token).toBe('access-token');
+      expect(state.csrfToken).toBe('new-csrf');
+      expect(state.user).toEqual(mockUser);
+      expect(state.isAuthenticated).toBe(true);
+      expect(state.isLoading).toBe(false);
+    });
+
+    it('should only run once per page load even if called multiple times', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+      });
+
+      const store = useAuthStore.getState();
+      await store.initAuth();
+      await store.initAuth(); // second call must be a no-op
+
+      // fetch should have been called only for the first initAuth
+      const callCount = (global.fetch as ReturnType<typeof vi.fn>).mock.calls.filter(
+        (c: string[]) => c[0]?.includes?.('/api/admin/auth/refresh')
+      ).length;
+      expect(callCount).toBe(1);
+    });
+  });
+
+  describe('silentRefresh', () => {
+    it('should store new csrf_token from refresh response', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          token: 'new-access-token',
+          access_expires_at: new Date(Date.now() + 900_000).toISOString(),
+          csrf_token: 'new-csrf-token',
+        }),
+      });
+
+      useAuthStore.setState({ csrfToken: 'old-csrf-token', isAuthenticated: true });
+
+      await useAuthStore.getState().silentRefresh();
+
+      const state = useAuthStore.getState();
+      expect(state.token).toBe('new-access-token');
+      expect(state.csrfToken).toBe('new-csrf-token');
+    });
+
+    it('should logout on non-ok refresh response', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+      });
+
+      useAuthStore.setState({ csrfToken: 'csrf-abc', isAuthenticated: true });
+
+      await useAuthStore.getState().silentRefresh();
+
+      expect(useAuthStore.getState().isAuthenticated).toBe(false);
+      expect(useAuthStore.getState().csrfToken).toBeNull();
     });
   });
 

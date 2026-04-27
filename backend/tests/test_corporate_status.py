@@ -14,6 +14,10 @@ def test_suspend_active_company(test_client, admin_override):
             "db_supabase.update_corporate_account_status",
             AsyncMock(return_value=corporate_account_row("suspended")),
         ),
+        patch(
+            "routes.corporate_accounts.get_corporate_wallet_by_company",
+            AsyncMock(return_value=None),  # no wallet → skip freeze step
+        ),
     ):
         resp = test_client.post(
             "/api/admin/corporate-accounts/c1/status",

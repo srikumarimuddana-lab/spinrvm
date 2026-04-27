@@ -1032,7 +1032,7 @@ async def create_ride(request: Request, body: CreateRideRequest, current_user: d
                 inserted = await db_supabase.insert_ride(ride_data)
                 break
             if "rides_one_active_per_rider" in msg:
-                raise HTTPException(status_code=409, detail="You already have an active ride")
+                raise HTTPException(status_code=409, detail="You already have an active ride") from e
             if "unique" in msg or "duplicate" in msg or "23505" in msg:
                 continue  # retry with a new code for ride_code conflicts
             raise
@@ -1171,20 +1171,23 @@ async def get_ride_history(
         "rides",
         {
             "rider_id": current_user["id"],
-            "status": {"$in": ["completed", "cancelled"]},
         },
-        order="created_at",
-        desc=True,
-        limit=500,
+        limit=2000,
     )
 
-    # Keep only completed rides and cancelled rides that had a driver assigned.
-    # Cancelled-before-match rides (no driver_id) are excluded from history.
-    result = [
-        r
-        for r in all_rides
-        if r.get("status") == "completed" or (r.get("status") == "cancelled" and r.get("driver_id"))
-    ]
+    # Only show rides where a driver was actually assigned and ride started or completed
+    # Exclude: searching, driver_assigned (never picked up), auto-expired
+    result = []
+    for ride in all_rides:
+        status = ride.get("status", "")
+        had_driver = bool(ride.get("driver_id"))
+
+        if status == "completed":
+            result.append(ride)
+        elif status == "cancelled" and had_driver:
+            result.append(ride)
+
+    result.sort(key=lambda r: str(r.get("created_at", "")), reverse=True)
 
     # Cursor-based pagination: skip rides up to and including the cursor id
     if before:
@@ -1400,14 +1403,16 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
             "already_paid": True,
         }
 
-    # Atomic guard: set payment_status to "processing" only if it's still pending.
-    # This prevents race conditions when two concurrent payment requests hit the endpoint.
-    guard_result = await db.update_one(
+    # Atomic guard: set payment_status to "processing" only if it's still "pending".
+    # Filter on payment_status="pending" so concurrent requests can't both proceed —
+    # Supabase returns the updated row only when the filter matches; None means
+    # another request won the race first.
+    guard_row = await db_supabase.update_one(
         "rides",
-        {"id": ride_id, "payment_status": {"$nin": ["paid", "processing"]}},
-        {"$set": {"payment_status": "processing"}},
+        {"id": ride_id, "payment_status": "pending"},
+        {"payment_status": "processing", "updated_at": datetime.now(timezone.utc).isoformat()},
     )
-    if hasattr(guard_result, "modified_count") and guard_result.modified_count == 0:
+    if guard_row is None:
         return {"success": True, "already_paid": True, "charged_amount": 0}
 
     if tip_amount < 0:
@@ -1573,6 +1578,10 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
         stripe_customer_id = (rider_user or {}).get("stripe_customer_id")
         payment_method_id = ride.get("payment_method_id") or (rider_user or {}).get("default_payment_method")
 
+        if not payment_method_id:
+            await db_supabase.update_ride(ride_id, {"payment_status": "pending"})
+            raise HTTPException(status_code=400, detail="No payment method on file. Please add a card.")
+
         outcome = await charge_ride(
             ride=ride,
             rider_id=current_user["id"],
@@ -1592,22 +1601,28 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
+            await manager.send_personal_message(
+                {"type": "payment_completed", "ride_id": ride_id, "charged_amount": float(total_charge)},
+                f"rider_{current_user['id']}",
+            )
         elif outcome.status == "requires_action":
+            # Off-session charges that require 3DS cannot be completed without rider interaction.
+            # Treat as a payment failure so the rider is prompted to use a different card.
             await db_supabase.update_ride(
                 ride_id,
                 {
-                    "payment_status": "requires_action",
+                    "payment_status": "failed",
                     "payment_intent_id": outcome.payment_intent_id,
-                    "tip_amount": float(tip_amount),
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
-            return {
-                "success": False,
-                "status": "requires_action",
-                "client_secret": outcome.client_secret,
-                "payment_intent_id": outcome.payment_intent_id,
-            }
+            raise HTTPException(
+                status_code=402,
+                detail={
+                    "code": "authentication_required",
+                    "message": "Card requires authentication. Please update your payment method.",
+                },
+            )
         elif outcome.status == "declined":
             await db_supabase.update_ride(
                 ride_id,
@@ -1645,10 +1660,10 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
                 },
             )
             raise HTTPException(
-                status_code=502,
+                status_code=402,
                 detail={
-                    "code": "payment_processor_error",
-                    "message": outcome.error_message or "Payment processor error.",
+                    "code": "payment_error",
+                    "message": outcome.error_message or "Payment could not be processed.",
                 },
             )
 
@@ -1865,28 +1880,22 @@ async def rate_driver(ride_id: str, rating_data: RideRatingRequest, current_user
         new_driver_earnings = ride.get("driver_earnings", 0) + rating_data.tip_amount
         await db_supabase.update_ride(ride_id, {"tip_amount": new_tip, "driver_earnings": new_driver_earnings})
 
-    # Aggregate driver rating accurately
+    # Aggregate driver rating using rolling average to avoid O(n) ride fetch.
     driver = await db_supabase.get_driver_by_id(driver_id)
     if driver:
-        # Fetch rated rides for this driver — columns="rider_rating" drops all other
-        # fields to save ~10× bandwidth; limit=10000 supports any driver lifetime
-        # (10k rides at 2 rides/day = 13 years; well beyond Spinr's planning horizon).
-        driver_rides = await db_supabase.get_rows(
-            "rides", {"driver_id": driver_id}, limit=10000, columns="rider_rating"
+        old_count = int(driver.get("total_ratings") or 0)
+        old_avg = float(driver.get("rating") or 0)
+        new_count = old_count + 1
+        new_avg = round((old_avg * old_count + float(rating_data.rating)) / new_count, 2)
+        await db_supabase.update_one(
+            "drivers",
+            {"id": driver_id},
+            {
+                "rating": new_avg,
+                "average_rating": new_avg,
+                "total_ratings": new_count,
+            },
         )
-        rated_rides = [float(r.get("rider_rating")) for r in driver_rides if r.get("rider_rating") is not None]
-
-        if rated_rides:
-            average_rating = round(sum(rated_rides) / len(rated_rides), 2)
-            await db_supabase.update_one(
-                "drivers",
-                {"id": driver_id},
-                {
-                    "rating": average_rating,
-                    "average_rating": average_rating,
-                    "total_ratings": len(rated_rides),
-                },
-            )
 
     # G19: Notify the driver that they received a rating. This creates a
     # feedback loop — drivers see their rating improve/decline in real time
@@ -2340,11 +2349,8 @@ async def get_ride_messages(ride_id: str, current_user: dict = Depends(get_curre
     if not (is_rider or is_driver):
         raise HTTPException(status_code=403, detail="Not authorized to track this ride")
 
-    messages_cursor = db_supabase.get_rows(
+    messages = await db_supabase.get_rows(
         "ride_messages", {"ride_id": ride_id}, limit=100, order="timestamp", desc=False
-    )
-    messages = (
-        await messages_cursor.to_list(length=100) if hasattr(messages_cursor, "to_list") else list(messages_cursor)
     )
 
     # Serialize datetime

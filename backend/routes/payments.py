@@ -344,7 +344,18 @@ async def add_card(request: Request, current_user: dict = Depends(get_current_us
     try:
         body = AddCardRequest(**data)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid request: {exc}") from exc
+        # B-P3-leak-cleanup: don't interpolate the Pydantic exception
+        # repr (which can include field paths and request structure
+        # hints). 400 is a 4xx so the framework sanitiser does not
+        # rescue this — manual cleanup matters. Body-shape errors
+        # should reach clients via FastAPI's RequestValidationError
+        # path normally; this except block is the fallback for the
+        # ad-hoc dict-driven payload here.
+        logger.warning("AddCardRequest validation failed", exc_info=exc)
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid request payload.",
+        ) from exc
 
     payment_method_id = body.payment_method_id
 
@@ -419,7 +430,7 @@ async def set_default_card(card_id: str, current_user: dict = Depends(get_curren
             if cid:
                 stripe.Customer.modify(cid, invoice_settings={"default_payment_method": card_id}, api_key=stripe_secret)
         except Exception as e:
-            logger.warning(f"Stripe set default: {e}")
+            logger.error(f"Stripe set default failed for card {card_id}: {e}", exc_info=True)
 
     return {"success": True}
 
@@ -433,7 +444,7 @@ async def delete_card(card_id: str, current_user: dict = Depends(get_current_use
         try:
             stripe.PaymentMethod.detach(card_id, api_key=stripe_secret)
         except Exception as e:
-            logger.warning(f"Stripe detach: {e}")
+            logger.error(f"Stripe detach failed for card {card_id}: {e}", exc_info=True)
 
     user = await db_supabase.get_user_by_id(current_user["id"])
     if user and user.get("default_payment_method") == card_id:

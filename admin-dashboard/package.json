@@ -49,7 +49,7 @@
     "@types/react-dom": "^19",
     "@types/uuid": "^10.0.0",
     "@vitejs/plugin-react": "^6.0.1",
-    "@vitest/ui": "^4.1.4",
+    "@vitest/ui": "^4.1.5",
     "eslint": "^9",
     "eslint-config-next": "16.2.4",
     "eslint-plugin-jsx-a11y": "^6.8.0",

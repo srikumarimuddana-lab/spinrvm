@@ -157,6 +157,7 @@ interface AuthState {
   updateDriverStatus: (isOnline: boolean) => Promise<void>;
   updateProfileImage: (imageUri: string) => Promise<void>;
   logout: () => Promise<void>;
+  logoutAll: () => Promise<{ revoked_refresh_tokens: number }>;
   clearError: () => void;
 }
 
@@ -598,6 +599,28 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
     // Clear user cache on logout
     await appCache.clearUserCache();
     set({ user: null, driver: null, token: null, refreshToken: null, tokenExpiresAt: null, isDriverMode: false });
+  },
+
+  // "Sign out of all devices" — closes B-P1-13. Backend bumps
+  // users.token_version (kills every in-flight access token on its
+  // next request via dependencies.py middleware re-read) and revokes
+  // every refresh token row for the user. Pairs with the B-P1-3 reuse-
+  // detection cascade: this is the user-driven recovery path the
+  // runbook (docs/runbooks/auth-tokens.md) sends compromised users to.
+  // Falls through to logout() either way so the local session ends
+  // even if the network call failed (we don't want to leave the user
+  // sitting on a screen that thinks they're signed in).
+  logoutAll: async () => {
+    let revoked = 0;
+    try {
+      const res = await api.post<{ success: boolean; revoked_refresh_tokens: number }>('/auth/logout-all');
+      revoked = Number(res.data?.revoked_refresh_tokens ?? 0);
+    } catch (error: any) {
+      if (__DEV__) console.log('logout-all backend call failed:', error?.message || error);
+    } finally {
+      await get().logout();
+    }
+    return { revoked_refresh_tokens: revoked };
   },
 
   updateProfileImage: async (imageUri: string) => {

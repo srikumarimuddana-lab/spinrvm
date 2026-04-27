@@ -344,7 +344,18 @@ async def add_card(request: Request, current_user: dict = Depends(get_current_us
     try:
         body = AddCardRequest(**data)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid request: {exc}") from exc
+        # B-P3-leak-cleanup: don't interpolate the Pydantic exception
+        # repr (which can include field paths and request structure
+        # hints). 400 is a 4xx so the framework sanitiser does not
+        # rescue this — manual cleanup matters. Body-shape errors
+        # should reach clients via FastAPI's RequestValidationError
+        # path normally; this except block is the fallback for the
+        # ad-hoc dict-driven payload here.
+        logger.warning("AddCardRequest validation failed", exc_info=exc)
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid request payload.",
+        ) from exc
 
     payment_method_id = body.payment_method_id
 

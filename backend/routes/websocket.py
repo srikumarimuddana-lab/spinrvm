@@ -8,6 +8,7 @@ from loguru import logger
 
 try:
     from .. import db_supabase
+    from ..core.config import settings
     from ..dependencies import verify_jwt_token
     from ..socket_manager import manager
     from ..utils.driver_presence import clear_presence, mark_present
@@ -191,6 +192,27 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
         # into the default threadpool so only this coroutine waits.
         try:
             payload = await asyncio.to_thread(firebase_auth.verify_id_token, token)
+            # B-P1-1 / DV-10: bind audience to client_type. Without this a
+            # driver-app Firebase token would mint a `role: "rider"` row
+            # below (or vice versa) — same cross-app reuse hazard fixed in
+            # routes/auth.py and dependencies/__init__.py. Production fails
+            # fast in core/config._guard_production_secrets when either
+            # FIREBASE_*_APP_ID is unset, so the empty-string branch is
+            # only reachable in dev/test.
+            expected_aud = ""
+            if client_type == "driver":
+                expected_aud = settings.FIREBASE_DRIVER_APP_ID or ""
+            elif client_type == "rider":
+                expected_aud = settings.FIREBASE_RIDER_APP_ID or ""
+            if not expected_aud:
+                await websocket.send_json({"type": "error", "message": "firebase_audience_not_configured"})
+                await websocket.close()
+                return
+            if payload.get("aud") != expected_aud:
+                await websocket.send_json({"type": "error", "message": "ERR_TOKEN_AUDIENCE"})
+                await websocket.close()
+                return
+
             uid = payload.get("uid") or payload.get("user_id")
             user = await db_supabase.get_user_by_id(uid)
             if not user:

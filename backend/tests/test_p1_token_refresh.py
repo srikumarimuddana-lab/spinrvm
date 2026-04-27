@@ -23,23 +23,25 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from starlette.requests import Request as StarletteRequest
 
-USER_ID = "user_p1_11"
-OLD_REFRESH_ROW_ID = "rtk-row-001"
-
 
 def _make_request(user_agent: str = "") -> StarletteRequest:
-    """Real Starlette Request required by slowapi's @limiter.limit decorator."""
-    headers = [(b"user-agent", user_agent.encode())] if user_agent else []
+    """Return a real Starlette Request so SlowAPI's rate-limit decorator accepts it."""
+    headers = []
+    if user_agent:
+        headers.append((b"user-agent", user_agent.encode()))
     return StarletteRequest(
-        scope={
+        {
             "type": "http",
             "method": "POST",
-            "headers": headers,
-            "query_string": b"",
             "path": "/auth/refresh",
-            "client": ("127.0.0.1", 8000),
+            "query_string": b"",
+            "headers": headers,
         }
     )
+
+
+USER_ID = "user_p1_11"
+OLD_REFRESH_ROW_ID = "rtk-row-001"
 
 
 def _refresh_row(audience: str = "rider", **extra) -> dict:
@@ -96,7 +98,7 @@ class TestRefreshAccessToken:
                 refresh_token = "old-refresh-raw"
 
             result = await auth_mod.refresh_access_token(
-                request=_make_request("TestApp/1.0"),
+                request=_make_request(user_agent="TestApp/1.0"),
                 body=_Body(),
             )
 
@@ -188,7 +190,7 @@ class TestRefreshAccessToken:
             class _Body:
                 refresh_token = "old-raw"
 
-            await auth_mod.refresh_access_token(request=_make_request("UA"), body=_Body())
+            await auth_mod.refresh_access_token(request=_make_request(user_agent="UA"), body=_Body())
 
         assert issue_calls, "issue_refresh_token was not called"
         assert issue_calls[0]["replaces"] == OLD_REFRESH_ROW_ID, (

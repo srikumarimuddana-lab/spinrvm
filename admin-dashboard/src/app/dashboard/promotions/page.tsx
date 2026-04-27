@@ -463,7 +463,7 @@ export default function PromotionsPage() {
                 </CardHeader>
                 <CardContent className="space-y-4">
                     <div className="flex flex-wrap items-center gap-3">
-                        <div className="relative flex-1 max-w-sm"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Search by code or description..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" /></div>
+                        <div className="relative flex-1 max-w-sm"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Search by code or description..." aria-label="Search promotions" value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" /></div>
                     </div>
 
                     {loading ? (
@@ -521,7 +521,7 @@ export default function PromotionsPage() {
                     <div className="flex items-center justify-between">
                         <h2 className="text-lg font-semibold flex items-center gap-2"><BarChart3 className="h-5 w-5 text-blue-500" /> Analytics</h2>
                         <Select value={chartFilter} onValueChange={setChartFilter}>
-                            <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
+                            <SelectTrigger className="w-44" aria-label="Filter chart by promotion type"><SelectValue /></SelectTrigger>
                             <SelectContent>
                                 <SelectItem value="all">All Promos</SelectItem>
                                 <SelectItem value="public">Public Codes Only</SelectItem>
@@ -580,21 +580,21 @@ export default function PromotionsPage() {
                         ))}
                         <Separator orientation="vertical" className="h-6 mx-1" />
                         <div className="flex items-center gap-2">
-                            <Label className="text-xs text-muted-foreground">From</Label>
-                            <Input type="date" value={usageDateFrom} onChange={(e) => setUsageDateFrom(e.target.value)} className="w-36 h-8 text-xs" />
+                            <Label className="text-xs text-muted-foreground" htmlFor="usage-date-from">From</Label>
+                            <Input id="usage-date-from" type="date" value={usageDateFrom} onChange={(e) => setUsageDateFrom(e.target.value)} className="w-36 h-8 text-xs" />
                         </div>
                         <div className="flex items-center gap-2">
-                            <Label className="text-xs text-muted-foreground">To</Label>
-                            <Input type="date" value={usageDateTo} onChange={(e) => setUsageDateTo(e.target.value)} className="w-36 h-8 text-xs" />
+                            <Label className="text-xs text-muted-foreground" htmlFor="usage-date-to">To</Label>
+                            <Input id="usage-date-to" type="date" value={usageDateTo} onChange={(e) => setUsageDateTo(e.target.value)} className="w-36 h-8 text-xs" />
                         </div>
                         {(usageDateFrom || usageDateTo) && <Button variant="ghost" size="sm" onClick={() => { setUsageDateFrom(""); setUsageDateTo(""); }}>Clear</Button>}
                     </div>
 
                     {/* Usage filters */}
                     <div className="flex flex-wrap items-center gap-3">
-                        <div className="relative flex-1 max-w-sm"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Search by code or user ID..." value={usageSearch} onChange={(e) => setUsageSearch(e.target.value)} className="pl-9" /></div>
+                        <div className="relative flex-1 max-w-sm"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Search by code or user ID..." aria-label="Search usage history" value={usageSearch} onChange={(e) => setUsageSearch(e.target.value)} className="pl-9" /></div>
                         <Select value={usageTypeFilter} onValueChange={setUsageTypeFilter}>
-                            <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
+                            <SelectTrigger className="w-44" aria-label="Filter usage by promotion type"><SelectValue /></SelectTrigger>
                             <SelectContent>
                                 <SelectItem value="all">All Promos</SelectItem>
                                 <SelectItem value="public">Public Codes Only</SelectItem>

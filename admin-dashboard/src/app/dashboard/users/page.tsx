@@ -286,13 +286,14 @@ export default function UsersPage() {
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                     <Input
                         placeholder="Search by name, email, phone..."
+                        aria-label="Search users"
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}
                         className="pl-9"
                     />
                 </div>
                 <Select value={roleFilter} onValueChange={(v) => setRoleFilter(v as "all" | "rider" | "driver")}>
-                    <SelectTrigger className="w-36">
+                    <SelectTrigger className="w-36" aria-label="Filter by role">
                         <SelectValue placeholder="Role" />
                     </SelectTrigger>
                     <SelectContent>
@@ -586,12 +587,14 @@ export default function UsersPage() {
                                                 step="0.01"
                                                 min="0.01"
                                                 placeholder="Amount (CAD)"
+                                                aria-label="Adjustment amount in CAD"
                                                 value={walletAmount}
                                                 onChange={(e) => setWalletAmount(e.target.value)}
                                                 disabled={walletSubmitting !== null}
                                             />
                                             <Input
                                                 placeholder="Reason (min 3 chars)"
+                                                aria-label="Reason for adjustment"
                                                 value={walletReason}
                                                 onChange={(e) => setWalletReason(e.target.value)}
                                                 disabled={walletSubmitting !== null}

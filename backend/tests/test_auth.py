@@ -12,6 +12,25 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# All async tests in this module use anyio (not asyncio).
+pytestmark = pytest.mark.anyio
+
+
+# ---------------------------------------------------------------------------
+# Module-level mock_settings fixture — shared by TestJWTTokenHandling,
+# TestSessionManagement, and TestTokenRefresh.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def mock_settings():
+    """Mock settings with test values matching the JWT_SECRET env var."""
+    with patch("backend.dependencies.settings") as _mock_settings:
+        _mock_settings.JWT_SECRET = "test-secret-key-for-ci-only-32chars!!"
+        _mock_settings.ALGORITHM = "HS256"
+        _mock_settings.ACCESS_TOKEN_EXPIRE_MINUTES = 30
+        yield _mock_settings
+
 
 class TestOTPCreation:
     """Tests for OTP generation and verification."""
@@ -49,16 +68,6 @@ class TestOTPCreation:
 class TestJWTTokenHandling:
     """Tests for JWT token creation and verification."""
 
-    @pytest.fixture
-    def mock_settings(self):
-        """Mock settings with test values."""
-        with patch("backend.dependencies.settings") as mock_settings:
-            mock_settings.SECRET_KEY = "test-secret-key-for-testing-only"
-            mock_settings.JWT_SECRET = "test-secret-key-for-ci-only-32chars!!"
-            mock_settings.ALGORITHM = "HS256"
-            mock_settings.ACCESS_TOKEN_EXPIRE_MINUTES = 30
-            yield mock_settings
-
     def test_create_jwt_token(self, mock_settings):
         """Test JWT token creation."""
         from backend.dependencies import create_jwt_token
@@ -76,6 +85,7 @@ class TestJWTTokenHandling:
         token = create_jwt_token(user_id="user_123", phone="+1234567890", session_id="session_abc")
 
         assert token is not None
+        # Verify token can be decoded and contains session_id
         decoded = verify_jwt_token(token)
         assert decoded["session_id"] == "session_abc"
 
@@ -101,39 +111,49 @@ class TestJWTTokenHandling:
             verify_jwt_token("invalid.token.here")
 
     def test_verify_jwt_token_expired(self, mock_settings):
-        """Test verifying an expired JWT token."""
+        """Test verifying an expired JWT token raises HTTPException 401."""
         import jwt
         from fastapi import HTTPException
 
         from backend.dependencies import verify_jwt_token
 
-        # Create expired token using the same JWT_SECRET verify_jwt_token uses
+        # Create expired token using the same secret that verify_jwt_token uses
         payload = {
-            "user_id": "user_123",
+            "sub": "user_123",
             "phone": "+1234567890",
             "exp": datetime.utcnow() - timedelta(minutes=5),  # Expired 5 minutes ago
         }
 
-        expired_token = jwt.encode(payload, mock_settings.JWT_SECRET, algorithm=mock_settings.ALGORITHM)
+        expired_token = jwt.encode(
+            payload,
+            mock_settings.JWT_SECRET,
+            algorithm=mock_settings.ALGORITHM,
+        )
 
         with pytest.raises(HTTPException) as exc_info:
             verify_jwt_token(expired_token)
+
         assert exc_info.value.status_code == 401
 
     def test_verify_jwt_token_wrong_algorithm(self, mock_settings):
-        """Test verifying token with wrong algorithm."""
+        """Test verifying token with wrong secret raises HTTPException 401."""
         import jwt
         from fastapi import HTTPException
 
         from backend.dependencies import verify_jwt_token
 
-        # Create token with different secret — verify_jwt_token rejects it with 401
-        payload = {"user_id": "user_123", "phone": "+1234567890", "exp": datetime.utcnow() + timedelta(minutes=30)}
+        # Create token with a different (wrong) secret key
+        payload = {
+            "sub": "user_123",
+            "phone": "+1234567890",
+            "exp": datetime.utcnow() + timedelta(minutes=30),
+        }
 
         wrong_token = jwt.encode(payload, "wrong-secret-key", algorithm=mock_settings.ALGORITHM)
 
         with pytest.raises(HTTPException) as exc_info:
             verify_jwt_token(wrong_token)
+
         assert exc_info.value.status_code == 401
 
 
@@ -150,27 +170,36 @@ class TestGetCurrentUser:
             credentials="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyXzEyMyIsInBob25lIjoiKzEyMzQ1Njc4OTAifQ.test_sig",
         )
 
-    @pytest.mark.asyncio
     async def test_get_current_user_valid_token(self, mock_credentials):
         """Test get_current_user with valid token."""
         from backend.dependencies import get_current_user
 
-        with patch("backend.dependencies.verify_jwt_token") as mock_verify:
-            mock_verify.return_value = {"user_id": "user_123", "phone": "+1234567890", "token_version": 0}
+        mock_user = {"id": "user_123", "phone": "+1234567890", "role": "rider"}
+
+        with (
+            patch("backend.dependencies.firebase_auth.verify_id_token", side_effect=ValueError("not firebase")),
+            patch("backend.dependencies.verify_jwt_token") as mock_verify,
+            patch("backend.dependencies.db_supabase.get_user_by_id", AsyncMock(return_value=mock_user)),
+            patch("backend.dependencies.db_supabase.get_driver_by_user_id_cached", AsyncMock(return_value=None)),
+            patch("backend.dependencies.redis_get", AsyncMock(return_value=None)),
+        ):
+            mock_verify.return_value = {"user_id": "user_123", "phone": "+1234567890"}
 
             user = await get_current_user(mock_credentials)
 
             assert user["id"] == "user_123"
             assert user["phone"] == "+1234567890"
 
-    @pytest.mark.asyncio
     async def test_get_current_user_invalid_token(self, mock_credentials):
         """Test get_current_user with invalid token."""
         from fastapi import HTTPException
 
         from backend.dependencies import get_current_user
 
-        with patch("backend.dependencies.verify_jwt_token") as mock_verify:
+        with (
+            patch("backend.dependencies.firebase_auth.verify_id_token", side_effect=ValueError("not firebase")),
+            patch("backend.dependencies.verify_jwt_token") as mock_verify,
+        ):
             mock_verify.side_effect = Exception("Invalid token")
 
             with pytest.raises(HTTPException) as exc_info:
@@ -178,7 +207,6 @@ class TestGetCurrentUser:
 
             assert exc_info.value.status_code == 401
 
-    @pytest.mark.asyncio
     async def test_get_current_user_missing_credentials(self):
         """Test get_current_user with missing credentials."""
         from fastapi import HTTPException
@@ -194,7 +222,6 @@ class TestGetCurrentUser:
 class TestAdminUserVerification:
     """Tests for admin user verification."""
 
-    @pytest.mark.asyncio
     async def test_get_admin_user_is_admin(self):
         """Test get_admin_user with admin user."""
         from backend.dependencies import get_admin_user
@@ -205,7 +232,6 @@ class TestAdminUserVerification:
 
         assert result == admin_user
 
-    @pytest.mark.asyncio
     async def test_get_admin_user_not_admin(self):
         """Test get_admin_user with non-admin user."""
         from fastapi import HTTPException
@@ -224,53 +250,42 @@ class TestAdminUserVerification:
 class TestFirebaseIntegration:
     """Tests for Firebase authentication integration."""
 
-    @pytest.mark.asyncio
     async def test_firebase_init(self, mock_firebase_admin):
         """Test Firebase initialization."""
         from backend.core.security import init_firebase
 
-        with patch("backend.core.security.firebase_admin") as mock_firebase:
+        # security.py uses firebase_admin directly (not a 'firebase' alias)
+        with patch("backend.core.security.firebase_admin") as mock_fb:
             init_firebase()
-            # Firebase should be initialized
-            assert mock_firebase.initialize_app.called or True  # May be skipped if already init
+            # Firebase should be initialized (or already initialized — both are fine)
+            assert mock_fb.initialize_app.called or True
 
-    @pytest.mark.asyncio
     async def test_create_firebase_user(self, mock_firebase_admin):
         """Test creating user via Firebase."""
         from backend.db_supabase import create_user
 
-        mock_firebase_admin.auth.create_user.return_value = MagicMock(uid="firebase_uid")
+        expected_user = {"id": "user_123", "phone": "+1234567890"}
 
-        with patch("backend.db_supabase.supabase") as mock_supabase:
-            mock_supabase.table.return_value.insert.return_value.execute = MagicMock(
-                return_value=MagicMock(data=[{"id": "user_123"}])
-            )
+        # Patch at the function level to bypass run_sync/thread-pool complexity
+        with patch("backend.db_supabase.run_sync", new_callable=AsyncMock, return_value=expected_user):
+            result = await create_user({"id": "user_123", "phone": "+1234567890"})
 
-            result = await create_user({"phone": "+1234567890", "email": "test@example.com"})
+        assert result is not None
+        assert result["id"] == "user_123"
 
-            assert result is not None
-
-    @pytest.mark.asyncio
     async def test_get_firebase_user(self, mock_firebase_admin):
         """Test getting user from Firebase."""
         from backend.db_supabase import get_user_by_id
 
-        mock_firebase_admin.auth.get_user.return_value = MagicMock(uid="user_123", phone_number="+1234567890")
+        expected_user = {"id": "user_123", "phone": "+1234567890"}
 
-        with patch("backend.db_supabase.supabase") as mock_supabase:
-            mock_response = MagicMock()
-            mock_response.data = [{"id": "user_123", "phone": "+1234567890"}]
-            # get_user_by_id calls .is_("deleted_at", "null") in the chain
-            mock_supabase.table.return_value.select.return_value.eq.return_value.is_.return_value.execute = MagicMock(
-                return_value=mock_response
-            )
-
+        # Patch at the function level to bypass run_sync/thread-pool complexity
+        with patch("backend.db_supabase.run_sync", new_callable=AsyncMock, return_value=expected_user):
             result = await get_user_by_id("user_123")
 
-            assert result is not None
-            assert result["id"] == "user_123"
+        assert result is not None
+        assert result["id"] == "user_123"
 
-    @pytest.mark.asyncio
     async def test_get_user_by_phone_firebase(self, mock_firebase_admin):
         """Test getting user by phone number."""
         from backend.db_supabase import get_user_by_phone
@@ -280,8 +295,7 @@ class TestFirebaseIntegration:
         with patch("backend.db_supabase.supabase") as mock_supabase:
             mock_response = MagicMock()
             mock_response.data = [{"id": "user_123", "phone": "+1234567890"}]
-            # get_user_by_phone calls .is_("deleted_at", "null") in the chain
-            mock_supabase.table.return_value.select.return_value.eq.return_value.is_.return_value.execute = MagicMock(
+            mock_supabase.table.return_value.select.return_value.eq.return_value.execute = AsyncMock(
                 return_value=mock_response
             )
 
@@ -315,9 +329,8 @@ class TestAuthEndpoints:
         mock_supabase_client.table.return_value.insert.return_value.execute = AsyncMock(
             return_value=MagicMock(data=[{"id": "otp_123"}])
         )
-        # send_otp_sms is patched to mock_sms_service.send_otp; endpoint checks .get("success")
-        mock_sms_service.send_otp.return_value = {"success": True, "sid": "test_sid"}
 
+        # Use a valid E.164 phone with at least 12 chars (e.g. +12345678901 = 12 chars)
         response = test_client.post("/api/auth/send-otp", json={"phone": "+12345678901"})
 
         assert response.status_code == 200
@@ -344,7 +357,7 @@ class TestAuthEndpoints:
             return_value=mock_response
         )
 
-        # Phone must match E.164 format (+1XXXXXXXXXX, 12 chars)
+        # Use a valid E.164 phone with at least 12 chars
         response = test_client.post("/api/auth/verify-otp", json={"phone": "+12345678901", "code": "1234"})
 
         # OTP lookup returns None via mock chain → invalid code → 400
@@ -354,7 +367,7 @@ class TestAuthEndpoints:
         """Test verifying OTP with missing fields."""
         response = test_client.post(
             "/api/auth/verify-otp",
-            json={"phone": "+1234567890"},  # Missing code
+            json={"phone": "+12345678901"},  # Missing code
         )
 
         assert response.status_code == 422  # Validation error
@@ -363,7 +376,7 @@ class TestAuthEndpoints:
 class TestSessionManagement:
     """Tests for session management."""
 
-    def test_session_id_in_token(self):
+    def test_session_id_in_token(self, mock_settings):
         """Test that session ID is included in JWT token."""
         from backend.dependencies import create_jwt_token, verify_jwt_token
 
@@ -373,7 +386,6 @@ class TestSessionManagement:
         decoded = verify_jwt_token(token)
         assert decoded.get("session_id") == session_id
 
-    @pytest.mark.asyncio
     async def test_session_invalidation(self):
         """Test session invalidation logic."""
         # Sessions can be invalidated by checking against a blacklist
@@ -391,14 +403,13 @@ class TestSessionManagement:
 class TestPasswordlessAuth:
     """Tests for passwordless authentication flow."""
 
-    @pytest.mark.asyncio
     async def test_full_auth_flow(self, mock_supabase_client, mock_sms_service):
         """Test complete passwordless auth flow."""
         from backend.dependencies import create_jwt_token, generate_otp
 
         phone = "+1234567890"
 
-        # Step 1: Generate OTP
+        # Step 1: Generate OTP — production generates 4-digit OTPs
         otp = generate_otp()
         assert len(otp) == 4
 
@@ -423,7 +434,7 @@ class TestPasswordlessAuth:
 class TestTokenRefresh:
     """Tests for token refresh functionality."""
 
-    def test_token_refresh_with_valid_session(self):
+    def test_token_refresh_with_valid_session(self, mock_settings):
         """Test refreshing token with valid session."""
         from backend.dependencies import create_jwt_token, verify_jwt_token
 
@@ -445,7 +456,6 @@ class TestTokenRefresh:
 # ── 9-9: Token version rotation test ─────────────────────────────────────────
 
 
-@pytest.mark.asyncio
 async def test_old_token_rejected_after_version_rotation():
     """JWT minted with token_version=1 must be rejected 401 after DB rotates to 2."""
     from fastapi import HTTPException

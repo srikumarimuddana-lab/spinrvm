@@ -8,7 +8,7 @@ a service layer.
 
 import os
 import sys
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -135,23 +135,28 @@ class TestMergeFareConfigs:
 
 
 def _make_db(vehicle_types=None, areas=None, fare_configs=None):
-    """Build a mock db that supports FareService's flat get_rows interface."""
+    """Build a mock db that supports the flat Supabase-style interface FareService uses."""
     db = MagicMock()
 
-    _data = {
-        "vehicle_types": vehicle_types or [],
-        "service_areas": areas or [],
-        "fare_configs": fare_configs or [],
-    }
+    # FareService calls db.get_rows(table_name, filters, limit=...) sequentially:
+    # 1st call: vehicle_types, 2nd call: service_areas, 3rd call: fare_configs
+    side_effects = []
+    side_effects.append(vehicle_types if vehicle_types is not None else [])
+    if areas is not None:
+        side_effects.append(areas)
+    if fare_configs is not None:
+        side_effects.append(fare_configs)
 
-    async def _get_rows(table, *args, **kwargs):
-        return _data.get(table, [])
-
-    db.get_rows = _get_rows
+    db.get_rows = AsyncMock(side_effect=side_effects)
+    db.find_one = AsyncMock(return_value=None)
+    db.insert_one = AsyncMock(return_value=None)
+    db.update_one = AsyncMock(return_value=None)
     return db
 
 
-@pytest.mark.asyncio
+pytestmark = pytest.mark.anyio
+
+
 class TestFareService:
     async def test_returns_empty_when_no_vehicle_types(self):
         svc = FareService(_make_db(vehicle_types=[]))

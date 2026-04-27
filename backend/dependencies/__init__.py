@@ -149,10 +149,14 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             payload = None
 
         if payload:
-            # R-P1-12: Enforce rider app audience — reject tokens minted for the
-            # driver app (which would otherwise create/access rider accounts).
-            rider_app_id = getattr(settings, "FIREBASE_RIDER_APP_ID", None)
-            if rider_app_id and payload.get("aud") != rider_app_id:
+            # R-P1-12 / B-P1-1 / DV-10: enforce rider app audience unconditionally.
+            # Production fails fast in core/config._guard_production_secrets when
+            # FIREBASE_RIDER_APP_ID is unset, so the empty-string branch below is
+            # only reachable in dev/test.
+            rider_app_id = getattr(settings, "FIREBASE_RIDER_APP_ID", None) or ""
+            if not rider_app_id:
+                raise HTTPException(status_code=503, detail="Rider Firebase audience not configured")
+            if payload.get("aud") != rider_app_id:
                 raise HTTPException(status_code=401, detail="ERR_TOKEN_AUDIENCE")
 
             uid = payload.get("uid") or payload.get("user_id")

@@ -385,6 +385,21 @@ async def admin_logout_all(request: Request, authorization: Optional[str] = Head
     new_version = int(staff.get("token_version") or 0) + 1
     await db.update_one("admin_staff", {"id": user_id}, {"$set": {"token_version": new_version}})
     revoked = await revoke_all_for_user(user_id)
+
+    # B-P1-11: kick any live admin WebSocket sockets (live monitoring
+    # console, etc.) so the staff member is logged out instantly. See
+    # the rider/driver logout_all comment for the best-effort rationale.
+    try:
+        try:
+            from ...socket_manager import manager as ws_manager
+        except ImportError:  # pragma: no cover — package-relative fallback
+            from socket_manager import manager as ws_manager
+        await ws_manager.kick_user(
+            user_id, client_types=["admin"], reason="logout_all",
+        )
+    except Exception as e:
+        logger.warning(f"admin logout-all: WS kick failed for {user_id}: {e}")
+
     logger.info(f"admin logout-all: user={user_id} token_version→{new_version} revoked_refresh={revoked}")
     return {"success": True, "revoked_refresh_tokens": revoked}
 

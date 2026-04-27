@@ -2,6 +2,7 @@ import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
+from typing import Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from firebase_admin import auth as firebase_auth
@@ -35,13 +36,73 @@ WS_MAX_MESSAGES_PER_SECOND = 30
 WS_MAX_MESSAGE_SIZE = 64 * 1024  # 64 KB max message payload
 
 
-async def heartbeat_task(websocket: WebSocket, connection_key: str):
+async def _read_token_version(connection_key: str, user_id: str) -> Optional[int]:
+    """Read the row's current ``token_version`` for this connection.
+
+    The connection_key prefix tells us which table to hit:
+    ``admin_*`` → admin_staff, ``rider_*``/``driver_*`` → users.
+
+    Returns the integer token_version, or None if the read failed
+    (transient DB hiccup) or the row no longer exists. Callers MUST
+    treat None as "do not act" — closing a healthy socket because of
+    a one-off DB blip would be a worse failure mode than letting a
+    revoked token live another 30s until the next heartbeat tick.
+    """
+    try:
+        if connection_key.startswith("admin_"):
+            row = await db.find_one("admin_staff", {"id": user_id})
+        else:
+            row = await db.get_user_by_id(user_id)
+        if not row:
+            return None
+        return int(row.get("token_version") or 0)
+    except Exception as e:
+        logger.warning(f"WS token_version read failed for {connection_key}: {e}")
+        return None
+
+
+async def heartbeat_task(
+    websocket: WebSocket,
+    connection_key: str,
+    *,
+    user_id: str,
+    claim_token_version: int,
+):
     """Background task that sends periodic ping messages to keep the connection alive
     and detect dead connections early. This is critical for rideshare apps where
-    a silently disconnected driver would miss ride offers."""
+    a silently disconnected driver would miss ride offers.
+
+    B-P1-11: also re-validates the user's ``token_version`` each tick.
+    If /auth/logout-all (or the B-P1-3 reuse cascade) bumped the row's
+    version since this socket connected, close the socket so the user
+    is forced through /auth/refresh — which will fail (refresh tokens
+    revoked) and surface session-expired UX. Without this re-check, a
+    user who hit "Sign out everywhere" would keep receiving ride
+    events on the old socket until it dropped on its own.
+
+    DB read failure is treated as "do not act" — see _read_token_version."""
     try:
         while True:
             await asyncio.sleep(HEARTBEAT_INTERVAL)
+
+            stored_version = await _read_token_version(connection_key, user_id)
+            if stored_version is not None and stored_version > claim_token_version:
+                logger.info(
+                    f"WS heartbeat: token_version stale for {connection_key} "
+                    f"(stored={stored_version} > claim={claim_token_version}); closing"
+                )
+                try:
+                    await websocket.send_json(
+                        {"type": "session_revoked", "reason": "token_revoked"}
+                    )
+                except Exception:  # noqa: S110 — socket may already be dead
+                    pass
+                try:
+                    await websocket.close(code=1008, reason="token_revoked")
+                except Exception:  # noqa: S110
+                    pass
+                break
+
             try:
                 await websocket.send_json({"type": "ping", "timestamp": datetime.now(timezone.utc).isoformat()})
             except Exception:
@@ -124,6 +185,28 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
             await websocket.close()
             return
 
+        # B-P1-11: Reject the handshake if the JWT's token_version claim
+        # is below the row's current value. This catches the case where
+        # the user called /auth/logout-all and is now reconnecting with
+        # a stale token they had cached client-side. HTTP requests
+        # already enforce this in dependencies.py::_token_version_mismatch;
+        # without the same gate here, a stale-token reconnect would
+        # silently succeed and start receiving ride events again.
+        # Firebase tokens carry no token_version claim — treated as 0,
+        # which matches the existing HTTP-side behaviour.
+        try:
+            claim_token_version = int((payload or {}).get("token_version") or 0)
+        except (TypeError, ValueError):
+            claim_token_version = 0
+        try:
+            stored_token_version = int((user or {}).get("token_version") or 0)
+        except (TypeError, ValueError):
+            stored_token_version = 0
+        if claim_token_version < stored_token_version:
+            await websocket.send_json({"type": "error", "message": "session_revoked"})
+            await websocket.close()
+            return
+
         # If connecting as driver, ensure user has a driver profile
         if client_type == "driver":
             driver_profile = (lambda _r: _r[0] if _r else None)(
@@ -164,7 +247,16 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                 )
 
         # GAP FIX: Start heartbeat background task
-        hb_task = asyncio.create_task(heartbeat_task(websocket, connection_key))
+        # B-P1-11: pass user_id + claim_token_version so the heartbeat
+        # can re-validate against the DB row each tick.
+        hb_task = asyncio.create_task(
+            heartbeat_task(
+                websocket,
+                connection_key,
+                user_id=user["id"],
+                claim_token_version=claim_token_version,
+            )
+        )
 
         # Rate limiting state
         _msg_timestamps: list = []

@@ -1,7 +1,7 @@
 # Runbook — Auth Token Lifecycle & Reuse Detection
 
 **Owner:** `backend` · **Cadence:** Always-on automatic; manual investigation on alert
-**Closes:** B-P1-3 (refresh-token reuse detection); cross-refs B-P1-13 (logout-all)
+**Closes:** B-P1-3 (refresh-token reuse detection), B-P1-11 (WebSocket token revocation); cross-refs B-P1-13 (logout-all)
 
 ---
 
@@ -46,6 +46,79 @@ the row that succeeded it. The chain is queryable for incident response
 
 ---
 
+## WebSocket Token Revocation (B-P1-11)
+
+HTTP requests re-read `token_version` on every call (the middleware in
+`backend/dependencies.py`). WebSocket connections, by contrast, are
+authenticated **once at connect time** — without further work, a socket
+that opened before `/auth/logout-all` would keep pushing dispatch
+events for the lifetime of the connection. B-P1-11 closes that with
+three layers of defence:
+
+1. **Connect-time check** (`backend/routes/websocket.py`). After the
+   JWT is decoded and the user row is loaded, the handshake is
+   rejected if `payload.token_version < user.token_version`. Stops a
+   stale-token reconnect from succeeding in the first place. The
+   client receives `{"type": "error", "message": "session_revoked"}`
+   and the socket is closed before any real traffic flows.
+
+2. **Periodic heartbeat re-validation** (`heartbeat_task` in the same
+   file). Every 30 s — same cadence as the existing keepalive ping —
+   the heartbeat re-reads `token_version` from `users` (rider/driver)
+   or `admin_staff` (admin) and closes the socket with code 1008
+   `token_revoked` if the row's value has advanced past the JWT's
+   claim. This is the **safety net**: it catches sockets even when
+   the push-based kick (layer 3) fails. Bound on staleness: at most
+   30 s after the bump lands.
+
+3. **Push-based kick** (`backend/socket_manager.py::ConnectionManager.kick_user`).
+   `/auth/logout-all`, `/admin/auth/logout-all`, and the B-P1-3 reuse
+   cascade all call `manager.kick_user(user_id, client_types=[…])`
+   after they finish bumping `token_version` and revoking refresh
+   tokens. `kick_user` publishes a control message
+   (`{"control": {"action": "kick_user", …}}`) on the
+   `spinr:ws:dispatch` Redis channel so every replica disconnects its
+   own copy of the user's sockets, then runs the local disconnect
+   synchronously so the caller's response blocks until at least the
+   originating VM has kicked the user. **Best-effort by design** —
+   layer 2 is the durable contract; layer 3 just shrinks the window
+   from ≤30 s to ≤a few hundred ms.
+
+Scope of the kick is set by `client_types`:
+
+| Trigger | Scope passed to `kick_user` |
+|---|---|
+| `/auth/logout-all` (rider/driver) | `["rider", "driver"]` |
+| `/admin/auth/logout-all` | `["admin"]` |
+| B-P1-3 reuse cascade, audience=rider/driver | `["rider", "driver"]` |
+| B-P1-3 reuse cascade, audience=admin | `["admin"]` |
+
+The reason string sent on the close frame propagates into the client's
+error handler so the UX can surface "you signed out everywhere" /
+"session revoked" rather than a generic disconnect. The frame the
+client sees right before the close is `{"type": "session_revoked",
+"reason": "<logout_all|refresh_token_reuse|token_revoked>"}`.
+
+### Single-machine fallback
+
+When `WS_REDIS_URL` / `RATE_LIMIT_REDIS_URL` are unset (dev),
+`pubsub.publish_kick_user` returns False and only the caller's local
+sockets get kicked. That's correct: in single-machine mode there are
+no other replicas to fan out to. The fallback is intentional, not a
+degraded path that needs alerting.
+
+### Why we still need the heartbeat layer
+
+On the day Redis is degraded, the publish path returns False, and
+**other replicas don't get the kick**. Without the heartbeat,
+sockets on those replicas would survive until their next reconnect.
+The heartbeat re-read is what makes B-P1-11 robust against partial
+Redis outages — never remove it as "redundant with kick_user". The
+contract is "≤30s to disconnect", and only the heartbeat enforces it
+under partial-failure modes.
+
+---
+
 ## Reuse Detection (B-P1-3)
 
 ### Trigger
@@ -63,8 +136,14 @@ non-NULL, `_handle_refresh_token_reuse` fires. The function:
    `admin-001` is skipped — the super-admin's creds live in env vars
    and have no DB row to bump (rotate `ADMIN_PASSWORD` instead).
 3. **Revokes every refresh token** for the user via
-   `revoke_all_for_user(user_id)`. All devices are logged out.
-4. **Inserts an `audit_logs` row** tagged
+   `revoke_all_for_user(user_id)`. All devices are logged out at the
+   refresh-token boundary.
+4. **Kicks every live WebSocket** for the user (B-P1-11) via
+   `manager.kick_user(...)` — scoped to the right client_types based
+   on the audience (rider/driver vs admin). Closes the socket with
+   `code=1008 token_revoked` so the client surfaces session-expired
+   UX. Best-effort: a kick failure does not skip step 5.
+5. **Inserts an `audit_logs` row** tagged
    `action='refresh_token_reuse_detected'` with the full cascade
    detail in `details` (TEXT JSON per migration 06 schema).
 
@@ -162,6 +241,16 @@ they're signed out everywhere when access tokens are still live, so
 the backend handler refuses to claim success unless the
 `token_version` bump landed (see `test_logout_all.py`).
 
+After B-P1-11 lands, the same handlers also invoke
+`manager.kick_user(...)` so any live WebSocket sockets close
+synchronously — without that, a rider who panics and hits "Sign out
+everywhere" would still receive ride/dispatch events on the open
+socket until the next heartbeat tick (≤30 s). The kick is layered on
+**top** of the durable token_version+refresh-revoke contract, not as
+a replacement: a kick failure logs and proceeds, because the
+heartbeat re-read is the safety net that closes the socket within
+30 s regardless.
+
 Manual SQL escape hatch (use `psql` with service-role connection):
 
 ```sql
@@ -196,6 +285,17 @@ why — manual session kills must be traceable.
   the sha256 hash lives in `refresh_tokens.token_hash`. A DB dump must
   not yield usable tokens. The raw bytes leave the backend exactly
   once (in the `/auth/refresh` and `/auth/login` response body).
+- **Do not delete the heartbeat token_version re-read as "redundant
+  with `kick_user`".** The kick is the fast path; the heartbeat is
+  the only layer that holds when Redis is degraded. Removing it
+  means partial-Redis outages silently regress B-P1-11 to its pre-
+  fix behaviour (sockets survive `logout-all` until reconnect).
+- **Do not widen `kick_user` scope across identity boundaries.** The
+  rider/driver `logout-all` passes `["rider", "driver"]`; the admin
+  variant passes `["admin"]`. An admin who hits "Sign out everywhere"
+  must not also disconnect their personal rider socket if they
+  happen to share a `user_id` (they don't, in our model — but the
+  scope guard keeps it that way).
 
 ---
 

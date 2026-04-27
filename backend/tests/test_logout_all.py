@@ -71,10 +71,12 @@ class TestLogoutAllRiderDriver:
 
         update_one = AsyncMock(return_value={"id": "user-rider-1"})
         revoke_all = AsyncMock(return_value=3)
+        kick_user = AsyncMock(return_value=0)
 
         with (
             patch("backend.routes.auth.db.update_one", update_one),
             patch("backend.routes.auth.revoke_all_for_user", revoke_all),
+            patch("backend.socket_manager.manager.kick_user", kick_user),
         ):
             inner = _resolve_inner(logout_all)
             request = MagicMock()
@@ -89,8 +91,47 @@ class TestLogoutAllRiderDriver:
         )
         # refresh tokens revoked for the same user
         revoke_all.assert_awaited_once_with("user-rider-1")
+        # B-P1-11: WS sockets kicked for the same user, scoped to
+        # rider+driver (not admin). Pin the scope — admin sockets
+        # belong to a different identity space.
+        kick_user.assert_awaited_once_with(
+            "user-rider-1",
+            client_types=["rider", "driver"],
+            reason="logout_all",
+        )
         # response shape the clients (authStore.logoutAll) parse
         assert result == {"success": True, "revoked_refresh_tokens": 3}
+
+    @pytest.mark.asyncio
+    async def test_ws_kick_failure_does_not_fail_the_response(self):
+        """B-P1-11: kick is best-effort. The token_version bump + refresh
+        revoke are the durable contract; the WS kick is a UX
+        accelerator. A kick failure (Redis hiccup, manager bug) must
+        NOT roll back the logout — the heartbeat re-validation closes
+        the socket within 30s anyway."""
+        from backend.routes.auth import logout_all
+
+        update_one = AsyncMock(return_value={"id": "user-rider-x"})
+        revoke_all = AsyncMock(return_value=2)
+        kick_user = AsyncMock(side_effect=RuntimeError("manager exploded"))
+
+        with (
+            patch("backend.routes.auth.db.update_one", update_one),
+            patch("backend.routes.auth.revoke_all_for_user", revoke_all),
+            patch("backend.socket_manager.manager.kick_user", kick_user),
+        ):
+            inner = _resolve_inner(logout_all)
+            request = MagicMock()
+            current_user = {"id": "user-rider-x", "token_version": 0}
+            result = await inner(request, current_user=current_user)
+
+        # The durable contract still landed.
+        update_one.assert_awaited_once()
+        revoke_all.assert_awaited_once_with("user-rider-x")
+        # And we still respond success — the operator's "Sign out
+        # everywhere" button must not show an error when token_version
+        # was successfully bumped.
+        assert result == {"success": True, "revoked_refresh_tokens": 2}
 
     @pytest.mark.asyncio
     async def test_treats_missing_token_version_as_zero(self):
@@ -238,11 +279,13 @@ class TestAdminLogoutAll:
         find_one = AsyncMock(return_value={"id": "staff-real", "token_version": 4})
         update_one = AsyncMock(return_value={"id": "staff-real"})
         revoke_all = AsyncMock(return_value=2)
+        kick_user = AsyncMock(return_value=0)
 
         with (
             patch("backend.routes.admin.auth.db.find_one", find_one),
             patch("backend.routes.admin.auth.db.update_one", update_one),
             patch("backend.routes.admin.auth.revoke_all_for_user", revoke_all),
+            patch("backend.socket_manager.manager.kick_user", kick_user),
         ):
             inner = _resolve_inner(admin_logout_all)
             request = MagicMock()
@@ -254,4 +297,9 @@ class TestAdminLogoutAll:
             {"$set": {"token_version": 5}},
         )
         revoke_all.assert_awaited_once_with("staff-real")
+        # B-P1-11: admin sockets only — never kick rider/driver sockets
+        # for an admin force-logout (different identity space).
+        kick_user.assert_awaited_once_with(
+            "staff-real", client_types=["admin"], reason="logout_all",
+        )
         assert result == {"success": True, "revoked_refresh_tokens": 2}

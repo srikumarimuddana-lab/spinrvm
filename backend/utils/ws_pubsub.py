@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 from loguru import logger
 
@@ -134,6 +134,51 @@ class _WSPubSub:
             logger.warning(f"WS pub/sub: publish failed, falling back to local delivery: {e}")
             return False
 
+    async def publish_kick_user(
+        self,
+        user_id: str,
+        *,
+        client_types: Optional[List[str]] = None,
+        reason: str = "token_revoked",
+    ) -> bool:
+        """Broadcast a "force-disconnect this user" control message (B-P1-11).
+
+        Each replica's consumer sees the message and calls
+        ``manager.disconnect_user`` against its own local socket dict;
+        replicas with no matching sockets no-op silently. The control
+        envelope is distinct from the ``client_id``/``message`` shape
+        used by ``publish``, so the consumer can route on shape and
+        old payloads remain unaffected.
+
+        Returns True iff the message was handed to Redis. False means
+        single-machine mode (caller still owns the local kick) or a
+        Redis hiccup — either way the local-only path stays correct.
+        """
+        if not self.active:
+            return False
+        try:
+            body = json.dumps(
+                {
+                    "control": {
+                        "action": "kick_user",
+                        "user_id": user_id,
+                        "client_types": client_types,
+                        "reason": reason,
+                    }
+                }
+            )
+        except (TypeError, ValueError) as e:
+            logger.error(
+                f"WS pub/sub: could not serialise kick_user for {user_id}: {e}"
+            )
+            return False
+        try:
+            await self._redis.publish(CHANNEL, body)
+            return True
+        except Exception as e:
+            logger.warning(f"WS pub/sub: kick_user publish failed: {e}")
+            return False
+
     async def _reconnect(self) -> bool:
         """Re-subscribe on the existing Redis client after a connection error.
 
@@ -197,6 +242,30 @@ class _WSPubSub:
                 try:
                     data = json.loads(msg.get("data") or "{}")
                 except (TypeError, ValueError):
+                    continue
+
+                # Control envelope (B-P1-11): {"control": {"action": ..., ...}}.
+                # Distinct from the {"client_id", "message"} delivery
+                # shape so we can route on payload shape rather than
+                # tagging every legacy delivery with a discriminator.
+                control = data.get("control") if isinstance(data, dict) else None
+                if isinstance(control, dict):
+                    action = control.get("action")
+                    if action == "kick_user":
+                        try:
+                            await self._manager.disconnect_user(
+                                control.get("user_id") or "",
+                                client_types=control.get("client_types"),
+                                reason=control.get("reason") or "token_revoked",
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                f"WS pub/sub: kick_user dispatch failed: {e}"
+                            )
+                    else:
+                        logger.warning(
+                            f"WS pub/sub: unknown control action ignored: {action}"
+                        )
                     continue
 
                 client_id = data.get("client_id")

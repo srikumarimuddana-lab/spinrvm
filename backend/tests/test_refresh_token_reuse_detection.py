@@ -221,6 +221,83 @@ async def test_cascade_calls_revoke_all_for_user():
     revoke_all_mock.assert_called_once_with("user-rider-1")
 
 
+@pytest.mark.asyncio
+async def test_cascade_kicks_ws_sockets_for_rider_audience():
+    """B-P1-11: the cascade must close any live WebSocket sockets too —
+    otherwise an attacker holding the access token paired with the
+    replayed refresh token keeps their socket open until the heartbeat
+    catches up, which is up to 30s of free dispatch events.
+
+    Scope: rider+driver for users-table audiences; admin for admin-staff.
+    Pinned here because the cascade is split across many best-effort
+    steps and a future refactor could quietly drop the kick."""
+    kick_mock = AsyncMock(return_value=0)
+
+    with (
+        patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value={"id": "u1", "token_version": 0})),
+        patch("utils.refresh_tokens.db.update_one", AsyncMock(return_value=True)),
+        patch("utils.refresh_tokens.db.insert_one", AsyncMock(return_value={"id": "audit-1"})),
+        patch("utils.refresh_tokens.revoke_all_for_user", AsyncMock(return_value=0)),
+        patch("socket_manager.manager.kick_user", kick_mock),
+    ):
+        from utils.refresh_tokens import _handle_refresh_token_reuse
+
+        await _handle_refresh_token_reuse(_revoked_row(audience="rider", user_id="u1"))
+
+    kick_mock.assert_awaited_once_with(
+        "u1", client_types=["rider", "driver"], reason="refresh_token_reuse",
+    )
+
+
+@pytest.mark.asyncio
+async def test_cascade_kicks_admin_ws_sockets_for_admin_audience():
+    """Admin-audience reuse → admin sockets only; never rider/driver."""
+    kick_mock = AsyncMock(return_value=0)
+
+    with (
+        patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value={"id": "staff-1", "token_version": 0})),
+        patch("utils.refresh_tokens.db.update_one", AsyncMock(return_value=True)),
+        patch("utils.refresh_tokens.db.insert_one", AsyncMock(return_value={"id": "audit-2"})),
+        patch("utils.refresh_tokens.revoke_all_for_user", AsyncMock(return_value=0)),
+        patch("socket_manager.manager.kick_user", kick_mock),
+    ):
+        from utils.refresh_tokens import _handle_refresh_token_reuse
+
+        await _handle_refresh_token_reuse(_revoked_row(audience="admin", user_id="staff-1"))
+
+    kick_mock.assert_awaited_once_with(
+        "staff-1", client_types=["admin"], reason="refresh_token_reuse",
+    )
+
+
+@pytest.mark.asyncio
+async def test_cascade_continues_to_audit_when_ws_kick_fails():
+    """A WS kick failure must NOT skip the audit_logs insert — security
+    ops needs the row even when the real-time disconnect didn't land."""
+    insert_calls = []
+
+    async def _insert_one(table, payload):
+        insert_calls.append((table, payload))
+        return {"id": payload.get("id")}
+
+    with (
+        patch("utils.refresh_tokens.db.find_one", AsyncMock(return_value={"id": "u1", "token_version": 0})),
+        patch("utils.refresh_tokens.db.update_one", AsyncMock(return_value=True)),
+        patch("utils.refresh_tokens.db.insert_one", AsyncMock(side_effect=_insert_one)),
+        patch("utils.refresh_tokens.revoke_all_for_user", AsyncMock(return_value=0)),
+        patch(
+            "socket_manager.manager.kick_user",
+            AsyncMock(side_effect=RuntimeError("redis exploded")),
+        ),
+    ):
+        from utils.refresh_tokens import _handle_refresh_token_reuse
+
+        await _handle_refresh_token_reuse(_revoked_row(audience="rider", user_id="u1"))
+
+    audit_calls = [c for c in insert_calls if c[0] == "audit_logs"]
+    assert len(audit_calls) == 1, "audit_logs row must still be written after kick failure"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Audit log row shape
 # ─────────────────────────────────────────────────────────────────────────────

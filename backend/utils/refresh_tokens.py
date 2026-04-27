@@ -214,6 +214,34 @@ async def _handle_refresh_token_reuse(row: dict) -> None:
     except Exception as e:
         logger.error(f"reuse-cascade: revoke_all_for_user failed (user={user_id}): {e}")
 
+    # Step 3.5 (B-P1-11): kick live WebSocket sockets for the user.
+    # Without this, an attacker holding the access token paired with
+    # the replayed refresh token keeps their WS open until the heartbeat
+    # tick (≤30s) — long enough to receive ride state for the victim.
+    # Best-effort: a kick failure does not skip the audit_logs insert,
+    # and the heartbeat re-validation closes the socket on next tick
+    # regardless.
+    if user_id:
+        try:
+            try:
+                from ..socket_manager import manager as ws_manager
+            except ImportError:  # pragma: no cover — package-relative fallback
+                from socket_manager import manager as ws_manager  # type: ignore
+            if audience in _USERS_TABLE_AUDIENCES:
+                await ws_manager.kick_user(
+                    user_id,
+                    client_types=["rider", "driver"],
+                    reason="refresh_token_reuse",
+                )
+            elif audience in _ADMIN_STAFF_AUDIENCES:
+                await ws_manager.kick_user(
+                    user_id, client_types=["admin"], reason="refresh_token_reuse",
+                )
+        except Exception as e:
+            logger.error(
+                f"reuse-cascade: WS kick failed (user={user_id} audience={audience}): {e}"
+            )
+
     # Step 4: audit_logs row. Production schema (migration 06):
     # id TEXT PK / action / entity_type / entity_id / user_email / details TEXT.
     try:

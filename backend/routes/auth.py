@@ -637,5 +637,23 @@ async def logout_all(request: Request, current_user: dict = Depends(get_current_
         raise HTTPException(status_code=500, detail="Could not invalidate sessions") from e
 
     revoked = await revoke_all_for_user(user_id)
+
+    # B-P1-11: kick any live WebSocket sockets so the user is logged
+    # out instantly rather than waiting up to 30s for the heartbeat
+    # to re-validate token_version. Best-effort — the heartbeat is
+    # the safety net, so a kick failure here must not fail the
+    # logout-all response. The heartbeat re-read still closes the
+    # socket on its next tick.
+    try:
+        try:
+            from ..socket_manager import manager as ws_manager
+        except ImportError:  # pragma: no cover — package-relative fallback
+            from socket_manager import manager as ws_manager
+        await ws_manager.kick_user(
+            user_id, client_types=["rider", "driver"], reason="logout_all",
+        )
+    except Exception as e:
+        logger.warning(f"logout-all: WS kick failed for {user_id}: {e}")
+
     logger.info(f"logout-all: user={user_id} token_version→{new_version} revoked_refresh={revoked}")
     return {"success": True, "revoked_refresh_tokens": revoked}

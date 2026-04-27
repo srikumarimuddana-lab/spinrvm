@@ -106,6 +106,16 @@ export const sendOtp = (phone: string) =>
         body: JSON.stringify({ phone }),
     });
 
+// Admin "sign out everywhere" — closes B-P1-13. Bumps
+// admin_staff.token_version (kills all in-flight admin access tokens
+// on next request) and revokes every refresh token for this staff row.
+// Refused server-side for admin-001 (env-var super admin); rotate
+// ADMIN_PASSWORD to globally kill that account.
+export const logoutAllAdmin = () =>
+    request<{ success: boolean; revoked_refresh_tokens: number }>("/api/admin/auth/logout-all", {
+        method: "POST",
+    });
+
 /* ── Dashboard ────────────────────────────── */
 export const getStats = () =>
     request<{

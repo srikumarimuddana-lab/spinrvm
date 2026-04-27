@@ -135,13 +135,32 @@ descendants. If they diverge sharply — different OS, different country
 ### Forcing a manual session kill
 
 For incident response (e.g. compromised device reported by a user),
-prefer the existing endpoints over a manual SQL run:
+prefer the existing endpoints over a manual SQL run. B-P1-13 wired
+these into every client surface, so the operator's first move is
+almost always to walk the user through the in-app button rather than
+touching the DB:
 
-- Rider/driver: have the user hit **Settings → Sign out of all
-  devices**, which calls `POST /auth/logout-all`. Or admin-side: bump
-  `users.token_version` and run `revoke_all_for_user(user_id)`.
-- Admin staff: `POST /admin/auth/logout-all`. For `admin-001` the only
-  path is rotating `ADMIN_PASSWORD` in the environment.
+- **Rider:** Account tab → **Safety & Privacy → Sign out of all
+  devices** (`rider-app/app/(tabs)/account.tsx`). Calls
+  `authStore.logoutAll()` → `POST /auth/logout-all`.
+- **Driver:** Profile screen → **Sign out of all devices** row, just
+  above the regular Sign Out (`driver-app/app/driver/profile.tsx`).
+  Same `authStore.logoutAll()` path.
+- **Admin staff:** Sidebar footer → **Sign out everywhere** (small
+  action below the regular Sign Out;
+  `admin-dashboard/src/components/sidebar.tsx` →
+  `lib/api.ts::logoutAllAdmin`). Calls `POST /admin/auth/logout-all`.
+- **`admin-001` super admin:** the admin endpoint refuses with HTTP
+  400 (no DB row to bump `token_version` against). The only kill is
+  rotating `ADMIN_PASSWORD` in the environment and redeploying — see
+  the env-var rotation steps in the deploy runbook.
+
+All three client paths share the same best-effort contract: if the
+backend call fails, the client still tears down the local session and
+redirects to login. The worst failure mode is an operator believing
+they're signed out everywhere when access tokens are still live, so
+the backend handler refuses to claim success unless the
+`token_version` bump landed (see `test_logout_all.py`).
 
 Manual SQL escape hatch (use `psql` with service-role connection):
 

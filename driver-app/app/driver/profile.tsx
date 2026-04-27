@@ -34,7 +34,7 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export default function ProfileScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { user, driver: driverData, logout, fetchDriverProfile, updateProfileImage } = useAuthStore();
+  const { user, driver: driverData, logout, logoutAll, fetchDriverProfile, updateProfileImage } = useAuthStore();
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const modalStyles = useMemo(() => createModalStyles(colors), [colors]);
@@ -54,6 +54,7 @@ export default function ProfileScreen() {
 
   // Custom alert state
   const [showLogoutAlert, setShowLogoutAlert] = useState(false);
+  const [showLogoutAllAlert, setShowLogoutAllAlert] = useState(false);
   const [showPhotoPickerAlert, setShowPhotoPickerAlert] = useState(false);
   const [feedbackAlert, setFeedbackAlert] = useState<{
     visible: boolean; title: string; message?: string;
@@ -173,6 +174,13 @@ export default function ProfileScreen() {
 
   const handleLogout = () => {
     setShowLogoutAlert(true);
+  };
+
+  // Sign out of every device. Used for lost/stolen phone or compromised
+  // account. Pairs with the B-P1-3 reuse-detection cascade — see runbook
+  // docs/runbooks/auth-tokens.md for the user-driven recovery flow.
+  const handleLogoutAll = () => {
+    setShowLogoutAllAlert(true);
   };
 
   const ratingElements = (rating: number) => {
@@ -527,6 +535,13 @@ export default function ProfileScreen() {
                     <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
                 </TouchableOpacity>
                 <View style={styles.cardDivider} />
+                <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={handleLogoutAll}>
+                    <View style={[styles.iconBox, { backgroundColor: 'rgba(239, 68, 68, 0.05)' }]}>
+                        <Ionicons name="log-out-outline" size={18} color={'#EF4444'} />
+                    </View>
+                    <Text style={[styles.actionText, { color: '#EF4444' }]}>Sign out of all devices</Text>
+                </TouchableOpacity>
+                <View style={styles.cardDivider} />
                 <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={handleLogout}>
                     <View style={[styles.iconBox, { backgroundColor: 'rgba(239, 68, 68, 0.05)' }]}>
                         <Ionicons name="log-out" size={18} color={'#EF4444'} />
@@ -793,6 +808,24 @@ export default function ProfileScreen() {
           { text: 'Sign Out', style: 'destructive', onPress: async () => { await logout(); router.replace('/login' as any); } },
         ]}
         onClose={() => setShowLogoutAlert(false)}
+      />
+      <CustomAlert
+        visible={showLogoutAllAlert}
+        title="Sign out of all devices?"
+        message="You will be signed out everywhere this driver account is logged in. Use this if your phone was lost or you suspect someone else has access."
+        variant="danger"
+        icon="log-out-outline"
+        buttons={[
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Sign out everywhere',
+            style: 'destructive',
+            onPress: async () => {
+              try { await logoutAll(); } finally { router.replace('/login' as any); }
+            },
+          },
+        ]}
+        onClose={() => setShowLogoutAllAlert(false)}
       />
       <CustomAlert
         visible={showPhotoPickerAlert}

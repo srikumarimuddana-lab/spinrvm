@@ -15,7 +15,7 @@ import { useWorkProfileStore } from '../../store/workProfileStore';
 
 export default function AccountScreen() {
   const router = useRouter();
-  const { user, logout, updateProfileImage } = useAuthStore();
+  const { user, logout, logoutAll, updateProfileImage } = useAuthStore();
   const { profiles, workModeEnabled } = useWorkProfileStore();
   const [uploading, setUploading] = useState(false);
   const [alertState, setAlertState] = useState<{
@@ -38,6 +38,33 @@ export default function AccountScreen() {
       buttons: [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Logout', style: 'destructive', onPress: async () => { await logout(); router.replace('/login'); } },
+      ],
+    });
+  };
+
+  // Sign out of every device this account is logged into — used when a
+  // phone is lost/stolen or the user suspects credential compromise.
+  // Backend bumps token_version (kills all in-flight access tokens) and
+  // revokes every refresh token, so re-auth is required on every device.
+  const handleLogoutAll = () => {
+    setAlertState({
+      visible: true,
+      title: 'Sign out of all devices?',
+      message: 'You will be signed out everywhere this account is logged in. Use this if your phone was lost or you think someone else has access.',
+      variant: 'danger',
+      buttons: [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Sign out everywhere',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await logoutAll();
+            } finally {
+              router.replace('/login');
+            }
+          },
+        },
       ],
     });
   };
@@ -234,6 +261,11 @@ export default function AccountScreen() {
             icon="lock-closed-outline" iconColor="#6B7280" iconBg="#F3F4F6"
             title="Privacy & Settings" subtitle="Data, notifications, permissions"
             onPress={() => router.push('/privacy-settings' as any)}
+          />
+          <MenuItem
+            icon="log-out-outline" iconColor="#DC2626" iconBg="#FEE2E2"
+            title="Sign out of all devices" subtitle="Use if your phone is lost or compromised"
+            onPress={handleLogoutAll}
           />
         </View>
 

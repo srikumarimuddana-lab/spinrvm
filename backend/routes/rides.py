@@ -84,6 +84,11 @@ except ImportError:
     from services import corporate_allowance_service, corporate_wallet_service  # type: ignore
     from services.corporate_policy_service import evaluate_policy, evaluate_policy_for_ride  # type: ignore
 
+try:
+    from ..core.config import settings as _settings
+except ImportError:
+    from core.config import settings as _settings  # noqa: F401 — dual-import pattern
+
 db = db_supabase  # legacy alias
 
 
@@ -1026,8 +1031,10 @@ async def create_ride(request: Request, body: CreateRideRequest, current_user: d
                 ride_data.pop("ride_code", None)
                 inserted = await db_supabase.insert_ride(ride_data)
                 break
+            if "rides_one_active_per_rider" in msg:
+                raise HTTPException(status_code=409, detail="You already have an active ride")
             if "unique" in msg or "duplicate" in msg or "23505" in msg:
-                continue  # retry with a new code
+                continue  # retry with a new code for ride_code conflicts
             raise
     else:
         logger.error(f"create_ride: could not allocate unique ride_code after 3 tries: {last_exc}")
@@ -2456,6 +2463,8 @@ async def cancel_scheduled_ride(ride_id: str, current_user: dict = Depends(get_c
 @api_router.post("/{ride_id}/simulate-arrival")
 async def simulate_driver_arrival(ride_id: str, current_user: dict = Depends(get_current_user)):
     """Dev/test only: Simulate driver arriving at pickup, returns OTP."""
+    if _settings.ENV.lower() == "production":
+        raise HTTPException(status_code=403, detail="Not available in production")
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")

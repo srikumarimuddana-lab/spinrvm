@@ -19,7 +19,7 @@ function beforeSend(event: Sentry.ErrorEvent): Sentry.ErrorEvent | null {
 
   // Scrub cookies entirely
   if (event.request?.cookies) {
-    event.request.cookies = '[Filtered]';
+    event.request.cookies = {};
   }
 
   // Remove URL query strings (may contain phone, email, or token params)

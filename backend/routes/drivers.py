@@ -446,7 +446,14 @@ async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
     query_filters["created_at"] = {"$gte": cutoff}
     query_filters["service_area_id"] = driver["service_area_id"]
 
-    rides = await db_supabase.get_rows("rides", query_filters, order="created_at", desc=True, limit=5000)
+    rides = await db_supabase.get_rows(
+        "rides",
+        query_filters,
+        order="created_at",
+        desc=True,
+        limit=2_000,
+        columns="pickup_lat,pickup_lng",
+    )
 
     points = []
     for r in rides:

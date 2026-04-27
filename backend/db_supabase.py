@@ -1063,12 +1063,13 @@ async def get_rows(
     desc: bool = False,
     limit: Optional[int] = None,
     offset: Optional[int] = None,
+    columns: str = "*",
 ):
     if not supabase:
         return []
 
     def _fn():
-        q = supabase.table(table).select("*")
+        q = supabase.table(table).select(columns)
         q = _apply_filters(q, filters)
         if order:
             q = q.order(order, desc=desc)

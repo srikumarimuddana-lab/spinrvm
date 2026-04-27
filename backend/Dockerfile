@@ -11,8 +11,14 @@ RUN apt-get update && apt-get upgrade -y --no-install-recommends && apt-get inst
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir --upgrade pip setuptools
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+# B-P1-10: install from the SHA-256 hash-pinned lockfile, not the floor-pin
+# source-of-truth. `--require-hashes` makes pip refuse any wheel/sdist whose
+# digest doesn't match the lockfile, so a compromised PyPI mirror or a
+# typosquat package can't slip into the container. Regenerate via
+# `cd backend && pip-compile --generate-hashes ... requirements.txt` —
+# see docs/runbooks/dependency-update.md.
+COPY requirements-locked.txt .
+RUN pip install --no-cache-dir --prefix=/install --require-hashes -r requirements-locked.txt
 
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
@@ -33,8 +39,8 @@ WORKDIR /app
 
 RUN mkdir -p /app/logs && chmod 777 /app/logs
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements-locked.txt .
+RUN pip install --no-cache-dir --require-hashes -r requirements-locked.txt
 
 COPY --chown=spinr:spinr . .
 

@@ -131,9 +131,9 @@ Postgres function `wallet_transfer(p_sender_id, p_recipient_id, p_amount)` that:
 
 ## Checklist
 
-- [ ] P0-1 Add Depends(get_current_admin) to GET + PUT /admin/disputes endpoints
-- [ ] P0-2 Add router-level Depends(get_current_admin) to promotions.py admin_router
-- [ ] P0-3 Validate email domain against corporate_allowed_domains in join-domain endpoint
-- [ ] P0-4 Replace top-up read-compute-write with atomic wallet_increment_balance RPC
-- [ ] P0-5 Replace pay read-compute-write + dual update with wallet_pay_for_ride RPC
-- [ ] P0-6 Replace transfer multi-step with atomic wallet_transfer RPC
+- [x] P0-1 Add Depends(get_current_admin) to GET + PUT /admin/disputes endpoints
+- [x] P0-2 Add router-level Depends(get_current_admin) to promotions.py admin_router
+- [x] P0-3 Validate email domain against corporate_allowed_domains in join-domain endpoint
+- [x] P0-4 Replace top-up read-compute-write with atomic wallet_increment_balance RPC
+- [x] P0-5 Replace pay read-compute-write + dual update with wallet_pay_for_ride RPC
+- [x] P0-6 Replace transfer multi-step with atomic wallet_transfer RPC

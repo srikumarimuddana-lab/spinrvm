@@ -749,15 +749,30 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     if (url) Linking.openURL(url);
   };
 
-  // ─── Crash recovery: hydrate from AsyncStorage then fetch from API ──
-  // hydrateDriverRideState() restores the last persisted ride state
-  // instantly (no network required) so the driver sees their active ride
-  // immediately on restart. fetchActiveRide() then confirms/updates the
-  // state with the live server response.
+  // ─── Crash recovery + background-push hydration ──────────────────
+  // 1. Check AsyncStorage for a ride offer received while the app was
+  //    backgrounded or killed. The background FCM handler in _layout.tsx
+  //    writes the full offer to PENDING_OFFER_KEY; we consume it here so
+  //    the offer panel appears instantly without a network round-trip.
+  // 2. hydrateDriverRideState() restores any persisted active-ride state.
+  // 3. fetchActiveRide() confirms live server state and may override both.
   useEffect(() => {
-    if (user) {
+    if (!user) return;
+    (async () => {
+      try {
+        const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+        const raw = await AsyncStorage.getItem('spinr_pending_ride_offer');
+        if (raw) {
+          await AsyncStorage.removeItem('spinr_pending_ride_offer');
+          const offer = JSON.parse(raw);
+          Vibration.vibrate([0, 500, 200, 500]);
+          setIncomingRide(offer);
+        }
+      } catch (e) {
+        console.warn('[Push] Failed to hydrate pending ride offer on mount:', e);
+      }
       hydrateDriverRideState().then(() => fetchActiveRide());
-    }
+    })();
   }, [user]);
 
   // ─── Fetch earnings when online ─────────────────────────────────

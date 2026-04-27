@@ -1,0 +1,145 @@
+"""Tests for utils/retention_purge.py — B-P1-6 daily PII purge loop.
+
+The Postgres function `purge_pii_retention()` is exercised via migration
++ integration tests; here we verify the Python wrapper:
+
+    - parses the JSONB rpc response correctly
+    - forwards `dry_run` to the SQL parameter
+    - returns None (not crashes) when supabase is unconfigured (dev/test)
+    - returns None on unexpected response shape (defensive)
+    - re-raises on DB error so the loop wrapper logs it (CLAUDE.md:
+      never silently swallow DB errors)
+    - leader lock acquires once and blocks subsequent acquirers
+"""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+
+@pytest.mark.asyncio
+async def test_run_tick_parses_jsonb_result_and_forwards_dry_run():
+    """Happy path: rpc returns a JSONB dict, the function returns it
+    verbatim and forwards p_dry_run=False to the SQL call."""
+    expected = {
+        "started_at": "2026-04-26T03:00:00+00:00",
+        "completed_at": "2026-04-26T03:00:01+00:00",
+        "dry_run": False,
+        "rides_anonymized": 12,
+        "rides_deleted": 3,
+        "driver_location_deleted": 4500,
+        "ride_messages_deleted": 87,
+        "refresh_tokens_deleted": 21,
+        "stripe_events_deleted": 9,
+        "audit_logs_deleted": 0,
+    }
+
+    rpc_mock = MagicMock()
+    rpc_mock.execute.return_value = MagicMock(data=expected)
+    supa = MagicMock()
+    supa.rpc.return_value = rpc_mock
+
+    with (
+        patch("utils.retention_purge.supabase", supa),
+        patch("utils.retention_purge.run_sync", AsyncMock(side_effect=lambda fn: fn())),
+    ):
+        from utils.retention_purge import run_retention_purge_tick
+
+        result = await run_retention_purge_tick(dry_run=False)
+
+    assert result == expected
+    supa.rpc.assert_called_once_with("purge_pii_retention", {"p_dry_run": False})
+
+
+@pytest.mark.asyncio
+async def test_run_tick_dry_run_true_passed_to_sql():
+    rpc_mock = MagicMock()
+    rpc_mock.execute.return_value = MagicMock(data={"dry_run": True, "rides_deleted": 0})
+    supa = MagicMock()
+    supa.rpc.return_value = rpc_mock
+
+    with (
+        patch("utils.retention_purge.supabase", supa),
+        patch("utils.retention_purge.run_sync", AsyncMock(side_effect=lambda fn: fn())),
+    ):
+        from utils.retention_purge import run_retention_purge_tick
+
+        result = await run_retention_purge_tick(dry_run=True)
+
+    supa.rpc.assert_called_once_with("purge_pii_retention", {"p_dry_run": True})
+    assert result["dry_run"] is True
+
+
+@pytest.mark.asyncio
+async def test_run_tick_returns_none_when_supabase_unconfigured():
+    """Dev/test without SUPABASE_URL — should not raise, returns None."""
+    with patch("utils.retention_purge.supabase", None):
+        from utils.retention_purge import run_retention_purge_tick
+
+        result = await run_retention_purge_tick()
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_run_tick_returns_none_on_unexpected_response_shape():
+    """If the rpc response is shaped differently (PostgREST upgrade,
+    schema drift), don't crash the loop — log and continue."""
+    rpc_mock = MagicMock()
+    rpc_mock.execute.return_value = MagicMock(data="not a dict")
+    supa = MagicMock()
+    supa.rpc.return_value = rpc_mock
+
+    with (
+        patch("utils.retention_purge.supabase", supa),
+        patch("utils.retention_purge.run_sync", AsyncMock(side_effect=lambda fn: fn())),
+    ):
+        from utils.retention_purge import run_retention_purge_tick
+
+        result = await run_retention_purge_tick()
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_run_tick_reraises_db_error():
+    """CLAUDE.md: never silently swallow DB errors. The wrapper logs
+    via logger.exception and re-raises so the loop's outer try/except
+    can record it without losing the stack."""
+    supa = MagicMock()
+    supa.rpc.side_effect = RuntimeError("PostgREST connection refused")
+
+    with (
+        patch("utils.retention_purge.supabase", supa),
+        patch("utils.retention_purge.run_sync", AsyncMock(side_effect=lambda fn: fn())),
+        pytest.raises(RuntimeError, match="PostgREST connection refused"),
+    ):
+        from utils.retention_purge import run_retention_purge_tick
+
+        await run_retention_purge_tick()
+
+
+def test_seconds_until_next_returns_positive():
+    """Scheduling math: should always return a positive sleep duration,
+    never sleep through the same target hour twice."""
+    from utils.retention_purge import _seconds_until_next
+
+    for hour in (0, 3, 12, 23):
+        assert _seconds_until_next(hour) > 0
+        assert _seconds_until_next(hour) <= 24 * 3600
+
+
+@pytest.mark.asyncio
+async def test_leader_lock_blocks_second_acquirer(mock_redis):
+    """Two replicas calling redis_set_nx with the same key — the first
+    wins, the second sees False and skips its run. Uses the in-process
+    fallback (mock_redis fixture isolates _local)."""
+    from utils.redis_client import redis_set_nx
+
+    first = await redis_set_nx("spinr:retention:purge:lock", "pod-A", 60)
+    second = await redis_set_nx("spinr:retention:purge:lock", "pod-B", 60)
+
+    assert first is True
+    assert second is False

@@ -3,18 +3,20 @@ import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
     from ...utils.password import hash_password
+    from ...utils.rate_limiter import admin_staff_delete_limit
     from ...utils.refresh_tokens import revoke_all_for_user
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user
     from utils.password import hash_password
+    from utils.rate_limiter import admin_staff_delete_limit
     from utils.refresh_tokens import revoke_all_for_user
 
 db = db_supabase  # legacy alias
@@ -184,6 +186,14 @@ async def update_staff(staff_id: str, req: StaffUpdateRequest, admin: dict = Dep
     if not s:
         raise HTTPException(status_code=404, detail="Staff member not found")
 
+    if req.role is not None or req.modules is not None:
+        if admin.get("role") != "super_admin":
+            raise HTTPException(status_code=403, detail="Only super admins can modify role or modules")
+    if req.role is not None and req.role != "super_admin" and s.get("role") == "super_admin":
+        count = await db_supabase.count_documents("admin_staff", {"role": "super_admin", "is_active": True})
+        if count <= 1:
+            raise HTTPException(status_code=400, detail="Cannot demote the last active super admin")
+
     updates = {}
     if req.first_name is not None:
         updates["first_name"] = req.first_name
@@ -224,8 +234,13 @@ async def update_staff(staff_id: str, req: StaffUpdateRequest, admin: dict = Dep
 
 
 @router.delete("/staff/{staff_id}")
-async def delete_staff(staff_id: str, admin: dict = Depends(get_admin_user)):
+@admin_staff_delete_limit
+async def delete_staff(request: Request, staff_id: str, admin: dict = Depends(get_admin_user)):
     """Delete a staff member."""
+    if admin.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Only super admins can delete staff")
+    if staff_id == admin.get("id"):
+        raise HTTPException(status_code=400, detail="Cannot delete your own account")
     s = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("admin_staff", {"id": staff_id}, limit=1))
     # Revoke all refresh tokens before the row is gone so any in-flight
     # session cannot exchange a refresh token after deletion (audit [03-3]).

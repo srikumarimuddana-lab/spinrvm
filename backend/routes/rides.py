@@ -84,6 +84,11 @@ except ImportError:
     from services import corporate_allowance_service, corporate_wallet_service  # type: ignore
     from services.corporate_policy_service import evaluate_policy, evaluate_policy_for_ride  # type: ignore
 
+try:
+    from ..core.config import settings as _settings
+except ImportError:
+    from core.config import settings as _settings  # noqa: F401 — dual-import pattern
+
 db = db_supabase  # legacy alias
 
 
@@ -122,6 +127,49 @@ def _d(v) -> Decimal:
 
 def _round(v: Decimal) -> Decimal:
     return v.quantize(_TWO_PLACES, rounding=ROUND_HALF_UP)
+
+
+def _reestimate_fare_for_stops(ride: dict, new_stops: list) -> dict:
+    """Recalculate distance, duration, and fare after a stop mutation.
+
+    Derives per-km and per-minute rates from the values already stored on the
+    ride row (distance_fare / (distance_km * surge) and time_fare / (duration *
+    surge)), then applies them to the new multi-leg distance.  Returns a dict
+    suitable for merging into a $set update.
+    """
+    # Build ordered waypoints: pickup → stops → dropoff
+    waypoints = [
+        (ride["pickup_lat"], ride["pickup_lng"]),
+        *[(s["lat"], s["lng"]) for s in new_stops],
+        (ride["dropoff_lat"], ride["dropoff_lng"]),
+    ]
+    new_distance_km = sum(
+        calculate_distance(waypoints[i][0], waypoints[i][1], waypoints[i + 1][0], waypoints[i + 1][1])
+        for i in range(len(waypoints) - 1)
+    )
+    new_duration_minutes = max(5, int(new_distance_km / 30 * 60) + 5)
+
+    surge = _d(ride.get("surge_multiplier", 1.0)) or _d(1)
+    old_dist = _d(ride.get("distance_km") or 1)
+    old_dur = _d(ride.get("duration_minutes") or 1)
+
+    per_km_effective = _d(ride.get("distance_fare", 0)) / (old_dist * surge)
+    per_min_effective = _d(ride.get("time_fare", 0)) / (old_dur * surge)
+
+    new_distance_fare = _round(per_km_effective * _d(new_distance_km) * surge)
+    new_time_fare = _round(per_min_effective * _d(new_duration_minutes) * surge)
+    new_total = _round(
+        _d(ride.get("base_fare", 0)) + new_distance_fare + new_time_fare + _d(ride.get("booking_fee", 0))
+    )
+
+    return {
+        "distance_km": round(new_distance_km, 2),
+        "duration_minutes": new_duration_minutes,
+        "distance_fare": _f(new_distance_fare),
+        "time_fare": _f(new_time_fare),
+        "estimated_fare": _f(new_total),
+        "total_fare": _f(new_total),
+    }
 
 
 def _f(v: Decimal) -> float:
@@ -350,11 +398,11 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
             )
             await manager.send_personal_message(dispatch_payload, f"driver_{selected_driver['user_id']}")
 
-            # Push-notification fallback. The driver-app listens for
-            # data.type == 'new_ride_offer' (useDriverDashboard.ts:457) and
-            # refetches the active ride via HTTP when this arrives, so we
-            # don't need to put the full ride data in the push — just
-            # a wake-up with the ride id.
+            # Push-notification fallback for backgrounded/killed app.
+            # The driver-app background handler (app/_layout.tsx) persists
+            # the full ride data to AsyncStorage; useDriverDashboard.ts then
+            # hydrates the store on cold-start without a network round-trip.
+            # FCM `data` values MUST be strings — all numbers are str()-wrapped.
             try:
                 await send_push_notification(
                     selected_driver["user_id"],
@@ -364,12 +412,23 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
                         f"→ {ride.get('dropoff_address') or 'destination'}"
                     ),
                     {
-                        "type": "new_ride_offer",
+                        "type": "new_ride_assignment",
                         "ride_id": ride_id,
+                        "pickup_address": ride.get("pickup_address") or "",
+                        "dropoff_address": ride.get("dropoff_address") or "",
+                        "pickup_lat": str(ride.get("pickup_lat") or 0),
+                        "pickup_lng": str(ride.get("pickup_lng") or 0),
+                        "dropoff_lat": str(ride.get("dropoff_lat") or 0),
+                        "dropoff_lng": str(ride.get("dropoff_lng") or 0),
+                        "fare": str(ride.get("driver_earnings") or 0),
+                        "distance_km": str(ride.get("distance_km") or ""),
+                        "duration_minutes": str(ride.get("duration_minutes") or ""),
+                        "rider_name": rider_display_name or "",
+                        "rider_rating": str((rider_user or {}).get("rating") or ""),
                         "deeplink": "/driver/",
                     },
                 )
-                logger.info(f"[DISPATCH] push new_ride_offer sent to user_id={selected_driver['user_id']}")
+                logger.info(f"[DISPATCH] push new_ride_assignment sent to user_id={selected_driver['user_id']}")
             except Exception as e:
                 logger.warning(f"[DISPATCH] push notification failed for user_id={selected_driver['user_id']}: {e}")
         else:
@@ -972,8 +1031,10 @@ async def create_ride(request: Request, body: CreateRideRequest, current_user: d
                 ride_data.pop("ride_code", None)
                 inserted = await db_supabase.insert_ride(ride_data)
                 break
+            if "rides_one_active_per_rider" in msg:
+                raise HTTPException(status_code=409, detail="You already have an active ride")
             if "unique" in msg or "duplicate" in msg or "23505" in msg:
-                continue  # retry with a new code
+                continue  # retry with a new code for ride_code conflicts
             raise
     else:
         logger.error(f"create_ride: could not allocate unique ride_code after 3 tries: {last_exc}")
@@ -2032,10 +2093,11 @@ async def add_stop_mid_trip(ride_id: str, req: AddStopMidTripRequest, current_us
     else:
         stops.append(new_stop)
 
+    fare_update = _reestimate_fare_for_stops(ride, stops)
     await db.update_one(
         "rides",
         {"id": ride_id},
-        {"$set": {"stops": stops, "updated_at": datetime.now(timezone.utc).isoformat()}},
+        {"$set": {**fare_update, "stops": stops, "updated_at": datetime.now(timezone.utc).isoformat()}},
     )
 
     # Notify driver via WebSocket
@@ -2043,11 +2105,16 @@ async def add_stop_mid_trip(ride_id: str, req: AddStopMidTripRequest, current_us
         driver = await db.find_one("drivers", {"id": ride["driver_id"]})
         if driver and driver.get("user_id"):
             await manager.send_personal_message(
-                {"type": "stops_updated", "ride_id": ride_id, "stops": stops},
+                {
+                    "type": "stops_updated",
+                    "ride_id": ride_id,
+                    "stops": stops,
+                    "estimated_fare": fare_update["estimated_fare"],
+                },
                 f"driver_{driver['user_id']}",
             )
 
-    return {"success": True, "stops": stops}
+    return {"success": True, "stops": stops, **fare_update}
 
 
 @api_router.delete("/{ride_id}/stops/{stop_index}")
@@ -2067,10 +2134,11 @@ async def remove_stop_mid_trip(ride_id: str, stop_index: int, current_user: dict
 
     stops.pop(stop_index)
 
+    fare_update = _reestimate_fare_for_stops(ride, stops)
     await db.update_one(
         "rides",
         {"id": ride_id},
-        {"$set": {"stops": stops, "updated_at": datetime.now(timezone.utc).isoformat()}},
+        {"$set": {**fare_update, "stops": stops, "updated_at": datetime.now(timezone.utc).isoformat()}},
     )
 
     # Notify driver
@@ -2078,11 +2146,16 @@ async def remove_stop_mid_trip(ride_id: str, stop_index: int, current_user: dict
         driver = await db.find_one("drivers", {"id": ride["driver_id"]})
         if driver and driver.get("user_id"):
             await manager.send_personal_message(
-                {"type": "stops_updated", "ride_id": ride_id, "stops": stops},
+                {
+                    "type": "stops_updated",
+                    "ride_id": ride_id,
+                    "stops": stops,
+                    "estimated_fare": fare_update["estimated_fare"],
+                },
                 f"driver_{driver['user_id']}",
             )
 
-    return {"success": True, "stops": stops}
+    return {"success": True, "stops": stops, **fare_update}
 
 
 class EmergencyRequest(BaseModel):
@@ -2390,6 +2463,8 @@ async def cancel_scheduled_ride(ride_id: str, current_user: dict = Depends(get_c
 @api_router.post("/{ride_id}/simulate-arrival")
 async def simulate_driver_arrival(ride_id: str, current_user: dict = Depends(get_current_user)):
     """Dev/test only: Simulate driver arriving at pickup, returns OTP."""
+    if _settings.ENV.lower() == "production":
+        raise HTTPException(status_code=403, detail="Not available in production")
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")

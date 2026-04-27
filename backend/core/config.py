@@ -84,7 +84,14 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _guard_production_secrets(self) -> "Settings":
-        """Refuse to start in production with known-weak placeholder values."""
+        """Refuse to start in production with weak placeholder values, short
+        secrets, or missing Firebase audience identifiers.
+
+        - JWT_SECRET: ≥32 chars (B-P1-2 / CLAUDE.md). HS256 with a short shared
+          secret is brute-forceable in seconds on a modern GPU.
+        - FIREBASE_DRIVER_APP_ID / FIREBASE_RIDER_APP_ID: required so the manual
+          audience check (B-P1-1 / DV-10) cannot be silently skipped.
+        """
         if self.ENV.lower() == "production":
             weak = {
                 "JWT_SECRET": ("your-strong-secret-key",),
@@ -98,6 +105,23 @@ class Settings(BaseSettings):
                         "Set a strong secret in your environment before running in production."
                     )
                     raise ValueError(msg)
+
+            jwt_secret = self.JWT_SECRET or ""
+            if len(jwt_secret) < 32:
+                raise ValueError(
+                    f"JWT_SECRET must be at least 32 characters in production "
+                    f"(got {len(jwt_secret)}). HS256 with a short shared secret "
+                    "is brute-forceable. Generate one with: "
+                    "python -c 'import secrets; print(secrets.token_urlsafe(48))'"
+                )
+
+            for field in ("FIREBASE_DRIVER_APP_ID", "FIREBASE_RIDER_APP_ID"):
+                if not getattr(self, field, ""):
+                    raise ValueError(
+                        f"{field} must be set in production. The Firebase ID-token "
+                        "audience check is gated on this value; an unset env var "
+                        "would silently allow cross-app token reuse (DV-10)."
+                    )
         return self
 
     @property

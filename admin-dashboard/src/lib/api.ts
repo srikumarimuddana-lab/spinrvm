@@ -28,26 +28,24 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
             // "Invalid credentials" is shown to the user rather than "Unauthorized".
             if (path !== "/api/admin/auth/login") {
                 const store = useAuthStore.getState();
-                // Attempt one silent refresh before giving up. This handles the
-                // case where the access token expired mid-session and the timer
-                // hasn't fired yet (e.g. the tab was backgrounded).
-                if (store.refresh_token) {
-                    await store.silentRefresh();
-                    const newToken = useAuthStore.getState().token;
-                    if (newToken) {
-                        const retryHeaders = { ...headers, Authorization: `Bearer ${newToken}` };
-                        const retryRes = await fetch(url, { ...options, headers: retryHeaders });
-                        if (retryRes.ok) return retryRes.json() as T;
-                        if (retryRes.status !== 401) {
-                            const retryBody = await retryRes.json().catch(() => ({}));
-                            const retryMsg =
-                                retryBody.detail ||
-                                retryBody.error?.detail ||
-                                retryBody.error?.message ||
-                                retryBody.message ||
-                                retryRes.statusText;
-                            throw new Error(retryMsg);
-                        }
+                // Attempt one silent refresh before giving up. The HttpOnly
+                // refresh cookie is sent automatically — no need to check for
+                // a token in JS state.
+                await store.silentRefresh();
+                const newToken = useAuthStore.getState().token;
+                if (newToken) {
+                    const retryHeaders = { ...headers, Authorization: `Bearer ${newToken}` };
+                    const retryRes = await fetch(url, { ...options, headers: retryHeaders });
+                    if (retryRes.ok) return retryRes.json() as T;
+                    if (retryRes.status !== 401) {
+                        const retryBody = await retryRes.json().catch(() => ({}));
+                        const retryMsg =
+                            retryBody.detail ||
+                            retryBody.error?.detail ||
+                            retryBody.error?.message ||
+                            retryBody.message ||
+                            retryRes.statusText;
+                        throw new Error(retryMsg);
                     }
                 }
                 useAuthStore.getState().logout();
@@ -101,9 +99,7 @@ export interface AuthResponse {
 
 export interface AdminLoginResponse {
     token: string;
-    refresh_token: string;
     access_expires_at: string;
-    refresh_expires_at: string;
     user: {
         id: string;
         email: string;
@@ -114,6 +110,13 @@ export interface AdminLoginResponse {
     };
 }
 
+export interface AdminMfaRequired {
+    mfa_required: true;
+    mfa_token: string;
+}
+
+export type AdminLoginResult = AdminLoginResponse | AdminMfaRequired;
+
 export const loginAdmin = (phone: string, code: string) =>
     request<AuthResponse>("/api/auth/verify-otp", {
         method: "POST",
@@ -121,9 +124,33 @@ export const loginAdmin = (phone: string, code: string) =>
     });
 
 export const loginAdminSession = (email: string, password: string) =>
-    request<AdminLoginResponse>("/api/admin/auth/login", {
+    request<AdminLoginResult>("/api/admin/auth/login", {
         method: "POST",
         body: JSON.stringify({ email, password }),
+    });
+
+export const mfaChallenge = (mfa_token: string, totp_code: string) =>
+    request<AdminLoginResponse>("/api/admin/auth/mfa/challenge", {
+        method: "POST",
+        body: JSON.stringify({ mfa_token, totp_code }),
+    });
+
+export const mfaStatus = () =>
+    request<{ mfa_enabled: boolean }>("/api/admin/auth/mfa/status");
+
+export const mfaEnroll = () =>
+    request<{ secret: string; otpauth_uri: string }>("/api/admin/auth/mfa/enroll", { method: "POST" });
+
+export const mfaConfirm = (totp_code: string) =>
+    request<{ backup_codes: string[] }>("/api/admin/auth/mfa/confirm", {
+        method: "POST",
+        body: JSON.stringify({ totp_code }),
+    });
+
+export const mfaDisable = (totp_code: string, password: string) =>
+    request<{ success: boolean }>("/api/admin/auth/mfa/disable", {
+        method: "POST",
+        body: JSON.stringify({ totp_code, password }),
     });
 
 export const sendOtp = (phone: string) =>

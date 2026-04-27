@@ -16,7 +16,7 @@ try:
     from ...core.config import settings
     from ...utils.audit_logger import log_admin_action  # noqa: F401
     from ...utils.password import hash_password, verify_password
-    from ...utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr
+    from ...utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set
     from ...utils.refresh_tokens import (
         issue_refresh_token,
         lookup_refresh_token,
@@ -28,7 +28,7 @@ except ImportError:
     from core.config import settings
     from utils.audit_logger import log_admin_action  # noqa: F401
     from utils.password import hash_password, verify_password
-    from utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr
+    from utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set
     from utils.refresh_tokens import (
         issue_refresh_token,
         lookup_refresh_token,
@@ -137,6 +137,7 @@ def _mint_admin_access_token(
             "modules": modules,
             "phone": phone,
             "token_version": int(token_version or 0),
+            "jti": secrets.token_hex(16),
             "iat": now,
             "exp": expires_at,
         },
@@ -394,13 +395,16 @@ async def admin_refresh(request: Request, body: RefreshRequest):
 
 @admin_auth_router.post("/logout")
 @limiter.limit("10/minute")
-async def admin_logout(request: Request, body: LogoutRequest):
-    """Admin logout — revokes the presented refresh token.
+async def admin_logout(
+    request: Request,
+    body: LogoutRequest,
+    authorization: Optional[str] = Header(None),
+):
+    """Admin logout — revokes the refresh token and blacklists the access token JTI.
 
-    Previously returned a canned success message with zero DB side
-    effects. Now actually stamps revoked_at so the refresh token can
-    never be exchanged again. The current access token keeps working
-    until exp; use /admin/auth/logout-all for immediate kill.
+    Blacklisting the JTI means the access token stops working immediately
+    rather than coasting until its exp claim. The Redis key is set with a TTL
+    equal to the token's remaining lifetime so the blacklist is self-pruning.
 
     The ``request`` parameter is required by slowapi's rate limiter
     (>=0.1.9 validates the signature at decoration time) even though we
@@ -409,6 +413,26 @@ async def admin_logout(request: Request, body: LogoutRequest):
     """
     if body.refresh_token:
         await revoke_refresh_token(body.refresh_token)
+
+    if authorization:
+        try:
+            scheme, access_token = authorization.split()
+            if scheme.lower() == "bearer":
+                payload = jwt.decode(
+                    access_token,
+                    settings.JWT_SECRET,
+                    algorithms=[settings.ALGORITHM],
+                    options={"verify_exp": False},
+                )
+                jti = payload.get("jti")
+                exp = payload.get("exp")
+                if jti and exp:
+                    remaining = int(exp - datetime.now(timezone.utc).timestamp())
+                    if remaining > 0:
+                        await redis_set(f"admin:revoked:{jti}", "1", ttl=remaining)
+        except Exception:
+            pass  # malformed / already-expired token — nothing to blacklist
+
     return {"success": True}
 
 

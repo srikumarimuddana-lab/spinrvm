@@ -16,7 +16,6 @@ import {
 
 import {
     AllowanceRequestRow,
-    CorporateAllowance,
     CorporateMember,
     CorporateMemberStatus,
     decideAllowanceRequest,

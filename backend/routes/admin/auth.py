@@ -59,19 +59,31 @@ def _lockout_key(email: str) -> str:
 
 
 async def _is_account_locked(email: str) -> bool:
-    val = await redis_get(_lockout_key(email))
-    return val is not None and int(val) >= _LOGIN_MAX_FAILURES
+    try:
+        val = await redis_get(_lockout_key(email))
+        return val is not None and int(val) >= _LOGIN_MAX_FAILURES
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[REDIS] _is_account_locked check failed for admin login ({email!r}): {e}")
+        raise HTTPException(status_code=503, detail="ERR_AUTH_UNAVAILABLE") from None
 
 
 async def _record_login_failure(email: str) -> None:
-    key = _lockout_key(email)
-    count = await redis_incr(key)
-    if count == 1:
-        await redis_expire(key, _LOGIN_LOCKOUT_TTL_SECONDS)
+    try:
+        key = _lockout_key(email)
+        count = await redis_incr(key)
+        if count == 1:
+            await redis_expire(key, _LOGIN_LOCKOUT_TTL_SECONDS)
+    except Exception as e:
+        logger.error(f"[REDIS] _record_login_failure could not persist failure count ({email!r}): {e}")
 
 
 async def _clear_login_failures(email: str) -> None:
-    await redis_delete(_lockout_key(email))
+    try:
+        await redis_delete(_lockout_key(email))
+    except Exception as e:
+        logger.error(f"[REDIS] _clear_login_failures could not clear failure count ({email!r}): {e}")
 
 
 # Auth sub-router — mounted at /admin/auth by server.py directly

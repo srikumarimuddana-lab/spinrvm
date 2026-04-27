@@ -12,17 +12,24 @@ Tiers give bonus multipliers and can be redeemed for wallet credits.
 import logging
 import uuid
 from datetime import datetime, timezone
+from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 try:
     from ..db import db
+    from ..db_supabase import wallet_increment_balance
     from ..dependencies import get_current_user
+    from ..utils.error_handling import DuplicateRecordError
 except ImportError:
     from db import db
+    from db_supabase import wallet_increment_balance
     from dependencies import get_current_user
+    from utils.error_handling import DuplicateRecordError
 
+# db is the db_supabase module (re-exported by backend/db.py shim); .rpc is the
+# Supabase RPC caller used for atomic wallet credits during point redemption.
 logger = logging.getLogger(__name__)
 api_router = APIRouter(prefix="/loyalty", tags=["Loyalty"])
 
@@ -119,13 +126,6 @@ async def earn_points_for_ride(ride_id: str = Query(...), current_user: dict = D
     if ride.get("status") != "completed":
         raise HTTPException(status_code=400, detail="Ride not completed")
 
-    # Check if already awarded
-    existing = await db.find_one(
-        "loyalty_transactions", {"user_id": current_user["id"], "reference_id": ride_id, "type": "ride_earned"}
-    )
-    if existing:
-        return {"already_awarded": True, "points": 0}
-
     fare = float(ride.get("total_fare", 0))
     account = await _get_or_create_account(current_user["id"])
     tier = account.get("tier", "bronze")
@@ -137,6 +137,27 @@ async def earn_points_for_ride(ride_id: str = Query(...), current_user: dict = D
     if total_points <= 0:
         return {"points": 0}
 
+    # INSERT the transaction first. The unique index (user_id, reference_id) WHERE
+    # type='ride_earned' makes this idempotent — a concurrent request that already
+    # inserted will cause a DuplicateRecordError here, and we return a no-op instead
+    # of double-awarding.
+    try:
+        await db.insert_one(
+            "loyalty_transactions",
+            {
+                "id": str(uuid.uuid4()),
+                "user_id": current_user["id"],
+                "points": total_points,
+                "type": "ride_earned",
+                "reference_id": ride_id,
+                "description": f"Earned {base_points} pts + {bonus_points} bonus ({tier} {multiplier}x)",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+    except DuplicateRecordError:
+        return {"already_awarded": True, "points": 0}
+
+    # INSERT succeeded — safe to update the account balance
     new_balance = account.get("points", 0) + total_points
     new_lifetime = account.get("lifetime_points", 0) + total_points
     new_tier = _calculate_tier(new_lifetime)
@@ -151,20 +172,6 @@ async def earn_points_for_ride(ride_id: str = Query(...), current_user: dict = D
                 "tier": new_tier,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
-        },
-    )
-
-    # Record transaction
-    await db.insert_one(
-        "loyalty_transactions",
-        {
-            "id": str(uuid.uuid4()),
-            "user_id": current_user["id"],
-            "points": total_points,
-            "type": "ride_earned",
-            "reference_id": ride_id,
-            "description": f"Earned {base_points} pts + {bonus_points} bonus ({tier} {multiplier}x)",
-            "created_at": datetime.now(timezone.utc).isoformat(),
         },
     )
 
@@ -194,37 +201,38 @@ async def redeem_points(req: RedeemRequest, current_user: dict = Depends(get_cur
     if account.get("points", 0) < req.points:
         raise HTTPException(status_code=400, detail="Insufficient points")
 
-    credit_amount = round(req.points / REDEMPTION_RATE, 2)
-    new_balance = account.get("points", 0) - req.points
+    credit_amount = (Decimal(req.points) / Decimal(REDEMPTION_RATE)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
-    await db.update_one(
-        "loyalty_accounts",
-        {"id": account["id"]},
-        {"$set": {"points": new_balance, "updated_at": datetime.now(timezone.utc).isoformat()}},
+    # Step 1: Credit the wallet first. If this fails the rider keeps their points.
+    from .wallet import _record_transaction, get_or_create_wallet
+
+    wallet = await get_or_create_wallet(current_user["id"])
+    new_wallet_balance = await wallet_increment_balance(wallet["id"], credit_amount)
+    await _record_transaction(
+        wallet_id=wallet["id"],
+        user_id=current_user["id"],
+        txn_type="bonus",
+        amount=float(credit_amount),
+        balance_after=float(new_wallet_balance),
+        description=f"Loyalty redemption: {req.points} pts → ${credit_amount:.2f}",
     )
 
-    # Credit to wallet
+    # Step 2: Deduct points. If this fails, issue a compensating wallet debit so
+    # the rider isn't credited without losing points.
+    new_balance = account.get("points", 0) - req.points
     try:
-        from .wallet import _d, _record_transaction, get_or_create_wallet
-
-        wallet = await get_or_create_wallet(current_user["id"])
-        old_wb = _d(wallet.get("balance", 0))
-        new_wb = old_wb + _d(credit_amount)
         await db.update_one(
-            "wallets",
-            {"id": wallet["id"]},
-            {"$set": {"balance": float(new_wb), "updated_at": datetime.now(timezone.utc).isoformat()}},
+            "loyalty_accounts",
+            {"id": account["id"]},
+            {"$set": {"points": new_balance, "updated_at": datetime.now(timezone.utc).isoformat()}},
         )
-        await _record_transaction(
-            wallet_id=wallet["id"],
-            user_id=current_user["id"],
-            txn_type="bonus",
-            amount=credit_amount,
-            balance_after=float(new_wb),
-            description=f"Loyalty redemption: {req.points} pts → ${credit_amount:.2f}",
-        )
-    except Exception as e:
-        logger.error(f"Loyalty redeem wallet credit failed: {e}")
+    except Exception as deduct_err:
+        logger.error(f"Loyalty redeem points deduction failed, reversing wallet credit: {deduct_err}")
+        try:
+            await wallet_increment_balance(wallet["id"], -credit_amount)
+        except Exception as reverse_err:
+            logger.error(f"Loyalty redeem wallet reversal also failed: {reverse_err}")
+        raise HTTPException(status_code=503, detail="Redemption failed — please retry") from deduct_err
 
     await db.insert_one(
         "loyalty_transactions",

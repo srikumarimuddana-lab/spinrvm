@@ -27,6 +27,11 @@ try:
 except ImportError:
     from dependencies import get_admin_user, require_module
 
+try:
+    from ..disputes import admin_router as disputes_admin_router
+except ImportError:
+    from routes.disputes import admin_router as disputes_admin_router
+
 from .analytics import api_router as analytics_router
 from .auth import admin_auth_router
 from .auth import router as auth_router
@@ -79,5 +84,6 @@ admin_router.include_router(messaging_router, dependencies=[Depends(require_modu
 admin_router.include_router(maintenance_router, dependencies=[Depends(require_module("dashboard"))])
 admin_router.include_router(analytics_router, dependencies=[Depends(require_module("dashboard"))])
 admin_router.include_router(wallet_router, dependencies=[Depends(require_module("earnings"))])
+admin_router.include_router(disputes_admin_router, dependencies=[Depends(require_module("disputes"))])
 
 __all__ = ["admin_router", "admin_auth_router"]

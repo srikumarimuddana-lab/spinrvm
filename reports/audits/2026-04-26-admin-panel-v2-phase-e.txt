@@ -1,0 +1,707 @@
+================================================================================
+SPINR ADMIN DASHBOARD — PHASE E (D17–D23) AUDIT FINDINGS (v2)
+================================================================================
+Date         : 2026-04-26
+Branch       : claude/audit-continuation-batch-2
+Scope        : admin-dashboard/ (Next.js 16) + .github/workflows/* admin jobs
+Kickoff      : reports/audits/2026-04-23-admin-panel-audit-plan-v1.md
+Prerequisite : reports/audits/2026-04-25-admin-panel-audit-v1.txt (Tasks 01-08)
+
+AUDIT GROUND RULES
+──────────────────
+• Per audit-framework/ground-rules.md (8 rules; rules 7+8 from v1.3 apply)
+• CRITICAL/HIGH require file:line:snippet evidence
+• Every finding tags ≥1 regulation
+• Risk-score formula per reports/audits/OPEN-ITEMS-TRACKER.md
+• Cross-references admin-v1 [NN-N] tags where overlap exists; duplicates noted
+
+================================================================================
+TASK 17 — CI/CD PIPELINE (admin-specific)
+================================================================================
+
+[17-1] MEDIUM | Admin Playwright E2E only runs on main, not PRs
+File: .github/workflows/ci.yml:261-303
+Finding: `if: github.ref == 'refs/heads/main'` gates Playwright E2E to
+post-merge runs. Lint, Vitest, and `next build` run on every PR, but the
+E2E suite — the only layer that exercises real navigation flows — does not
+block a bad merge. Regressions land first, are caught second.
+Fix: Move E2E to PR checks as a non-blocking job at first; promote to
+required-status after stabilization. Effort: 2-3 h
+Risk score: 12 (MEDIUM × org × likely)
+Regulations: SOC2 (Change Management)
+Owner: ci · Sprint: P2
+
+[17-2] HIGH | deploy-admin needs only backend-test, not backend-deploy
+File: .github/workflows/ci.yml:362
+Finding: `deploy-admin` has `needs: [backend-test]` but not `[backend-deploy]`.
+A backend that passes tests but fails deploy still releases the admin to
+Vercel — admin frontend can hit a stale or unavailable backend version.
+Fix: Re-chain to `needs: [backend-deploy]` (or whichever job represents
+backend-on-prod). Effort: 1-2 h
+Risk score: 18 (HIGH × org × possible)
+Regulations: SOC2 (Change Management)
+Owner: ci · Sprint: P1
+
+[17-3] MEDIUM | npm ci runs without explicit audit gate; security-gates audit non-blocking
+File: .github/workflows/ci.yml:242, security-gates.yml:73
+Finding: CI uses `npm ci` (deterministic). However, `npm audit` in
+security-gates runs with `continue-on-error: true`. A high-severity CVE
+landing in dependencies will be a green build.
+Fix: Set `continue-on-error: false` for `npm audit --audit-level=high` after
+a baseline-clean window. Add `audit=true` to `.npmrc`. Effort: 0.5 h
+Risk score: 12 (MEDIUM × org × likely)
+Regulations: Supply Chain, SOC2
+Owner: ci · Sprint: P2
+
+[17-4] MEDIUM | No required-status-check / branch protection on Vercel deploy
+File: .github/workflows/ci.yml:383-388
+Finding: Vercel deploy fires once the build job exits zero — no gate on
+security-gates results, no documented rollback runbook. A late-arriving CVE
+or a Sentry release-tracking failure does not stop the rollout.
+Fix: Add GH branch protection requiring security-gates checks; document a
+1-page rollback runbook (`docs/runbooks/admin-rollback.md`). Effort: 1-2 h
+Risk score: 12 (MEDIUM × org × possible)
+Regulations: Change Management, SOC2
+Owner: ci/ops · Sprint: P2
+
+[17-5] LOW | Build output not scanned for secrets pre-deploy
+File: .github/workflows/security-gates.yml:145-160 (Gitleaks runs on history)
+Finding: Gitleaks scans the git history but not the compiled `.next/`
+output. A `NEXT_PUBLIC_*` typo for a server-only secret would slip through:
+Gitleaks doesn't see it (committed file ≠ secret pattern), and audit shows
+nothing in source — only the bundle leaks.
+Fix: Add `truffleHog` (or repeat Gitleaks) over `.next/` after build, before
+Vercel upload. Effort: 1 h
+Risk score: 6 (LOW × org × possible)
+Regulations: Secret Management
+Owner: ci · Sprint: P3
+
+[17-6] PASS | Lint + Vitest + next build run on every PR
+File: .github/workflows/ci.yml:241-255
+Finding: The three fastest checks (ESLint with `--max-warnings 600`, Vitest,
+`next build`) execute on every PR. This is the correct pattern — fast checks
+gate, slow checks (E2E) follow.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 17 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     1 |
+| MEDIUM          |     3 |
+| LOW             |     1 |
+| PASS            |     1 |
+| TOTAL           |     6 |
+
+
+================================================================================
+TASK 18 — SECRETS MANAGEMENT (admin-specific)
+================================================================================
+
+[18-1] HIGH | Cookie SameSite=Lax — should be Strict for admin-only UI
+File: admin-dashboard/src/store/authStore.ts:25
+Finding: Token cookie sets `SameSite=Lax`, which permits cross-site GETs
+(e.g. an attacker-controlled site framing the admin). Strict eliminates the
+cross-site request entirely. Pairs with admin-v1 [02-2] (sessionStorage
+removal) — that fix moves the token to a cookie; this fix tightens it.
+Fix: Set `SameSite=Strict`. The admin has no cross-site nav use case. The
+audit-v1 P0-1 fix should land with `Strict` from the start. Effort: 0.5 h
+Related to: admin-v1 [02-2]
+Risk score: 18 (HIGH × org × possible)
+Regulations: OWASP A01
+Owner: admin-dashboard · Sprint: P1
+
+[18-2] MEDIUM | Client-side cookie can't enforce HttpOnly; backend must set it
+File: admin-dashboard/src/store/authStore.ts:18-28
+Finding: Client checks `window.location.protocol === 'https:'` and
+conditionally adds `Secure`. JavaScript can never set `HttpOnly` — only the
+backend `Set-Cookie` response header can. Today the cookie is JS-readable.
+Fix: Backend `/admin/auth/login` and `/admin/auth/refresh` must emit
+`Set-Cookie: admin_access=...; HttpOnly; Secure; SameSite=Strict; Path=/admin`
+unconditionally in production. Frontend stops setting cookies entirely.
+Pair with admin-v1 [02-2] (the P0 work). Effort: 1 h verification +
+backend wiring covered by admin-v1 [02-2]
+Related to: admin-v1 [02-2]
+Risk score: 12 (MEDIUM × org × possible)
+Regulations: OWASP A02
+Owner: backend · Sprint: P0 (covered by admin-v1 [02-2])
+
+[18-3] MEDIUM | Refresh token persisted to sessionStorage is XSS-stealable
+File: admin-dashboard/src/store/authStore.ts:65, 194
+Finding: `partialize` correctly excludes the access token from storage but
+*includes* `refresh_token`. An XSS payload that steals the refresh token can
+mint new access tokens for the refresh-TTL window (currently 30d).
+Fix: Move refresh token to a separate HttpOnly cookie (`admin_refresh`) with
+`Path=/admin/auth/refresh` and the same Secure + SameSite=Strict flags. The
+refresh endpoint is the only consumer; no JS needs the value. Effort: 4-6 h
+Related to: admin-v1 [02-2]
+Risk score: 12 (MEDIUM × org × possible)
+Regulations: OWASP A01
+Owner: admin-dashboard + backend · Sprint: P1
+
+[18-4] LOW | NEXT_PUBLIC_API_URL has localhost fallback in production code path
+File: admin-dashboard/next.config.ts:3-6, admin-dashboard/src/lib/api.ts:5
+Finding: `process.env.NEXT_PUBLIC_API_URL ?? "http://127.0.0.1:8000"` —
+if the prod env var is misconfigured, the admin silently calls localhost.
+The dev fallback should not be a runtime safety net.
+Fix: At build time in production, throw if `NEXT_PUBLIC_API_URL` unset:
+`if (process.env.NODE_ENV === 'production' && !process.env.NEXT_PUBLIC_API_URL)
+  throw new Error('NEXT_PUBLIC_API_URL must be set in production');`
+Effort: 1 h
+Risk score: 4 (LOW × self × possible)
+Regulations: Configuration Management
+Owner: admin-dashboard · Sprint: P3
+
+[18-5] PASS | Access token stored in memory only
+File: admin-dashboard/src/store/authStore.ts:63-64, 199
+Finding: Zustand `partialize` excludes `token` from persisted state. On
+reload, silent refresh exchanges `refresh_token` → fresh access token before
+the first API call. XSS cannot read the access token from storage.
+
+[18-6] LOW | No .env.example in admin-dashboard
+File: admin-dashboard/ (no .env.example)
+Finding: The admin-dashboard relies entirely on Vercel's env var UI; there
+is no `.env.example` listing required variables. New contributors discover
+required variables only when something breaks at runtime.
+Fix: Add `admin-dashboard/.env.example` listing every `NEXT_PUBLIC_*` and
+`SENTRY_*` variable with a one-line purpose comment. Effort: 0.5 h
+Risk score: 3 (LOW × self × possible)
+Regulations: Documentation
+Owner: admin-dashboard · Sprint: P3
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 18 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     1 |
+| MEDIUM          |     2 |
+| LOW             |     2 |
+| PASS            |     1 |
+| TOTAL           |     6 |
+
+
+================================================================================
+TASK 19 — DEPENDENCY HYGIENE
+================================================================================
+
+[19-1] MEDIUM | dompurify ≤3.3.3 has 4 unresolved XSS-bypass CVEs (via jspdf)
+File: admin-dashboard/package-lock.json (transitive: jspdf → dompurify)
+Finding: dompurify 3.3.3 is exposed to GHSA-39q2-94rc-95cp,
+GHSA-h7mw-gpvr-xq4m, GHSA-crv5-9vww-q3g8, GHSA-v9jr-rg53-9pgp — all XSS
+sanitization bypasses. Path: jspdf 4.2.1 → dompurify. Admin uses jspdf for
+report PDF generation; if any user-controlled string lands in a PDF, XSS at
+PDF-render time is in scope.
+Fix: Bump jspdf to a release pinning dompurify ≥ 3.4.0, or pin dompurify
+directly via npm overrides. Run PDF-generation tests. Effort: 1-2 h
+Risk score: 12 (MEDIUM × org × possible)
+Regulations: OWASP A06
+Owner: admin-dashboard · Sprint: P2
+
+[19-2] MEDIUM | postcss <8.5.10 has unescaped </style> XSS (via tailwindcss)
+File: admin-dashboard/package-lock.json (transitive: @tailwindcss/postcss → postcss)
+Finding: GHSA-qx2v-qp2m-jg93 — PostCSS ≤ 8.5.9 fails to escape `</style>`
+in CSS output. Tailwind compiles via PostCSS. If user-controlled content
+ever reaches a className or `style=` block (currently none, per audit), XSS
+becomes possible.
+Fix: Upgrade `@tailwindcss/postcss` to a version that pulls postcss
+≥ 8.5.10. Effort: 0.5 h
+Risk score: 8 (MEDIUM × org × low)
+Regulations: OWASP A03
+Owner: admin-dashboard · Sprint: P2
+
+[19-3] MEDIUM | hono <4.12.14 JSX-attribute XSS (transitive provenance unclear)
+File: admin-dashboard/package-lock.json (search for hono confirmed indirect)
+Finding: GHSA-458j-xx4x-4375 — hono < 4.12.14 mishandles JSX attribute
+names, allowing HTML injection in SSR contexts. Admin doesn't use hono
+directly; verify via `npm ls hono`. If a shared dep pulls it, ensure the
+upgrade lands.
+Fix: Pin hono ≥ 4.12.14 via `overrides` if a transitive bring-in is found.
+If not, drop this finding after `npm ls hono` confirms absent. Effort: 1 h
+Risk score: 6 (MEDIUM × org × low)
+Regulations: OWASP A03
+Owner: admin-dashboard · Sprint: P3
+
+[19-4] HIGH | eslint 5+ minor versions behind (9.39.4 → 10.2.1)
+File: admin-dashboard/package.json:53
+Finding: ESLint 9 is on a multi-version-behind track. ESLint 10 ships
+new rule-set categories (security, regex-injection) and core engine fixes.
+Not a runtime CVE, but a missed-detection lift across the entire codebase.
+Fix: Upgrade to eslint 10.x; rerun `npm run lint` and triage new violations
+(`--max-warnings 600` budget will absorb most). Effort: 2-3 h
+Risk score: 12 (HIGH × tooling × likely-future-bug-prevention)
+Regulations: Dependency Hygiene
+Owner: admin-dashboard · Sprint: P2
+
+[19-5] MEDIUM | uuid 13.0.0 → 14.0.0 (one major behind; entropy improvements)
+File: admin-dashboard/package.json:36
+Finding: uuid 14 ships RFC-9562 v6/v7/v8 generators with stronger time
+ordering and entropy. Admin uses uuid for request-correlation IDs (low
+sensitivity) but bumping is cheap and forward-aligned.
+Fix: `npm install uuid@latest`; verify call sites use `v4` (no breaking
+changes for v4). Effort: 0.5 h
+Risk score: 6 (MEDIUM × self × low)
+Regulations: Cryptography (entropy hygiene)
+Owner: admin-dashboard · Sprint: P3
+
+[19-6] MEDIUM | lucide-react icons 3 minor behind (1.8.0 → 1.11.0)
+File: admin-dashboard/package.json:27
+Finding: Icon library lag; not a security finding directly. Older lucide
+versions had two SVG-rendering bugs that could yield malformed icons in
+dynamic-icon-name code paths.
+Fix: `npm install lucide-react@latest`; visual-regression test the
+dashboard. Effort: 0.5 h
+Risk score: 4 (MEDIUM × self × low)
+Regulations: General Hygiene
+Owner: admin-dashboard · Sprint: P3
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 19 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     1 |
+| MEDIUM          |     5 |
+| LOW             |     0 |
+| PASS            |     0 |
+| TOTAL           |     6 |
+
+
+================================================================================
+TASK 20 — SUPPLY CHAIN
+================================================================================
+
+[20-1] PASS | package-lock.json checked in; npm ci enforced in CI
+File: admin-dashboard/package-lock.json (601 KB), .github/workflows/ci.yml:242
+Finding: Lockfile is tracked and CI uses `npm ci` (which fails on lockfile
+drift). Build is deterministic. This is the right baseline.
+
+[20-2] MEDIUM | .npmrc has only legacy-peer-deps; no audit=true
+File: admin-dashboard/.npmrc:1
+Finding: Single line `legacy-peer-deps=true`. No `audit=true`, no
+`audit-level=high`. The npm audit job is decoupled from local
+`npm install` runs and only fires in CI as non-blocking.
+Fix: Add `audit=true` and `audit-level=high` to .npmrc; flip the
+security-gates audit job to blocking after a baseline-clean window
+(see [17-3]). Effort: 0.5 h
+Risk score: 8 (MEDIUM × org × likely)
+Regulations: Supply Chain, SOC2
+Owner: admin-dashboard · Sprint: P2
+
+[20-3] MEDIUM | No Subresource Integrity for third-party scripts
+File: admin-dashboard/src/app/layout.tsx:33 (Vercel Analytics)
+Finding: `<Analytics />` injects a Vercel-hosted script tag with no SRI
+hash. A compromised Vercel CDN endpoint would inject arbitrary JS into the
+admin context. SRI defends against the CDN-takeover scenario.
+Fix: Vercel Analytics auto-injection makes user-controlled SRI difficult;
+verify Vercel docs for SRI support. As fallback, restrict via CSP
+`script-src` to the exact Vercel Analytics domain (see [23-1]). Effort: 1-2 h
+Risk score: 8 (MEDIUM × org × low)
+Regulations: OWASP A06, Supply Chain
+Owner: admin-dashboard · Sprint: P2
+
+[20-4] LOW | Registry not pinned in .npmrc (relies on npm default)
+File: admin-dashboard/.npmrc (no `registry=` line)
+Finding: No explicit `registry=https://registry.npmjs.org/`. Default is
+npmjs but a stale or hijacked .npmrc on a developer machine could redirect.
+Fix: Add `registry=https://registry.npmjs.org/` to .npmrc; document in
+DEVELOPMENT.md that any other registry requires sign-off. Effort: 0.5 h
+Risk score: 4 (LOW × org × low)
+Regulations: Supply Chain
+Owner: admin-dashboard · Sprint: P3
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 20 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     0 |
+| MEDIUM          |     2 |
+| LOW             |     1 |
+| PASS            |     1 |
+| TOTAL           |     4 |
+
+
+================================================================================
+TASK 21 — OBSERVABILITY (admin-specific)
+================================================================================
+
+[21-1] MEDIUM | Sentry session replays may capture admin PII despite maskAllText
+File: admin-dashboard/sentry.client.config.ts:16-29
+Finding: `replaysSessionSampleRate: 0.1` + `replaysOnErrorSampleRate: 1.0`
+with `maskAllText: true, blockAllMedia: false`. Admin views render rider
+phone numbers, driver licences, payout amounts, and Stripe IDs. `maskAllText`
+masks DOM text but does not mask media or canvas; `blockAllMedia: false`
+means uploaded ID images on document-review pages can be captured.
+Fix: Set `blockAllMedia: true` for admin (document images > replay value);
+add `mask: ['[data-pii]', 'input']` selector list and tag PII-bearing
+elements with `data-pii`. Document the masking contract in
+`docs/runbooks/sentry-pii.md`. Effort: 2-3 h
+Risk score: 12 (MEDIUM × org × possible)
+Regulations: PIPEDA, OWASP A09
+Owner: admin-dashboard · Sprint: P2
+
+[21-2] MEDIUM | tracesSampleRate=0.2 in prod misses 80% of perf incidents
+File: admin-dashboard/sentry.client.config.ts:13, sentry.server.config.ts:9
+Finding: 20% trace sampling on a low-traffic admin surface (estimated <5k
+admin requests/day) means most performance regressions never reach Sentry.
+The admin is the surface where staff diagnose payouts and dispatch issues —
+slow loads here are operationally expensive and rare enough that 100%
+sampling is tractable.
+Fix: Raise to `tracesSampleRate: 1.0` for admin in production; the comment
+already acknowledges "raise to 1.0 in staging" — same rationale applies to
+admin in prod. Effort: 0.25 h
+Risk score: 8 (MEDIUM × org × likely)
+Regulations: SOC2 (Monitoring)
+Owner: admin-dashboard · Sprint: P2
+
+[21-3] HIGH | No Sentry beforeSend filter — full URL + query strings leak
+File: admin-dashboard/sentry.client.config.ts:8-31 (no beforeSend)
+Finding: Default Sentry transport sends the full request URL including
+query strings. Admin URLs include `?driver_id=`, `?ride_id=`, `?phone=` and
+search filters with PII. CLAUDE.md PIPEDA section forbids exact addresses,
+phone numbers, names, and emails in Sentry payloads.
+Fix: Add `beforeSend` hook that scrubs query params matching
+`(driver_id|rider_id|ride_id|phone|email|address|name)` and replaces with
+`[redacted]`. Apply same hook in `sentry.server.config.ts`. Effort: 2 h
+Risk score: 18 (HIGH × org × likely)
+Regulations: PIPEDA, OWASP A09
+Owner: admin-dashboard · Sprint: P1
+
+[21-4] MEDIUM | Sentry tags missing required `domain` and `surface`
+File: admin-dashboard/sentry.client.config.ts (no setTag in init)
+Finding: CLAUDE.md observability section requires every captured event to
+carry `domain` (one of: dispatch/payments/auth/...) and
+`surface=admin`. Admin Sentry init sets neither, so cross-surface
+dashboards group admin errors with rider/driver errors.
+Fix: Add `Sentry.setTag('surface', 'admin')` after init; wrap each route
+group with a domain tag (e.g., `/dashboard/payments/*` → `domain=payments`).
+Effort: 1-2 h
+Risk score: 8 (MEDIUM × self × possible)
+Regulations: SOC2 (Monitoring)
+Owner: admin-dashboard · Sprint: P2
+
+[21-5] MEDIUM | No structured logging — only console.* and Sentry capture
+File: admin-dashboard/src/**/*.ts (grep: `console.(log|error|warn)`)
+Finding: Admin uses bare `console.error` for client-side error paths. There
+is no structured logger (pino, bunyan) emitting JSON to a sink. Vercel
+captures stdout/stderr, but the lines are unstructured strings — hard to
+query, no correlation ID across requests.
+Fix: Adopt `pino` (or Vercel's built-in logger primitives) for SSR/route-
+handler code paths. Add request-correlation header propagation. Effort: 4-6 h
+Risk score: 8 (MEDIUM × self × possible)
+Regulations: SOC2 (Monitoring)
+Owner: admin-dashboard · Sprint: P2
+
+[21-6] LOW | No release tag in Sentry init — release-tracking degraded
+File: admin-dashboard/sentry.client.config.ts:8-31 (no `release` field)
+Finding: Sentry init omits `release: process.env.VERCEL_GIT_COMMIT_SHA`.
+Without it, "regression introduced in release X" reports lose value;
+release-health metrics (crash-free sessions per release) cannot compute.
+Fix: Add `release: process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA` (Vercel
+auto-injects). Mirror in server config. Effort: 0.25 h
+Risk score: 4 (LOW × self × possible)
+Regulations: SOC2 (Change Management)
+Owner: admin-dashboard · Sprint: P3
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 21 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     1 |
+| MEDIUM          |     4 |
+| LOW             |     1 |
+| PASS            |     0 |
+| TOTAL           |     6 |
+
+
+================================================================================
+TASK 22 — VENDOR & DATA RESIDENCY (admin-specific)
+================================================================================
+
+[22-1] HIGH | No Vercel region pinning — admin SSR may run in US-East
+File: admin-dashboard/ (no vercel.json, no `export const runtime`/`regions`)
+Finding: Admin has no `vercel.json` and no per-route `export const regions`.
+Vercel defaults to deploying in `iad1` (US-East, Washington DC). Admin SSR
+fetches rider/driver PII from the Canadian Supabase region — round-trips
+cross the border. CLAUDE.md PIPEDA section: "Supabase project must be in a
+Canadian region. Changing regions is a compliance event."
+Fix: Add `vercel.json` with `"regions": ["yyz1"]` (Toronto). For App Router,
+also set `export const preferredRegion = 'yyz1'` in route handlers and
+server components that touch PII. Verify post-deploy via Vercel dashboard.
+Effort: 1-2 h + DNS/deploy verification
+Risk score: 18 (HIGH × org × likely)
+Regulations: PIPEDA, Data Residency
+Owner: admin-dashboard/ops · Sprint: P1
+
+[22-2] MEDIUM | Sentry DSN not region-locked to EU/CA-compliant ingestion
+File: admin-dashboard/sentry.client.config.ts:9, sentry.server.config.ts:8
+Finding: Sentry SaaS default ingestion is US-region. Sending Canadian
+admin telemetry (even scrubbed) to US infrastructure is a residency
+question Sentry doesn't auto-resolve. Sentry now offers EU and self-hosted
+options; CA region is on roadmap.
+Fix: Verify the configured DSN's region; if US, document the residency
+exception in a one-page DPA addendum, OR switch to Sentry EU + scrub all
+PII at source (per [21-3]) so no Canadian PII leaves the boundary.
+Effort: 2-3 h (legal review + DSN swap)
+Risk score: 12 (MEDIUM × org × possible)
+Regulations: PIPEDA, Data Residency
+Owner: ops/legal · Sprint: P2
+
+[22-3] MEDIUM | Vercel Analytics ships to US edge — telemetry residency
+File: admin-dashboard/src/app/layout.tsx:33 (<Analytics />)
+Finding: `@vercel/analytics` collects page-view + custom events, ingested
+at Vercel's US edge. Admin page paths can encode entity IDs (`/dashboard/
+drivers/abc123`); URL telemetry crossing the border is the same residency
+question as Sentry.
+Fix: Strip dynamic IDs before sending: `<Analytics beforeSend={(e) =>
+({...e, url: e.url.replace(/\/[a-f0-9-]{8,}/g, '/[id]')})} />`. Document
+the data flow in the residency register. Effort: 1 h
+Risk score: 8 (MEDIUM × org × possible)
+Regulations: PIPEDA, Data Residency
+Owner: admin-dashboard · Sprint: P2
+
+[22-4] LOW | No Data Processing Agreements (DPAs) registered for admin vendors
+File: docs/ (no docs/vendor-register.md or similar)
+Finding: Admin uses Vercel (hosting), Sentry (errors), Vercel Analytics,
+Supabase (DB) — each is a third-party processor under PIPEDA. There is
+no committed register of which vendor processes which data class with
+DPA effective date.
+Fix: Create `docs/vendor-register.md` listing each vendor, data class,
+DPA URL, region, effective date, and renewal date. Tie to the breach
+runbook. Effort: 1-2 h
+Risk score: 4 (LOW × org × low)
+Regulations: PIPEDA, SOC2 (Vendor Management)
+Owner: ops/legal · Sprint: P3
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 22 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     1 |
+| MEDIUM          |     2 |
+| LOW             |     1 |
+| PASS            |     0 |
+| TOTAL           |     4 |
+
+
+================================================================================
+TASK 23 — WEB-PLATFORM-SPECIFIC (admin-only attack surface)
+================================================================================
+
+[23-1] HIGH | No Content Security Policy header on admin pages
+File: admin-dashboard/next.config.ts:8-22 (no `headers()` block)
+Finding: `nextConfig` defines `rewrites()` but no `headers()`. Admin
+responses ship with zero `Content-Security-Policy`. Any reflected XSS or
+compromised dependency runs with full DOM access. Pairs with [19-1]
+(dompurify CVE) — CSP is the second line of defence when sanitization
+fails.
+Fix: Add `headers()` returning a strict CSP: `default-src 'self';
+script-src 'self' https://va.vercel-scripts.com;
+connect-src 'self' ${BACKEND_URL} https://*.sentry.io;
+img-src 'self' data: https:; style-src 'self' 'unsafe-inline';
+frame-ancestors 'none'; base-uri 'self'; form-action 'self'`. Roll out via
+`Content-Security-Policy-Report-Only` first; capture violations; then enforce.
+Effort: 4-6 h
+Duplicate of: admin-v1 [07-2] (broader security-headers gap)
+Risk score: 18 (HIGH × org × likely)
+Regulations: OWASP A05, A03
+Owner: admin-dashboard · Sprint: P1
+
+[23-2] HIGH | No X-Frame-Options / frame-ancestors — clickjacking exposure
+File: admin-dashboard/next.config.ts:8-22 (no security headers)
+Finding: An attacker page can iframe `/dashboard/*` and trick a logged-in
+admin into clicking destructive actions (refund, ban driver, suspend
+account). No `X-Frame-Options: DENY` and no CSP `frame-ancestors 'none'`.
+Fix: Set `X-Frame-Options: DENY` on every admin response; CSP
+`frame-ancestors 'none'` provides modern equivalent. Effort: 0.25 h (lands
+with [23-1])
+Duplicate of: admin-v1 [07-2]
+Risk score: 18 (HIGH × org × likely)
+Regulations: OWASP A05
+Owner: admin-dashboard · Sprint: P1
+
+[23-3] HIGH | No HSTS — TLS-strip downgrade possible on first visit
+File: admin-dashboard/next.config.ts:8-22 (no Strict-Transport-Security)
+Finding: Without `Strict-Transport-Security`, an admin opening a coffee-
+shop wifi link can be MITM-downgraded to HTTP, leaking the auth cookie
+(see [18-1]). Vercel auto-applies HSTS on `*.vercel.app` but custom-domain
+configs need it explicitly.
+Fix: `Strict-Transport-Security: max-age=63072000; includeSubDomains;
+preload`. Submit the apex to `hstspreload.org` after one week of clean
+deploys. Effort: 0.5 h
+Duplicate of: admin-v1 [07-2]
+Risk score: 18 (HIGH × org × likely)
+Regulations: OWASP A02
+Owner: admin-dashboard/ops · Sprint: P1
+
+[23-4] MEDIUM | No Permissions-Policy — unused browser APIs left open
+File: admin-dashboard/next.config.ts:8-22 (no Permissions-Policy)
+Finding: Admin doesn't use camera, microphone, geolocation, payment, or
+USB. Without `Permissions-Policy`, a compromised script (or iframed third-
+party widget) can request these. Defence-in-depth.
+Fix: `Permissions-Policy: camera=(), microphone=(), geolocation=(),
+payment=(), usb=(), interest-cohort=()`. Effort: 0.25 h (lands with [23-1])
+Duplicate of: admin-v1 [07-2]
+Risk score: 8 (MEDIUM × org × low)
+Regulations: OWASP A05
+Owner: admin-dashboard · Sprint: P2
+
+[23-5] MEDIUM | Referrer-Policy default leaks pathnames to external links
+File: admin-dashboard/next.config.ts:8-22 (no Referrer-Policy)
+Finding: Default browser policy is `strict-origin-when-cross-origin`, but
+Next.js doesn't override. External links from admin (Stripe dashboard,
+Twilio console) get full pathnames in the Referer — `/dashboard/drivers/
+abc123` leaks the driver_id. Pair with [22-3] (URL ID redaction).
+Fix: `Referrer-Policy: same-origin` (or `no-referrer`). Effort: 0.25 h
+Risk score: 8 (MEDIUM × org × possible)
+Regulations: PIPEDA
+Owner: admin-dashboard · Sprint: P2
+
+[23-6] MEDIUM | No CSRF tokens on state-changing admin endpoints
+File: admin-dashboard/src/lib/api.ts (Axios; no CSRF header injection)
+Finding: Admin uses bearer-token auth (cookie + `Authorization` header).
+Once [18-1]/[18-2] move the token to a SameSite=Strict cookie, CSRF risk
+drops sharply but isn't zero — a same-site sub-origin attack (e.g., a
+compromised marketing subdomain) can still cross. Defence-in-depth: add a
+double-submit CSRF token on POST/PUT/DELETE.
+Fix: Backend issues a CSRF cookie at login (`admin_csrf`, not HttpOnly,
+SameSite=Strict); Axios interceptor reads it and sets `X-CSRF-Token`
+header on mutating requests; backend validates equality.
+Effort: 4-6 h (backend + frontend)
+Risk score: 9 (MEDIUM × org × possible)
+Regulations: OWASP A01
+Owner: admin-dashboard + backend · Sprint: P2
+
+[23-7] MEDIUM | X-Content-Type-Options, X-XSS-Protection not set
+File: admin-dashboard/next.config.ts:8-22 (no security headers)
+Finding: Without `X-Content-Type-Options: nosniff`, a malformed JSON
+response can be MIME-sniffed as HTML and execute. `X-XSS-Protection: 0`
+disables legacy IE/Edge XSS filter (modern guidance — the legacy filter
+itself had bypasses).
+Fix: `X-Content-Type-Options: nosniff` + `X-XSS-Protection: 0`. Lands
+with [23-1]. Effort: 0.25 h
+Duplicate of: admin-v1 [07-2]
+Risk score: 8 (MEDIUM × org × possible)
+Regulations: OWASP A05
+Owner: admin-dashboard · Sprint: P2
+
+[23-8] MEDIUM | No robots.txt / no noindex on admin
+File: admin-dashboard/public/ (no robots.txt), src/app/layout.tsx (no
+metadata.robots)
+Finding: Search engines may crawl and index admin login + leaked snippets
+of any unauthenticated route. Even returning 401 on protected routes,
+the login page itself is indexable, and any error pages may leak stack
+traces. Reconnaissance accelerator.
+Fix: Add `public/robots.txt` with `User-agent: * \n Disallow: /`. Add
+`metadata.robots = { index: false, follow: false }` in
+`src/app/layout.tsx`. Effort: 0.5 h
+Risk score: 6 (MEDIUM × org × low)
+Regulations: General Hardening
+Owner: admin-dashboard · Sprint: P3
+
+[23-9] LOW | Service worker not registered — no offline caching, no scope risks
+File: admin-dashboard/ (no public/sw.js, no next-pwa)
+Finding: Admin has no service worker. Not a finding per se — flagged for
+completeness. If a future PR adds one, scope it to `/dashboard/*` and
+strict-cache only static assets; never cache HTML or API responses
+(staleness on payouts/dispatch is a correctness hazard).
+Fix: Document in `docs/runbooks/admin-pwa.md` that service workers are
+out-of-scope until the offline use case is justified. Effort: 0.25 h
+Risk score: 3 (LOW × self × low)
+Regulations: General Hardening
+Owner: admin-dashboard · Sprint: P3
+
+[23-10] LOW | window.opener leak via target="_blank" without rel="noopener"
+File: admin-dashboard/src/**/*.tsx (grep target="_blank")
+Finding: Any `<a target="_blank">` without `rel="noopener noreferrer"`
+allows the opened tab to access `window.opener` and redirect the admin's
+tab. Modern browsers default to `noopener` for `target=_blank` since 2021,
+but defence-in-depth + older-browser users.
+Fix: Lint rule `react/jsx-no-target-blank` (already in eslint-plugin-react
+recommended); ensure the rule is enabled. Audit existing instances. Effort: 1 h
+Risk score: 3 (LOW × self × low)
+Regulations: OWASP A05
+Owner: admin-dashboard · Sprint: P3
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 23 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     3 |
+| MEDIUM          |     5 |
+| LOW             |     2 |
+| PASS            |     0 |
+| TOTAL           |    10 |
+
+Note: 4 of the 10 (23-1, 23-2, 23-3, 23-7) are duplicates of admin-v1
+[07-2] (security-headers gap, P2 sprint). They are listed here for
+completeness of the Phase E coverage; the canonical fix lives under
+admin-P2-9. Remediation should land once, not twice.
+
+
+================================================================================
+PHASE E (D17–D23) ROLLUP
+================================================================================
+
+| Task                        | CRIT | HIGH | MED | LOW | PASS | TOTAL |
+|-----------------------------|------|------|-----|-----|------|-------|
+| 17 CI/CD Pipeline           |    0 |    1 |   3 |   1 |    1 |     6 |
+| 18 Secrets Management       |    0 |    1 |   2 |   2 |    1 |     6 |
+| 19 Dependency Hygiene       |    0 |    1 |   5 |   0 |    0 |     6 |
+| 20 Supply Chain             |    0 |    0 |   2 |   1 |    1 |     4 |
+| 21 Observability            |    0 |    1 |   4 |   1 |    0 |     6 |
+| 22 Vendor & Data Residency  |    0 |    1 |   2 |   1 |    0 |     4 |
+| 23 Web-Platform-Specific    |    0 |    3 |   5 |   2 |    0 |    10 |
+|-----------------------------|------|------|-----|-----|------|-------|
+| **PHASE E TOTAL**           |  **0** | **8** | **23** | **8** | **3** | **42** |
+
+After de-duplication against admin-v1 [07-2] (4 findings collapse into one
+canonical fix), Phase E contributes **38 net-new** items + **4 cross-refs**.
+
+Sprint distribution (net-new findings only):
+| Sprint | Count |
+|--------|-------|
+| P0     |     0 |
+| P1     |     5 |  (17-2, 18-1, 18-3, 21-3, 22-1, 23-1*, 23-2*, 23-3*)
+| P2     |    16 |
+| P3     |    11 |
+| (admin-v1 cross-refs) | 4 |
+
+* 23-1/2/3 already counted under admin-v1 P2; if treated as accelerated
+to P1 due to severity, +3 to P1 column. Recommend landing them with the
+[18-1] cookie work as one security-headers PR.
+
+Top P1 actions for sprint planning:
+1. [17-2] Re-chain `deploy-admin → backend-deploy` (1-2 h, ci)
+2. [18-1] Cookie SameSite=Lax → Strict (0.5 h, lands with admin-v1 [02-2])
+3. [18-3] Refresh token to HttpOnly cookie (4-6 h)
+4. [21-3] Sentry beforeSend PII scrubber (2 h)
+5. [22-1] Vercel region pin to yyz1 (1-2 h + verification)
+
+────────────────────────────────────────────────────────────────────────────────
+CROSS-REFERENCES TO admin-v1 (2026-04-25)
+────────────────────────────────────────────────────────────────────────────────
+| Phase E ID | admin-v1 ID    | Relationship                                |
+|------------|----------------|---------------------------------------------|
+| 18-1       | [02-2]         | Pairs with cookie hardening (P0 in v1)      |
+| 18-2       | [02-2]         | Same fix path (backend Set-Cookie)          |
+| 18-3       | [02-2]         | Refresh-token storage scope                 |
+| 23-1       | [07-2]         | Duplicate (CSP)                             |
+| 23-2       | [07-2]         | Duplicate (X-Frame-Options)                 |
+| 23-3       | [07-2]         | Duplicate (HSTS)                            |
+| 23-7       | [07-2]         | Duplicate (security headers)                |
+
+================================================================================
+END OF PHASE E AUDIT (v2)
+================================================================================

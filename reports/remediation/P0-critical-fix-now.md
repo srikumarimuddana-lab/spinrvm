@@ -121,10 +121,10 @@ style={{ top: insets.top }}
 
 ## Checklist
 
-- [ ] P0-1 Fix `revoked` → `revoked_at` in auth.py
-- [ ] P0-2 Delete dead refresh_token function (lines 347–401)
-- [ ] P0-3 Add atomic UPDATE for ride acceptance (no double-accept)
-- [ ] P0-4 Hash pickup OTP before saving to database
-- [ ] P0-5 Add driver suspension + disconnect when documents expire
-- [ ] P0-6 Replace permanent document URLs with 1-hour signed links
-- [ ] P0-7 Fix OfflineBanner to sit below the notch/status bar
+- [x] P0-1 Fix `revoked` → `revoked_at` in auth.py — PASS: auth.py:575 uses `revoked_at` correctly
+- [x] P0-2 Delete dead refresh_token function (lines 347–401) — PASS: only one refresh handler exists; no `_store_refresh_token` reference found
+- [x] P0-3 Add atomic UPDATE for ride acceptance (no double-accept) — PASS: drivers.py:1800–1818 uses atomic `AND status='searching'` conditional update; 0 rows → ride_taken WS event + 409
+- [x] P0-4 Hash pickup OTP before saving to database — PASS: rides.py:887 `hash_otp(pickup_otp_plain)` (SHA-256) before INSERT
+- [x] P0-5 Add driver suspension + disconnect when documents expire — PASS: document_expiry.py:110–128 sets `status=suspended`, clears presence, calls `manager.disconnect()`, sends push
+- [x] P0-6 Replace permanent document URLs with 1-hour signed links — PASS: documents.py:263 uses `create_signed_url(filename, 3600)`
+- [x] P0-7 Fix OfflineBanner to sit below the notch/status bar — PASS: OfflineBanner.tsx:171 uses `top: topInset` (from `useSafeAreaInsets()`)

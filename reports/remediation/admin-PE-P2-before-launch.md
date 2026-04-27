@@ -73,7 +73,9 @@ Branch: `claude/plan-deferred-tasks-qtT8I`
 
 **How to fix:** `npm install eslint@^10 --save-dev`; run `npm run lint`; triage new violations within the `--max-warnings 600` budget.
 
-**Effort:** 2–3 h · **Audit ref:** 19-4
+**Blocker (2026-04-27):** `eslint-config-next@16.2.4` bundles `eslint-plugin-react` that calls an internal ESLint API removed in v10 (`linter.js:497` / `createRuleListeners`). Installing ESLint 10 crashes the linter with an unhandled TypeError. Retry when `eslint-config-next` ships an ESLint-10-compatible release. Track: https://github.com/vercel/next.js/issues — search "eslint 10".
+
+**Effort:** 2–3 h (after blocker clears) · **Audit ref:** 19-4
 
 ---
 
@@ -139,6 +141,6 @@ Branch: `claude/plan-deferred-tasks-qtT8I`
 - [x] A-PE-P2-2 CSRF double-submit token (23-6) — already implemented (refresh/route.ts validates csrfCookie === csrfHeader; api.ts sends X-CSRF-Token)
 - [ ] A-PE-P2-3 ESLint 9 → 10 upgrade (19-4)
 - [x] A-PE-P2-4 uuid 13 → 14 (19-5) — upgraded to ^14.0.0
-- [ ] A-PE-P2-5 Sentry DSN region / DPA addendum (22-2)
+- [ ] A-PE-P2-5 Sentry DSN region / DPA addendum (22-2) — tracked in docs/vendor-register.md
 - [ ] A-PE-P2-6 Structured server-side logging (21-5)
-- [ ] A-PE-P2-7 Branch protection + rollback runbook (17-4)
+- [x] A-PE-P2-7 Branch protection + rollback runbook (17-4) — docs/runbooks/admin-rollback.md created; GitHub branch protection settings documented in §5

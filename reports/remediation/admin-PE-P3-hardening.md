@@ -116,6 +116,6 @@ Branch: `claude/plan-deferred-tasks-qtT8I`
 - [x] A-PE-P3-2 NEXT_PUBLIC_API_URL fail-fast (18-4) — done in next.config.ts
 - [x] A-PE-P3-3 lucide-react upgrade (19-6) — upgraded to ^1.11.0 (latest)
 - [x] A-PE-P3-4 Sentry release tag (21-6) — done; verify in Sentry UI post-deploy
-- [ ] A-PE-P3-5 Vendor register PIPEDA DPA inventory (22-4)
+- [x] A-PE-P3-5 Vendor register PIPEDA DPA inventory (22-4) — template created at docs/vendor-register.md; DPA URLs and signed agreements are legal's open items
 - [x] A-PE-P3-6 noopener lint rule (23-10) — react/jsx-no-target-blank: "error" in eslint.config.mjs
 - [x] A-PE-P3-7 Service worker policy doc (23-9) — created docs/runbooks/admin-pwa.md

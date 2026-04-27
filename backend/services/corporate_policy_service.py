@@ -135,7 +135,7 @@ async def evaluate_policy_for_ride(
         )
 
     ride_context: dict = {
-        "estimated_fare": float(estimated_fare),
+        "estimated_fare": estimated_fare,
         "ride_type": ride_type,
         "pickup_time": pickup_time,
         "allowance": allowance,
@@ -182,7 +182,7 @@ def evaluate_policy(policy: dict, ride_context: dict) -> dict:
     max_fare = policy.get("max_fare_per_ride")
     if max_fare is not None:
         fare = ride_context.get("estimated_fare") or ride_context.get("final_fare")
-        if fare is not None and float(fare) > float(max_fare):
+        if fare is not None and Decimal(str(fare)) > Decimal(str(max_fare)):
             failed.append("max_fare_per_ride")
 
     # ── Rule 2: time_window ───────────────────────────────────────────────────
@@ -225,9 +225,9 @@ def evaluate_policy(policy: dict, ride_context: dict) -> dict:
     if allowed_source == "allowance_only":
         allowance = ride_context.get("allowance") or {}
         if allowance.get("type") != "unlimited":
-            amt = float(allowance.get("amount") or 0)
-            used = float(allowance.get("used") or 0)
-            remaining = amt - max(used, 0.0)
+            amt = Decimal(str(allowance.get("amount") or 0))
+            used = Decimal(str(allowance.get("used") or 0))
+            remaining = amt - max(used, Decimal(0))
             if remaining <= 0:
                 failed.append("allowed_payment_source")
 

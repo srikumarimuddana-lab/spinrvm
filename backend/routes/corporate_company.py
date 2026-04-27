@@ -294,10 +294,10 @@ async def decide_allowance_request(
             wallet_id=wallet["id"],
             allowance_id=allowance["id"],
             member_id=request["member_id"],
-            amount=float(request["amount"]),
+            amount=Decimal(str(request["amount"])),
             actor_user_id=guard["user"]["id"],
             notes=f"approved request {request_id}",
-            floor=float(wallet.get("soft_negative_floor", -50)),
+            floor=Decimal(str(wallet.get("soft_negative_floor", -50))),
         )
     return await update_allowance_request(
         request_id=request_id,

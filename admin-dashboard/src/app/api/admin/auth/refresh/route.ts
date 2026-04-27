@@ -91,13 +91,18 @@ export async function POST(req: NextRequest) {
 
   const { refresh_token, refresh_expires_at: _ignored, ...clientData } = data;
 
-  const newCsrfToken = randomBytes(32).toString("hex");
-  const res = NextResponse.json(
-    { ...clientData, csrf_token: newCsrfToken },
-    { status: 200 },
-  );
   const isProduction = process.env.NODE_ENV === "production";
+
+  // Rotate both cookies atomically — they must always be updated together
+  // so the CSRF token always corresponds to the current HttpOnly RT cookie.
+  // A missing refresh_token on a 200 is a backend contract violation; treat
+  // it as a protocol error rather than silently issuing a mismatched CSRF token.
   if (refresh_token) {
+    const newCsrfToken = randomBytes(32).toString("hex");
+    const res = NextResponse.json(
+      { ...clientData, csrf_token: newCsrfToken },
+      { status: 200 },
+    );
     res.cookies.set(RT_COOKIE, refresh_token, {
       httpOnly: true,
       sameSite: "strict",
@@ -105,13 +110,16 @@ export async function POST(req: NextRequest) {
       path: "/api/admin/auth",
       maxAge: SESSION_MAX_AGE,
     });
+    res.cookies.set(CSRF_COOKIE, newCsrfToken, {
+      httpOnly: false,
+      sameSite: "strict",
+      secure: isProduction,
+      path: "/api/admin/auth",
+      maxAge: SESSION_MAX_AGE,
+    });
+    return res;
   }
-  res.cookies.set(CSRF_COOKIE, newCsrfToken, {
-    httpOnly: false,
-    sameSite: "strict",
-    secure: isProduction,
-    path: "/api/admin/auth",
-    maxAge: SESSION_MAX_AGE,
-  });
-  return res;
+
+  // Backend returned 200 without a refresh_token — protocol violation.
+  return NextResponse.json({ detail: "Backend protocol error" }, { status: 502 });
 }

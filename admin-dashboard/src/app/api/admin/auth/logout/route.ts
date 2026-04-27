@@ -54,7 +54,11 @@ function clearSessionCookies(res: NextResponse): void {
 
 export async function POST(req: NextRequest) {
   if (!verifyCsrf(req)) {
-    return NextResponse.json({ detail: "CSRF validation failed" }, { status: 403 });
+    // Clear session cookies even on CSRF failure — consistent with refresh/route.ts
+    // and prevents a live RT cookie persisting after a logout-race clears in-memory state.
+    const res = NextResponse.json({ detail: "CSRF validation failed" }, { status: 403 });
+    clearSessionCookies(res);
+    return res;
   }
 
   const refreshToken = req.cookies.get(RT_COOKIE)?.value;

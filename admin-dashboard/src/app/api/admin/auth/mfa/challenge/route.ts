@@ -44,13 +44,18 @@ export async function POST(req: NextRequest) {
   // Strip the refresh token — must never reach the browser's JS context.
   const { refresh_token, refresh_expires_at: _ignored, ...clientData } = data;
 
-  const csrfToken = randomBytes(32).toString("hex");
-  const res = NextResponse.json(
-    { ...clientData, csrf_token: csrfToken },
-    { status: 200 },
-  );
   const isProduction = process.env.NODE_ENV === "production";
+
+  // Only issue cookies when a real session was created (refresh_token present).
+  // If the backend returns 200 without a refresh_token the protocol contract
+  // is violated — return the response without a CSRF token so the client
+  // cannot receive a csrf_token value that has no matching HttpOnly cookie.
   if (refresh_token) {
+    const csrfToken = randomBytes(32).toString("hex");
+    const res = NextResponse.json(
+      { ...clientData, csrf_token: csrfToken },
+      { status: 200 },
+    );
     res.cookies.set(RT_COOKIE, refresh_token, {
       httpOnly: true,
       sameSite: "strict",
@@ -65,6 +70,8 @@ export async function POST(req: NextRequest) {
       path: "/api/admin/auth",
       maxAge: SESSION_MAX_AGE,
     });
+    return res;
   }
-  return res;
+
+  return NextResponse.json(clientData, { status: 200 });
 }

@@ -1403,14 +1403,17 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
             "already_paid": True,
         }
 
-    # Atomic guard: set payment_status to "processing" only if it's still pending.
-    # This prevents race conditions when two concurrent payment requests hit the endpoint.
-    # The idempotency check above already handles the common case; this write locks the row
-    # so a concurrent request that also passed the idempotency check cannot double-charge.
-    await db_supabase.update_ride(
-        ride_id,
+    # Atomic guard: set payment_status to "processing" only if it's still "pending".
+    # Filter on payment_status="pending" so concurrent requests can't both proceed —
+    # Supabase returns the updated row only when the filter matches; None means
+    # another request won the race first.
+    guard_row = await db_supabase.update_one(
+        "rides",
+        {"id": ride_id, "payment_status": "pending"},
         {"payment_status": "processing", "updated_at": datetime.now(timezone.utc).isoformat()},
     )
+    if guard_row is None:
+        return {"success": True, "already_paid": True, "charged_amount": 0}
 
     if tip_amount < 0:
         raise HTTPException(status_code=400, detail="Tip amount cannot be negative")

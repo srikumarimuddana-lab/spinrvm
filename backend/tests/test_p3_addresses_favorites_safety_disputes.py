@@ -1,0 +1,311 @@
+"""P3 coverage: addresses, favorites, safety, and disputes routes."""
+
+from __future__ import annotations
+
+import os
+import sys
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+RIDER = {"id": "user_1", "role": "rider", "phone": "+13061234567"}
+
+
+@pytest.fixture
+def client():
+    import dependencies
+    from backend.server import app
+
+    app.dependency_overrides[dependencies.get_current_user] = lambda: RIDER
+    from fastapi.testclient import TestClient
+
+    with TestClient(app) as c:
+        yield c
+    app.dependency_overrides.clear()
+
+
+def _mock_db(**overrides):
+    """Build a mock db_supabase module with sensible defaults."""
+    m = MagicMock()
+    m.get_rows = AsyncMock(return_value=[])
+    m.find_one = AsyncMock(return_value=None)
+    m.insert_one = AsyncMock(return_value={"id": "new_id"})
+    m.update_one = AsyncMock(return_value=None)
+    m.delete_one = AsyncMock(return_value=[{"id": "deleted"}])
+    m.delete_many = AsyncMock(return_value=[])
+    m.get_ride = AsyncMock(return_value=None)
+    for k, v in overrides.items():
+        setattr(m, k, v)
+    return m
+
+
+# ──────────────────────────────── addresses ──────────────────────────────────
+
+
+class TestAddresses:
+    def test_get_addresses_returns_list(self, client):
+        rows = [{"id": "a1", "user_id": "user_1", "name": "Home", "address": "123 Main", "lat": 52.1, "lng": -106.0}]
+        db = _mock_db(get_rows=AsyncMock(return_value=rows))
+        with patch("routes.addresses.db_supabase", db):
+            r = client.get("/api/v1/addresses")
+        assert r.status_code == 200
+        assert r.json()[0]["name"] == "Home"
+
+    def test_get_addresses_empty(self, client):
+        db = _mock_db()
+        with patch("routes.addresses.db_supabase", db):
+            r = client.get("/api/v1/addresses")
+        assert r.status_code == 200
+        assert r.json() == []
+
+    def test_create_address_success(self, client):
+        db = _mock_db()
+        with patch("routes.addresses.db_supabase", db):
+            r = client.post(
+                "/api/v1/addresses",
+                json={"name": "Work", "address": "456 Office Blvd", "lat": 52.2, "lng": -106.1, "icon": "work"},
+            )
+        assert r.status_code == 200
+        assert r.json()["name"] == "Work"
+
+    def test_delete_address_success(self, client):
+        db = _mock_db(delete_one=AsyncMock(return_value=[{"id": "a1"}]))
+        with patch("routes.addresses.db_supabase", db):
+            r = client.delete("/api/v1/addresses/a1")
+        assert r.status_code == 200
+        assert r.json()["success"] is True
+
+    def test_delete_address_not_found(self, client):
+        db = _mock_db(delete_one=AsyncMock(return_value=[]))
+        with patch("routes.addresses.db_supabase", db):
+            r = client.delete("/api/v1/addresses/missing")
+        assert r.status_code == 404
+
+
+# ──────────────────────────────── favorites ──────────────────────────────────
+
+
+FAV_ROW = {
+    "id": "fav_1",
+    "user_id": "user_1",
+    "name": "Airport Run",
+    "pickup_address": "123 Main St",
+    "pickup_lat": 52.1,
+    "pickup_lng": -106.0,
+    "dropoff_address": "YXE Airport",
+    "dropoff_lat": 52.17,
+    "dropoff_lng": -106.7,
+    "use_count": 3,
+}
+
+SAVE_PAYLOAD = {
+    "name": "Airport Run",
+    "pickup_address": "123 Main St",
+    "pickup_lat": 52.1,
+    "pickup_lng": -106.0,
+    "dropoff_address": "YXE Airport",
+    "dropoff_lat": 52.17,
+    "dropoff_lng": -106.7,
+}
+
+
+def _mock_fav_db(**overrides):
+    m = MagicMock()
+    m.get_rows = AsyncMock(return_value=[])
+    m.find_one = AsyncMock(return_value=None)
+    m.insert_one = AsyncMock(return_value={"id": "fav_new"})
+    m.update_one = AsyncMock(return_value=None)
+    m.delete_one = AsyncMock(return_value=[{"id": "fav_1"}])
+    for k, v in overrides.items():
+        setattr(m, k, v)
+    return m
+
+
+class TestFavorites:
+    def test_get_favorites_returns_list(self, client):
+        fdb = _mock_fav_db(get_rows=AsyncMock(return_value=[FAV_ROW]))
+        with patch("routes.favorites.db", fdb):
+            r = client.get("/api/v1/favorites")
+        assert r.status_code == 200
+        assert r.json()[0]["name"] == "Airport Run"
+
+    def test_get_favorites_error_returns_empty(self, client):
+        fdb = _mock_fav_db(get_rows=AsyncMock(side_effect=RuntimeError("db down")))
+        with patch("routes.favorites.db", fdb):
+            r = client.get("/api/v1/favorites")
+        assert r.status_code == 200
+        assert r.json() == []
+
+    def test_save_favorite_new(self, client):
+        fdb = _mock_fav_db(get_rows=AsyncMock(return_value=[]))
+        with patch("routes.favorites.db", fdb):
+            r = client.post("/api/v1/favorites", json=SAVE_PAYLOAD)
+        assert r.status_code == 200
+        assert r.json()["name"] == "Airport Run"
+
+    def test_save_favorite_duplicate_returns_existing(self, client):
+        fdb = _mock_fav_db(get_rows=AsyncMock(return_value=[FAV_ROW]))
+        with patch("routes.favorites.db", fdb):
+            r = client.post("/api/v1/favorites", json=SAVE_PAYLOAD)
+        assert r.status_code == 200
+        assert r.json()["id"] == "fav_1"
+
+    def test_delete_favorite_not_found(self, client):
+        fdb = _mock_fav_db(find_one=AsyncMock(return_value=None))
+        with patch("routes.favorites.db", fdb):
+            r = client.delete("/api/v1/favorites/missing")
+        assert r.status_code == 404
+
+    def test_delete_favorite_wrong_owner(self, client):
+        # Route filters by user_id in the DB query; wrong owner → no row returned → 404
+        fdb = _mock_fav_db(find_one=AsyncMock(return_value=None))
+        with patch("routes.favorites.db", fdb):
+            r = client.delete("/api/v1/favorites/fav_1")
+        assert r.status_code == 404
+
+
+# ──────────────────────────────── safety ─────────────────────────────────────
+
+
+class TestSafety:
+    def test_submit_report_success(self, client):
+        db = _mock_db()
+        with patch("routes.safety.db_supabase", db):
+            r = client.post(
+                "/api/v1/safety/report",
+                json={"category": "driver_behaviour", "description": "Driver was reckless"},
+            )
+        assert r.status_code == 200
+        body = r.json()
+        assert "incident_id" in body
+        assert body["success"] is True
+
+    def test_submit_report_with_ride_context(self, client):
+        db = _mock_db()
+        with patch("routes.safety.db_supabase", db):
+            r = client.post(
+                "/api/v1/safety/report",
+                json={
+                    "category": "assault",
+                    "description": "Physical altercation",
+                    "location": {"latitude": 52.1, "longitude": -106.0},
+                    "ride_context": {"ride_id": "ride_123"},
+                },
+            )
+        assert r.status_code == 200
+        assert "incident_id" in r.json()
+
+    def test_submit_report_db_failure_raises_503(self, client):
+        db = _mock_db(insert_one=AsyncMock(side_effect=Exception("db error")))
+        with patch("routes.safety.db_supabase", db):
+            r = client.post(
+                "/api/v1/safety/report",
+                json={"category": "fraud", "description": "Fraudulent charge"},
+            )
+        assert r.status_code == 503
+
+
+# ──────────────────────────────── disputes ───────────────────────────────────
+
+
+RIDE_ROW = {
+    "id": "ride_1",
+    "rider_id": "user_1",
+    "status": "completed",
+    "total_fare": "25.50",
+}
+
+DISPUTE_ROW = {
+    "id": "disp_1",
+    "ride_id": "ride_1",
+    "user_id": "user_1",
+    "reason": "overcharged",
+    "description": "Fare was higher than estimated",
+    "status": "open",
+    "created_at": "2026-01-01T00:00:00Z",
+}
+
+
+class TestDisputes:
+    def test_create_dispute_success(self, client):
+        db = _mock_db(
+            get_ride=AsyncMock(return_value=RIDE_ROW),
+            get_rows=AsyncMock(return_value=[]),
+        )
+        with patch("routes.disputes.db_supabase", db):
+            r = client.post(
+                "/api/v1/disputes",
+                json={"ride_id": "ride_1", "reason": "overcharged", "description": "Fare too high"},
+            )
+        assert r.status_code == 200
+        assert r.json()["success"] is True
+
+    def test_create_dispute_ride_not_found(self, client):
+        db = _mock_db(get_ride=AsyncMock(return_value=None))
+        with patch("routes.disputes.db_supabase", db):
+            r = client.post(
+                "/api/v1/disputes",
+                json={"ride_id": "ghost", "reason": "overcharged", "description": "x"},
+            )
+        assert r.status_code == 404
+
+    def test_create_dispute_unauthorized_rider(self, client):
+        other_ride = {**RIDE_ROW, "rider_id": "other_user"}
+        db = _mock_db(get_ride=AsyncMock(return_value=other_ride))
+        with patch("routes.disputes.db_supabase", db):
+            r = client.post(
+                "/api/v1/disputes",
+                json={"ride_id": "ride_1", "reason": "overcharged", "description": "x"},
+            )
+        assert r.status_code == 403
+
+    def test_create_dispute_ride_not_complete(self, client):
+        active_ride = {**RIDE_ROW, "status": "in_progress"}
+        db = _mock_db(get_ride=AsyncMock(return_value=active_ride))
+        with patch("routes.disputes.db_supabase", db):
+            r = client.post(
+                "/api/v1/disputes",
+                json={"ride_id": "ride_1", "reason": "overcharged", "description": "x"},
+            )
+        assert r.status_code == 400
+
+    def test_create_dispute_already_open(self, client):
+        db = _mock_db(
+            get_ride=AsyncMock(return_value=RIDE_ROW),
+            get_rows=AsyncMock(return_value=[DISPUTE_ROW]),
+        )
+        with patch("routes.disputes.db_supabase", db):
+            r = client.post(
+                "/api/v1/disputes",
+                json={"ride_id": "ride_1", "reason": "overcharged", "description": "x"},
+            )
+        assert r.status_code == 400
+
+    def test_get_user_disputes(self, client):
+        db = _mock_db(get_rows=AsyncMock(return_value=[DISPUTE_ROW]))
+        with patch("routes.disputes.db_supabase", db):
+            r = client.get("/api/v1/disputes")
+        assert r.status_code == 200
+        assert r.json()[0]["id"] == "disp_1"
+
+    def test_get_dispute_by_id(self, client):
+        db = _mock_db(get_rows=AsyncMock(return_value=[DISPUTE_ROW]))
+        with patch("routes.disputes.db_supabase", db):
+            r = client.get("/api/v1/disputes/disp_1")
+        assert r.status_code == 200
+        assert r.json()["id"] == "disp_1"
+
+    def test_get_dispute_not_found(self, client):
+        db = _mock_db(get_rows=AsyncMock(return_value=[]))
+        with patch("routes.disputes.db_supabase", db):
+            r = client.get("/api/v1/disputes/missing")
+        assert r.status_code == 404
+
+    def test_get_dispute_wrong_owner(self, client):
+        other_dispute = {**DISPUTE_ROW, "user_id": "other_user"}
+        db = _mock_db(get_rows=AsyncMock(return_value=[other_dispute]))
+        with patch("routes.disputes.db_supabase", db):
+            r = client.get("/api/v1/disputes/disp_1")
+        assert r.status_code == 403

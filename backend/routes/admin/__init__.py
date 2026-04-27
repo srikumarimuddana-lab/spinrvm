@@ -23,9 +23,14 @@ can reach /api/admin/auth/login without a token.
 from fastapi import APIRouter, Depends
 
 try:
-    from ...dependencies import get_admin_user
+    from ...dependencies import get_admin_user, require_module
 except ImportError:
-    from dependencies import get_admin_user
+    from dependencies import get_admin_user, require_module
+
+try:
+    from ..disputes import admin_router as disputes_admin_router
+except ImportError:
+    from routes.disputes import admin_router as disputes_admin_router
 
 from .analytics import api_router as analytics_router
 from .auth import admin_auth_router
@@ -56,28 +61,29 @@ admin_router = APIRouter(
     dependencies=[Depends(get_admin_user)],
 )
 
-# Include all sub-routers (no prefix — /admin is already set above).
-# `auth_router` is an empty placeholder re-exported from .auth for
-# include-order symmetry; the real login/session/logout routes live
-# on `admin_auth_router`, which server.py mounts separately so it
-# stays public.
+# Include all sub-routers with module-level RBAC (audit [03-1]).
+# require_module() raises 403 when the caller's JWT modules claim does not
+# include the required module. super_admin always passes.
+# `auth_router` is an empty placeholder; the real login/session/logout routes
+# live on `admin_auth_router`, mounted separately by server.py (no auth gate).
 admin_router.include_router(auth_router)
-admin_router.include_router(settings_router)
-admin_router.include_router(service_areas_router)
-admin_router.include_router(vehicle_fleet_router)
-admin_router.include_router(drivers_router)
-admin_router.include_router(rides_router)
-admin_router.include_router(users_router)
-admin_router.include_router(promotions_router)
-admin_router.include_router(support_router)
-admin_router.include_router(faqs_router)
-admin_router.include_router(legal_documents_router)
-admin_router.include_router(documents_router)
-admin_router.include_router(staff_router)
-admin_router.include_router(subscriptions_router)
-admin_router.include_router(messaging_router)
-admin_router.include_router(maintenance_router)
-admin_router.include_router(analytics_router)
-admin_router.include_router(wallet_router)
+admin_router.include_router(settings_router, dependencies=[Depends(require_module("settings"))])
+admin_router.include_router(service_areas_router, dependencies=[Depends(require_module("service_areas"))])
+admin_router.include_router(vehicle_fleet_router, dependencies=[Depends(require_module("vehicle_types"))])
+admin_router.include_router(drivers_router, dependencies=[Depends(require_module("drivers"))])
+admin_router.include_router(rides_router, dependencies=[Depends(require_module("rides"))])
+admin_router.include_router(users_router, dependencies=[Depends(require_module("users"))])
+admin_router.include_router(promotions_router, dependencies=[Depends(require_module("promotions"))])
+admin_router.include_router(support_router, dependencies=[Depends(require_module("support"))])
+admin_router.include_router(faqs_router, dependencies=[Depends(require_module("support"))])
+admin_router.include_router(legal_documents_router, dependencies=[Depends(require_module("documents"))])
+admin_router.include_router(documents_router, dependencies=[Depends(require_module("documents"))])
+admin_router.include_router(staff_router, dependencies=[Depends(require_module("staff"))])
+admin_router.include_router(subscriptions_router, dependencies=[Depends(require_module("earnings"))])
+admin_router.include_router(messaging_router, dependencies=[Depends(require_module("notifications"))])
+admin_router.include_router(maintenance_router, dependencies=[Depends(require_module("dashboard"))])
+admin_router.include_router(analytics_router, dependencies=[Depends(require_module("dashboard"))])
+admin_router.include_router(wallet_router, dependencies=[Depends(require_module("earnings"))])
+admin_router.include_router(disputes_admin_router, dependencies=[Depends(require_module("disputes"))])
 
 __all__ = ["admin_router", "admin_auth_router"]

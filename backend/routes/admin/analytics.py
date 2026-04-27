@@ -48,21 +48,18 @@ async def get_cancellation_breakdown(
     start_date = _parse_date_range(date_range)
 
     try:
-        filters = {"status": "cancelled"}
-        rides = await db.get_rows("rides", filters, limit=10000, order="created_at")
+        filters: dict = {
+            "status": "cancelled",
+            "created_at": {"$gte": start_date.isoformat()},
+        }
+        if service_area_id:
+            filters["service_area_id"] = service_area_id
+        filtered = await db.get_rows("rides", filters, limit=5000, order="created_at")
     except Exception as e:
-        logger.error(f"Failed to fetch cancelled rides: {e}")
-        rides = []
+        logger.error(f"Failed to fetch cancelled rides: {e}", exc_info=True)
+        from fastapi import HTTPException as _HTTPException
 
-    # Filter by date and optionally by service area
-    filtered = []
-    for r in rides:
-        created = r.get("created_at", "")
-        if isinstance(created, str) and created < start_date.isoformat():
-            continue
-        if service_area_id and r.get("service_area_id") != service_area_id:
-            continue
-        filtered.append(r)
+        raise _HTTPException(status_code=503, detail="Analytics data unavailable — database error") from e
 
     # Categorize cancellation reasons
     reason_counter = Counter()
@@ -151,21 +148,14 @@ async def get_driver_acceptance_rates(
     for driver in drivers:
         driver_id = driver["id"]
         try:
-            all_rides = await db.get_rows(
+            period_rides = await db.get_rows(
                 "rides",
-                {"driver_id": driver_id},
+                {"driver_id": driver_id, "created_at": {"$gte": start_date.isoformat()}},
                 limit=500,
                 order="created_at",
             )
         except Exception:
-            all_rides = []
-
-        # Filter by date range
-        period_rides = [
-            r
-            for r in all_rides
-            if isinstance(r.get("created_at", ""), str) and r.get("created_at", "") >= start_date.isoformat()
-        ]
+            period_rides = []
 
         total_assigned = len(period_rides)
         completed = sum(1 for r in period_rides if r.get("status") == "completed")
@@ -226,16 +216,17 @@ async def get_analytics_overview(
     start_date = _parse_date_range(date_range)
 
     try:
-        all_rides = await db.get_rows("rides", {}, limit=10000, order="created_at")
+        period_rides = await db.get_rows(
+            "rides",
+            {"created_at": {"$gte": start_date.isoformat()}},
+            limit=10000,
+            order="created_at",
+        )
     except Exception as e:
-        logger.error(f"Failed to fetch rides: {e}")
-        all_rides = []
+        logger.error(f"Failed to fetch rides: {e}", exc_info=True)
+        from fastapi import HTTPException as _HTTPException
 
-    period_rides = [
-        r
-        for r in all_rides
-        if isinstance(r.get("created_at", ""), str) and r.get("created_at", "") >= start_date.isoformat()
-    ]
+        raise _HTTPException(status_code=503, detail="Analytics data unavailable — database error") from e
 
     total = len(period_rides)
     completed = sum(1 for r in period_rides if r.get("status") == "completed")

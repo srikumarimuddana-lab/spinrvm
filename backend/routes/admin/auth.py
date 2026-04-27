@@ -12,6 +12,7 @@ try:
     from ... import db_supabase
     from ...core.config import settings
     from ...utils.password import hash_password, verify_password
+    from ...utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr
     from ...utils.refresh_tokens import (
         issue_refresh_token,
         lookup_refresh_token,
@@ -22,6 +23,7 @@ except ImportError:
     import db_supabase
     from core.config import settings
     from utils.password import hash_password, verify_password
+    from utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr
     from utils.refresh_tokens import (
         issue_refresh_token,
         lookup_refresh_token,
@@ -38,6 +40,46 @@ logger = logging.getLogger(__name__)
 # to 5 attempts per minute per IP. Matches the pattern already used
 # for the rider/driver OTP endpoint in routes/auth.py.
 limiter = Limiter(key_func=get_remote_address)
+
+# Per-account lockout — 5 failures within the sliding window triggers a
+# 15-minute lockout regardless of IP (defends against distributed attacks
+# that rotate IPs to bypass the per-IP SlowAPI limit above). Stored in
+# Redis with TTL; falls back to in-process dict when Redis is unavailable.
+_LOGIN_MAX_FAILURES = 5
+_LOGIN_LOCKOUT_TTL_SECONDS = 15 * 60  # 15 minutes
+
+
+def _lockout_key(email: str) -> str:
+    return f"admin:login_failures:{email.lower().strip()}"
+
+
+async def _is_account_locked(email: str) -> bool:
+    try:
+        val = await redis_get(_lockout_key(email))
+        return val is not None and int(val) >= _LOGIN_MAX_FAILURES
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[REDIS] _is_account_locked check failed for admin login ({email!r}): {e}")
+        raise HTTPException(status_code=503, detail="ERR_AUTH_UNAVAILABLE") from None
+
+
+async def _record_login_failure(email: str) -> None:
+    try:
+        key = _lockout_key(email)
+        count = await redis_incr(key)
+        if count == 1:
+            await redis_expire(key, _LOGIN_LOCKOUT_TTL_SECONDS)
+    except Exception as e:
+        logger.error(f"[REDIS] _record_login_failure could not persist failure count ({email!r}): {e}")
+
+
+async def _clear_login_failures(email: str) -> None:
+    try:
+        await redis_delete(_lockout_key(email))
+    except Exception as e:
+        logger.error(f"[REDIS] _clear_login_failures could not clear failure count ({email!r}): {e}")
+
 
 # Auth sub-router — mounted at /admin/auth by server.py directly
 admin_auth_router = APIRouter(prefix="/admin/auth", tags=["Admin Auth"])
@@ -177,6 +219,14 @@ async def admin_login(request: Request, body: LoginRequest):
     user_agent = request.headers.get("user-agent", "")
     client_ip = get_remote_address(request)
 
+    # Per-account lockout (F-21): reject before touching credentials so that
+    # timing differences cannot reveal whether an account exists.
+    if await _is_account_locked(body.email):
+        raise HTTPException(
+            status_code=429,
+            detail="Too many failed login attempts. Account temporarily locked. Try again in 15 minutes.",
+        )
+
     # 1. Super admin from env. Extra truthy-check on ADMIN_PASSWORD so an
     # empty/whitespace value in .env cannot match an empty body.password.
     if settings.ADMIN_PASSWORD and body.email == settings.ADMIN_EMAIL and body.password == settings.ADMIN_PASSWORD:
@@ -194,6 +244,7 @@ async def admin_login(request: Request, body: LoginRequest):
         refresh_raw, _, refresh_expires_at = await issue_refresh_token(
             "admin-001", audience="admin", user_agent=user_agent, ip=client_ip
         )
+        await _clear_login_failures(body.email)
         return {
             "user": {
                 "id": "admin-001",
@@ -234,6 +285,7 @@ async def admin_login(request: Request, body: LoginRequest):
             refresh_raw, _, refresh_expires_at = await issue_refresh_token(
                 staff["id"], audience="admin", user_agent=user_agent, ip=client_ip
             )
+            await _clear_login_failures(body.email)
             return {
                 "user": {
                     "id": staff["id"],
@@ -249,6 +301,7 @@ async def admin_login(request: Request, body: LoginRequest):
                 "refresh_expires_at": refresh_expires_at.isoformat(),
             }
 
+    await _record_login_failure(body.email)
     raise HTTPException(status_code=401, detail="Invalid credentials")
 
 

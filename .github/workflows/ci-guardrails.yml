@@ -52,6 +52,7 @@ jobs:
           SUPABASE_URL: https://test.supabase.co
           SUPABASE_SERVICE_ROLE_KEY: test_key
           JWT_SECRET: ci-only-not-a-real-secret-000000000000
+          ADMIN_PASSWORD: ci-placeholder-password
           ENV: test
         run: |
           pytest --cov=. --cov-report=json:../pr-coverage.json -q --no-header 2>/dev/null || true
@@ -87,13 +88,11 @@ jobs:
       - name: Assert no regression
         run: |
           PR_PCT=$(cat .coverage-pr)
-          # GHA expressions are expanded before the shell runs, so
-          # ${{ ... }} works even inside a single-quoted <<'PYEOF' heredoc.
-          # A plain shell variable ($BASE_PCT) would NOT be expanded there.
+          BASE_PCT="${{ steps.base_coverage.outputs.base_pct }}"
           python3 - <<'PYEOF'
           import sys
           pr_pct   = float(open('.coverage-pr').read().strip() or 0)
-          base_pct = float("${{ steps.base_coverage.outputs.base_pct }}" or 0)
+          base_pct = float("$BASE_PCT" or 0)
           # Allow up to 2% regression before blocking (accounts for flaky mocks)
           TOLERANCE = 2.0
           delta = pr_pct - base_pct
@@ -248,7 +247,7 @@ jobs:
           path: ./
           base: ${{ github.event.pull_request.base.sha }}
           head: ${{ github.event.pull_request.head.sha }}
-          extra_args: --fail
+          extra_args: --only-verified --fail
 
       - name: Check EXPO_PUBLIC_ variable exposure
         run: |

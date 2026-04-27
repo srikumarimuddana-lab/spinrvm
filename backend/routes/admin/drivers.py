@@ -1,18 +1,22 @@
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 try:
     from ... import db_supabase
+    from ...dependencies import get_admin_user
     from ...features import send_push_notification
+    from ...utils.audit_logger import log_admin_action
     from ...utils.datetime_utils import parse_iso_utc
 except ImportError:
     import db_supabase
+    from dependencies import get_admin_user  # noqa: F401
     from features import send_push_notification
+    from utils.audit_logger import log_admin_action  # noqa: F401
     from utils.datetime_utils import parse_iso_utc
 
 db = db_supabase  # legacy alias
@@ -96,12 +100,12 @@ class DriverVerifyRequest(BaseModel):
 
 
 class DriverActionRequest(BaseModel):
-    action: str  # approve, reject, suspend, ban, unban, reactivate
+    action: Literal["approve", "reject", "suspend", "ban", "unban", "reactivate"]
     reason: Optional[str] = None
 
 
 class DriverStatusOverride(BaseModel):
-    status: str  # pending, active, rejected, suspended, banned
+    status: Literal["pending", "active", "rejected", "suspended", "banned"]
     is_verified: Optional[bool] = None
     reason: Optional[str] = None
 
@@ -375,7 +379,7 @@ async def admin_get_driver_stats(
 
 
 @router.put("/drivers/{driver_id}")
-async def admin_update_driver(driver_id: str, updates: Dict[str, Any]):
+async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: dict = Depends(get_admin_user)):
     """Update driver details from admin dashboard."""
     allowed = {
         "first_name",
@@ -412,11 +416,12 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any]):
     except Exception as e:
         logger.error(f"Failed to update driver {driver_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to update driver: {e}") from e
+    await log_admin_action(admin, "driver_updated", "drivers", driver_id, {"updated_fields": list(filtered.keys())})
     return {"message": "Driver updated", "updated_fields": list(filtered.keys())}
 
 
 @router.post("/drivers/{driver_id}/verify")
-async def admin_verify_driver(driver_id: str, req: DriverVerifyRequest):
+async def admin_verify_driver(driver_id: str, req: DriverVerifyRequest, admin: dict = Depends(get_admin_user)):
     """Verify or unverify a driver.
 
     NOTE: the Supabase `drivers` table in production was created from
@@ -462,11 +467,12 @@ async def admin_verify_driver(driver_id: str, req: DriverVerifyRequest):
     except Exception as e:
         logger.warning(f"[ADMIN] Push notification failed for driver {driver_id}: {e}")
 
+    await log_admin_action(admin, "driver_verified", "drivers", driver_id, {"verified": req.verified})
     return {"message": f"Driver {'verified' if req.verified else 'unverified'}"}
 
 
 @router.post("/drivers/{driver_id}/action")
-async def admin_driver_action(driver_id: str, req: DriverActionRequest):
+async def admin_driver_action(driver_id: str, req: DriverActionRequest, admin: dict = Depends(get_admin_user)):
     """Perform a lifecycle action on a driver.
 
     Actions: approve, reject, suspend, ban, unban, reactivate.
@@ -552,6 +558,13 @@ async def admin_driver_action(driver_id: str, req: DriverActionRequest):
         req.reason or "",
         {"old_status": current_status, "new_status": updates.get("status"), "reason": req.reason},
     )
+    await log_admin_action(
+        admin,
+        f"driver_{req.action}",
+        "drivers",
+        driver_id,
+        {"action": req.action, "reason": req.reason, "old_status": current_status, "new_status": updates.get("status")},
+    )
 
     # G4: Notify the driver about their status change. Critical for
     # approve/reject/suspend — without this, drivers wait days not knowing
@@ -595,7 +608,9 @@ async def admin_driver_action(driver_id: str, req: DriverActionRequest):
 
 
 @router.put("/drivers/{driver_id}/status-override")
-async def admin_override_driver_status(driver_id: str, req: DriverStatusOverride):
+async def admin_override_driver_status(
+    driver_id: str, req: DriverStatusOverride, admin: dict = Depends(get_admin_user)
+):
     """Manually move a driver to any status. Use with caution."""
     valid = {"pending", "active", "needs_review", "suspended", "banned"}
     if req.status not in valid:
@@ -629,6 +644,13 @@ async def admin_override_driver_status(driver_id: str, req: DriverStatusOverride
         "status_override",
         f"Status changed to {req.status}",
         req.reason or "Manual admin override",
+        {"old_status": driver.get("status"), "new_status": req.status, "reason": req.reason},
+    )
+    await log_admin_action(
+        admin,
+        "driver_status_override",
+        "drivers",
+        driver_id,
         {"old_status": driver.get("status"), "new_status": req.status, "reason": req.reason},
     )
     return {"message": f"Driver status set to {req.status}"}

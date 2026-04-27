@@ -365,9 +365,13 @@ class CreateRideRequest(BaseModel):
         if v is not None:
             from datetime import timedelta
 
-            naive = v.replace(tzinfo=None) if v.tzinfo else v
-            if naive < datetime.now(timezone.utc) + timedelta(minutes=5):
+            # Normalise to UTC-aware for the "in the future" comparison, then
+            # strip tz for the DST-gap round-trip check which needs a naive wall time.
+            v_utc = v if v.tzinfo else v.replace(tzinfo=timezone.utc)
+            if v_utc < datetime.now(timezone.utc) + timedelta(minutes=5):
                 raise ValueError("Scheduled time must be at least 5 minutes in the future")
+
+            naive = v_utc.replace(tzinfo=None)
 
             tz_name: Optional[str] = values.get("scheduled_timezone")
             if tz_name:

@@ -20,8 +20,13 @@ export default function Error({
                     <div>
                         <h1 className="text-2xl font-bold tracking-tight">Something Went Wrong</h1>
                         <p className="text-muted-foreground mt-2">
-                            {error.message || "An unexpected error occurred. Please try again."}
+                            An unexpected error occurred. Please try again.
                         </p>
+                        {error.digest && (
+                            <p className="text-xs text-muted-foreground mt-1">
+                                Reference: {error.digest}
+                            </p>
+                        )}
                     </div>
                     <div className="flex gap-3 justify-center">
                         <Button onClick={reset}>Try Again</Button>

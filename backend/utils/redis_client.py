@@ -95,17 +95,18 @@ async def _get_redis():
 
 async def redis_get(key: str) -> Optional[str]:
     r = await _get_redis()
-    if r:
+    if r is not None:
         try:
             return await r.get(key)
         except Exception as e:
-            logger.warning(f"redis_get error: {e}")
+            logger.error(f"[REDIS] redis_get({key!r}) failed — Redis configured but unavailable: {e}")
+            raise
     return _local_get(key)
 
 
 async def redis_set(key: str, value: str, ttl: Optional[int] = None) -> None:
     r = await _get_redis()
-    if r:
+    if r is not None:
         try:
             if ttl:
                 await r.setex(key, ttl, value)
@@ -113,7 +114,8 @@ async def redis_set(key: str, value: str, ttl: Optional[int] = None) -> None:
                 await r.set(key, value)
             return
         except Exception as e:
-            logger.warning(f"redis_set error: {e}")
+            logger.error(f"[REDIS] redis_set({key!r}) failed — Redis configured but unavailable: {e}")
+            raise
     _local_set(key, value, ttl)
 
 
@@ -140,40 +142,43 @@ async def redis_set_nx(key: str, value: str, ttl: int) -> bool:
 
 async def redis_incr(key: str) -> int:
     r = await _get_redis()
-    if r:
+    if r is not None:
         try:
             return await r.incr(key)
         except Exception as e:
-            logger.warning(f"redis_incr error: {e}")
+            logger.error(f"[REDIS] redis_incr({key!r}) failed — Redis configured but unavailable: {e}")
+            raise
     return _local_incr(key)
 
 
 async def redis_expire(key: str, ttl: int) -> None:
     r = await _get_redis()
-    if r:
+    if r is not None:
         try:
             await r.expire(key, ttl)
             return
         except Exception as e:
-            logger.warning(f"redis_expire error: {e}")
+            logger.error(f"[REDIS] redis_expire({key!r}) failed — Redis configured but unavailable: {e}")
+            raise
     _local_expire(key, ttl)
 
 
 async def redis_delete(key: str) -> None:
     r = await _get_redis()
-    if r:
+    if r is not None:
         try:
             await r.delete(key)
             return
         except Exception as e:
-            logger.warning(f"redis_delete error: {e}")
+            logger.error(f"[REDIS] redis_delete({key!r}) failed — Redis configured but unavailable: {e}")
+            raise
     _local_delete(key)
 
 
 async def redis_delete_pattern(pattern: str) -> int:
     """Delete all keys matching a glob pattern. Returns count deleted."""
     r = await _get_redis()
-    if r:
+    if r is not None:
         try:
             keys = []
             async for key in r.scan_iter(pattern):
@@ -182,8 +187,9 @@ async def redis_delete_pattern(pattern: str) -> int:
                 await r.delete(*keys)
             return len(keys)
         except Exception as e:
-            logger.warning(f"redis_delete_pattern error: {e}")
-    # Fallback
+            logger.error(f"[REDIS] redis_delete_pattern({pattern!r}) failed — Redis configured but unavailable: {e}")
+            raise
+    # Only reached when REDIS_URL is unset (dev mode).
     keys = _local_keys_matching(pattern)
     for k in keys:
         _local_delete(k)

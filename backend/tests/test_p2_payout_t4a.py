@@ -20,12 +20,27 @@ Run:
 from __future__ import annotations
 
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from starlette.requests import Request as StarletteRequest
 
 DRIVER_USER_ID = "driver_user_p2_16"
 DRIVER_ID = "driver_row_p2_16"
+
+
+def _make_request() -> StarletteRequest:
+    """Minimal Starlette Request with no Idempotency-Key (idempotent_endpoint passes through)."""
+    return StarletteRequest(
+        scope={
+            "type": "http",
+            "method": "POST",
+            "headers": [],
+            "query_string": b"",
+            "path": "/drivers/payouts",
+            "client": ("127.0.0.1", 8000),
+        }
+    )
 
 
 def _driver_row(stripe_account_id: str | None = None) -> dict:
@@ -68,25 +83,6 @@ def _ride_row(earnings: float = 20.00) -> dict:
     }
 
 
-class _SimpleCursor:
-    """Minimal cursor stub for code paths that don't await get_rows."""
-
-    def __init__(self, items):
-        self._items = items
-
-    def sort(self, *a, **k):
-        return self
-
-    def skip(self, n):
-        return self
-
-    def limit(self, n):
-        return self
-
-    async def to_list(self, length=None):
-        return self._items
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # POST /drivers/payouts
 # ─────────────────────────────────────────────────────────────────────────────
@@ -107,8 +103,6 @@ class TestRequestPayout:
         driver = _driver_row()
         inserted = []
 
-        # get_driver_balance is called internally and makes multiple get_rows calls.
-        # Mock it directly to control the returned balance cleanly.
         async def _mock_balance(user):
             return {"available_balance": available_balance}
 
@@ -126,10 +120,13 @@ class TestRequestPayout:
                 AsyncMock(side_effect=lambda t, r: inserted.append(r) or r),
             ),
             patch("backend.routes.drivers.get_driver_balance", AsyncMock(side_effect=_mock_balance)),
-            patch("backend.routes.drivers.get_app_settings", AsyncMock(return_value={})),  # no Stripe key
+            # get_app_settings is imported inline inside the function; patch at source
+            patch("backend.settings_loader.get_app_settings", AsyncMock(return_value={})),
+            patch("settings_loader.get_app_settings", AsyncMock(return_value={})),
         ):
             result = await request_payout(
                 req=req,
+                request=_make_request(),
                 current_user={"id": DRIVER_USER_ID},
             )
 
@@ -173,7 +170,11 @@ class TestRequestPayout:
 
         with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[])):
             with pytest.raises(HTTPException) as exc_info:
-                await request_payout(req=req, current_user={"id": "ghost-driver"})
+                await request_payout(
+                    req=req,
+                    request=_make_request(),
+                    current_user={"id": "ghost-driver"},
+                )
 
         assert exc_info.value.status_code == 404
 
@@ -196,31 +197,20 @@ class TestGetPayoutHistory:
 
         driver = _driver_row()
         payouts = [_payout_row(50.00), _payout_row(30.00, "completed")]
-        cursor = _SimpleCursor(payouts)
 
-        call_count = [0]
-
-        def _get_rows(table, query=None, **kwargs):
-            call_count[0] += 1
+        async def _get_rows(table, query=None, **kwargs):
             if table == "drivers":
                 return [driver]
-            # Return cursor for payouts (not awaited in the endpoint)
-            return cursor
+            if table == "payouts":
+                return payouts
+            return []
 
-        with patch("backend.routes.drivers.db_supabase.get_rows", MagicMock(side_effect=_get_rows)):
-            # get_rows for drivers is awaited, but for payouts it's not;
-            # wrap driver call in AsyncMock and payouts in sync mock
-            async def _async_get_rows(table, query=None, **kwargs):
-                if table == "drivers":
-                    return [driver]
-                return cursor
-
-            with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=_async_get_rows)):
-                result = await get_payout_history(
-                    limit=20,
-                    offset=0,
-                    current_user={"id": DRIVER_USER_ID},
-                )
+        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)):
+            result = await get_payout_history(
+                limit=20,
+                offset=0,
+                current_user={"id": DRIVER_USER_ID},
+            )
 
         assert result["success"] is True
         assert len(result["payouts"]) == 2
@@ -259,18 +249,18 @@ class TestGetT4ASummary:
 
         driver = _driver_row()
         rides = [_ride_row(20.00), _ride_row(35.00), _ride_row(15.00)]
-        cursor = _SimpleCursor(rides)
 
         async def _get_rows(table, query=None, **kwargs):
-            return [driver]  # for drivers lookup
+            return [driver]
 
-        def _get_rides_for_driver(drv, **kwargs):
-            return cursor
+        async def _get_rides_for_driver(drv, **kwargs):
+            return rides
 
         with (
             patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
             patch(
-                "backend.routes.drivers.db_supabase.get_rides_for_driver", MagicMock(side_effect=_get_rides_for_driver)
+                "backend.routes.drivers.db_supabase.get_rides_for_driver",
+                AsyncMock(side_effect=_get_rides_for_driver),
             ),
         ):
             result = await get_t4a_summary(year=2025, current_user={"id": DRIVER_USER_ID})

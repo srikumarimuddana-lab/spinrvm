@@ -196,7 +196,7 @@ async def test_full_ride_lifecycle():
         # Step 4: Complete ride – in_progress → completed
         await drv_mod.complete_ride(ride_id=ride_id, current_user={"id": user_driver_id})
         assert ride["status"] == "completed"
-        assert ride.get("payment_status") == "completed"
+        # payment_status is NOT set by complete_ride (P0-5: only process_payment writes it)
 
 
 class TestRideCreation:

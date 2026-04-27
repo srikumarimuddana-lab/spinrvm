@@ -1490,11 +1490,14 @@ async def get_payout_history(
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
 
-    payouts_cursor = db_supabase.get_rows("payouts", {"driver_id": driver["id"]}, limit=100)
-    if hasattr(payouts_cursor, "sort"):
-        payouts_cursor = payouts_cursor.sort("created_at", -1).skip(offset).limit(limit)
-
-    payouts = await payouts_cursor.to_list(length=limit) if hasattr(payouts_cursor, "to_list") else list(payouts_cursor)
+    payouts = await db_supabase.get_rows(
+        "payouts",
+        {"driver_id": driver["id"]},
+        limit=limit,
+        offset=offset,
+        order="created_at",
+        desc=True,
+    )
     return {"success": True, "payouts": [serialize_doc(p) for p in payouts]}
 
 

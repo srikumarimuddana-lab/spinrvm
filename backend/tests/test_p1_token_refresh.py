@@ -18,12 +18,28 @@ Run:
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
+from starlette.requests import Request as StarletteRequest
 
 USER_ID = "user_p1_11"
 OLD_REFRESH_ROW_ID = "rtk-row-001"
+
+
+def _make_request(user_agent: str = "") -> StarletteRequest:
+    """Real Starlette Request required by slowapi's @limiter.limit decorator."""
+    headers = [(b"user-agent", user_agent.encode())] if user_agent else []
+    return StarletteRequest(
+        scope={
+            "type": "http",
+            "method": "POST",
+            "headers": headers,
+            "query_string": b"",
+            "path": "/auth/refresh",
+            "client": ("127.0.0.1", 8000),
+        }
+    )
 
 
 def _refresh_row(audience: str = "rider", **extra) -> dict:
@@ -65,9 +81,6 @@ class TestRefreshAccessToken:
         new_raw_token = "new-refresh-raw-xyz"
         refresh_expires = datetime.now(timezone.utc) + timedelta(days=30)
 
-        mock_request = MagicMock()
-        mock_request.headers.get = MagicMock(return_value="TestApp/1.0")
-
         with (
             patch("backend.routes.auth.lookup_refresh_token", AsyncMock(return_value=_refresh_row())),
             patch("backend.routes.auth.db.find_one", AsyncMock(return_value=_user_row())),
@@ -83,7 +96,7 @@ class TestRefreshAccessToken:
                 refresh_token = "old-refresh-raw"
 
             result = await auth_mod.refresh_access_token(
-                request=mock_request,
+                request=_make_request("TestApp/1.0"),
                 body=_Body(),
             )
 
@@ -97,9 +110,6 @@ class TestRefreshAccessToken:
 
         from backend.routes import auth as auth_mod
 
-        mock_request = MagicMock()
-        mock_request.headers.get = MagicMock(return_value="")
-
         with (
             patch("backend.routes.auth.lookup_refresh_token", AsyncMock(return_value=None)),
             patch("backend.routes.auth.get_remote_address", return_value="127.0.0.1"),
@@ -109,7 +119,7 @@ class TestRefreshAccessToken:
                 refresh_token = "bad-or-revoked-token"
 
             with pytest.raises(HTTPException) as exc_info:
-                await auth_mod.refresh_access_token(request=mock_request, body=_Body())
+                await auth_mod.refresh_access_token(request=_make_request(), body=_Body())
 
         assert exc_info.value.status_code == 401
 
@@ -119,9 +129,6 @@ class TestRefreshAccessToken:
         from fastapi import HTTPException
 
         from backend.routes import auth as auth_mod
-
-        mock_request = MagicMock()
-        mock_request.headers.get = MagicMock(return_value="")
 
         with (
             patch(
@@ -135,7 +142,7 @@ class TestRefreshAccessToken:
                 refresh_token = "admin-refresh-token"
 
             with pytest.raises(HTTPException) as exc_info:
-                await auth_mod.refresh_access_token(request=mock_request, body=_Body())
+                await auth_mod.refresh_access_token(request=_make_request(), body=_Body())
 
         assert exc_info.value.status_code == 401
 
@@ -144,9 +151,6 @@ class TestRefreshAccessToken:
         from fastapi import HTTPException
 
         from backend.routes import auth as auth_mod
-
-        mock_request = MagicMock()
-        mock_request.headers.get = MagicMock(return_value="")
 
         with (
             patch("backend.routes.auth.lookup_refresh_token", AsyncMock(return_value=_refresh_row())),
@@ -158,7 +162,7 @@ class TestRefreshAccessToken:
                 refresh_token = "valid-token-deleted-user"
 
             with pytest.raises(HTTPException) as exc_info:
-                await auth_mod.refresh_access_token(request=mock_request, body=_Body())
+                await auth_mod.refresh_access_token(request=_make_request(), body=_Body())
 
         assert exc_info.value.status_code == 401
 
@@ -173,9 +177,6 @@ class TestRefreshAccessToken:
             issue_calls.append({"replaces": replaces})
             return ("new-raw", "hashed", datetime.now(timezone.utc) + timedelta(days=30))
 
-        mock_request = MagicMock()
-        mock_request.headers.get = MagicMock(return_value="UA")
-
         with (
             patch("backend.routes.auth.lookup_refresh_token", AsyncMock(return_value=_refresh_row())),
             patch("backend.routes.auth.db.find_one", AsyncMock(return_value=_user_row())),
@@ -187,7 +188,7 @@ class TestRefreshAccessToken:
             class _Body:
                 refresh_token = "old-raw"
 
-            await auth_mod.refresh_access_token(request=mock_request, body=_Body())
+            await auth_mod.refresh_access_token(request=_make_request("UA"), body=_Body())
 
         assert issue_calls, "issue_refresh_token was not called"
         assert issue_calls[0]["replaces"] == OLD_REFRESH_ROW_ID, (

@@ -10,6 +10,7 @@ Flow:
 
 import asyncio
 import logging
+import random
 from datetime import datetime, timedelta, timezone
 
 try:
@@ -151,4 +152,6 @@ async def scheduled_ride_dispatcher_loop():
             await check_scheduled_rides()
         except Exception as e:
             logger.error(f"Scheduled ride dispatcher error: {e}")
-        await asyncio.sleep(60)
+        # B-P3-2: ±6 s jitter on the 60 s interval so replicas don't
+        # contend for the same scheduled-ride row on every minute boundary.
+        await asyncio.sleep(60 + random.uniform(-6, 6))

@@ -11,6 +11,7 @@ from slowapi.util import get_remote_address
 try:
     from ... import db_supabase
     from ...core.config import settings
+    from ...core.csrf import clear_csrf_cookie, generate_csrf_token, set_csrf_cookie
     from ...utils.password import hash_password, verify_password
     from ...utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr
     from ...utils.refresh_tokens import (
@@ -186,7 +187,7 @@ async def get_session(authorization: Optional[str] = Header(None)):
 
 @admin_auth_router.post("/login")
 @limiter.limit("5/minute")
-async def admin_login(request: Request, body: LoginRequest):
+async def admin_login(request: Request, response: Response, body: LoginRequest):
     """Admin login — supports super admin + staff members with module access.
 
     Rate-limited to 5 attempts per minute per IP (see `limiter` above)
@@ -245,6 +246,10 @@ async def admin_login(request: Request, body: LoginRequest):
             "admin-001", audience="admin", user_agent=user_agent, ip=client_ip
         )
         await _clear_login_failures(body.email)
+        csrf = generate_csrf_token()
+        set_csrf_cookie(
+            response, csrf, secure=settings.ENV == "production", max_age=settings.ADMIN_ACCESS_TOKEN_TTL_HOURS * 3600
+        )
         return {
             "user": {
                 "id": "admin-001",
@@ -258,6 +263,7 @@ async def admin_login(request: Request, body: LoginRequest):
             "refresh_token": refresh_raw,
             "access_expires_at": access_expires_at.isoformat(),
             "refresh_expires_at": refresh_expires_at.isoformat(),
+            "csrf_token": csrf,
         }
 
     # 2. Staff member
@@ -286,6 +292,13 @@ async def admin_login(request: Request, body: LoginRequest):
                 staff["id"], audience="admin", user_agent=user_agent, ip=client_ip
             )
             await _clear_login_failures(body.email)
+            csrf = generate_csrf_token()
+            set_csrf_cookie(
+                response,
+                csrf,
+                secure=settings.ENV == "production",
+                max_age=settings.ADMIN_ACCESS_TOKEN_TTL_HOURS * 3600,
+            )
             return {
                 "user": {
                     "id": staff["id"],
@@ -299,6 +312,7 @@ async def admin_login(request: Request, body: LoginRequest):
                 "refresh_token": refresh_raw,
                 "access_expires_at": access_expires_at.isoformat(),
                 "refresh_expires_at": refresh_expires_at.isoformat(),
+                "csrf_token": csrf,
             }
 
     await _record_login_failure(body.email)
@@ -307,7 +321,7 @@ async def admin_login(request: Request, body: LoginRequest):
 
 @admin_auth_router.post("/refresh")
 @limiter.limit("20/minute")
-async def admin_refresh(request: Request, body: RefreshRequest):
+async def admin_refresh(request: Request, response: Response, body: RefreshRequest):
     """Exchange an admin refresh token for a new admin access token.
 
     Scoped to ``audience='admin'`` — a rider refresh token cannot be
@@ -375,17 +389,22 @@ async def admin_refresh(request: Request, body: RefreshRequest):
         phone=email,
         token_version=token_version,
     )
+    csrf = generate_csrf_token()
+    set_csrf_cookie(
+        response, csrf, secure=settings.ENV == "production", max_age=settings.ADMIN_ACCESS_TOKEN_TTL_HOURS * 3600
+    )
     return {
         "token": token,
         "refresh_token": new_raw,
         "access_expires_at": access_expires_at.isoformat(),
         "refresh_expires_at": refresh_expires_at.isoformat(),
+        "csrf_token": csrf,
     }
 
 
 @admin_auth_router.post("/logout")
 @limiter.limit("10/minute")
-async def admin_logout(request: Request, body: LogoutRequest):
+async def admin_logout(request: Request, response: Response, body: LogoutRequest):
     """Admin logout — revokes the presented refresh token.
 
     Previously returned a canned success message with zero DB side
@@ -400,6 +419,7 @@ async def admin_logout(request: Request, body: LogoutRequest):
     """
     if body.refresh_token:
         await revoke_refresh_token(body.refresh_token)
+    clear_csrf_cookie(response)
     return {"success": True}
 
 

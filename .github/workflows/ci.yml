@@ -259,12 +259,13 @@ jobs:
           NEXT_PUBLIC_API_URL: https://api.spinr.ca
         run: npm run build
 
-  # E2E Tests (run on main branch only)
+  # E2E Tests — blocking on main, non-blocking on PRs while the suite stabilises ([17-1])
   e2e-test:
     name: E2E tests (Playwright)
     runs-on: ubuntu-latest
     needs: [backend-test]
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
+    continue-on-error: ${{ github.event_name == 'pull_request' }}
     defaults:
       run:
         working-directory: admin-dashboard
@@ -384,6 +385,15 @@ jobs:
       - name: Build for production
         working-directory: admin-dashboard
         run: npm run build
+
+      - name: Scan build output for accidentally bundled secrets ([17-5])
+        working-directory: admin-dashboard
+        run: |
+          GITLEAKS_VERSION=8.27.2
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz gitleaks
+          ./gitleaks detect --source .next --no-git --redact --exit-code 1
+          rm gitleaks
 
       - name: Deploy to Vercel
         uses: amondnet/vercel-action@v25

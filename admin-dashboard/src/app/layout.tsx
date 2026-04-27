@@ -37,7 +37,14 @@ export default async function RootLayout({
             </TooltipProvider>
           </SidebarProvider>
         </ThemeProvider>
-        <Analytics />
+        {/* Strip dynamic entity IDs from page paths before they reach Vercel's US
+            edge ingestion — /dashboard/drivers/abc123 → /dashboard/drivers/[id] ([22-3]) */}
+        <Analytics
+          beforeSend={(event) => ({
+            ...event,
+            url: event.url.replace(/\/[0-9a-f-]{8,}(?=\/|$)/gi, '/[id]'),
+          })}
+        />
       </body>
     </html>
   );

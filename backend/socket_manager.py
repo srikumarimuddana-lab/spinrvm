@@ -96,9 +96,14 @@ class ConnectionManager:
         Prefer prefix-scoped broadcasts (``broadcast_to_admins``) which
         fan out correctly across VMs.
         """
-        connections = list(self.active_connections.values())  # snapshot to avoid mutation during iteration
-        for connection in connections:
-            await connection.send_json(message)
+        snapshot = list(self.active_connections.items())
+        if not snapshot:
+            return
+        coros = [asyncio.wait_for(conn.send_json(message), timeout=2.0) for _, conn in snapshot]
+        results = await asyncio.gather(*coros, return_exceptions=True)
+        for (conn_id, _), result in zip(snapshot, results):
+            if isinstance(result, Exception):
+                logger.warning("ws broadcast failed", extra={"conn_id": conn_id})
 
     async def broadcast_to_admins(self, message: dict):
         """Broadcast to every admin client across the fleet.
@@ -155,15 +160,14 @@ class ConnectionManager:
         ``prefix``. Snapshot the match list before iterating so a
         concurrent disconnect doesn't RuntimeError the loop.
         """
-        keys = [k for k in self.active_connections if k.startswith(prefix)]
-        for key in keys:
-            ws = self.active_connections.get(key)
-            if ws is None:
-                continue
-            try:
-                await ws.send_json(message)
-            except Exception as e:
-                logger.warning(f"Failed to send to {key}: {e}")
+        snapshot = [(k, ws) for k, ws in dict(self.active_connections).items() if k.startswith(prefix)]
+        if not snapshot:
+            return
+        coros = [asyncio.wait_for(ws.send_json(message), timeout=2.0) for _, ws in snapshot]
+        results = await asyncio.gather(*coros, return_exceptions=True)
+        for (key, _), result in zip(snapshot, results):
+            if isinstance(result, Exception):
+                logger.warning("ws prefix-broadcast failed", extra={"conn_id": key, "prefix": prefix})
 
     def update_driver_location(self, driver_id: str, lat: float, lng: float):
         self.driver_locations[driver_id] = {

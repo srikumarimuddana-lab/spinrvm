@@ -42,7 +42,11 @@ async def log_audit(
             },
         )
     except Exception as exc:
-        logger.warning(f"[AUDIT] log_audit({action}, {entity_type}, {entity_id}) failed: {exc}")
+        logger.error(
+            f"[AUDIT] log_audit({action}, {entity_type}, {entity_id}) failed: {exc}",
+            exc_info=True,
+            extra={"domain": "admin"},
+        )
 
 
 router = APIRouter()

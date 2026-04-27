@@ -226,14 +226,15 @@ if sentry_dsn:
         traces_sample_rate=0.1,
         profiles_sample_rate=0.1,
         environment=settings.ENV if hasattr(settings, "ENV") else "production",
-        send_default_pii=True,
+        # PIPEDA: never send IP, cookies, or auth headers to Sentry.
+        send_default_pii=False,
     )
 
     # Bridge loguru → Sentry. The LoggingIntegration above only captures
     # stdlib `logging` records; the rest of the backend uses loguru and
     # would otherwise be invisible in Sentry (including the high-signal
     # REFRESH TOKEN REUSE DETECTED alert in utils/refresh_tokens.py).
-    def _loguru_sentry_sink(message: "Any") -> None:  # noqa: ANN401
+    def _loguru_sentry_sink(message: "Any") -> None:  # noqa: ANN401, F821
         record = message.record
         exc_info = record["exception"]
         if exc_info is not None and exc_info.value is not None:

@@ -259,12 +259,13 @@ jobs:
           NEXT_PUBLIC_API_URL: https://api.spinr.ca
         run: npm run build
 
-  # E2E Tests (run on main branch only)
+  # E2E Tests — blocking on main, non-blocking on PRs while the suite stabilises ([17-1])
   e2e-test:
     name: E2E tests (Playwright)
     runs-on: ubuntu-latest
     needs: [backend-test]
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
+    continue-on-error: ${{ github.event_name == 'pull_request' }}
     defaults:
       run:
         working-directory: admin-dashboard

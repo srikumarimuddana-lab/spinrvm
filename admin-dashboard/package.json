@@ -39,7 +39,8 @@
   "overrides": {
     "jspdf": {
       "dompurify": "^3.4.1"
-    }
+    },
+    "postcss": ">=8.5.10"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.9.0",

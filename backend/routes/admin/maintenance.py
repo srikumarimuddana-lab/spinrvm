@@ -16,6 +16,35 @@ db = db_supabase  # legacy alias
 
 logger = logging.getLogger(__name__)
 
+
+async def log_audit(
+    action: str,
+    entity_type: str,
+    entity_id: str,
+    actor: str,
+    details: str = "",
+) -> None:
+    """Write a single row to the audit_logs table.
+
+    Non-raising: callers wrap this in try/except so a DB hiccup never
+    blocks the parent operation. Failures are logged at WARNING level.
+    """
+    try:
+        await db_supabase.insert_one(
+            "audit_logs",
+            {
+                "action": action,
+                "entity_type": entity_type,
+                "resource_id": entity_id,
+                "actor_id": actor,
+                "details": details,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+    except Exception as exc:
+        logger.warning(f"[AUDIT] log_audit({action}, {entity_type}, {entity_id}) failed: {exc}")
+
+
 router = APIRouter()
 
 # ── GPS Location History Cleanup ──

@@ -77,11 +77,21 @@ describe('rideStore — triggerEmergency (P2-14 / R13)', () => {
     const err = new Error('Network error');
     mockPost.mockRejectedValue(err);
 
+    // Use try/catch instead of .rejects.toThrow() — the latter's internal Jest
+    // assertion wrapper throws in the wrong execution context when real timers
+    // are in play (3s retry backoff), causing a fatal uncaught exception on
+    // Node 22 in CI even though the test ultimately passes.
+    let caughtErr: unknown;
+    try {
+      await useRideStore.getState().triggerEmergency('ride-003', 43.0, -79.0);
+      throw new Error('Expected triggerEmergency to throw but it resolved');
+    } catch (e) {
+      caughtErr = e;
+    }
+
     // triggerEmergency must rethrow — SOSButton's retry loop catches this to
     // determine backendOk=false and show "Alert Not Sent" instead of "Alert Sent"
-    await expect(
-      useRideStore.getState().triggerEmergency('ride-003', 43.0, -79.0),
-    ).rejects.toThrow('Network error');
+    expect((caughtErr as Error).message).toBe('Network error');
 
     // rideStore must NOT show its own Alert — that's SOSButton's responsibility
     expect(mockAlert).not.toHaveBeenCalled();

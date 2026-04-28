@@ -61,9 +61,21 @@ None currently open in production (pre-launch).
 | #127 | B-P1-5 ext. | `logger.warning` → `logger.error` sweep: `stripe_charge.py`, `payments.py`, `users.py`, `drivers.py` |
 | already in code | B-P1-2 | `JWT_SECRET` length ≥32 enforced in `core/config.py` |
 | already in code | B-P1-6 | Retention purge loop in `core/lifespan.py` + migration 50 |
+| #133 | CI + PIPEDA | `@react-native/jest-preset@0.85.2` added to rider/driver devDeps (RN 0.85.2 CI fix); `send_default_pii=False` in Sentry init (PIPEDA) |
+| #134 | B-P2-2 ext. | Unknown Stripe event types now return early without stamping `processed_at`; `test_unknown_event_type_not_marked_processed` added |
+| #135 | test fix | `test_p2_payout_t4a.py` — `MagicMock` → `AsyncMock` for `get_rows`/`get_rides_for_driver` (non-awaitable cursor crash) |
+
+## Recently shipped (post-sprint hardening)
+
+| PR | What |
+|---|---|
+| #128 | `logger.warning` → `error` sweep: `stripe_charge.py`, `payments.py`, `users.py`, `drivers.py` — payment/dispatch/safety failures now reach Sentry |
+| #132 | `_vault_encrypt` fail-closed: driver PII (`license_number`, `vehicle_vin`) no longer stored as plaintext when Supabase Vault is unavailable |
+| manual | [17-4] Branch protection on `main` — PR + 1 review required; `Post guard rail summary` + `Security gates summary` required checks; force-push + deletion blocked |
+| #133 | CI + PIPEDA | `@react-native/jest-preset@0.85.2` added to rider/driver devDeps (RN 0.85.2 CI fix); `send_default_pii=False` in Sentry init (PIPEDA) |
+| #134 | B-P2-2 ext. | Unknown Stripe event types now return early without stamping `processed_at`; `test_unknown_event_type_not_marked_processed` added |
+| #135 | test fix | `test_p2_payout_t4a.py` — `MagicMock` → `AsyncMock` for `get_rows`/`get_rides_for_driver` (non-awaitable cursor crash) |
 
 ## Next sprint candidates
 
-- **[17-4] Branch protection** (manual — GitHub Settings UI): require PR + 1 review; make `Security gates summary` + `Post guard rail summary` required checks; disable force-push + deletion on `main`.
-- **logger.warning sweep remainder**: `drivers.py` vault-encrypt plaintext fallback (line ~70) — currently warns and stores plaintext when encryption unavailable; should fail closed with 503.
-- **Sentry alert rule**: Now that loguru bridge is live, create a Sentry alert for `REFRESH TOKEN REUSE DETECTED` → PagerDuty. Estimated ~30 min in Sentry UI.
+- **Sentry alert rule**: Create a Sentry alert for `REFRESH TOKEN REUSE DETECTED` → PagerDuty. ~30 min in Sentry UI. No code required.

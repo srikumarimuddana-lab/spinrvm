@@ -96,8 +96,7 @@ export default function NotificationsScreen() {
         else if (item.type === 'payout_processed') router.push('/driver/earnings');
         else if (item.type === 'ride_offer') router.push('/driver/');
         else if (item.type === 'quest_earned') router.push('/driver/quests');
-        // Unknown type: notification is marked read above; no navigation needed.
-        // Explicit no-op prevents accidental fall-through if new types are added later.
+        else router.push('/driver/');
     };
 
     const renderNotification = ({ item }: { item: Notification }) => {

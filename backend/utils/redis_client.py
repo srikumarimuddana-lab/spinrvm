@@ -86,7 +86,9 @@ async def _get_redis():
         logger.info(f"Redis connected: {url[:30]}...")
         return _redis
     except Exception as e:
-        logger.warning(f"Redis connection failed ({e}); using in-process fallback")
+        logger.error(
+            f"Redis connection failed ({e}); falling back to in-process dict — rate-limit and OTP lockout state are NOT shared across replicas"
+        )
         return None
 
 

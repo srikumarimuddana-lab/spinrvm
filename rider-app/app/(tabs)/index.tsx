@@ -56,6 +56,7 @@ export default function HomeScreen() {
   const lastFetchedAt = useRef<number>(0);
 
   const { width, height } = useWindowDimensions();
+  const isTablet = width >= 768;
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
@@ -190,7 +191,7 @@ export default function HomeScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, isTablet && { flexDirection: 'row' as const }]}>
       {/* Map Implementation */}
       <View style={styles.mapContainer}>
         {/* Header */}
@@ -348,9 +349,9 @@ export default function HomeScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Bottom Sheet */}
-      <View style={styles.bottomSheet}>
-        <View style={styles.sheetHandle} />
+      {/* Bottom Sheet / Side Panel */}
+      <View style={[styles.bottomSheet, isTablet && styles.sidePanel]}>
+        {!isTablet && <View style={styles.sheetHandle} />}
 
         {/* Search Bar + AI Button */}
         <View style={styles.searchRow}>
@@ -738,6 +739,16 @@ function createStyles(colors: ThemeColors) {
     },
     promoClose: {
       padding: 4,
+    },
+    sidePanel: {
+      width: 340,
+      borderTopLeftRadius: 0,
+      borderTopRightRadius: 0,
+      borderLeftWidth: 1,
+      borderLeftColor: colors.border,
+      shadowOffset: { width: -4, height: 0 },
+      paddingTop: 60,
+      flexShrink: 0 as const,
     },
   });
 }

@@ -88,14 +88,20 @@ None currently open in production (pre-launch).
 
 **Sprint goal:** Close the top P1 backend safety and data-integrity gaps from the driver-app verification pass (2026-04-23): suspended-driver dispatch gap, document-expiry `$set` anti-pattern, and open items from `OPEN-ITEMS-TRACKER.md` section A/B.
 
-**Status (2026-04-28):** B-S2-1 and B-S2-2 shipped (#140).
+**Status (2026-04-28):** COMPLETE. Both tickets shipped via PR #140 (merged).
 
 ## In-flight
 
-| Ticket | Owner | State | Notes |
-|---|---|---|---|
-| B-S2-1 | — | shipped (#140) | **DV-1 / P0-5**: Migration 55 — `status != 'suspended'` filter added to `find_nearby_drivers`. |
-| B-S2-2 | — | shipped (#140) | **DV-2 / P0-5**: `document_expiry.py` — `{"$set": ...}` wrapper removed from both `update_one` calls. |
+_None._
+
+## Recently shipped (Sprint 2)
+
+| PR | Ticket | What |
+|---|---|---|
+| #140 | B-S2-1 | `55_find_nearby_drivers_suspended_filter.sql` — `AND status != 'suspended'` added to `find_nearby_drivers` RPC; suspended-driver dispatch gap closed |
+| #140 | B-S2-2 | `document_expiry.py` — `{"$set": ...}` wrapper removed from both `update_one` calls |
+
+> **Migration note (2026-04-28):** `55_drivers_dispatch_partial_index.sql` and `55_find_nearby_drivers_suspended_filter.sql` share the `55_` numeric prefix — a CLAUDE.md convention violation. The migration runner uses the full filename as the idempotency key, so both are applied correctly in alphabetical order. Cannot be renamed since they are already merged and may be applied in production. Next free slot is **57**.
 
 ## Deferred (non-code or future sprint)
 

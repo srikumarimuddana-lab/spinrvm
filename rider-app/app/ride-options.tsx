@@ -96,8 +96,8 @@ function RideOptionsScreenContent() {
   useEffect(() => {
     if (pickup && dropoff) {
       console.log('Platform:', Platform.OS, '| Fetching estimates & nearby drivers for:', pickup.address, 'to', dropoff.address);
-      handleFetchEstimates();
-      fetchNearbyDrivers();
+      // R-P2-51: run both fetches in parallel — they are independent requests.
+      void Promise.all([handleFetchEstimates(), fetchNearbyDrivers()]);
 
       // Auto-refresh drivers every 10 seconds
       const interval = setInterval(() => {

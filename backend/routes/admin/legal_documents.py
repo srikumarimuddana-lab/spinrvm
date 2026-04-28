@@ -10,12 +10,16 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 try:
     from ... import db_supabase
+    from ...dependencies import get_admin_user
+    from ...utils.audit_logger import log_admin_action
 except ImportError:
     import db_supabase
+    from dependencies import get_admin_user  # type: ignore[assignment]
+    from utils.audit_logger import log_admin_action  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +37,7 @@ async def admin_list_legal_documents():
 
 
 @router.put("/legal-documents")
-async def admin_upsert_legal_document(payload: Dict[str, Any]):
+async def admin_upsert_legal_document(payload: Dict[str, Any], admin: dict = Depends(get_admin_user)):
     """Create or update an (audience, doc_type) row in one shot.
 
     Body: { audience: 'rider'|'driver', type: 'tos'|'privacy', content: str }
@@ -60,6 +64,13 @@ async def admin_upsert_legal_document(payload: Dict[str, Any]):
             {"id": existing["id"]},
             {"content": content, "version": next_version, "updated_at": now},
         )
+        await log_admin_action(
+            admin,
+            "legal_document_updated",
+            "legal_document",
+            str(existing["id"]),
+            {"audience": audience, "doc_type": doc_type, "version": next_version},
+        )
         return {"audience": audience, "type": doc_type, "version": next_version}
 
     row = await db_supabase.insert_one(
@@ -72,9 +83,17 @@ async def admin_upsert_legal_document(payload: Dict[str, Any]):
             "updated_at": now,
         },
     )
+    doc_id = str((row or {}).get("id", ""))
+    await log_admin_action(
+        admin,
+        "legal_document_created",
+        "legal_document",
+        doc_id,
+        {"audience": audience, "doc_type": doc_type, "version": 1},
+    )
     return {
         "audience": audience,
         "type": doc_type,
         "version": 1,
-        "id": (row or {}).get("id"),
+        "id": doc_id,
     }

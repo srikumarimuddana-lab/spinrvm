@@ -87,6 +87,7 @@ jobs:
 
       - name: Upload coverage to Codecov
         if: always()
+        continue-on-error: true
         uses: codecov/codecov-action@v4
         with:
           file: ./backend/coverage.xml

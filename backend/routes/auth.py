@@ -412,7 +412,7 @@ async def firebase_auth_login(request: Request, response: Response, body: Fireba
     try:
         from firebase_admin import auth as _firebase_auth  # type: ignore
 
-        payload = _firebase_auth.verify_id_token(body.firebase_token)
+        payload = _firebase_auth.verify_id_token(body.firebase_token, check_revoked=True)
     except Exception as e:
         raise HTTPException(status_code=401, detail="Invalid Firebase token") from e
 

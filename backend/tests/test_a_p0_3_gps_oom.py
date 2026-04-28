@@ -81,8 +81,7 @@ def test_decline_logs_cap_is_10000():
     import ast
     import pathlib
 
-    _root = pathlib.Path(__file__).parent.parent
-    source = (_root / "routes/admin/maintenance.py").read_text()
+    source = (pathlib.Path(__file__).parent.parent / "routes/admin/maintenance.py").read_text()
     tree = ast.parse(source)
 
     # Walk the AST and find the get_rows call for audit_logs with action=ride_declined.
@@ -112,28 +111,26 @@ def test_decline_logs_cap_is_10000():
     )
 
 
-def test_cleanup_uses_count_documents_not_get_rows_for_counting():
-    """Verify maintenance.py uses count_documents (not get_rows+len) for cleanup counts."""
+def test_cleanup_uses_delete_many_not_get_rows_for_counting():
+    """Verify maintenance.py uses delete_many (not get_rows+len) for cleanup — avoids loading rows into memory."""
     import pathlib
 
-    _root = pathlib.Path(__file__).parent.parent
-    source = (_root / "routes/admin/maintenance.py").read_text()
-    # The cleanup endpoint must reference count_documents
-    assert "count_documents" in source, "cleanup must use count_documents to avoid OOM"
-    # The cleanup endpoint must NOT use get_rows with a large limit just to call len()
-    # (i.e., we should not see the old pattern: get_rows + limit=100000 in the cleanup block)
+    source = (pathlib.Path(__file__).parent.parent / "routes/admin/maintenance.py").read_text()
     cleanup_block_start = source.find("async def admin_cleanup_location_history")
     cleanup_block_end = source.find("async def admin_rollup_driver_daily")
     cleanup_block = source[cleanup_block_start:cleanup_block_end]
+    # Must use delete_many (direct DB delete, no Python-side counting)
+    assert "delete_many" in cleanup_block, "cleanup must use delete_many to avoid loading GPS rows into memory"
+    # Must NOT fetch rows with a large limit just to call len()
     assert "limit=100000" not in cleanup_block, "cleanup block must not fetch 100k rows"
+    assert "len(old_rows" not in cleanup_block, "cleanup block must not count rows via len()"
 
 
 def test_presence_rows_uses_driver_id_column():
     """Verify presence_rows query uses columns='driver_id' not columns='*'."""
     import pathlib
 
-    _root = pathlib.Path(__file__).parent.parent
-    source = (_root / "routes/admin/maintenance.py").read_text()
+    source = (pathlib.Path(__file__).parent.parent / "routes/admin/maintenance.py").read_text()
     assert 'columns="driver_id"' in source, "presence query must restrict to driver_id column"
 
 
@@ -154,41 +151,40 @@ _skip_no_deps = pytest.mark.skipif(not _HAS_BACKEND_DEPS, reason="backend deps n
 
 @_skip_no_deps
 @pytest.mark.anyio
-async def test_cleanup_calls_count_documents_not_get_rows():
-    """Cleanup endpoint must call count_documents (not get_rows) for the deletion count."""
+async def test_cleanup_calls_delete_many_not_get_rows():
+    """Cleanup endpoint must call delete_many (direct DB delete) — never get_rows+len which OOMs."""
     from unittest.mock import AsyncMock, patch
 
-    count_mock = AsyncMock(return_value=42)
     delete_mock = AsyncMock(return_value=None)
     get_rows_mock = AsyncMock(return_value=[])
 
     with (
-        patch("backend.routes.admin.maintenance.db_supabase.count_documents", count_mock),
         patch("backend.routes.admin.maintenance.db_supabase.delete_many", delete_mock),
         patch("backend.routes.admin.maintenance.db_supabase.get_rows", get_rows_mock),
     ):
         result = await _maintenance_module.admin_cleanup_location_history(days=30)
 
-    # count_documents must be called (not get_rows) for deletion counts
-    assert count_mock.call_count == 2, "must call count_documents twice (historical + idle)"
+    # delete_many called twice (historical + idle)
+    assert delete_mock.call_count == 2, "must call delete_many twice (historical + idle)"
     # get_rows must NOT be called by the cleanup endpoint
     assert get_rows_mock.call_count == 0, "cleanup must not call get_rows (OOM risk)"
-    assert result["deleted_historical"] == 42
-    assert result["deleted_idle"] == 42
+    # deleted counts are -1 = "deleted (count unknown)" — direct delete returns no count
+    assert result["deleted_historical"] == -1
+    assert result["deleted_idle"] == -1
 
 
 @_skip_no_deps
 @pytest.mark.anyio
-async def test_cleanup_skips_delete_when_count_is_zero():
-    """delete_many must not be called when count_documents returns 0."""
+async def test_cleanup_returns_correct_structure():
+    """Cleanup response contains the expected keys."""
     from unittest.mock import AsyncMock, patch
 
     with (
-        patch("backend.routes.admin.maintenance.db_supabase.count_documents", AsyncMock(return_value=0)),
-        patch("backend.routes.admin.maintenance.db_supabase.delete_many", AsyncMock()) as delete_mock,
+        patch("backend.routes.admin.maintenance.db_supabase.delete_many", AsyncMock(return_value=None)),
     ):
         result = await _maintenance_module.admin_cleanup_location_history(days=30)
 
-    assert delete_mock.call_count == 0, "must not call delete_many when nothing to delete"
-    assert result["deleted_historical"] == 0
-    assert result["deleted_idle"] == 0
+    assert "deleted_historical" in result
+    assert "deleted_idle" in result
+    assert "historical_cutoff" in result
+    assert "idle_cutoff" in result

@@ -184,6 +184,7 @@ def classify(run_data: dict[str, Any], surface_filter: str = "all") -> dict[str,
         # Prefer the job-level log (fetched once per job by fetch_run_data.py).
         # Fall back to per-step logs for backwards compatibility.
         job_log: str = job.get("log", "")
+        errors_before = len(all_errors)
         if job_log:
             errors = _classify_log_chunk(job_name, "job log", job_log)
             all_errors.extend(errors)
@@ -195,6 +196,34 @@ def classify(run_data: dict[str, Any], surface_filter: str = "all") -> dict[str,
                     continue
                 errors = _classify_log_chunk(job_name, step_name, log_text)
                 all_errors.extend(errors)
+
+        # Fallback: if the job conclusion is "failure" but no log patterns
+        # matched (empty logs, fetch error, or unrecognised error format), emit
+        # a synthetic P1 error so the report is never silently empty for a
+        # failed job. This was the root cause of audit reports claiming "No
+        # errors found" while backend-test / rider-app-test / driver-app-test
+        # were conclusively failing.
+        if len(all_errors) == errors_before and job_status == "failure":
+            surface = _job_to_surface(job_name)
+            failed_step = next(
+                (s.get("name", "unknown") for s in job.get("steps", [])
+                 if s.get("conclusion") == "failure"),
+                "unknown step",
+            )
+            all_errors.append(ClassifiedError(
+                job=job_name,
+                step=failed_step,
+                category="test" if "test" in job_name.lower() else "build",
+                severity="P1",
+                description=(
+                    f"Job '{job_name}' failed (step: {failed_step}). "
+                    "Log text unavailable or no pattern matched — inspect run directly."
+                ),
+                log_excerpt="",
+                surface=surface,
+                patterns_matched=["__job_conclusion_failure__"],
+                raw_message=f"conclusion={job_status}",
+            ))
 
     # Apply surface filter
     if surface_filter != "all":

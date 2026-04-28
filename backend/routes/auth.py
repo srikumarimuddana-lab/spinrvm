@@ -117,7 +117,7 @@ async def _clear_otp_failures(phone: str) -> None:
         await redis_delete(_FAIL_KEY.format(phone))
         await redis_delete(_LOCK_KEY.format(phone))
     except Exception as e:
-        logger.warning(f"_clear_otp_failures: {e}")
+        logger.error(f"_clear_otp_failures: {e}", exc_info=True)
 
 
 def _is_dev_otp_bypass(otp: str) -> bool:
@@ -555,7 +555,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         try:
             await db_supabase.update_one("users", {"id": current_user["id"]}, {"profile_complete": True})
         except Exception:
-            logger.warning("Could not self-heal profile_complete")
+            logger.error("Could not self-heal profile_complete", exc_info=True)
         current_user["profile_complete"] = True
 
     # Derive driver onboarding status (None for non-drivers).

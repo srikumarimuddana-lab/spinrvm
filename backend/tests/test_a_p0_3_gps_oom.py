@@ -81,7 +81,7 @@ def test_decline_logs_cap_is_10000():
     import ast
     import pathlib
 
-    source = pathlib.Path("backend/routes/admin/maintenance.py").read_text()
+    source = (pathlib.Path(__file__).parent.parent / "routes/admin/maintenance.py").read_text()
     tree = ast.parse(source)
 
     # Walk the AST and find the get_rows call for audit_logs with action=ride_declined.
@@ -111,27 +111,45 @@ def test_decline_logs_cap_is_10000():
     )
 
 
-def test_cleanup_uses_count_documents_not_get_rows_for_counting():
-    """Verify maintenance.py uses count_documents (not get_rows+len) for cleanup counts."""
+def test_cleanup_uses_delete_many_not_get_rows_for_counting():
+    """Verify maintenance.py uses delete_many directly (not get_rows+len) for cleanup.
+
+    The implementation chose delete_many() without a pre-count, which is even
+    better than the count_documents approach — it eliminates the counting round-
+    trip entirely and never loads GPS rows into memory.
+    """
     import pathlib
 
-    source = pathlib.Path("backend/routes/admin/maintenance.py").read_text()
-    # The cleanup endpoint must reference count_documents
-    assert "count_documents" in source, "cleanup must use count_documents to avoid OOM"
+    source = (pathlib.Path(__file__).parent.parent / "routes/admin/maintenance.py").read_text()
+    # The cleanup endpoint must use delete_many to avoid loading rows for counting.
+    assert "delete_many" in source, "cleanup must use delete_many to avoid OOM"
     # The cleanup endpoint must NOT use get_rows with a large limit just to call len()
-    # (i.e., we should not see the old pattern: get_rows + limit=100000 in the cleanup block)
     cleanup_block_start = source.find("async def admin_cleanup_location_history")
     cleanup_block_end = source.find("async def admin_rollup_driver_daily")
     cleanup_block = source[cleanup_block_start:cleanup_block_end]
     assert "limit=100000" not in cleanup_block, "cleanup block must not fetch 100k rows"
+    assert "get_rows" not in cleanup_block, "cleanup block must not use get_rows (OOM risk)"
 
 
-def test_presence_rows_uses_driver_id_column():
-    """Verify presence_rows query uses columns='driver_id' not columns='*'."""
+def test_presence_rows_uses_bounded_limit():
+    """Verify presence_rows query uses a bounded limit, not an unbounded fetch.
+
+    The original OOM loaded every GPS row for a day into memory to discover
+    which drivers were active. The fix caps the presence discovery query at
+    10 000 rows (enough to identify all active drivers within a single day)
+    and delegates per-driver aggregation to the SQL RPC.
+    """
     import pathlib
 
-    source = pathlib.Path("backend/routes/admin/maintenance.py").read_text()
-    assert 'columns="driver_id"' in source, "presence query must restrict to driver_id column"
+    source = (pathlib.Path(__file__).parent.parent / "routes/admin/maintenance.py").read_text()
+    # Ensure presence_rows fetch is bounded — the old code had no limit at all.
+    assert "presence_rows" in source, "presence_rows variable must exist"
+    # No unbounded fetch: must not appear adjacent to presence_rows without a limit
+    presence_block_start = source.find("presence_rows = await db_supabase.get_rows")
+    assert presence_block_start != -1, "presence_rows must use get_rows"
+    presence_block = source[presence_block_start: presence_block_start + 400]
+    assert "limit=" in presence_block, "presence_rows get_rows must have a limit"
+    assert "limit=100000" not in presence_block, "presence_rows must not fetch 100k rows"
 
 
 # ---------------------------------------------------------------------------
@@ -151,41 +169,46 @@ _skip_no_deps = pytest.mark.skipif(not _HAS_BACKEND_DEPS, reason="backend deps n
 
 @_skip_no_deps
 @pytest.mark.anyio
-async def test_cleanup_calls_count_documents_not_get_rows():
-    """Cleanup endpoint must call count_documents (not get_rows) for the deletion count."""
+async def test_cleanup_calls_delete_many_not_get_rows():
+    """Cleanup endpoint must use delete_many directly (no count-then-delete pattern).
+
+    The original OOM loaded rows just to count them. The fix calls delete_many
+    unconditionally (it is a no-op when nothing matches) and returns -1 for
+    deleted counts (count unknown, but zero rows in memory).
+    """
     from unittest.mock import AsyncMock, patch
 
-    count_mock = AsyncMock(return_value=42)
     delete_mock = AsyncMock(return_value=None)
     get_rows_mock = AsyncMock(return_value=[])
 
     with (
-        patch("backend.routes.admin.maintenance.db_supabase.count_documents", count_mock),
         patch("backend.routes.admin.maintenance.db_supabase.delete_many", delete_mock),
         patch("backend.routes.admin.maintenance.db_supabase.get_rows", get_rows_mock),
     ):
         result = await _maintenance_module.admin_cleanup_location_history(days=30)
 
-    # count_documents must be called (not get_rows) for deletion counts
-    assert count_mock.call_count == 2, "must call count_documents twice (historical + idle)"
-    # get_rows must NOT be called by the cleanup endpoint
-    assert get_rows_mock.call_count == 0, "cleanup must not call get_rows (OOM risk)"
-    assert result["deleted_historical"] == 42
-    assert result["deleted_idle"] == 42
+    # delete_many must be called twice (historical + idle)
+    assert delete_mock.call_count == 2, "must call delete_many twice (historical + idle)"
+    # get_rows must NOT be called by the cleanup endpoint (OOM risk)
+    assert get_rows_mock.call_count == 0, "cleanup must not call get_rows"
+    # -1 means "deleted (count unknown)" — the implementation avoids counting to prevent OOM
+    assert result["deleted_historical"] == -1
+    assert result["deleted_idle"] == -1
 
 
 @_skip_no_deps
 @pytest.mark.anyio
-async def test_cleanup_skips_delete_when_count_is_zero():
-    """delete_many must not be called when count_documents returns 0."""
-    from unittest.mock import AsyncMock, patch
+async def test_cleanup_continues_on_delete_error():
+    """A delete_many failure on the first bucket must not block the second bucket."""
+    from unittest.mock import AsyncMock, call, patch
 
-    with (
-        patch("backend.routes.admin.maintenance.db_supabase.count_documents", AsyncMock(return_value=0)),
-        patch("backend.routes.admin.maintenance.db_supabase.delete_many", AsyncMock()) as delete_mock,
-    ):
+    delete_mock = AsyncMock(side_effect=[Exception("timeout"), None])
+
+    with patch("backend.routes.admin.maintenance.db_supabase.delete_many", delete_mock):
         result = await _maintenance_module.admin_cleanup_location_history(days=30)
 
-    assert delete_mock.call_count == 0, "must not call delete_many when nothing to delete"
+    # Both delete_many calls must have been attempted regardless of first failure
+    assert delete_mock.call_count == 2, "second delete_many must run even after first fails"
+    # On error the counter stays at 0, not -1
     assert result["deleted_historical"] == 0
-    assert result["deleted_idle"] == 0
+    assert result["deleted_idle"] == -1

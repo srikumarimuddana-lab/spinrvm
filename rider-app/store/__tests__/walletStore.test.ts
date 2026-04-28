@@ -218,4 +218,75 @@ describe('walletStore', () => {
       ).rejects.toThrow();
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // R-P2-35: paySplitShare / respondToSplit
+  // ---------------------------------------------------------------------------
+  describe('paySplitShare', () => {
+    it('calls the correct endpoint and clears loading on success', async () => {
+      mockApi.post.mockResolvedValueOnce({ data: {} });
+      await useWalletStore.getState().paySplitShare('participant-1', 'wallet');
+      expect(mockApi.post).toHaveBeenCalledWith(
+        '/fare-split/participant/participant-1/pay',
+        { payment_method: 'wallet' }
+      );
+      expect(useWalletStore.getState().isLoading).toBe(false);
+      expect(useWalletStore.getState().error).toBeNull();
+    });
+
+    it('sets error and rethrows when payment fails', async () => {
+      const err: any = new Error('Insufficient funds');
+      err.response = { data: { detail: 'Insufficient wallet balance' } };
+      mockApi.post.mockRejectedValueOnce(err);
+
+      await expect(
+        useWalletStore.getState().paySplitShare('participant-1', 'wallet')
+      ).rejects.toThrow();
+
+      expect(useWalletStore.getState().error).toBe('Insufficient wallet balance');
+      expect(useWalletStore.getState().isLoading).toBe(false);
+    });
+
+    it('supports card payment method', async () => {
+      mockApi.post.mockResolvedValueOnce({ data: {} });
+      await useWalletStore.getState().paySplitShare('participant-2', 'card');
+      expect(mockApi.post).toHaveBeenCalledWith(
+        '/fare-split/participant/participant-2/pay',
+        { payment_method: 'card' }
+      );
+    });
+  });
+
+  describe('respondToSplit', () => {
+    it('accepts a split invitation', async () => {
+      mockApi.post.mockResolvedValueOnce({ data: {} });
+      await useWalletStore.getState().respondToSplit('participant-1', 'accept');
+      expect(mockApi.post).toHaveBeenCalledWith(
+        '/fare-split/participant/participant-1/respond',
+        { action: 'accept' }
+      );
+      expect(useWalletStore.getState().isLoading).toBe(false);
+    });
+
+    it('declines a split invitation', async () => {
+      mockApi.post.mockResolvedValueOnce({ data: {} });
+      await useWalletStore.getState().respondToSplit('participant-1', 'decline');
+      expect(mockApi.post).toHaveBeenCalledWith(
+        '/fare-split/participant/participant-1/respond',
+        { action: 'decline' }
+      );
+    });
+
+    it('sets error and rethrows on failure', async () => {
+      const err: any = new Error('Not found');
+      err.response = { data: { detail: 'Split invitation not found' } };
+      mockApi.post.mockRejectedValueOnce(err);
+
+      await expect(
+        useWalletStore.getState().respondToSplit('participant-x', 'accept')
+      ).rejects.toThrow();
+
+      expect(useWalletStore.getState().error).toBe('Split invitation not found');
+    });
+  });
 });

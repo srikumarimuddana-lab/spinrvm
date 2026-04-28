@@ -137,7 +137,7 @@ jobs:
       - name: Count ruff warnings on PR branch
         working-directory: backend
         run: |
-          ruff check . --output-format=json 2>/dev/null | \
+          python -m ruff check . --output-format=json 2>/dev/null | \
             python3 -c "
           import json, sys
           try:

@@ -278,6 +278,7 @@ I've shared my live location with you for safety.
             accessibilityLabel="Message driver"
             accessibilityRole="button"
             accessibilityHint="Open chat with your driver"
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           >
             <Ionicons name="chatbubble" size={20} color={colors.primary} />
           </TouchableOpacity>
@@ -316,19 +317,19 @@ I've shared my live location with you for safety.
         <View style={styles.fareRow}>
           <View style={styles.fareItem}>
             <Ionicons name="cash-outline" size={16} color={colors.textDim} />
-            <Text style={styles.fareValue}>${(currentRide?.total_fare || 0).toFixed(2)}</Text>
+            <Text style={styles.fareValue} allowFontScaling={false}>${(currentRide?.total_fare || 0).toFixed(2)}</Text>
             <Text style={styles.fareLabel}>Fare</Text>
           </View>
           <View style={styles.fareDivider} />
           <View style={styles.fareItem}>
             <Ionicons name="speedometer-outline" size={16} color={colors.textDim} />
-            <Text style={styles.fareValue}>{(currentRide?.distance_km || 0).toFixed(1)} km</Text>
+            <Text style={styles.fareValue} allowFontScaling={false}>{(currentRide?.distance_km || 0).toFixed(1)} km</Text>
             <Text style={styles.fareLabel}>Distance</Text>
           </View>
           <View style={styles.fareDivider} />
           <View style={styles.fareItem}>
             <Ionicons name="time-outline" size={16} color={colors.textDim} />
-            <Text style={styles.fareValue}>{eta} min</Text>
+            <Text style={styles.fareValue} allowFontScaling={false}>{eta} min</Text>
             <Text style={styles.fareLabel}>ETA</Text>
           </View>
         </View>
@@ -342,7 +343,12 @@ I've shared my live location with you for safety.
             <Text style={styles.liveText}>LIVE</Text>
           </View>
           <Text style={styles.sharingText}>Location sharing active</Text>
-          <TouchableOpacity onPress={handleCopyTrackingLink}>
+          <TouchableOpacity
+            onPress={handleCopyTrackingLink}
+            accessibilityRole="button"
+            accessibilityLabel="Copy live tracking link"
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          >
             <Ionicons name="copy-outline" size={18} color={colors.textDim} />
           </TouchableOpacity>
         </View>
@@ -557,7 +563,13 @@ I've shared my live location with you for safety.
         )}
 
         {/* Location button */}
-        <TouchableOpacity style={styles.locationButton} onPress={handleLocation}>
+        <TouchableOpacity
+          style={styles.locationButton}
+          onPress={handleLocation}
+          accessibilityRole="button"
+          accessibilityLabel="Center map on my location"
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
           <Ionicons name="navigate" size={22} color={colors.text} />
         </TouchableOpacity>
       </View>

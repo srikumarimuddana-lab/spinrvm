@@ -333,6 +333,7 @@ export default function SearchDestinationScreen() {
           onPress={() => router.back()}
           accessibilityRole="button"
           accessibilityLabel="Go back"
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
         >
           <Ionicons name="arrow-back" size={24} color={colors.text} />
         </TouchableOpacity>
@@ -355,6 +356,11 @@ export default function SearchDestinationScreen() {
               placeholder="Pickup location"
               placeholderTextColor={colors.textDim}
               selectTextOnFocus
+              returnKeyType="next"
+              onSubmitEditing={() => {
+                if (stops.length > 0) stopRefs.current[0]?.focus();
+                else dropoffRef.current?.focus();
+              }}
             />
             {pickupText ? (
               <TouchableOpacity
@@ -366,6 +372,7 @@ export default function SearchDestinationScreen() {
                 }}
                 accessibilityRole="button"
                 accessibilityLabel="Clear pickup location"
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
               >
                 <Ionicons name="close-circle" size={18} color="#CCC" />
               </TouchableOpacity>
@@ -389,6 +396,11 @@ export default function SearchDestinationScreen() {
                   onFocus={() => handleFieldFocus(index)}
                   placeholder="Enter stop address"
                   placeholderTextColor={colors.textDim}
+                  returnKeyType="next"
+                  onSubmitEditing={() => {
+                    if (index < stops.length - 1) stopRefs.current[index + 1]?.focus();
+                    else dropoffRef.current?.focus();
+                  }}
                 />
               </View>
               <TouchableOpacity
@@ -396,6 +408,7 @@ export default function SearchDestinationScreen() {
                 style={styles.removeButton}
                 accessibilityRole="button"
                 accessibilityLabel={`Remove stop ${index + 1}`}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
               >
                 <Ionicons name="close-circle" size={20} color={colors.textDim} />
               </TouchableOpacity>
@@ -417,6 +430,8 @@ export default function SearchDestinationScreen() {
               placeholder="Where to?"
               placeholderTextColor={colors.textDim}
               autoFocus
+              returnKeyType="search"
+              onSubmitEditing={handleSearchRide}
             />
             {dropoffText ? (
               <TouchableOpacity
@@ -428,6 +443,7 @@ export default function SearchDestinationScreen() {
                 }}
                 accessibilityRole="button"
                 accessibilityLabel="Clear destination"
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
               >
                 <Ionicons name="close-circle" size={18} color="#CCC" />
               </TouchableOpacity>

@@ -12,6 +12,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import SkeletonBox from '../../components/SkeletonBox';
 import { useRideStore } from '../../store/rideStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -236,12 +237,12 @@ export default function ActivityScreen() {
         </View>
 
         <View style={styles.rideFareContainer}>
-          <Text style={[styles.rideFare, ride.status === 'cancelled' && styles.rideFareCancelled]}>
+          <Text style={[styles.rideFare, ride.status === 'cancelled' && styles.rideFareCancelled]} allowFontScaling={false}>
             ${fare}
           </Text>
           <View style={styles.rideStatusContainer}>
             <View style={[styles.statusDot, { backgroundColor: getStatusColor(ride.status) }]} />
-            <Text style={[styles.rideStatus, { color: getStatusColor(ride.status) }]}>
+            <Text style={[styles.rideStatus, { color: getStatusColor(ride.status) }]} allowFontScaling={false}>
               {getStatusText(ride.status)}
             </Text>
           </View>
@@ -264,6 +265,7 @@ export default function ActivityScreen() {
           accessibilityRole="button"
           accessibilityLabel="Filter rides"
           accessibilityHint="Opens ride filter options"
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
         >
           <Ionicons name="options-outline" size={24} color={colors.text} />
         </TouchableOpacity>
@@ -318,6 +320,22 @@ export default function ActivityScreen() {
               <Ionicons name="alert-circle-outline" size={48} color="#EF4444" />
               <Text style={[styles.emptyTitle, { color: '#EF4444' }]}>Could not load rides</Text>
               <Text style={styles.emptyText}>Pull down to refresh.</Text>
+            </View>
+          ) : loading && rides.length === 0 ? (
+            <View style={{ paddingHorizontal: 16, paddingTop: 8 }}>
+              {[0, 1, 2, 3].map((i) => (
+                <View key={i} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' }}>
+                  <SkeletonBox width={40} height={40} borderRadius={20} style={{ marginRight: 12 }} />
+                  <View style={{ flex: 1, gap: 8 }}>
+                    <SkeletonBox width="60%" height={14} />
+                    <SkeletonBox width="40%" height={12} />
+                  </View>
+                  <View style={{ alignItems: 'flex-end', gap: 8 }}>
+                    <SkeletonBox width={50} height={14} />
+                    <SkeletonBox width={40} height={12} />
+                  </View>
+                </View>
+              ))}
             </View>
           ) : rides.length === 0 && !loading ? (
             <View style={styles.emptyState}>
@@ -383,12 +401,12 @@ export default function ActivityScreen() {
                   </Text>
                 </View>
                 <View style={styles.rideFareContainer}>
-                  <Text style={styles.rideFare}>
+                  <Text style={styles.rideFare} allowFontScaling={false}>
                     ${ride.total_fare?.toFixed(2) || '0.00'}
                   </Text>
                   <View style={styles.rideStatusContainer}>
                     <View style={[styles.statusDot, { backgroundColor: '#3B82F6' }]} />
-                    <Text style={[styles.rideStatus, { color: '#3B82F6' }]}>{t('activity.scheduled')}</Text>
+                    <Text style={[styles.rideStatus, { color: '#3B82F6' }]} allowFontScaling={false}>{t('activity.scheduled')}</Text>
                   </View>
                 </View>
               </TouchableOpacity>

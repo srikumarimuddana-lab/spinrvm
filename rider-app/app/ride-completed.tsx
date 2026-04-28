@@ -257,6 +257,7 @@ function RideCompletedScreenContent() {
               }}
               accessibilityRole="button"
               accessibilityLabel="Copy receipt to clipboard"
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
             >
               <Ionicons name="copy-outline" size={18} color={colors.textDim} />
             </TouchableOpacity>
@@ -369,7 +370,7 @@ function RideCompletedScreenContent() {
 
         {/* Fare Card */}
         <View style={styles.fareCard}>
-          <Text style={styles.fareAmount}>${fare.toFixed(2)}</Text>
+          <Text style={styles.fareAmount} allowFontScaling={false}>${fare.toFixed(2)}</Text>
           <View style={styles.paymentBadge}>
             <Ionicons name="card" size={14} color={colors.textDim} />
             <Text style={styles.paymentText}>
@@ -378,7 +379,7 @@ function RideCompletedScreenContent() {
             {alreadyPaid && (
               <>
                 <Ionicons name="checkmark-circle" size={14} color="#10B981" />
-                <Text style={{ fontSize: 11, fontWeight: '700', color: '#10B981' }}>PAID</Text>
+                <Text style={{ fontSize: 11, fontWeight: '700', color: '#10B981' }} allowFontScaling={false}>PAID</Text>
               </>
             )}
           </View>
@@ -387,19 +388,19 @@ function RideCompletedScreenContent() {
           <View style={styles.statsRow}>
             <View style={styles.stat}>
               <Ionicons name="time-outline" size={18} color={colors.textDim} />
-              <Text style={styles.statVal}>{duration} min</Text>
+              <Text style={styles.statVal} allowFontScaling={false}>{duration} min</Text>
               <Text style={styles.statLbl}>Duration</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.stat}>
               <Ionicons name="speedometer-outline" size={18} color={colors.textDim} />
-              <Text style={styles.statVal}>{distance.toFixed(1)} km</Text>
+              <Text style={styles.statVal} allowFontScaling={false}>{distance.toFixed(1)} km</Text>
               <Text style={styles.statLbl}>Distance</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.stat}>
               <Ionicons name="cash-outline" size={18} color={colors.textDim} />
-              <Text style={styles.statVal}>${fare.toFixed(2)}</Text>
+              <Text style={styles.statVal} allowFontScaling={false}>${fare.toFixed(2)}</Text>
               <Text style={styles.statLbl}>Total</Text>
             </View>
           </View>
@@ -485,6 +486,7 @@ function RideCompletedScreenContent() {
                   keyboardType="decimal-pad"
                   value={customTip}
                   onChangeText={(t) => { setCustomTip(t); setSelectedTip(null); }}
+                  returnKeyType="done"
                 />
               </View>
             </View>

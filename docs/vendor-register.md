@@ -29,7 +29,7 @@ changes its DPA, data region, or service scope.
 
 | Item | Owner | Due |
 |------|-------|-----|
-| File signed DPA with Supabase | Legal | Q3 2026 |
+| File signed DPA with Supabase + verify ca-central-1 region; set `SUPABASE_REGION=ca-central-1` in Railway (startup check fires until done — see `reports/legal/supabase-region-attestation-checklist.md`) | Legal + Engineering | Q2 2026 |
 | File signed DPA with Vercel | Legal | Q3 2026 |
 | File signed DPA with Stripe | Legal | Q3 2026 |
 | Resolve Sentry US ingestion — migrate to EU or DPA addendum (A-PE-P2-5). Steps: (1) Sentry → Settings → Data Storage → request EU migration, or create new EU org at sentry.io, (2) update `SENTRY_DSN` + `NEXT_PUBLIC_SENTRY_DSN` in Vercel to use `ingest.de.sentry.io` endpoint, (3) startup check in `sentry.server.config.ts` will stop logging PIPEDA errors once EU DSN is set. | Engineering + Legal | Q2 2026 |

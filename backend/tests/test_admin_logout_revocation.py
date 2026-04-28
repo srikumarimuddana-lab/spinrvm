@@ -126,8 +126,11 @@ async def test_admin_logout_blacklists_jti():
     redis_set_mock = AsyncMock()
     revoke_mock = AsyncMock()
 
-    request_mock = MagicMock()
-    request_mock.state = MagicMock()
+    from starlette.requests import Request as StarletteRequest
+
+    scope = {"type": "http", "method": "POST", "headers": [], "path": "/api/admin/auth/logout", "query_string": b""}
+    request_mock = StarletteRequest(scope=scope)
+    request_mock.state.user = None
 
     from backend.routes.admin.auth import LogoutRequest
 

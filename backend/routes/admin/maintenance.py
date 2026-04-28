@@ -161,6 +161,7 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
         {"timestamp": {"$gte": day_start_iso, "$lt": day_end_iso}},
         order="timestamp",
         limit=10000,  # enough to identify all active drivers; per-driver aggregation is done in SQL
+        columns="driver_id",
     )
     drivers_with_gps: set = set()
     for p in presence_rows or []:

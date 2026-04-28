@@ -137,7 +137,7 @@ class TestDriverCancelNotifiesRider:
         that's a safety / fraud vector."""
         from backend.routes import drivers as drv_mod
 
-        in_progress = _ride(status="trip_in_progress", driver_id=DRIVER_ID)
+        in_progress = _ride(status="in_progress", driver_id=DRIVER_ID)
 
         with (
             patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[_driver_row()])),

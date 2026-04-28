@@ -77,10 +77,40 @@ None currently open in production (pre-launch).
 | #133 | CI + PIPEDA | `@react-native/jest-preset@0.85.2` added to rider/driver devDeps (RN 0.85.2 CI fix); `send_default_pii=False` in Sentry init (PIPEDA) |
 | #134 | B-P2-2 ext. | Unknown Stripe event types now return early without stamping `processed_at`; `test_unknown_event_type_not_marked_processed` added |
 | #135 | test fix | `test_p2_payout_t4a.py` — `MagicMock` → `AsyncMock` for `get_rows`/`get_rides_for_driver` (non-awaitable cursor crash) |
+| #127 | **B-P1-5** (auth.py 2 sites — profile_complete self-heal, logout-all WS kick) + **B-P2-6** (DSAR `asyncio.gather` two-wave pattern, ~3× speedup) + **B-P3-2** (±10% per-tick jitter on surge / scheduled / payment-retry loops) |
+| #137 | **B-P3-1** (WS `broadcast()` + `_deliver_broadcast_local()` per-message 2 s timeout) + **B-P2-3** (App Check log lines bind `req_id=` for X-Request-ID correlation) + **B-P2-7** (explicit `_DB_EXECUTOR` ThreadPoolExecutor with 32 workers, configurable via `DB_THREAD_POOL_SIZE`) |
+| #138 | **B-P2-5** (`idx_drivers_dispatch_ready` partial composite index — turns the dispatch query from sequential scan to index-only lookup) + **B-P2-4** (audit_logs DELETE lockdown via `audit_logs_no_delete` trigger gated by `spinr.audit_logs.allow_delete` session flag) |
+| #166 | **Retention regression fix** — migration 57 `CREATE OR REPLACE purge_pii_retention()` restores migration 51's audit-log INSERT schema fix and 7-year `audit_logs` purge step. PR #141 had silently overwritten both, breaking PIPEDA + SK Transportation Act retention enforcement. Caught by conflict-safety audit on a follow-up PR; patched within 30 min of detection. See `docs/runbooks/migration-conflict-detection.md`. |
+| #173 | **B-P3-3** (sub-processor monitor) — `.github/workflows/subprocessor-monitor.yml` runs every Monday 13:00 UTC; opens a `subprocessor-review` issue when `docs/vendor-inventory.md` hasn't been touched in 90+ days. Idempotent. Closes the cadence-enforcement gap PIPEDA s.4.1.3 + SOC 2 CC9.2 require. |
+| #176 | **Migration conflict-detection runbook** (`docs/runbooks/migration-conflict-detection.md`) — 5-step pre-merge checklist for any PR touching `backend/migrations/*.sql` to catch the slot-collision + outdated-fork failure mode that broke retention in #166. Includes verbatim incident timeline. |
+| #182 | **B-P2-8 partial** — `backend/Dockerfile` builder pinned to `python:3.12.9-slim` (was `3.12-slim` mutable tag); `docs/runbooks/docker-image-pinning.md` documents the SHA256 digest-pin procedure (manual step, requires `docker pull`). RO-root half noted as future host-migration item (Railway doesn't expose). |
+
+## Lessons learned (2026-04-28 incident)
+
+PRs #138 and #141 both used migration slot 56 to `CREATE OR REPLACE` the same Postgres function (`purge_pii_retention`). The alphabetically-second migration (PR #141) was forked from migration **50** instead of migration **51**, silently regressing two intervening fixes — including a known-bad `audit_logs` INSERT column list that migration 51 had explicitly fixed with the comment "Today the function would error on first real run and roll back the entire purge transaction — silently disabling the retention job." The bug shipped to main; the daily retention loop was failing on every tick from the moment #141 merged until #166's forward-fix landed (~45 minutes silently broken in pre-launch, no impact to users).
+
+**What caught it**: the next PR's conflict-safety audit (a 5-minute `git log origin/main` + diff every shared `CREATE OR REPLACE` target) found the regression before any production-impacting ride happened.
+
+**What we changed**: `docs/runbooks/migration-conflict-detection.md` (PR #176) makes the conflict-safety check explicit for every future migration author. The runbook also documents what existing CI guard rails catch (append-only, forward-compat, lock-safety) and what they don't (slot-collision + outdated-fork — the failure mode that bit us). A future CI enhancement to walk every PR's `CREATE OR REPLACE` targets across open + recently-merged PRs is tracked as the next layer.
 
 ## Next sprint candidates
 
 - **Sentry alert rule**: Create a Sentry alert for `REFRESH TOKEN REUSE DETECTED` → PagerDuty. ~30 min in Sentry UI. No code required.
+- **L-P0-3 WAV dispatch**: Wheelchair-accessible vehicle matching in dispatch — needs `/plan` (5+ files + migration). Saskatchewan legal requirement.
+- **L-P1-2 authStore.ts**: 16+ `any` types on critical auth flows in `shared/store/authStore.ts`.
+- **L-P1-4 earnings GST/BN**: T4A export missing `gst_registered`/`gst_bn` — migration + drivers.py needed.
+- **Dockerfile SHA256 digest pin** (B-P2-8 second half): manual step, follow `docs/runbooks/docker-image-pinning.md`. Quarterly cadence.
+- **Read-only-root-filesystem** (B-P2-8 third half): host migration off Railway (Fly.io / K8s / ECS); not gating launch.
+- **CI enhancement: cross-PR migration target check**: walk every open + recently-merged PR's `CREATE OR REPLACE` targets, fail when two PRs modify the same target without explicit annotation. Closes the gap that this session's incident exposed.
+
+## Launch readiness shipped
+
+| PR | Item | What |
+|---|---|---|
+| #172 | L-P0-1 | `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` validated at startup in production |
+| #172 | L-P1-1 | `logger.error` on startup if Redis missing in production |
+| #172 | L-P0-2 | Railway primary / Render fallback (was inverted); `--fail-with-body` on curl |
+| #172 | L-P0-4 | Smoke test extended: JSON validation + auth middleware (401 not 500) + fare service health |
 
 ---
 

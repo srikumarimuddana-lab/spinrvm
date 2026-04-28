@@ -140,6 +140,15 @@ class Settings(BaseSettings):
                         "audience check is gated on this value; an unset env var "
                         "would silently allow cross-app token reuse (DV-10)."
                     )
+
+            for field in ("SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"):
+                if not getattr(self, field, ""):
+                    raise ValueError(
+                        f"{field} must be set in production. An empty value causes "
+                        "the Supabase client to initialise successfully but fail on "
+                        "every database call, producing a misleading 500 at runtime "
+                        "rather than a clean startup error."
+                    )
         return self
 
     @property

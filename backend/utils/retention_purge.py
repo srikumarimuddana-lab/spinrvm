@@ -108,6 +108,17 @@ async def run_retention_purge_tick(dry_run: bool = False) -> Optional[dict]:
     return data
 
 
+INTERVAL_SECONDS = 86400  # 24 h nominal; actual sleep includes ±10% jitter
+
+
+def _metric_gauge(name: str, value: float, labels: dict) -> None:
+    pass  # stub — wire to real metrics system when Prometheus/OpenMetrics lands
+
+
+def _metric_inc(name: str, labels: dict | None = None) -> None:
+    pass  # stub
+
+
 def _seconds_until_next(target_hour_utc: int) -> float:
     """How long to sleep until the next 03:00 UTC (or whatever hour is
     requested). Always returns a positive value."""
@@ -118,33 +129,32 @@ def _seconds_until_next(target_hour_utc: int) -> float:
     return (target - now).total_seconds()
 
 
-async def retention_purge_loop(
-    interval_seconds: int = 86400,
-    target_hour_utc: int = 3,
-) -> None:
-    """Daily retention-purge loop. Sleeps until the next `target_hour_utc`
-    on first iteration, then runs every `interval_seconds` (24h).
+async def _tick() -> None:
+    """One purge iteration: acquire the replica lock then call run_retention_purge_tick."""
+    acquired = await redis_set_nx(_LOCK_KEY, _pod_id(), _LOCK_TTL_SECONDS)
+    if acquired:
+        await run_retention_purge_tick(dry_run=False)
+    else:
+        logger.info("retention_purge_loop: another replica holds the lock, skipping")
 
-    Idempotent across replicas via Redis SET NX EX. If a different replica
-    already holds the lock for today's window, this replica skips silently;
-    it does not retry until the next interval.
+
+async def retention_purge_loop() -> None:
+    """Daily retention-purge loop with ±10% jitter sleep.
+
+    Runs every ~24 h (INTERVAL_SECONDS ± 10%). Idempotent across replicas via
+    the Redis SET NX EX leader lock inside _tick.
     """
-    first_sleep = _seconds_until_next(target_hour_utc)
-    logger.info(
-        "retention_purge_loop: first run in %.0fs (target %02d:00 UTC)",
-        first_sleep,
-        target_hour_utc,
-    )
-    await asyncio.sleep(first_sleep)
-
     while True:
+        t0 = asyncio.get_event_loop().time()
         try:
-            acquired = await redis_set_nx(_LOCK_KEY, _pod_id(), _LOCK_TTL_SECONDS)
-            if acquired:
-                await run_retention_purge_tick(dry_run=False)
-            else:
-                logger.info("retention_purge_loop: another replica holds the lock, skipping")
+            await _tick()
+            _metric_gauge(
+                "spinr_bgloop_duration_ms",
+                (asyncio.get_event_loop().time() - t0) * 1000,
+                {"loop": "retention_purge"},
+            )
         except Exception:
             logger.exception("retention_purge_loop: tick raised")
+            _metric_inc("spinr_bgloop_errors_total", {"loop": "retention_purge"})
         _record_heartbeat("retention_purge (24h)")
-        await asyncio.sleep(interval_seconds)
+        await asyncio.sleep(INTERVAL_SECONDS * (0.9 + random.random() * 0.2))

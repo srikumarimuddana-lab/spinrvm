@@ -25,11 +25,12 @@ jest.mock('react-native', () => ({
   Platform: { OS: 'web' },
 }));
 
-jest.mock('../../config', () => ({
-  API_URL: 'http://localhost:8000',
+jest.mock('../../config/spinr.config', () => ({
+  __esModule: true,
+  default: { backendUrl: 'http://localhost:8000' },
 }));
 
-jest.mock('../../services/firebase', () => ({
+jest.mock('../../config/firebaseConfig', () => ({
   auth: { currentUser: null, onAuthStateChanged: null },
   isFirebaseConfigured: false,
 }));

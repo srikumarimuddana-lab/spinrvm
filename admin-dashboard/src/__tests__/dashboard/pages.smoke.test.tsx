@@ -20,6 +20,7 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), back: vi.fn() }),
   useSearchParams: () => new URLSearchParams(),
   usePathname: () => "/dashboard",
+  redirect: vi.fn(),
 }));
 
 vi.mock("next/link", () => ({
@@ -43,25 +44,27 @@ vi.mock("@/store/authStore", () => ({
 }));
 
 // Stub every API function to avoid real network calls.
-vi.mock("@/lib/api", () => {
+// Use importOriginal so Vitest can enumerate all named exports from the real
+// module and validate them — a Proxy return value doesn't satisfy that check.
+vi.mock("@/lib/api", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
   const noop = vi.fn().mockResolvedValue({});
   const list = vi.fn().mockResolvedValue([]);
-  return new Proxy(
-    {},
-    {
-      get(_, key) {
-        // Functions that return arrays
-        if (
-          String(key).startsWith("get") ||
-          String(key).startsWith("list") ||
-          String(key).startsWith("fetch")
-        ) {
-          return list;
-        }
-        return noop;
-      },
+  const overrides: Record<string, unknown> = {};
+  for (const key of Object.keys(actual)) {
+    if (typeof actual[key] === "function") {
+      const k = String(key);
+      overrides[key] =
+        k.startsWith("get") || k.startsWith("list") || k.startsWith("fetch")
+          ? list
+          : noop;
+    } else {
+      overrides[key] = actual[key];
     }
-  );
+  }
+  // getRides returns a paginated object, not a plain array
+  overrides.getRides = vi.fn().mockResolvedValue({ rides: [], total_count: 0 });
+  return overrides;
 });
 
 vi.mock("@/lib/utils", () => ({
@@ -73,20 +76,21 @@ vi.mock("@/lib/utils", () => ({
 vi.mock("@/lib/export-csv", () => ({ exportToCsv: vi.fn() }));
 
 // Stub all Lucide icons to avoid SVG rendering issues.
-vi.mock("lucide-react", () =>
-  new Proxy(
-    {},
-    {
-      get(_, key) {
-        const Icon = ({ className }: { className?: string }) => (
-          <span className={className} data-icon={String(key)} />
-        );
-        Icon.displayName = String(key);
-        return Icon;
-      },
-    }
-  )
-);
+// importOriginal lets Vitest enumerate named exports; we replace each with a
+// lightweight stub component so the strict export-validation check passes.
+vi.mock("lucide-react", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  const overrides: Record<string, unknown> = {};
+  for (const key of Object.keys(actual)) {
+    const k = String(key);
+    const Icon = ({ className }: { className?: string }) => (
+      <span className={className} data-icon={k} />
+    );
+    Icon.displayName = k;
+    overrides[key] = Icon;
+  }
+  return overrides;
+});
 
 // Stub shadcn/ui components to lightweight HTML equivalents.
 const stubComponents = (names: string[]) =>

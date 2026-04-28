@@ -383,7 +383,7 @@ const client = {
       headers,
     });
 
-    if (!response.ok) await handleApiError(response, 'GET', url, () => client.get(url, config));
+    if (!response.ok) return await handleApiError(response, 'GET', url, () => client.get(url, config));
 
     const data = await response.json();
     return { data, status: response.status };
@@ -410,7 +410,7 @@ const client = {
       body: body ? JSON.stringify(body) : undefined,
     });
 
-    if (!response.ok) await handleApiError(response, 'POST', url, () => client.post(url, body, config));
+    if (!response.ok) return await handleApiError(response, 'POST', url, () => client.post(url, body, config));
 
     const data = await response.json();
     return { data, status: response.status };
@@ -441,7 +441,7 @@ const client = {
       body: body === undefined || body === null ? undefined : (isFormData ? body : JSON.stringify(body)),
     });
 
-    if (!response.ok) await handleApiError(response, 'PUT', url, () => client.put(url, body, config));
+    if (!response.ok) return await handleApiError(response, 'PUT', url, () => client.put(url, body, config));
 
     const data = await response.json();
     return { data, status: response.status };
@@ -468,7 +468,7 @@ const client = {
       body: body ? JSON.stringify(body) : undefined,
     });
 
-    if (!response.ok) await handleApiError(response, 'PATCH', url, () => client.patch(url, body, config));
+    if (!response.ok) return await handleApiError(response, 'PATCH', url, () => client.patch(url, body, config));
 
     const data = await response.json();
     return { data, status: response.status };
@@ -494,7 +494,7 @@ const client = {
       headers,
     });
 
-    if (!response.ok) await handleApiError(response, 'DELETE', url, () => client.delete(url, config));
+    if (!response.ok) return await handleApiError(response, 'DELETE', url, () => client.delete(url, config));
 
     const data = await response.json().catch(() => ({} as T));
     return { data, status: response.status };

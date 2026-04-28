@@ -221,7 +221,7 @@ async def _generate_and_store_ride_snapshot(
 
         base = (settings.SUPABASE_URL or "").rstrip("/")
         if not base:
-            logger.warning("SUPABASE_URL not configured; cannot build public snapshot URL")
+            logger.error("SUPABASE_URL not configured; cannot build public snapshot URL")
             return
         url = f"{base}/storage/v1/object/public/{bucket}/{storage_path}"
 
@@ -291,7 +291,7 @@ async def get_driver_config(current_user: dict = Depends(get_current_user)):
     try:
         app_settings = await get_app_settings() or {}
     except Exception as e:
-        logger.warning(f"get_driver_config: failed to read app_settings: {e}")
+        logger.error(f"get_driver_config: failed to read app_settings: {e}", exc_info=True)
         app_settings = {}
 
     def _clamp(value, lo, hi, default):
@@ -1733,14 +1733,14 @@ async def get_active_ride(current_user: dict = Depends(get_current_user)):
     try:
         rider = await db_supabase.get_user_by_id(ride["rider_id"])
     except Exception as e:
-        logger.warning(f"get_active_ride: failed to load rider {ride['rider_id']}: {e}")
+        logger.error(f"get_active_ride: failed to load rider {ride['rider_id']}: {e}", exc_info=True)
         rider = None
     try:
         vehicle_type = (lambda _r: _r[0] if _r else None)(
             await db_supabase.get_rows("vehicle_types", {"id": ride["vehicle_type_id"]}, limit=1)
         )
     except Exception as e:
-        logger.warning(f"get_active_ride: failed to load vehicle_type {ride['vehicle_type_id']}: {e}")
+        logger.error(f"get_active_ride: failed to load vehicle_type {ride['vehicle_type_id']}: {e}", exc_info=True)
         vehicle_type = None
 
     # R-P1-28: Strip PII fields from the rider object — drivers only need
@@ -1921,7 +1921,7 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
             },
         )
     except Exception as _e:
-        logger.warning(f"Could not log ride decline to audit_logs: {_e}")
+        logger.error(f"Could not log ride decline to audit_logs: {_e}", exc_info=True)
 
     # GAP FIX: Re-match to find the next available driver
     try:
@@ -3240,7 +3240,7 @@ async def verify_subscription_session(
     try:
         session = stripe.checkout.Session.retrieve(session_id, api_key=stripe_key)
     except Exception as e:
-        logger.warning(f"[SUBSCRIBE] verify-session Stripe error: {e}")
+        logger.error(f"[SUBSCRIBE] verify-session Stripe error: {e}", exc_info=True)
         return {"status": "pending"}
 
     if session.payment_status == "paid":
@@ -3380,7 +3380,9 @@ async def check_expiring_subscriptions():
                 app_settings = await get_app_settings()
                 require_sub = bool(app_settings.get("require_driver_subscription", False))
             except Exception as e:
-                logger.warning(f"[SUB-EXPIRY] get_app_settings failed, skipping enforcement this tick: {e}")
+                logger.error(
+                    f"[SUB-EXPIRY] get_app_settings failed, skipping enforcement this tick: {e}", exc_info=True
+                )
                 require_sub = False
 
             warned_count = 0
@@ -3411,7 +3413,7 @@ async def check_expiring_subscriptions():
                             {"status": "expired"},
                         )
                     except Exception as e:
-                        logger.warning(f"[SUB-EXPIRY] Failed to mark sub {sub['id']} expired: {e}")
+                        logger.error(f"[SUB-EXPIRY] Failed to mark sub {sub['id']} expired: {e}", exc_info=True)
                         continue
 
                     if not require_sub:
@@ -3442,7 +3444,7 @@ async def check_expiring_subscriptions():
                     try:
                         await clear_presence(driver["id"])
                     except Exception as e:
-                        logger.warning(f"[SUB-EXPIRY] clear_presence failed for {driver['id']}: {e}")
+                        logger.error(f"[SUB-EXPIRY] clear_presence failed for {driver['id']}: {e}", exc_info=True)
 
                     if driver.get("user_id"):
                         manager.disconnect(f"driver_{driver['user_id']}")
@@ -3466,7 +3468,7 @@ async def check_expiring_subscriptions():
                             },
                         )
                     except Exception as e:
-                        logger.warning(f"[SUB-EXPIRY] activity log insert failed for {driver['id']}: {e}")
+                        logger.error(f"[SUB-EXPIRY] activity log insert failed for {driver['id']}: {e}", exc_info=True)
 
                     if driver.get("user_id"):
                         try:
@@ -3525,7 +3527,7 @@ async def check_expiring_subscriptions():
             )
 
         except Exception as e:
-            logger.warning(f"[SUB-EXPIRY] Background check error: {e}")
+            logger.error(f"[SUB-EXPIRY] Background check error: {e}", exc_info=True)
 
         try:
             from utils.loop_monitor import record_heartbeat as _lm_hb

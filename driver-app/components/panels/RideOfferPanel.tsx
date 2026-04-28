@@ -91,7 +91,7 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                             {incomingRide.distance_km != null && (
                                 <View style={styles.tripStat}>
                                     <Ionicons name="navigate-outline" size={18} color="#fff" />
-                                    <Text style={styles.tripStatValue}>
+                                    <Text style={styles.tripStatValue} allowFontScaling={false}>
                                         {incomingRide.distance_km.toFixed(1)} km
                                     </Text>
                                     <Text style={styles.tripStatLabel}>trip distance</Text>
@@ -100,7 +100,7 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                             {incomingRide.duration_minutes != null && (
                                 <View style={styles.tripStat}>
                                     <Ionicons name="time-outline" size={18} color="#fff" />
-                                    <Text style={styles.tripStatValue}>
+                                    <Text style={styles.tripStatValue} allowFontScaling={false}>
                                         {Math.round(incomingRide.duration_minutes)} min
                                     </Text>
                                     <Text style={styles.tripStatLabel}>estimated</Text>
@@ -135,7 +135,7 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                             {incomingRide.rider_rating && (
                                 <View style={styles.ratingBadge}>
                                     <Ionicons name="star" size={12} color={COLORS.gold} />
-                                    <Text style={styles.ratingText}>{incomingRide.rider_rating.toFixed(1)}</Text>
+                                    <Text style={styles.ratingText} allowFontScaling={false}>{incomingRide.rider_rating.toFixed(1)}</Text>
                                 </View>
                             )}
                         </View>

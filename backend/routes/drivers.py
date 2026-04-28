@@ -1758,15 +1758,17 @@ async def get_ride_history(
         raise HTTPException(status_code=404, detail="Driver not found")
 
     try:
-        total = await db_supabase.count_documents("rides", {"driver_id": driver["id"]})
+        history_filter = {
+            "driver_id": driver["id"],
+            "status": {"$in": ["completed", "cancelled"]},
+        }
+        total = await db_supabase.count_documents("rides", history_filter)
         rides = await db_supabase.get_rows(
             "rides",
-            {
-                "driver_id": driver["id"],
-            },
+            history_filter,
             order="created_at",
             desc=True,
-            limit=limit,
+            limit=min(limit, 500),
             offset=offset,
         )
     except Exception as e:

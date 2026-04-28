@@ -1173,21 +1173,18 @@ async def get_ride_history(
             "rider_id": current_user["id"],
             "status": {"$in": ["completed", "cancelled"]},
         },
-        limit=2000,
+        order="created_at",
+        desc=True,
+        limit=500,
     )
 
-    # Exclude cancelled rides that never had a driver (auto-expired searching)
-    result = []
-    for ride in all_rides:
-        status = ride.get("status", "")
-        had_driver = bool(ride.get("driver_id"))
-
-        if status == "completed":
-            result.append(ride)
-        elif status == "cancelled" and had_driver:
-            result.append(ride)
-
-    result.sort(key=lambda r: str(r.get("created_at", "")), reverse=True)
+    # Post-filter: exclude cancelled rides where no driver was ever matched
+    # (these are searching/auto-expired cancellations with no trip value to the rider)
+    result = [
+        r
+        for r in all_rides
+        if r.get("status") == "completed" or (r.get("status") == "cancelled" and r.get("driver_id"))
+    ]
 
     # Cursor-based pagination: skip rides up to and including the cursor id
     if before:

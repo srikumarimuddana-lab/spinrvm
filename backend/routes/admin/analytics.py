@@ -8,7 +8,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 try:
     from ...db import db
@@ -63,7 +63,7 @@ async def get_cancellation_breakdown(
         logger.error(f"Failed to fetch cancelled rides: {e}", exc_info=True)
         from fastapi import HTTPException as _HTTPException
 
-        raise _HTTPException(status_code=503, detail="analytics_unavailable") from e
+        raise _HTTPException(status_code=503, detail="Analytics data unavailable — database error") from e
 
     # Categorize cancellation reasons
     reason_counter = Counter()
@@ -143,9 +143,7 @@ async def get_driver_acceptance_rates(
         drivers = await db.get_rows("drivers", {}, limit=500)
     except Exception as e:
         logger.error(f"Failed to fetch drivers: {e}", exc_info=True, extra={"domain": "admin"})
-        from fastapi import HTTPException as _HTTPException
-
-        raise _HTTPException(status_code=503, detail="analytics_unavailable") from e
+        raise HTTPException(status_code=503, detail="analytics_unavailable") from e
 
     if service_area_id:
         drivers = [d for d in drivers if d.get("service_area_id") == service_area_id]
@@ -262,7 +260,7 @@ async def get_analytics_overview(
         logger.error(f"Failed to fetch rides: {e}", exc_info=True)
         from fastapi import HTTPException as _HTTPException
 
-        raise _HTTPException(status_code=503, detail="analytics_unavailable") from e
+        raise _HTTPException(status_code=503, detail="Analytics data unavailable — database error") from e
 
     total = len(period_rides)
     completed = sum(1 for r in period_rides if r.get("status") == "completed")

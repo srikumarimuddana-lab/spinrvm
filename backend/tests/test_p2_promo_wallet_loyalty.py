@@ -97,8 +97,9 @@ class TestValidatePromo:
     """
 
     async def _call(self, code: str, ride_fare: float, promo_row: dict, user_uses: int = 0):
-        from backend.routes.promotions import ValidatePromoRequest, validate_promo
         from starlette.requests import Request as StarletteRequest
+
+        from backend.routes.promotions import ValidatePromoRequest, validate_promo
 
         req = ValidatePromoRequest(code=code, ride_fare=Decimal(str(ride_fare)))
         mock_request = StarletteRequest(
@@ -204,9 +205,9 @@ class TestValidatePromo:
 
     async def test_unknown_code_raises_404(self):
         from fastapi import HTTPException
+        from starlette.requests import Request as StarletteRequest
 
         from backend.routes.promotions import ValidatePromoRequest, validate_promo
-        from starlette.requests import Request as StarletteRequest
 
         req = ValidatePromoRequest(code="GHOST", ride_fare=Decimal("20.00"))
         mock_request = StarletteRequest(

@@ -74,16 +74,22 @@ describe('rideStore — triggerEmergency (P2-14 / R13)', () => {
   });
 
   it('on API failure throws so SOSButton can detect failure and retry', async () => {
+    jest.useFakeTimers();
     const err = new Error('Network error');
-    mockPost.mockRejectedValue(err);
+    // Use mockImplementation so the rejection persists across all 3 retry attempts
+    // (triggerEmergency retries up to 3× with 1s/2s backoff before rethrowing)
+    mockPost.mockImplementation(() => Promise.reject(err));
+
+    const triggerPromise = useRideStore.getState().triggerEmergency('ride-003', 43.0, -79.0);
+    // Advance fake timers past all retry delays (1000ms + 2000ms = 3000ms)
+    await jest.runAllTimersAsync();
 
     // triggerEmergency must rethrow — SOSButton's retry loop catches this to
     // determine backendOk=false and show "Alert Not Sent" instead of "Alert Sent"
-    await expect(
-      useRideStore.getState().triggerEmergency('ride-003', 43.0, -79.0),
-    ).rejects.toThrow('Network error');
+    await expect(triggerPromise).rejects.toThrow('Network error');
 
     // rideStore must NOT show its own Alert — that's SOSButton's responsibility
     expect(mockAlert).not.toHaveBeenCalled();
+    jest.useRealTimers();
   });
 });

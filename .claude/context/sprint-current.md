@@ -81,3 +81,26 @@ None currently open in production (pre-launch).
 ## Next sprint candidates
 
 - **Sentry alert rule**: Create a Sentry alert for `REFRESH TOKEN REUSE DETECTED` → PagerDuty. ~30 min in Sentry UI. No code required.
+
+---
+
+# Sprint 2 — Backend Safety Hardening
+
+**Sprint goal:** Close the top P1 backend safety and data-integrity gaps from the driver-app verification pass (2026-04-23): suspended-driver dispatch gap, document-expiry `$set` anti-pattern, and open items from `OPEN-ITEMS-TRACKER.md` section A/B.
+
+**Status (2026-04-28):** In progress.
+
+## In-flight
+
+| Ticket | Owner | State | Notes |
+|---|---|---|---|
+| B-S2-1 | — | pending | **DV-1 / P0-5**: Migration 55 — add `status != 'suspended'` to `find_nearby_drivers` RPC WHERE clause. Suspended drivers with `is_online=true` can currently receive ride offers. |
+| B-S2-2 | — | pending | **DV-2 / P0-5**: `document_expiry.py` — remove `{"$set": ...}` wrapper from both `update_one` calls (lines 115, 180). The db layer strips it, but semantic pollution. |
+
+## Deferred (non-code or future sprint)
+
+| Item | Reason |
+|---|---|
+| DV-3 state machine strings | Not a bug — `"trip_in_progress"` is GPS phase name, `"in_progress"` is ride status. Intentional mapping confirmed in `websocket.py`. |
+| DV-4 Stripe idempotency | Already correct — `ride-charge-{ride_id}` is ride-scoped, docstring documents the design. |
+| Sentry alert rule (REFRESH TOKEN REUSE) | Requires Sentry UI; no code change. |

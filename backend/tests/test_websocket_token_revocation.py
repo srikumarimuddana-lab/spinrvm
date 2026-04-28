@@ -54,7 +54,9 @@ class TestDisconnectUser:
         await mgr.connect(rider_u2, "rider_u2")
 
         closed = await mgr.disconnect_user(
-            "u1", client_types=["rider", "driver"], reason="logout_all",
+            "u1",
+            client_types=["rider", "driver"],
+            reason="logout_all",
         )
 
         assert closed == 2
@@ -64,12 +66,8 @@ class TestDisconnectUser:
         assert "admin_u1" in mgr.active_connections
         assert "rider_u2" in mgr.active_connections
         # Each kicked socket got the reason frame before close.
-        rider_u1.send_json.assert_awaited_once_with(
-            {"type": "session_revoked", "reason": "logout_all"}
-        )
-        driver_u1.send_json.assert_awaited_once_with(
-            {"type": "session_revoked", "reason": "logout_all"}
-        )
+        rider_u1.send_json.assert_awaited_once_with({"type": "session_revoked", "reason": "logout_all"})
+        driver_u1.send_json.assert_awaited_once_with({"type": "session_revoked", "reason": "logout_all"})
         rider_u1.close.assert_awaited_once()
         driver_u1.close.assert_awaited_once()
         # Untouched sockets must NOT have been closed.
@@ -148,14 +146,20 @@ class TestKickUser:
         await mgr.connect(ws, "rider_u5")
 
         with patch.object(
-            code_pubsub, "publish_kick_user", AsyncMock(return_value=True),
+            code_pubsub,
+            "publish_kick_user",
+            AsyncMock(return_value=True),
         ) as publish_kick:
             closed = await mgr.kick_user(
-                "u5", client_types=["rider"], reason="logout_all",
+                "u5",
+                client_types=["rider"],
+                reason="logout_all",
             )
 
         publish_kick.assert_awaited_once_with(
-            "u5", client_types=["rider"], reason="logout_all",
+            "u5",
+            client_types=["rider"],
+            reason="logout_all",
         )
         assert closed == 1
         assert "rider_u5" not in mgr.active_connections
@@ -173,7 +177,9 @@ class TestKickUser:
         await mgr.connect(ws, "driver_u6")
 
         with patch.object(
-            code_pubsub, "publish_kick_user", AsyncMock(return_value=False),
+            code_pubsub,
+            "publish_kick_user",
+            AsyncMock(return_value=False),
         ):
             closed = await mgr.kick_user("u6", client_types=["driver"])
 
@@ -194,7 +200,9 @@ class TestKickUser:
         await mgr.connect(ws, "rider_u7")
 
         with patch.object(
-            code_pubsub, "publish_kick_user", AsyncMock(side_effect=RuntimeError("redis down")),
+            code_pubsub,
+            "publish_kick_user",
+            AsyncMock(side_effect=RuntimeError("redis down")),
         ):
             closed = await mgr.kick_user("u7", client_types=["rider"])
 
@@ -209,9 +217,9 @@ class TestKickUser:
 
 class TestPubSubKickConsumer:
     """Pin the cross-replica wire shape. Two parts:
-      1. publish_kick_user emits a control-shaped JSON envelope.
-      2. The consumer routes that envelope to manager.disconnect_user
-         rather than the legacy _deliver_local path."""
+    1. publish_kick_user emits a control-shaped JSON envelope.
+    2. The consumer routes that envelope to manager.disconnect_user
+       rather than the legacy _deliver_local path."""
 
     @pytest.mark.asyncio
     async def test_publish_kick_user_emits_control_envelope(self):
@@ -230,7 +238,9 @@ class TestPubSubKickConsumer:
         ps._task.done = MagicMock(return_value=False)
 
         ok = await ps.publish_kick_user(
-            "u8", client_types=["rider", "driver"], reason="logout_all",
+            "u8",
+            client_types=["rider", "driver"],
+            reason="logout_all",
         )
 
         assert ok is True
@@ -353,9 +363,7 @@ class TestHeartbeatTokenVersionRecheck:
             )
 
         # Reason frame sent BEFORE the close.
-        ws.send_json.assert_any_await(
-            {"type": "session_revoked", "reason": "token_revoked"}
-        )
+        ws.send_json.assert_any_await({"type": "session_revoked", "reason": "token_revoked"})
         ws.close.assert_awaited_once()
         # Must not have sent a ping after deciding to close.
         ping_calls = [
@@ -405,9 +413,7 @@ class TestHeartbeatTokenVersionRecheck:
         revoke_frames = [
             c
             for c in ws.send_json.await_args_list
-            if c.args
-            and isinstance(c.args[0], dict)
-            and c.args[0].get("type") == "session_revoked"
+            if c.args and isinstance(c.args[0], dict) and c.args[0].get("type") == "session_revoked"
         ]
         assert revoke_frames == []
         # close() must NOT have been called for revocation reasons.

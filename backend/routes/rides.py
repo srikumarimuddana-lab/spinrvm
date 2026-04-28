@@ -1181,7 +1181,8 @@ async def get_ride_history(
     # Post-filter: exclude cancelled rides where no driver was ever matched
     # (these are searching/auto-expired cancellations with no trip value to the rider)
     result = [
-        r for r in all_rides
+        r
+        for r in all_rides
         if r.get("status") == "completed" or (r.get("status") == "cancelled" and r.get("driver_id"))
     ]
 
@@ -1989,7 +1990,7 @@ async def cancel_ride_rider(request: Request, ride_id: str, current_user: dict =
                 await send_push_notification(
                     driver_user_id,
                     title="Cancellation fee earned",
-                    body=f"${fee_amount:.2f} cancellation fee added to your earnings.",
+                    body=f"${fee_dec:.2f} cancellation fee added to your earnings.",
                     data={"type": "cancellation_fee_paid", "ride_id": ride_id},
                 )
         except Exception as fee_err:

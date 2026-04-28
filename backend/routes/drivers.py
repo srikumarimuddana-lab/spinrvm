@@ -63,11 +63,11 @@ async def _vault_encrypt(value: str, hint: str = "") -> str:
         return value
     try:
         from supabase_client import supabase as _sb  # type: ignore[import]
-    except ImportError:
+    except ImportError as exc:
         logger.error(
             "vault_encrypt: supabase_client unavailable for %s — refusing to store plaintext", hint, exc_info=True
         )
-        raise HTTPException(status_code=503, detail="Encryption service unavailable")
+        raise HTTPException(status_code=503, detail="Encryption service unavailable") from exc
     if not _sb:
         logger.error("vault_encrypt: Supabase client not initialised for %s — refusing to store plaintext", hint)
         raise HTTPException(status_code=503, detail="Encryption service unavailable")
@@ -79,9 +79,9 @@ async def _vault_encrypt(value: str, hint: str = "") -> str:
         return str(res.data)
     except HTTPException:
         raise
-    except Exception:
+    except Exception as exc:
         logger.error("vault_encrypt: RPC failed for %s — refusing to store plaintext", hint, exc_info=True)
-        raise HTTPException(status_code=503, detail="Encryption service unavailable")
+        raise HTTPException(status_code=503, detail="Encryption service unavailable") from exc
 
 
 async def _vault_decrypt(value: str, hint: str = "") -> str:

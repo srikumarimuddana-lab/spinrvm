@@ -46,12 +46,12 @@ logger = logging.getLogger(__name__)
 # for the rider/driver OTP endpoint in routes/auth.py.
 limiter = Limiter(key_func=get_remote_address)
 
-# Per-account lockout — 5 failures within the sliding window triggers a
-# 15-minute lockout regardless of IP (defends against distributed attacks
-# that rotate IPs to bypass the per-IP SlowAPI limit above). Stored in
-# Redis with TTL; falls back to in-process dict when Redis is unavailable.
+# Per-account lockout (A-P3-2) — 5 failures within the sliding window
+# triggers a 24-hour lockout regardless of IP (defends against distributed
+# attacks that rotate IPs to bypass the per-IP SlowAPI limit above). Stored
+# in Redis with TTL; falls back to in-process dict when Redis is unavailable.
 _LOGIN_MAX_FAILURES = 5
-_LOGIN_LOCKOUT_TTL_SECONDS = 15 * 60  # 15 minutes
+_LOGIN_LOCKOUT_TTL_SECONDS = 24 * 60 * 60  # 24 hours (was 15 minutes)
 
 
 def _lockout_key(email: str) -> str:
@@ -191,7 +191,7 @@ async def get_session(authorization: Optional[str] = Header(None)):
 
 
 @admin_auth_router.post("/login")
-@limiter.limit("5/minute")
+@limiter.limit("3/30minutes")
 async def admin_login(request: Request, body: LoginRequest):
     """Admin login — supports super admin + staff members with module access.
 
@@ -229,13 +229,17 @@ async def admin_login(request: Request, body: LoginRequest):
     # timing differences cannot reveal whether an account exists.
     if await _is_account_locked(body.email):
         raise HTTPException(
-            status_code=429,
-            detail="Too many failed login attempts. Account temporarily locked. Try again in 15 minutes.",
+            status_code=423,
+            detail="Account locked due to too many failed login attempts. Try again in 24 hours.",
         )
 
-    # 1. Super admin from env. Extra truthy-check on ADMIN_PASSWORD so an
-    # empty/whitespace value in .env cannot match an empty body.password.
-    if settings.ADMIN_PASSWORD and body.email == settings.ADMIN_EMAIL and body.password == settings.ADMIN_PASSWORD:
+    # 1. Super admin from env. Extra truthy-checks so an empty/whitespace
+    # env var cannot match an empty body.password (A-P3-1: bcrypt comparison).
+    if (
+        settings.admin_password_hash
+        and body.email == settings.ADMIN_EMAIL
+        and verify_password(body.password, settings.admin_password_hash)[0]
+    ):
         # admin-001 has no DB row, so token_version stays at 0. We still
         # emit the claim + an exp so a captured super-admin token dies
         # after ADMIN_ACCESS_TOKEN_TTL_HOURS and can't live forever.

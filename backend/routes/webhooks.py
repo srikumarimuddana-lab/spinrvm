@@ -14,12 +14,19 @@ import logging
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
-# IMPORTANT: This router does NOT have a /api/ prefix in the original server.py
-# In server.py: app.post("/webhooks/stripe")
-# So we should probably mount it at root or handle it carefully.
-# However, for consistency with other modules, let's define the router here.
-# The user will need to mount it appropriately in server.py.
 api_router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
+
+# B-P2-2: Explicit allowlist of Stripe event types we process. Any event type
+# NOT in this set is logged and acknowledged (200) without processing.
+# Return 200 (not 400) for unknown events — 400 causes Stripe to retry for
+# 3 days and creates noise; we want Stripe to stop re-sending them.
+_STRIPE_HANDLED_EVENTS = frozenset(
+    {
+        "payment_intent.succeeded",
+        "payment_intent.payment_failed",
+        "checkout.session.completed",
+    }
+)
 
 
 @api_router.post("/stripe")
@@ -213,21 +220,18 @@ async def stripe_webhook(request: Request):
             )
 
     else:
-        _HANDLED = {
-            "payment_intent.succeeded",
-            "payment_intent.payment_failed",
-            "checkout.session.completed",
-        }
-        if event_type in _HANDLED:
+        if event_type in _STRIPE_HANDLED_EVENTS:
             logger.error(
-                f"[WEBHOOK] Event type {event_type!r} matched allowlist but fell through dispatch — "
+                "[WEBHOOK] Event type %r matched allowlist but fell through dispatch — "
                 "handler logic gap; check for missing elif branch",
+                event_type,
                 extra={"domain": "payments", "event_id": event_id},
             )
         else:
             logger.warning(
-                f"[WEBHOOK] Unhandled Stripe event type {event_type!r} — "
-                "add to dispatch or update Stripe dashboard webhook subscriptions",
+                "[WEBHOOK] Unhandled Stripe event type %r — not in _STRIPE_HANDLED_EVENTS. "
+                "Update Stripe dashboard to send only subscribed events.",
+                event_type,
                 extra={"domain": "payments", "event_id": event_id},
             )
         # Leave processed_at NULL for unknown/unhandled events so the nightly

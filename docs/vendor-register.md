@@ -21,6 +21,7 @@ changes its DPA, data region, or service scope.
 | **Firebase / FCM** (push notifications) | Push notifications to rider & driver apps | Device tokens, notification payloads (ride status only — no PII in payload body) | [Google Cloud DPA](https://cloud.google.com/terms/data-processing-addendum) | US (Firebase default) — evaluate CA region or addendum | _TBD_ | Annual | Payloads contain ride_id only; no rider/driver PII. |
 | **Twilio** (SMS / OTP) | OTP delivery, SMS notifications | Phone numbers (last-4 logged only; full number sent to Twilio for delivery) | [Twilio DPA](https://www.twilio.com/en-us/legal/data-protection-addendum) | US (Twilio default) — evaluate addendum | _TBD_ | Annual | Twilio receives full phone number for SMS routing. PIPEDA: minimal retention, no marketing use. |
 | **Railway** (backend hosting) | FastAPI backend runtime | All request traffic passing through backend (auth, rides, payments) | [Railway Privacy Policy](https://railway.app/legal/privacy) — obtain DPA | US (Railway default) — evaluate CA region or addendum | _TBD_ | Annual | Backend processes all app data in transit. Data at rest is in Supabase (CA). |
+| **Google Gemini** (Google LLC) | AI text processing for in-app support and automated responses | User-provided trip context and support text (no PANs; PII must be stripped from prompts per CLAUDE.md before Gemini call) | [Google Cloud DPA](https://cloud.google.com/terms/data-processing-addendum) | US (Google Cloud default) — cross-border transfer under PIPEDA s.4.1.3; disclosure required in privacy policy | _TBD — file DPA_ | Annual | Disclose in privacy policy: "Google LLC, United States". Strip all rider/driver PII (names, phone, addresses) from prompts before sending. Evaluate Google Cloud CA region (`northamerica-northeast1`) as alternative. |
 
 ---
 
@@ -35,6 +36,10 @@ changes its DPA, data region, or service scope.
 | Evaluate Firebase/FCM Canadian region availability | Engineering | Q3 2026 |
 | Evaluate Twilio Canadian routing / addendum | Legal | Q3 2026 |
 | Evaluate Railway Canadian region or addendum | Engineering | Q3 2026 |
+| File signed DPA with Google LLC (Gemini) | Legal | Q3 2026 |
+| Update privacy policy to disclose Gemini / Google LLC (US) cross-border transfer (PIPEDA s.4.1.3) | Legal | Q2 2026 |
+| Evaluate Google Cloud `northamerica-northeast1` for Gemini API calls | Engineering | Q3 2026 |
+| Implement PII-stripping middleware for Gemini prompts | Engineering | Q2 2026 |
 
 ---
 

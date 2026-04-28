@@ -20,8 +20,15 @@ from fastapi.testclient import TestClient
 # breaks tests that do  sys.modules["slowapi"].Limiter.return_value.limit = fn.
 # Replacing it here (conftest runs before collection) makes the stub visible
 # to every test file regardless of collection order.
+from slowapi.errors import RateLimitExceeded as _real_RateLimitExceeded  # noqa: E402
+
 for _slowapi_mod in ("slowapi", "slowapi.extension", "slowapi.errors", "slowapi.util"):
     sys.modules[_slowapi_mod] = MagicMock()
+
+# Restore RateLimitExceeded as a real Exception subclass so that
+# app.add_exception_handler(RateLimitExceeded, ...) passes issubclass() when
+# Starlette builds its ExceptionMiddleware during TestClient startup.
+sys.modules["slowapi.errors"].RateLimitExceeded = _real_RateLimitExceeded
 
 # TASK 9-11: explicitly load anyio plugin so @pytest.mark.anyio is available
 # alongside the asyncio_mode=auto setting in pytest.ini.

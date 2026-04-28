@@ -87,6 +87,8 @@ export default function NotificationsScreen() {
         else if (item.type === 'payout_processed') router.push('/driver/earnings');
         else if (item.type === 'ride_offer') router.push('/driver/');
         else if (item.type === 'quest_earned') router.push('/driver/quests');
+        // DV-9: unknown types stay on the notifications screen (already visible);
+        // no navigation needed — the item is still readable in place.
     };
 
     const renderNotification = ({ item }: { item: Notification }) => {

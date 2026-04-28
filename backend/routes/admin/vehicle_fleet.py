@@ -3,15 +3,19 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 try:
     from ... import db_supabase
+    from ...dependencies import get_admin_user
     from ...routes.fares import invalidate_fare_cache
+    from ...utils.audit_logger import log_admin_action
 except ImportError:
     import db_supabase
+    from dependencies import get_admin_user  # type: ignore[assignment]
     from routes.fares import invalidate_fare_cache
+    from utils.audit_logger import log_admin_action  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +96,7 @@ async def admin_get_vehicle_types():
 
 
 @router.post("/vehicle-types")
-async def admin_create_vehicle_type(vtype: VehicleTypeCreateRequest):
+async def admin_create_vehicle_type(vtype: VehicleTypeCreateRequest, admin: dict = Depends(get_admin_user)):
     """Create vehicle type."""
     doc = {
         "name": vtype.name,
@@ -105,13 +109,16 @@ async def admin_create_vehicle_type(vtype: VehicleTypeCreateRequest):
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     row = await db_supabase.insert_one("vehicle_types", doc)
-    # PERF-001: Invalidate fare cache
     await invalidate_fare_cache()
-    return {"type_id": str(row.get("id") if row and isinstance(row, dict) else "")}
+    new_id = str(row.get("id") if row and isinstance(row, dict) else "")
+    await log_admin_action(admin, "vehicle_type_created", "vehicle_types", new_id, {"name": vtype.name})
+    return {"type_id": new_id}
 
 
 @router.put("/vehicle-types/{type_id}")
-async def admin_update_vehicle_type(type_id: str, vtype: VehicleTypeUpdateRequest):
+async def admin_update_vehicle_type(
+    type_id: str, vtype: VehicleTypeUpdateRequest, admin: dict = Depends(get_admin_user)
+):
     """Update vehicle type."""
     update_payload: Dict[str, Any] = {}
     if vtype.name is not None:
@@ -131,13 +138,15 @@ async def admin_update_vehicle_type(type_id: str, vtype: VehicleTypeUpdateReques
 
     if update_payload:
         await db_supabase.update_one("vehicle_types", {"id": type_id}, update_payload)
-        # PERF-001: Invalidate fare cache
         await invalidate_fare_cache()
+        await log_admin_action(
+            admin, "vehicle_type_updated", "vehicle_types", type_id, {"fields": list(update_payload)}
+        )
     return {"message": "Vehicle type updated"}
 
 
 @router.delete("/vehicle-types/{type_id}")
-async def admin_delete_vehicle_type(type_id: str):
+async def admin_delete_vehicle_type(type_id: str, admin: dict = Depends(get_admin_user)):
     """Delete a vehicle type — only if nothing still references it.
 
     Vehicle types are parents of two structures:
@@ -197,8 +206,8 @@ async def admin_delete_vehicle_type(type_id: str):
         )
 
     await db_supabase.delete_many("vehicle_types", {"id": type_id})
-    # PERF-001: Invalidate fare cache
     await invalidate_fare_cache()
+    await log_admin_action(admin, "vehicle_type_deleted", "vehicle_types", type_id, {"name": vt_name})
     return {"message": "Vehicle type deleted"}
 
 
@@ -213,7 +222,7 @@ async def admin_get_fare_configs():
 
 
 @router.post("/fare-configs")
-async def admin_create_fare_config(config: FareConfigCreateRequest):
+async def admin_create_fare_config(config: FareConfigCreateRequest, admin: dict = Depends(get_admin_user)):
     """Create fare configuration."""
     doc = {
         "name": config.name,
@@ -230,13 +239,16 @@ async def admin_create_fare_config(config: FareConfigCreateRequest):
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     row = await db_supabase.insert_one("fare_configs", doc)
-    # PERF-001: Invalidate fare cache
     await invalidate_fare_cache()
-    return {"config_id": str(row.get("id") if row and isinstance(row, dict) else "")}
+    new_id = str(row.get("id") if row and isinstance(row, dict) else "")
+    await log_admin_action(admin, "fare_config_created", "fare_configs", new_id, {"name": config.name})
+    return {"config_id": new_id}
 
 
 @router.put("/fare-configs/{config_id}")
-async def admin_update_fare_config(config_id: str, config: FareConfigUpdateRequest):
+async def admin_update_fare_config(
+    config_id: str, config: FareConfigUpdateRequest, admin: dict = Depends(get_admin_user)
+):
     """Update fare configuration."""
     updates: Dict[str, Any] = {}
     if config.name is not None:
@@ -256,17 +268,17 @@ async def admin_update_fare_config(config_id: str, config: FareConfigUpdateReque
 
     if updates:
         await db_supabase.update_one("fare_configs", {"id": config_id}, updates)
-        # PERF-001: Invalidate fare cache
         await invalidate_fare_cache()
+        await log_admin_action(admin, "fare_config_updated", "fare_configs", config_id, {"fields": list(updates)})
     return {"message": "Fare configuration updated"}
 
 
 @router.delete("/fare-configs/{config_id}")
-async def admin_delete_fare_config(config_id: str):
+async def admin_delete_fare_config(config_id: str, admin: dict = Depends(get_admin_user)):
     """Delete fare configuration."""
     await db_supabase.delete_many("fare_configs", {"id": config_id})
-    # PERF-001: Invalidate fare cache
     await invalidate_fare_cache()
+    await log_admin_action(admin, "fare_config_deleted", "fare_configs", config_id)
     return {"message": "Fare configuration deleted"}
 
 
@@ -274,7 +286,7 @@ async def admin_delete_fare_config(config_id: str):
 
 
 @router.post("/rides/{ride_id}/lost-and-found")
-async def admin_report_lost_item(ride_id: str, req: LostAndFoundRequest):
+async def admin_report_lost_item(ride_id: str, req: LostAndFoundRequest, admin: dict = Depends(get_admin_user)):
     """Report a lost item from a ride and notify the driver."""
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
@@ -296,6 +308,7 @@ async def admin_report_lost_item(ride_id: str, req: LostAndFoundRequest):
     }
 
     item = await db_supabase.create_lost_and_found(item_data)
+    await log_admin_action(admin, "lost_item_reported", "lost_and_found", item["id"], {"ride_id": ride_id})
 
     # Send push notification to driver
     try:
@@ -313,7 +326,6 @@ async def admin_report_lost_item(ride_id: str, req: LostAndFoundRequest):
                     f"A rider reported a lost item: {req.item_description}. Please check your vehicle.",
                     {"type": "lost_and_found", "ride_id": ride_id},
                 )
-                # Update status to driver_notified
                 await db_supabase.update_lost_and_found(
                     item["id"],
                     {
@@ -328,7 +340,7 @@ async def admin_report_lost_item(ride_id: str, req: LostAndFoundRequest):
 
 
 @router.put("/lost-and-found/{item_id}/resolve")
-async def admin_resolve_lost_item(item_id: str, req: LostAndFoundResolveRequest):
+async def admin_resolve_lost_item(item_id: str, req: LostAndFoundResolveRequest, admin: dict = Depends(get_admin_user)):
     """Resolve or mark a lost and found item as unresolved."""
     update_data: Dict[str, Any] = {
         "status": req.status,
@@ -342,6 +354,7 @@ async def admin_resolve_lost_item(item_id: str, req: LostAndFoundResolveRequest)
     result = await db_supabase.update_lost_and_found(item_id, update_data)
     if not result:
         raise HTTPException(status_code=404, detail="Item not found")
+    await log_admin_action(admin, "lost_item_resolved", "lost_and_found", item_id, {"status": req.status})
     return result
 
 
@@ -365,7 +378,7 @@ async def admin_list_lost_and_found(
 
 
 @router.put("/lost-and-found/{item_id}")
-async def admin_update_lost_item(item_id: str, req: LostAndFoundUpdateRequest):
+async def admin_update_lost_item(item_id: str, req: LostAndFoundUpdateRequest, admin: dict = Depends(get_admin_user)):
     """Update a lost and found item."""
     update: Dict[str, Any] = {}
     if req.item_description is not None:
@@ -378,11 +391,13 @@ async def admin_update_lost_item(item_id: str, req: LostAndFoundUpdateRequest):
     result = await db_supabase.update_lost_and_found(item_id, update)
     if not result:
         raise HTTPException(status_code=404, detail="Item not found")
+    await log_admin_action(admin, "lost_item_updated", "lost_and_found", item_id, {"fields": list(update)})
     return result
 
 
 @router.delete("/lost-and-found/{item_id}")
-async def admin_delete_lost_item(item_id: str):
+async def admin_delete_lost_item(item_id: str, admin: dict = Depends(get_admin_user)):
     """Delete a lost and found item."""
     await db_supabase.delete_one("lost_and_found", {"id": item_id})
+    await log_admin_action(admin, "lost_item_deleted", "lost_and_found", item_id)
     return {"message": "Item deleted"}

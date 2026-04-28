@@ -20,12 +20,10 @@ module.exports = {
   ],
   coverageThreshold: {
     global: {
-      // P3-4: step +5 pp/sprint toward 50/40/50 target.
-      // Actuals at 2026-04-28: lines≈35%, functions≈26%, statements≈35%.
-      // Next step: 2026-07 sprint → 40/30/40.
-      lines: 35,
-      functions: 25,
-      statements: 34,
+      lines: 49,
+      functions: 35,
+      branches: 29,
+      statements: 48,
     },
   },
   moduleNameMapper: {

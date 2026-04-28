@@ -127,6 +127,7 @@ export default function NotificationsScreen() {
         router.push('/(tabs)' as any);
         break;
       default:
+        router.push('/(tabs)' as any);
         break;
     }
   };

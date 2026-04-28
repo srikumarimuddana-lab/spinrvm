@@ -56,6 +56,7 @@ export default function HomeScreen() {
   const lastFetchedAt = useRef<number>(0);
 
   const { width, height } = useWindowDimensions();
+  const isTablet = width >= 768;
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
@@ -190,7 +191,7 @@ export default function HomeScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, isTablet && { flexDirection: 'row' as const }]}>
       {/* Map Implementation */}
       <View style={styles.mapContainer}>
         {/* Header */}
@@ -225,6 +226,7 @@ export default function HomeScreen() {
               style={styles.notificationButton}
               accessibilityLabel="Notifications"
               accessibilityRole="button"
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
               <Ionicons name="notifications-outline" size={24} color={colors.text} />
             </TouchableOpacity>
@@ -263,27 +265,41 @@ export default function HomeScreen() {
         {/* Map Controls Container - Right Side */}
         {/* Map Controls Container - Right Side */}
         <View style={styles.mapControls}>
-          <TouchableOpacity style={styles.mapControlButton} onPress={() => {
-            if (region && mapRef.current) {
-              mapRef.current.animateToRegion({
-                ...region,
-                latitudeDelta: region.latitudeDelta / 2,
-                longitudeDelta: region.longitudeDelta / 2,
-              }, 500);
-            }
-          }}>
+          <TouchableOpacity
+            style={styles.mapControlButton}
+            onPress={() => {
+              if (region && mapRef.current) {
+                mapRef.current.animateToRegion({
+                  ...region,
+                  latitudeDelta: region.latitudeDelta / 2,
+                  longitudeDelta: region.longitudeDelta / 2,
+                }, 500);
+              }
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Zoom in"
+            accessibilityHint="Zooms the map in"
+            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+          >
             <Ionicons name="add" size={24} color={colors.text} />
           </TouchableOpacity>
           <View style={styles.divider} />
-          <TouchableOpacity style={styles.mapControlButton} onPress={() => {
-            if (region && mapRef.current) {
-              mapRef.current.animateToRegion({
-                ...region,
-                latitudeDelta: region.latitudeDelta * 2,
-                longitudeDelta: region.longitudeDelta * 2,
-              }, 500);
-            }
-          }}>
+          <TouchableOpacity
+            style={styles.mapControlButton}
+            onPress={() => {
+              if (region && mapRef.current) {
+                mapRef.current.animateToRegion({
+                  ...region,
+                  latitudeDelta: region.latitudeDelta * 2,
+                  longitudeDelta: region.longitudeDelta * 2,
+                }, 500);
+              }
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Zoom out"
+            accessibilityHint="Zooms the map out"
+            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+          >
             <Ionicons name="remove" size={24} color={colors.text} />
           </TouchableOpacity>
         </View>
@@ -306,7 +322,13 @@ export default function HomeScreen() {
         {/* Current Location Button — always fetches a fresh fix. Tapping
             this is an explicit user request for "where am I now", so we
             bypass any cached state and hit getCurrentPositionAsync. */}
-        <TouchableOpacity style={styles.locationButton} onPress={async () => {
+        <TouchableOpacity
+          style={styles.locationButton}
+          accessibilityRole="button"
+          accessibilityLabel="Go to my location"
+          accessibilityHint="Centers the map on your current GPS position"
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          onPress={async () => {
           if (!mapRef.current) return;
           const { status } = await Location.requestForegroundPermissionsAsync();
           if (status !== 'granted') return;
@@ -331,9 +353,9 @@ export default function HomeScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Bottom Sheet */}
-      <View style={styles.bottomSheet}>
-        <View style={styles.sheetHandle} />
+      {/* Bottom Sheet / Side Panel */}
+      <View style={[styles.bottomSheet, isTablet && styles.sidePanel]}>
+        {!isTablet && <View style={styles.sheetHandle} />}
 
         {/* Search Bar + AI Button */}
         <View style={styles.searchRow}>
@@ -371,21 +393,39 @@ export default function HomeScreen() {
 
         {/* Quick Actions */}
         <View style={styles.quickActions}>
-          <TouchableOpacity style={styles.quickAction} onPress={() => handleQuickAction('home')}>
+          <TouchableOpacity
+            style={styles.quickAction}
+            onPress={() => handleQuickAction('home')}
+            accessibilityRole="button"
+            accessibilityLabel="Go home"
+            accessibilityHint="Sets your saved home address as destination"
+          >
             <View style={styles.quickActionIcon}>
               <Ionicons name="home" size={22} color={colors.primary} />
             </View>
             <Text style={styles.quickActionText}>Home</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.quickAction} onPress={() => handleQuickAction('work')}>
+          <TouchableOpacity
+            style={styles.quickAction}
+            onPress={() => handleQuickAction('work')}
+            accessibilityRole="button"
+            accessibilityLabel="Go to work"
+            accessibilityHint="Sets your saved work address as destination"
+          >
             <View style={styles.quickActionIcon}>
               <Ionicons name="briefcase" size={22} color={colors.primary} />
             </View>
             <Text style={styles.quickActionText}>Work</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.quickAction} onPress={() => handleQuickAction('saved')}>
+          <TouchableOpacity
+            style={styles.quickAction}
+            onPress={() => handleQuickAction('saved')}
+            accessibilityRole="button"
+            accessibilityLabel="Saved places"
+            accessibilityHint="Browse your saved locations"
+          >
             <View style={styles.quickActionIcon}>
               <Ionicons name="star" size={22} color={colors.primary} />
             </View>
@@ -405,7 +445,13 @@ export default function HomeScreen() {
                 We take 0% commission. 100% of{"\n"}your fare goes to your driver.
               </Text>
             </View>
-            <TouchableOpacity onPress={() => setShowPromo(false)} style={styles.promoClose}>
+            <TouchableOpacity
+              onPress={() => setShowPromo(false)}
+              style={styles.promoClose}
+              accessibilityRole="button"
+              accessibilityLabel="Dismiss promotion banner"
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            >
               <Ionicons name="close" size={20} color={colors.textDim} />
             </TouchableOpacity>
           </View>
@@ -698,6 +744,16 @@ function createStyles(colors: ThemeColors) {
     },
     promoClose: {
       padding: 4,
+    },
+    sidePanel: {
+      width: 340,
+      borderTopLeftRadius: 0,
+      borderTopRightRadius: 0,
+      borderLeftWidth: 1,
+      borderLeftColor: colors.border,
+      shadowOffset: { width: -4, height: 0 },
+      paddingTop: 60,
+      flexShrink: 0 as const,
     },
   });
 }

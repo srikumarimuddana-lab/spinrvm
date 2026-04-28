@@ -12,6 +12,7 @@ replaced with redaction tokens so they do not appear in Google's telemetry.
 """
 
 import re
+
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 

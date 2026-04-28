@@ -22,7 +22,7 @@ import pytest
 # ---------------------------------------------------------------------------
 # Minimal stubs so the module imports succeed in isolation
 # ---------------------------------------------------------------------------
-for _mod in ["loguru", "logging_utils", "sentry_sdk", "firebase_admin"]:
+for _mod in ["loguru", "logging_utils", "sentry_sdk"]:
     if _mod not in sys.modules:
         sys.modules[_mod] = MagicMock()
 
@@ -67,9 +67,17 @@ def _make_admin_token(
 class TestBruteForceAccountLockout:
     """After _LOGIN_MAX_FAILURES failures the account is locked (HTTP 423)."""
 
+    def setup_method(self):
+        """Reset the admin auth rate limiter before each test to avoid cross-test 429s."""
+        try:
+            from routes.admin.auth import limiter
+            limiter._storage.reset()
+        except Exception:
+            pass
+
     def test_login_lockout_after_5_failures(self, test_client):
         """Mock Redis to report failure threshold reached → expect 423."""
-        with patch("backend.routes.admin.auth._is_account_locked", new=AsyncMock(return_value=True)):
+        with patch("routes.admin.auth._is_account_locked", new=AsyncMock(return_value=True)):
             response = test_client.post(
                 "/api/admin/auth/login",
                 json={"email": "locked@spinr.ca", "password": "any"},
@@ -81,8 +89,8 @@ class TestBruteForceAccountLockout:
     def test_login_succeeds_when_not_locked(self, test_client):
         """When _is_account_locked returns False, login proceeds normally (401 on bad creds)."""
         with (
-            patch("backend.routes.admin.auth._is_account_locked", new=AsyncMock(return_value=False)),
-            patch("backend.routes.admin.auth.db_supabase") as mock_db,
+            patch("routes.admin.auth._is_account_locked", new=AsyncMock(return_value=False)),
+            patch("routes.admin.auth.db_supabase") as mock_db,
         ):
             mock_db.get_rows = AsyncMock(return_value=[])  # no staff row → fall-through
             response = test_client.post(
@@ -96,9 +104,9 @@ class TestBruteForceAccountLockout:
     def test_failure_counter_incremented_on_bad_credentials(self, test_client):
         """_record_login_failure must be called when credentials are wrong."""
         with (
-            patch("backend.routes.admin.auth._is_account_locked", new=AsyncMock(return_value=False)),
-            patch("backend.routes.admin.auth._record_login_failure", new=AsyncMock()) as mock_record,
-            patch("backend.routes.admin.auth.db_supabase") as mock_db,
+            patch("routes.admin.auth._is_account_locked", new=AsyncMock(return_value=False)),
+            patch("routes.admin.auth._record_login_failure", new=AsyncMock()) as mock_record,
+            patch("routes.admin.auth.db_supabase") as mock_db,
         ):
             mock_db.get_rows = AsyncMock(return_value=[])
             test_client.post(
@@ -116,6 +124,14 @@ class TestBruteForceAccountLockout:
 class TestDeactivatedStaffRejected:
     """A deactivated staff member cannot log in even with correct password."""
 
+    def setup_method(self):
+        """Reset the admin auth rate limiter before each test to avoid cross-test 429s."""
+        try:
+            from routes.admin.auth import limiter
+            limiter._storage.reset()
+        except Exception:
+            pass
+
     def test_deactivated_staff_token_is_rejected(self, test_client):
         """staff.is_active=False → 403 even when password matches."""
         from backend.utils.password import hash_password
@@ -130,8 +146,8 @@ class TestDeactivatedStaffRejected:
             "token_version": 0,
         }
         with (
-            patch("backend.routes.admin.auth._is_account_locked", new=AsyncMock(return_value=False)),
-            patch("backend.routes.admin.auth.db_supabase") as mock_db,
+            patch("routes.admin.auth._is_account_locked", new=AsyncMock(return_value=False)),
+            patch("routes.admin.auth.db_supabase") as mock_db,
         ):
             mock_db.get_rows = AsyncMock(return_value=[fake_staff])
             response = test_client.post(
@@ -155,10 +171,9 @@ class TestStaffRBAC:
         """Override get_admin_user with a support-role token."""
         from backend.server import app
 
-        try:
-            from backend.dependencies import get_admin_user
-        except ImportError:
-            from dependencies import get_admin_user
+        # Use the bare import — server.py routes use `from dependencies import get_admin_user`
+        # (bare path via server.py's sys.path.insert), not `backend.dependencies`.
+        from dependencies import get_admin_user
 
         app.dependency_overrides[get_admin_user] = lambda: {
             "id": "staff-support-1",
@@ -173,10 +188,7 @@ class TestStaffRBAC:
         """Override get_admin_user with a super_admin token."""
         from backend.server import app
 
-        try:
-            from backend.dependencies import get_admin_user
-        except ImportError:
-            from dependencies import get_admin_user
+        from dependencies import get_admin_user
 
         app.dependency_overrides[get_admin_user] = lambda: {
             "id": "admin-001",
@@ -242,7 +254,7 @@ class TestLogoutInvalidatesToken:
 
     def test_logout_calls_revoke_refresh_token(self, test_client):
         """POST /logout with a refresh token must invoke revoke_refresh_token."""
-        with patch("backend.routes.admin.auth.revoke_refresh_token", new=AsyncMock()) as mock_revoke:
+        with patch("routes.admin.auth.revoke_refresh_token", new=AsyncMock()) as mock_revoke:
             response = test_client.post(
                 "/api/admin/auth/logout",
                 json={"refresh_token": "fake-refresh-token"},

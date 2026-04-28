@@ -27,6 +27,8 @@ _STRIPE_HANDLED_EVENTS = frozenset(
         "checkout.session.completed",
     }
 )
+# Alias used by the post-merge allowlist gate at dispatch time
+ALLOWED_STRIPE_EVENTS = _STRIPE_HANDLED_EVENTS
 
 
 @api_router.post("/stripe")
@@ -95,11 +97,11 @@ async def stripe_webhook(request: Request):
 
     # ── Allowlist gate ───────────────────────────────────────────────
     if event_type not in ALLOWED_STRIPE_EVENTS:
-        logger.error(
+        logger.warning(
             "stripe_webhook: unknown event type — not processed",
             extra={"event_type": event_type, "event_id": event_id},
         )
-        raise HTTPException(status_code=400, detail="unknown_event_type")
+        return {"received": True, "unhandled": True, "event_id": event_id}
 
     # ── Dispatch ─────────────────────────────────────────────────────
     # Any exception raised below propagates as 5xx, leaving processed_at

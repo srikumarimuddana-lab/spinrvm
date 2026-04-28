@@ -28,11 +28,35 @@ mobile users get "Request failed" instead of "Try again in 60s".
 from __future__ import annotations
 
 import os
+import sys
+
+# test_p1_auth_hardening.py and test_csrf_middleware.py stub slowapi and
+# utils.rate_limiter as MagicMocks at collection time.  Pop all of them so
+# this file always imports the real slowapi and a real Limiter.
+for _stale in ["slowapi", "slowapi.errors", "slowapi.util", "utils.rate_limiter"]:
+    sys.modules.pop(_stale, None)
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from slowapi.errors import RateLimitExceeded
+
+# Pre-cache backend.utils.rate_limiter NOW (collection time), while
+# os.environ still has JWT_SECRET etc. (set by conftest.py's setdefault).
+# test_p1_auth_hardening.py's _make_settings() pops JWT_SECRET/SUPABASE_URL
+# in its finally block before rate_limit tests run; importing rate_limiter
+# after that fails because Settings() requires those vars.  Caching here
+# avoids the re-import during test execution entirely.
+#
+# test_csrf_middleware.py stubs sys.modules["core.config"] = MagicMock at its
+# own collection time (before this file).  Pop it temporarily so the fresh
+# backend.utils.rate_limiter import uses the real Settings, then restore it.
+_stale_core_cfg = sys.modules.pop("core.config", None)
+try:
+    import backend.utils.rate_limiter as _rate_limiter_mod  # noqa: F401  — side-effect: caches module
+finally:
+    if _stale_core_cfg is not None:
+        sys.modules["core.config"] = _stale_core_cfg
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
@@ -43,16 +67,57 @@ def _app_with_auth_router() -> FastAPI:
     """Build a stripped FastAPI app that mounts only the auth router and
     wires the slowapi handler — bypasses server.py's full middleware
     stack (which pulls in multipart parsers we don't need here)."""
+    import sys
+
+    # test_p1_auth_hardening.py installs sys.modules["slowapi"] = _slowapi_mock
+    # at collection time (after this file's collection-time pops run).  That
+    # noop mock survives into test execution, so routes.auth's module-level
+    # `limiter = Limiter(...)` would get a MagicMock Limiter whose .limit() is
+    # a passthrough decorator — rate limiting never fires.
+    #
+    # Pop "slowapi" (the package) so routes.auth reimports a real Limiter.
+    # Do NOT pop slowapi.errors or slowapi.extension: those modules' import-time
+    # binding of RateLimitExceeded must stay the same class object that
+    # slowapi.extension will raise — popping and reimporting creates a NEW class
+    # that won't match the registered exception handler.
+    for _stale in (
+        "slowapi",
+        "routes.auth",
+        "backend.routes.auth",
+        "utils.rate_limiter",
+    ):
+        sys.modules.pop(_stale, None)
+    for _routes_pkg_key in ("backend.routes", "routes"):
+        _pkg = sys.modules.get(_routes_pkg_key)
+        if _pkg is not None:
+            try:
+                delattr(_pkg, "auth")
+            except AttributeError:
+                pass
+
     # conftest puts both backend/ and the project root on sys.path, so
     # both `from utils...` and `from backend.utils...` resolve. Use the
     # bare path to match the routes' own imports.
     from dependencies import get_current_user
     from routes.auth import api_router
-    from utils.rate_limiter import default_limiter, rate_limit_exceeded_handler
+
+    # backend.utils.rate_limiter was pre-cached at collection time (module-level
+    # code above) while env vars were intact — no fresh import needed here.
+    from backend.utils.rate_limiter import default_limiter, rate_limit_exceeded_handler
+
+    # slowapi.extension captured RateLimitExceeded at its own import time.
+    # By the time this test runs, some earlier test may have caused
+    # slowapi.errors to be reimported, creating a NEW class object that
+    # slowapi.extension doesn't know about.  Registering the handler with
+    # the NEW class means the exception (raised with OLD class) won't match.
+    # Fix: always pull the class from slowapi.extension directly — that is
+    # the exact same object the limiter will raise.
+    import slowapi.extension as _slowapi_ext
+    _RateLimitExceeded = _slowapi_ext.RateLimitExceeded
 
     app = FastAPI()
     app.state.limiter = default_limiter
-    app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+    app.add_exception_handler(_RateLimitExceeded, rate_limit_exceeded_handler)
     app.include_router(api_router)
 
     async def fake_user():
@@ -177,7 +242,10 @@ class TestOtpLockout429ResponseShape:
 
         from fastapi import HTTPException
 
-        from core.config import settings
+        # Import via the fully-qualified path so test_csrf_middleware.py's
+        # bare-path 'core.config' stub (if still in sys.modules) does not
+        # shadow the real Settings object with a MagicMock whose int() = 1.
+        from backend.core.config import settings
 
         with patch("backend.routes.auth.redis_get", AsyncMock(return_value="1")):
             from backend.routes import auth as auth_mod

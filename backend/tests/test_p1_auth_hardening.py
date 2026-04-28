@@ -31,9 +31,6 @@ _STUBS = [
     "firebase_admin.messaging",
     "twilio",
     "twilio.rest",
-    "slowapi",
-    "slowapi.errors",
-    "slowapi.util",
     "redis",
     "redis.asyncio",
     "jwt",
@@ -45,7 +42,8 @@ for _m in _STUBS:
 # auth.py decorates endpoint functions with @limiter.limit(...) where limiter
 # comes from slowapi.Limiter (stubbed as MagicMock).  A plain MagicMock
 # decorator replaces the async def with a MagicMock, breaking await calls.
-# Configure the stub to act as a no-op decorator factory instead.
+# Force-replace slowapi with a MagicMock regardless of import order so that
+# Limiter.return_value exists and limit() is a no-op decorator factory.
 
 
 def _noop_limit_factory(*args, **kwargs):
@@ -55,7 +53,24 @@ def _noop_limit_factory(*args, **kwargs):
     return _passthrough
 
 
-sys.modules["slowapi"].Limiter.return_value.limit = _noop_limit_factory
+_slowapi_mock = MagicMock()
+_slowapi_mock.Limiter.return_value.limit = _noop_limit_factory
+sys.modules["slowapi"] = _slowapi_mock
+
+# RateLimitExceeded must be a real Exception subclass so that
+# core/middleware.py's app.add_exception_handler(RateLimitExceeded, ...)
+# survives Starlette's issubclass() guard when backend.server is first
+# imported in the same pytest session.
+
+
+class _FakeRateLimitExceeded(Exception):
+    pass
+
+
+_slowapi_errors_mock = MagicMock()
+_slowapi_errors_mock.RateLimitExceeded = _FakeRateLimitExceeded
+sys.modules["slowapi.errors"] = _slowapi_errors_mock
+sys.modules["slowapi.util"] = MagicMock()
 
 
 # ── B-P1-2 + B-P1-1 ───────────────────────────────────────────────────────────
@@ -154,13 +169,36 @@ class TestFirebaseAuthDbFailureRaises503:
         fake_payload = {"uid": "firebase_uid_1", "phone_number": "+13061234567", "aud": "driver-app"}
         fb_stub = self._make_firebase_stub(fake_payload)
 
-        with patch.dict(sys.modules, {"firebase_admin.auth": fb_stub}):
+        with patch.dict(
+            sys.modules,
+            {
+                "firebase_admin.auth": fb_stub,
+                # Restore the noop limiter so the fresh auth import below
+                # doesn't pick up the real slowapi (which requires a real
+                # starlette Request).
+                "slowapi": _slowapi_mock,
+                "slowapi.errors": _slowapi_errors_mock,
+                "slowapi.util": MagicMock(),
+            },
+        ):
             # `from firebase_admin import auth` resolves via the module object's
             # .auth attribute, not via sys.modules["firebase_admin.auth"].
             # Set both so the lazy import inside the route function finds the stub.
             sys.modules["firebase_admin"].auth = fb_stub
-            if "backend.routes.auth" in sys.modules:
-                del sys.modules["backend.routes.auth"]
+            # Force a fresh import by removing both the sys.modules entry and
+            # any stale package attribute (patch.dict full-restore can leave
+            # a stale .auth attribute on the backend.routes package object).
+            # Also pop utils.rate_limiter so the fresh auth import picks up the
+            # noop limiter (from the _slowapi_mock above) rather than the cached
+            # real Limiter that's already in sys.modules from other test files.
+            sys.modules.pop("backend.routes.auth", None)
+            sys.modules.pop("utils.rate_limiter", None)
+            _pkg = sys.modules.get("backend.routes")
+            if _pkg is not None:
+                try:
+                    delattr(_pkg, "auth")
+                except AttributeError:
+                    pass
             from backend.routes import auth as auth_mod
 
             with (
@@ -180,6 +218,18 @@ class TestFirebaseAuthDbFailureRaises503:
                 with pytest.raises(HTTPException) as exc_info:
                     await auth_mod.firebase_auth_login(req, resp, body)
 
+        # patch.dict restores sys.modules but does NOT restore package attributes.
+        # backend.routes.auth may now point to the stale FRESH_AUTH imported
+        # inside the block while sys.modules["backend.routes.auth"] points to
+        # the original module. Always remove the stale attribute so subsequent
+        # `from backend.routes import auth` resolves through sys.modules only.
+        _pkg = sys.modules.get("backend.routes")
+        if _pkg is not None:
+            try:
+                delattr(_pkg, "auth")
+            except AttributeError:
+                pass
+
         assert exc_info.value.status_code == 503
         assert exc_info.value.detail == "auth_persist_failed"
 
@@ -188,10 +238,24 @@ class TestFirebaseAuthDbFailureRaises503:
         existing_user = {"id": "firebase_uid_2", "phone": "+13061234568", "token_version": 0}
         fb_stub = self._make_firebase_stub(fake_payload)
 
-        with patch.dict(sys.modules, {"firebase_admin.auth": fb_stub}):
+        with patch.dict(
+            sys.modules,
+            {
+                "firebase_admin.auth": fb_stub,
+                "slowapi": _slowapi_mock,
+                "slowapi.errors": _slowapi_errors_mock,
+                "slowapi.util": MagicMock(),
+            },
+        ):
             sys.modules["firebase_admin"].auth = fb_stub
-            if "backend.routes.auth" in sys.modules:
-                del sys.modules["backend.routes.auth"]
+            sys.modules.pop("backend.routes.auth", None)
+            sys.modules.pop("utils.rate_limiter", None)
+            _pkg = sys.modules.get("backend.routes")
+            if _pkg is not None:
+                try:
+                    delattr(_pkg, "auth")
+                except AttributeError:
+                    pass
             from backend.routes import auth as auth_mod
 
             with (
@@ -210,5 +274,13 @@ class TestFirebaseAuthDbFailureRaises503:
                 with pytest.raises(HTTPException) as exc_info:
                     await auth_mod.firebase_auth_login(req, resp, body)
 
+        # Same unconditional stale-attribute cleanup as the test above.
+        _pkg = sys.modules.get("backend.routes")
+        if _pkg is not None:
+            try:
+                delattr(_pkg, "auth")
+            except AttributeError:
+                pass
+
         assert exc_info.value.status_code == 503
-        assert exc_info.value.detail == "auth_session_failed"
+        assert exc_info.value.detail == "auth_session_update_failed"

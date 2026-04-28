@@ -809,8 +809,8 @@ async def admin_get_payout(payout_id: str, _: dict = Depends(get_admin_user)):
     if payout.get("driver_id"):
         try:
             driver = await db.find_one("drivers", {"id": payout["driver_id"]}) or {}
-        except Exception:
-            pass
+        except Exception as _drv_err:
+            logger.warning("Could not enrich payout %s with driver details: %s", payout.get("id"), _drv_err)
     payout["driver_name"] = driver.get("full_name") or driver.get("name") or payout.get("driver_name")
     payout["driver_email"] = driver.get("email")
     payout["driver_phone"] = driver.get("phone")

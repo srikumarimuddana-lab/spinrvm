@@ -17,6 +17,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 # Stub heavy deps before any backend import.
+# Track whether fastapi was already imported (real module) before this file
+# is collected. If it was, we must NOT overwrite its WebSocket attribute —
+# doing so corrupts the real fastapi module for the rest of the test session
+# (routes/websocket.py would get a MagicMock WebSocket and FastAPI's
+# dependency analysis would fail with FastAPIError on all subsequent tests).
+_fastapi_was_imported = "fastapi" in sys.modules
+
 _STUBS = [
     "loguru",
     "logging_utils",
@@ -27,9 +34,13 @@ for _m in _STUBS:
     if _m not in sys.modules:
         sys.modules[_m] = MagicMock()
 
-# Make `from loguru import logger` and `from fastapi import WebSocket` return mocks.
+# Make `from loguru import logger` return mock.
 sys.modules["loguru"].logger = MagicMock()
-sys.modules["fastapi"].WebSocket = MagicMock()
+# Only patch fastapi.WebSocket when fastapi is a stub we just created.
+# If the real fastapi is already loaded, patching it globally breaks every
+# test that imports routes after this file is collected.
+if not _fastapi_was_imported:
+    sys.modules["fastapi"].WebSocket = MagicMock()
 sys.modules["logging_utils"].diag_logger = MagicMock()
 
 from backend.socket_manager import ConnectionManager  # noqa: E402

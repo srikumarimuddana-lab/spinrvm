@@ -13,15 +13,29 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Track whether core.config was already imported before we stub anything.
+# If the real module is loaded, we must NOT replace its settings attribute —
+# that corrupts the real Settings instance for every subsequent test that
+# imports backend.server or any route module via the bare 'core.config' path.
+_core_config_was_imported = "core.config" in sys.modules
+
 # Stub out heavy deps that middleware.py imports but the test env doesn't have.
 _STUBS = ["slowapi", "slowapi.errors", "core.config", "utils.rate_limiter"]
 for _m in _STUBS:
     if _m not in sys.modules:
         sys.modules[_m] = MagicMock()
 
-# Provide the Settings object that CSRFMiddleware reads from core.config.settings
-_settings_mock = sys.modules["core.config"]
-_settings_mock.settings = MagicMock(ENV="development")
+# Only inject a mock settings when we just created the core.config stub.
+# Set FIREBASE_SERVICE_ACCOUNT_JSON and sentry_dsn to None so that
+# backend.server's conditional init blocks don't activate when another test
+# later imports the server with core.config still pointing to this stub.
+if not _core_config_was_imported:
+    _settings_mock = sys.modules["core.config"]
+    _settings_mock.settings = MagicMock(
+        ENV="development",
+        FIREBASE_SERVICE_ACCOUNT_JSON=None,
+        sentry_dsn=None,
+    )
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

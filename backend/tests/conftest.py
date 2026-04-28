@@ -273,10 +273,19 @@ def mock_redis(monkeypatch: pytest.MonkeyPatch) -> dict:
     by one test never bleed into the next.  monkeypatch restores the original
     dict automatically after the test finishes.
     """
+    import sys
+
     from backend.utils import redis_client as rc
 
     clean: dict = {}
     monkeypatch.setattr(rc, "_local", clean)
+    # Both backend/ and the project root are on sys.path, so the same file
+    # can be loaded under two different module keys ("utils.redis_client" and
+    # "backend.utils.redis_client").  Patch the bare-path entry too so tests
+    # that import from "utils.redis_client" see the same isolated dict.
+    rc_bare = sys.modules.get("utils.redis_client")
+    if rc_bare is not None and rc_bare is not rc:
+        monkeypatch.setattr(rc_bare, "_local", clean)
     return clean
 
 

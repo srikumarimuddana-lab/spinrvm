@@ -23,8 +23,8 @@ try:
     from ..features import send_push_notification
     from ..settings_loader import get_app_settings
     from .datetime_utils import parse_iso_utc
-    from .metrics import inc as _metric_inc
-    from .metrics import set_gauge as _metric_gauge
+    from .metrics import inc as _metric_inc  # noqa: F401
+    from .metrics import set_gauge as _metric_gauge  # noqa: F401
 except ImportError:
     from db import db
     from features import send_push_notification

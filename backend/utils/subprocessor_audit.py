@@ -39,8 +39,10 @@ _FETCH_TIMEOUT = 20  # seconds per vendor
 
 def _fetch_page(url: str) -> tuple[str, str | None]:
     """Fetch URL text content and ETag. Returns (content, etag_or_None)."""
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=_FETCH_TIMEOUT) as resp:
+    if not url.lower().startswith(("https://", "http://")):
+        raise ValueError(f"Only http/https URLs are permitted; got {url[:60]!r}")
+    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})  # noqa: S310
+    with urllib.request.urlopen(req, timeout=_FETCH_TIMEOUT) as resp:  # noqa: S310
         etag = resp.headers.get("ETag")
         content = resp.read().decode("utf-8", errors="replace")
     return content, etag

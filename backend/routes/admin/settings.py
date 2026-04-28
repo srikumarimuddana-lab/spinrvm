@@ -9,7 +9,7 @@ except ImportError:
     from utils.audit_logger import log_admin_action  # noqa: F401
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 try:
     from ... import db_supabase
@@ -62,11 +62,11 @@ class SettingsUpdateRequest(BaseModel):
     twilio_auth_token: Optional[str] = None
     twilio_from_number: Optional[str] = None
     driver_matching_algorithm: Optional[str] = None
-    min_driver_rating: Optional[float] = None
-    search_radius_km: Optional[float] = None
-    cancellation_fee_admin: Optional[float] = None
-    cancellation_fee_driver: Optional[float] = None
-    platform_fee_percent: Optional[float] = None
+    min_driver_rating: Optional[float] = Field(default=None, ge=1.0, le=5.0)
+    search_radius_km: Optional[float] = Field(default=None, ge=1, le=100)
+    cancellation_fee_admin: Optional[float] = Field(default=None, ge=0, le=50)
+    cancellation_fee_driver: Optional[float] = Field(default=None, ge=0, le=50)
+    platform_fee_percent: Optional[float] = Field(default=None, ge=0, le=1.0)
     require_driver_subscription: Optional[bool] = None
     terms_of_service_text: Optional[str] = None
     privacy_policy_text: Optional[str] = None

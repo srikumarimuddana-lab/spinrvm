@@ -12,12 +12,18 @@ import CustomAlert from '@shared/components/CustomAlert';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
+const TRIP_ACTIVE_STATUSES = ['in_progress', 'driver_arrived', 'driver_accepted', 'driver_assigned'];
+
 export default function FareSplitScreen() {
   const router = useRouter();
   const { currentRide, estimates, selectedVehicle } = useRideStore();
   const { createFareSplit, currentSplit, isLoading } = useWalletStore();
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
+
+  // Fare split must be arranged before the trip starts. Once a driver has been
+  // assigned (or the trip is underway) the split can no longer be initiated.
+  const tripAlreadyStarted = TRIP_ACTIVE_STATUSES.includes(currentRide?.status ?? '');
 
   const [phones, setPhones] = useState<string[]>(['']);
   const [alertState, setAlertState] = useState<{
@@ -94,6 +100,15 @@ export default function FareSplitScreen() {
       </View>
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+        {tripAlreadyStarted && (
+          <View style={styles.tripActiveWarning}>
+            <Ionicons name="information-circle-outline" size={18} color="#92400E" />
+            <Text style={styles.tripActiveWarningText}>
+              Fare split must be set up before the trip starts. Return to the ride screen.
+            </Text>
+          </View>
+        )}
+
         {/* Split Summary */}
         <View style={styles.summaryCard}>
           <Text style={styles.summaryLabel}>Total Fare</Text>
@@ -155,7 +170,7 @@ export default function FareSplitScreen() {
         <TouchableOpacity
           style={styles.splitButton}
           onPress={handleSplit}
-          disabled={isLoading}
+          disabled={isLoading || tripAlreadyStarted}
           activeOpacity={0.8}
         >
           {isLoading ? (
@@ -196,6 +211,13 @@ function createStyles(colors: ThemeColors) {
       alignItems: 'center', justifyContent: 'center',
     },
     headerTitle: { fontSize: 18, fontWeight: '700', color: colors.text },
+
+    tripActiveWarning: {
+      flexDirection: 'row', alignItems: 'center', gap: 8,
+      marginHorizontal: 16, marginTop: 12, marginBottom: 4,
+      backgroundColor: '#FEF3C7', borderRadius: 10, padding: 12,
+    },
+    tripActiveWarningText: { flex: 1, fontSize: 13, color: '#92400E', lineHeight: 18 },
 
     summaryCard: {
       margin: 16, backgroundColor: colors.surface, borderRadius: 16, padding: 24,

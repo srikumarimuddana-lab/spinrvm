@@ -223,6 +223,27 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
                 raise HTTPException(status_code=401, detail="ERR_ACCOUNT_INACTIVE")
             if _token_version_mismatch(payload, staff):
                 raise HTTPException(status_code=401, detail="ERR_SESSION_REVOKED")
+            # Server-side idle timeout: 30 min of inactivity → force re-login
+            # (audit A-P2-2). admin-001 has no DB row so this only runs for
+            # staff accounts.
+            _IDLE_SECONDS = 30 * 60
+            last_active_raw = staff.get("last_activity_at")
+            if last_active_raw:
+                try:
+                    last_active = datetime.fromisoformat(last_active_raw.replace("Z", "+00:00"))
+                    if (datetime.now(timezone.utc) - last_active).total_seconds() > _IDLE_SECONDS:
+                        raise HTTPException(status_code=401, detail="ERR_IDLE_TIMEOUT")
+                except HTTPException:
+                    raise
+                except Exception:  # noqa: S110
+                    pass  # malformed timestamp — let it through, don't block auth
+            # Fire-and-forget activity timestamp update (best-effort; auth must not fail here)
+            try:
+                await db_supabase.update_one(
+                    "admin_staff", {"id": user_id}, {"last_activity_at": datetime.now(timezone.utc).isoformat()}
+                )
+            except Exception:  # noqa: S110
+                pass  # best-effort — auth must not fail on a timestamp write error
         return {
             "id": user_id,
             "email": payload.get("email"),

@@ -510,7 +510,7 @@ async def firebase_auth_login(request: Request, body: FirebaseAuthRequest):
     access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     token = create_jwt_token(user_id, phone, session_id=session_id, token_version=token_version)
     refresh_raw, _, refresh_expires_at = await issue_refresh_token(
-        user_id, audience="rider", user_agent=user_agent, ip=client_ip
+        user_id, audience="driver", user_agent=user_agent, ip=client_ip
     )
 
     try:
@@ -612,9 +612,10 @@ async def refresh_access_token(request: Request, body: RefreshRequest):
     if not row:
         raise HTTPException(status_code=401, detail="Invalid refresh token")
 
-    if row.get("audience") != "rider":
-        # Admin refresh tokens go through /admin/auth/refresh; rider tokens
-        # minted for admin use would be a privilege-escalation vector.
+    if row.get("audience") not in {"rider", "driver"}:
+        # Admin refresh tokens go through /admin/auth/refresh. Only rider and
+        # driver tokens are valid here; anything else is a privilege-escalation
+        # attempt or a minted-for-wrong-endpoint token.
         raise HTTPException(status_code=401, detail="Invalid refresh token")
 
     user_id = row.get("user_id")
@@ -637,7 +638,7 @@ async def refresh_access_token(request: Request, body: RefreshRequest):
     # revoked_at != null and the lookup returns None.
     new_raw, _, refresh_expires_at = await issue_refresh_token(
         user_id,
-        audience="rider",
+        audience=row.get("audience", "rider"),
         user_agent=user_agent,
         ip=client_ip,
         replaces=row.get("id"),

@@ -47,7 +47,7 @@ Full evidence in `reports/audits/2026-04-23-driver-P{0..4}-verification.md`.
 
 | ID | Status | Blast | Owner | Effort | Regs | Action |
 |---|---|---|---|---:|---|---|
-| **P0-5** | PARTIAL | org | backend | 4 h | SAFE-CRC, SAFE-DRV, SAFE-VEH, SGI, SK-TNC | Replace `{"$set": ...}` wrapper on Supabase update in `utils/document_expiry.py:115`; add `status != 'suspended'` filter to `find_nearby_drivers` RPC; fix past-expiry loop bound; regression test |
+| **P0-5** | DONE | org | backend | — | SAFE-CRC, SAFE-DRV, SAFE-VEH, SGI, SK-TNC | All 4 sub-fixes landed: flat dict update (no $set), migration 55 (suspended filter), loop-bound fix, `tests/test_document_expiry.py` (4 tests pass) |
 | **P3-4** | PARTIAL | self | backend + driver-app | 8 h | — | Raise `driver-app/jest.config.js` threshold from 30/20/30 → 50/40/50; add `--cov-fail-under=30` in `backend/pytest.ini`; step +5 pp/sprint; add CI "coverage must not drop" check |
 | **P4-5** | PARTIAL | self | driver-app | 20 h | — | Add E2E specs for verify-OTP, complete-trip, payout (framework: Playwright-style to match existing specs, **not** Maestro as originally named); update `P4-future-features.md` to reflect framework choice |
 | **P4-7** | PARTIAL | regulator | backend | 12 h | CRA | Complete T4A PDF generator + filing path; `/drivers/t4a/${year}` must return real `pdf_url`; schedule Feb-each-year generator job; integration test |

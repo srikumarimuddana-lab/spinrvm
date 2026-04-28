@@ -38,6 +38,7 @@ export default function AccountScreen() {
     name?: string; address?: string; phone?: string; email?: string; website?: string;
   }>({});
 
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
   const [showLogoutAlert, setShowLogoutAlert] = useState(false);
   const [showPhotoPickerAlert, setShowPhotoPickerAlert] = useState(false);
   const [feedbackAlert, setFeedbackAlert] = useState<{
@@ -65,8 +66,14 @@ export default function AccountScreen() {
       (async () => {
         setIsRefreshing(true);
         try {
-          const userRes = await api.get('/auth/me');
+          const [userRes, notifRes] = await Promise.all([
+            api.get('/auth/me'),
+            api.get('/notifications?limit=1').catch(() => null),
+          ]);
           if (!cancelled && userRes.data) useAuthStore.setState({ user: userRes.data });
+          if (!cancelled && notifRes?.data?.unread_count != null) {
+            setUnreadNotificationCount(notifRes.data.unread_count);
+          }
         } catch {}
         finally { if (!cancelled) setIsRefreshing(false); }
       })();
@@ -374,7 +381,8 @@ export default function AccountScreen() {
                 styles={styles} colors={colors}
                 icon="notifications" iconColor="#6366F1" iconBg="rgba(99, 102, 241, 0.1)"
                 label="Notifications"
-                onPress={() => router.push('/notifications' as any)}
+                badge={unreadNotificationCount > 0 ? String(unreadNotificationCount) : undefined}
+                onPress={() => { setUnreadNotificationCount(0); router.push('/notifications' as any); }}
               />
               <View style={styles.cardDivider} />
               <MenuRow
@@ -482,11 +490,11 @@ export default function AccountScreen() {
 }
 
 function MenuRow({
-  styles, colors, icon, iconColor, iconBg, label, subtitle, onPress,
+  styles, colors, icon, iconColor, iconBg, label, subtitle, badge, onPress,
 }: {
   styles: any; colors: ThemeColors;
   icon: string; iconColor: string; iconBg: string;
-  label: string; subtitle?: string; onPress: () => void;
+  label: string; subtitle?: string; badge?: string; onPress: () => void;
 }) {
   return (
     <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={onPress}>
@@ -497,6 +505,11 @@ function MenuRow({
         <Text style={styles.actionText}>{label}</Text>
         {!!subtitle && <Text style={[styles.actionText, { fontSize: 12, color: colors.textDim, fontWeight: '400', marginTop: 1 }]}>{subtitle}</Text>}
       </View>
+      {!!badge && (
+        <View style={{ backgroundColor: '#EF4444', borderRadius: 10, minWidth: 20, height: 20, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 5, marginRight: 6 }}>
+          <Text style={{ color: '#FFF', fontSize: 11, fontWeight: '700' }}>{badge}</Text>
+        </View>
+      )}
       <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
     </TouchableOpacity>
   );

@@ -314,12 +314,14 @@ async def pay_split_share(
         )
         # Participant already marked 'paid' atomically by fare_split_pay_share RPC
     else:
-        # Card path: mark participant as paid
-        await db.update_one(
+        # Card path: atomic claim — only succeeds if still "accepted"; prevents double-pay.
+        updated = await db.update_one(
             "fare_split_participants",
-            {"id": participant_id},
+            {"id": participant_id, "status": "accepted"},
             {"$set": {"status": "paid", "paid_at": datetime.now(timezone.utc).isoformat()}},
         )
+        if not updated:
+            raise HTTPException(status_code=400, detail="Already paid")
 
     # Check if all participants have paid → mark split as completed
     split = await db.find_one("fare_splits", {"id": participant["fare_split_id"]})

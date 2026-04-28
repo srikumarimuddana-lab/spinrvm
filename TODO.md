@@ -16,17 +16,14 @@ _No open critical issues. All previously listed items were resolved:_
 
 ## High Priority
 
-- [ ] **Backend: CORS wildcard blocked in prod but `ALLOWED_ORIGINS` not set by default**
+- ✅ **Backend: CORS wildcard blocked in prod but `ALLOWED_ORIGINS` not set by default**
   - `middleware.py:354` raises `RuntimeError` if `"*"` is in origins on production — correct guard exists.
-  - Remaining gap: deployment docs / Railway env var checklist does not explicitly require `ALLOWED_ORIGINS` to be set before go-live.
-  - Action: Add `ALLOWED_ORIGINS` to the Railway required-env-vars list in `docs/` and `.env.example`.
-  - File: `backend/.env.example`, `docs/deploy.md`
+  - Fixed: `docs/ENVIRONMENT_VARIABLES.md` now marks `ALLOWED_ORIGINS` as **Required (prod)** with the RuntimeError callout and example values. `backend/.env.example` already had the variable documented.
 
-- [ ] **Backend: `server.py` still mounts duplicate root + `/api/v1` routes**
-  - `server.py:152-163` mounts routers at both `/api/v1` and `/` for backward compatibility.
-  - Stale root mounts widen the attack surface and confuse rate-limit rules.
-  - Action: Audit which root-mounted routes are still called by mobile clients; deprecate and remove after a version bump.
-  - File: `backend/server.py`
+- ✅ **Backend: `server.py` root-mounted routes — audit complete**
+  - All root mounts are intentional and active: `corporate_company_router` / `corporate_rider_router` at `/company/{id}/...` are called by the rider app without an `/api` prefix (confirmed in `workProfileStore.ts`); `settings_router` at root is used by mobile legal screen. None are stale.
+  - Rate-limit note added to server.py: slowapi tracks root and `/api/v1` prefixes separately; acceptable for public read-only routes. Add a shared `key_func` if tighter control is needed.
+  - Removal requires a coordinated mobile release — tracked as a post-launch cleanup item, not a security fix.
 
 - [ ] **4-digit OTP — deliberate product decision, not a bug**
   - `backend/dependencies/__init__.py:42-46` documents the trade-off (1/10,000 guess odds + 5-attempt lockout = acceptable).

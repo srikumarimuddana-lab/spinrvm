@@ -40,6 +40,10 @@ jobs:
         github.event.comment.author_association == 'COLLABORATOR'))
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Review is advisory — a missing/invalid ANTHROPIC_API_KEY or model error
+    # should never block merging. Add the key in repo Settings → Secrets to
+    # enable full AI review; until then PRs proceed without it.
+    continue-on-error: true
 
     steps:
       - name: Checkout PR code

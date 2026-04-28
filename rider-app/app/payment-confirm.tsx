@@ -153,7 +153,12 @@ function PaymentConfirmScreenContent() {
     <SafeAreaView style={styles.container} edges={['top']}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={() => router.back()}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+        >
           <Ionicons name="arrow-back" size={24} color={colors.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Confirm booking</Text>
@@ -262,6 +267,9 @@ function PaymentConfirmScreenContent() {
                 key={card.id}
                 style={[styles.paymentOption, isSelected && styles.paymentOptionSelected]}
                 onPress={() => { setSelectedPayment('card'); setSelectedCardId(card.id); }}
+                accessibilityRole="radio"
+                accessibilityLabel={`${card.brand.charAt(0).toUpperCase() + card.brand.slice(1)} card ending in ${card.last4}, expires ${card.exp_month}/${String(card.exp_year).slice(-2)}`}
+                accessibilityState={{ checked: isSelected }}
               >
                 <View style={styles.paymentIconContainer}>
                   <Ionicons name="card" size={24} color={isSelected ? colors.primary : colors.textDim} />
@@ -284,6 +292,9 @@ function PaymentConfirmScreenContent() {
             <TouchableOpacity
               style={[styles.paymentOption, selectedPayment === 'card' && styles.paymentOptionSelected]}
               onPress={() => setSelectedPayment('card')}
+              accessibilityRole="radio"
+              accessibilityLabel="Credit card"
+              accessibilityState={{ checked: selectedPayment === 'card' }}
             >
               <View style={styles.paymentIconContainer}>
                 <Ionicons name="card" size={24} color={selectedPayment === 'card' ? colors.primary : colors.textDim} />
@@ -303,6 +314,9 @@ function PaymentConfirmScreenContent() {
           <TouchableOpacity
             style={[styles.paymentOption, selectedPayment === 'wallet' && styles.paymentOptionSelected]}
             onPress={() => setSelectedPayment('wallet')}
+            accessibilityRole="radio"
+            accessibilityLabel="Spinr Wallet"
+            accessibilityState={{ checked: selectedPayment === 'wallet' }}
           >
             <View style={styles.paymentIconContainer}>
               <Ionicons name="wallet" size={24} color={selectedPayment === 'wallet' ? colors.primary : colors.textDim} />
@@ -317,7 +331,13 @@ function PaymentConfirmScreenContent() {
             )}
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.addPaymentButton} onPress={() => router.push('/manage-cards' as any)}>
+          <TouchableOpacity
+            style={styles.addPaymentButton}
+            onPress={() => router.push('/manage-cards' as any)}
+            accessibilityRole="button"
+            accessibilityLabel="Add payment method"
+            accessibilityHint="Opens the manage cards screen"
+          >
             <Ionicons name="add" size={20} color={colors.primary} />
             <Text style={styles.addPaymentText}>Add Payment Method</Text>
           </TouchableOpacity>
@@ -343,6 +363,8 @@ function PaymentConfirmScreenContent() {
                 onValueChange={(v) => setUseCorporate(v)}
                 trackColor={{ false: colors.border, true: colors.primary }}
                 thumbColor="#FFF"
+                accessibilityLabel="Bill to business"
+                accessibilityHint="Toggle to charge this ride to a corporate account"
               />
             </View>
             {useCorporate && corporateAccounts.length > 1 && (
@@ -352,6 +374,9 @@ function PaymentConfirmScreenContent() {
                     key={acct.id}
                     style={[styles.corporateOption, selectedCorporateId === acct.id && styles.corporateOptionSelected]}
                     onPress={() => setSelectedCorporateId(acct.id)}
+                    accessibilityRole="radio"
+                    accessibilityLabel={acct.company_name}
+                    accessibilityState={{ checked: selectedCorporateId === acct.id }}
                   >
                     <Text style={[styles.corporateOptionText, selectedCorporateId === acct.id && { color: colors.primary }]}>
                       {acct.company_name}
@@ -366,7 +391,13 @@ function PaymentConfirmScreenContent() {
 
         {/* Promo Code */}
         {!promoExpanded ? (
-          <TouchableOpacity style={styles.promoButton} onPress={() => setPromoExpanded(true)}>
+          <TouchableOpacity
+            style={styles.promoButton}
+            onPress={() => setPromoExpanded(true)}
+            accessibilityRole="button"
+            accessibilityLabel={promoApplied ? `Promo applied, saving $${promoDiscount.toFixed(2)}` : 'Add promo code'}
+            accessibilityHint="Opens the promo code entry field"
+          >
             <Ionicons name="pricetag" size={20} color={colors.primary} />
             <Text style={styles.promoText}>
               {promoApplied ? `Promo applied: -$${promoDiscount.toFixed(2)}` : 'Add promo code'}
@@ -390,6 +421,9 @@ function PaymentConfirmScreenContent() {
                 style={[styles.promoApplyButton, (!promoCode.trim() || promoValidating) && styles.promoApplyDisabled]}
                 onPress={handleApplyPromo}
                 disabled={!promoCode.trim() || promoValidating}
+                accessibilityRole="button"
+                accessibilityLabel="Apply promo code"
+                accessibilityState={{ disabled: !promoCode.trim() || promoValidating, busy: promoValidating }}
               >
                 {promoValidating ? (
                   <ActivityIndicator color="#FFF" size="small" />
@@ -410,6 +444,9 @@ function PaymentConfirmScreenContent() {
         <TouchableOpacity
           style={styles.splitButton}
           onPress={() => router.push('/fare-split' as any)}
+          accessibilityRole="button"
+          accessibilityLabel="Split fare"
+          accessibilityHint="Share the cost of this ride with friends"
         >
           <View style={styles.splitIconContainer}>
             <Ionicons name="people" size={20} color={colors.primary} />
@@ -455,6 +492,10 @@ function PaymentConfirmScreenContent() {
           onPress={handleBookRide}
           disabled={isLoading || isBooking}
           activeOpacity={0.8}
+          accessibilityRole="button"
+          accessibilityLabel={scheduledTime ? `Schedule ${selectedVehicle?.name}` : `Book ${selectedVehicle?.name}`}
+          accessibilityHint={`Total $${totalFare.toFixed(2)}`}
+          accessibilityState={{ disabled: isLoading || isBooking, busy: isBooking }}
         >
           {isLoading || isBooking ? (
             <ActivityIndicator color="#FFFFFF" />

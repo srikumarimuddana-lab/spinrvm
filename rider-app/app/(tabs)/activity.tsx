@@ -209,10 +209,14 @@ export default function ActivityScreen() {
       return <Text style={styles.monthHeader}>{item.title}</Text>;
     }
     const { ride } = item;
+    const fare = ride.status === 'cancelled' ? '0.00' : ride.total_fare?.toFixed(2) || '0.00';
     return (
       <TouchableOpacity
         style={styles.rideCard}
         onPress={() => handleRidePress(ride)}
+        accessibilityRole="button"
+        accessibilityLabel={`${getStatusText(ride.status)} ride to ${ride.dropoff_address || 'unknown destination'}, $${fare}`}
+        accessibilityHint="Double-tap to view ride details"
       >
         <View style={[styles.rideIcon, { backgroundColor: '#FFF0F0' }]}>
           <Ionicons
@@ -233,7 +237,7 @@ export default function ActivityScreen() {
 
         <View style={styles.rideFareContainer}>
           <Text style={[styles.rideFare, ride.status === 'cancelled' && styles.rideFareCancelled]}>
-            ${ride.status === 'cancelled' ? '0.00' : ride.total_fare?.toFixed(2) || '0.00'}
+            ${fare}
           </Text>
           <View style={styles.rideStatusContainer}>
             <View style={[styles.statusDot, { backgroundColor: getStatusColor(ride.status) }]} />
@@ -255,22 +259,33 @@ export default function ActivityScreen() {
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.title}>{t('activity.title')}</Text>
-        <TouchableOpacity style={styles.filterIcon}>
+        <TouchableOpacity
+          style={styles.filterIcon}
+          accessibilityRole="button"
+          accessibilityLabel="Filter rides"
+          accessibilityHint="Opens ride filter options"
+        >
           <Ionicons name="options-outline" size={24} color={colors.text} />
         </TouchableOpacity>
       </View>
 
       {/* Tab Switcher — History vs Upcoming (R-P1-5) */}
-      <View style={styles.tabRow}>
+      <View style={styles.tabRow} accessibilityRole="tablist">
         <TouchableOpacity
           style={[styles.tab, activeTab === 'history' && styles.tabActive]}
           onPress={() => setActiveTab('history')}
+          accessibilityRole="tab"
+          accessibilityLabel="Ride history"
+          accessibilityState={{ selected: activeTab === 'history' }}
         >
           <Text style={[styles.tabText, activeTab === 'history' && styles.tabTextActive]}>{t('activity.history_tab')}</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.tab, activeTab === 'upcoming' && styles.tabActive]}
           onPress={() => setActiveTab('upcoming')}
+          accessibilityRole="tab"
+          accessibilityLabel={`Upcoming rides${scheduledRides.length > 0 ? `, ${scheduledRides.length} scheduled` : ''}`}
+          accessibilityState={{ selected: activeTab === 'upcoming' }}
         >
           <Text style={[styles.tabText, activeTab === 'upcoming' && styles.tabTextActive]}>
             {t('activity.upcoming_tab')}{scheduledRides.length > 0 ? ` (${scheduledRides.length})` : ''}
@@ -287,6 +302,9 @@ export default function ActivityScreen() {
                 key={f}
                 style={[styles.filterTab, filter === f && styles.filterTabActive]}
                 onPress={() => setFilter(f as FilterType)}
+                accessibilityRole="radio"
+                accessibilityLabel={`${f.charAt(0).toUpperCase() + f.slice(1)} rides`}
+                accessibilityState={{ checked: filter === f }}
               >
                 <Text style={[styles.filterTabText, filter === f && styles.filterTabTextActive]}>
                   {f.charAt(0).toUpperCase() + f.slice(1)}
@@ -349,6 +367,9 @@ export default function ActivityScreen() {
                 key={ride.id}
                 style={styles.rideCard}
                 onPress={() => handleRidePress(ride)}
+                accessibilityRole="button"
+                accessibilityLabel={`Scheduled ride to ${ride.dropoff_address || 'unknown destination'}, ${ride.scheduled_time ? formatDate(ride.scheduled_time) : 'scheduled'}`}
+                accessibilityHint="Double-tap to view ride details"
               >
                 <View style={[styles.rideIcon, { backgroundColor: '#EFF6FF' }]}>
                   <Ionicons name="calendar" size={20} color="#3B82F6" />

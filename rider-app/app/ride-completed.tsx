@@ -238,7 +238,13 @@ function RideCompletedScreenContent() {
         {/* Post-Trip Actions */}
         <View style={styles.postTripActions}>
           <View style={styles.receiptRow}>
-            <TouchableOpacity style={[styles.invoiceBtn, { flex: 1 }]} onPress={handleShareInvoice}>
+            <TouchableOpacity
+              style={[styles.invoiceBtn, { flex: 1 }]}
+              onPress={handleShareInvoice}
+              accessibilityRole="button"
+              accessibilityLabel="Share receipt"
+              accessibilityHint="Shares your trip receipt"
+            >
               <Ionicons name="receipt-outline" size={18} color={colors.primary} />
               <Text style={styles.invoiceBtnText}>Share Receipt</Text>
               <Ionicons name="share-outline" size={16} color={colors.textDim} />
@@ -249,6 +255,8 @@ function RideCompletedScreenContent() {
                 Clipboard.setString(buildReceiptText());
                 setAlertState({ visible: true, title: 'Copied!', message: 'Receipt copied to clipboard.', variant: 'success' });
               }}
+              accessibilityRole="button"
+              accessibilityLabel="Copy receipt to clipboard"
             >
               <Ionicons name="copy-outline" size={18} color={colors.textDim} />
             </TouchableOpacity>
@@ -256,6 +264,9 @@ function RideCompletedScreenContent() {
           <TouchableOpacity
             style={styles.chatBtn}
             onPress={() => router.push(`/chat-driver?rideId=${rideId}` as any)}
+            accessibilityRole="button"
+            accessibilityLabel="Message driver"
+            accessibilityHint="Opens a chat with your driver"
           >
             <Ionicons name="chatbubble-ellipses-outline" size={18} color="#3B82F6" />
             <Text style={styles.chatBtnText}>Message Driver</Text>
@@ -458,6 +469,9 @@ function RideCompletedScreenContent() {
                   key={amt}
                   style={[styles.tipBtn, selectedTip === amt && styles.tipBtnActive]}
                   onPress={() => { setSelectedTip(amt); setCustomTip(''); }}
+                  accessibilityRole="radio"
+                  accessibilityLabel={`Tip $${amt}`}
+                  accessibilityState={{ checked: selectedTip === amt }}
                 >
                   <Text style={[styles.tipBtnText, selectedTip === amt && styles.tipBtnTextActive]}>${amt}</Text>
                 </TouchableOpacity>
@@ -487,6 +501,9 @@ function RideCompletedScreenContent() {
           onPress={handleSubmit}
           disabled={isSubmitting}
           activeOpacity={0.8}
+          accessibilityRole="button"
+          accessibilityLabel={alreadyPaid ? 'Rate and finish' : `Pay and finish`}
+          accessibilityState={{ disabled: isSubmitting, busy: isSubmitting }}
         >
           {isSubmitting ? (
             <ActivityIndicator size="small" color="#FFF" />

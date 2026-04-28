@@ -8,7 +8,17 @@ their active WebSocket session.
 
 import asyncio
 import logging
+import random
+import time
 from datetime import datetime, timedelta, timezone
+
+try:
+    from utils.loop_monitor import record_heartbeat as _record_heartbeat
+except ImportError:
+
+    def _record_heartbeat(name: str) -> None:  # type: ignore[misc]
+        pass
+
 
 try:
     from ..db import db
@@ -16,12 +26,16 @@ try:
     from ..socket_manager import manager
     from .datetime_utils import parse_iso_utc
     from .driver_presence import clear_presence
+    from .metrics import inc as _metric_inc
+    from .metrics import set_gauge as _metric_gauge
 except ImportError:
     from db import db
     from features import send_push_notification
     from socket_manager import manager
     from utils.datetime_utils import parse_iso_utc
     from utils.driver_presence import clear_presence
+    from utils.metrics import inc as _metric_inc
+    from utils.metrics import set_gauge as _metric_gauge
 
 logger = logging.getLogger(__name__)
 
@@ -191,8 +205,15 @@ async def document_expiry_loop():
     """Background loop that checks for expiring documents every 12 hours."""
     logger.info("Document expiry checker started (every 12h)")
     while True:
+        _t0 = time.monotonic()
+        _had_error = False
         try:
             await check_expiring_documents()
         except Exception as e:
             logger.error(f"Document expiry loop error: {e}")
-        await asyncio.sleep(CHECK_INTERVAL_SECONDS)
+            _had_error = True
+        _metric_gauge("spinr_bgloop_duration_ms", (time.monotonic() - _t0) * 1000, {"loop": "document_expiry"})
+        if _had_error:
+            _metric_inc("spinr_bgloop_errors_total", {"loop": "document_expiry"})
+        _record_heartbeat("document_expiry (12h)")
+        await asyncio.sleep(CHECK_INTERVAL_SECONDS * (0.9 + random.random() * 0.2))

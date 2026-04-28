@@ -11,6 +11,7 @@ import { AuthInitializer } from "@/components/auth-initializer";
 export const metadata: Metadata = {
   title: "Spinr Admin",
   description: "Admin Dashboard for the Spinr Rideshare Platform",
+  robots: { index: false, follow: false },
 };
 
 export default async function RootLayout({

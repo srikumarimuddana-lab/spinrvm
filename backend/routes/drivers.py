@@ -15,6 +15,7 @@ try:
     from ..features import send_email, send_push_notification
     from ..geo_utils import calculate_distance
     from ..logging_utils import diag_logger
+    from ..models.ride_status import RideStatus
     from ..schemas import Driver, RideRatingRequest
     from ..socket_manager import manager
     from ..utils.crypto import hash_otp
@@ -28,6 +29,7 @@ except ImportError:
     from features import send_email, send_push_notification
     from geo_utils import calculate_distance
     from logging_utils import diag_logger
+    from models.ride_status import RideStatus  # noqa: F401
     from schemas import Driver, RideRatingRequest
     from socket_manager import manager
     from utils.crypto import hash_otp
@@ -140,11 +142,11 @@ api_router = APIRouter(prefix="/drivers", tags=["Drivers"])
 #   • restarting a cancelled ride
 #   • marking "arrived" on a completed ride
 # Idempotent destination states are included to make retries safe.
-ARRIVE_FROM_STATES = ("driver_assigned", "driver_accepted", "driver_arrived")
+ARRIVE_FROM_STATES = (RideStatus.DRIVER_ASSIGNED, RideStatus.DRIVER_ACCEPTED, RideStatus.DRIVER_ARRIVED)
 # verify-otp and start both move driver_arrived → in_progress.
 # in_progress is idempotent for both (retry after network blip).
-START_FROM_STATES = ("driver_arrived", "in_progress")
-COMPLETE_FROM_STATES = ("in_progress",)
+START_FROM_STATES = (RideStatus.DRIVER_ARRIVED, RideStatus.IN_PROGRESS)
+COMPLETE_FROM_STATES = (RideStatus.IN_PROGRESS,)
 
 
 async def _generate_and_store_ride_snapshot(
@@ -1559,6 +1561,8 @@ async def get_t4a_summary(year: int, current_user: dict = Depends(get_current_us
         "total_trips": len(rides),
         "platform_fees": 0,
         "net_earnings": total_earnings,
+        "gst_registered": driver.get("gst_registered", False),
+        "gst_bn": driver.get("gst_bn") or "",
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -1570,7 +1574,17 @@ async def export_earnings(year: int = Query(None), current_user: dict = Depends(
 
     summary_data = await get_t4a_summary(year, current_user)
 
-    csv_data = f"Year,Total Earnings,Total Trips,Net Earnings\n{year},{summary_data['total_earnings']},{summary_data['total_trips']},{summary_data['net_earnings']}"
+    # CRA T4A-compatible CSV. GST/BN columns are required for drivers who
+    # earn above the T4A reporting threshold and hold a GST/HST account.
+    csv_data = (
+        "Year,Total Earnings,Total Trips,Net Earnings,GST Registered,GST/HST Business Number\n"
+        f"{year},"
+        f"{summary_data['total_earnings']},"
+        f"{summary_data['total_trips']},"
+        f"{summary_data['net_earnings']},"
+        f"{'Yes' if summary_data['gst_registered'] else 'No'},"
+        f"{summary_data['gst_bn']}"
+    )
     filename = f"earnings_export_{year}.csv"
 
     return {"data": csv_data, "filename": filename}
@@ -2174,7 +2188,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     # payment_status value, and it masked genuine failures from the
     # webhook dispatcher in webhooks.py.
     update_fields: Dict[str, Any] = {
-        "status": "completed",
+        "status": RideStatus.COMPLETED,
         "ride_completed_at": datetime.now(timezone.utc),
         "updated_at": datetime.now(timezone.utc),
         "planned_distance_km": planned_distance,
@@ -2307,8 +2321,8 @@ async def cancel_ride(ride_id: str, reason: str = Query(""), current_user: dict 
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
-    if ride.get("status") == "in_progress":
-        raise RideStateError("Cannot cancel a trip that is already in progress")
+    if ride.get("status") in (RideStatus.IN_PROGRESS, RideStatus.COMPLETED):
+        raise RideStateError(f"Cannot cancel a ride in state '{ride.get('status')}'")
 
     now = datetime.now(timezone.utc)
     base_update = {
@@ -3230,7 +3244,7 @@ async def verify_subscription_session(
     try:
         session = stripe.checkout.Session.retrieve(session_id, api_key=stripe_key)
     except Exception as e:
-        logger.warning(f"[SUBSCRIBE] verify-session Stripe error: {e}")
+        logger.error(f"[SUBSCRIBE] verify-session Stripe error: {e}", exc_info=True)
         return {"status": "pending"}
 
     if session.payment_status == "paid":
@@ -3370,7 +3384,9 @@ async def check_expiring_subscriptions():
                 app_settings = await get_app_settings()
                 require_sub = bool(app_settings.get("require_driver_subscription", False))
             except Exception as e:
-                logger.warning(f"[SUB-EXPIRY] get_app_settings failed, skipping enforcement this tick: {e}")
+                logger.error(
+                    f"[SUB-EXPIRY] get_app_settings failed, skipping enforcement this tick: {e}", exc_info=True
+                )
                 require_sub = False
 
             warned_count = 0
@@ -3401,7 +3417,7 @@ async def check_expiring_subscriptions():
                             {"status": "expired"},
                         )
                     except Exception as e:
-                        logger.warning(f"[SUB-EXPIRY] Failed to mark sub {sub['id']} expired: {e}")
+                        logger.error(f"[SUB-EXPIRY] Failed to mark sub {sub['id']} expired: {e}", exc_info=True)
                         continue
 
                     if not require_sub:
@@ -3432,7 +3448,7 @@ async def check_expiring_subscriptions():
                     try:
                         await clear_presence(driver["id"])
                     except Exception as e:
-                        logger.warning(f"[SUB-EXPIRY] clear_presence failed for {driver['id']}: {e}")
+                        logger.error(f"[SUB-EXPIRY] clear_presence failed for {driver['id']}: {e}", exc_info=True)
 
                     if driver.get("user_id"):
                         manager.disconnect(f"driver_{driver['user_id']}")
@@ -3456,7 +3472,7 @@ async def check_expiring_subscriptions():
                             },
                         )
                     except Exception as e:
-                        logger.warning(f"[SUB-EXPIRY] activity log insert failed for {driver['id']}: {e}")
+                        logger.error(f"[SUB-EXPIRY] activity log insert failed for {driver['id']}: {e}", exc_info=True)
 
                     if driver.get("user_id"):
                         try:
@@ -3515,6 +3531,13 @@ async def check_expiring_subscriptions():
             )
 
         except Exception as e:
-            logger.warning(f"[SUB-EXPIRY] Background check error: {e}")
+            logger.error(f"[SUB-EXPIRY] Background check error: {e}", exc_info=True)
+
+        try:
+            from utils.loop_monitor import record_heartbeat as _lm_hb
+
+            _lm_hb("subscription_expiry (6h)")
+        except ImportError:
+            pass
 
         await asyncio.sleep(6 * 3600)

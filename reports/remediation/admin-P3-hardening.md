@@ -251,18 +251,18 @@ Generic detail in the response, full diagnostic in the log. Repeat the sweep acr
 
 ## Checklist
 
-- [ ] A-P3-1 bcrypt `ADMIN_PASSWORD` at startup (02-6)
-- [ ] A-P3-2 Tighter login rate limit + 24-hour account lockout (02-7)
-- [ ] A-P3-3 Optional IP whitelist per staff member (02-8)
-- [ ] A-P3-4 Forgot-password flow with 15-min reset link (02-9)
-- [ ] A-P3-5 `require_role("super_admin")` on staff update/delete (03-4)
-- [ ] A-P3-6 Re-auth + email notification on promotion-to-super_admin (03-5)
-- [ ] A-P3-7 Vitest unit tests for dashboard pages (06-3)
-- [ ] A-P3-8 Security test cases for auth (06-4)
-- [ ] A-P3-9 `logger.error` on document requirement lookup failure (07-3)
-- [ ] A-P3-10 Generic detail in HTTPException; full diagnostic in logs (07-4)
-- [ ] A-P3-11 Wire all subscription CRUD actions; add driver subscription management (01-3)
-- [ ] A-P3-12 Standardize `audit_logs` schema; populate from every admin action (05-5)
+- [x] A-P3-1 bcrypt `ADMIN_PASSWORD` at startup (02-6)
+- [x] A-P3-2 Tighter login rate limit + 24-hour account lockout (02-7)
+- [x] A-P3-3 Optional IP whitelist per staff member (02-8)
+- [x] A-P3-4 Forgot-password flow with 15-min reset link (02-9)
+- [x] A-P3-5 `require_role("super_admin")` on staff update/delete (03-4)
+- [x] A-P3-6 Re-auth + email notification on promotion-to-super_admin (03-5)
+- [x] A-P3-7 Vitest unit tests for dashboard pages (06-3)
+- [x] A-P3-8 Security test cases for auth (06-4)
+- [x] A-P3-9 `logger.error` on document requirement lookup failure (07-3)
+- [x] A-P3-10 Generic detail in HTTPException; full diagnostic in logs (07-4)
+- [x] A-P3-11 Wire all subscription CRUD actions; add driver subscription management (01-3)
+- [x] A-P3-12 Standardize `audit_logs` schema; populate from every admin action (05-5)
 
 ## After this file
 

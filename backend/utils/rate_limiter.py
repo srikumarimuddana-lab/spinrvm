@@ -54,7 +54,9 @@ else:
         scheme = _rate_limit_storage_uri.split("://", 1)[0]
         logger.info(f"Rate limiter using distributed storage backend: {scheme}://…")
     except Exception as _redis_err:
-        logger.warning(f"Redis unavailable — rate limiter using in-memory fallback ({_redis_err})")
+        logger.error(
+            f"Redis unavailable — rate limiter degraded to in-memory fallback ({_redis_err}); OTP brute-force protection weakened on multi-replica deployments"
+        )
         _rate_limit_storage_uri = "memory://"
 
 # Default limiter — reads the real client IP from X-Forwarded-For when the
@@ -362,8 +364,12 @@ class RedisRateLimiter:
         try:
             results = await pipe.execute()
         except Exception as e:
-            # Redis went down mid-operation — reset connection and use in-memory fallback
-            logger.warning(f"Redis unavailable — rate limiter using in-memory fallback ({e})")
+            # Redis went down mid-operation — reset and fall back to in-memory.
+            # Log at ERROR so this surfaces in SRE alerting (DV-6).
+            logger.error(
+                f"Redis unavailable mid-operation — rate limiter degraded to in-memory ({e}); "
+                "OTP brute-force protection weakened on multi-replica deployments"
+            )
             self._redis = None
             return self._memory_check(key.replace("ratelimit:", ""), limit, window)
 

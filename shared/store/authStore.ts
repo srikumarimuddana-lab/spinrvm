@@ -3,7 +3,7 @@ import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 import { auth } from '../config/firebaseConfig';
 import { PhoneAuthProvider, signInWithCredential, signOut, User as FirebaseUser } from 'firebase/auth';
-import api, { setInMemoryToken, setRefreshCallback } from '../api/client';
+import api, { setCsrfToken, setInMemoryToken, setRefreshCallback } from '../api/client';
 import { appCache, CACHE_KEYS, CACHE_CONFIG } from '../cache';
 
 // Wipe every auth artifact from local storage. Called whenever initialize
@@ -126,6 +126,16 @@ export interface User {
   driver_onboarding_next_screen?: string | null;
 }
 
+interface RefreshTokenResponse {
+  token: string;
+  refresh_token: string;
+  expires_in: number;
+}
+
+// Payload accepted by POST /drivers/register — all fields are optional;
+// the backend populates required fields from the authenticated user.
+export type DriverRegistrationPayload = Record<string, unknown>;
+
 interface AuthState {
   user: User | null;
   driver: Driver | null;
@@ -140,7 +150,7 @@ interface AuthState {
   // Actions
   initialize: () => Promise<void>;
   verifyOTP: (verificationId: string, code: string) => Promise<void>;
-  setTokens: (token: string, refreshToken: string, expiresIn: number) => Promise<void>;
+  setTokens: (token: string, refreshToken: string, expiresIn: number, csrfToken?: string | null) => Promise<void>;
   refreshTokens: () => Promise<boolean>;
   createProfile: (data: {
     first_name: string;
@@ -152,7 +162,7 @@ interface AuthState {
   }) => Promise<void>;
   fetchDriverProfile: () => Promise<void>;
   refreshProfile: () => Promise<void>;
-  registerDriver: (data: any) => Promise<void>;
+  registerDriver: (data: DriverRegistrationPayload) => Promise<void>;
   toggleDriverMode: () => void;
   updateDriverStatus: (isOnline: boolean) => Promise<void>;
   updateProfileImage: (imageUri: string) => Promise<void>;
@@ -161,7 +171,7 @@ interface AuthState {
   clearError: () => void;
 }
 
-export const useAuthStore = create<AuthState>((set: any, get: any) => ({
+export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
   driver: null,
   isDriverMode: false,
@@ -174,11 +184,12 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
 
   // ── Token helpers ──────────────────────────────────────────────────────── //
 
-  setTokens: async (token: string, refreshToken: string, expiresIn: number) => {
+  setTokens: async (token: string, refreshToken: string, expiresIn: number, csrfToken?: string | null) => {
     const expiresAt = Date.now() + expiresIn * 1000;
     // Access token is memory-only (wiped on restart, stays within JWT TTL).
     // Only the refresh token is persisted to hardware-backed secure storage.
     setInMemoryToken(token);
+    if (csrfToken !== undefined) setCsrfToken(csrfToken);
     await storage.setItem('refresh_token', refreshToken);
     await storage.setItem('token_expires_at', String(expiresAt));
     // Remove any previously-persisted access token from older app versions.
@@ -191,8 +202,8 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
     if (!storedRefresh) return false;
     try {
       const res = await api.post('/auth/refresh', { refresh_token: storedRefresh });
-      const { token, refresh_token: newRefresh, expires_in } = res.data as any;
-      await get().setTokens(token, newRefresh, expires_in);
+      const { token, refresh_token: newRefresh, expires_in, csrf_token } = res.data as any;
+      await get().setTokens(token, newRefresh, expires_in, csrf_token);
       return true;
     } catch (e: any) {
       // Only wipe the session when the server explicitly rejects the refresh
@@ -253,9 +264,9 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
         // it's the reliable "driver row exists" signal when is_driver/role
         // flags are stale on legacy user rows.
         const looksLikeDriver =
-          !!(userData as any).is_driver ||
-          (userData as any).role === 'driver' ||
-          !!(userData as any).driver_onboarding_status;
+          !!userData.is_driver ||
+          userData.role === 'driver' ||
+          !!userData.driver_onboarding_status;
         if (looksLikeDriver) {
           try {
             const driverRes = await api.get('/drivers/me', {
@@ -315,9 +326,9 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
 
           let driverData: Driver | null = null;
           const looksLikeDriver =
-            !!(userData as any).is_driver ||
-            (userData as any).role === 'driver' ||
-            !!(userData as any).driver_onboarding_status;
+            !!userData.is_driver ||
+            userData.role === 'driver' ||
+            !!userData.driver_onboarding_status;
           if (looksLikeDriver) {
             try {
               const driverRes = await api.get('/drivers/me');
@@ -373,7 +384,7 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
         }
       }, 4000);
 
-      firebaseAuthInstance.onAuthStateChanged(async (firebaseUser: any) => {
+      firebaseAuthInstance.onAuthStateChanged(async (firebaseUser: FirebaseUser | null) => {
         if (get().isInitialized) return; // Already resolved by timeout or previous call
 
         if (firebaseUser) {
@@ -391,9 +402,9 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
                 await appCache.set(CACHE_KEYS.USER_PROFILE, userData, CACHE_CONFIG.USER_PROFILE_TTL);
               }
               const looksLikeDriver2 =
-                !!(userData as any)?.is_driver ||
-                (userData as any)?.role === 'driver' ||
-                !!(userData as any)?.driver_onboarding_status;
+                !!userData?.is_driver ||
+                userData?.role === 'driver' ||
+                !!userData?.driver_onboarding_status;
               if (looksLikeDriver2) {
                 try {
                   const driverRes = await api.get('/drivers/me');
@@ -449,7 +460,7 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
     }
   },
 
-  createProfile: async (data: any) => {
+  createProfile: async (data: Parameters<AuthState['createProfile']>[0]) => {
     try {
       set({ isLoading: true, error: null });
       const response = await api.post('/users/profile', data);
@@ -494,9 +505,9 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
       // those flags. Without this, /drivers/me is never called and the GO
       // button stays disabled because `driver` is null in the store.
       const looksLikeDriver =
-        !!(userData as any)?.is_driver ||
-        (userData as any)?.role === 'driver' ||
-        !!(userData as any)?.driver_onboarding_status;
+        !!userData?.is_driver ||
+        userData?.role === 'driver' ||
+        !!userData?.driver_onboarding_status;
       if (looksLikeDriver) {
         try {
           const driverRes = await api.get('/drivers/me');
@@ -522,7 +533,7 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
     }
   },
 
-  registerDriver: async (data: any) => {
+  registerDriver: async (data: DriverRegistrationPayload) => {
     try {
       set({ isLoading: true, error: null });
       const response = await api.post('/drivers/register', data);
@@ -593,6 +604,7 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
       if (__DEV__) console.log('Logout error:', error);
     }
     setInMemoryToken(null);
+    setCsrfToken(null);
     await storage.deleteItem('auth_token');
     await storage.deleteItem('refresh_token');
     await storage.deleteItem('token_expires_at');

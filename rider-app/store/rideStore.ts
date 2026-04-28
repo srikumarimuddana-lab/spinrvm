@@ -517,9 +517,8 @@ export const useRideStore = create<RideState>((set, get) => ({
         }
       }
     }
-    // All attempts failed — rethrow so SOSButton can show "Alert Not Sent" UX
-    // and offer the 911 call-to-action. SOSButton owns all failure UX;
-    // showing Alert here would produce a double-prompt.
+    // All attempts failed — rethrow so SOSButton can set backendOk=false and
+    // show its own "Alert Not Sent" UI with the 911 prompt.
     throw lastError;
   },
 

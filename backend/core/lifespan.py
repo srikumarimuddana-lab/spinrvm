@@ -90,6 +90,18 @@ async def lifespan(app: FastAPI):
         logger.error(f"Failed to initialize database: {e}")
         raise
 
+    # Warn operators if Redis is absent in production. Without Redis, OTP
+    # lockout state and per-user rate-limit counters are in-process only and
+    # are lost on every restart — brute-force protection degrades silently.
+    if settings.ENV.lower() == "production" and not any(
+        [settings.REDIS_URL, settings.RATE_LIMIT_REDIS_URL, settings.WS_REDIS_URL]
+    ):
+        logger.error(
+            "No Redis URL configured in production. OTP lockout and rate-limit "
+            "state are stored in-process and reset on every restart. "
+            "Set REDIS_URL (or RATE_LIMIT_REDIS_URL + WS_REDIS_URL) before launch."
+        )
+
     # Start background tasks
     import asyncio
 

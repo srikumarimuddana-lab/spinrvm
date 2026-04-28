@@ -300,6 +300,8 @@ class TestAdminLogoutAll:
         # B-P1-11: admin sockets only — never kick rider/driver sockets
         # for an admin force-logout (different identity space).
         kick_user.assert_awaited_once_with(
-            "staff-real", client_types=["admin"], reason="logout_all",
+            "staff-real",
+            client_types=["admin"],
+            reason="logout_all",
         )
         assert result == {"success": True, "revoked_refresh_tokens": 2}

@@ -85,5 +85,5 @@ describe('rideStore — triggerEmergency (P2-14 / R13)', () => {
 
     // rideStore must NOT show its own Alert — that's SOSButton's responsibility
     expect(mockAlert).not.toHaveBeenCalled();
-  });
+  }, 10000); // 10s timeout: triggerEmergency retries 3× with 1s+2s real-timer backoff
 });

@@ -184,6 +184,7 @@ class TestOtpLockout429ResponseShape:
 
             with pytest.raises(HTTPException) as exc:
                 import asyncio
+
                 asyncio.run(auth_mod._check_otp_lockout("+15555550100"))
 
         assert exc.value.status_code == 429
@@ -191,15 +192,9 @@ class TestOtpLockout429ResponseShape:
         # contract _record_otp_failure sets the lockout key to expire
         # at, so by then Redis will have evicted it and the next
         # send-otp will succeed.
-        assert exc.value.headers["Retry-After"] == str(
-            int(settings.OTP_LOCKOUT_DURATION_SECONDS)
-        )
+        assert exc.value.headers["Retry-After"] == str(int(settings.OTP_LOCKOUT_DURATION_SECONDS))
         # IETF headers must mirror the slowapi 429 shape so the mobile
         # parser doesn't need to special-case OTP.
-        assert exc.value.headers["RateLimit-Limit"] == str(
-            int(settings.OTP_MAX_FAILURES)
-        )
+        assert exc.value.headers["RateLimit-Limit"] == str(int(settings.OTP_MAX_FAILURES))
         assert exc.value.headers["RateLimit-Remaining"] == "0"
-        assert exc.value.headers["RateLimit-Reset"] == str(
-            int(settings.OTP_LOCKOUT_DURATION_SECONDS)
-        )
+        assert exc.value.headers["RateLimit-Reset"] == str(int(settings.OTP_LOCKOUT_DURATION_SECONDS))

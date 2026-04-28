@@ -7,6 +7,7 @@ import {
     FlatList,
     Platform,
     RefreshControl,
+    Alert,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -62,11 +63,19 @@ export default function NotificationsScreen() {
     const markAsRead = (id: string) => {
         // Mutation invalidates the list cache on success; the screen
         // re-renders with the row's is_read=true once the server confirms.
-        markReadMutation.mutate(id);
+        markReadMutation.mutate(id, {
+            onError: () => {
+                Alert.alert(t('notifications.markReadError'), t('notifications.markReadErrorBody'));
+            },
+        });
     };
 
     const markAllRead = () => {
-        markAllReadMutation.mutate();
+        markAllReadMutation.mutate(undefined, {
+            onError: () => {
+                Alert.alert(t('notifications.markReadError'), t('notifications.markReadErrorBody'));
+            },
+        });
     };
 
     const onRefresh = () => { refetch(); };
@@ -87,8 +96,8 @@ export default function NotificationsScreen() {
         else if (item.type === 'payout_processed') router.push('/driver/earnings');
         else if (item.type === 'ride_offer') router.push('/driver/');
         else if (item.type === 'quest_earned') router.push('/driver/quests');
-        // DV-9: unknown types stay on the notifications screen (already visible);
-        // no navigation needed — the item is still readable in place.
+        // Unknown type: notification is marked read above; no navigation needed.
+        // Explicit no-op prevents accidental fall-through if new types are added later.
     };
 
     const renderNotification = ({ item }: { item: Notification }) => {

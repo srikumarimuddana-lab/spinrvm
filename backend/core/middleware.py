@@ -105,9 +105,7 @@ class FirebaseAppCheckMiddleware(BaseHTTPMiddleware):
                     status_code=401,
                     content={"detail": "Invalid App Check token"},
                 )
-            logger.debug(
-                "App Check: token verification failed (enforcement disabled) req_id={}: {}", request_id, exc
-            )
+            logger.debug("App Check: token verification failed (enforcement disabled) req_id={}: {}", request_id, exc)
 
         return await call_next(request)
 
@@ -143,7 +141,7 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
 _BASE_SECURITY_HEADERS: dict[str, str] = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
-    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Referrer-Policy": "no-referrer",
     "Permissions-Policy": "geolocation=(), microphone=(), camera=(), payment=()",
     "Cross-Origin-Opener-Policy": "same-origin",
     "Cross-Origin-Resource-Policy": "same-site",
@@ -354,7 +352,15 @@ def init_middleware(app):
     origins = [origin.strip() for origin in settings.ALLOWED_ORIGINS.split(",") if origin.strip()]
 
     # Always allow the admin and default apps explicitly regardless of env variables
-    always_allowed = ["https://spinr-admin.vercel.app", "http://localhost:3000", "http://localhost:3001"]
+    always_allowed = [
+        "https://spinr-admin.vercel.app",
+        "https://spinr.app",
+        "https://www.spinr.app",
+        "https://spinr-track.app",
+        "https://www.spinr-track.app",
+        "http://localhost:3000",
+        "http://localhost:3001",
+    ]
     origins.extend(always_allowed)
     # Remove empty strings and duplicates (preserve order for determinism)
     origins = list(dict.fromkeys(o for o in origins if o))

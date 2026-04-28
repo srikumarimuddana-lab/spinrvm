@@ -20,7 +20,7 @@ Layer 2 — integration: require backend deps; skipped locally, run in CI.
 """
 
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -126,9 +126,11 @@ async def test_admin_logout_blacklists_jti():
     redis_set_mock = AsyncMock()
     revoke_mock = AsyncMock()
 
-    from starlette.requests import Request as _Request
-    request_mock = MagicMock(spec=_Request)
-    request_mock.state = MagicMock()
+    from starlette.requests import Request as StarletteRequest
+
+    scope = {"type": "http", "method": "POST", "headers": [], "path": "/api/admin/auth/logout", "query_string": b""}
+    request_mock = StarletteRequest(scope=scope)
+    request_mock.state.user = None
 
     from backend.routes.admin.auth import LogoutRequest
 

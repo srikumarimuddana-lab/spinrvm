@@ -17,7 +17,22 @@ from pathlib import Path
 from typing import Any
 
 API_BASE = "https://api.github.com"
-MAX_LOG_CHARS = 10_000  # Keep last N chars of each job log (errors usually tail)
+MAX_LOG_CHARS = 20_000  # Keep last N chars of each job log (errors usually tail)
+
+
+class _NoAuthOnRedirect(urllib.request.HTTPRedirectHandler):
+    """Strip Authorization header when following GitHub's 302 redirect to presigned
+    storage URLs.  Python's default urllib handler forwards ALL original headers,
+    including Authorization.  S3 presigned URLs embed their own auth signature;
+    receiving a conflicting Authorization header causes a 403 SignatureDoesNotMatch
+    error, making every log fetch silently return "".
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new_req:
+            new_req.remove_header("Authorization")
+        return new_req
 
 
 def _get(url: str, token: str) -> Any:
@@ -46,15 +61,23 @@ def _get(url: str, token: str) -> Any:
 
 
 def _get_text(url: str, token: str) -> str:
+    """Fetch job log text from GitHub Actions API.
+
+    GitHub returns a 302 redirect to a presigned storage URL.  We use a custom
+    opener that strips the Authorization header on redirect so that the S3/Azure
+    presigned URL isn't rejected due to conflicting auth signatures.
+    """
     req = urllib.request.Request(
         url,
         headers={
             "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github.v3.raw",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
         },
     )
+    opener = urllib.request.build_opener(_NoAuthOnRedirect())
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with opener.open(req, timeout=60) as resp:
             text = resp.read().decode("utf-8", errors="replace")
             return text[-MAX_LOG_CHARS:]  # Errors are usually at the end
     except (urllib.error.HTTPError, urllib.error.URLError):

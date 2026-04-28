@@ -1,4 +1,15 @@
-FROM python:3.12-slim
+# B-P2-8: builder stage pinned to a specific Python minor version, matching
+# the runtime stage below. Previously this was `python:3.12-slim` (any 3.12.x),
+# which meant a Docker Hub re-tag of `3.12-slim` could change the build
+# environment between runs without any visible PR diff.
+#
+# NEXT STEP — content-hash pin: add `@sha256:<digest>` after the tag to make
+# the base image bit-for-bit reproducible. This requires a `docker pull` of
+# the current upstream image, which is a manual step performed at the deploy
+# host (Railway / local dev). See `docs/runbooks/docker-image-pinning.md`
+# for the procedure. The digest should be refreshed quarterly or when a
+# Trivy/Grype scan flags the current base.
+FROM python:3.12.9-slim
 
 WORKDIR /build
 

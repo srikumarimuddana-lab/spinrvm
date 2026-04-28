@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 try:
     from ... import db_supabase
@@ -37,21 +37,21 @@ class ServiceAreaCreateRequest(BaseModel):
     is_active: bool = True
     parent_service_area_id: Optional[str] = None
     is_airport: bool = False
-    airport_fee: float = 0
+    airport_fee: float = Field(default=0, ge=0, le=100)
     surge_enabled: Optional[bool] = None
     surge_active: Optional[bool] = None
-    surge_multiplier: float = 1.0
+    surge_multiplier: float = Field(default=1.0, ge=1.0, le=2.5)
     gst_enabled: bool = True
-    gst_rate: float = 5.0
+    gst_rate: float = Field(default=5.0, ge=0, le=100)
     pst_enabled: bool = False
-    pst_rate: float = 0.0
+    pst_rate: float = Field(default=0.0, ge=0, le=100)
     hst_enabled: bool = False
-    hst_rate: float = 0.0
+    hst_rate: float = Field(default=0.0, ge=0, le=100)
     spinr_pass_enabled: bool = True
     subscription_plan_ids: List[str] = []
     driver_matching_algorithm: str = "nearest"
-    search_radius_km: float = 10.0
-    min_driver_rating: float = 4.0
+    search_radius_km: float = Field(default=10.0, ge=1, le=100)
+    min_driver_rating: float = Field(default=4.0, ge=1.0, le=5.0)
     show_demand_heatmap: bool = False
 
 
@@ -63,27 +63,27 @@ class ServiceAreaUpdateRequest(BaseModel):
     is_active: Optional[bool] = None
     parent_service_area_id: Optional[str] = None
     is_airport: Optional[bool] = None
-    airport_fee: Optional[float] = None
+    airport_fee: Optional[float] = Field(default=None, ge=0, le=100)
     surge_enabled: Optional[bool] = None
     surge_active: Optional[bool] = None
-    surge_multiplier: Optional[float] = None
+    surge_multiplier: Optional[float] = Field(default=None, ge=1.0, le=2.5)
     gst_enabled: Optional[bool] = None
-    gst_rate: Optional[float] = None
+    gst_rate: Optional[float] = Field(default=None, ge=0, le=100)
     pst_enabled: Optional[bool] = None
-    pst_rate: Optional[float] = None
+    pst_rate: Optional[float] = Field(default=None, ge=0, le=100)
     hst_enabled: Optional[bool] = None
-    hst_rate: Optional[float] = None
+    hst_rate: Optional[float] = Field(default=None, ge=0, le=100)
     required_documents: Optional[Any] = None
     spinr_pass_enabled: Optional[bool] = None
     subscription_plan_ids: Optional[List[str]] = None
     driver_matching_algorithm: Optional[str] = None
-    search_radius_km: Optional[float] = None
-    min_driver_rating: Optional[float] = None
+    search_radius_km: Optional[float] = Field(default=None, ge=1, le=100)
+    min_driver_rating: Optional[float] = Field(default=None, ge=1.0, le=5.0)
     show_demand_heatmap: Optional[bool] = None
 
 
 class SurgePricingRequest(BaseModel):
-    multiplier: float = 1.0
+    multiplier: float = Field(default=1.0, ge=1.0, le=2.5)
     is_active: bool = False
 
 
@@ -91,7 +91,7 @@ class AreaFeeCreateRequest(BaseModel):
     fee_name: str = ""
     fee_type: str = "custom"
     calc_mode: str = "flat"
-    amount: float = 0
+    amount: float = Field(default=0, ge=0, le=100)
     description: str = ""
     conditions: Dict[str, Any] = {}
     is_active: bool = True
@@ -101,7 +101,7 @@ class AreaFeeUpdateRequest(BaseModel):
     fee_name: Optional[str] = None
     fee_type: Optional[str] = None
     calc_mode: Optional[str] = None
-    amount: Optional[float] = None
+    amount: Optional[float] = Field(default=None, ge=0, le=100)
     description: Optional[str] = None
     conditions: Optional[Dict[str, Any]] = None
     is_active: Optional[bool] = None

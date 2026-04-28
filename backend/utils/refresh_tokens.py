@@ -235,12 +235,12 @@ async def _handle_refresh_token_reuse(row: dict) -> None:
                 )
             elif audience in _ADMIN_STAFF_AUDIENCES:
                 await ws_manager.kick_user(
-                    user_id, client_types=["admin"], reason="refresh_token_reuse",
+                    user_id,
+                    client_types=["admin"],
+                    reason="refresh_token_reuse",
                 )
         except Exception as e:
-            logger.error(
-                f"reuse-cascade: WS kick failed (user={user_id} audience={audience}): {e}"
-            )
+            logger.error(f"reuse-cascade: WS kick failed (user={user_id} audience={audience}): {e}")
 
     # Step 4: audit_logs row. Production schema (migration 06):
     # id TEXT PK / action / entity_type / entity_id / user_email / details TEXT.

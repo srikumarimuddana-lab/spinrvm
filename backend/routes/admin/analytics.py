@@ -8,7 +8,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 try:
     from ...db import db
@@ -143,7 +143,7 @@ async def get_driver_acceptance_rates(
         drivers = await db.get_rows("drivers", {}, limit=500)
     except Exception as e:
         logger.error(f"Failed to fetch drivers: {e}", exc_info=True, extra={"domain": "admin"})
-        drivers = []
+        raise HTTPException(status_code=503, detail="analytics_unavailable") from e
 
     if service_area_id:
         drivers = [d for d in drivers if d.get("service_area_id") == service_area_id]
@@ -244,8 +244,8 @@ async def get_analytics_overview(
     if cached:
         try:
             return _json.loads(cached)
-        except Exception:
-            pass
+        except Exception:  # noqa: S110
+            pass  # corrupt cache entry — fall through to fresh fetch
 
     start_date = _parse_date_range(date_range)
 
@@ -322,8 +322,8 @@ async def get_analytics_overview(
     }
     try:
         await redis_set(cache_key, _json.dumps(result), ttl=_OVERVIEW_CACHE_TTL)
-    except Exception:
-        pass
+    except Exception:  # noqa: S110
+        pass  # Redis unavailable — return fresh result uncached
     return result
 
 
@@ -396,4 +396,6 @@ async def get_surge_history(
         return {"area_id": area_id, "hours": hours, "history": filtered}
     except Exception as e:
         logger.error(f"Failed to fetch surge history: {e}", exc_info=True, extra={"domain": "admin"})
-        return {"area_id": area_id, "hours": hours, "history": []}
+        from fastapi import HTTPException as _HTTPException
+
+        raise _HTTPException(status_code=503, detail="Surge history unavailable — database error") from e

@@ -7,7 +7,16 @@ Also resolves driver payouts stuck as 'pending' after transfer failures.
 
 import asyncio
 import logging
+import random
 from datetime import datetime, timezone
+
+try:
+    from utils.loop_monitor import record_heartbeat as _record_heartbeat
+except ImportError:
+
+    def _record_heartbeat(name: str) -> None:  # type: ignore[misc]
+        pass
+
 
 try:
     from ..db import db
@@ -211,4 +220,9 @@ async def payment_retry_loop():
             await retry_stuck_payouts()
         except Exception as e:
             logger.error(f"Payout retry loop error: {e}")
-        await asyncio.sleep(RETRY_INTERVAL_SECONDS)
+        _record_heartbeat("payment_retry (5min)")
+        # B-P3-2: per-tick ±10% jitter so replicas don't tick in lockstep
+        # and create a thundering herd against Stripe + Supabase. Tested
+        # cap is RETRY_INTERVAL_SECONDS * 0.1 ≈ 30s on 5min interval.
+        delta = RETRY_INTERVAL_SECONDS * 0.1
+        await asyncio.sleep(RETRY_INTERVAL_SECONDS + random.uniform(-delta, delta))

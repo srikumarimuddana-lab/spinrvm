@@ -17,6 +17,14 @@ import logging
 import stripe
 
 try:
+    from utils.loop_monitor import record_heartbeat as _record_heartbeat
+except ImportError:
+
+    def _record_heartbeat(name: str) -> None:  # type: ignore[misc]
+        pass
+
+
+try:
     from ..db_supabase import (  # type: ignore
         get_corporate_account_by_id,
         get_default_payment_method,
@@ -104,4 +112,5 @@ async def corporate_autotopup_loop() -> None:
             await run_autotopup_tick()
         except Exception as e:
             logger.error("autotopup loop error: %s", e)
+        _record_heartbeat("corporate_autotopup (10min)")
         await asyncio.sleep(600)

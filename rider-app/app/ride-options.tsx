@@ -8,7 +8,7 @@ import {
   ScrollView,
   ActivityIndicator,
   Image,
-  Dimensions,
+  useWindowDimensions,
   Platform,
   Switch,
   Modal,
@@ -25,14 +25,16 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { CarMarker } from '@shared/components/CarMarker';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import SkeletonBox from '../components/SkeletonBox';
 
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const MAP_HEIGHT = 280;
 
 function RideOptionsScreenContent() {
+  const { width: SCREEN_WIDTH, height } = useWindowDimensions();
+  // Reactive map height: 35% of current screen height, clamped for usability
+  const MAP_HEIGHT = Math.min(Math.max(Math.round(height * 0.35), 180), 380);
   const { colors, isDark } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useMemo(() => createStyles(colors, MAP_HEIGHT), [colors, MAP_HEIGHT]);
   const router = useRouter();
   const {
     pickup,
@@ -95,8 +97,8 @@ function RideOptionsScreenContent() {
   useEffect(() => {
     if (pickup && dropoff) {
       console.log('Platform:', Platform.OS, '| Fetching estimates & nearby drivers for:', pickup.address, 'to', dropoff.address);
-      handleFetchEstimates();
-      fetchNearbyDrivers();
+      // R-P2-51: run both fetches in parallel — they are independent requests.
+      void Promise.all([handleFetchEstimates(), fetchNearbyDrivers()]);
 
       // Auto-refresh drivers every 10 seconds
       const interval = setInterval(() => {
@@ -283,7 +285,13 @@ function RideOptionsScreenContent() {
     <SafeAreaView style={styles.container} edges={['top']}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={() => router.back()}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
           <Ionicons name="arrow-back" size={24} color="#1A1A1A" />
         </TouchableOpacity>
         {dropoff && (
@@ -483,9 +491,17 @@ function RideOptionsScreenContent() {
           </TouchableOpacity>
         </View>
       ) : isLoading ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={colors.primary} />
-          <Text style={styles.loadingText}>Finding best rides...</Text>
+        <View style={styles.optionsList}>
+          {[0, 1, 2].map((i) => (
+            <View key={i} style={{ flexDirection: 'row', alignItems: 'center', padding: 16, marginBottom: 8, backgroundColor: colors.surface, borderRadius: 12 }}>
+              <SkeletonBox width={72} height={48} borderRadius={8} style={{ marginRight: 14 }} />
+              <View style={{ flex: 1, gap: 8 }}>
+                <SkeletonBox width="50%" height={16} />
+                <SkeletonBox width="35%" height={12} />
+              </View>
+              <SkeletonBox width={52} height={22} borderRadius={6} />
+            </View>
+          ))}
         </View>
       ) : (
         <ScrollView style={styles.optionsList} showsVerticalScrollIndicator={false}>
@@ -527,7 +543,7 @@ function RideOptionsScreenContent() {
                     {(estimate.surge_multiplier ?? 1) > 1.0 && (
                       <View style={styles.surgeBadge}>
                         <Ionicons name="trending-up" size={10} color="#fff" />
-                        <Text style={styles.surgeBadgeText}>{estimate.surge_multiplier}x</Text>
+                        <Text style={styles.surgeBadgeText} allowFontScaling={false}>{estimate.surge_multiplier}x</Text>
                       </View>
                     )}
                     <View style={styles.capacityBadge}>
@@ -537,7 +553,7 @@ function RideOptionsScreenContent() {
                   </View>
 
                   {isAvailable ? (
-                    <Text style={styles.optionETA}>
+                    <Text style={styles.optionETA} allowFontScaling={false}>
                       {estimate.eta_minutes ? `${estimate.eta_minutes} min away` : 'Nearby'}
                       {estimate.driver_count > 0 && ` · ${estimate.driver_count} driver${estimate.driver_count > 1 ? 's' : ''}`}
                     </Text>
@@ -553,13 +569,13 @@ function RideOptionsScreenContent() {
                 <View style={[styles.optionPriceContainer, !isAvailable && { opacity: 0.4 }]}>
                   {appliedPromo && appliedPromo.discount_amount > 0 && isSelected ? (
                     <View style={{ alignItems: 'flex-end' }}>
-                      <Text style={styles.optionPriceStruck}>${estimate.total_fare.toFixed(2)}</Text>
-                      <Text style={styles.optionPriceDiscounted}>
+                      <Text style={styles.optionPriceStruck} allowFontScaling={false}>${estimate.total_fare.toFixed(2)}</Text>
+                      <Text style={styles.optionPriceDiscounted} allowFontScaling={false}>
                         ${Math.max(0, estimate.total_fare - appliedPromo.discount_amount).toFixed(2)}
                       </Text>
                     </View>
                   ) : (
-                    <Text style={styles.optionPrice}>${estimate.total_fare.toFixed(2)}</Text>
+                    <Text style={styles.optionPrice} allowFontScaling={false}>${estimate.total_fare.toFixed(2)}</Text>
                   )}
                   {isSelected && isAvailable && (
                     <View style={styles.selectedCheck}>
@@ -597,7 +613,7 @@ function RideOptionsScreenContent() {
               onPress={() => setShowDatePicker(true)}
             >
               <Ionicons name="calendar-outline" size={18} color={colors.primary} />
-              <Text style={styles.scheduledTimeText}>
+              <Text style={styles.scheduledTimeText} allowFontScaling={false}>
                 {scheduledTime.toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' })}{' '}
                 at {scheduledTime.toLocaleTimeString('en-CA', { hour: '2-digit', minute: '2-digit' })}
               </Text>
@@ -750,7 +766,7 @@ function RideOptionsScreenContent() {
                   <View style={{ flex: 1 }}>
                     <Text style={styles.promoRowCode}>{promo.code}</Text>
                     <Text style={styles.promoRowDesc}>{promo.description || discountLabel}</Text>
-                    <Text style={styles.promoRowSaving}>{discountLabel}</Text>
+                    <Text style={styles.promoRowSaving} allowFontScaling={false}>{discountLabel}</Text>
                   </View>
                   {isSelected && <Ionicons name="checkmark-circle" size={22} color={colors.primary} />}
                 </TouchableOpacity>
@@ -791,7 +807,7 @@ export default function RideOptionsScreen() {
   );
 }
 
-function createStyles(colors: ThemeColors) {
+function createStyles(colors: ThemeColors, mapHeight: number = 280) {
   return StyleSheet.create({
   container: {
     flex: 1,
@@ -828,7 +844,7 @@ function createStyles(colors: ThemeColors) {
   mapContainer: {
     marginHorizontal: 0,
     backgroundColor: colors.border,
-    height: MAP_HEIGHT,
+    height: mapHeight,
   },
   map: {
     width: '100%',

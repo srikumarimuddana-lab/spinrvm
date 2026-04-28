@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from fastapi import WebSocket
 from loguru import logger
+
+# B-P3-1: per-message timeout for fan-out broadcasts. Prevents a single
+# stuck socket from stalling the whole iteration (TCP half-close + kernel
+# keepalive can take tens of seconds otherwise).
+_BROADCAST_SEND_TIMEOUT = 2.0
 
 try:
     from .logging_utils import diag_logger  # type: ignore
@@ -280,10 +286,20 @@ class ConnectionManager:
         broadcast would need a story for excluding admin-only channels.
         Prefer prefix-scoped broadcasts (``broadcast_to_admins``) which
         fan out correctly across VMs.
+
+        B-P3-1: per-message 2 s timeout so a single stuck socket can't
+        stall the whole broadcast (FastAPI's WebSocket.send_json await
+        has no built-in deadline; a half-closed TCP connection blocks
+        until the kernel keepalive kicks in, ~tens of seconds).
         """
         connections = list(self.active_connections.values())  # snapshot to avoid mutation during iteration
         for connection in connections:
-            await connection.send_json(message)
+            try:
+                await asyncio.wait_for(connection.send_json(message), timeout=_BROADCAST_SEND_TIMEOUT)
+            except asyncio.TimeoutError:
+                logger.warning(f"broadcast: send timed out after {_BROADCAST_SEND_TIMEOUT}s; skipping connection")
+            except Exception as e:
+                logger.warning(f"broadcast: send failed: {e}")
 
     async def broadcast_to_admins(self, message: dict):
         """Broadcast to every admin client across the fleet.
@@ -339,6 +355,9 @@ class ConnectionManager:
         """Deliver ``message`` to every local socket whose key starts with
         ``prefix``. Snapshot the match list before iterating so a
         concurrent disconnect doesn't RuntimeError the loop.
+
+        B-P3-1: same per-message timeout as broadcast() — a stuck admin
+        client must not stall the entire admin fan-out.
         """
         keys = [k for k in self.active_connections if k.startswith(prefix)]
         for key in keys:
@@ -346,7 +365,9 @@ class ConnectionManager:
             if ws is None:
                 continue
             try:
-                await ws.send_json(message)
+                await asyncio.wait_for(ws.send_json(message), timeout=_BROADCAST_SEND_TIMEOUT)
+            except asyncio.TimeoutError:
+                logger.warning(f"Failed to send to {key}: timed out after {_BROADCAST_SEND_TIMEOUT}s")
             except Exception as e:
                 logger.warning(f"Failed to send to {key}: {e}")
 

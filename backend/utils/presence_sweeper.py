@@ -46,6 +46,14 @@ import uuid
 from datetime import datetime, timezone
 
 try:
+    from utils.loop_monitor import record_heartbeat as _record_heartbeat
+except ImportError:
+
+    def _record_heartbeat(name: str) -> None:  # type: ignore[misc]
+        pass
+
+
+try:
     from .. import db_supabase
     from ..socket_manager import manager
     from .driver_presence import present_driver_ids
@@ -214,4 +222,5 @@ async def presence_sweeper_loop() -> None:
             raise
         except Exception as exc:
             logger.warning(f"[presence_sweeper] tick failed: {exc}")
+        _record_heartbeat("presence_sweeper (60s)")
         await asyncio.sleep(SWEEP_INTERVAL_SECONDS)

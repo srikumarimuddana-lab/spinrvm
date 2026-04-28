@@ -90,6 +90,18 @@ async def lifespan(app: FastAPI):
         logger.error(f"Failed to initialize database: {e}")
         raise
 
+    # Warn operators if Redis is absent in production. Without Redis, OTP
+    # lockout state and per-user rate-limit counters are in-process only and
+    # are lost on every restart — brute-force protection degrades silently.
+    if settings.ENV.lower() == "production" and not any(
+        [settings.REDIS_URL, settings.RATE_LIMIT_REDIS_URL, settings.WS_REDIS_URL]
+    ):
+        logger.error(
+            "No Redis URL configured in production. OTP lockout and rate-limit "
+            "state are stored in-process and reset on every restart. "
+            "Set REDIS_URL (or RATE_LIMIT_REDIS_URL + WS_REDIS_URL) before launch."
+        )
+
     # Start background tasks
     import asyncio
 
@@ -198,6 +210,17 @@ async def lifespan(app: FastAPI):
         _spawn("retention_purge (24h)", retention_purge_loop)
     except Exception as e:
         logger.warning(f"Failed to import retention purge loop: {e}")
+
+    # Stripe ↔ DB daily reconciliation — runs at 02:00 UTC, one replica
+    # via Redis leader lock. Flags paid rides with no matching Stripe
+    # PaymentIntent, amount mismatches, and orphaned Stripe charges.
+    # Discrepancies logged at ERROR so they reach Sentry + audit_logs.
+    try:
+        from utils.stripe_reconcile import stripe_reconcile_loop
+
+        _spawn("stripe_reconcile (24h)", stripe_reconcile_loop)
+    except Exception as e:
+        logger.warning(f"Failed to import Stripe reconciliation loop: {e}")
 
     app.state.background_tasks = background_tasks
 

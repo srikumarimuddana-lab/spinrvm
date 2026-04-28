@@ -432,17 +432,17 @@ def _aggregate_rows(rows: list[dict]) -> dict:
     by_member_out = [
         {
             **v,
-            "allowance_total": float(v["allowance_total"]),
-            "master_total": float(v["master_total"]),
-            "total": float(v["total"]),
+            "allowance_total": float(v["allowance_total"].quantize(_TWO, rounding=ROUND_HALF_UP)),
+            "master_total": float(v["master_total"].quantize(_TWO, rounding=ROUND_HALF_UP)),
+            "total": float(v["total"].quantize(_TWO, rounding=ROUND_HALF_UP)),
         }
         for v in sorted(by_member.values(), key=lambda m: m["total"], reverse=True)
     ]
     return {
         "ride_count": len(rows),
-        "allowance_total": float(allowance_total),
-        "master_total": float(master_total),
-        "total": float(total),
+        "allowance_total": float(allowance_total.quantize(_TWO, rounding=ROUND_HALF_UP)),
+        "master_total": float(master_total.quantize(_TWO, rounding=ROUND_HALF_UP)),
+        "total": float(total.quantize(_TWO, rounding=ROUND_HALF_UP)),
         "avg_fare": float((total / len(rows)).quantize(_TWO, rounding=ROUND_HALF_UP)) if rows else 0.0,
         "by_member": by_member_out,
     }
@@ -485,7 +485,7 @@ async def billing_summary(
     wallet = await get_corporate_wallet_by_company(company_id) or {}
     return {
         "month": month,
-        "wallet_balance": float(wallet.get("balance") or 0),
+        "wallet_balance": float(Decimal(str(wallet.get("balance") or "0")).quantize(_TWO, rounding=ROUND_HALF_UP)),
         "wallet_currency": wallet.get("currency") or "CAD",
         **_aggregate_rows(all_rows),
     }
@@ -560,7 +560,7 @@ async def billing_transactions(
     )
     return {
         "wallet_id": wallet["id"],
-        "balance": float(wallet.get("balance") or 0),
+        "balance": float(Decimal(str(wallet.get("balance") or "0")).quantize(_TWO, rounding=ROUND_HALF_UP)),
         "currency": wallet.get("currency") or "CAD",
         "transactions": txns,
     }

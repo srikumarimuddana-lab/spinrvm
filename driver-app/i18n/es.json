@@ -181,7 +181,9 @@
         "unreadCount": "{{count}} notificación sin leer",
         "unreadCountPlural": "{{count}} notificaciones sin leer",
         "noNotifications": "Sin notificaciones",
-        "allCaughtUp": "¡Estás al día!"
+        "allCaughtUp": "¡Estás al día!",
+        "markReadError": "No se pudo actualizar la notificación",
+        "markReadErrorBody": "Comprueba tu conexión e inténtalo de nuevo."
     },
     "profile": {
         "editProfile": "Editar perfil",

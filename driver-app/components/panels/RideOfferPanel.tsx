@@ -45,13 +45,30 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
 
     const progress = countdownSeconds / 15;
 
+    const fareStr = `$${(incomingRide.fare || 0).toFixed(2)}`;
+    const distStr = incomingRide.distance_km != null ? `${incomingRide.distance_km.toFixed(1)} km` : '';
+    const panelLabel = [
+        `New ride offer. Earnings: ${fareStr}`,
+        distStr && `${distStr} to pickup`,
+        incomingRide.pickup_address && `Pickup: ${incomingRide.pickup_address}`,
+    ].filter(Boolean).join('. ');
+
     return (
-        <View style={styles.rideOfferOverlay}>
+        <View
+            style={styles.rideOfferOverlay}
+            accessibilityViewIsModal
+            accessibilityLabel={panelLabel}
+        >
             <LinearGradient colors={['rgba(10,14,33,0.95)', COLORS.primary]} style={styles.rideOfferGradient}>
                 {/* Countdown Ring */}
                 <View style={styles.countdownContainer}>
-                    <View style={styles.countdownCircle}>
-                        <Text style={styles.countdownText}>{countdownSeconds}</Text>
+                    <View
+                        style={styles.countdownCircle}
+                        accessibilityLabel={`${countdownSeconds} seconds remaining to accept`}
+                        accessibilityLiveRegion="polite"
+                        accessible
+                    >
+                        <Text style={styles.countdownText} allowFontScaling={false}>{countdownSeconds}</Text>
                     </View>
                     <View style={[styles.countdownBar, { width: `${progress * 100}%` }]} />
                 </View>
@@ -60,7 +77,13 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                 <View style={styles.rideOfferInfo}>
                     <View style={styles.fareHighlight}>
                         <Text style={styles.fareLabel}>YOUR EARNINGS</Text>
-                        <Text style={styles.fareAmount}>${(incomingRide.fare || 0).toFixed(2)}</Text>
+                        <Text
+                            style={styles.fareAmount}
+                            allowFontScaling={false}
+                            accessibilityLabel={`Earnings: ${fareStr}`}
+                        >
+                            {fareStr}
+                        </Text>
                     </View>
 
                     {(incomingRide.distance_km != null || incomingRide.duration_minutes != null) && (
@@ -124,6 +147,9 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                     <TouchableOpacity
                         style={styles.declineBtn}
                         onPress={onDecline}
+                        accessibilityRole="button"
+                        accessibilityLabel="Decline ride offer"
+                        accessibilityHint="Double-tap to decline this ride"
                     >
                         <Ionicons name="close" size={28} color={COLORS.danger} />
                         <Text style={styles.declineText}>Decline</Text>
@@ -133,6 +159,10 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                         style={styles.acceptBtn}
                         onPress={onAccept}
                         disabled={isLoading}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Accept ride — ${fareStr}`}
+                        accessibilityHint="Double-tap to accept this ride"
+                        accessibilityState={{ disabled: isLoading, busy: isLoading }}
                     >
                         <LinearGradient
                             colors={[COLORS.accent, COLORS.accentDim]}

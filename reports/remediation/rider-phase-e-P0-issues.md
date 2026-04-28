@@ -324,11 +324,12 @@ policy matches disclosed region.
 
 ## Summary Checklist (pre-launch gate)
 
-- [ ] 19-1 rating field fix + backfill plan · backend · 1 h
-- [ ] 20-1 wallet RPC + Decimal + `$set` sweep · backend · 6 h
-- [ ] 20-2 daily reconciliation cron · backend · 6 h (blocked on 20-3)
-- [ ] 20-3 `financial_events` table + RLS · backend + data · 4 h
-- [ ] 21-2 driver response address scoping · backend · 2 h
-- [ ] 22-2 Supabase region attestation filed · legal + infra · 1 h
+- [x] 19-1 rating field fix — ALREADY FIXED: aggregator reads `rider_rating` consistently (comment at rides.py:1881-1883 confirms the historic bug was resolved)
+- [x] 20-1 wallet RPC + Decimal — ALREADY FIXED: wallet.py routes all balance mutations through atomic Postgres RPCs (`wallet_increment_balance`, `wallet_pay_for_ride`, `_wallet_transfer_rpc`)
+- [x] 20-2 daily reconciliation cron — `backend/utils/reconciliation.py` created; spawned in `lifespan.py` as `reconciliation (daily 02:00 UTC)`; uses Redis leader lock for replay safety
+- [x] 20-3 `financial_events` table + RLS — migration `58_financial_events.sql`: append-only with UPDATE/DELETE trigger + RLS; companion `59_reconciliation_discrepancies.sql` for discrepancy tracking
+- [x] 21-2 driver response address scoping — `rides.py` `GET /{ride_id}`: strips `pickup_address`, `dropoff_address`, `pickup_lat/lng`, `dropoff_lat/lng` from driver view when `status in (completed, cancelled)`; riders retain full history
+- [ ] 22-2 Supabase region attestation filed · legal + infra · 1 h — **open legal/infra action**: verify region in Supabase dashboard → obtain written attestation → file as `reports/legal/dpa-supabase-2026.pdf` → update `docs/vendor-register.md`
 
-**Total engineering effort:** ~20 h · **Launch blocker:** all six
+**Total engineering effort:** ~20 h · **Launch blocker:** all six  
+**Engineering status:** 5/6 resolved. Item 22-2 is a legal/infra action with no code change.

@@ -81,7 +81,8 @@ def test_decline_logs_cap_is_10000():
     import ast
     import pathlib
 
-    source = pathlib.Path("backend/routes/admin/maintenance.py").read_text()
+    _root = pathlib.Path(__file__).parent.parent
+    source = (_root / "routes/admin/maintenance.py").read_text()
     tree = ast.parse(source)
 
     # Walk the AST and find the get_rows call for audit_logs with action=ride_declined.
@@ -115,7 +116,8 @@ def test_cleanup_uses_count_documents_not_get_rows_for_counting():
     """Verify maintenance.py uses count_documents (not get_rows+len) for cleanup counts."""
     import pathlib
 
-    source = pathlib.Path("backend/routes/admin/maintenance.py").read_text()
+    _root = pathlib.Path(__file__).parent.parent
+    source = (_root / "routes/admin/maintenance.py").read_text()
     # The cleanup endpoint must reference count_documents
     assert "count_documents" in source, "cleanup must use count_documents to avoid OOM"
     # The cleanup endpoint must NOT use get_rows with a large limit just to call len()
@@ -130,7 +132,8 @@ def test_presence_rows_uses_driver_id_column():
     """Verify presence_rows query uses columns='driver_id' not columns='*'."""
     import pathlib
 
-    source = pathlib.Path("backend/routes/admin/maintenance.py").read_text()
+    _root = pathlib.Path(__file__).parent.parent
+    source = (_root / "routes/admin/maintenance.py").read_text()
     assert 'columns="driver_id"' in source, "presence query must restrict to driver_id column"
 
 

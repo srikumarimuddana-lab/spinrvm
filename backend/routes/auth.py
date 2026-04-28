@@ -345,7 +345,7 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
                 user_obj = UserProfile(**existing_user)
                 logger.info("UserProfile valid")
             except Exception as e:
-                logger.warning(f"UserProfile validation failed, falling back to raw dict: {e}")
+                logger.error(f"UserProfile validation failed, falling back to raw dict: {e}", exc_info=True)
                 user_obj = existing_user
             return _make_auth_response(
                 token,

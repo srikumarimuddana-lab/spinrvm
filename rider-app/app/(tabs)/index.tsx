@@ -93,7 +93,15 @@ export default function HomeScreen() {
     }
 
     const { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== 'granted') return;
+    if (status !== 'granted') {
+      setAlertState({
+        visible: true,
+        title: 'Location Access Required',
+        message: 'Spinr needs your location to show nearby drivers and calculate fares. Please enable location access in Settings.',
+        variant: 'warning',
+      });
+      return;
+    }
 
     if (useCache) {
       try {
@@ -345,7 +353,15 @@ export default function HomeScreen() {
           onPress={async () => {
           if (!mapRef.current) return;
           const { status } = await Location.requestForegroundPermissionsAsync();
-          if (status !== 'granted') return;
+          if (status !== 'granted') {
+            setAlertState({
+              visible: true,
+              title: 'Location Access Required',
+              message: 'Spinr needs your location to show nearby drivers and calculate fares. Please enable location access in Settings.',
+              variant: 'warning',
+            });
+            return;
+          }
           let loc: any;
           try {
             loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
@@ -476,7 +492,14 @@ export default function HomeScreen() {
         title={alertState.title}
         message={alertState.message}
         variant={alertState.variant}
-        buttons={[{ text: 'OK', style: 'default' }]}
+        buttons={
+          alertState.title === 'Location Access Required'
+            ? [
+                { text: 'Open Settings', style: 'default', onPress: () => Linking.openSettings() },
+                { text: 'Cancel', style: 'cancel' },
+              ]
+            : [{ text: 'OK', style: 'default' }]
+        }
         onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
       />
     </View>

@@ -14,6 +14,8 @@ interface FreeCancelTimerProps {
   cancellationFee?: number;
   /** Compact single-line layout for use inside dialogs. Default false. */
   compact?: boolean;
+  /** Called once when the free-cancel window transitions to expired. */
+  onExpire?: () => void;
 }
 
 /**
@@ -31,12 +33,15 @@ export function FreeCancelTimer({
   freeCancelWindowSeconds = 120,
   cancellationFee = 3.0,
   compact = false,
+  onExpire,
 }: FreeCancelTimerProps) {
   const [secondsLeft, setSecondsLeft] = useState<number>(() => {
     if (!driverAcceptedAt) return freeCancelWindowSeconds;
     const elapsed = Math.floor((Date.now() - new Date(driverAcceptedAt).getTime()) / 1000);
     return Math.max(0, freeCancelWindowSeconds - elapsed);
   });
+  const onExpireRef = React.useRef(onExpire);
+  onExpireRef.current = onExpire;
 
   useEffect(() => {
     if (!driverAcceptedAt || secondsLeft <= 0) return;
@@ -45,7 +50,10 @@ export function FreeCancelTimer({
       const elapsed = Math.floor((Date.now() - new Date(driverAcceptedAt).getTime()) / 1000);
       const remaining = Math.max(0, freeCancelWindowSeconds - elapsed);
       setSecondsLeft(remaining);
-      if (remaining === 0) clearInterval(interval);
+      if (remaining === 0) {
+        clearInterval(interval);
+        onExpireRef.current?.();
+      }
     }, 1000);
 
     return () => clearInterval(interval);

@@ -52,6 +52,7 @@ function DriverArrivingScreenContent() {
   }>({ visible: false, title: '', message: '', variant: 'info' });
   const mapRef = React.useRef<MapView>(null);
   const bottomSheetRef = React.useRef<BottomSheet>(null);
+  const [freeCancelExpired, setFreeCancelExpired] = React.useState(false);
 
   const snapPoints = React.useMemo(() => ['30%', '50%', '85%'], []);
 
@@ -151,24 +152,45 @@ function DriverArrivingScreenContent() {
         ],
       });
     } else if (status === RideStatus.DRIVER_ASSIGNED || status === RideStatus.DRIVER_ACCEPTED) {
-      // Driver on the way — free cancel
-      setAlertState({
-        visible: true,
-        title: 'Cancel ride?',
-        message: 'Your driver is on the way. You can cancel for free right now.',
-        variant: 'warning',
-        buttons: [
-          { text: 'Keep Ride', style: 'cancel' },
-          {
-            text: 'Cancel (Free)', style: 'destructive',
-            onPress: async () => {
-              await cancelRide();
-              clearRide();
-              router.replace('/(tabs)' as any);
+      if (freeCancelExpired) {
+        // Free window has closed — fee applies even before driver_arrived state
+        setAlertState({
+          visible: true,
+          title: 'Cancellation fee applies',
+          message: `The free cancellation window has closed. A fee of $${cancellationFee.toFixed(2)} will be charged.`,
+          variant: 'warning',
+          buttons: [
+            { text: 'Keep Ride', style: 'cancel' },
+            {
+              text: `Cancel & Pay $${cancellationFee.toFixed(2)}`, style: 'destructive',
+              onPress: async () => {
+                await cancelRide();
+                clearRide();
+                router.replace('/(tabs)' as any);
+              },
             },
-          },
-        ],
-      });
+          ],
+        });
+      } else {
+        // Driver on the way — free cancel still available
+        setAlertState({
+          visible: true,
+          title: 'Cancel ride?',
+          message: 'Your driver is on the way. You can cancel for free right now.',
+          variant: 'warning',
+          buttons: [
+            { text: 'Keep Ride', style: 'cancel' },
+            {
+              text: 'Cancel (Free)', style: 'destructive',
+              onPress: async () => {
+                await cancelRide();
+                clearRide();
+                router.replace('/(tabs)' as any);
+              },
+            },
+          ],
+        });
+      }
     } else {
       // Still searching — free cancel
       setAlertState({
@@ -545,6 +567,7 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
                   driverAcceptedAt={(currentRide as any)?.driver_accepted_at}
                   freeCancelWindowSeconds={freeCancelWindowSeconds}
                   cancellationFee={cancellationFee}
+                  onExpire={() => setFreeCancelExpired(true)}
                 />
               </View>
             )}

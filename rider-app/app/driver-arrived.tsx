@@ -13,6 +13,7 @@ import { useRideStore } from '../store/rideStore';
 import { useRiderSocket } from '../hooks/useRiderSocket';
 import { RideStatus } from '../constants/rideStatus';
 import { CarMarker } from '@shared/components/CarMarker';
+import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import api from '@shared/api/client';
 import CustomAlert from '@shared/components/CustomAlert';
 import { SOSButton } from '@shared/components/SOSButton';
@@ -22,7 +23,7 @@ import type { ThemeColors } from '@shared/theme/index';
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 
-export default function DriverArrivedScreen() {
+function DriverArrivedScreenContent() {
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
   const { currentRide, currentDriver, fetchRide, cancelRide, clearRide, triggerEmergency } = useRideStore();
@@ -388,6 +389,31 @@ export default function DriverArrivedScreen() {
         onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
       />
     </View>
+  );
+}
+
+export default function DriverArrivedScreen() {
+  const router = useRouter();
+  const { clearRide } = useRideStore();
+  return (
+    <ErrorBoundary
+      fallback={
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+          <Text style={{ fontSize: 18, fontWeight: '700', marginBottom: 8 }}>Map Error</Text>
+          <Text style={{ textAlign: 'center', color: '#6B7280', marginBottom: 24 }}>
+            The map failed to load. Your ride is still active.
+          </Text>
+          <TouchableOpacity
+            onPress={() => { clearRide(); router.replace('/(tabs)' as any); }}
+            style={{ backgroundColor: '#EE2B2B', paddingHorizontal: 24, paddingVertical: 12, borderRadius: 20 }}
+          >
+            <Text style={{ color: '#FFF', fontWeight: '700' }}>Go to Home</Text>
+          </TouchableOpacity>
+        </View>
+      }
+    >
+      <DriverArrivedScreenContent />
+    </ErrorBoundary>
   );
 }
 

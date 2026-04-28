@@ -31,6 +31,7 @@ module.exports = {
     // ReferenceError. Node 22 ships TextDecoder, URL, structuredClone etc.
     // natively, so skipping the expo polyfill setup is safe in tests.
     '^expo/src/winter$': '<rootDir>/__mocks__/expoWinter.js',
+    '^expo/src/winter/ImportMetaRegistry$': '<rootDir>/__mocks__/expo-winter-noop.js',
     '^@shared/api/client$': '<rootDir>/__mocks__/@shared/api/client.js',
     '^@shared/config/spinr\\.config$': '<rootDir>/__mocks__/@shared/config/spinr.config.js',
     '^@shared/(.*)$': '<rootDir>/__mocks__/@shared/$1',

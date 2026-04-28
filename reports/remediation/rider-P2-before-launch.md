@@ -1608,8 +1608,8 @@ contrast compliance.
 - [x] R-P2-32 Book button disabled state tied to isBooking state; spinner shown immediately on tap
 - [x] R-P2-33 Promo validation uses ride_id to fetch fare server-side; minimum-fare bypass closed
 - [x] R-P2-34 Fare-split pay endpoint uses atomic status guard to prevent TOCTOU double-deduction
-- [ ] R-P2-35 Store tests added for scheduled rides, promo, offline queue, fare-split payment confirmation
-- [ ] R-P2-36 useRiderSocket hook test added; component tests for ride panel UI components added
+- [x] R-P2-35 Store tests added for scheduled rides, promo, offline queue, fare-split payment confirmation
+- [x] R-P2-36 useRiderSocket hook test added; component tests for ride panel UI components added
 - [x] R-P2-37 ride-options.tsx shows error message + retry button when fetchEstimates() fails
 - [x] R-P2-38 ErrorBoundary added to driver-arriving, ride-in-progress, ride-completed, driver-arrived screens
 - [x] R-P2-39 /rides/{id}/cancel decorated with @cancel_ride_limit; request: Request param present

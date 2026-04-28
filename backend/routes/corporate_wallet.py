@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from decimal import Decimal
 from typing import Optional
 
@@ -119,8 +120,13 @@ async def manual_topup(
             off_session=True,
             confirm=True,
         )
-    if body.client_idempotency_key:
-        intent_kwargs["idempotency_key"] = body.client_idempotency_key
+    # Always set an idempotency key so retries after network timeouts don't
+    # create duplicate PaymentIntents. Client may supply one (e.g. a UUID they
+    # track); fall back to a 1-minute time-bucket keyed on the wallet so the
+    # same top-up amount within the same minute reuses the same intent.
+    intent_kwargs["idempotency_key"] = (
+        body.client_idempotency_key or f"corp-topup-{wallet['id']}-{int(time.time() // 60)}"
+    )
     intent = stripe.PaymentIntent.create(**intent_kwargs)
     return {"payment_intent_id": intent.id, "client_secret": intent.client_secret}
 

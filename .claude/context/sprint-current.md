@@ -88,7 +88,7 @@ None currently open in production (pre-launch).
 
 **Sprint goal:** Close the top P1 backend safety and data-integrity gaps from the driver-app verification pass (2026-04-23): suspended-driver dispatch gap, document-expiry `$set` anti-pattern, and open items from `OPEN-ITEMS-TRACKER.md` section A/B.
 
-**Status (2026-04-28):** B-S2-1 and B-S2-2 shipped (#140).
+**Status (2026-04-28):** B-S2-1/2 shipped (#140). B-S2-3/4 shipped (#141).
 
 ## In-flight
 
@@ -96,6 +96,8 @@ None currently open in production (pre-launch).
 |---|---|---|---|
 | B-S2-1 | — | shipped (#140) | **DV-1 / P0-5**: Migration 55 — `status != 'suspended'` filter added to `find_nearby_drivers`. |
 | B-S2-2 | — | shipped (#140) | **DV-2 / P0-5**: `document_expiry.py` — `{"$set": ...}` wrapper removed from both `update_one` calls. |
+| B-S2-3 | — | shipped (#141) | **DV-17 / PIPEDA**: `users.py` both deletion endpoints now write `audit_logs` row on DSAR request/execution. |
+| B-S2-4 | — | shipped (#141) | **DV-8 / PIPEDA**: Migration 56 — `purge_pii_retention()` Step G anonymizes `pending_deletion` users after 30-day grace period. |
 
 ## Deferred (non-code or future sprint)
 

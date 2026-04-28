@@ -63,25 +63,25 @@ async def _vault_encrypt(value: str, hint: str = "") -> str:
         return value
     try:
         from supabase_client import supabase as _sb  # type: ignore[import]
-    except ImportError:
+    except ImportError as exc:
         logger.error(
             "vault_encrypt: supabase_client unavailable for %s — refusing to store plaintext", hint, exc_info=True
         )
-        raise HTTPException(status_code=503, detail="Encryption service unavailable") from None
+        raise HTTPException(status_code=503, detail="Encryption service unavailable") from exc
     if not _sb:
         logger.error("vault_encrypt: Supabase client not initialised for %s — refusing to store plaintext", hint)
         raise HTTPException(status_code=503, detail="Encryption service unavailable")
     try:
         res = await db_supabase.run_sync(lambda: _sb.rpc("encrypt_driver_pii", {"plaintext": value}).execute())
         if not res.data:
-            logger.error("vault_encrypt: RPC returned no data for %s", hint)
+            logger.error("vault_encrypt: RPC returned no data for %s — refusing to store plaintext", hint)
             raise HTTPException(status_code=503, detail="Encryption service unavailable")
         return str(res.data)
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error("vault_encrypt: RPC failed for %s: %s — refusing to store plaintext", hint, exc, exc_info=True)
-        raise HTTPException(status_code=503, detail="Encryption service unavailable") from None
+        logger.error("vault_encrypt: RPC failed for %s — refusing to store plaintext", hint, exc_info=True)
+        raise HTTPException(status_code=503, detail="Encryption service unavailable") from exc
 
 
 async def _vault_decrypt(value: str, hint: str = "") -> str:
@@ -101,8 +101,8 @@ async def _vault_decrypt(value: str, hint: str = "") -> str:
     try:
         res = await db_supabase.run_sync(lambda: _sb.rpc("decrypt_driver_pii", {"secret_id": value}).execute())
         return str(res.data) if res.data else value
-    except Exception as exc:
-        logger.error("vault_decrypt: RPC failed for %s — returning raw token: %s", hint, exc, exc_info=True)
+    except Exception:
+        logger.error("vault_decrypt: RPC failed for %s — returning raw token", hint, exc_info=True)
         return value
 
 
@@ -1557,6 +1557,8 @@ async def get_t4a_summary(year: int, current_user: dict = Depends(get_current_us
         "total_trips": len(rides),
         "platform_fees": 0,
         "net_earnings": total_earnings,
+        "gst_registered": driver.get("gst_registered", False),
+        "gst_bn": driver.get("gst_bn") or "",
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -1568,7 +1570,17 @@ async def export_earnings(year: int = Query(None), current_user: dict = Depends(
 
     summary_data = await get_t4a_summary(year, current_user)
 
-    csv_data = f"Year,Total Earnings,Total Trips,Net Earnings\n{year},{summary_data['total_earnings']},{summary_data['total_trips']},{summary_data['net_earnings']}"
+    # CRA T4A-compatible CSV. GST/BN columns are required for drivers who
+    # earn above the T4A reporting threshold and hold a GST/HST account.
+    csv_data = (
+        "Year,Total Earnings,Total Trips,Net Earnings,GST Registered,GST/HST Business Number\n"
+        f"{year},"
+        f"{summary_data['total_earnings']},"
+        f"{summary_data['total_trips']},"
+        f"{summary_data['net_earnings']},"
+        f"{'Yes' if summary_data['gst_registered'] else 'No'},"
+        f"{summary_data['gst_bn']}"
+    )
     filename = f"earnings_export_{year}.csv"
 
     return {"data": csv_data, "filename": filename}
@@ -1596,40 +1608,40 @@ async def export_driver_data(
 
 async def _build_and_email_data_export(user_id: str, email: str) -> None:
     """Background task: collect all driver data and email a JSON export."""
+    import asyncio  # noqa: PLC0415
     import json  # noqa: PLC0415
 
     try:
-        # 1. Driver profile
-        driver_rows = await db_supabase.get_rows("drivers", {"user_id": user_id}, limit=1)
-        driver = driver_rows[0] if driver_rows else {}
+        # B-P2-6: PIPEDA right-to-access has a 30-day SLA but riders/drivers
+        # judge "fast" by the email arrival, not the SLA. The previous
+        # 6-sequential-await pattern accumulated ~6× round-trip latency.
+        # Wave 1 (no driver_id needed) — 3 reads in parallel.
+        driver_rows, user_rows, notification_prefs = await asyncio.gather(
+            db_supabase.get_rows("drivers", {"user_id": user_id}, limit=1),
+            db_supabase.get_rows("users", {"id": user_id}, limit=1),
+            db_supabase.get_rows("notification_preferences", {"user_id": user_id}, limit=1),
+        )
+        driver = (driver_rows or [{}])[0] if driver_rows else {}
+        user = (user_rows or [{}])[0] if user_rows else {}
         driver_id = driver.get("id", "")
+        notification_prefs = notification_prefs or []
 
-        # 2. User account record
-        user_rows = await db_supabase.get_rows("users", {"id": user_id}, limit=1)
-        user = user_rows[0] if user_rows else {}
-
-        # 3. Ride history (last 500 trips)
+        # Wave 2 (driver_id-dependent) — 3 reads in parallel. Skip entirely
+        # if there's no driver row (rider-only account requesting export).
         rides: list = []
-        if driver_id:
-            rides = await db_supabase.get_rows(
-                "rides", {"driver_id": driver_id}, limit=500, order="created_at", desc=True
-            )
-
-        # 4. Payout history
         payouts: list = []
-        if driver_id:
-            payouts = await db_supabase.get_rows(
-                "driver_payouts", {"driver_id": driver_id}, limit=200, order="created_at", desc=True
-            )
-
-        # 5. Uploaded documents
         documents: list = []
         if driver_id:
-            documents = await db_supabase.get_rows("driver_documents", {"driver_id": driver_id}, limit=50)
-
-        # 6. Notification preferences
-        notification_prefs: list = []
-        notification_prefs = await db_supabase.get_rows("notification_preferences", {"user_id": user_id}, limit=1)
+            rides, payouts, documents = await asyncio.gather(
+                db_supabase.get_rows("rides", {"driver_id": driver_id}, limit=500, order="created_at", desc=True),
+                db_supabase.get_rows(
+                    "driver_payouts", {"driver_id": driver_id}, limit=200, order="created_at", desc=True
+                ),
+                db_supabase.get_rows("driver_documents", {"driver_id": driver_id}, limit=50),
+            )
+            rides = rides or []
+            payouts = payouts or []
+            documents = documents or []
 
         export_payload = {
             "export_generated_at": datetime.now(timezone.utc).isoformat() + "Z",
@@ -1758,15 +1770,17 @@ async def get_ride_history(
         raise HTTPException(status_code=404, detail="Driver not found")
 
     try:
-        total = await db_supabase.count_documents("rides", {"driver_id": driver["id"]})
+        history_filter = {
+            "driver_id": driver["id"],
+            "status": {"$in": ["completed", "cancelled"]},
+        }
+        total = await db_supabase.count_documents("rides", history_filter)
         rides = await db_supabase.get_rows(
             "rides",
-            {
-                "driver_id": driver["id"],
-            },
+            history_filter,
             order="created_at",
             desc=True,
-            limit=limit,
+            limit=min(limit, 500),
             offset=offset,
         )
     except Exception as e:
@@ -3512,5 +3526,12 @@ async def check_expiring_subscriptions():
 
         except Exception as e:
             logger.warning(f"[SUB-EXPIRY] Background check error: {e}")
+
+        try:
+            from utils.loop_monitor import record_heartbeat as _lm_hb
+
+            _lm_hb("subscription_expiry (6h)")
+        except ImportError:
+            pass
 
         await asyncio.sleep(6 * 3600)

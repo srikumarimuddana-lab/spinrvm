@@ -34,6 +34,11 @@ from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from starlette.requests import Request as StarletteRequest
+
+_MOCK_REQUEST = StarletteRequest(
+    {"type": "http", "method": "GET", "path": "/", "headers": [], "query_string": b"", "root_path": ""}
+)
 
 RIDER_ID = "rider-abc"
 DRIVER_USER_ID = "driver-user-xyz"
@@ -217,6 +222,7 @@ class TestGetRideReturnsAcceptedStatus:
         ):
             result = asyncio.run(
                 rides_mod.get_ride(
+                    request=_MOCK_REQUEST,
                     ride_id=RIDE_ID,
                     current_user={"id": RIDER_ID, "role": "rider"},
                 )

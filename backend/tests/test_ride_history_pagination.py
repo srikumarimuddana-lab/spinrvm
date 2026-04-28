@@ -21,6 +21,11 @@ Layer 2 — integration: require backend deps; skipped locally, run in CI.
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from starlette.requests import Request as StarletteRequest
+
+_MOCK_REQUEST = StarletteRequest(
+    {"type": "http", "method": "GET", "path": "/", "headers": [], "query_string": b"", "root_path": ""}
+)
 
 # ---------------------------------------------------------------------------
 # Layer 1 — pure logic
@@ -131,6 +136,7 @@ async def test_get_ride_history_calls_get_rows_with_status_filter():
 
     with patch("backend.routes.rides.db_supabase.get_rows", get_rows_mock):
         result = await _rides_module.get_ride_history(
+            request=_MOCK_REQUEST,
             limit=20,
             before=None,
             current_user={"id": "user-1"},
@@ -156,6 +162,7 @@ async def test_get_ride_history_excludes_cancelled_without_driver():
 
     with patch("backend.routes.rides.db_supabase.get_rows", get_rows_mock):
         result = await _rides_module.get_ride_history(
+            request=_MOCK_REQUEST,
             limit=20,
             before=None,
             current_user={"id": "user-1"},

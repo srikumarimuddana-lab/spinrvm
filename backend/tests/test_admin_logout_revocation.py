@@ -20,7 +20,7 @@ Layer 2 — integration: require backend deps; skipped locally, run in CI.
 """
 
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -126,13 +126,11 @@ async def test_admin_logout_blacklists_jti():
     redis_set_mock = AsyncMock()
     revoke_mock = AsyncMock()
 
-    # SlowAPI's @limiter.limit requires a Starlette Request — use spec so
-    # isinstance() passes without building a full ASGI scope dict.
     from starlette.requests import Request as StarletteRequest
 
-    request_mock = MagicMock(spec=StarletteRequest)
-    request_mock.state = MagicMock()
-    request_mock.client = MagicMock(host="127.0.0.1")
+    scope = {"type": "http", "method": "POST", "headers": [], "path": "/api/admin/auth/logout", "query_string": b""}
+    request_mock = StarletteRequest(scope=scope)
+    request_mock.state.user = None
 
     from backend.routes.admin.auth import LogoutRequest
 

@@ -1,6 +1,7 @@
 import os
 from typing import Optional
 
+import bcrypt
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -51,6 +52,15 @@ class Settings(BaseSettings):
     # Admin credentials — no defaults; app refuses to start if unset in production
     ADMIN_EMAIL: str = "admin@spinr.ca"
     ADMIN_PASSWORD: str
+    # Bcrypt hash of ADMIN_PASSWORD — computed once at startup so the plaintext
+    # is never compared directly in hot-path code (A-P3-1).
+    admin_password_hash: str = ""
+
+    # Break-glass emergency access token.  Store the SHA-256 hex digest here,
+    # not the raw token.  When unset, the /admin/auth/break-glass endpoint is
+    # disabled entirely.  Generate with:
+    #   python3 -c "import hashlib, secrets; t=secrets.token_hex(32); print('token:', t, '\nhash:', hashlib.sha256(t.encode()).hexdigest())"
+    BREAK_GLASS_TOKEN_HASH: str = ""
 
     # Rate limiting
     RATE_LIMIT: str = "10/minute"
@@ -81,6 +91,18 @@ class Settings(BaseSettings):
 
     # Observability — optional; Sentry only initialises when this is set
     sentry_dsn: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _hash_admin_password(self) -> "Settings":
+        """Hash ADMIN_PASSWORD with bcrypt at startup (A-P3-1).
+
+        The plaintext env var is read once here and the hash is stored in
+        `admin_password_hash`. All login code compares against the hash so
+        a leaked Settings object never exposes the plaintext.
+        """
+        if self.ADMIN_PASSWORD and not self.admin_password_hash:
+            self.admin_password_hash = bcrypt.hashpw(self.ADMIN_PASSWORD.encode(), bcrypt.gensalt(rounds=12)).decode()
+        return self
 
     @model_validator(mode="after")
     def _guard_production_secrets(self) -> "Settings":
@@ -121,6 +143,15 @@ class Settings(BaseSettings):
                         f"{field} must be set in production. The Firebase ID-token "
                         "audience check is gated on this value; an unset env var "
                         "would silently allow cross-app token reuse (DV-10)."
+                    )
+
+            for field in ("SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"):
+                if not getattr(self, field, ""):
+                    raise ValueError(
+                        f"{field} must be set in production. An empty value causes "
+                        "the Supabase client to initialise successfully but fail on "
+                        "every database call, producing a misleading 500 at runtime "
+                        "rather than a clean startup error."
                     )
         return self
 

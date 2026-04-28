@@ -345,7 +345,7 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
                 user_obj = UserProfile(**existing_user)
                 logger.info("UserProfile valid")
             except Exception as e:
-                logger.warning(f"UserProfile validation failed, falling back to raw dict: {e}")
+                logger.error(f"UserProfile validation failed, falling back to raw dict: {e}", exc_info=True)
                 user_obj = existing_user
             return _make_auth_response(
                 token,
@@ -510,7 +510,7 @@ async def firebase_auth_login(request: Request, body: FirebaseAuthRequest):
     access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     token = create_jwt_token(user_id, phone, session_id=session_id, token_version=token_version)
     refresh_raw, _, refresh_expires_at = await issue_refresh_token(
-        user_id, audience="rider", user_agent=user_agent, ip=client_ip
+        user_id, audience="driver", user_agent=user_agent, ip=client_ip
     )
 
     try:
@@ -554,8 +554,14 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         # Self-heal the column so the next login is fast and consistent.
         try:
             await db_supabase.update_one("users", {"id": current_user["id"]}, {"profile_complete": True})
-        except Exception:
-            logger.warning("Could not self-heal profile_complete")
+        except Exception as e:
+            # B-P1-5 / CLAUDE.md: this is a DB write failure, not a
+            # recoverable anomaly. Mutating `current_user` in memory
+            # below masks the persistence failure for the next login.
+            logger.error(
+                f"Could not self-heal profile_complete for {current_user.get('id')}: {e}",
+                exc_info=True,
+            )
         current_user["profile_complete"] = True
 
     # Derive driver onboarding status (None for non-drivers).
@@ -612,9 +618,10 @@ async def refresh_access_token(request: Request, body: RefreshRequest):
     if not row:
         raise HTTPException(status_code=401, detail="Invalid refresh token")
 
-    if row.get("audience") != "rider":
-        # Admin refresh tokens go through /admin/auth/refresh; rider tokens
-        # minted for admin use would be a privilege-escalation vector.
+    if row.get("audience") not in {"rider", "driver"}:
+        # Admin refresh tokens go through /admin/auth/refresh. Only rider and
+        # driver tokens are valid here; anything else is a privilege-escalation
+        # attempt or a minted-for-wrong-endpoint token.
         raise HTTPException(status_code=401, detail="Invalid refresh token")
 
     user_id = row.get("user_id")
@@ -637,7 +644,7 @@ async def refresh_access_token(request: Request, body: RefreshRequest):
     # revoked_at != null and the lookup returns None.
     new_raw, _, refresh_expires_at = await issue_refresh_token(
         user_id,
-        audience="rider",
+        audience=row.get("audience", "rider"),
         user_agent=user_agent,
         ip=client_ip,
         replaces=row.get("id"),
@@ -717,7 +724,17 @@ async def logout_all(request: Request, current_user: dict = Depends(get_current_
             reason="logout_all",
         )
     except Exception as e:
-        logger.warning(f"logout-all: WS kick failed for {user_id}: {e}")
+        # B-P1-5 / CLAUDE.md: WS kick is the only signal that propagates
+        # logout to other devices in real time. The token-version bump and
+        # refresh-token revocation above will eventually catch the next
+        # API request, but the gap (up to 15 min for the access TTL) is
+        # exactly the window an attacker exploits. exc_info captures
+        # whether this was Redis pub/sub vs in-process registry vs socket
+        # send so on-call can target the fix.
+        logger.error(
+            f"logout-all: WS kick failed for {user_id}: {e}",
+            exc_info=True,
+        )
 
     logger.info(f"logout-all: user={user_id} token_version→{new_version} revoked_refresh={revoked}")
     return {"success": True, "revoked_refresh_tokens": revoked}

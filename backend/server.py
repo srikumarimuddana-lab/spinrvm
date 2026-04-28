@@ -159,6 +159,9 @@ app.include_router(websocket_router)
 # Public settings endpoints (GET /settings, GET /settings/legal). Mounted at
 # root so mobile apps can call them without an auth token, and also at /api/v1
 # for parity. The legal screen fetch uses backendUrl/settings/legal directly.
+# Rate-limit note: double-mounting means slowapi tracks each prefix separately.
+# The settings endpoint is public+read-only so the doubled effective rate is
+# acceptable; add a shared key_func if this ever needs tighter control.
 app.include_router(settings_router)
 app.include_router(settings_router, prefix="/api/v1")
 
@@ -168,7 +171,9 @@ app.include_router(admin_auth_router, prefix="/api")
 app.include_router(corporate_accounts_router, prefix="/api")
 app.include_router(corporate_wallet_router, prefix="/api")
 # Corporate member/allowance/domain endpoints served at root (`/company/{id}/...`)
-# because the rider app hits them without the `/api` prefix.
+# because the rider app calls /company/{id}/policy and /company/{id}/allowances
+# without an /api prefix (verified in workProfileStore.ts). Do not remove until
+# a coordinated mobile release migrates those calls to /api/company/{id}/...
 app.include_router(corporate_company_router)
 app.include_router(corporate_rider_router)
 # files_router serves document files at /api/documents/{id} (used by admin dashboard).
@@ -226,14 +231,15 @@ if sentry_dsn:
         traces_sample_rate=0.1,
         profiles_sample_rate=0.1,
         environment=settings.ENV if hasattr(settings, "ENV") else "production",
-        send_default_pii=True,
+        # PIPEDA: never send IP, cookies, or auth headers to Sentry.
+        send_default_pii=False,
     )
 
     # Bridge loguru → Sentry. The LoggingIntegration above only captures
     # stdlib `logging` records; the rest of the backend uses loguru and
     # would otherwise be invisible in Sentry (including the high-signal
     # REFRESH TOKEN REUSE DETECTED alert in utils/refresh_tokens.py).
-    def _loguru_sentry_sink(message: "Any") -> None:  # noqa: ANN401
+    def _loguru_sentry_sink(message: "Any") -> None:  # noqa: ANN401, F821
         record = message.record
         exc_info = record["exception"]
         if exc_info is not None and exc_info.value is not None:

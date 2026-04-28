@@ -430,7 +430,7 @@ async def admin_logout(
                     remaining = int(exp - datetime.now(timezone.utc).timestamp())
                     if remaining > 0:
                         await redis_set(f"admin:revoked:{jti}", "1", ttl=remaining)
-        except Exception:
+        except Exception:  # noqa: S110
             pass  # malformed / already-expired token — nothing to blacklist
 
     return {"success": True}

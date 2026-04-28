@@ -76,6 +76,4 @@ async def test_run_sync_dispatches_to_db_executor(monkeypatch):
         real_loop.run_in_executor = real_run_in_executor  # type: ignore[method-assign]
 
     assert result == 42
-    assert seen["executor"] is db_supabase._DB_EXECUTOR, (
-        f"run_sync should pass _DB_EXECUTOR, got {seen['executor']!r}"
-    )
+    assert seen["executor"] is db_supabase._DB_EXECUTOR, f"run_sync should pass _DB_EXECUTOR, got {seen['executor']!r}"

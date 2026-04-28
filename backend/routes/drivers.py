@@ -1596,40 +1596,40 @@ async def export_driver_data(
 
 async def _build_and_email_data_export(user_id: str, email: str) -> None:
     """Background task: collect all driver data and email a JSON export."""
+    import asyncio  # noqa: PLC0415
     import json  # noqa: PLC0415
 
     try:
-        # 1. Driver profile
-        driver_rows = await db_supabase.get_rows("drivers", {"user_id": user_id}, limit=1)
-        driver = driver_rows[0] if driver_rows else {}
+        # B-P2-6: PIPEDA right-to-access has a 30-day SLA but riders/drivers
+        # judge "fast" by the email arrival, not the SLA. The previous
+        # 6-sequential-await pattern accumulated ~6× round-trip latency.
+        # Wave 1 (no driver_id needed) — 3 reads in parallel.
+        driver_rows, user_rows, notification_prefs = await asyncio.gather(
+            db_supabase.get_rows("drivers", {"user_id": user_id}, limit=1),
+            db_supabase.get_rows("users", {"id": user_id}, limit=1),
+            db_supabase.get_rows("notification_preferences", {"user_id": user_id}, limit=1),
+        )
+        driver = (driver_rows or [{}])[0] if driver_rows else {}
+        user = (user_rows or [{}])[0] if user_rows else {}
         driver_id = driver.get("id", "")
+        notification_prefs = notification_prefs or []
 
-        # 2. User account record
-        user_rows = await db_supabase.get_rows("users", {"id": user_id}, limit=1)
-        user = user_rows[0] if user_rows else {}
-
-        # 3. Ride history (last 500 trips)
+        # Wave 2 (driver_id-dependent) — 3 reads in parallel. Skip entirely
+        # if there's no driver row (rider-only account requesting export).
         rides: list = []
-        if driver_id:
-            rides = await db_supabase.get_rows(
-                "rides", {"driver_id": driver_id}, limit=500, order="created_at", desc=True
-            )
-
-        # 4. Payout history
         payouts: list = []
-        if driver_id:
-            payouts = await db_supabase.get_rows(
-                "driver_payouts", {"driver_id": driver_id}, limit=200, order="created_at", desc=True
-            )
-
-        # 5. Uploaded documents
         documents: list = []
         if driver_id:
-            documents = await db_supabase.get_rows("driver_documents", {"driver_id": driver_id}, limit=50)
-
-        # 6. Notification preferences
-        notification_prefs: list = []
-        notification_prefs = await db_supabase.get_rows("notification_preferences", {"user_id": user_id}, limit=1)
+            rides, payouts, documents = await asyncio.gather(
+                db_supabase.get_rows("rides", {"driver_id": driver_id}, limit=500, order="created_at", desc=True),
+                db_supabase.get_rows(
+                    "driver_payouts", {"driver_id": driver_id}, limit=200, order="created_at", desc=True
+                ),
+                db_supabase.get_rows("driver_documents", {"driver_id": driver_id}, limit=50),
+            )
+            rides = rides or []
+            payouts = payouts or []
+            documents = documents or []
 
         export_payload = {
             "export_generated_at": datetime.now(timezone.utc).isoformat() + "Z",

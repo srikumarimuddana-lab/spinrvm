@@ -124,7 +124,7 @@ When a vendor relationship ends:
 |---|---|---|---|
 | Supabase region not confirmed in doc | Supabase | CRITICAL if non-CA | `data` to verify + update this file |
 | Upstash region unknown | Upstash | HIGH | `devops` to verify |
-| Gemini not in privacy policy | Google | MEDIUM | **DV-16 open** |
+| Gemini not in privacy policy | Google | MEDIUM | **DV-16**: Privacy policy text (stored in `app_settings.privacy_policy_text`) must add Gemini as a US sub-processor with PIPEDA cross-border transfer disclosure. Owner: legal. Action: update privacy policy text via admin dashboard before public launch. |
 | DPIA for Google Maps not filed | Google | MEDIUM | `compliance` to file |
 | ~~No sub-processor monitoring cadence~~ | Multiple | RESOLVED | `.github/workflows/subprocessor-monitor.yml` (B-P3-3) opens a `subprocessor-review` issue if this doc hasn't been touched in 90+ days |
 | Email provider not yet selected | — | MEDIUM | `backend` to decide + onboard |

@@ -85,6 +85,17 @@ async def request_data_export(current_user: dict = Depends(get_current_user)):
     except Exception as e:
         logger.error(f"Could not record data export request for user {user_id}: {e}", exc_info=True)
         raise HTTPException(status_code=503, detail="data_export_request_failed") from e
+    # DV-17: audit trail for PIPEDA DSAR access requests (30-day SLA obligation)
+    try:
+        await log_admin_action(
+            {"id": user_id, "role": "user"},
+            action="dsar_export_requested",
+            resource="data_export_requests",
+            resource_id=user_id,
+            details={"pipeda": True, "sla_deadline": (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()},
+        )
+    except Exception as e:
+        logger.warning(f"DSAR audit log failed for user {user_id} — non-fatal: {e}")
     return {
         "success": True,
         "message": "Data export requested. You will receive an email with a download link within 24 hours.",

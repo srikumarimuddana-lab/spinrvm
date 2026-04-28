@@ -66,15 +66,15 @@ Logged here so nothing is lost between audit passes.
 ### B1. Backend / dispatch
 | ID | Area | Summary | Owner | Regs |
 |---|---|---|---|---|
-| DV-1 | Dispatch | `find_nearby_drivers` RPC lacks `status != 'suspended'` filter (defense-in-depth beyond P0-5) | backend | SAFE-*, SK-TNC |
-| DV-2 | DB helpers | Mongo-style `{"$set": ...}` wrapper on Supabase `update` in `utils/document_expiry.py` — same anti-pattern as source finding `[2-2]`; grep for other occurrences | backend | — |
-| DV-3 | State machine | `COMPLETE_FROM_STATES = ("in_progress",)` vs `trip_in_progress` used elsewhere → full state-string sweep required | backend | SK-CPPA |
-| DV-4 | Payments | Fallback Stripe idempotency key `intent-{user}-{amount}` collides on legitimate same-amount retry after 24 h → swap to UUID client token | backend | PCI-DSS |
-| DV-5 | Notifications | P2-10 fire-and-forget PUT swallows 4xx/5xx; UI diverges from server → surface a toast | driver-app | CASL |
+| ~~DV-1~~ | ~~Dispatch~~ | ~~`find_nearby_drivers` RPC lacks `status != 'suspended'` filter~~ | ~~backend~~ | ~~SAFE-*, SK-TNC~~ | **DONE** — migration 55 adds filter; dispatch_service already gates on `status='active'` |
+| DV-2 | DB helpers | Mongo-style `{"$set": ...}` wrapper on Supabase `update` in `utils/document_expiry.py` — same anti-pattern as source finding `[2-2]`; grep for other occurrences | backend | — | **NOT A BUG** — `db_supabase.update_one` normalizes `$set` via `update.get("$set", update)`; no data risk |
+| ~~DV-3~~ | ~~State machine~~ | ~~`COMPLETE_FROM_STATES = ("in_progress",)` vs `trip_in_progress` used elsewhere~~ | ~~backend~~ | ~~SK-CPPA~~ | **DONE** — `trip_in_progress` is a GPS phase name (websocket/snapshot only), never a ride status guard; `test_b_p0_2.py` pins this |
+| ~~DV-4~~ | ~~Payments~~ | ~~Fallback Stripe idempotency key `intent-{user}-{amount}` collides~~ | ~~backend~~ | ~~PCI-DSS~~ | **DONE** — changed to `intent-{uuid4()}` in `backend/routes/payments.py` |
+| ~~DV-5~~ | ~~Notifications~~ | ~~P2-10 fire-and-forget PUT swallows 4xx/5xx~~ | ~~driver-app~~ | ~~CASL~~ | **DONE** — driver-app uses TanStack Query `onError: () => Alert.alert(...)` |
 | DV-6 | Rate limiter | P2-4 in-memory fallback is per-process; alert SRE when "Redis unavailable" warning fires in prod | devops | PIPEDA |
 | DV-7 | Secrets | pgsodium `drivers_pii_key` rotation cadence undocumented (SOC2) | infra / compliance | SOC2 |
-| DV-8 | Retention | P3-8 soft-delete without scheduled purge at PIPEDA/CRA horizon → add cron | data | PIPEDA, CRA |
-| DV-9 | Notifications | P3-9 notification deep-link has no default fallback for unknown types → silent no-op | driver-app | — |
+| ~~DV-8~~ | ~~Retention~~ | ~~P3-8 soft-delete without scheduled purge at PIPEDA/CRA horizon~~ | ~~data~~ | ~~PIPEDA, CRA~~ | **DONE** — `backend/utils/account_purge.py` + registered in lifespan.py; 5 regression tests |
+| ~~DV-9~~ | ~~Notifications~~ | ~~P3-9 notification deep-link has no default fallback for unknown types~~ | ~~driver-app~~ | ~~—~~ | **DONE** — `notifications.tsx` default case now calls `router.push('/(tabs)')` |
 
 ### B2. Auth
 | ID | Area | Summary | Owner | Regs |
@@ -97,8 +97,8 @@ Logged here so nothing is lost between audit passes.
 ### B5. Compliance follow-ups
 | ID | Area | Summary | Owner | Regs |
 |---|---|---|---|---|
-| DV-16 | Privacy | Gemini cross-border disclosure (P4-1): add as sub-processor in privacy policy | legal | PIPEDA |
-| DV-17 | DSAR | P4-6 emit audit-log row on request + enforce 30-day PIPEDA SLA | backend + compliance | PIPEDA |
+| DV-16 | Privacy | Gemini cross-border disclosure (P4-1): add as sub-processor in privacy policy | legal | PIPEDA | **TRACKED** — `docs/vendor-inventory.md` updated with action item; privacy policy text updated via admin dashboard (owner: legal, pre-launch) |
+| ~~DV-17~~ | ~~DSAR~~ | ~~P4-6 emit audit-log row on request + enforce 30-day PIPEDA SLA~~ | ~~backend + compliance~~ | ~~PIPEDA~~ | **DONE** — `dsar_export_requested` audit row with `sla_deadline` added to `POST /users/data-export`; deletion requests already logged |
 
 **Triage recommendation:** DV-1, DV-2, DV-3, DV-4 are P1 technical debt worth addressing in the next engineering sprint. DV-6, DV-7, DV-8, DV-16, DV-17 are compliance/ops preconditions for public launch — move to P2. DV-5, DV-9 are P3 polish. DV-10 is tracked under rider. DV-11 through DV-15 are documentation syncs — 1 h total, do at start of next audit cycle.
 

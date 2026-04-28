@@ -67,24 +67,31 @@ async def create_profile(request: CreateProfileRequest, current_user: dict = Dep
 
 @api_router.post("/data-export")
 async def request_data_export(current_user: dict = Depends(get_current_user)):
-    """R-P1-6 PIPEDA: Queue a data-export email for the authenticated rider.
-    In production this queues a background job that emails a signed download link.
+    """R-P1-6 / DV-17 PIPEDA DSAR: Queue a data-export request with 30-day SLA tracking.
+    PIPEDA s.9 requires a response within 30 days of receipt.
     """
     user_id = current_user["id"]
-    logger.info(f"Data export requested for user {user_id}")
+    request_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+    response_due_at = (now + timedelta(days=30)).isoformat()
+    logger.info(f"DSAR submitted for user {user_id} request_id={request_id} due={response_due_at}")
     try:
         export_record = {
-            "id": str(uuid.uuid4()),
+            "id": request_id,
             "user_id": user_id,
             "status": "pending",
-            "requested_at": datetime.now(timezone.utc).isoformat(),
+            "requested_at": now.isoformat(),
+            "response_due_at": response_due_at,
         }
         await db_supabase.insert_one("data_export_requests", export_record)
     except Exception as e:
-        logger.warning(f"Could not record data export request: {e}")
+        logger.error(f"Could not record DSAR request for user {user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=503, detail="Failed to submit data export request. Please try again.") from e
     return {
         "success": True,
-        "message": "Data export requested. You will receive an email with a download link within 24 hours.",
+        "request_id": request_id,
+        "response_due_at": response_due_at,
+        "message": "Data export requested. We will respond within 30 days as required by PIPEDA.",
     }
 
 

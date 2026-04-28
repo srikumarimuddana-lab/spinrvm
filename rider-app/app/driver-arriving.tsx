@@ -29,6 +29,7 @@ import type { ThemeColors } from '@shared/theme/index';
 import { SOSButton } from '@shared/components/SOSButton';
 import { CarMarker } from '@shared/components/CarMarker';
 import { FreeCancelTimer } from '../components/FreeCancelTimer';
+import { formatFare } from '@shared/utils/currency';
 
 const { width } = Dimensions.get('window');
 
@@ -118,12 +119,12 @@ function DriverArrivingScreenContent() {
       setAlertState({
         visible: true,
         title: 'Ride in progress',
-        message: `Your ride is in progress. If you cancel now, you will be charged the full fare of $${fare.toFixed(2)}.`,
+        message: `Your ride is in progress. If you cancel now, you will be charged the full fare of ${formatFare(fare)}.`,
         variant: 'warning',
         buttons: [
           { text: 'Continue Ride', style: 'cancel' },
           {
-            text: `Cancel & Pay $${fare.toFixed(2)}`, style: 'destructive',
+            text: `Cancel & Pay ${formatFare(fare)}`, style: 'destructive',
             onPress: async () => {
               await cancelRide();
               clearRide();
@@ -137,12 +138,12 @@ function DriverArrivingScreenContent() {
       setAlertState({
         visible: true,
         title: 'Driver is waiting',
-        message: `Your driver has arrived at the pickup. A cancellation fee of $${cancellationFee.toFixed(2)} will be charged.`,
+        message: `Your driver has arrived at the pickup. A cancellation fee of ${formatFare(cancellationFee)} will be charged.`,
         variant: 'warning',
         buttons: [
           { text: 'Keep Ride', style: 'cancel' },
           {
-            text: `Cancel & Pay $${cancellationFee.toFixed(2)}`, style: 'destructive',
+            text: `Cancel & Pay ${formatFare(cancellationFee)}`, style: 'destructive',
             onPress: async () => {
               await cancelRide();
               clearRide();
@@ -157,12 +158,12 @@ function DriverArrivingScreenContent() {
         setAlertState({
           visible: true,
           title: 'Cancellation fee applies',
-          message: `The free cancellation window has closed. A fee of $${cancellationFee.toFixed(2)} will be charged.`,
+          message: `The free cancellation window has closed. A fee of ${formatFare(cancellationFee)} will be charged.`,
           variant: 'warning',
           buttons: [
             { text: 'Keep Ride', style: 'cancel' },
             {
-              text: `Cancel & Pay $${cancellationFee.toFixed(2)}`, style: 'destructive',
+              text: `Cancel & Pay ${formatFare(cancellationFee)}`, style: 'destructive',
               onPress: async () => {
                 await cancelRide();
                 clearRide();

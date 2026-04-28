@@ -11,6 +11,7 @@ import CustomAlert from '@shared/components/CustomAlert';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useScheduledRideReminder } from '../hooks/useScheduledRideReminder';
+import { formatFare } from '@shared/utils/currency';
 
 export default function ScheduledRidesScreen() {
   const router = useRouter();
@@ -103,7 +104,7 @@ export default function ScheduledRidesScreen() {
             <Ionicons name="time" size={14} color={isImminent ? '#FFF' : colors.primary} />
             <Text style={[styles.timeBadgeText, isImminent && { color: '#FFF' }]}>{timeUntil}</Text>
           </View>
-          <Text style={styles.fareText}>${(item.total_fare || 0).toFixed(2)}</Text>
+          <Text style={styles.fareText}>{formatFare(item.total_fare || 0)}</Text>
         </View>
 
         <View style={styles.scheduleRow}>

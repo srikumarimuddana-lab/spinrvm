@@ -29,6 +29,7 @@ import { SOSButton } from '@shared/components/SOSButton';
 import { CarMarker } from '@shared/components/CarMarker';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { formatFare } from '@shared/utils/currency';
 
 function RideInProgressScreenContent() {
   const router = useRouter();
@@ -113,7 +114,7 @@ function RideInProgressScreenContent() {
       setAlertState({
         visible: true,
         title: 'End ride early?',
-        message: `Full fare of $${(currentRide?.total_fare || 0).toFixed(2)} applies. Your driver will continue.`,
+        message: `Full fare of ${formatFare(currentRide?.total_fare || 0)} applies. Your driver will continue.`,
         variant: 'warning',
         buttons: [
           { text: 'Continue Ride', style: 'cancel' },
@@ -317,7 +318,7 @@ I've shared my live location with you for safety.
         <View style={styles.fareRow}>
           <View style={styles.fareItem}>
             <Ionicons name="cash-outline" size={16} color={colors.textDim} />
-            <Text style={styles.fareValue} allowFontScaling={false}>${(currentRide?.total_fare || 0).toFixed(2)}</Text>
+            <Text style={styles.fareValue} allowFontScaling={false}>{formatFare(currentRide?.total_fare || 0)}</Text>
             <Text style={styles.fareLabel}>Fare</Text>
           </View>
           <View style={styles.fareDivider} />
@@ -387,7 +388,7 @@ I've shared my live location with you for safety.
           setAlertState({
             visible: true,
             title: 'End ride early?',
-            message: `You will be charged the full agreed fare of $${(currentRide?.total_fare || 0).toFixed(2)}. This cannot be undone.`,
+            message: `You will be charged the full agreed fare of ${formatFare(currentRide?.total_fare || 0)}. This cannot be undone.`,
             variant: 'warning',
             buttons: [
               { text: 'Continue Ride', style: 'cancel' },

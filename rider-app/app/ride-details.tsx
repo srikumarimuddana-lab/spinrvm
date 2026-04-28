@@ -10,6 +10,7 @@ import MapViewDirections from 'react-native-maps-directions';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { formatFare } from '@shared/utils/currency';
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
@@ -188,15 +189,15 @@ export default function RideDetailsScreen() {
         {/* Fare Card */}
         <View style={styles.fareCard}>
           <Text style={styles.fareTitle}>Fare Breakdown</Text>
-          <FareRow label="Base fare" value={`$${(ride.base_fare || 0).toFixed(2)}`} colors={colors} />
-          <FareRow label={`Distance (${(ride.distance_km || 0).toFixed(1)} km)`} value={`$${(ride.distance_fare || 0).toFixed(2)}`} colors={colors} />
-          <FareRow label={`Time (${ride.duration_minutes || 0} min)`} value={`$${(ride.time_fare || 0).toFixed(2)}`} colors={colors} />
-          <FareRow label="Booking fee" value={`$${(ride.booking_fee || 0).toFixed(2)}`} colors={colors} />
-          {(ride.tip_amount || 0) > 0 && <FareRow label="Tip" value={`$${ride.tip_amount.toFixed(2)}`} highlight colors={colors} />}
+          <FareRow label="Base fare" value={formatFare(ride.base_fare || 0)} colors={colors} />
+          <FareRow label={`Distance (${(ride.distance_km || 0).toFixed(1)} km)`} value={formatFare(ride.distance_fare || 0)} colors={colors} />
+          <FareRow label={`Time (${ride.duration_minutes || 0} min)`} value={formatFare(ride.time_fare || 0)} colors={colors} />
+          <FareRow label="Booking fee" value={formatFare(ride.booking_fee || 0)} colors={colors} />
+          {(ride.tip_amount || 0) > 0 && <FareRow label="Tip" value={formatFare(ride.tip_amount)} highlight colors={colors} />}
           <View style={styles.fareDivider} />
           <View style={styles.fareRowWrap}>
             <Text style={styles.fareTotalLabel}>Total</Text>
-            <Text style={styles.fareTotalValue}>${(ride.total_fare || 0).toFixed(2)}</Text>
+            <Text style={styles.fareTotalValue}>{formatFare(ride.total_fare || 0)}</Text>
           </View>
           <View style={styles.paymentRow}>
             <Ionicons name="card" size={14} color={colors.textDim} />

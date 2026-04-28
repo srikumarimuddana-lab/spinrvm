@@ -11,6 +11,7 @@ import { useRideStore } from '../store/rideStore';
 import CustomAlert from '@shared/components/CustomAlert';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { formatFare } from '@shared/utils/currency';
 
 const TRIP_ACTIVE_STATUSES = ['in_progress', 'driver_arrived', 'driver_accepted', 'driver_assigned'];
 
@@ -77,7 +78,7 @@ export default function FareSplitScreen() {
       await createFareSplit(rideId, validPhones);
       setAlertState({
         visible: true, title: 'Fare Split Created',
-        message: `Split request sent to ${validPhones.length} contact${validPhones.length > 1 ? 's' : ''}. Each person pays $${shareAmount.toFixed(2)}.`,
+        message: `Split request sent to ${validPhones.length} contact${validPhones.length > 1 ? 's' : ''}. Each person pays ${formatFare(shareAmount)}.`,
         variant: 'success',
       });
     } catch (err: any) {
@@ -112,13 +113,13 @@ export default function FareSplitScreen() {
         {/* Split Summary */}
         <View style={styles.summaryCard}>
           <Text style={styles.summaryLabel}>Total Fare</Text>
-          <Text style={styles.summaryAmount}>${totalFare.toFixed(2)}</Text>
+          <Text style={styles.summaryAmount}>{formatFare(totalFare)}</Text>
 
           <View style={styles.splitPreview}>
             <View style={styles.splitDivider} />
             <View style={styles.splitInfo}>
               <Text style={styles.splitInfoLabel}>Split {splitCount} ways</Text>
-              <Text style={styles.splitInfoAmount}>${shareAmount.toFixed(2)} each</Text>
+              <Text style={styles.splitInfoAmount}>{formatFare(shareAmount)} each</Text>
             </View>
           </View>
         </View>
@@ -179,7 +180,7 @@ export default function FareSplitScreen() {
             <>
               <Ionicons name="people" size={20} color="#FFF" />
               <Text style={styles.splitButtonText}>
-                Send Split Request (${shareAmount.toFixed(2)} each)
+                Send Split Request ({formatFare(shareAmount)} each)
               </Text>
             </>
           )}

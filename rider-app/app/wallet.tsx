@@ -10,6 +10,7 @@ import { useWalletStore, WalletTransaction } from '../store/walletStore';
 import CustomAlert from '@shared/components/CustomAlert';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { formatFare } from '@shared/utils/currency';
 
 const TOP_UP_AMOUNTS = [10, 25, 50, 100];
 const PHONE_REGEX = /^\+?1?\s?\(?[0-9]{3}\)?[\s.-]?[0-9]{3}[\s.-]?[0-9]{4}$/;
@@ -78,7 +79,7 @@ export default function WalletScreen() {
       await topUp(amount);
       setShowTopUp(false);
       setCustomAmount('');
-      setAlertState({ visible: true, title: 'Success', message: `$${amount.toFixed(2)} added to your wallet`, variant: 'success' });
+      setAlertState({ visible: true, title: 'Success', message: `${formatFare(amount)} added to your wallet`, variant: 'success' });
       fetchTransactions(30);
     } catch (err: any) {
       setAlertState({ visible: true, title: 'Top-up Failed', message: err.message || 'Please try again', variant: 'danger' });
@@ -99,7 +100,7 @@ export default function WalletScreen() {
       return;
     }
     if ((wallet?.balance ?? 0) < amount) {
-      setAlertState({ visible: true, title: 'Insufficient Funds', message: `Your balance ($${(wallet?.balance ?? 0).toFixed(2)}) is less than $${amount.toFixed(2)}.`, variant: 'danger' });
+      setAlertState({ visible: true, title: 'Insufficient Funds', message: `Your balance (${formatFare(wallet?.balance ?? 0)}) is less than ${formatFare(amount)}.`, variant: 'danger' });
       return;
     }
     setTransferLoading(true);

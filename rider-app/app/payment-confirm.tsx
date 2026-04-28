@@ -23,6 +23,7 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import Analytics from '@shared/analytics';
 import { useScheduledRideReminder } from '../hooks/useScheduledRideReminder';
+import { formatFare } from '@shared/utils/currency';
 
 interface CorporateAccount {
   id: string;
@@ -136,7 +137,7 @@ function PaymentConfirmScreenContent() {
       const res = await api.post('/promo/validate', { code, ride_fare: fare });
       setPromoDiscount(res.data.discount_amount);
       setPromoApplied(true);
-      setPromoMessage(`-$${res.data.discount_amount.toFixed(2)} discount applied!`);
+      setPromoMessage(`-${formatFare(res.data.discount_amount)} discount applied!`);
     } catch (error: any) {
       const msg = error?.response?.data?.detail || 'Invalid promo code';
       setPromoMessage(msg);
@@ -178,7 +179,7 @@ function PaymentConfirmScreenContent() {
               <Text style={styles.vehicleName}>{selectedVehicle?.name}</Text>
               <Text style={styles.vehicleDesc} allowFontScaling={false}>{selectedEstimate?.duration_minutes} min • {selectedEstimate?.distance_km} km</Text>
             </View>
-            <Text style={styles.totalPrice} allowFontScaling={false}>${selectedEstimate?.total_fare.toFixed(2)}</Text>
+            <Text style={styles.totalPrice} allowFontScaling={false}>{selectedEstimate ? formatFare(selectedEstimate.total_fare) : ''}</Text>
           </View>
 
           <View style={styles.routeContainer}>
@@ -207,19 +208,19 @@ function PaymentConfirmScreenContent() {
 
             <View style={styles.fareRow}>
               <Text style={styles.fareLabel}>Base fare</Text>
-              <Text style={styles.fareValue} allowFontScaling={false}>${selectedEstimate.base_fare.toFixed(2)}</Text>
+              <Text style={styles.fareValue} allowFontScaling={false}>{formatFare(selectedEstimate.base_fare)}</Text>
             </View>
             <View style={styles.fareRow}>
               <Text style={styles.fareLabel}>Distance ({selectedEstimate.distance_km} km)</Text>
-              <Text style={styles.fareValue} allowFontScaling={false}>${selectedEstimate.distance_fare.toFixed(2)}</Text>
+              <Text style={styles.fareValue} allowFontScaling={false}>{formatFare(selectedEstimate.distance_fare)}</Text>
             </View>
             <View style={styles.fareRow}>
               <Text style={styles.fareLabel}>Time ({selectedEstimate.duration_minutes} min)</Text>
-              <Text style={styles.fareValue} allowFontScaling={false}>${selectedEstimate.time_fare.toFixed(2)}</Text>
+              <Text style={styles.fareValue} allowFontScaling={false}>{formatFare(selectedEstimate.time_fare)}</Text>
             </View>
             <View style={styles.fareRow}>
               <Text style={styles.fareLabel}>Booking fee</Text>
-              <Text style={styles.fareValue} allowFontScaling={false}>${selectedEstimate.booking_fee.toFixed(2)}</Text>
+              <Text style={styles.fareValue} allowFontScaling={false}>{formatFare(selectedEstimate.booking_fee)}</Text>
             </View>
 
             <View style={styles.fareDivider} />
@@ -228,7 +229,7 @@ function PaymentConfirmScreenContent() {
             {(selectedEstimate as any).area_fees?.map((fee: any, i: number) => (
               <View key={fee.id || i} style={styles.fareRow}>
                 <Text style={styles.fareLabel}>{fee.name || fee.type}</Text>
-                <Text style={styles.fareValue} allowFontScaling={false}>${Number(fee.calculated_value || 0).toFixed(2)}</Text>
+                <Text style={styles.fareValue} allowFontScaling={false}>{formatFare(Number(fee.calculated_value || 0))}</Text>
               </View>
             ))}
 
@@ -236,7 +237,7 @@ function PaymentConfirmScreenContent() {
             {(selectedEstimate as any).tax_breakdown && Object.entries((selectedEstimate as any).tax_breakdown).map(([name, info]: [string, any]) => (
               <View key={name} style={styles.fareRow}>
                 <Text style={styles.fareLabel}>{name} ({info.rate}%)</Text>
-                <Text style={styles.fareValue} allowFontScaling={false}>${Number(info.amount || 0).toFixed(2)}</Text>
+                <Text style={styles.fareValue} allowFontScaling={false}>{formatFare(Number(info.amount || 0))}</Text>
               </View>
             ))}
 
@@ -251,7 +252,7 @@ function PaymentConfirmScreenContent() {
             <View style={styles.fareRow}>
               <Text style={styles.fareTotalLabel}>Estimated Total</Text>
               <Text style={styles.fareTotalValue} allowFontScaling={false}>
-                ${((selectedEstimate as any).grand_total || selectedEstimate.total_fare).toFixed(2)}
+                {formatFare((selectedEstimate as any).grand_total || selectedEstimate.total_fare)}
               </Text>
             </View>
           </View>
@@ -396,12 +397,12 @@ function PaymentConfirmScreenContent() {
             style={styles.promoButton}
             onPress={() => setPromoExpanded(true)}
             accessibilityRole="button"
-            accessibilityLabel={promoApplied ? `Promo applied, saving $${promoDiscount.toFixed(2)}` : 'Add promo code'}
+            accessibilityLabel={promoApplied ? `Promo applied, saving ${formatFare(promoDiscount)}` : 'Add promo code'}
             accessibilityHint="Opens the promo code entry field"
           >
             <Ionicons name="pricetag" size={20} color={colors.primary} />
             <Text style={styles.promoText}>
-              {promoApplied ? `Promo applied: -$${promoDiscount.toFixed(2)}` : 'Add promo code'}
+              {promoApplied ? `Promo applied: -${formatFare(promoDiscount)}` : 'Add promo code'}
             </Text>
             <Ionicons name="chevron-forward" size={20} color={colors.textDim} />
           </TouchableOpacity>
@@ -467,18 +468,18 @@ function PaymentConfirmScreenContent() {
       <View style={styles.footer}>
         <View style={styles.totalRow}>
           <Text style={styles.totalLabel}>Subtotal</Text>
-          <Text style={styles.totalAmount} allowFontScaling={false}>${selectedEstimate?.total_fare.toFixed(2)}</Text>
+          <Text style={styles.totalAmount} allowFontScaling={false}>{selectedEstimate ? formatFare(selectedEstimate.total_fare) : ''}</Text>
         </View>
         {promoDiscount > 0 && (
           <View style={styles.discountRow}>
             <Text style={styles.discountLabel}>Promo discount</Text>
-            <Text style={styles.discountAmount} allowFontScaling={false}>-${promoDiscount.toFixed(2)}</Text>
+            <Text style={styles.discountAmount} allowFontScaling={false}>-{formatFare(promoDiscount)}</Text>
           </View>
         )}
         {promoDiscount > 0 && (
           <View style={[styles.totalRow, { marginTop: 4 }]}>
             <Text style={[styles.totalLabel, { fontFamily: 'PlusJakartaSans_700Bold', color: colors.text }]}>Total</Text>
-            <Text style={styles.totalAmount} allowFontScaling={false}>${totalFare.toFixed(2)}</Text>
+            <Text style={styles.totalAmount} allowFontScaling={false}>{formatFare(totalFare)}</Text>
           </View>
         )}
         {scheduledTime && (
@@ -497,7 +498,7 @@ function PaymentConfirmScreenContent() {
           activeOpacity={0.8}
           accessibilityRole="button"
           accessibilityLabel={scheduledTime ? `Schedule ${selectedVehicle?.name}` : `Book ${selectedVehicle?.name}`}
-          accessibilityHint={`Total $${totalFare.toFixed(2)}`}
+          accessibilityHint={`Total ${formatFare(totalFare)}`}
           accessibilityState={{ disabled: isLoading || isBooking, busy: isBooking }}
         >
           {isLoading || isBooking ? (

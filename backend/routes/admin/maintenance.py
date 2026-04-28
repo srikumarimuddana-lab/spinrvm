@@ -69,31 +69,22 @@ async def admin_cleanup_location_history(days: int = Query(30, ge=7, le=1095)):
     cutoff_historical = (now - timedelta(days=days)).isoformat()
     cutoff_idle = (now - timedelta(hours=24)).isoformat()
 
-    deleted_historical = 0
-    deleted_idle = 0
+    deleted_historical = -1
+    deleted_idle = -1
     try:
-        deleted_historical = await db_supabase.count_documents(
-            "driver_location_history", {"timestamp": {"$lt": cutoff_historical}}
-        )
-        if deleted_historical > 0:
-            await db_supabase.delete_many("driver_location_history", {"timestamp": {"$lt": cutoff_historical}})
+        await db_supabase.delete_many("driver_location_history", {"timestamp": {"$lt": cutoff_historical}})
     except Exception as e:
         logger.error(f"Cleanup historical GPS failed: {e}", exc_info=True)
 
     try:
-        deleted_idle = await db_supabase.count_documents(
+        await db_supabase.delete_many(
             "driver_location_history",
             {"timestamp": {"$lt": cutoff_idle}, "tracking_phase": "online_idle"},
         )
-        if deleted_idle > 0:
-            await db_supabase.delete_many(
-                "driver_location_history",
-                {"timestamp": {"$lt": cutoff_idle}, "tracking_phase": "online_idle"},
-            )
     except Exception as e:
         logger.error(f"Cleanup idle GPS failed: {e}", exc_info=True)
 
-    logger.info(f"[CLEANUP] Deleted {deleted_historical} historical + {deleted_idle} idle GPS points")
+    logger.info("[CLEANUP] Deleted historical + idle GPS points (counts not tracked — direct delete)")
     return {
         "deleted_historical": deleted_historical,
         "deleted_idle": deleted_idle,

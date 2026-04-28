@@ -335,6 +335,7 @@ class UpdateDriverProfileRequest(BaseModel):
     gst_number: Optional[str] = None
     preferred_language: Optional[str] = None
     photo_url: Optional[str] = None
+    is_wav: Optional[bool] = None
     # Vehicle/document fields (triggers re-review on verified drivers)
     vehicle_type_id: Optional[str] = None
     vehicle_make: Optional[str] = None
@@ -366,7 +367,7 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
     )
 
     # Fields that always update without affecting verification
-    safe_fields = {"gst_number", "preferred_language", "photo_url"}
+    safe_fields = {"gst_number", "preferred_language", "photo_url", "is_wav"}
     # Vehicle/doc fields — changing these on a verified driver triggers re-review
     vehicle_fields = {
         "vehicle_type_id",

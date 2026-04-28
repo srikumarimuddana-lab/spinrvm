@@ -33,12 +33,18 @@ CATEGORY_RULES: list[tuple[str, str, str]] = [
     # (category, pattern_in_log, description_template)
     # ── Test failures ─────────────────────────────────────────────────────
     ("test",     r"FAILED\s+tests/",               "pytest test failure"),
+    ("test",     r"FAILED\s+backend/tests/",        "pytest test failure (backend prefix)"),
+    ("test",     r"= \d+ failed",                   "pytest: N tests failed"),
+    ("test",     r"= \d+ error",                    "pytest: collection/fixture errors"),
+    ("test",     r"ERROR\s+collecting",              "pytest collection error"),
+    ("test",     r"ERROR\s+tests/",                 "pytest fixture/setup error"),
     ("test",     r"AssertionError",                 "assertion error in test"),
     ("test",     r"FAIL\s+.*\.(test|spec)\.[tj]sx?", "Jest/Vitest test failure"),
     ("test",     r"●\s+.*\s+›",                     "Jest describe block failure"),
     ("test",     r"TimeoutError:",                  "test timeout"),
     ("test",     r"Error: expect\(",                "expect assertion failure"),
-    ("test",     r"short test summary info",          "pytest summary (failures present)"),
+    ("test",     r"short test summary info",         "pytest summary (failures present)"),
+    ("test",     r"Tests\s+\d+\s+failed",           "Vitest/Jest failure summary"),
     ("coverage", r"FAIL\s+Required test coverage",  "coverage threshold not met"),
     ("coverage", r"Coverage\s+.*below\s+threshold", "coverage threshold not met"),
     # ── Lint / type errors ────────────────────────────────────────────────
@@ -57,7 +63,7 @@ CATEGORY_RULES: list[tuple[str, str, str]] = [
     ("security", r"HIGH.*vulnerability",            "Trivy HIGH vulnerability"),
     ("security", r"EXPO_PUBLIC_.*SECRET",           "exposed secret in public env var"),
     # ── Build failures ────────────────────────────────────────────────────
-    ("build",    r"ModuleNotFoundError",            "Python module not found"),
+    ("build",    r"ModuleNotFoundError:\s+No module named", "Python module not found"),
     ("build",    r"ImportError",                    "Python import error"),
     ("build",    r"SyntaxError",                    "syntax error"),
     ("build",    r"Cannot find module",             "Node module not found"),

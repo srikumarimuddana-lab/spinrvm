@@ -29,6 +29,27 @@ async def init_database():
         logger.warning(f"{msg} — continuing in {settings.ENV} mode")
         return None
 
+    # PIPEDA data-residency check (Rider Phase E 22-2): Supabase must be in a
+    # Canadian region (ca-central-1). The URL alone doesn't embed the region,
+    # so we rely on the explicit SUPABASE_REGION env var. A missing or non-CA
+    # value logs ERROR in production so this surfaces in SRE alerting.
+    supabase_region = getattr(settings, "SUPABASE_REGION", "") or ""
+    if settings.ENV.lower() == "production":
+        if not supabase_region:
+            logger.error(
+                "PIPEDA 22-2: SUPABASE_REGION is not set. "
+                "Set SUPABASE_REGION=ca-central-1 to confirm Canadian data residency."
+            )
+        elif supabase_region.lower() != "ca-central-1":
+            logger.error(
+                f"PIPEDA 22-2: SUPABASE_REGION={supabase_region!r} — expected 'ca-central-1'. "
+                "Canadian data-residency compliance requires the Supabase project to be in ca-central-1."
+            )
+        else:
+            logger.info(f"Supabase data residency confirmed: region={supabase_region}")
+    else:
+        logger.info(f"Supabase region: {supabase_region or 'unset (non-production)'}")
+
     # Active health check — one trivial read against a table that always exists.
     # The `users` table is part of the core schema; a failure here means either
     # the service role key is invalid, the DB is unreachable, or the schema
@@ -210,6 +231,27 @@ async def lifespan(app: FastAPI):
         _spawn("retention_purge (24h)", retention_purge_loop)
     except Exception as e:
         logger.warning(f"Failed to import retention purge loop: {e}")
+
+    # Daily Stripe ↔ DB ↔ wallet reconciliation — 20-2 (PCI-DSS, SOC2 CC9.1,
+    # CRA). Polls every 60 s, runs the actual reconciliation once per day at
+    # 02:00 UTC. Alerts finance on discrepancies > $0.01.
+    try:
+        from utils.reconciliation import reconciliation_loop
+
+        _spawn("reconciliation (daily 02:00 UTC)", reconciliation_loop)
+    except Exception as e:
+        logger.warning(f"Failed to import reconciliation loop: {e}")
+
+    # Stripe ↔ DB daily reconciliation — runs at 02:00 UTC, one replica
+    # via Redis leader lock. Flags paid rides with no matching Stripe
+    # PaymentIntent, amount mismatches, and orphaned Stripe charges.
+    # Discrepancies logged at ERROR so they reach Sentry + audit_logs.
+    try:
+        from utils.stripe_reconcile import stripe_reconcile_loop
+
+        _spawn("stripe_reconcile (24h)", stripe_reconcile_loop)
+    except Exception as e:
+        logger.warning(f"Failed to import Stripe reconciliation loop: {e}")
 
     app.state.background_tasks = background_tasks
 

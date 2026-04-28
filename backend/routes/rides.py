@@ -15,6 +15,7 @@ try:
     from ..dependencies import generate_pickup_otp, get_current_user
     from ..features import calculate_airport_fee, calculate_all_fees, send_push_notification
     from ..geo_utils import calculate_distance, get_service_area_polygon, point_in_polygon
+    from ..models.ride_status import RideStatus
     from ..schemas import CreateRideRequest, DriverPublicView, Ride, RideRatingRequest
     from ..services import DispatchService
     from ..services.dispatch_service import (
@@ -31,6 +32,7 @@ except ImportError:
     from dependencies import generate_pickup_otp, get_current_user
     from features import calculate_airport_fee, calculate_all_fees, send_push_notification
     from geo_utils import calculate_distance, get_service_area_polygon, point_in_polygon
+    from models.ride_status import RideStatus  # noqa: F401
     from schemas import CreateRideRequest, DriverPublicView, Ride, RideRatingRequest
     from services.dispatch_service import (
         DispatchService,
@@ -218,7 +220,7 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
     if ride is None:
         ride = await db_supabase.get_ride(ride_id)
     if not ride:
-        logger.warning(f"[DISPATCH] match_driver_to_ride: ride {ride_id} not found")
+        logger.error(f"[DISPATCH] match_driver_to_ride: ride {ride_id} not found")
         return
 
     # Single app_settings fetch — used both for matching config (via
@@ -359,7 +361,7 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
         try:
             rider_user = await db_supabase.get_user_by_id(ride["rider_id"])
         except Exception as e:
-            logger.warning(f"[DISPATCH] could not load rider user {ride['rider_id']}: {e}")
+            logger.error(f"[DISPATCH] could not load rider user {ride['rider_id']}: {e}", exc_info=True)
 
         rider_display_name = None
         if rider_user:
@@ -432,7 +434,7 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
             except Exception as e:
                 logger.warning(f"[DISPATCH] push notification failed for user_id={selected_driver['user_id']}: {e}")
         else:
-            logger.warning(
+            logger.error(
                 f"[DISPATCH] selected_driver has no user_id — cannot notify. "
                 f"driver_id={selected_driver.get('id')} name={selected_driver.get('name')}. "
                 f"This row is likely an orphan demo driver; clean up the drivers table."
@@ -530,7 +532,7 @@ async def _offer_timeout_handler(
         await match_driver_to_ride(ride_id)
 
     except Exception as e:
-        logger.warning(f"[DISPATCH] Offer timeout handler error for ride {ride_id}: {e}")
+        logger.error(f"[DISPATCH] Offer timeout handler error for ride {ride_id}: {e}", exc_info=True)
 
 
 class RideEstimateRequest(BaseModel):
@@ -712,7 +714,7 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
             )
             logger.info(f"Ride {r_id} auto-cancelled after {timeout_seconds}s - no driver found")
     except Exception as e:
-        logger.warning(f"Ride timeout handler error for {r_id}: {e}")
+        logger.error(f"Ride timeout handler error for {r_id}: {e}", exc_info=True)
 
 
 @api_router.post("")
@@ -772,7 +774,7 @@ async def create_ride(request: Request, body: CreateRideRequest, current_user: d
     try:
         all_areas = await db_supabase.get_rows("service_areas", {"is_active": True}, limit=100)
     except Exception as e:
-        logger.warning(f"Failed to fetch service areas: {e}")
+        logger.error(f"Failed to fetch service areas: {e}", exc_info=True)
 
     # Resolve the pickup service area once and pass the match downstream.
     matched_area = None
@@ -863,7 +865,7 @@ async def create_ride(request: Request, body: CreateRideRequest, current_user: d
             _matched_area=matched_area,
         )
     except Exception as e:
-        logger.warning(f"Failed to calculate area fees: {e}")
+        logger.error(f"Failed to calculate area fees: {e}", exc_info=True)
 
     area_fees_total = fees_result.get("fees_total", 0)
     tax_amount = fees_result.get("tax_amount", 0)
@@ -1289,6 +1291,21 @@ async def get_ride(request: Request, ride_id: str, current_user: dict = Depends(
     ride["free_cancel_window_seconds"] = free_cancel_window
     ride["cancellation_fee"] = cancellation_fee_amount
 
+    # PIPEDA / threat-model RI-2: drivers only need pickup/dropoff addresses
+    # while the trip is active. Retaining exact addresses post-completion
+    # enables address-based stalking (attack tree RAT-1). Riders retain their
+    # own address history (is_rider check).
+    if is_driver and not is_rider and ride.get("status") in ("completed", "cancelled"):
+        for _addr_key in (
+            "pickup_address",
+            "dropoff_address",
+            "pickup_lat",
+            "pickup_lng",
+            "dropoff_lat",
+            "dropoff_lng",
+        ):
+            ride.pop(_addr_key, None)
+
     def serialize_doc(doc):
         return doc
 
@@ -1344,7 +1361,7 @@ async def add_tip(
             driver = await db_supabase.get_driver_by_id(driver_row_id)
             driver_user_id = driver.get("user_id") if driver else None
         except Exception as exc:
-            logger.warning(f"[TIP] Could not resolve driver user_id for ride {ride_id}: {exc}")
+            logger.error(f"[TIP] Could not resolve driver user_id for ride {ride_id}: {exc}", exc_info=True)
 
     if driver_user_id:
         rider = await db_supabase.get_user_by_id(ride["rider_id"]) or {}
@@ -1389,7 +1406,7 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
         raise HTTPException(status_code=403, detail="Not authorized")
 
     _ride_status = ride.get("status", "")
-    if _ride_status != "completed":
+    if _ride_status != RideStatus.COMPLETED:
         raise HTTPException(
             status_code=409,
             detail=f"Ride is in status '{_ride_status}'; payment requires completed state.",
@@ -1643,7 +1660,7 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
                 },
             )
         elif outcome.status == "unconfigured":
-            logger.warning("Stripe unconfigured — marking ride %s paid without real charge", ride_id)
+            logger.error("Stripe unconfigured — marking ride %s paid without real charge", ride_id)
             await db_supabase.update_ride(
                 ride_id,
                 {
@@ -1823,7 +1840,7 @@ async def track_shared_ride(share_token: str):
                 raise HTTPException(status_code=404, detail="Share link has expired")
         except (ValueError, TypeError):
             pass  # Malformed timestamp — allow access but log
-            logger.warning(f"Malformed shared_trip_token_created_at for ride {ride.get('id')}")
+            logger.error(f"Malformed shared_trip_token_created_at for ride {ride.get('id')}")
 
     if ride.get("status") in ["completed", "cancelled"]:
         return {
@@ -1998,7 +2015,7 @@ async def cancel_ride_rider(request: Request, ride_id: str, current_user: dict =
                     data={"type": "cancellation_fee_paid", "ride_id": ride_id},
                 )
         except Exception as fee_err:
-            logger.warning(f"[CANCEL] cancellation fee payout failed for driver {driver_id}: {fee_err}")
+            logger.error(f"[CANCEL] cancellation fee payout failed for driver {driver_id}: {fee_err}", exc_info=True)
 
     _now = datetime.now(timezone.utc)
     _base_update = {
@@ -2212,7 +2229,7 @@ async def trigger_emergency(ride_id: str, request: EmergencyRequest, current_use
     try:
         await manager.broadcast_to_admins({"type": "emergency_alert", "incident": incident})
     except Exception as _exc:  # pragma: no cover - best effort
-        logger.warning(f"emergency_alert admin broadcast failed: {_exc}")
+        logger.error(f"emergency_alert admin broadcast failed: {_exc}", exc_info=True)
     logger.critical(f"EMERGENCY ALERT TRIGGERED for ride {ride_id} by user {current_user['id']}")
 
     # GAP FIX: Notify emergency contacts via SMS/push
@@ -2236,7 +2253,7 @@ async def trigger_emergency(ride_id: str, request: EmergencyRequest, current_use
         if contacts:
             logger.info(f"Notified {len(contacts)} emergency contacts for user {current_user['id']}")
     except Exception as e:
-        logger.warning(f"Could not notify emergency contacts: {e}")
+        logger.error(f"Could not notify emergency contacts: {e}", exc_info=True)
 
     return {
         "success": True,

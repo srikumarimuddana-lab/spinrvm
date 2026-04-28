@@ -42,17 +42,31 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
+import time
 import uuid
 from datetime import datetime, timezone
+
+try:
+    from utils.loop_monitor import record_heartbeat as _record_heartbeat
+except ImportError:
+
+    def _record_heartbeat(name: str) -> None:  # type: ignore[misc]
+        pass
+
 
 try:
     from .. import db_supabase
     from ..socket_manager import manager
     from .driver_presence import present_driver_ids
+    from .metrics import inc as _metric_inc
+    from .metrics import set_gauge as _metric_gauge
 except ImportError:  # pragma: no cover
     import db_supabase  # type: ignore
     from socket_manager import manager  # type: ignore
     from utils.driver_presence import present_driver_ids  # type: ignore
+    from utils.metrics import inc as _metric_inc  # type: ignore
+    from utils.metrics import set_gauge as _metric_gauge  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -203,15 +217,19 @@ async def _sweep_once() -> int:
 
 async def presence_sweeper_loop() -> None:
     """Background loop: reconcile presence → DB every SWEEP_INTERVAL_SECONDS."""
-    # Small initial jitter so replicas don't all sweep on the same tick.
-    import random
-
     await asyncio.sleep(random.uniform(0, SWEEP_INTERVAL_SECONDS))
     while True:
+        _t0 = time.monotonic()
+        _had_error = False
         try:
             await _sweep_once()
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             logger.warning(f"[presence_sweeper] tick failed: {exc}")
-        await asyncio.sleep(SWEEP_INTERVAL_SECONDS)
+            _had_error = True
+        _metric_gauge("spinr_bgloop_duration_ms", (time.monotonic() - _t0) * 1000, {"loop": "presence_sweeper"})
+        if _had_error:
+            _metric_inc("spinr_bgloop_errors_total", {"loop": "presence_sweeper"})
+        _record_heartbeat("presence_sweeper (60s)")
+        await asyncio.sleep(SWEEP_INTERVAL_SECONDS * (0.9 + random.random() * 0.2))

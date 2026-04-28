@@ -102,7 +102,7 @@ async def register_push_token(body: RegisterTokenRequest, current_user: dict = D
     try:
         await db.update_one("users", {"id": current_user["id"]}, {"$set": {"fcm_token": token}})
     except Exception as exc:
-        logger.warning(f"Failed to mirror FCM token onto users.fcm_token: {exc}")
+        logger.error(f"Failed to mirror FCM token onto users.fcm_token: {exc}", exc_info=True)
 
     logger.info(f"FCM token registered for user {current_user['id']} ({platform})")
     return {"success": True}

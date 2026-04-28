@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     # IMPORTANT: Rotate this key before deploying — see docs/key-rotation.md
     SUPABASE_SERVICE_ROLE_KEY: str = ""
     USE_SUPABASE: bool = True  # Supabase is now the default database
+    # PIPEDA 22-2: must be "ca-central-1" in production; checked at startup.
+    SUPABASE_REGION: str = ""
 
     # Firebase settings
     FIREBASE_SERVICE_ACCOUNT_JSON: Optional[str] = None
@@ -55,6 +57,12 @@ class Settings(BaseSettings):
     # Bcrypt hash of ADMIN_PASSWORD — computed once at startup so the plaintext
     # is never compared directly in hot-path code (A-P3-1).
     admin_password_hash: str = ""
+
+    # Break-glass emergency access token.  Store the SHA-256 hex digest here,
+    # not the raw token.  When unset, the /admin/auth/break-glass endpoint is
+    # disabled entirely.  Generate with:
+    #   python3 -c "import hashlib, secrets; t=secrets.token_hex(32); print('token:', t, '\nhash:', hashlib.sha256(t.encode()).hexdigest())"
+    BREAK_GLASS_TOKEN_HASH: str = ""
 
     # Rate limiting
     RATE_LIMIT: str = "10/minute"

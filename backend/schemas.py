@@ -104,6 +104,8 @@ class AuthResponse(BaseModel):
     expires_in: int  # access token lifetime in seconds
     access_expires_at: Optional[datetime] = None
     refresh_expires_at: Optional[datetime] = None
+    # CSRF double-submit token — echo back as X-CSRF-Token on state-changing requests
+    csrf_token: Optional[str] = None
 
 
 class AppSettings(BaseModel):

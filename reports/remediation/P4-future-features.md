@@ -63,13 +63,15 @@ The backend already has the Google Generative AI dependency installed — it jus
 
 ## P4-5 · Add End-to-End Test Flows for Core Ride Scenarios
 
-**What's missing:** The automated end-to-end tests (Maestro) only cover logging in and going online. The core business flow — accepting a ride, verifying the pickup code, completing the trip, checking earnings — has never been tested automatically.
+**What's missing:** The automated end-to-end tests (Playwright-style E2E — see `driver-app/e2e/`) only cover logging in and going online. The core business flow — accepting a ride, verifying the pickup code, completing the trip, checking earnings — has never been tested automatically.
+
+> **DV-15 (2026-04-23):** Framework updated from Maestro → Playwright-style E2E (implemented in `driver-app/e2e/`). YAML flow files below should be translated to the current test runner format.
 
 **To add:**
-- `03_accept_ride.yaml` — receive offer, accept, navigate to pickup
-- `04_verify_otp.yaml` — enter pickup code, start trip
-- `05_complete_trip.yaml` — arrive at destination, complete, see earnings
-- `06_payout.yaml` — request payout, confirm balance updates
+- accept_ride flow — receive offer, accept, navigate to pickup
+- verify_otp flow — enter pickup code, start trip
+- complete_trip flow — arrive at destination, complete, see earnings
+- payout flow — request payout, confirm balance updates
 
 **Effort:** 3–4 days
 
@@ -104,6 +106,6 @@ The backend already has the Google Generative AI dependency installed — it jus
 - [ ] P4-2 In-app FAQ screen with search and category filters
 - [ ] P4-3 Build payout-history, tax-documents, report-safety, legal screens
 - [ ] P4-4 Enable Firebase App Check enforcement in production
-- [ ] P4-5 Add Maestro E2E flows for accept, OTP, complete, payout
+- [ ] P4-5 Add Playwright-style E2E flows for accept, OTP, complete, payout (framework: driver-app/e2e/)
 - [ ] P4-6 Add GDPR/PIPEDA data export endpoint and UI
 - [ ] P4-7 Wire T4A and earnings CSV download to payout screen

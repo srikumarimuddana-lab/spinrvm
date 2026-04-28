@@ -11,7 +11,7 @@ export default defineConfig({
     include: ['src/**/*.{test,spec}.{ts,tsx}'],
     coverage: {
       provider: 'v8',
-      include: ['src/lib/**', 'src/store/**', 'src/components/**'],
+      include: ['src/lib/**', 'src/store/**', 'src/components/**', 'src/app/dashboard/**'],
       exclude: ['src/components/ui/**'],
       thresholds: {
         branches: 50,

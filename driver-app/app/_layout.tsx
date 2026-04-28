@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Stack } from 'expo-router';
+import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { View, ActivityIndicator, StyleSheet, Text, Platform } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -106,6 +106,28 @@ setBackgroundMessageHandler(async (remoteMessage: any) => {
     }
   }
 });
+
+// DV-9: Route push-notification taps to the correct in-app screen.
+// new_ride_assignment → driver home (offer panel hydrates from AsyncStorage);
+// everything else → notifications inbox as the safe fallback so the driver
+// can read the notification content rather than landing on a random screen.
+function usePushNotificationRouter() {
+  const router = useRouter();
+  useEffect(() => {
+    if (!Notifications) return;
+    const sub = Notifications.addNotificationResponseReceivedListener(
+      (response: any) => {
+        const data = response?.notification?.request?.content?.data ?? {};
+        if (data?.type === 'new_ride_assignment') {
+          router.push('/driver/');
+        } else {
+          router.push('/driver/notifications');
+        }
+      },
+    );
+    return () => sub?.remove?.();
+  }, [router]);
+}
 
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
@@ -298,6 +320,7 @@ function DriverRootLayoutInner({
   setIsOffline: (v: boolean) => void;
 }) {
   const { isDark } = useTheme();
+  usePushNotificationRouter();
   return (
     <ErrorBoundary>
       <OfflineBanner visible={isOffline} onVisibilityChange={setIsOffline} />

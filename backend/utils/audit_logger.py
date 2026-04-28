@@ -24,18 +24,25 @@ async def log_admin_action(
 
     Failures are logged but never re-raised — an audit write failure must not
     roll back the underlying mutation.
+
+    Column mapping (production schema from migration 06 + 51):
+      entity_type = resource (e.g. "users", "rides")
+      entity_id   = resource_id
+      details     = JSON blob including actor_id + actor_role
     """
     try:
         await db_supabase.insert_one(
             "audit_logs",
             {
                 "id": str(uuid.uuid4()),
-                "actor_id": admin["id"],
-                "actor_role": admin.get("role"),
                 "action": action,
-                "resource": resource,
-                "resource_id": resource_id,
-                "details": details or {},
+                "entity_type": resource,
+                "entity_id": resource_id,
+                "details": {
+                    "actor_id": admin["id"],
+                    "actor_role": admin.get("role"),
+                    **(details or {}),
+                },
                 "created_at": datetime.now(timezone.utc).isoformat(),
             },
         )

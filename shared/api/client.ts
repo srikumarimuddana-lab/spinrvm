@@ -19,6 +19,16 @@ function deadlineHeader(timeoutMs: number = REQUEST_TIMEOUT): Record<string, str
   return { 'X-Deadline-Ms': String(Date.now() + timeoutMs) };
 }
 
+// Generate a UUID v4 that works in React Native (no crypto.randomUUID on RN).
+// The backend's RequestIDMiddleware echoes this back in X-Request-ID, so
+// caller-generated IDs link client-side logs to backend loguru JSON lines.
+function generateRequestId(): string {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+  });
+}
+
 // Helper function to wrap fetch with timeout
 const fetchWithTimeout = async (
   url: string,
@@ -57,6 +67,17 @@ let _inMemoryToken: string | null = null;
 export function setInMemoryToken(token: string | null) {
   _inMemoryToken = token;
   if (__DEV__) console.log('[API] In-memory token:', token ? 'SET' : 'CLEARED');
+}
+
+// ── CSRF double-submit token ──
+// Populated from the `csrf_token` field in AuthResponse after every
+// login/refresh. Sent as X-CSRF-Token on all state-changing requests.
+// The backend validates it against the csrf_token cookie; the cookie is
+// SameSite=Strict so cross-site requests can never present a matching pair.
+let _csrfToken: string | null = null;
+
+export function setCsrfToken(token: string | null): void {
+  _csrfToken = token;
 }
 
 // ── Token refresh callback ──
@@ -349,6 +370,7 @@ const client = {
     const token = await getAuthHeader();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      'X-Request-ID': generateRequestId(),
       ...deadlineHeader(),
       ...config?.headers,
     };
@@ -371,11 +393,15 @@ const client = {
     const token = await getAuthHeader();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      'X-Request-ID': generateRequestId(),
       ...deadlineHeader(),
       ...config?.headers,
     };
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
+    }
+    if (_csrfToken) {
+      headers['X-CSRF-Token'] = _csrfToken;
     }
 
     const response = await fetchWithTimeout(`${API_URL}/api/v1${url}`, {
@@ -395,6 +421,7 @@ const client = {
     const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
     const headers: Record<string, string> = {
       ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
+      'X-Request-ID': generateRequestId(),
       ...config?.headers,
     };
     // Strip any Content-Type for FormData so fetch can set the multipart boundary itself.
@@ -403,6 +430,9 @@ const client = {
     }
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
+    }
+    if (_csrfToken) {
+      headers['X-CSRF-Token'] = _csrfToken;
     }
 
     const response = await fetchWithTimeout(`${API_URL}/api/v1${url}`, {
@@ -421,11 +451,15 @@ const client = {
     const token = await getAuthHeader();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      'X-Request-ID': generateRequestId(),
       ...deadlineHeader(),
       ...config?.headers,
     };
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
+    }
+    if (_csrfToken) {
+      headers['X-CSRF-Token'] = _csrfToken;
     }
 
     const response = await fetchWithTimeout(`${API_URL}/api/v1${url}`, {
@@ -444,11 +478,15 @@ const client = {
     const token = await getAuthHeader();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      'X-Request-ID': generateRequestId(),
       ...deadlineHeader(),
       ...config?.headers,
     };
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
+    }
+    if (_csrfToken) {
+      headers['X-CSRF-Token'] = _csrfToken;
     }
 
     const response = await fetchWithTimeout(`${API_URL}/api/v1${url}`, {

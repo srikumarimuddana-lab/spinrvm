@@ -925,6 +925,7 @@ async def create_ride(request: Request, body: CreateRideRequest, current_user: d
         total_fare=_f(total_fare),
         stops=body.stops,
         is_scheduled=body.is_scheduled,
+        requires_wav=body.requires_wav,
         scheduled_time=body.scheduled_time,
         driver_earnings=_f(driver_earnings),
         admin_earnings=_f(admin_earnings),

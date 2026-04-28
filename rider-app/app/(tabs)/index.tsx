@@ -226,6 +226,7 @@ export default function HomeScreen() {
               style={styles.notificationButton}
               accessibilityLabel="Notifications"
               accessibilityRole="button"
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
               <Ionicons name="notifications-outline" size={24} color={colors.text} />
             </TouchableOpacity>
@@ -278,6 +279,7 @@ export default function HomeScreen() {
             accessibilityRole="button"
             accessibilityLabel="Zoom in"
             accessibilityHint="Zooms the map in"
+            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
           >
             <Ionicons name="add" size={24} color={colors.text} />
           </TouchableOpacity>
@@ -296,6 +298,7 @@ export default function HomeScreen() {
             accessibilityRole="button"
             accessibilityLabel="Zoom out"
             accessibilityHint="Zooms the map out"
+            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
           >
             <Ionicons name="remove" size={24} color={colors.text} />
           </TouchableOpacity>
@@ -324,6 +327,7 @@ export default function HomeScreen() {
           accessibilityRole="button"
           accessibilityLabel="Go to my location"
           accessibilityHint="Centers the map on your current GPS position"
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           onPress={async () => {
           if (!mapRef.current) return;
           const { status } = await Location.requestForegroundPermissionsAsync();
@@ -446,6 +450,7 @@ export default function HomeScreen() {
               style={styles.promoClose}
               accessibilityRole="button"
               accessibilityLabel="Dismiss promotion banner"
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
             >
               <Ionicons name="close" size={20} color={colors.textDim} />
             </TouchableOpacity>

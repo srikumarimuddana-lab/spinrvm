@@ -78,15 +78,23 @@ export default function SettingsScreen() {
         if (prefs.vibration != null) setVibration(Boolean(prefs.vibration));
     }, [prefsResponse]);
 
-    const savePreference = (key: string, value: boolean) => {
-        // Fire-and-forget mutation; cache invalidation happens in the
-        // hook's onSuccess so the next screen open reflects the new value.
-        updatePreferences.mutate({ [key]: value });
+    const savePreference = (key: string, value: boolean, revert: () => void) => {
+        updatePreferences.mutate({ [key]: value }, {
+            onError: () => {
+                revert();
+                setFeedbackAlert({
+                    visible: true,
+                    title: 'Preference not saved',
+                    message: 'Could not reach the server. Your setting has been reverted — please try again.',
+                    variant: 'danger',
+                });
+            },
+        });
     };
 
     const handleToggle = (key: string, setter: (v: boolean) => void) => (value: boolean) => {
         setter(value);
-        savePreference(key, value);
+        savePreference(key, value, () => setter(!value));
     };
     const [navApp, setNavApp] = useState<'default' | 'google' | 'waze'>('default');
 

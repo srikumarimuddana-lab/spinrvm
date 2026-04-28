@@ -4,10 +4,12 @@ try:
     from .. import db_supabase  # type: ignore
     from ..dependencies import get_current_user  # type: ignore
     from ..schemas import CreateProfileRequest, UserProfile  # type: ignore
+    from ..utils.audit_logger import log_admin_action  # type: ignore
 except ImportError:
     import db_supabase  # type: ignore
     from dependencies import get_current_user  # type: ignore
     from schemas import CreateProfileRequest, UserProfile  # type: ignore
+    from utils.audit_logger import log_admin_action  # type: ignore  # noqa: F811
 import base64
 import logging
 import uuid
@@ -104,6 +106,13 @@ async def delete_account_pipeda(current_user: dict = Depends(get_current_user)):
             {"deletion_requested_at": now, "deletion_scheduled_at": grace_period_end, "status": "pending_deletion"},
         )
         await db_supabase.update_one("drivers", {"user_id": user_id}, {"deleted_at": now})
+        await log_admin_action(
+            {"id": user_id, "role": "user"},
+            action="dsar_deletion_requested",
+            resource="users",
+            resource_id=user_id,
+            details={"grace_period_end": grace_period_end, "pipeda": True},
+        )
         logger.info(f"Account deletion scheduled for user {user_id} (grace period until {grace_period_end})")
         return {
             "success": True,
@@ -132,7 +141,13 @@ async def delete_account(current_user: dict = Depends(get_current_user)):
         await db_supabase.delete_many("saved_addresses", {"user_id": user_id})
         # Soft-delete the user record
         await db_supabase.update_one("users", {"id": user_id}, {"deleted_at": now})
-
+        await log_admin_action(
+            {"id": user_id, "role": "user"},
+            action="dsar_deletion_executed",
+            resource="users",
+            resource_id=user_id,
+            details={"immediate": True, "pipeda": True},
+        )
         logger.info(f"Account deleted successfully for user {user_id}")
         return {"success": True, "message": "Account permanently deleted"}
     except Exception as e:

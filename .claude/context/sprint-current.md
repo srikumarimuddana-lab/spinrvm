@@ -62,8 +62,14 @@ None currently open in production (pre-launch).
 | already in code | B-P1-2 | `JWT_SECRET` length ≥32 enforced in `core/config.py` |
 | already in code | B-P1-6 | Retention purge loop in `core/lifespan.py` + migration 50 |
 
+## Recently shipped (post-sprint hardening)
+
+| PR | What |
+|---|---|
+| #128 | `logger.warning` → `error` sweep: `stripe_charge.py`, `payments.py`, `users.py`, `drivers.py` — payment/dispatch/safety failures now reach Sentry |
+| #132 | `_vault_encrypt` fail-closed: driver PII (`license_number`, `vehicle_vin`) no longer stored as plaintext when Supabase Vault is unavailable |
+| manual | [17-4] Branch protection on `main` — PR + 1 review required; `Post guard rail summary` + `Security gates summary` required checks; force-push + deletion blocked |
+
 ## Next sprint candidates
 
-- **[17-4] Branch protection** (manual — GitHub Settings UI): require PR + 1 review; make `Security gates summary` + `Post guard rail summary` required checks; disable force-push + deletion on `main`.
-- **logger.warning sweep remainder**: `drivers.py` vault-encrypt plaintext fallback (line ~70) — currently warns and stores plaintext when encryption unavailable; should fail closed with 503.
-- **Sentry alert rule**: Now that loguru bridge is live, create a Sentry alert for `REFRESH TOKEN REUSE DETECTED` → PagerDuty. Estimated ~30 min in Sentry UI.
+- **Sentry alert rule**: Create a Sentry alert for `REFRESH TOKEN REUSE DETECTED` → PagerDuty. ~30 min in Sentry UI. No code required.

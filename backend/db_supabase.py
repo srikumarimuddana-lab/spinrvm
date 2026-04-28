@@ -1,7 +1,9 @@
 import asyncio
 import json as _json
+import os as _os
 import random as _random
 import re
+from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Literal, Optional
@@ -108,6 +110,21 @@ class _CircuitBreaker:
 _breaker = _CircuitBreaker()
 
 
+# ── DB thread pool (B-P2-7) ──────────────────────────────────────────
+# The default `loop.run_in_executor(None, ...)` uses asyncio's default
+# ThreadPoolExecutor whose `max_workers` is `min(32, os.cpu_count() + 4)`
+# — i.e. 8 on a 4-core Railway container. Every Supabase call (read, RPC,
+# write) goes through this pool, so a burst of slow queries (e.g. heatmap
+# aggregations or webhook handlers under load) saturates it and starves
+# every other `run_in_executor` caller.
+#
+# A dedicated pool sized for our DB-bound workload (default 32, override
+# via DB_THREAD_POOL_SIZE env var) gives Supabase calls headroom without
+# competing with whatever else may use the default executor.
+_DB_THREAD_POOL_SIZE = int(_os.environ.get("DB_THREAD_POOL_SIZE", "32"))
+_DB_EXECUTOR = _ThreadPoolExecutor(max_workers=_DB_THREAD_POOL_SIZE, thread_name_prefix="spinr-db")
+
+
 # ── Retry policy per call class ──────────────────────────────────────
 # Different DB call classes have different retry semantics. Hot reads
 # want many retries (cheap, safe). Idempotent writes want one. Non-
@@ -208,7 +225,11 @@ async def run_sync(
 
     for attempt in range(len(backoffs) + 1):
         try:
-            result = await loop.run_in_executor(_db_executor, func)  # type: ignore
+            # B-P2-7: explicit DB executor (max_workers=DB_THREAD_POOL_SIZE,
+            # default 32) instead of the asyncio default pool capped at 8
+            # workers on a 4-core box. Prevents Supabase bursts from starving
+            # every other run_in_executor caller in the process.
+            result = await loop.run_in_executor(_DB_EXECUTOR, func)  # type: ignore
             _breaker.record_success()
             _metric_gauge("spinr_db_circuit_state", 0, {"state": "closed"})
             _metric_gauge("spinr_db_thread_pool_threads", len(_db_executor._threads))

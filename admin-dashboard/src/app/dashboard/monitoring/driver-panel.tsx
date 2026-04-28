@@ -81,8 +81,8 @@ export function DriverPanel({ driver, onRideClick }: DriverPanelProps) {
                             <p className="text-xs text-muted-foreground">Rides</p>
                         </div>
                         <div className="rounded-lg bg-muted p-2 text-center">
-                            <p className="text-lg font-bold text-green-600">
-                                {driver.is_online ? "●" : "○"}
+                            <p className={`text-sm font-bold ${driver.is_online ? "text-green-600" : "text-muted-foreground"}`}>
+                                {driver.is_online ? (driver.active_ride_id ? "On Ride" : "Online") : "Offline"}
                             </p>
                             <p className="text-xs text-muted-foreground">Status</p>
                         </div>

@@ -181,7 +181,9 @@
         "unreadCount": "{{count}} unread notification",
         "unreadCountPlural": "{{count}} unread notifications",
         "noNotifications": "No notifications",
-        "allCaughtUp": "You're all caught up!"
+        "allCaughtUp": "You're all caught up!",
+        "markReadError": "Could not update notification",
+        "markReadErrorBody": "Please check your connection and try again."
     },
     "subscription": {
         "title": "Spinr Pass",

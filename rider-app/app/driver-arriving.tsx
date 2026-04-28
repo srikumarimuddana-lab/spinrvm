@@ -212,7 +212,7 @@ function DriverArrivingScreenContent() {
           text: 'Call 911',
           style: 'destructive',
           onPress: () => {
-            if (rideId) triggerEmergency(rideId as string);
+            if (rideId) void triggerEmergency(rideId as string).catch(() => {});
             Linking.openURL('tel:911');
           },
         },

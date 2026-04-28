@@ -325,7 +325,7 @@ async def admin_get_driver_stats(
     # Rides + earnings per day (for drivers matching the service_area filter)
     driver_ids_set = {d["id"] for d in enriched_drivers}
     ride_filters: Dict[str, Any] = {"created_at": {"$gte": range_start.isoformat()}}
-    all_rides = await db_supabase.get_rows("rides", ride_filters, order="created_at", desc=True, limit=50000)
+    all_rides = await db_supabase.get_rows("rides", ride_filters, order="created_at", desc=True, limit=5000)
 
     # Filter rides to only those belonging to our driver set
     relevant_rides = [r for r in all_rides if r.get("driver_id") in driver_ids_set] if service_area_id else all_rides
@@ -416,8 +416,13 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: di
     try:
         await db_supabase.update_one("drivers", {"id": driver_id}, filtered)
     except Exception as e:
-        logger.error(f"Failed to update driver {driver_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to update driver: {e}") from e
+        # B-P3-leak-cleanup: full traceback to logs, generic detail
+        # to client. Supabase / postgrest errors carry table internals.
+        logger.exception(f"Failed to update driver {driver_id}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to update driver.",
+        ) from e
     await log_admin_action(admin, "driver_updated", "drivers", driver_id, {"updated_fields": list(filtered.keys())})
     return {"message": "Driver updated", "updated_fields": list(filtered.keys())}
 
@@ -446,8 +451,13 @@ async def admin_verify_driver(driver_id: str, req: DriverVerifyRequest, admin: d
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to update driver {driver_id} verify flag: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to update driver: {e}") from e
+        # B-P3-leak-cleanup: full traceback to logs, generic detail
+        # to client.
+        logger.exception(f"Failed to update driver {driver_id} verify flag")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to update driver.",
+        ) from e
     # G4: Notify the driver via push so they know their verification status
     # changed without having to manually check the Documents screen.
     try:
@@ -717,10 +727,16 @@ async def admin_get_driver_activity(driver_id: str, limit: int = 100):
 
 
 @router.get("/drivers/{driver_id}/rides")
-async def admin_get_driver_rides(driver_id: str):
-    """Get all rides for a specific driver."""
-    rides = await db_supabase.get_rows("rides", {"driver_id": driver_id}, order="created_at", desc=True, limit=500)
-    return rides
+async def admin_get_driver_rides(
+    driver_id: str,
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+):
+    """Get rides for a driver with pagination (max 500 per page)."""
+    rides = await db_supabase.get_rows("rides", {"driver_id": driver_id}, order="created_at", desc=True, limit=limit)
+    # Apply offset in-process (Supabase helper doesn't expose OFFSET natively)
+    page = rides[offset : offset + limit]
+    return {"rides": page, "total": len(rides), "offset": offset, "limit": limit}
 
 
 @router.get("/drivers/{driver_id}/daily-stats")

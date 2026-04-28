@@ -85,8 +85,12 @@ class TestSendRideMessage:
 
         driver_row = _driver_row()
 
-        # find_one returns: ride (1st call), driver lookup for WS target
-        find_calls = [ride, driver_row if ride.get("driver_id") else None]
+        # send_ride_message makes up to three db.find_one calls:
+        #   1. get ride by id
+        #   2. get driver by user_id (for is_driver auth check) — returns None for riders
+        #   3. get driver by driver_id (for WS forwarding target) — only when sender is rider
+        # Provide all three slots to avoid StopAsyncIteration.
+        find_calls = [ride, None, driver_row if ride.get("driver_id") else None]
 
         with (
             patch("backend.routes.rides.db.find_one", AsyncMock(side_effect=find_calls)),

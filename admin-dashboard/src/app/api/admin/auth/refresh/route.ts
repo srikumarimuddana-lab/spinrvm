@@ -1,113 +1,125 @@
-import { randomUUID } from "crypto";
+import { randomBytes, timingSafeEqual } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
-import logger from "@/lib/logger";
 
-// PIPEDA data residency: pin to Canadian (Montréal) region (F-22).
+// PIPEDA data residency: pin to Canadian (Montreal) Vercel edge region (F-22).
 export const preferredRegion = "yul1";
 
-const BACKEND_URL =
-  process.env.BACKEND_URL ||
-  process.env.NEXT_PUBLIC_API_URL ||
-  "http://127.0.0.1:8000";
+const BACKEND_URL = (() => {
+  const url =
+    process.env.BACKEND_URL ||
+    process.env.NEXT_PUBLIC_API_URL ||
+    (process.env.NODE_ENV !== "production" ? "http://127.0.0.1:8000" : "");
+  if (!url) {
+    throw new Error(
+      "BACKEND_URL env var is required in production. Set it in your Railway / Vercel environment.",
+    );
+  }
+  return url;
+})();
 
 const RT_COOKIE = "spinr_admin_rt";
-const AT_COOKIE = "admin_token";
-const CSRF_COOKIE = "csrf_token";
-const RT_MAX_AGE = 30 * 24 * 60 * 60;
-const AT_MAX_AGE = 8 * 60 * 60;
+const CSRF_COOKIE = "spinr_admin_csrf";
+const SESSION_MAX_AGE = 30 * 24 * 60 * 60;
 
-function clearRtCookie(res: NextResponse): void {
+function clearSessionCookies(res: NextResponse): void {
+  const isProduction = process.env.NODE_ENV === "production";
   res.cookies.set(RT_COOKIE, "", {
     httpOnly: true,
     sameSite: "strict",
-    secure: process.env.NODE_ENV === "production",
+    secure: isProduction,
+    path: "/api/admin/auth",
+    maxAge: 0,
+  });
+  res.cookies.set(CSRF_COOKIE, "", {
+    httpOnly: false,
+    sameSite: "strict",
+    secure: isProduction,
     path: "/api/admin/auth",
     maxAge: 0,
   });
 }
 
-export async function POST(req: NextRequest) {
-  const request_id = randomUUID();
-  const log = logger.child({ request_id, domain: "auth" });
+function verifyCsrf(req: NextRequest): boolean {
+  const cookieToken = req.cookies.get(CSRF_COOKIE)?.value;
+  const headerToken = req.headers.get("x-csrf-token");
+  if (!cookieToken || !headerToken) return false;
+  try {
+    const a = Buffer.from(cookieToken, "utf8");
+    const b = Buffer.from(headerToken, "utf8");
+    // timingSafeEqual requires equal-length buffers; mismatched length → reject.
+    if (a.length !== b.length) return false;
+    return timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
+}
 
-  // CSRF double-submit validation — cookie value must match the request header.
-  // silentRefresh() bootstraps this by reading the csrf_token cookie from
-  // document.cookie and echoing it as X-CSRF-Token before in-memory state is
-  // available. Both must be present and equal.
-  const csrfCookie = req.cookies.get(CSRF_COOKIE)?.value ?? null;
-  const csrfHeader = req.headers.get("x-csrf-token") ?? null;
-  if (!csrfCookie || !csrfHeader || csrfCookie !== csrfHeader) {
-    log.warn({ reason: "csrf_mismatch" }, "token refresh rejected: CSRF validation failed");
-    return NextResponse.json({ detail: "CSRF validation failed" }, { status: 403 });
+export async function POST(req: NextRequest) {
+  if (!verifyCsrf(req)) {
+    // Clear session cookies on CSRF failure so a logout race (in-flight
+    // silentRefresh fired after logout cleared the in-memory token) does not
+    // leave a live RT cookie in the browser.
+    const res = NextResponse.json({ detail: "CSRF validation failed" }, { status: 403 });
+    clearSessionCookies(res);
+    return res;
   }
 
   const refreshToken = req.cookies.get(RT_COOKIE)?.value;
   if (!refreshToken) {
-    log.warn({ reason: "no_rt_cookie" }, "token refresh rejected: no RT cookie");
     return NextResponse.json({ detail: "No refresh token" }, { status: 401 });
   }
 
   let upstream: Response;
-  const start = Date.now();
   try {
     upstream = await fetch(`${BACKEND_URL}/api/admin/auth/refresh`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ refresh_token: refreshToken }),
     });
-  } catch (err) {
-    log.error({ err, duration_ms: Date.now() - start }, "backend unreachable on token refresh");
+  } catch {
     return NextResponse.json({ detail: "Backend unreachable" }, { status: 502 });
   }
 
-  const duration_ms = Date.now() - start;
   const data = await upstream.json();
 
   if (!upstream.ok) {
-    log.warn({ status: upstream.status, duration_ms }, "token refresh rejected by backend");
     const res = NextResponse.json(data, { status: upstream.status });
     // On a definitive 401 the token is revoked — clear the cookie.
-    if (upstream.status === 401) clearRtCookie(res);
+    if (upstream.status === 401) clearSessionCookies(res);
     return res;
   }
 
-  log.info({ duration_ms }, "admin token refreshed");
-
   const { refresh_token, refresh_expires_at: _ignored, ...clientData } = data;
 
-  const res = NextResponse.json(clientData, { status: 200 });
+  const isProduction = process.env.NODE_ENV === "production";
+
+  // Rotate both cookies atomically — they must always be updated together
+  // so the CSRF token always corresponds to the current HttpOnly RT cookie.
+  // A missing refresh_token on a 200 is a backend contract violation; treat
+  // it as a protocol error rather than silently issuing a mismatched CSRF token.
   if (refresh_token) {
+    const newCsrfToken = randomBytes(32).toString("hex");
+    const res = NextResponse.json(
+      { ...clientData, csrf_token: newCsrfToken },
+      { status: 200 },
+    );
     res.cookies.set(RT_COOKIE, refresh_token, {
       httpOnly: true,
       sameSite: "strict",
-      secure: process.env.NODE_ENV === "production",
+      secure: isProduction,
       path: "/api/admin/auth",
-      maxAge: RT_MAX_AGE,
+      maxAge: SESSION_MAX_AGE,
     });
-  }
-  // Rotate the HttpOnly access-token cookie alongside the refresh token.
-  if (clientData.token) {
-    const atMaxAge = clientData.access_expires_at
-      ? Math.max(0, Math.floor((new Date(clientData.access_expires_at).getTime() - Date.now()) / 1000))
-      : AT_MAX_AGE;
-    res.cookies.set(AT_COOKIE, clientData.token, {
-      httpOnly: true,
-      sameSite: "strict",
-      secure: process.env.NODE_ENV === "production",
-      path: "/",
-      maxAge: atMaxAge,
-    });
-  }
-  // Rotate the browser-readable csrf_token cookie so the next page-reload
-  // bootstrap picks up the fresh value returned by the backend.
-  if (clientData.csrf_token) {
-    res.cookies.set(CSRF_COOKIE, clientData.csrf_token, {
+    res.cookies.set(CSRF_COOKIE, newCsrfToken, {
       httpOnly: false,
       sameSite: "strict",
-      secure: process.env.NODE_ENV === "production",
-      path: "/",
-      maxAge: RT_MAX_AGE,
+      secure: isProduction,
+      path: "/api/admin/auth",
+      maxAge: SESSION_MAX_AGE,
     });
+    return res;
   }
-  return res;
+
+  // Backend returned 200 without a refresh_token — protocol violation.
+  return NextResponse.json({ detail: "Backend protocol error" }, { status: 502 });
 }

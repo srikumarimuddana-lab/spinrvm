@@ -296,14 +296,17 @@ async def decide_allowance_request(
         wallet = await get_corporate_wallet_by_company(company_id)
         if not allowance or not wallet:
             raise HTTPException(status_code=409, detail="missing allowance or wallet")
+        amount_raw = request.get("amount")
+        if amount_raw is None:
+            raise HTTPException(status_code=422, detail="allowance request amount is required")
         await apply_grant(
             wallet_id=wallet["id"],
             allowance_id=allowance["id"],
             member_id=request["member_id"],
-            amount=Decimal(str(request["amount"])),
+            amount=Decimal(str(amount_raw)),
             actor_user_id=guard["user"]["id"],
             notes=f"approved request {request_id}",
-            floor=Decimal(str(wallet.get("soft_negative_floor", -50))),
+            floor=Decimal(str(wallet.get("soft_negative_floor", "-50"))),
         )
     return await update_allowance_request(
         request_id=request_id,
@@ -435,17 +438,17 @@ def _aggregate_rows(rows: list[dict]) -> dict:
     by_member_out = [
         {
             **v,
-            "allowance_total": float(v["allowance_total"]),
-            "master_total": float(v["master_total"]),
-            "total": float(v["total"]),
+            "allowance_total": float(v["allowance_total"].quantize(_TWO, rounding=ROUND_HALF_UP)),
+            "master_total": float(v["master_total"].quantize(_TWO, rounding=ROUND_HALF_UP)),
+            "total": float(v["total"].quantize(_TWO, rounding=ROUND_HALF_UP)),
         }
         for v in sorted(by_member.values(), key=lambda m: m["total"], reverse=True)
     ]
     return {
         "ride_count": len(rows),
-        "allowance_total": float(allowance_total),
-        "master_total": float(master_total),
-        "total": float(total),
+        "allowance_total": float(allowance_total.quantize(_TWO, rounding=ROUND_HALF_UP)),
+        "master_total": float(master_total.quantize(_TWO, rounding=ROUND_HALF_UP)),
+        "total": float(total.quantize(_TWO, rounding=ROUND_HALF_UP)),
         "avg_fare": float((total / len(rows)).quantize(_TWO, rounding=ROUND_HALF_UP)) if rows else 0.0,
         "by_member": by_member_out,
     }
@@ -488,7 +491,7 @@ async def billing_summary(
     wallet = await get_corporate_wallet_by_company(company_id) or {}
     return {
         "month": month,
-        "wallet_balance": float(wallet.get("balance") or 0),
+        "wallet_balance": float(Decimal(str(wallet.get("balance") or "0")).quantize(_TWO, rounding=ROUND_HALF_UP)),
         "wallet_currency": wallet.get("currency") or "CAD",
         **_aggregate_rows(all_rows),
     }
@@ -563,7 +566,7 @@ async def billing_transactions(
     )
     return {
         "wallet_id": wallet["id"],
-        "balance": float(wallet.get("balance") or 0),
+        "balance": float(Decimal(str(wallet.get("balance") or "0")).quantize(_TWO, rounding=ROUND_HALF_UP)),
         "currency": wallet.get("currency") or "CAD",
         "transactions": txns,
     }

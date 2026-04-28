@@ -79,20 +79,17 @@ export default function SettingsScreen() {
     }, [prefsResponse]);
 
     const savePreference = (key: string, value: boolean, revert: () => void) => {
-        updatePreferences.mutate(
-            { [key]: value },
-            {
-                onError: () => {
-                    revert();
-                    setFeedbackAlert({
-                        visible: true,
-                        title: 'Settings not saved',
-                        message: 'Could not save your preference. Please try again.',
-                        variant: 'danger',
-                    });
-                },
+        updatePreferences.mutate({ [key]: value }, {
+            onError: () => {
+                revert();
+                setFeedbackAlert({
+                    visible: true,
+                    title: 'Preference not saved',
+                    message: 'Could not reach the server. Your setting has been reverted — please try again.',
+                    variant: 'danger',
+                });
             },
-        );
+        });
     };
 
     const handleToggle = (key: string, setter: (v: boolean) => void) => (value: boolean) => {

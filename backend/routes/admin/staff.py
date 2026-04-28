@@ -189,8 +189,10 @@ async def get_staff(staff_id: str):
 
 
 @router.put("/staff/{staff_id}")
-async def update_staff(staff_id: str, req: StaffUpdateRequest, admin: dict = Depends(require_role("super_admin"))):
-    """Update staff member role/modules/status. Requires super_admin (A-P3-5)."""
+async def update_staff(staff_id: str, req: StaffUpdateRequest, admin: dict = Depends(get_admin_user)):
+    """Update staff member role/modules/status. Only super_admin may call this (A-P3-5)."""
+    if admin.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Only super admins can update staff members")
     s = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("admin_staff", {"id": staff_id}, limit=1))
     if not s:
         raise HTTPException(status_code=404, detail="Staff member not found")

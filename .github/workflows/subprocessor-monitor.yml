@@ -1,0 +1,203 @@
+name: Sub-processor monitor (B-P3-3)
+
+# B-P3-3: ensures docs/vendor-inventory.md gets a scheduled review.
+#
+# Why this exists
+# ---------------
+# PIPEDA s.4.1.3 (cross-border disclosure), SOC 2 CC9.2, and PCI-DSS 12.8
+# require Spinr to maintain an up-to-date inventory of every external
+# vendor that handles user data. The inventory itself lives at
+# docs/vendor-inventory.md and declares a quarterly review cadence — but
+# nothing actually enforced that cadence, so the doc could silently rot.
+#
+# What this workflow does
+# -----------------------
+# Every Monday at 13:00 UTC (≈06:00 PST / 09:00 EST — early-week so a
+# review issue doesn't sit unread over the weekend):
+#
+#   1. Reads the last-modified date of docs/vendor-inventory.md from
+#      git log (most recent non-CI-bot commit; we ignore audit-report
+#      commits to avoid resetting the timer on noise).
+#   2. If that date is older than VENDOR_REVIEW_DAYS (default 90), opens
+#      a GitHub issue tagged `compliance` reminding the owners that the
+#      inventory is due for a quarterly review.
+#   3. Idempotent: if there is already an OPEN issue with the
+#      "subprocessor-review" label, the workflow does nothing — it
+#      will not spam a new issue every week until the existing one is
+#      closed.
+#
+# This is intentionally lightweight. It does NOT scrape vendor
+# sub-processor URLs (those URLs change form, are sometimes auth-gated,
+# and would create a high-noise scrape). It enforces the existing
+# quarterly cadence the doc itself declares; that's the gap the audit
+# (B-P3-3) flagged.
+#
+# Future enhancement: per-vendor sub-processor URL list with hash-diff,
+# tracked separately. See docs/vendor-inventory.md "Future enhancements".
+
+on:
+  schedule:
+    # Weekly Monday 13:00 UTC. cron is in UTC and has no DST handling.
+    - cron: "0 13 * * 1"
+  workflow_dispatch:
+    inputs:
+      force_open_issue:
+        description: "Open a review issue even if the inventory was just updated (manual override)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+permissions:
+  issues: write
+  contents: read
+
+env:
+  VENDOR_REVIEW_DAYS: "90"
+  INVENTORY_FILE: "docs/vendor-inventory.md"
+  ISSUE_LABEL: "subprocessor-review"
+
+jobs:
+  check-and-notify:
+    name: Vendor inventory freshness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need full history so `git log` can find the inventory's last
+          # human commit (depth=1 only gives the latest commit overall).
+          fetch-depth: 0
+
+      - name: Compute days since last inventory update
+        id: freshness
+        run: |
+          set -euo pipefail
+          if [ ! -f "${INVENTORY_FILE}" ]; then
+            echo "::error::${INVENTORY_FILE} is missing"
+            exit 1
+          fi
+
+          # Last commit author date for the inventory file. ISO-8601 strict
+          # so `date -d` parses unambiguously. We exclude the CI-audit bot
+          # so a noise commit doesn't reset the timer.
+          last_iso=$(git log -1 \
+            --pretty=format:%aI \
+            --invert-grep \
+            --author='github-actions\[bot\]' \
+            -- "${INVENTORY_FILE}")
+
+          if [ -z "$last_iso" ]; then
+            # No human commits at all (only the bot, or nothing) — treat as
+            # very stale so the issue gets created.
+            last_iso=$(git log -1 --pretty=format:%aI -- "${INVENTORY_FILE}")
+          fi
+
+          last_epoch=$(date -d "${last_iso}" +%s)
+          now_epoch=$(date +%s)
+          age_days=$(( (now_epoch - last_epoch) / 86400 ))
+
+          echo "last_iso=${last_iso}"   >> "$GITHUB_OUTPUT"
+          echo "age_days=${age_days}"   >> "$GITHUB_OUTPUT"
+          echo "Inventory last touched: ${last_iso} (${age_days} days ago)"
+
+      - name: Check for existing open review issue
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # gh issue list returns JSON; use --json to avoid screen-scraping.
+          existing=$(gh issue list \
+            --state open \
+            --label "${ISSUE_LABEL}" \
+            --json number,title \
+            --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            echo "existing=${existing}" >> "$GITHUB_OUTPUT"
+            echo "Found existing open review issue #${existing} — skipping creation."
+          else
+            echo "existing=" >> "$GITHUB_OUTPUT"
+            echo "No existing open review issue."
+          fi
+
+      - name: Decide whether to open issue
+        id: decide
+        run: |
+          set -euo pipefail
+          force="${{ github.event.inputs.force_open_issue || 'false' }}"
+          age="${{ steps.freshness.outputs.age_days }}"
+          existing="${{ steps.existing.outputs.existing }}"
+
+          if [ -n "$existing" ]; then
+            echo "open_issue=false" >> "$GITHUB_OUTPUT"
+            echo "Reason: open issue #${existing} already exists."
+          elif [ "$force" = "true" ]; then
+            echo "open_issue=true" >> "$GITHUB_OUTPUT"
+            echo "Reason: workflow_dispatch with force_open_issue=true."
+          elif [ "$age" -ge "${VENDOR_REVIEW_DAYS}" ]; then
+            echo "open_issue=true" >> "$GITHUB_OUTPUT"
+            echo "Reason: inventory is ${age} days stale (threshold: ${VENDOR_REVIEW_DAYS})."
+          else
+            echo "open_issue=false" >> "$GITHUB_OUTPUT"
+            echo "Reason: inventory is fresh (${age} days, under ${VENDOR_REVIEW_DAYS}d threshold)."
+          fi
+
+      - name: Open vendor-review issue
+        if: steps.decide.outputs.open_issue == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          age="${{ steps.freshness.outputs.age_days }}"
+          last="${{ steps.freshness.outputs.last_iso }}"
+
+          title="Vendor inventory review due — last updated ${age}d ago"
+          body=$(cat <<EOF
+          # Vendor inventory quarterly review
+
+          \`docs/vendor-inventory.md\` was last updated **${last}** — ${age} days ago.
+          The doc declares a quarterly (90-day) review cadence; this issue is
+          this cycle's reminder.
+
+          ## Owners
+
+          \`compliance\` + \`infra\` (per the doc's "Owner" line).
+
+          ## Checklist
+
+          - [ ] Walk every row in **Active Vendors** — confirm vendor still in use.
+          - [ ] For each row: confirm DPA still on file and not expired.
+          - [ ] For each row: confirm vendor's published sub-processor list hasn't changed materially since last review (Stripe, Google, Twilio, Supabase publish these). If it has, update the **Sub-processors** column and disclose the change in the privacy policy within 30 days.
+          - [ ] Confirm hosting region for **Supabase** and **Upstash / Redis Cloud** (still flagged ⚠ VERIFY in the doc).
+          - [ ] Onboarded any new vendors since last review? Run \`Vendor Onboarding Checklist\` from the doc and add rows here.
+          - [ ] Offboarded any vendors? Mark RETIRED and update privacy policy.
+          - [ ] DPIA status updated where relevant.
+          - [ ] Commit the doc changes with message \`chore(compliance): vendor inventory quarterly review YYYY-Q\`. The commit's author timestamp resets this workflow's clock; closing this issue does not.
+
+          ## When to close
+
+          Close this issue once \`docs/vendor-inventory.md\` has been committed
+          with the new review timestamp. The next reminder will fire 90 days
+          after that commit.
+
+          ---
+
+          *Auto-generated by \`.github/workflows/subprocessor-monitor.yml\` (B-P3-3).*
+          EOF
+          )
+
+          gh issue create \
+            --title "${title}" \
+            --body  "${body}" \
+            --label "${ISSUE_LABEL}" \
+            --label "compliance"
+
+      - name: No-op summary
+        if: steps.decide.outputs.open_issue != 'true'
+        run: |
+          echo "✅ No vendor-review issue opened this run."
+          echo "   age_days: ${{ steps.freshness.outputs.age_days }}"
+          echo "   threshold: ${VENDOR_REVIEW_DAYS}"
+          echo "   existing open issue: ${{ steps.existing.outputs.existing }}"

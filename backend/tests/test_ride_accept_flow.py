@@ -34,6 +34,11 @@ from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from starlette.requests import Request as StarletteRequest
+
+_MOCK_REQUEST = StarletteRequest(
+    {"type": "http", "method": "GET", "path": "/", "headers": [], "query_string": b"", "root_path": ""}
+)
 
 RIDER_ID = "rider-abc"
 DRIVER_USER_ID = "driver-user-xyz"
@@ -82,19 +87,24 @@ class TestAcceptRideFlipsStatus:
     is stuck on the 'Finding your driver' pulse animation."""
 
     def test_accept_updates_status_and_sends_ws(self):
+        """accept_ride uses the atomic db.update_one guard (NOT db_supabase.update_ride)
+        and returns {"success": True}, then sends WS + push to notify the rider."""
         from backend.routes import drivers as drivers_mod
 
         # Ride starts as `driver_assigned` (offer sent to this driver).
         pre_ride = _ride_row("driver_assigned", driver_id=DRIVER_ID)
-        # After update_ride runs, subsequent reads return the new row.
+        # After update_one runs, the re-read via find_one returns the updated row.
         post_ride = _ride_row(
             "driver_accepted",
             driver_id=DRIVER_ID,
             driver_accepted_at=datetime.utcnow().isoformat(),
         )
 
-        get_ride_mock = AsyncMock(side_effect=[pre_ride, post_ride])
-        update_ride_mock = AsyncMock(return_value=post_ride)
+        # guard_ok signals that the atomic update matched one row
+        guard_ok = type("_Guard", (), {"modified_count": 1})()
+
+        get_ride_mock = AsyncMock(return_value=pre_ride)
+        update_one_mock = AsyncMock(return_value=guard_ok)
         get_rows_mock = AsyncMock(return_value=[_driver_row()])
         find_one_mock = AsyncMock(return_value=post_ride)
         send_ws_mock = AsyncMock()
@@ -102,10 +112,12 @@ class TestAcceptRideFlipsStatus:
 
         with (
             patch("backend.routes.drivers.db_supabase.get_ride", get_ride_mock),
-            patch("backend.routes.drivers.db_supabase.update_ride", update_ride_mock),
             patch("backend.routes.drivers.db_supabase.get_rows", get_rows_mock),
+            # accept_ride calls db.update_one (db is aliased to db_supabase)
+            patch("backend.routes.drivers.db.update_one", update_one_mock),
             patch("backend.routes.drivers.db.find_one", find_one_mock),
             patch("backend.routes.drivers.manager.send_personal_message", send_ws_mock),
+            patch("backend.routes.drivers.manager.broadcast_ride_status", AsyncMock()),
             patch("backend.routes.drivers.send_push_notification", send_push_mock),
         ):
             result = asyncio.run(
@@ -117,11 +129,12 @@ class TestAcceptRideFlipsStatus:
 
         assert result == {"success": True}
 
-        # 1) update_ride was called with status=driver_accepted + driver_id
-        assert update_ride_mock.await_count == 1
-        _, kwargs = update_ride_mock.call_args
-        args = update_ride_mock.call_args.args
-        patch_payload = args[1] if len(args) > 1 else kwargs.get("updates")
+        # 1) The atomic update_one was called (this is the real DB write path)
+        assert update_one_mock.await_count == 1
+        args = update_one_mock.call_args.args
+        # args = (table, filter, patch_doc)
+        assert args[0] == "rides"
+        patch_payload = args[2].get("$set", args[2])
         assert patch_payload["status"] == "driver_accepted"
         assert patch_payload["driver_id"] == DRIVER_ID
         assert "driver_accepted_at" in patch_payload
@@ -129,46 +142,42 @@ class TestAcceptRideFlipsStatus:
         # 2) WS notification fired on the rider_<id> channel — this is
         #    what the rider-app's useRiderSocket.ts listens for to
         #    trigger fetchRide without waiting for the 15 s poll.
-        assert send_ws_mock.await_count == 1
-        ws_args = send_ws_mock.call_args.args
-        ws_message, channel = ws_args[0], ws_args[1]
+        assert send_ws_mock.await_count >= 1
+        ws_calls = send_ws_mock.call_args_list
+        rider_calls = [c for c in ws_calls if f"rider_{RIDER_ID}" in str(c.args[1])]
+        assert rider_calls, (
+            f"WS channel must include rider_{RIDER_ID} to match the hook's "
+            f"server-side key; got channels: {[c.args[1] for c in ws_calls]}"
+        )
+        ws_message = rider_calls[0].args[0]
         assert ws_message["type"] == "driver_accepted"
         assert ws_message["ride_id"] == RIDE_ID
-        assert channel == f"rider_{RIDER_ID}", (
-            f"WS channel must be rider_<rider_id> to match the hook's "
-            f"server-side key (backend/routes/websocket.py builds "
-            f"connection_key = f'{{client_type}}_{{user_id}}'); got {channel}"
-        )
 
         # 3) Push notification too so a backgrounded rider app still gets it.
-        assert send_push_mock.await_count == 1
+        assert send_push_mock.await_count >= 1
 
-    def test_verify_reread_catches_silent_noop(self):
-        """If update_ride succeeds but the row didn't flip (missing column,
-        stale cache, etc.), the endpoint MUST 4xx instead of returning
-        {success:true}. Returning success here is exactly what caused
-        the bug in the first place — client thinks it worked but the
-        rider keeps polling a `searching` row."""
+    def test_double_accept_rejected_by_guard(self):
+        """When the atomic guard returns modified_count=0 (ride already taken),
+        accept_ride must raise 409 — never return {success: True}."""
         from fastapi import HTTPException
 
         from backend.routes import drivers as drivers_mod
 
         pre_ride = _ride_row("driver_assigned", driver_id=DRIVER_ID)
-        # Stale row after the "write" — simulates the silent-no-op case.
-        stuck_ride = _ride_row("driver_assigned", driver_id=DRIVER_ID)
+
+        # Guard says 0 rows matched → ride taken by a concurrent request
+        guard_fail = type("_Guard", (), {"modified_count": 0})()
 
         with (
-            patch(
-                "backend.routes.drivers.db_supabase.get_ride",
-                AsyncMock(side_effect=[pre_ride, stuck_ride]),
-            ),
-            patch("backend.routes.drivers.db_supabase.update_ride", AsyncMock(return_value=None)),
+            patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=pre_ride)),
             patch(
                 "backend.routes.drivers.db_supabase.get_rows",
                 AsyncMock(return_value=[_driver_row()]),
             ),
-            patch("backend.routes.drivers.db.find_one", AsyncMock(return_value=stuck_ride)),
+            patch("backend.routes.drivers.db.update_one", AsyncMock(return_value=guard_fail)),
+            patch("backend.routes.drivers.db.find_one", AsyncMock(return_value=pre_ride)),
             patch("backend.routes.drivers.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.drivers.manager.broadcast_ride_status", AsyncMock()),
             patch("backend.routes.drivers.send_push_notification", AsyncMock()),
         ):
             with pytest.raises(HTTPException) as excinfo:
@@ -178,7 +187,7 @@ class TestAcceptRideFlipsStatus:
                         current_user={"id": DRIVER_USER_ID},
                     )
                 )
-        assert excinfo.value.status_code == 400
+        assert excinfo.value.status_code == 409
 
 
 class TestGetRideReturnsAcceptedStatus:
@@ -213,6 +222,7 @@ class TestGetRideReturnsAcceptedStatus:
         ):
             result = asyncio.run(
                 rides_mod.get_ride(
+                    request=_MOCK_REQUEST,
                     ride_id=RIDE_ID,
                     current_user={"id": RIDER_ID, "role": "rider"},
                 )

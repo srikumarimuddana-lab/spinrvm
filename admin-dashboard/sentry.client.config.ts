@@ -19,7 +19,7 @@ function beforeSend(event: Sentry.ErrorEvent): Sentry.ErrorEvent | null {
 
   // Scrub cookies entirely
   if (event.request?.cookies) {
-    event.request.cookies = {};
+    event.request.cookies = { _filtered: '[Filtered]' };
   }
 
   // Remove URL query strings (may contain phone, email, or token params)
@@ -61,11 +61,14 @@ function beforeSend(event: Sentry.ErrorEvent): Sentry.ErrorEvent | null {
   return event;
 }
 
+// [22-2] PIPEDA data residency: Sentry has no Canadian region.
+// Use the EU-region DSN (sentry.io → Settings → Data Storage → EU) as the
+// closest compliant option. EU DSN host pattern: o<org>.ingest.de.sentry.io
 Sentry.init({
   dsn: process.env.NEXT_PUBLIC_SENTRY_DSN,
 
-  // Admin is low-traffic (<5k req/day); 100% sampling gives full perf visibility
-  // on this high-blast-radius surface without meaningful cost.
+  // Admin is low-traffic (<5k req/day) — 100% sampling catches all perf regressions
+  // on a surface where slow loads have high operational cost ([21-2]).
   tracesSampleRate: 1.0,
 
   // Replays: 10% of sessions, 100% of sessions with errors.
@@ -82,12 +85,21 @@ Sentry.init({
 
   beforeSend,
 
+  // Required tags per CLAUDE.md observability conventions ([21-4]).
+  initialScope: {
+    tags: {
+      surface: 'admin',
+      env: process.env.NODE_ENV ?? 'development',
+    },
+  },
+
   integrations: [
     Sentry.replayIntegration({
-      // Mask PII in session replays. Block media so driver document images
-      // (uploaded IDs) cannot be captured in replay recordings.
+      // Admin views render driver licences, payout amounts, and Stripe IDs;
+      // block all media so document-review images never appear in replays ([21-1]).
       maskAllText: true,
       blockAllMedia: true,
+      mask: ['[data-pii]', 'input'],
     }),
   ],
 });

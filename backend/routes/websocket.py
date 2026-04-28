@@ -8,6 +8,7 @@ from loguru import logger
 
 try:
     from .. import db_supabase
+    from ..core.config import settings
     from ..dependencies import verify_jwt_token
     from ..socket_manager import manager
     from ..utils.driver_presence import clear_presence, mark_present
@@ -108,10 +109,38 @@ async def _handle_driver_ws_disconnect(connection_key: str | None, user: dict | 
         logger.warning(f"[WS] disconnect handler failed for {connection_key}: {_exc}")
 
 
+async def _read_token_version(connection_key: str, user_id: str) -> int | None:
+    """Read the row's current ``token_version`` for this connection (B-P1-11).
+
+    The connection_key prefix tells us which table to hit:
+    ``admin_*`` → admin_staff, ``rider_*``/``driver_*`` → users.
+
+    Returns the integer token_version, or None if the read failed
+    (transient DB hiccup) or the row no longer exists. Callers MUST
+    treat None as "do not act" — closing a healthy socket because of
+    a one-off DB blip would be a worse failure mode than letting a
+    revoked token live another 30s until the next heartbeat tick.
+    """
+    try:
+        if connection_key.startswith("admin_"):
+            row = await db.find_one("admin_staff", {"id": user_id})
+        else:
+            row = await db_supabase.get_user_by_id(user_id)
+        if not row:
+            return None
+        return int(row.get("token_version") or 0)
+    except Exception as e:
+        logger.warning(f"WS token_version read failed for {connection_key}: {e}")
+        return None
+
+
 async def heartbeat_task(
     websocket: WebSocket,
     connection_key: str,
-    conn_state: dict,
+    conn_state: dict | None = None,
+    *,
+    user_id: str | None = None,
+    claim_token_version: int = 0,
 ):
     """Background task that sends periodic ping messages to keep the connection
     alive and detect dead connections early. Critical for rideshare apps where
@@ -127,6 +156,15 @@ async def heartbeat_task(
        the socket after a grace window. `conn_state["last_pong_at"]` is
        updated by the pong-handler branch in the main receive loop.
 
+    B-P1-11 also re-validates the user's ``token_version`` each tick.
+    If /auth/logout-all (or the B-P1-3 reuse cascade) bumped the row's
+    version since this socket connected, close the socket so the user
+    is forced through /auth/refresh — which will fail (refresh tokens
+    revoked) and surface session-expired UX. Without this re-check, a
+    user who hit "Sign out everywhere" would keep receiving ride
+    events on the old socket until it dropped on its own. DB read
+    failure is treated as "do not act" — see _read_token_version.
+
     Either path raises ``WebSocketDisconnect`` in the receive loop, which
     clears Redis presence and triggers ``_handle_driver_ws_disconnect`` to
     notify admins — but does NOT write ``is_online=False``. See the
@@ -141,11 +179,38 @@ async def heartbeat_task(
     try:
         while True:
             await asyncio.sleep(HEARTBEAT_INTERVAL)
+
+            # B-P1-11: token_version re-validation. Skipped when user_id
+            # wasn't passed (legacy callers), so this hook is opt-in and
+            # backwards-compatible with any future heartbeat caller that
+            # hasn't been updated.
+            if user_id:
+                stored_version = await _read_token_version(connection_key, user_id)
+                if stored_version is not None and stored_version > claim_token_version:
+                    logger.info(
+                        f"WS heartbeat: token_version stale for {connection_key} "
+                        f"(stored={stored_version} > claim={claim_token_version}); closing"
+                    )
+                    try:
+                        await websocket.send_json({"type": "session_revoked", "reason": "token_revoked"})
+                    except Exception:  # noqa: S110 — socket may already be dead
+                        pass
+                    try:
+                        await websocket.close(code=1008, reason="token_revoked")
+                    except Exception:  # noqa: S110
+                        pass
+                    break
+
             try:
                 await websocket.send_json({"type": "ping", "timestamp": datetime.now(timezone.utc).isoformat()})
             except Exception:
                 logger.info(f"Heartbeat send failed for {connection_key} — connection likely dead")
                 break
+            # Pong-staleness check is opt-in via conn_state; legacy/test
+            # callers that pass conn_state=None skip this branch and rely
+            # purely on the send-side failure path above.
+            if conn_state is None:
+                continue
             last_pong = conn_state.get("last_pong_at", 0.0)
             if loop.time() - last_pong > stale_threshold:
                 logger.info(
@@ -191,6 +256,27 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
         # into the default threadpool so only this coroutine waits.
         try:
             payload = await asyncio.to_thread(firebase_auth.verify_id_token, token)
+            # B-P1-1 / DV-10: bind audience to client_type. Without this a
+            # driver-app Firebase token would mint a `role: "rider"` row
+            # below (or vice versa) — same cross-app reuse hazard fixed in
+            # routes/auth.py and dependencies/__init__.py. Production fails
+            # fast in core/config._guard_production_secrets when either
+            # FIREBASE_*_APP_ID is unset, so the empty-string branch is
+            # only reachable in dev/test.
+            expected_aud = ""
+            if client_type == "driver":
+                expected_aud = settings.FIREBASE_DRIVER_APP_ID or ""
+            elif client_type == "rider":
+                expected_aud = settings.FIREBASE_RIDER_APP_ID or ""
+            if not expected_aud:
+                await websocket.send_json({"type": "error", "message": "firebase_audience_not_configured"})
+                await websocket.close()
+                return
+            if payload.get("aud") != expected_aud:
+                await websocket.send_json({"type": "error", "message": "ERR_TOKEN_AUDIENCE"})
+                await websocket.close()
+                return
+
             uid = payload.get("uid") or payload.get("user_id")
             user = await db_supabase.get_user_by_id(uid)
             if not user:
@@ -244,6 +330,28 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
 
         if not user:
             await websocket.send_json({"type": "error", "message": "invalid_token_or_user_not_found"})
+            await websocket.close()
+            return
+
+        # B-P1-11: Reject the handshake if the JWT's token_version claim
+        # is below the row's current value. This catches the case where
+        # the user called /auth/logout-all and is now reconnecting with
+        # a stale token they had cached client-side. HTTP requests
+        # already enforce this in dependencies.py::_token_version_mismatch;
+        # without the same gate here, a stale-token reconnect would
+        # silently succeed and start receiving ride events again.
+        # Firebase tokens carry no token_version claim — treated as 0,
+        # which matches the existing HTTP-side behaviour.
+        try:
+            claim_token_version = int((payload or {}).get("token_version") or 0)
+        except (TypeError, ValueError):
+            claim_token_version = 0
+        try:
+            stored_token_version = int((user or {}).get("token_version") or 0)
+        except (TypeError, ValueError):
+            stored_token_version = 0
+        if claim_token_version < stored_token_version:
+            await websocket.send_json({"type": "error", "message": "session_revoked"})
             await websocket.close()
             return
 
@@ -303,11 +411,19 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
         # heartbeat_task so it can detect stale connections — every pong the
         # client sends bumps last_pong_at; the heartbeat closes the socket
         # if pongs stop arriving (phone died, app killed, airplane mode).
+        # B-P1-11: pass user_id + claim_token_version so the heartbeat can
+        # re-validate against the DB row each tick and close the socket
+        # if /auth/logout-all bumped token_version since connect.
         conn_state: dict = {"last_pong_at": asyncio.get_event_loop().time()}
-        hb_task = asyncio.create_task(heartbeat_task(websocket, connection_key, conn_state))
-
-        # Rate limiting state
-        _msg_timestamps: list = []
+        hb_task = asyncio.create_task(
+            heartbeat_task(
+                websocket,
+                connection_key,
+                conn_state,
+                user_id=user["id"],
+                claim_token_version=claim_token_version,
+            )
+        )
 
         # Main message loop
         while True:
@@ -326,13 +442,29 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                 await websocket.send_json({"type": "error", "message": "invalid_json"})
                 continue
 
-            # Per-connection rate limiting
-            now_ts = asyncio.get_event_loop().time()
-            _msg_timestamps = [t for t in _msg_timestamps if now_ts - t < 1.0]
-            if len(_msg_timestamps) >= WS_MAX_MESSAGES_PER_SECOND:
-                await websocket.send_json({"type": "error", "message": "rate_limited"})
+            # B-P1-12: Per-USER rate limiting (not per-connection).
+            # Replaces the old closure-scoped _msg_timestamps which an
+            # attacker could side-step by opening N sockets to get
+            # N×WS_MAX_MESSAGES_PER_SECOND throughput. The manager's
+            # bucket aggregates across every WebSocket the user has
+            # open on this machine. See docs/runbooks/websockets.md
+            # for the multi-replica caveat. We drop the offending
+            # message but keep the socket alive — a brief burst from
+            # a buggy reconnect should not force a re-auth round-trip.
+            if not manager.note_user_message(
+                user["id"],
+                max_per_second=WS_MAX_MESSAGES_PER_SECOND,
+            ):
+                await websocket.send_json(
+                    {
+                        "type": "rate_limited",
+                        "scope": "user",
+                        "limit": WS_MAX_MESSAGES_PER_SECOND,
+                        "window_seconds": 1,
+                        "retry_after_seconds": 1,
+                    }
+                )
                 continue
-            _msg_timestamps.append(now_ts)
 
             # GAP FIX: Handle pong responses (client acknowledges our ping).
             # Bump last_pong_at so heartbeat_task knows the client is alive —

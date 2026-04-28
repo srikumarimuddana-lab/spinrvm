@@ -118,6 +118,9 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // socket (observed as a perpetual "Reconnecting…" banner).
   const isOnlineRef = useRef(isOnline);
   const locationRef = useRef<Location.LocationObject | null>(null);
+  // Throttle setLocation re-renders: map updates at most every 10 s.
+  // WS payloads still fire every watchPositionAsync callback (~5 s).
+  const lastRenderMsRef = useRef<number>(0);
   const userRef = useRef(user);
   useEffect(() => { userRef.current = user; }, [user]);
 
@@ -333,8 +336,12 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           distanceInterval: 10,
         },
         (loc) => {
-          setLocation(loc);
           locationRef.current = loc;
+          const now = Date.now();
+          if (now - lastRenderMsRef.current >= 10000) {
+            lastRenderMsRef.current = now;
+            setLocation(loc);
+          }
 
           const { rideState: currentRideState, activeRide: currentActiveRide } = useDriverStore.getState();
           const rideId = currentActiveRide?.ride?.id || null;

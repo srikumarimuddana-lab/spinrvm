@@ -87,7 +87,7 @@ async def run_retention_purge_tick(dry_run: bool = False) -> Optional[dict]:
 
     logger.info(
         "retention_purge complete dry_run=%s rides_anon=%s rides_del=%s "
-        "loc_del=%s msgs_del=%s tokens_del=%s stripe_del=%s",
+        "loc_del=%s msgs_del=%s tokens_del=%s stripe_del=%s dsar_users=%s",
         data.get("dry_run"),
         data.get("rides_anonymized"),
         data.get("rides_deleted"),
@@ -95,6 +95,7 @@ async def run_retention_purge_tick(dry_run: bool = False) -> Optional[dict]:
         data.get("ride_messages_deleted"),
         data.get("refresh_tokens_deleted"),
         data.get("stripe_events_deleted"),
+        data.get("dsar_users_purged"),
     )
     return data
 

@@ -8,7 +8,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 try:
     from ...db import db
@@ -143,9 +143,7 @@ async def get_driver_acceptance_rates(
         drivers = await db.get_rows("drivers", {}, limit=500)
     except Exception as e:
         logger.error(f"Failed to fetch drivers: {e}", exc_info=True, extra={"domain": "admin"})
-        from fastapi import HTTPException as _HTTPException
-
-        raise _HTTPException(status_code=503, detail="analytics_unavailable") from e
+        raise HTTPException(status_code=503, detail="analytics_unavailable") from e
 
     if service_area_id:
         drivers = [d for d in drivers if d.get("service_area_id") == service_area_id]

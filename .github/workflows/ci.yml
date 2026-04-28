@@ -317,22 +317,26 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Deploy to Render
-        env:
-          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
-          RENDER_SERVICE_ID: ${{ secrets.RENDER_BACKEND_SERVICE_ID }}
-        run: |
-          curl -X POST \
-            "https://api.render.com/v1/services/${{ secrets.RENDER_BACKEND_SERVICE_ID }}/deploys" \
-            -H "Authorization: Bearer ${{ secrets.RENDER_API_KEY }}"
-
-      - name: Deploy to Railway (fallback)
-        if: failure()
+      # Railway is the primary backend host (CLAUDE.md). --fail-with-body
+      # ensures a non-zero exit on HTTP 4xx/5xx so the Render fallback
+      # step actually triggers on API errors (previously curl exited 0
+      # on any HTTP response, silently skipping Render).
+      - name: Deploy to Railway (primary)
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           npm i -g @railway/cli@4.40.2
           railway up --service spinr-backend
+
+      - name: Deploy to Render (fallback)
+        if: failure()
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SERVICE_ID: ${{ secrets.RENDER_BACKEND_SERVICE_ID }}
+        run: |
+          curl --fail-with-body -X POST \
+            "https://api.render.com/v1/services/${{ secrets.RENDER_BACKEND_SERVICE_ID }}/deploys" \
+            -H "Authorization: Bearer ${{ secrets.RENDER_API_KEY }}"
 
   # Deploy Frontend
   deploy-frontend:

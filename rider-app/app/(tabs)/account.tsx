@@ -376,6 +376,22 @@ export default function AccountScreen() {
                 label="Notifications"
                 onPress={() => router.push('/notifications' as any)}
               />
+              <View style={styles.cardDivider} />
+              <MenuRow
+                styles={styles} colors={colors}
+                icon="download-outline" iconColor="#6B7280" iconBg={colors.surfaceLight}
+                label="Download My Data"
+                subtitle="Request a copy of your personal data"
+                onPress={() => router.push('/privacy-settings' as any)}
+              />
+              <View style={styles.cardDivider} />
+              <MenuRow
+                styles={styles} colors={colors}
+                icon="trash-outline" iconColor="#DC2626" iconBg="rgba(220, 38, 38, 0.08)"
+                label="Delete My Account"
+                subtitle="Permanently delete your account and data"
+                onPress={() => router.push('/privacy-settings' as any)}
+              />
             </View>
           </View>
 
@@ -393,8 +409,16 @@ export default function AccountScreen() {
               <MenuRow
                 styles={styles} colors={colors}
                 icon="document-text" iconColor={colors.textDim} iconBg={colors.surfaceLight}
-                label="Legal"
+                label="Terms of Service"
                 onPress={() => router.push('/legal?type=tos' as any)}
+              />
+              <View style={styles.cardDivider} />
+              <MenuRow
+                styles={styles} colors={colors}
+                icon="eye-outline" iconColor={colors.textDim} iconBg={colors.surfaceLight}
+                label="Privacy Policy"
+                subtitle="How we collect, use, and protect your data"
+                onPress={() => router.push('/legal?type=privacy' as any)}
               />
               <View style={styles.cardDivider} />
               <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => setShowLogoutAlert(true)}>
@@ -458,18 +482,21 @@ export default function AccountScreen() {
 }
 
 function MenuRow({
-  styles, colors, icon, iconColor, iconBg, label, onPress,
+  styles, colors, icon, iconColor, iconBg, label, subtitle, onPress,
 }: {
   styles: any; colors: ThemeColors;
   icon: string; iconColor: string; iconBg: string;
-  label: string; onPress: () => void;
+  label: string; subtitle?: string; onPress: () => void;
 }) {
   return (
     <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={onPress}>
       <View style={[styles.iconBox, { backgroundColor: iconBg }]}>
         <Ionicons name={icon as any} size={18} color={iconColor} />
       </View>
-      <Text style={styles.actionText}>{label}</Text>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.actionText}>{label}</Text>
+        {!!subtitle && <Text style={[styles.actionText, { fontSize: 12, color: colors.textDim, fontWeight: '400', marginTop: 1 }]}>{subtitle}</Text>}
+      </View>
       <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
     </TouchableOpacity>
   );

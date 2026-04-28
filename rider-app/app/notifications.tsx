@@ -116,6 +116,21 @@ export default function NotificationsScreen() {
     }
   };
 
+  const handleTap = (item: AppNotification) => {
+    handleMarkRead(item);
+    switch (item.type) {
+      case 'ride_update':
+      case 'ride':
+        router.push('/(tabs)' as any);
+        break;
+      case 'promotion':
+        router.push('/(tabs)' as any);
+        break;
+      default:
+        break;
+    }
+  };
+
   const renderNotification = ({ item }: { item: AppNotification }) => {
     const typeInfo = getTypeIcon(item.type);
     const iconColor = typeInfo.color || (
@@ -125,7 +140,7 @@ export default function NotificationsScreen() {
     return (
       <TouchableOpacity
         style={[styles.card, !item.is_read && styles.cardUnread]}
-        onPress={() => handleMarkRead(item)}
+        onPress={() => handleTap(item)}
         activeOpacity={0.7}
       >
         {!item.is_read && <View style={[styles.unreadBar, { backgroundColor: colors.primary }]} />}

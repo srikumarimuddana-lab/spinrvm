@@ -451,6 +451,7 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
         enablePanDownToClose={false}
         backgroundStyle={styles.bottomSheetBackground}
         handleIndicatorStyle={styles.sheetHandleIndicator}
+        accessibilityViewIsModal
       >
         {/* @ts-ignore - gorhom/bottom-sheet v4 has a known children typing bug with React 18 */}
         <BottomSheetScrollView>

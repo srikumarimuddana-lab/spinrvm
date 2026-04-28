@@ -240,6 +240,7 @@ function DriverArrivedScreenContent() {
         snapPoints={snapPoints}
         backgroundStyle={styles.sheetBg}
         handleIndicatorStyle={styles.sheetHandle}
+        accessibilityViewIsModal
       >
         <BottomSheetScrollView contentContainerStyle={styles.sheetContent}>
 

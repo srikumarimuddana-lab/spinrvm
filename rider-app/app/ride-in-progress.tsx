@@ -592,6 +592,7 @@ I've shared my live location with you for safety.
           enablePanDownToClose={false}
           backgroundStyle={styles.bottomSheetBackground}
           handleIndicatorStyle={styles.sheetHandleIndicator}
+          accessibilityViewIsModal
         >
           {/* @ts-ignore - gorhom/bottom-sheet v4 has a known children typing bug with React 18 */}
           <BottomSheetScrollView contentContainerStyle={styles.bottomSheetContent}>

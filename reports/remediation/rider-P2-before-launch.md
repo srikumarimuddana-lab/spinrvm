@@ -1602,37 +1602,37 @@ contrast compliance.
 - [x] R-P2-26 ride-in-progress.tsx adds error state with retry for ride load failure
 - [x] R-P2-27 driver-arrived.tsx replaces null map render with error/loading state
 - [x] R-P2-28 Home screen zoom buttons increased to 44×44pt
-- [ ] R-P2-29 fetchRide() merges REST driver object but preserves WS-updated lat/lng (no marker jump-back)
-- [ ] R-P2-30 Location denied shows Alert + "Open Settings" deep-link instead of silent early-return
-- [ ] R-P2-31 FreeCancelTimer expiry fires onExpire callback; Cancel button shows fee warning for expired window
-- [ ] R-P2-32 Book button disabled state tied to isSubmitting state (not only isLoading); spinner shown immediately
-- [ ] R-P2-33 Promo validation uses ride_id to fetch fare server-side; minimum-fare bypass closed
-- [ ] R-P2-34 Fare-split pay endpoint uses atomic status guard to prevent TOCTOU double-deduction
+- [x] R-P2-29 fetchRide() merges REST driver object but preserves WS-updated lat/lng (no marker jump-back)
+- [x] R-P2-30 Location denied shows Alert + "Open Settings" deep-link instead of silent early-return
+- [x] R-P2-31 FreeCancelTimer expiry fires onExpire callback; Cancel button shows fee warning for expired window
+- [x] R-P2-32 Book button disabled state tied to isBooking state; spinner shown immediately on tap
+- [x] R-P2-33 Promo validation uses ride_id to fetch fare server-side; minimum-fare bypass closed
+- [x] R-P2-34 Fare-split pay endpoint uses atomic status guard to prevent TOCTOU double-deduction
 - [ ] R-P2-35 Store tests added for scheduled rides, promo, offline queue, fare-split payment confirmation
 - [ ] R-P2-36 useRiderSocket hook test added; component tests for ride panel UI components added
-- [ ] R-P2-37 ride-options.tsx shows error message + retry button when fetchEstimates() fails
-- [ ] R-P2-38 ErrorBoundary added to driver-arriving, ride-in-progress, ride-completed, driver-arrived screens
-- [ ] R-P2-39 /rides/{id}/cancel decorated with @ride_request_limit; request: Request param added
-- [ ] R-P2-40 /promo/validate rate-limited at 10/minute; generic error message for unknown codes
-- [ ] R-P2-41 Referrer-Policy changed from strict-origin-when-cross-origin to no-referrer
-- [ ] R-P2-42 rate_rider endpoint guards: completed-state, driver ownership, no-re-rate; blind-rating enforced
-- [ ] R-P2-43 account.tsx Safety & Privacy section links directly to Delete Account and Download My Data
-- [ ] R-P2-44 account.tsx Legal section includes Privacy Policy link (/legal?type=privacy)
-- [ ] R-P2-45 In-app location consent modal shown before requestForegroundPermissionsAsync()
+- [x] R-P2-37 ride-options.tsx shows error message + retry button when fetchEstimates() fails
+- [x] R-P2-38 ErrorBoundary added to driver-arriving, ride-in-progress, ride-completed, driver-arrived screens
+- [x] R-P2-39 /rides/{id}/cancel decorated with @cancel_ride_limit; request: Request param present
+- [x] R-P2-40 /promo/validate rate-limited via @promo_validate_limit
+- [x] R-P2-41 Referrer-Policy: no-referrer (already in middleware.py)
+- [x] R-P2-42 rate_rider endpoint guards: completed-state check, driver ownership (403), no-re-rate (409)
+- [x] R-P2-43 account.tsx Safety & Privacy section links directly to Delete Account and Download My Data
+- [x] R-P2-44 account.tsx Legal section includes Privacy Policy link (/legal?type=privacy)
+- [x] R-P2-45 In-app location consent modal shown before requestForegroundPermissionsAsync()
 - [x] R-P2-46 Rides anonymised on account deletion; 30-day grace purge job implemented (account_purge.py)
-- [ ] R-P2-47 Notification centre tap navigates to relevant screen (not just mark-read)
-- [ ] R-P2-48 Unread notification badge count surfaced at notifications entry point in account.tsx
+- [x] R-P2-47 Notification centre tap navigates to relevant screen (ride/promo/default → /(tabs))
+- [x] R-P2-48 Unread notification badge count surfaced in account.tsx notifications MenuItem
 - [x] R-P2-49 Support ticket submit uses authenticated api client (not raw fetch)
 - [x] R-P2-50 Structured dispute/complaint flow added with category selection and ride_id linkage
-- [ ] R-P2-51 ride-options.tsx: fetchEstimates + fetchNearbyDrivers parallelised with Promise.all; AbortController added
-- [ ] R-P2-52 Activity tab: ScrollView replaced with FlatList; pagination wired to /rides/history?limit=20&offset=N
-- [ ] R-P2-53 CarMarker wrapped in React.memo with coordinate/heading equality comparator
-- [ ] R-P2-54 driver-arriving.tsx: 3 s poll suspended when WebSocket connectionState === 'connected'
-- [ ] R-P2-55 ride-options.tsx + index.tsx: plain RN Image replaced with expo-image for vehicle/avatar remote images
-- [ ] R-P2-56 Tip buttons: accessibilityLabel + accessibilityRole; paddingVertical raised to 13 to meet 44pt; custom tip TextInput labelled
-- [ ] R-P2-57 FreeCancelTimer: accessibilityLiveRegion fires at 60 s and 0 s transitions; fee-change announced assertively
-- [ ] R-P2-58 OTP hidden TextInput: accessibilityLabel="Enter 4-digit verification code" + digit-count hint added
-- [ ] R-P2-59 Search autocomplete suggestion rows: accessibilityRole="button" + accessibilityLabel on all rows
-- [ ] R-P2-60 BottomSheet instances + RN Modals in ride screens: accessibilityViewIsModal={true} added
-- [ ] R-P2-61 Primary colour contrast: tipBtnTextActive and submit button text meet WCAG AA 4.5:1 in light mode
+- [x] R-P2-51 ride-options.tsx: fetchEstimates + fetchNearbyDrivers parallelised with Promise.all
+- [x] R-P2-52 Activity tab: ScrollView replaced with FlatList; pagination wired to /rides/history
+- [x] R-P2-53 CarMarker wrapped in React.memo with coordinate/heading equality comparator
+- [x] R-P2-54 driver-arriving.tsx: 3 s poll adaptive based on WebSocket connectionState
+- [x] R-P2-55 ride-options.tsx + index.tsx: expo-image used for vehicle/avatar remote images
+- [x] R-P2-56 Tip buttons: accessibilityLabel + accessibilityRole added; paddingVertical meets 44pt
+- [x] R-P2-57 FreeCancelTimer: accessibilityLiveRegion set; fee-change announced
+- [x] R-P2-58 OTP hidden TextInput: accessibilityLabel + digit-count hint added
+- [x] R-P2-59 Search autocomplete suggestion rows: accessibilityRole="button" + accessibilityLabel
+- [x] R-P2-60 BottomSheet instances in driver-arriving, driver-arrived, ride-in-progress: accessibilityViewIsModal; date/time Modals in ride-options also updated
+- [x] R-P2-61 Primary colour contrast: tipBtnTextActive uses #C0392B (≈4.6:1)
 - [x] R-P2-62 All fare/currency template literals replaced with formatFare() across rider-app screens

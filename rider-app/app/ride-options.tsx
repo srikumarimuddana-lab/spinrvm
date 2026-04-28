@@ -625,7 +625,7 @@ function RideOptionsScreenContent() {
           {/* DateTimePicker Modals */}
           {showDatePicker && (
             Platform.OS === 'ios' ? (
-              <Modal transparent animationType="slide" visible={showDatePicker}>
+              <Modal transparent animationType="slide" visible={showDatePicker} accessibilityViewIsModal>
                 <View style={styles.modalOverlay}>
                   <View style={styles.pickerContainer}>
                     <View style={styles.pickerHeader}>
@@ -661,7 +661,7 @@ function RideOptionsScreenContent() {
           )}
           {showTimePicker && (
             Platform.OS === 'ios' ? (
-              <Modal transparent animationType="slide" visible={showTimePicker}>
+              <Modal transparent animationType="slide" visible={showTimePicker} accessibilityViewIsModal>
                 <View style={styles.modalOverlay}>
                   <View style={styles.pickerContainer}>
                     <View style={styles.pickerHeader}>

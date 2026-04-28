@@ -2290,6 +2290,11 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     except Exception as _exc:  # pragma: no cover - best effort
         logger.warning(f"complete_ride: admin broadcast failed: {_exc}")
 
+    # Insurance period: trip ended → close Period 3, re-open Period 1.
+    # Driver remains online after completing a trip (Period 1 = TNC contingent liability).
+    asyncio.create_task(db_supabase.close_insurance_period(driver_id=driver["id"], period=3, ride_id=ride_id))
+    asyncio.create_task(db_supabase.open_insurance_period(driver_id=driver["id"], period=1))
+
     return serialize_doc(completed_ride)
 
 
@@ -2362,6 +2367,10 @@ async def cancel_ride(ride_id: str, reason: str = Query(""), current_user: dict 
         await manager.broadcast_to_admins({"type": "ride_cancelled", "ride_id": ride_id, "reason": "driver_cancelled"})
     except Exception as _exc:  # pragma: no cover - best effort
         logger.warning(f"driver cancel admin broadcast failed: {_exc}")
+
+    # Insurance period: driver cancelled pre-trip → close Period 2, re-open Period 1.
+    asyncio.create_task(db_supabase.close_insurance_period(driver_id=driver["id"], period=2, ride_id=ride_id))
+    asyncio.create_task(db_supabase.open_insurance_period(driver_id=driver["id"], period=1))
 
     return {"success": True}
 
@@ -2945,6 +2954,14 @@ async def update_driver_status(
         await mark_present(driver_id)
     else:
         await clear_presence(driver_id)
+
+    # Insurance period transitions (regulatory — Saskatchewan TNC / SGI).
+    if is_online and status_flipped:
+        # Period 0 → 1: driver goes online; TNC contingent liability starts.
+        asyncio.create_task(db_supabase.open_insurance_period(driver_id=driver_id, period=1))
+    elif not is_online and status_flipped:
+        # Period 1 → 0: driver goes offline; TNC coverage ends.
+        asyncio.create_task(db_supabase.close_insurance_period(driver_id=driver_id, period=1))
 
     return {"success": True, "is_online": is_online}
 

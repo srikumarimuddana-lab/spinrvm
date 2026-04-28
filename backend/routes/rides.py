@@ -347,6 +347,13 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
             f"user_id={selected_driver.get('user_id')} name={selected_driver.get('name')}"
         )
 
+        # Insurance period: driver_assigned → Period 2 (TNC primary commercial).
+        # Period 2 starts on driver_assigned per CLAUDE.md — driver is obligated.
+        asyncio.create_task(db_supabase.close_insurance_period(driver_id=selected_driver["id"], period=1))
+        asyncio.create_task(
+            db_supabase.open_insurance_period(driver_id=selected_driver["id"], period=2, ride_id=ride_id)
+        )
+
         # No rider-facing WS event here — the rider app waits for
         # ``driver_accepted`` (emitted when the driver actually taps
         # Accept). Notifying on bare assignment caused premature "driver
@@ -2517,6 +2524,11 @@ async def rider_start_ride(ride_id: str, current_user: dict = Depends(get_curren
             "updated_at": datetime.now(timezone.utc),
         },
     )
+
+    # Insurance period: in_progress → Period 3 (passenger aboard, full TNC coverage).
+    asyncio.create_task(db_supabase.close_insurance_period(driver_id=driver_row["id"], period=2, ride_id=ride_id))
+    asyncio.create_task(db_supabase.open_insurance_period(driver_id=driver_row["id"], period=3, ride_id=ride_id))
+
     return {"success": True}
 
 

@@ -1,8 +1,10 @@
 import asyncio
 import json as _json
+import logging
 import os as _os
 import random as _random
 import re
+import uuid
 from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -2568,3 +2570,97 @@ async def ping() -> None:
         supabase.table("app_settings").select("key").limit(1).execute()
 
     await run_sync(_check)
+
+
+# ── TNC insurance period logging (regulatory — Saskatchewan TNC / SGI) ─────
+# Every driver state transition that crosses an insurance period boundary must
+# be appended here.  Rows are never updated or deleted — 7-year retention.
+#
+# Period map:
+#   0  App off / offline          — personal auto only
+#   1  App on, available          — TNC contingent liability
+#   2  En route to pickup         — TNC primary commercial
+#   3  Passenger aboard           — TNC primary commercial (full)
+
+
+async def open_insurance_period(
+    *,
+    driver_id: str,
+    period: int,
+    ride_id: str | None = None,
+) -> Optional[Dict[str, Any]]:
+    """Append a new open period row (ended_at = NULL).
+
+    Returns the inserted row, or None on failure.  Callers must NOT raise on
+    None — a failed audit write must never block the ride flow.
+    """
+    if not supabase:
+        return None
+
+    row = {
+        "id": str(uuid.uuid4()),
+        "driver_id": driver_id,
+        "period": period,
+        "ride_id": ride_id,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    def _insert():
+        res = supabase.table("driver_insurance_periods").insert(row).execute()
+        data = res.data
+        return data[0] if data else None
+
+    try:
+        return await run_sync(_insert)
+    except Exception as e:
+        logging.getLogger(__name__).error(
+            "insurance_period open failed driver=%s period=%d: %s",
+            driver_id,
+            period,
+            e,
+        )
+        return None
+
+
+async def close_insurance_period(
+    *,
+    driver_id: str,
+    period: int,
+    ride_id: str | None = None,
+) -> None:
+    """Stamp ended_at on the most recent open period row for this driver+period.
+
+    Silently no-ops when no open row is found (idempotent).
+    """
+    if not supabase:
+        return
+
+    ended_at = datetime.now(timezone.utc).isoformat()
+
+    def _close():
+        # Find the latest open row for this driver+period
+        res = (
+            supabase.table("driver_insurance_periods")
+            .select("id")
+            .eq("driver_id", driver_id)
+            .eq("period", period)
+            .is_("ended_at", "null")
+            .order("started_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        rows = res.data or []
+        if not rows:
+            return
+        row_id = rows[0]["id"]
+        supabase.table("driver_insurance_periods").update({"ended_at": ended_at}).eq("id", row_id).execute()
+
+    try:
+        await run_sync(_close)
+    except Exception as e:
+        logging.getLogger(__name__).error(
+            "insurance_period close failed driver=%s period=%d: %s",
+            driver_id,
+            period,
+            e,
+        )

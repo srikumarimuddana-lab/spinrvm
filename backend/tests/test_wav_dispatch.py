@@ -168,7 +168,6 @@ async def test_find_candidate_drivers_returns_empty_when_no_wav_driver():
 # ---------------------------------------------------------------------------
 
 try:
-
     from backend.schemas import CreateRideRequest
 
     _HAS_SCHEMAS = True

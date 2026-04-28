@@ -28,7 +28,7 @@ Variables are loaded by `pydantic-settings` from a `.env` file in the `backend/`
 | `APP_VERSION` | Optional | `"1.0.0"` | API version string. | Hard-code or set in CI |
 | `ALGORITHM` | Optional | `"HS256"` | JWT signing algorithm. | Hard-code; only change if rotating algorithms. |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | Optional | `30` | JWT expiry in minutes for short-lived tokens. Long-lived driver/rider tokens use 30 days (set in `dependencies.py`). | Hard-code |
-| `ALLOWED_ORIGINS` | Optional | `"*"` | Comma-separated list of CORS origins. Use specific origins in production (e.g. `https://admin.spinr.ca`). | Hard-code per deployment |
+| `ALLOWED_ORIGINS` | **Required (prod)** | `"*"` | Comma-separated list of CORS origins. **`middleware.py` raises `RuntimeError` at startup if `"*"` is present and `ENV=production`.** Set to real domains before go-live (e.g. `https://admin.spinr.ca,https://spinr.app`). Dev default is `http://localhost:3000,http://localhost:8081,http://localhost:19006`. | Hard-code per deployment |
 | `ADMIN_EMAIL` | Optional | `"admin@spinr.ca"` | Email used for the built-in admin account login endpoint. Override in production. | Set to a real internal email |
 | `ADMIN_PASSWORD` | Optional | `"admin123"` | Password for the built-in admin account. **Change this immediately in production.** | Generate a strong password |
 | `RATE_LIMIT` | Optional | `"10/minute"` | Global API rate limit applied via `slowapi`. Format: `"<count>/<period>"`. | Hard-code per deployment |

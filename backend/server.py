@@ -159,6 +159,9 @@ app.include_router(websocket_router)
 # Public settings endpoints (GET /settings, GET /settings/legal). Mounted at
 # root so mobile apps can call them without an auth token, and also at /api/v1
 # for parity. The legal screen fetch uses backendUrl/settings/legal directly.
+# Rate-limit note: double-mounting means slowapi tracks each prefix separately.
+# The settings endpoint is public+read-only so the doubled effective rate is
+# acceptable; add a shared key_func if this ever needs tighter control.
 app.include_router(settings_router)
 app.include_router(settings_router, prefix="/api/v1")
 
@@ -168,7 +171,9 @@ app.include_router(admin_auth_router, prefix="/api")
 app.include_router(corporate_accounts_router, prefix="/api")
 app.include_router(corporate_wallet_router, prefix="/api")
 # Corporate member/allowance/domain endpoints served at root (`/company/{id}/...`)
-# because the rider app hits them without the `/api` prefix.
+# because the rider app calls /company/{id}/policy and /company/{id}/allowances
+# without an /api prefix (verified in workProfileStore.ts). Do not remove until
+# a coordinated mobile release migrates those calls to /api/company/{id}/...
 app.include_router(corporate_company_router)
 app.include_router(corporate_rider_router)
 # files_router serves document files at /api/documents/{id} (used by admin dashboard).

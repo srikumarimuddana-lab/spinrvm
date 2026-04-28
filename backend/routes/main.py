@@ -75,10 +75,10 @@ async def health_check(request: Request = None):
             from ..utils.loop_monitor import get_loop_status as _gls  # noqa: PLC0415
 
             loop_status = _gls(None)
-        except Exception:
-            pass
-    except Exception:
-        pass
+        except Exception:  # noqa: S110
+            pass  # loop_monitor unavailable (relative import path); loops field omitted
+    except Exception:  # noqa: S110
+        pass  # loop_monitor import failed entirely; health still reports DB status
 
     # ── Aggregate ────────────────────────────────────────────────────────────
     overall_healthy = db_ok and loop_status.get("healthy", True)

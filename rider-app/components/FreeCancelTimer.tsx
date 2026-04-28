@@ -66,7 +66,15 @@ export function FreeCancelTimer({
 
   if (compact) {
     return (
-      <Text style={isWindowOpen ? styles.compactFree : styles.compactFee}>
+      <Text
+        style={isWindowOpen ? styles.compactFree : styles.compactFee}
+        accessibilityLiveRegion={secondsLeft === 0 ? 'assertive' : 'polite'}
+        accessibilityLabel={
+          isWindowOpen
+            ? `Free cancellation — ${timerLabel} remaining`
+            : `Cancellation fee applies — $${cancellationFee.toFixed(2)}`
+        }
+      >
         {isWindowOpen
           ? `Free cancel — ${timerLabel} left`
           : `Cancel fee: $${cancellationFee.toFixed(2)}`}

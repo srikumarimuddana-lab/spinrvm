@@ -7,12 +7,12 @@ import {
   TouchableOpacity,
   ScrollView,
   ActivityIndicator,
-  Image,
   useWindowDimensions,
   Platform,
   Switch,
   Modal,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -527,7 +527,8 @@ function RideOptionsScreenContent() {
                     <Image
                       source={{ uri: estimate.vehicle_type.image_url }}
                       style={styles.carImage}
-                      resizeMode="contain"
+                      contentFit="contain"
+                      cachePolicy="memory-disk"
                     />
                   ) : (
                     <View style={styles.carIconFallback}>

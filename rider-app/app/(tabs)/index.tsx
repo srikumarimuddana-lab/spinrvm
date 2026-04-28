@@ -7,10 +7,10 @@ import {
   useWindowDimensions,
   ActivityIndicator,
   Platform,
-  Image,
   Linking,
   AppState,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
@@ -217,6 +217,8 @@ export default function HomeScreen() {
                   <Image
                     source={{ uri: user.profile_image }}
                     style={styles.avatarImage}
+                    contentFit="cover"
+                    cachePolicy="memory-disk"
                   />
                 ) : (
                   <Ionicons name="person" size={20} color={colors.textDim} />

@@ -242,6 +242,8 @@ export default function OtpScreen() {
             keyboardType="phone-pad"
             maxLength={codeLength}
             autoFocus
+            accessibilityLabel="Enter 4-digit verification code"
+            accessibilityHint={`${code.length} of ${codeLength} digits entered`}
           />
 
           <TouchableOpacity

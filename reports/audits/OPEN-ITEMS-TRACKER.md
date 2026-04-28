@@ -167,7 +167,7 @@ track consolidated here because they are shared infrastructure concerns.
 
 | Gap | Module(s) | Owner | Severity est. |
 |---|---|---|---:|
-| Structured JSON logging with `request_id` end-to-end | backend + mobile | backend + mobile | HIGH |
+| ~~Structured JSON logging with `request_id` end-to-end~~ | ~~backend + mobile~~ | DONE — backend: loguru `serialize=True` + `RequestIDMiddleware`; mobile: `shared/api/client.ts` sends `X-Request-ID` on every request | ~~HIGH~~ |
 | SLO doc + alerting rules committed to repo | infra | infra + devops | HIGH |
 | PITR restore drill evidence (past 90 days) | data | data | MEDIUM |
 | Vendor inventory file `docs/vendor-inventory.md` | cross | compliance | HIGH |

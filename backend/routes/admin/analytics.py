@@ -396,4 +396,6 @@ async def get_surge_history(
         return {"area_id": area_id, "hours": hours, "history": filtered}
     except Exception as e:
         logger.error(f"Failed to fetch surge history: {e}", exc_info=True, extra={"domain": "admin"})
-        return {"area_id": area_id, "hours": hours, "history": []}
+        from fastapi import HTTPException as _HTTPException
+
+        raise _HTTPException(status_code=503, detail="Surge history unavailable — database error") from e

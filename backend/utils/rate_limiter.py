@@ -175,6 +175,9 @@ ride_request_limit = default_limiter.limit("5/minute")
 # Ride cancellation - max 10 per hour per user (prevents cancellation farming)
 cancel_ride_limit = default_limiter.limit("10/hour")
 
+# Ride read endpoints — generous ceiling covers 3 s polling without churn
+ride_read_limit = default_limiter.limit("120/minute")
+
 # Promo enumeration guard - max 20 per minute
 promo_available_limit = default_limiter.limit("20/minute")
 

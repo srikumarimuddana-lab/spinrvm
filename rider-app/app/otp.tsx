@@ -266,6 +266,8 @@ export default function OtpScreen() {
                     isFilled && styles.codeBoxFilled,
                     { transform: [{ scale }] },
                   ]}
+                  accessibilityLabel={`Digit ${i + 1}${isFilled ? `, entered` : ', empty'}`}
+                  accessibilityRole="text"
                 >
                   <Text style={[styles.codeDigit, isFilled && styles.codeDigitFilled]}>
                     {code[i] || ''}

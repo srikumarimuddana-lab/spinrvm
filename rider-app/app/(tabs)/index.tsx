@@ -18,6 +18,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import Constants from 'expo-constants';
 import { useAuthStore } from '@shared/store/authStore';
+import api from '@shared/api/client';
 import { DEFAULT_LATITUDE, DEFAULT_LONGITUDE } from '../../constants/geo';
 import { useRideStore } from '../../store/rideStore';
 import AppMap from '@shared/components/AppMap';
@@ -42,6 +43,7 @@ export default function HomeScreen() {
   const router = useRouter();
   const { user } = useAuthStore();
   const { savedAddresses, fetchSavedAddresses, setUserLocation, currentRide, triggerEmergency } = useRideStore();
+  const [unreadNotifCount, setUnreadNotifCount] = useState(0);
   const [showPromo, setShowPromo] = useState(true);
   const [location, setLocation] = useState<any>(null);
   const [region, setRegion] = useState<any>(null);
@@ -126,6 +128,10 @@ export default function HomeScreen() {
   const fetchHomeData = useCallback(async () => {
     await refreshLocation(true);
     fetchSavedAddresses();
+    // R-P2-48: refresh unread notification badge count each time home mounts
+    api.get('/notifications?limit=1').then((res: any) => {
+      setUnreadNotifCount(res.data?.unread_count ?? 0);
+    }).catch(() => {});
   }, [refreshLocation, fetchSavedAddresses]);
 
   useFocusEffect(
@@ -224,11 +230,19 @@ export default function HomeScreen() {
             </View>
             <TouchableOpacity
               style={styles.notificationButton}
-              accessibilityLabel="Notifications"
+              onPress={() => router.push('/notifications' as any)}
+              accessibilityLabel={unreadNotifCount > 0 ? `Notifications, ${unreadNotifCount} unread` : 'Notifications'}
               accessibilityRole="button"
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
               <Ionicons name="notifications-outline" size={24} color={colors.text} />
+              {unreadNotifCount > 0 && (
+                <View style={styles.notifBadge}>
+                  <Text style={styles.notifBadgeText}>
+                    {unreadNotifCount > 9 ? '9+' : unreadNotifCount}
+                  </Text>
+                </View>
+              )}
             </TouchableOpacity>
           </View>
         </SafeAreaView>
@@ -542,12 +556,21 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.surface,
       justifyContent: 'center',
       alignItems: 'center',
+      position: 'relative',
       shadowColor: '#000',
       shadowOffset: { width: 0, height: 2 },
       shadowOpacity: 0.1,
       shadowRadius: 4,
       elevation: 3,
     },
+    notifBadge: {
+      position: 'absolute', top: 6, right: 6,
+      minWidth: 16, height: 16, borderRadius: 8,
+      backgroundColor: '#EF4444',
+      justifyContent: 'center', alignItems: 'center',
+      paddingHorizontal: 3,
+    },
+    notifBadgeText: { color: '#FFF', fontSize: 10, fontWeight: '700', lineHeight: 14 },
     mapPlaceholder: {
       flex: 1,
       backgroundColor: '#E0E7E0',

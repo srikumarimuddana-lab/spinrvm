@@ -230,7 +230,9 @@ async def _generate_and_store_ride_snapshot(
         try:
             await db_supabase.update_one("rides", {"id": ride_id}, {"route_snapshot_url": url})
         except Exception as exc:
-            logger.error(f"route_snapshot_url write failed for ride {ride_id} (migration 41 missing?): {exc}", exc_info=True)
+            logger.error(
+                f"route_snapshot_url write failed for ride {ride_id} (migration 41 missing?): {exc}", exc_info=True
+            )
     except Exception as exc:
         logger.error(f"Ride snapshot pipeline failed for {ride_id}: {exc}", exc_info=True)
 

@@ -235,15 +235,15 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
                         raise HTTPException(status_code=401, detail="ERR_IDLE_TIMEOUT")
                 except HTTPException:
                     raise
-                except Exception:
-                    pass  # malformed timestamp — let it through, don't block auth
+                except Exception as _ts_err:
+                    logger.warning(f"Malformed last_activity_at for staff {user_id} — letting through: {_ts_err}")
             # Fire-and-forget activity timestamp update (best-effort; auth must not fail here)
             try:
                 await db_supabase.update_one(
                     "admin_staff", {"id": user_id}, {"last_activity_at": datetime.now(timezone.utc).isoformat()}
                 )
-            except Exception:
-                pass
+            except Exception as _upd_err:
+                logger.warning(f"Could not update last_activity_at for staff {user_id}: {_upd_err}")
         return {
             "id": user_id,
             "email": payload.get("email"),

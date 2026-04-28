@@ -645,7 +645,7 @@ function createStyles(colors: ThemeColors) {
     },
     tipBtnActive: { backgroundColor: `${colors.primary}15`, borderColor: colors.primary },
     tipBtnText: { fontSize: 16, fontWeight: '700', color: colors.text },
-    tipBtnTextActive: { color: colors.primary },
+    tipBtnTextActive: { color: '#C0392B' },
     tipCustom: {
       flexDirection: 'row', alignItems: 'center',
       backgroundColor: colors.surface, borderRadius: 14, borderWidth: 1.5, borderColor: colors.border,

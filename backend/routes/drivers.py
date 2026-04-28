@@ -2374,6 +2374,16 @@ async def rate_rider(ride_id: str, rating_data: RideRatingRequest, current_user:
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
+    ride = await db_supabase.get_ride(ride_id)
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    if ride.get("driver_id") != driver["id"]:
+        raise HTTPException(status_code=403, detail="Not your ride")
+    if ride.get("status") != "completed":
+        raise HTTPException(status_code=400, detail="Ride must be completed to rate rider")
+    if ride.get("rider_rating") is not None:
+        raise HTTPException(status_code=409, detail="Rider already rated for this ride")
+
     # Update ride with rating
     await db_supabase.update_ride(
         ride_id,

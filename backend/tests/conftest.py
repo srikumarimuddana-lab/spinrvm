@@ -13,6 +13,16 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+# Force-stub slowapi before any test file is collected. The real package IS
+# installed in CI (it's in requirements.txt for the rate-limiter), so the
+# `if _m not in sys.modules` guard in some test files leaves the real module
+# in place.  The real Limiter class has no .return_value attribute, which
+# breaks tests that do  sys.modules["slowapi"].Limiter.return_value.limit = fn.
+# Replacing it here (conftest runs before collection) makes the stub visible
+# to every test file regardless of collection order.
+for _slowapi_mod in ("slowapi", "slowapi.extension", "slowapi.errors", "slowapi.util"):
+    sys.modules[_slowapi_mod] = MagicMock()
+
 # TASK 9-11: explicitly load anyio plugin so @pytest.mark.anyio is available
 # alongside the asyncio_mode=auto setting in pytest.ini.
 pytest_plugins = ["anyio"]

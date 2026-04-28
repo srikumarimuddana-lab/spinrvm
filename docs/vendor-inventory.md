@@ -126,10 +126,41 @@ When a vendor relationship ends:
 | Upstash region unknown | Upstash | HIGH | `devops` to verify |
 | Gemini not in privacy policy | Google | MEDIUM | **DV-16 open** |
 | DPIA for Google Maps not filed | Google | MEDIUM | `compliance` to file |
-| No sub-processor monitoring cadence | Multiple | MEDIUM | Add quarterly check to this doc |
+| ~~No sub-processor monitoring cadence~~ | Multiple | RESOLVED | `.github/workflows/subprocessor-monitor.yml` (B-P3-3) opens a `subprocessor-review` issue if this doc hasn't been touched in 90+ days |
 | Email provider not yet selected | — | MEDIUM | `backend` to decide + onboard |
 | PagerDuty/OpsGenie not yet selected | — | HIGH | `devops` to decide |
 | Status page provider not yet selected | — | MEDIUM | `devops` to decide |
+
+---
+
+## Monitoring (B-P3-3)
+
+A scheduled GitHub Action — `.github/workflows/subprocessor-monitor.yml` —
+runs every Monday at 13:00 UTC and:
+
+1. Reads the last commit date for this file (excluding bot-only commits).
+2. If the file is older than 90 days, opens a `subprocessor-review`
+   GitHub issue assigned to the `compliance` label.
+3. The check is idempotent — a single open issue silences the workflow
+   until the issue is closed.
+
+The intent is to enforce the quarterly review cadence the doc itself
+declares. Closing the auto-generated issue does **not** reset the 90-day
+clock; only an actual commit to this file does. The expected close-out
+flow is:
+
+- Owners walk the **Vendor Onboarding** + **Active Vendors** rows.
+- Update the **Change Log** entry with the new review date.
+- Commit with message `chore(compliance): vendor inventory quarterly review YYYY-Q`.
+- Close the GitHub issue once the commit lands.
+
+Manual trigger is also exposed via `workflow_dispatch` with a
+`force_open_issue=true` input for ad-hoc reviews (e.g. mid-cycle vendor
+changes).
+
+Future enhancement: per-vendor sub-processor URL list with hash-diff,
+so material changes to (e.g.) Stripe's published sub-processor page
+auto-flag here. Tracked separately; not in scope for B-P3-3.
 
 ---
 
@@ -138,3 +169,4 @@ When a vendor relationship ends:
 | Date | Change | Author |
 |---|---|---|
 | 2026-04-24 | Initial inventory created | audit-framework |
+| 2026-04-28 | B-P3-3: scheduled `subprocessor-monitor.yml` workflow added; review-cadence gap resolved | session 01L8Q1k |

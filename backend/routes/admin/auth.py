@@ -904,8 +904,7 @@ async def break_glass_access(request: Request, body: BreakGlassRequest):
 
     # 7. Sentry-visible error-level log so on-call is paged immediately
     logger.error(
-        "BREAK GLASS ACCESSED from ip=%s ua=%s justification=%r — "
-        "1h super_admin token issued; investigate urgently",
+        "BREAK GLASS ACCESSED from ip=%s ua=%s justification=%r — 1h super_admin token issued; investigate urgently",
         client_ip,
         user_agent,
         justification[:200],

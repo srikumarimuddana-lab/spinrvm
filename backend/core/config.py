@@ -101,9 +101,7 @@ class Settings(BaseSettings):
         a leaked Settings object never exposes the plaintext.
         """
         if self.ADMIN_PASSWORD and not self.admin_password_hash:
-            self.admin_password_hash = bcrypt.hashpw(
-                self.ADMIN_PASSWORD.encode(), bcrypt.gensalt(rounds=12)
-            ).decode()
+            self.admin_password_hash = bcrypt.hashpw(self.ADMIN_PASSWORD.encode(), bcrypt.gensalt(rounds=12)).decode()
         return self
 
     @model_validator(mode="after")

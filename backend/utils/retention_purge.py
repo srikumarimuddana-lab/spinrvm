@@ -29,6 +29,14 @@ from datetime import datetime, time, timedelta, timezone
 from typing import Any, Optional
 
 try:
+    from utils.loop_monitor import record_heartbeat as _record_heartbeat
+except ImportError:
+
+    def _record_heartbeat(name: str) -> None:  # type: ignore[misc]
+        pass
+
+
+try:
     from ..db_supabase import run_sync, supabase  # type: ignore
     from .redis_client import redis_set_nx  # type: ignore
 except ImportError:
@@ -138,4 +146,5 @@ async def retention_purge_loop(
                 logger.info("retention_purge_loop: another replica holds the lock, skipping")
         except Exception:
             logger.exception("retention_purge_loop: tick raised")
+        _record_heartbeat("retention_purge (24h)")
         await asyncio.sleep(interval_seconds)

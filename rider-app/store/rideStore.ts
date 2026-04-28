@@ -517,12 +517,9 @@ export const useRideStore = create<RideState>((set, get) => ({
         }
       }
     }
-    // All attempts failed — prompt the user to call 911 directly
-    Alert.alert(
-      'Emergency Alert May Not Have Sent',
-      'Could not reach the server after multiple attempts. Please call 911 directly.',
-      [{ text: 'Call 911', onPress: () => Linking.openURL('tel:911') }]
-    );
+    // All attempts failed — rethrow so SOSButton can set backendOk=false and
+    // show its own "Alert Not Sent" UI with the 911 prompt.
+    throw lastError;
   },
 
   fetchSavedAddresses: async () => {

@@ -1,5 +1,6 @@
 module.exports = {
   preset: 'jest-expo',
+  setupFiles: ['./jest-setup-expo.js'],
   setupFilesAfterEnv: ['@testing-library/jest-native/extend-expect'],
   testPathIgnorePatterns: [
     '/node_modules/',
@@ -10,6 +11,7 @@ module.exports = {
   ],
   modulePaths: ['<rootDir>/node_modules'],
   moduleNameMapper: {
+    '^expo/src/winter/ImportMetaRegistry$': '<rootDir>/__mocks__/expo-winter-noop.js',
     '^@shared/(.*)$': '<rootDir>/../shared/$1',
   },
   // R-P1-22: Enforce minimum coverage thresholds before merging to main.

@@ -56,6 +56,12 @@ class Settings(BaseSettings):
     # is never compared directly in hot-path code (A-P3-1).
     admin_password_hash: str = ""
 
+    # Break-glass emergency access token.  Store the SHA-256 hex digest here,
+    # not the raw token.  When unset, the /admin/auth/break-glass endpoint is
+    # disabled entirely.  Generate with:
+    #   python3 -c "import hashlib, secrets; t=secrets.token_hex(32); print('token:', t, '\nhash:', hashlib.sha256(t.encode()).hexdigest())"
+    BREAK_GLASS_TOKEN_HASH: str = ""
+
     # Rate limiting
     RATE_LIMIT: str = "10/minute"
     # Redis configuration
@@ -95,9 +101,7 @@ class Settings(BaseSettings):
         a leaked Settings object never exposes the plaintext.
         """
         if self.ADMIN_PASSWORD and not self.admin_password_hash:
-            self.admin_password_hash = bcrypt.hashpw(
-                self.ADMIN_PASSWORD.encode(), bcrypt.gensalt(rounds=12)
-            ).decode()
+            self.admin_password_hash = bcrypt.hashpw(self.ADMIN_PASSWORD.encode(), bcrypt.gensalt(rounds=12)).decode()
         return self
 
     @model_validator(mode="after")

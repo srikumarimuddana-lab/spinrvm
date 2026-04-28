@@ -300,6 +300,9 @@ export default function SearchDestinationScreen() {
     <TouchableOpacity
       style={styles.predictionRow}
       onPress={() => handleSelectPrediction(item)}
+      accessibilityLabel={item.description}
+      accessibilityRole="button"
+      accessibilityHint="Select this address"
     >
       <View style={styles.predictionIcon}>
         <Ionicons name="location-outline" size={20} color={colors.textDim} />

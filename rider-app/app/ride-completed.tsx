@@ -458,6 +458,9 @@ function RideCompletedScreenContent() {
                   key={amt}
                   style={[styles.tipBtn, selectedTip === amt && styles.tipBtnActive]}
                   onPress={() => { setSelectedTip(amt); setCustomTip(''); }}
+                  accessibilityLabel={`Tip $${amt}`}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: selectedTip === amt }}
                 >
                   <Text style={[styles.tipBtnText, selectedTip === amt && styles.tipBtnTextActive]}>${amt}</Text>
                 </TouchableOpacity>

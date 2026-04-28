@@ -218,7 +218,7 @@ async def _generate_and_store_ride_snapshot(
                 ),
             )
         except Exception as upload_exc:
-            logger.warning(f"Supabase Storage upload failed for ride {ride_id}: {upload_exc}")
+            logger.error(f"Supabase Storage upload failed for ride {ride_id}: {upload_exc}", exc_info=True)
             return
 
         base = (settings.SUPABASE_URL or "").rstrip("/")
@@ -232,9 +232,11 @@ async def _generate_and_store_ride_snapshot(
         try:
             await db_supabase.update_one("rides", {"id": ride_id}, {"route_snapshot_url": url})
         except Exception as exc:
-            logger.warning(f"route_snapshot_url write failed for ride {ride_id} (migration 41 missing?): {exc}")
+            logger.error(
+                f"route_snapshot_url write failed for ride {ride_id} (migration 41 missing?): {exc}", exc_info=True
+            )
     except Exception as exc:
-        logger.warning(f"Ride snapshot pipeline failed for {ride_id}: {exc}")
+        logger.error(f"Ride snapshot pipeline failed for {ride_id}: {exc}", exc_info=True)
 
 
 async def _require_ride_in_state(ride_id: str, driver_id: str, allowed_states: tuple) -> Dict[str, Any]:
@@ -2174,7 +2176,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
                     [round(p["lat"], 6), round(p["lng"], 6), p.get("tracking_phase", "")] for p in sampled
                 ]
     except Exception as e:
-        logger.warning(f"Could not aggregate GPS data for ride {ride_id}: {e}")
+        logger.error(f"Could not aggregate GPS data for ride {ride_id}: {e}", exc_info=True)
 
     # ── Build update payload ──
     # P0-5: do NOT write payment_status here. The driver completing the

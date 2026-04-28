@@ -3,14 +3,18 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel
 
 try:
     from ... import db_supabase
+    from ...dependencies import get_admin_user
+    from ...utils.audit_logger import log_admin_action
     from ...utils.rate_limiter import admin_mass_notify_limit
 except ImportError:
     import db_supabase
+    from dependencies import get_admin_user  # type: ignore[assignment]
+    from utils.audit_logger import log_admin_action  # type: ignore[assignment]
     from utils.rate_limiter import admin_mass_notify_limit
 
 db = db_supabase  # legacy alias
@@ -58,7 +62,7 @@ async def admin_get_faqs():
 
 
 @router.post("/faqs")
-async def admin_create_faq(faq: FaqCreateRequest):
+async def admin_create_faq(faq: FaqCreateRequest, admin: dict = Depends(get_admin_user)):
     """Create a new FAQ entry."""
     doc = {
         "question": faq.question,
@@ -69,11 +73,13 @@ async def admin_create_faq(faq: FaqCreateRequest):
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     row = await db_supabase.insert_one("faqs", doc)
-    return {"faq_id": str(row.get("id") if row and isinstance(row, dict) else "")}
+    faq_id = str(row.get("id") if row and isinstance(row, dict) else "")
+    await log_admin_action(admin, "faq_created", "faq", faq_id, {"question": faq.question, "audience": faq.audience})
+    return {"faq_id": faq_id}
 
 
 @router.put("/faqs/{faq_id}")
-async def admin_update_faq(faq_id: str, faq: FaqUpdateRequest):
+async def admin_update_faq(faq_id: str, faq: FaqUpdateRequest, admin: dict = Depends(get_admin_user)):
     """Update an FAQ entry."""
     updates: Dict[str, Any] = {}
     if faq.question is not None:
@@ -90,13 +96,15 @@ async def admin_update_faq(faq_id: str, faq: FaqUpdateRequest):
     if updates:
         updates["updated_at"] = datetime.now(timezone.utc).isoformat()
         await db_supabase.update_one("faqs", {"id": faq_id}, updates)
+    await log_admin_action(admin, "faq_updated", "faq", faq_id, updates)
     return {"message": "FAQ updated"}
 
 
 @router.delete("/faqs/{faq_id}")
-async def admin_delete_faq(faq_id: str):
+async def admin_delete_faq(faq_id: str, admin: dict = Depends(get_admin_user)):
     """Delete an FAQ entry."""
     await db_supabase.delete_many("faqs", {"id": faq_id})
+    await log_admin_action(admin, "faq_deleted", "faq", faq_id, {})
     return {"message": "FAQ deleted"}
 
 
@@ -105,7 +113,11 @@ async def admin_delete_faq(faq_id: str):
 
 @router.post("/notifications/send")
 @admin_mass_notify_limit
-async def admin_send_notification(request: Request, notification: NotificationRequest):
+async def admin_send_notification(
+    request: Request,
+    notification: NotificationRequest,
+    admin: dict = Depends(get_admin_user),
+):
     """Send a notification to a specific user or audience."""
     user_id = notification.user_id
     title = notification.title
@@ -149,6 +161,13 @@ async def admin_send_notification(request: Request, notification: NotificationRe
             await send_push_notification(u["id"], title, body)
         logger.info(f"Broadcast notification to all drivers: {title}")
 
+    await log_admin_action(
+        admin,
+        "notification_sent",
+        "notification",
+        notification_doc["id"],
+        {"audience": audience, "title": title, "user_id": user_id},
+    )
     return {"success": True, "notification": notification_doc}
 
 

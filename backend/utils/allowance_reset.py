@@ -15,6 +15,14 @@ from datetime import date
 from typing import Optional
 
 try:
+    from utils.loop_monitor import record_heartbeat as _record_heartbeat
+except ImportError:
+
+    def _record_heartbeat(name: str) -> None:  # type: ignore[misc]
+        pass
+
+
+try:
     from ..db_supabase import (  # type: ignore
         get_corporate_member_by_id,
         get_corporate_wallet_by_company,
@@ -101,4 +109,5 @@ async def allowance_reset_loop(interval_seconds: int = 3600) -> None:
         _metric_gauge("spinr_bgloop_duration_ms", (time.monotonic() - _t0) * 1000, {"loop": "allowance_reset"})
         if _had_error:
             _metric_inc("spinr_bgloop_errors_total", {"loop": "allowance_reset"})
+        _record_heartbeat("allowance_reset (1h)")
         await asyncio.sleep(interval_seconds * (0.9 + random.random() * 0.2))

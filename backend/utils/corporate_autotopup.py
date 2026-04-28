@@ -19,6 +19,14 @@ import time
 import stripe
 
 try:
+    from utils.loop_monitor import record_heartbeat as _record_heartbeat
+except ImportError:
+
+    def _record_heartbeat(name: str) -> None:  # type: ignore[misc]
+        pass
+
+
+try:
     from ..db_supabase import (  # type: ignore
         get_corporate_account_by_id,
         get_default_payment_method,
@@ -119,4 +127,5 @@ async def corporate_autotopup_loop() -> None:
         _metric_gauge("spinr_bgloop_duration_ms", (time.monotonic() - _t0) * 1000, {"loop": "corporate_autotopup"})
         if _had_error:
             _metric_inc("spinr_bgloop_errors_total", {"loop": "corporate_autotopup"})
+        _record_heartbeat("corporate_autotopup (10min)")
         await asyncio.sleep(600 * (0.9 + random.random() * 0.2))

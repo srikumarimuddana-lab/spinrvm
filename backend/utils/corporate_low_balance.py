@@ -15,6 +15,14 @@ import time
 from datetime import datetime, timedelta, timezone
 
 try:
+    from utils.loop_monitor import record_heartbeat as _record_heartbeat
+except ImportError:
+
+    def _record_heartbeat(name: str) -> None:  # type: ignore[misc]
+        pass
+
+
+try:
     from ..db_supabase import (  # type: ignore
         get_corporate_account_by_id,
         list_wallets_low_balance_no_autotopup,
@@ -88,4 +96,5 @@ async def corporate_low_balance_loop() -> None:
         _metric_gauge("spinr_bgloop_duration_ms", (time.monotonic() - _t0) * 1000, {"loop": "corporate_low_balance"})
         if _had_error:
             _metric_inc("spinr_bgloop_errors_total", {"loop": "corporate_low_balance"})
+        _record_heartbeat("corporate_low_balance (1h)")
         await asyncio.sleep(3600 * (0.9 + random.random() * 0.2))

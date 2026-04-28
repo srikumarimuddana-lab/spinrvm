@@ -3529,4 +3529,11 @@ async def check_expiring_subscriptions():
         except Exception as e:
             logger.warning(f"[SUB-EXPIRY] Background check error: {e}")
 
+        try:
+            from utils.loop_monitor import record_heartbeat as _lm_hb
+
+            _lm_hb("subscription_expiry (6h)")
+        except ImportError:
+            pass
+
         await asyncio.sleep(6 * 3600)

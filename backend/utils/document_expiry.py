@@ -13,6 +13,14 @@ import time
 from datetime import datetime, timedelta, timezone
 
 try:
+    from utils.loop_monitor import record_heartbeat as _record_heartbeat
+except ImportError:
+
+    def _record_heartbeat(name: str) -> None:  # type: ignore[misc]
+        pass
+
+
+try:
     from ..db import db
     from ..features import send_push_notification
     from ..socket_manager import manager
@@ -207,4 +215,5 @@ async def document_expiry_loop():
         _metric_gauge("spinr_bgloop_duration_ms", (time.monotonic() - _t0) * 1000, {"loop": "document_expiry"})
         if _had_error:
             _metric_inc("spinr_bgloop_errors_total", {"loop": "document_expiry"})
+        _record_heartbeat("document_expiry (12h)")
         await asyncio.sleep(CHECK_INTERVAL_SECONDS * (0.9 + random.random() * 0.2))

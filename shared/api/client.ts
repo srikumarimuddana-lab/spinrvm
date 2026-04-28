@@ -19,6 +19,16 @@ function deadlineHeader(timeoutMs: number = REQUEST_TIMEOUT): Record<string, str
   return { 'X-Deadline-Ms': String(Date.now() + timeoutMs) };
 }
 
+// Generate a UUID v4 that works in React Native (no crypto.randomUUID on RN).
+// The backend's RequestIDMiddleware echoes this back in X-Request-ID, so
+// caller-generated IDs link client-side logs to backend loguru JSON lines.
+function generateRequestId(): string {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+  });
+}
+
 // Helper function to wrap fetch with timeout
 const fetchWithTimeout = async (
   url: string,
@@ -360,6 +370,7 @@ const client = {
     const token = await getAuthHeader();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      'X-Request-ID': generateRequestId(),
       ...deadlineHeader(),
       ...config?.headers,
     };
@@ -382,6 +393,7 @@ const client = {
     const token = await getAuthHeader();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      'X-Request-ID': generateRequestId(),
       ...deadlineHeader(),
       ...config?.headers,
     };
@@ -409,6 +421,7 @@ const client = {
     const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
     const headers: Record<string, string> = {
       ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
+      'X-Request-ID': generateRequestId(),
       ...config?.headers,
     };
     // Strip any Content-Type for FormData so fetch can set the multipart boundary itself.
@@ -438,6 +451,7 @@ const client = {
     const token = await getAuthHeader();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      'X-Request-ID': generateRequestId(),
       ...deadlineHeader(),
       ...config?.headers,
     };
@@ -464,6 +478,7 @@ const client = {
     const token = await getAuthHeader();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      'X-Request-ID': generateRequestId(),
       ...deadlineHeader(),
       ...config?.headers,
     };

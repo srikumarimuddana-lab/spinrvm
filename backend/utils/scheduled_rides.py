@@ -14,6 +14,14 @@ import random
 from datetime import datetime, timedelta, timezone
 
 try:
+    from utils.loop_monitor import record_heartbeat as _record_heartbeat
+except ImportError:
+
+    def _record_heartbeat(name: str) -> None:  # type: ignore[misc]
+        pass
+
+
+try:
     from ..db import db
     from ..features import send_push_notification
     from .datetime_utils import parse_iso_utc
@@ -154,6 +162,7 @@ async def scheduled_ride_dispatcher_loop():
             await check_scheduled_rides()
         except Exception as e:
             logger.error(f"Scheduled ride dispatcher error: {e}")
+        _record_heartbeat("scheduled_dispatcher (60s)")
         # B-P3-2: ±6 s jitter on the 60 s interval so replicas don't
         # contend for the same scheduled-ride row on every minute boundary.
         await asyncio.sleep(60 + random.uniform(-6, 6))

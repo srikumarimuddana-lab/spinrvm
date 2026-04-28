@@ -1,6 +1,7 @@
-import hashlib  # noqa: F401
+import hashlib
 import logging
-import secrets  # noqa: F401
+import secrets
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
@@ -85,6 +86,27 @@ async def _clear_login_failures(email: str) -> None:
     except Exception as e:
         logger.error(f"[REDIS] _clear_login_failures could not clear failure count ({email!r}): {e}")
 
+
+ALL_MODULES = [
+    "dashboard",
+    "users",
+    "drivers",
+    "rides",
+    "earnings",
+    "promotions",
+    "surge",
+    "service_areas",
+    "vehicle_types",
+    "pricing",
+    "support",
+    "disputes",
+    "notifications",
+    "settings",
+    "corporate_accounts",
+    "documents",
+    "heatmap",
+    "staff",
+]
 
 # Auth sub-router — mounted at /admin/auth by server.py directly
 admin_auth_router = APIRouter(prefix="/admin/auth", tags=["Admin Auth"])
@@ -201,27 +223,6 @@ async def admin_login(request: Request, body: LoginRequest):
     extract the client address; the Pydantic body has been renamed
     from ``request`` to ``body`` to free up the name.
     """
-    ALL_MODULES = [
-        "dashboard",
-        "users",
-        "drivers",
-        "rides",
-        "earnings",
-        "promotions",
-        "surge",
-        "service_areas",
-        "vehicle_types",
-        "pricing",
-        "support",
-        "disputes",
-        "notifications",
-        "settings",
-        "corporate_accounts",
-        "documents",
-        "heatmap",
-        "staff",
-    ]
-
     user_agent = request.headers.get("user-agent", "")
     client_ip = get_remote_address(request)
 
@@ -763,4 +764,156 @@ async def admin_mfa_challenge(request: Request, body: MfaChallengeRequest):
         "refresh_token": refresh_raw,
         "access_expires_at": access_expires_at.isoformat(),
         "refresh_expires_at": refresh_expires_at.isoformat(),
+    }
+
+
+# ── Break-glass emergency access ─────────────────────────────────────────────
+
+_BG_RATE_KEY = "spinr:admin:break_glass:rate"
+_BG_MAX_USES_PER_DAY = 5
+_BG_TOKEN_TTL_HOURS = 1
+
+
+class BreakGlassRequest(BaseModel):
+    token: str
+    justification: str
+
+
+@admin_auth_router.post("/break-glass")
+async def break_glass_access(request: Request, body: BreakGlassRequest):
+    """Emergency access endpoint — issues a 1-hour super_admin JWT when a
+    valid pre-shared break-glass token is presented with a justification.
+
+    Every use is logged to audit_logs at ERROR level (reaches Sentry) so
+    operators are alerted immediately.  The endpoint is disabled unless
+    BREAK_GLASS_TOKEN_HASH is set in the environment.
+
+    Rate-limited to 5 uses per 24h (Redis); each attempt is logged
+    regardless of outcome so brute-force attempts are visible in Sentry.
+
+    Token management:
+      Generate a token + its SHA-256 hash with:
+        python3 -c "import hashlib, secrets; t=secrets.token_hex(32);
+          print('TOKEN:', t); print('HASH:', hashlib.sha256(t.encode()).hexdigest())"
+      Store BREAK_GLASS_TOKEN_HASH=<hash> in the environment.
+      Keep the raw token in an offline vault (1Password, Vault, etc.).
+    """
+    client_ip = get_remote_address(request)
+    user_agent = request.headers.get("user-agent", "unknown")
+
+    # 1. Feature-gate: disabled unless hash is configured
+    if not settings.BREAK_GLASS_TOKEN_HASH:
+        logger.warning("break_glass: attempt from %s — endpoint not configured", client_ip)
+        raise HTTPException(status_code=404, detail="Not found")
+
+    # 2. Justification required (non-empty, min 10 chars)
+    justification = (body.justification or "").strip()
+    if len(justification) < 10:
+        logger.error(
+            "break_glass: rejected from %s — justification too short (%d chars)",
+            client_ip,
+            len(justification),
+        )
+        raise HTTPException(status_code=400, detail="justification must be at least 10 characters")
+
+    # 3. Daily rate limit (5 attempts total, including failed token checks)
+    try:
+        from utils.redis_client import redis_expire, redis_get, redis_incr  # noqa: PLC0415
+    except ImportError:
+        from ..utils.redis_client import redis_expire, redis_get, redis_incr  # type: ignore[no-redef]
+
+    daily_use_count: int = 0
+    try:
+        count_raw = await redis_get(_BG_RATE_KEY)
+        count = int(count_raw or 0)
+    except Exception:
+        count = 0
+
+    if count >= _BG_MAX_USES_PER_DAY:
+        logger.error(
+            "break_glass: RATE LIMIT EXCEEDED from %s — %d attempts today",
+            client_ip,
+            count,
+        )
+        raise HTTPException(status_code=429, detail="Break-glass rate limit exceeded for today")
+
+    # Increment before token validation so brute-force attempts consume quota
+    try:
+        daily_use_count = await redis_incr(_BG_RATE_KEY)
+        if daily_use_count == 1:
+            # First use today — set expiry to 24h
+            await redis_expire(_BG_RATE_KEY, 86400)
+    except Exception:  # noqa: S110
+        pass  # Redis unavailable — allow through; rate limiting is best-effort
+
+    # 4. Constant-time token comparison
+    provided_hash = hashlib.sha256(body.token.encode()).hexdigest()
+    if not secrets.compare_digest(provided_hash, settings.BREAK_GLASS_TOKEN_HASH):
+        logger.error(
+            "break_glass: INVALID TOKEN from %s (ua=%s) justification=%r",
+            client_ip,
+            user_agent,
+            justification[:100],
+        )
+        raise HTTPException(status_code=401, detail="Invalid break-glass token")
+
+    # 5. Mint a short-lived super_admin token (1 hour, no refresh)
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(hours=_BG_TOKEN_TTL_HOURS)
+    bg_token = jwt.encode(
+        {
+            "user_id": "break-glass",
+            "email": "break-glass@spinr.ca",
+            "role": "super_admin",
+            "modules": ALL_MODULES,
+            "phone": "",
+            "token_version": 0,
+            "jti": secrets.token_hex(16),
+            "iat": now,
+            "exp": expires_at,
+            "break_glass": True,
+        },
+        settings.JWT_SECRET,
+        algorithm=settings.ALGORITHM,
+    )
+
+    # 6. Mandatory audit log — this MUST land; if it fails, still return the token
+    #    (operator is in an emergency) but log loudly so the gap is visible.
+    audit_payload = {
+        "actor": "break-glass",
+        "client_ip": client_ip,
+        "user_agent": user_agent,
+        "justification": justification,
+        "token_expires_at": expires_at.isoformat(),
+        "daily_use_count": daily_use_count,
+    }
+    try:
+        await db_supabase.insert_one(
+            "audit_logs",
+            {
+                "id": str(uuid.uuid4()),
+                "action": "break_glass_access",
+                "entity_type": "system",
+                "entity_id": "break_glass",
+                "details": audit_payload,
+                "created_at": now.isoformat(),
+            },
+        )
+    except Exception as exc:
+        logger.error("break_glass: AUDIT LOG WRITE FAILED — %s", exc, exc_info=True)
+
+    # 7. Sentry-visible error-level log so on-call is paged immediately
+    logger.error(
+        "BREAK GLASS ACCESSED from ip=%s ua=%s justification=%r — 1h super_admin token issued; investigate urgently",
+        client_ip,
+        user_agent,
+        justification[:200],
+    )
+
+    return {
+        "token": bg_token,
+        "role": "super_admin",
+        "expires_at": expires_at.isoformat(),
+        "ttl_hours": _BG_TOKEN_TTL_HOURS,
+        "warning": "This token is time-limited and every use is audited. Use only in genuine emergencies.",
     }

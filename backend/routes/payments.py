@@ -108,9 +108,10 @@ async def create_payment_intent(
 
         # Idempotency key ties this PaymentIntent to a specific ride + user so
         # a network retry after a timeout cannot create a second charge. (P2-8)
-        idempotency_key = (
-            f"ride-{body.ride_id}-{current_user['id']}" if body.ride_id else f"intent-{current_user['id']}-{amount}"
-        )
+        # DV-4: the old fallback "intent-{user}-{amount}" collides when a rider
+        # makes two charges of the same amount within 24 h. Use a UUID instead
+        # so each no-ride-id intent gets a unique, non-colliding key.
+        idempotency_key = f"ride-{body.ride_id}-{current_user['id']}" if body.ride_id else f"intent-{uuid.uuid4()}"
         intent = stripe.PaymentIntent.create(
             **intent_params,
             api_key=stripe_secret,

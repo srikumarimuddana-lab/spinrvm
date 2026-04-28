@@ -40,6 +40,14 @@ from decimal import Decimal
 from typing import Any, Dict, List
 
 try:
+    from utils.loop_monitor import record_heartbeat as _record_heartbeat
+except ImportError:
+
+    def _record_heartbeat(name: str) -> None:  # type: ignore[misc]
+        pass
+
+
+try:
     from .. import db_supabase  # type: ignore
     from ..settings_loader import get_app_settings  # type: ignore
     from ..utils.redis_client import redis_set_nx  # type: ignore
@@ -282,4 +290,5 @@ async def stripe_reconcile_loop(target_hour_utc: int = _RUN_HOUR_UTC) -> None:
                 logger.info("stripe_reconcile_loop: another replica holds the lock, skipping")
         except Exception:
             logger.error("stripe_reconcile_loop: tick raised", exc_info=True)
+        _record_heartbeat("stripe_reconcile (24h)")
         await asyncio.sleep(86400)

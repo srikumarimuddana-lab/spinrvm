@@ -189,7 +189,7 @@ async def test_complete_ride_does_not_overwrite_payment_status():
     with (
         patch(
             "backend.routes.drivers.db_supabase.get_rows",
-            AsyncMock(side_effect=lambda t, *a, **kw: [driver] if t == "drivers" else []),
+            AsyncMock(side_effect=lambda t, *a, **kw: [driver] if t == "drivers" else ([ride] if t == "rides" else [])),
         ),
         patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=ride)),
         patch("backend.routes.drivers.db_supabase.update_one", AsyncMock(side_effect=capture_update_one)),

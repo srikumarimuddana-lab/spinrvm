@@ -17,6 +17,7 @@ import type { ThemeColors } from '@shared/theme/index';
 import Analytics from '@shared/analytics';
 import { useStripe } from '@stripe/stripe-react-native';
 import { attemptRidePayment, PaymentAlertButton } from '../utils/attemptRidePayment';
+import { formatFare } from '@shared/utils/currency';
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
@@ -100,13 +101,13 @@ function RideCompletedScreenContent() {
       `▸ TO    ${currentRide?.dropoff_address || '—'}`,
       ``,
       `━━━━━━ FARE BREAKDOWN ━━━━━━`,
-      `Base fare:     $${(currentRide?.base_fare || 0).toFixed(2)}`,
-      `Distance fare: $${(currentRide?.distance_fare || 0).toFixed(2)}  (${distance.toFixed(1)} km)`,
-      `Time fare:     $${(currentRide?.time_fare || 0).toFixed(2)}  (${duration} min)`,
-      `Booking fee:   $${(currentRide?.booking_fee || 0).toFixed(2)}`,
-      tipAmount > 0 ? `Tip:           $${tipAmount.toFixed(2)}` : null,
+      `Base fare:     ${formatFare(currentRide?.base_fare || 0)}`,
+      `Distance fare: ${formatFare(currentRide?.distance_fare || 0)}  (${distance.toFixed(1)} km)`,
+      `Time fare:     ${formatFare(currentRide?.time_fare || 0)}  (${duration} min)`,
+      `Booking fee:   ${formatFare(currentRide?.booking_fee || 0)}`,
+      tipAmount > 0 ? `Tip:           ${formatFare(tipAmount)}` : null,
       `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
-      `TOTAL:         $${total.toFixed(2)} CAD`,
+      `TOTAL:         ${formatFare(total)} CAD`,
       ``,
       `💳 Card •••• ${currentRide?.card_last4 || '4242'}  ✅ PAID`,
       ``,

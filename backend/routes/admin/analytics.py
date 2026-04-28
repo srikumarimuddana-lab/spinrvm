@@ -143,7 +143,8 @@ async def get_driver_acceptance_rates(
         drivers = await db.get_rows("drivers", {}, limit=500)
     except Exception as e:
         logger.error(f"Failed to fetch drivers: {e}", exc_info=True, extra={"domain": "admin"})
-        drivers = []
+        from fastapi import HTTPException as _HTTPException
+        raise _HTTPException(status_code=503, detail="analytics_unavailable") from e
 
     if service_area_id:
         drivers = [d for d in drivers if d.get("service_area_id") == service_area_id]

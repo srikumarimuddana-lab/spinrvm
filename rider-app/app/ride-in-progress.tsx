@@ -5,7 +5,7 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  Dimensions,
+  useWindowDimensions,
   Share,
   Linking,
   Platform,
@@ -29,8 +29,6 @@ import { CarMarker } from '@shared/components/CarMarker';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
-const { width } = Dimensions.get('window');
-
 function RideInProgressScreenContent() {
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
@@ -51,10 +49,16 @@ function RideInProgressScreenContent() {
   const mapRef = React.useRef<MapView>(null);
   const bottomSheetRef = React.useRef<BottomSheet>(null);
 
+  const { height, width } = useWindowDimensions();
+  const isLandscape = height < width;
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
-  const snapPoints = React.useMemo(() => ['30%', '50%', '85%'], []);
+  // Responsive snap points: fewer / higher stops on landscape phones and tablets
+  const snapPoints = React.useMemo(
+    () => (isLandscape ? ['50%', '90%'] : ['30%', '50%', '85%']),
+    [isLandscape]
+  );
 
   useEffect(() => {
     if (currentRide && mapRef.current) {

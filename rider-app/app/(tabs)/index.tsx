@@ -4,7 +4,7 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  Dimensions,
+  useWindowDimensions,
   ActivityIndicator,
   Platform,
   Image,
@@ -27,8 +27,6 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
 const HOME_DATA_TTL_MS = 5 * 60 * 1000; // 5 minutes
-
-const { width, height } = Dimensions.get('window');
 
 const getBackendUrl = () => {
   if (process.env.EXPO_PUBLIC_BACKEND_URL) return process.env.EXPO_PUBLIC_BACKEND_URL;
@@ -57,6 +55,7 @@ export default function HomeScreen() {
   const mapRef = useRef<any>(null);
   const lastFetchedAt = useRef<number>(0);
 
+  const { width, height } = useWindowDimensions();
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 

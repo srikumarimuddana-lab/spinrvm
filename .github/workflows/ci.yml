@@ -53,8 +53,10 @@ jobs:
           # B-P1-10: install from the SHA-256 hash-pinned lockfile that ships
           # to production. --require-hashes makes pip refuse any wheel whose
           # digest doesn't match, blocking compromised mirrors / typosquats.
+          # pytest-mock is now declared in requirements.in and therefore present
+          # in requirements-locked.txt with a verified SHA-256 hash — no
+          # separate bare `pip install pytest-mock` needed.
           pip install --require-hashes -r requirements-locked.txt
-          pip install pytest-mock
 
       - name: Python dependency CVE scan
         run: |
@@ -589,8 +591,17 @@ jobs:
 
     steps:
       - name: Send Slack notification
+        # continue-on-error so a missing/invalid SLACK_WEBHOOK secret does not
+        # itself count as a CI failure and obscure the real upstream failures.
+        continue-on-error: true
         uses: 8398a7/action-slack@v3
         with:
           status: failure
           webhook_url: ${{ secrets.SLACK_WEBHOOK }}
           text: 'CI/CD Pipeline Failed'
+
+      - name: Summarise failed jobs (fallback when Slack is unconfigured)
+        if: always()
+        run: |
+          echo "::warning::One or more CI jobs failed. Configure SLACK_WEBHOOK in repo secrets for Slack alerts."
+          echo "Failed needs: backend-test, frontend-test, rider-app-test, driver-app-test, or admin-test"

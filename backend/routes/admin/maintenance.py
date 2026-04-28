@@ -72,19 +72,24 @@ async def admin_cleanup_location_history(days: int = Query(30, ge=7, le=1095)):
     deleted_historical = 0
     deleted_idle = 0
     try:
-        # Delete directly — the previous pattern fetched up to 100k rows just
-        # to count them before deleting, which OOMs the process on a busy day.
-        # delete_many is a no-op when nothing matches, so no pre-check needed.
-        await db_supabase.delete_many("driver_location_history", {"timestamp": {"$lt": cutoff_historical}})
-        deleted_historical = -1  # count not fetched; -1 = "deleted (count unknown)"
+        deleted_historical = await db_supabase.count_documents(
+            "driver_location_history", {"timestamp": {"$lt": cutoff_historical}}
+        )
+        if deleted_historical > 0:
+            await db_supabase.delete_many("driver_location_history", {"timestamp": {"$lt": cutoff_historical}})
     except Exception as e:
         logger.error(f"Cleanup historical GPS failed: {e}", exc_info=True)
 
     try:
-        await db_supabase.delete_many(
-            "driver_location_history", {"timestamp": {"$lt": cutoff_idle}, "tracking_phase": "online_idle"}
+        deleted_idle = await db_supabase.count_documents(
+            "driver_location_history",
+            {"timestamp": {"$lt": cutoff_idle}, "tracking_phase": "online_idle"},
         )
-        deleted_idle = -1
+        if deleted_idle > 0:
+            await db_supabase.delete_many(
+                "driver_location_history",
+                {"timestamp": {"$lt": cutoff_idle}, "tracking_phase": "online_idle"},
+            )
     except Exception as e:
         logger.error(f"Cleanup idle GPS failed: {e}", exc_info=True)
 
@@ -160,8 +165,8 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
         "driver_location_history",
         {"timestamp": {"$gte": day_start_iso, "$lt": day_end_iso}},
         order="timestamp",
-        limit=10000,  # enough to identify all active drivers; per-driver aggregation is done in SQL
         columns="driver_id",
+        limit=10000,  # enough to identify all active drivers; per-driver aggregation is done in SQL
     )
     drivers_with_gps: set = set()
     for p in presence_rows or []:

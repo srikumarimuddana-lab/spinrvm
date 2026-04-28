@@ -64,6 +64,8 @@ None currently open in production (pre-launch).
 | #133 | CI + PIPEDA | `@react-native/jest-preset@0.85.2` added to rider/driver devDeps (RN 0.85.2 CI fix); `send_default_pii=False` in Sentry init (PIPEDA) |
 | #134 | B-P2-2 ext. | Unknown Stripe event types now return early without stamping `processed_at`; `test_unknown_event_type_not_marked_processed` added |
 | #135 | test fix | `test_p2_payout_t4a.py` — `MagicMock` → `AsyncMock` for `get_rows`/`get_rides_for_driver` (non-awaitable cursor crash) |
+| #131 | B-P1-5 + money | `auth.py:348` logger.warning→error; `rides.py` float→`_f()` at all payment serialisation sites; Vercel ignoreCommand; `test_corporate_allowance_service.py` str-equality assertions |
+| #139 | B-P1-1 (refresh) + B-P2-1 | Driver refresh token audience `"rider"` → `"driver"`; `/auth/refresh` gate broadened to `{"rider","driver"}`; rotation preserves original audience; corporate billing totals quantized to 2dp before JSON |
 
 ## Recently shipped (post-sprint hardening)
 
@@ -79,3 +81,26 @@ None currently open in production (pre-launch).
 ## Next sprint candidates
 
 - **Sentry alert rule**: Create a Sentry alert for `REFRESH TOKEN REUSE DETECTED` → PagerDuty. ~30 min in Sentry UI. No code required.
+
+---
+
+# Sprint 2 — Backend Safety Hardening
+
+**Sprint goal:** Close the top P1 backend safety and data-integrity gaps from the driver-app verification pass (2026-04-23): suspended-driver dispatch gap, document-expiry `$set` anti-pattern, and open items from `OPEN-ITEMS-TRACKER.md` section A/B.
+
+**Status (2026-04-28):** B-S2-1 and B-S2-2 shipped (#140).
+
+## In-flight
+
+| Ticket | Owner | State | Notes |
+|---|---|---|---|
+| B-S2-1 | — | shipped (#140) | **DV-1 / P0-5**: Migration 55 — `status != 'suspended'` filter added to `find_nearby_drivers`. |
+| B-S2-2 | — | shipped (#140) | **DV-2 / P0-5**: `document_expiry.py` — `{"$set": ...}` wrapper removed from both `update_one` calls. |
+
+## Deferred (non-code or future sprint)
+
+| Item | Reason |
+|---|---|
+| DV-3 state machine strings | Not a bug — `"trip_in_progress"` is GPS phase name, `"in_progress"` is ride status. Intentional mapping confirmed in `websocket.py`. |
+| DV-4 Stripe idempotency | Already correct — `ride-charge-{ride_id}` is ride-scoped, docstring documents the design. |
+| Sentry alert rule (REFRESH TOKEN REUSE) | Requires Sentry UI; no code change. |

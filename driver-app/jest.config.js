@@ -26,6 +26,7 @@ module.exports = {
     },
   },
   moduleNameMapper: {
+    '^expo/src/winter/ImportMetaRegistry$': '<rootDir>/__mocks__/expo-winter-noop.js',
     '^@shared/api/client$': '<rootDir>/__mocks__/@shared/api/client.js',
     '^@shared/config/spinr\\.config$': '<rootDir>/__mocks__/@shared/config/spinr.config.js',
     '^@shared/(.*)$': '<rootDir>/__mocks__/@shared/$1',

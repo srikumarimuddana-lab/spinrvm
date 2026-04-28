@@ -8,7 +8,7 @@ import {
   ScrollView,
   ActivityIndicator,
   Image,
-  Dimensions,
+  useWindowDimensions,
   Platform,
   Switch,
   Modal,
@@ -27,12 +27,13 @@ import { CarMarker } from '@shared/components/CarMarker';
 import DateTimePicker from '@react-native-community/datetimepicker';
 
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const MAP_HEIGHT = 280;
 
 function RideOptionsScreenContent() {
+  const { width: SCREEN_WIDTH, height } = useWindowDimensions();
+  // Reactive map height: 35% of current screen height, clamped for usability
+  const MAP_HEIGHT = Math.min(Math.max(Math.round(height * 0.35), 180), 380);
   const { colors, isDark } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useMemo(() => createStyles(colors, MAP_HEIGHT), [colors, MAP_HEIGHT]);
   const router = useRouter();
   const {
     pickup,
@@ -791,7 +792,7 @@ export default function RideOptionsScreen() {
   );
 }
 
-function createStyles(colors: ThemeColors) {
+function createStyles(colors: ThemeColors, mapHeight: number = 280) {
   return StyleSheet.create({
   container: {
     flex: 1,
@@ -828,7 +829,7 @@ function createStyles(colors: ThemeColors) {
   mapContainer: {
     marginHorizontal: 0,
     backgroundColor: colors.border,
-    height: MAP_HEIGHT,
+    height: mapHeight,
   },
   map: {
     width: '100%',

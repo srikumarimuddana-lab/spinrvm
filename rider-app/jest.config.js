@@ -1,5 +1,6 @@
 module.exports = {
   preset: 'jest-expo',
+  setupFiles: ['./jest-setup-expo.js'],
   setupFilesAfterEnv: ['@testing-library/jest-native/extend-expect'],
   testPathIgnorePatterns: [
     '/node_modules/',
@@ -10,6 +11,7 @@ module.exports = {
   ],
   modulePaths: ['<rootDir>/node_modules'],
   moduleNameMapper: {
+    '^expo/src/winter/ImportMetaRegistry$': '<rootDir>/__mocks__/expo-winter-noop.js',
     '^@shared/(.*)$': '<rootDir>/../shared/$1',
     // Expo SDK 54 winter (WinterCG) runtime executes require('./ImportMetaRegistry')
     // lazily via installGlobal — that require fails inside Jest's sandbox.

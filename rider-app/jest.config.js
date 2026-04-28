@@ -10,6 +10,11 @@ module.exports = {
   ],
   modulePaths: ['<rootDir>/node_modules'],
   moduleNameMapper: {
+    // expo/src/winter installs polyfills via a lazy getter that fires outside
+    // test-code scope (isInsideTestCode=false), which Jest 30 blocks with a
+    // ReferenceError. Node 22 ships TextDecoder, URL, structuredClone etc.
+    // natively, so skipping the expo polyfill setup is safe in tests.
+    '^expo/src/winter$': '<rootDir>/__mocks__/expoWinter.js',
     '^@shared/(.*)$': '<rootDir>/../shared/$1',
   },
   // R-P1-22: Enforce minimum coverage thresholds before merging to main.

@@ -7,11 +7,20 @@ service_areas.surge_multiplier for areas where surge_source == 'auto'.
 """
 
 import asyncio
+import random
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 from loguru import logger
+
+try:
+    from utils.loop_monitor import record_heartbeat as _record_heartbeat
+except ImportError:
+
+    def _record_heartbeat(name: str) -> None:  # type: ignore[misc]
+        pass
+
 
 try:
     from db import db
@@ -249,4 +258,9 @@ async def surge_recalculation_loop():
                 logger.debug(f"Surge recalc complete: {len(results)} areas, {active} surging")
         except Exception as e:
             logger.error(f"Surge recalculation loop error: {e}")
-        await asyncio.sleep(RECALC_INTERVAL_SECONDS)
+        _record_heartbeat("surge_engine (2min)")
+        # B-P3-2: ±10% per-tick jitter so replicas don't all flip surge
+        # state on the same wall-clock tick (rider apps would receive a
+        # synchronised price-change notification storm).
+        delta = RECALC_INTERVAL_SECONDS * 0.1
+        await asyncio.sleep(RECALC_INTERVAL_SECONDS + random.uniform(-delta, delta))

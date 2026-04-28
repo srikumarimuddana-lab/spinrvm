@@ -123,6 +123,7 @@ interface RideState {
   selectedVehicle: VehicleType | null;
   currentRide: Ride | null;
   currentDriver: Driver | null;
+  _lastWsDriverPositionAt: number; // epoch ms of last WS-driven position update
   savedAddresses: SavedAddress[];
   recentSearches: Location[];
   scheduledTime: Date | null;
@@ -187,6 +188,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   selectedVehicle: null,
   currentRide: null,
   currentDriver: null,
+  _lastWsDriverPositionAt: 0,
   chatMessages: [],
   savedAddresses: [],
   recentSearches: [],
@@ -416,7 +418,13 @@ export const useRideStore = create<RideState>((set, get) => ({
       }
       const response = await api.get(`/rides/${rideId}`);
       const ride = response.data;
-      const driver = ride.driver || null;
+      let driver = ride.driver || null;
+      // R-P2-29: if a WS position update arrived within the last 10 s, the DB
+      // value is stale — preserve the WS-sourced lat/lng so the map doesn't jump.
+      const { _lastWsDriverPositionAt, currentDriver } = get();
+      if (driver && currentDriver && Date.now() - _lastWsDriverPositionAt < 10_000) {
+        driver = { ...driver, lat: currentDriver.lat, lng: currentDriver.lng };
+      }
       set({ currentRide: ride, currentDriver: driver, isLoading: false });
       _persistRide(ride, driver);
     } catch (error: any) {
@@ -517,12 +525,9 @@ export const useRideStore = create<RideState>((set, get) => ({
         }
       }
     }
-    // All attempts failed — prompt the user to call 911 directly
-    Alert.alert(
-      'Emergency Alert May Not Have Sent',
-      'Could not reach the server after multiple attempts. Please call 911 directly.',
-      [{ text: 'Call 911', onPress: () => Linking.openURL('tel:911') }]
-    );
+    // All attempts failed — rethrow so SOSButton can set backendOk=false and
+    // show its own "Alert Not Sent" UI with the 911 prompt.
+    throw lastError;
   },
 
   fetchSavedAddresses: async () => {
@@ -633,7 +638,8 @@ export const useRideStore = create<RideState>((set, get) => ({
       ...(speed !== null && speed !== undefined ? { speed } : {}),
       ...(heading !== null && heading !== undefined ? { heading } : {}),
     };
-    set({ currentDriver: updated });
+    // R-P2-29: record timestamp so fetchRide doesn't overwrite this WS position.
+    set({ currentDriver: updated, _lastWsDriverPositionAt: Date.now() });
     _persistRide(get().currentRide, updated);
   },
 

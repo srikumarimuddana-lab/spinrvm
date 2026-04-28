@@ -69,26 +69,22 @@ async def admin_cleanup_location_history(days: int = Query(30, ge=7, le=1095)):
     cutoff_historical = (now - timedelta(days=days)).isoformat()
     cutoff_idle = (now - timedelta(hours=24)).isoformat()
 
-    deleted_historical = 0
-    deleted_idle = 0
+    deleted_historical = -1
+    deleted_idle = -1
     try:
-        # Delete directly — the previous pattern fetched up to 100k rows just
-        # to count them before deleting, which OOMs the process on a busy day.
-        # delete_many is a no-op when nothing matches, so no pre-check needed.
         await db_supabase.delete_many("driver_location_history", {"timestamp": {"$lt": cutoff_historical}})
-        deleted_historical = -1  # count not fetched; -1 = "deleted (count unknown)"
     except Exception as e:
         logger.error(f"Cleanup historical GPS failed: {e}", exc_info=True)
 
     try:
         await db_supabase.delete_many(
-            "driver_location_history", {"timestamp": {"$lt": cutoff_idle}, "tracking_phase": "online_idle"}
+            "driver_location_history",
+            {"timestamp": {"$lt": cutoff_idle}, "tracking_phase": "online_idle"},
         )
-        deleted_idle = -1
     except Exception as e:
         logger.error(f"Cleanup idle GPS failed: {e}", exc_info=True)
 
-    logger.info(f"[CLEANUP] Deleted {deleted_historical} historical + {deleted_idle} idle GPS points")
+    logger.info("[CLEANUP] Deleted historical + idle GPS points (counts not tracked — direct delete)")
     return {
         "deleted_historical": deleted_historical,
         "deleted_idle": deleted_idle,
@@ -160,6 +156,7 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
         "driver_location_history",
         {"timestamp": {"$gte": day_start_iso, "$lt": day_end_iso}},
         order="timestamp",
+        columns="driver_id",
         limit=10000,  # enough to identify all active drivers; per-driver aggregation is done in SQL
     )
     drivers_with_gps: set = set()

@@ -245,7 +245,9 @@ async def test_cascade_kicks_ws_sockets_for_rider_audience():
         await _handle_refresh_token_reuse(_revoked_row(audience="rider", user_id="u1"))
 
     kick_mock.assert_awaited_once_with(
-        "u1", client_types=["rider", "driver"], reason="refresh_token_reuse",
+        "u1",
+        client_types=["rider", "driver"],
+        reason="refresh_token_reuse",
     )
 
 
@@ -266,7 +268,9 @@ async def test_cascade_kicks_admin_ws_sockets_for_admin_audience():
         await _handle_refresh_token_reuse(_revoked_row(audience="admin", user_id="staff-1"))
 
     kick_mock.assert_awaited_once_with(
-        "staff-1", client_types=["admin"], reason="refresh_token_reuse",
+        "staff-1",
+        client_types=["admin"],
+        reason="refresh_token_reuse",
     )
 
 

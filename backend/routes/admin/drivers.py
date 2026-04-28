@@ -323,7 +323,7 @@ async def admin_get_driver_stats(
     # Rides + earnings per day (for drivers matching the service_area filter)
     driver_ids_set = {d["id"] for d in enriched_drivers}
     ride_filters: Dict[str, Any] = {"created_at": {"$gte": range_start.isoformat()}}
-    all_rides = await db_supabase.get_rows("rides", ride_filters, order="created_at", desc=True, limit=50000)
+    all_rides = await db_supabase.get_rows("rides", ride_filters, order="created_at", desc=True, limit=5000)
 
     # Filter rides to only those belonging to our driver set
     relevant_rides = [r for r in all_rides if r.get("driver_id") in driver_ids_set] if service_area_id else all_rides
@@ -725,10 +725,16 @@ async def admin_get_driver_activity(driver_id: str, limit: int = 100):
 
 
 @router.get("/drivers/{driver_id}/rides")
-async def admin_get_driver_rides(driver_id: str):
-    """Get all rides for a specific driver."""
-    rides = await db_supabase.get_rows("rides", {"driver_id": driver_id}, order="created_at", desc=True, limit=500)
-    return rides
+async def admin_get_driver_rides(
+    driver_id: str,
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+):
+    """Get rides for a driver with pagination (max 500 per page)."""
+    rides = await db_supabase.get_rows("rides", {"driver_id": driver_id}, order="created_at", desc=True, limit=limit)
+    # Apply offset in-process (Supabase helper doesn't expose OFFSET natively)
+    page = rides[offset : offset + limit]
+    return {"rides": page, "total": len(rides), "offset": offset, "limit": limit}
 
 
 @router.get("/drivers/{driver_id}/daily-stats")

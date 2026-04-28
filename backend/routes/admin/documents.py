@@ -217,7 +217,12 @@ async def admin_review_driver_document(
                 )
                 if req_row:
                     req_name = req_row.get("name")
-            except Exception:
+            except Exception as _req_err:
+                logger.error(
+                    "document requirement lookup failed — expiry won't propagate to legacy field",
+                    extra={"req_id": existing_req_id, "doc_id": document_id},
+                    exc_info=True,
+                )
                 req_name = None
         if not req_name:
             req_name = existing.get("document_type") or existing.get("requirement_key")
@@ -236,9 +241,12 @@ async def admin_review_driver_document(
                         "updated_at": datetime.now(timezone.utc).isoformat(),
                     },
                 )
-            except Exception as e:
-                logger.warning(
-                    f"Could not update legacy expiry field {legacy_field} for driver {existing.get('driver_id')}: {e}"
+            except Exception:
+                logger.error(
+                    "Could not update legacy expiry field %s for driver %s",
+                    legacy_field,
+                    existing.get("driver_id"),
+                    exc_info=True,
                 )
 
     # After approving, check if this driver has no more pending docs → clear needs_review

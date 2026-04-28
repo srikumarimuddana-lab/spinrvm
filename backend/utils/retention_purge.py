@@ -29,6 +29,14 @@ from datetime import datetime, time, timedelta, timezone
 from typing import Any, Optional
 
 try:
+    from utils.loop_monitor import record_heartbeat as _record_heartbeat
+except ImportError:
+
+    def _record_heartbeat(name: str) -> None:  # type: ignore[misc]
+        pass
+
+
+try:
     from ..db_supabase import run_sync, supabase  # type: ignore
     from .redis_client import redis_set_nx  # type: ignore
 except ImportError:
@@ -87,7 +95,7 @@ async def run_retention_purge_tick(dry_run: bool = False) -> Optional[dict]:
 
     logger.info(
         "retention_purge complete dry_run=%s rides_anon=%s rides_del=%s "
-        "loc_del=%s msgs_del=%s tokens_del=%s stripe_del=%s",
+        "loc_del=%s msgs_del=%s tokens_del=%s stripe_del=%s dsar_users=%s",
         data.get("dry_run"),
         data.get("rides_anonymized"),
         data.get("rides_deleted"),
@@ -95,6 +103,7 @@ async def run_retention_purge_tick(dry_run: bool = False) -> Optional[dict]:
         data.get("ride_messages_deleted"),
         data.get("refresh_tokens_deleted"),
         data.get("stripe_events_deleted"),
+        data.get("dsar_users_purged"),
     )
     return data
 
@@ -137,4 +146,5 @@ async def retention_purge_loop(
                 logger.info("retention_purge_loop: another replica holds the lock, skipping")
         except Exception:
             logger.exception("retention_purge_loop: tick raised")
+        _record_heartbeat("retention_purge (24h)")
         await asyncio.sleep(interval_seconds)

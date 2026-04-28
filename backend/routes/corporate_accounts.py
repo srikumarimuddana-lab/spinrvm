@@ -54,7 +54,6 @@ router = APIRouter(prefix="/admin/corporate-accounts", tags=["Corporate Accounts
 # before returning or mutating data.
 
 
-
 # Pydantic models for request/response validation
 class CorporateAccountBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=200, description="Company name")

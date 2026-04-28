@@ -53,6 +53,7 @@ export default function HomeScreen() {
     title: string;
     message: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
+    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
   }>({ visible: false, title: '', message: '', variant: 'info' });
   const mapRef = useRef<any>(null);
   const lastFetchedAt = useRef<number>(0);
@@ -79,6 +80,39 @@ export default function HomeScreen() {
     return null;
   };
 
+  // PIPEDA: Show an in-app explanation before the OS location permission dialog.
+  // We only show it once (stored in AsyncStorage). On subsequent launches the
+  // OS dialog handles it. Returns true if the caller should proceed with the
+  // permission request, false if the user deferred.
+  const ensureLocationConsent = useCallback(async (): Promise<boolean> => {
+    try {
+      const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+      const shown = await AsyncStorage.getItem('@spinr:location_consent_shown');
+      if (shown) return true;
+      return new Promise<boolean>(resolve => {
+        setAlertState({
+          visible: true,
+          title: 'Location Access',
+          message: 'Spinr needs your location to find nearby drivers and calculate fares. Your location is only shared with your assigned driver during an active trip.',
+          variant: 'info',
+          buttons: [
+            {
+              text: 'Continue',
+              style: 'default',
+              onPress: async () => {
+                await AsyncStorage.setItem('@spinr:location_consent_shown', '1');
+                resolve(true);
+              },
+            },
+            { text: 'Not Now', style: 'cancel', onPress: () => resolve(false) },
+          ],
+        });
+      });
+    } catch {
+      return true;
+    }
+  }, []);
+
   // Fresh GPS fix + weather. Location is NOT TTL-gated — we always want a
   // current fix when the user is looking at the map. Cache only primes the
   // very first paint.
@@ -92,6 +126,9 @@ export default function HomeScreen() {
       }
     }
 
+    const consentGranted = await ensureLocationConsent();
+    if (!consentGranted) return;
+
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') {
       setAlertState({
@@ -99,6 +136,10 @@ export default function HomeScreen() {
         title: 'Location Access Required',
         message: 'Spinr needs your location to show nearby drivers and calculate fares. Please enable location access in Settings.',
         variant: 'warning',
+        buttons: [
+          { text: 'Open Settings', style: 'default', onPress: () => Linking.openSettings() },
+          { text: 'Cancel', style: 'cancel' },
+        ],
       });
       return;
     }
@@ -354,6 +395,8 @@ export default function HomeScreen() {
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           onPress={async () => {
           if (!mapRef.current) return;
+          const consentGranted = await ensureLocationConsent();
+          if (!consentGranted) return;
           const { status } = await Location.requestForegroundPermissionsAsync();
           if (status !== 'granted') {
             setAlertState({
@@ -361,6 +404,10 @@ export default function HomeScreen() {
               title: 'Location Access Required',
               message: 'Spinr needs your location to show nearby drivers and calculate fares. Please enable location access in Settings.',
               variant: 'warning',
+              buttons: [
+                { text: 'Open Settings', style: 'default', onPress: () => Linking.openSettings() },
+                { text: 'Cancel', style: 'cancel' },
+              ],
             });
             return;
           }
@@ -494,14 +541,7 @@ export default function HomeScreen() {
         title={alertState.title}
         message={alertState.message}
         variant={alertState.variant}
-        buttons={
-          alertState.title === 'Location Access Required'
-            ? [
-                { text: 'Open Settings', style: 'default', onPress: () => Linking.openSettings() },
-                { text: 'Cancel', style: 'cancel' },
-              ]
-            : [{ text: 'OK', style: 'default' }]
-        }
+        buttons={alertState.buttons ?? [{ text: 'OK', style: 'default' }]}
         onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
       />
     </View>

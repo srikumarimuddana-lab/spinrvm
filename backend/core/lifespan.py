@@ -211,6 +211,17 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to import retention purge loop: {e}")
 
+    # PIPEDA right-to-erasure purge — daily sweep that permanently deletes
+    # accounts whose 30-day grace period has expired (DV-8 / P2-46).
+    # Replay-safe: gated on status='pending_deletion'; once deleted_at is
+    # stamped the row no longer matches and other replicas skip it.
+    try:
+        from utils.account_purge import account_purge_loop
+
+        _spawn("account_purge (24h)", account_purge_loop)
+    except Exception as e:
+        logger.warning(f"Failed to import account purge loop: {e}")
+
     app.state.background_tasks = background_tasks
 
     # WebSocket pub/sub (audit P0-B3): before this, socket sends were

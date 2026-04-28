@@ -244,8 +244,8 @@ async def get_analytics_overview(
     if cached:
         try:
             return _json.loads(cached)
-        except Exception:
-            pass
+        except Exception:  # noqa: S110
+            pass  # corrupt cache entry — fall through to fresh fetch
 
     start_date = _parse_date_range(date_range)
 
@@ -322,8 +322,8 @@ async def get_analytics_overview(
     }
     try:
         await redis_set(cache_key, _json.dumps(result), ttl=_OVERVIEW_CACHE_TTL)
-    except Exception:
-        pass
+    except Exception:  # noqa: S110
+        pass  # Redis unavailable — return fresh result uncached
     return result
 
 

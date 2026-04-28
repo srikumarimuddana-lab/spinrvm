@@ -23,20 +23,19 @@ module.exports = {
       // P3-4: step +5 pp/sprint toward 50/40/50 target.
       // Actuals at 2026-04-28: lines≈35%, functions≈26%, statements≈35%.
       // Next step: 2026-07 sprint → 40/30/40.
-      lines: 34,
-      functions: 24,
+      lines: 35,
+      functions: 25,
       statements: 34,
     },
   },
   moduleNameMapper: {
-    '^expo/src/winter/ImportMetaRegistry$': '<rootDir>/__mocks__/expo-winter-noop.js',
-    '^@shared/api/client$': '<rootDir>/__mocks__/@shared/api/client.js',
-    '^@shared/config/spinr\\.config$': '<rootDir>/__mocks__/@shared/config/spinr.config.js',
-    '^@shared/(.*)$': '<rootDir>/__mocks__/@shared/$1',
     // Expo SDK 54 winter (WinterCG) runtime executes require('./ImportMetaRegistry')
     // lazily via installGlobal — that require fails inside Jest's sandbox.
     // Mock the index so jest-expo's setup.js gets a no-op instead of the real runtime.
     '^expo/src/winter$': '<rootDir>/__mocks__/expo-winter-runtime.js',
     '^expo/src/winter/ImportMetaRegistry$': '<rootDir>/__mocks__/expo-winter-runtime.js',
+    '^@shared/api/client$': '<rootDir>/__mocks__/@shared/api/client.js',
+    '^@shared/config/spinr\\.config$': '<rootDir>/__mocks__/@shared/config/spinr.config.js',
+    '^@shared/(.*)$': '<rootDir>/__mocks__/@shared/$1',
   },
 };

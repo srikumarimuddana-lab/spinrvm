@@ -93,6 +93,14 @@ async def stripe_webhook(request: Request):
     if not is_new:
         return {"received": True, "duplicate": True, "event_id": event_id}
 
+    # ── Allowlist gate ───────────────────────────────────────────────
+    if event_type not in ALLOWED_STRIPE_EVENTS:
+        logger.error(
+            "stripe_webhook: unknown event type — not processed",
+            extra={"event_type": event_type, "event_id": event_id},
+        )
+        raise HTTPException(status_code=400, detail="unknown_event_type")
+
     # ── Dispatch ─────────────────────────────────────────────────────
     # Any exception raised below propagates as 5xx, leaving processed_at
     # NULL so either (a) Stripe retries, or (b) the nightly reconciliation

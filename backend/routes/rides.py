@@ -15,6 +15,7 @@ try:
     from ..dependencies import generate_pickup_otp, get_current_user
     from ..features import calculate_airport_fee, calculate_all_fees, send_push_notification
     from ..geo_utils import calculate_distance, get_service_area_polygon, point_in_polygon
+    from ..models.ride_status import RideStatus
     from ..schemas import CreateRideRequest, DriverPublicView, Ride, RideRatingRequest
     from ..services import DispatchService
     from ..services.dispatch_service import (
@@ -31,6 +32,7 @@ except ImportError:
     from dependencies import generate_pickup_otp, get_current_user
     from features import calculate_airport_fee, calculate_all_fees, send_push_notification
     from geo_utils import calculate_distance, get_service_area_polygon, point_in_polygon
+    from models.ride_status import RideStatus  # noqa: F401
     from schemas import CreateRideRequest, DriverPublicView, Ride, RideRatingRequest
     from services.dispatch_service import (
         DispatchService,
@@ -1289,6 +1291,21 @@ async def get_ride(request: Request, ride_id: str, current_user: dict = Depends(
     ride["free_cancel_window_seconds"] = free_cancel_window
     ride["cancellation_fee"] = cancellation_fee_amount
 
+    # PIPEDA / threat-model RI-2: drivers only need pickup/dropoff addresses
+    # while the trip is active. Retaining exact addresses post-completion
+    # enables address-based stalking (attack tree RAT-1). Riders retain their
+    # own address history (is_rider check).
+    if is_driver and not is_rider and ride.get("status") in ("completed", "cancelled"):
+        for _addr_key in (
+            "pickup_address",
+            "dropoff_address",
+            "pickup_lat",
+            "pickup_lng",
+            "dropoff_lat",
+            "dropoff_lng",
+        ):
+            ride.pop(_addr_key, None)
+
     def serialize_doc(doc):
         return doc
 
@@ -1389,7 +1406,7 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
         raise HTTPException(status_code=403, detail="Not authorized")
 
     _ride_status = ride.get("status", "")
-    if _ride_status != "completed":
+    if _ride_status != RideStatus.COMPLETED:
         raise HTTPException(
             status_code=409,
             detail=f"Ride is in status '{_ride_status}'; payment requires completed state.",

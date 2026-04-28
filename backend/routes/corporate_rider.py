@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -65,7 +66,7 @@ class JoinDomainBody(BaseModel):
     email: str
 
 
-def _compute_remaining(allowance: dict) -> Optional[float]:
+def _compute_remaining(allowance: dict) -> Optional[Decimal]:
     """v1 convention: remaining = amount - max(used, 0).
 
     `used` goes negative after grants post (grants decrement used) and
@@ -77,7 +78,7 @@ def _compute_remaining(allowance: dict) -> Optional[float]:
     used = allowance.get("used") or 0
     if amt is None:
         return None
-    return float(amt) - max(float(used), 0.0)
+    return Decimal(str(amt)) - max(Decimal(str(used)), Decimal(0))
 
 
 async def _ensure_member(current_user: dict, company_id: str) -> dict:
@@ -226,7 +227,7 @@ async def submit_request(
     used_auto = allowance.get("auto_approved_this_period") or 0
     if (
         auto_cap is not None
-        and body.amount <= float(auto_cap)
+        and Decimal(str(body.amount)) <= Decimal(str(auto_cap))
         and auto_monthly is not None
         and used_auto < int(auto_monthly)
     ):
@@ -245,7 +246,7 @@ async def submit_request(
                 amount=body.amount,
                 actor_user_id=current_user["id"],
                 notes=f"auto_approved request {row.get('id', '')}",
-                floor=float(wallet.get("soft_negative_floor", -50)),
+                floor=Decimal(str(wallet.get("soft_negative_floor", -50))),
             )
         return row
     return await insert_allowance_request(

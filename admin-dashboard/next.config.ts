@@ -1,5 +1,18 @@
 import type { NextConfig } from "next";
 
+// Fail fast on Vercel production if the API URL is missing — prevents silent
+// localhost fallback. Uses VERCEL_ENV (not NODE_ENV) because next build always
+// sets NODE_ENV=production even for local builds.
+if (
+  process.env.VERCEL_ENV === "production" &&
+  !process.env.BACKEND_URL &&
+  !process.env.NEXT_PUBLIC_API_URL
+) {
+  throw new Error(
+    "NEXT_PUBLIC_API_URL must be set in production (admin-dashboard)"
+  );
+}
+
 const BACKEND_URL =
   process.env.BACKEND_URL ||
   process.env.NEXT_PUBLIC_API_URL ||
@@ -21,6 +34,23 @@ const securityHeaders = [
     value: "max-age=63072000; includeSubDomains; preload",
   },
   // Admin uses none of these APIs; block them as defence-in-depth ([23-4])
+  {
+    key: "Content-Security-Policy",
+    value: [
+      "default-src 'self'",
+      // unsafe-inline needed by Next.js inline scripts; unsafe-eval needed by
+      // Turbopack dev. Roll out CSP-Report-Only to tighten before removing.
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://va.vercel-scripts.com",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: blob: https:",
+      "font-src 'self'",
+      "connect-src 'self' https:",
+      "frame-ancestors 'none'",
+      "form-action 'self'",
+      "base-uri 'self'",
+      "object-src 'none'",
+    ].join("; "),
+  },
   {
     key: "Permissions-Policy",
     value: "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()",

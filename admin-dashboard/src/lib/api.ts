@@ -61,12 +61,17 @@ const parseIntHeader = (header: string | null): number | null => {
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     // Get token from Zustand store
-    const token = useAuthStore.getState().token;
+    const store = useAuthStore.getState();
+    const token = store.token;
     const headers: Record<string, string> = {
         "Content-Type": "application/json",
         ...(options.headers as Record<string, string>),
     };
     if (token) headers["Authorization"] = `Bearer ${token}`;
+    const method = (options.method ?? "GET").toUpperCase();
+    if (!["GET", "HEAD", "OPTIONS"].includes(method) && store.csrfToken) {
+        headers["X-CSRF-Token"] = store.csrfToken;
+    }
 
     const url = `${API_BASE}${path}`;
     try {
@@ -79,7 +84,6 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
             // For the login endpoint, fall through to the !res.ok handler so
             // "Invalid credentials" is shown to the user rather than "Unauthorized".
             if (path !== "/api/admin/auth/login") {
-                const store = useAuthStore.getState();
                 // Attempt one silent refresh before giving up. The HttpOnly
                 // refresh cookie is sent automatically — no need to check for
                 // a token in JS state.
@@ -1423,6 +1427,9 @@ export const getSurgeHistory = (areaId: string, hours = 24) =>
 export const getPayouts = (status?: string) =>
     request<any[]>(`/api/admin/payouts${status ? `?status=${status}` : ''}`);
 
+export const getPayoutById = (id: string) =>
+    request<any>(`/api/admin/payouts/${id}`);
+
 export const getPayoutStats = () =>
     request<any>("/api/admin/payouts/stats");
 
@@ -1531,3 +1538,40 @@ export const flushRedisPrefix = (prefix: string) =>
             body: JSON.stringify({ prefix, confirm: "FLUSH" }),
         },
     );
+
+/* ── Document Requirements (A-P4-1) ─────── */
+export const getDocumentRequirements = () =>
+    request<any[]>("/api/admin/documents/requirements");
+
+export const createDocumentRequirement = (data: {
+    name: string;
+    description?: string;
+    document_type?: string;
+    is_required?: boolean;
+    applicable_to?: string;
+}) => request<any>("/api/admin/documents/requirements", { method: "POST", body: JSON.stringify(data) });
+
+export const updateDocumentRequirement = (id: string, data: Partial<{
+    name: string;
+    description: string;
+    document_type: string;
+    is_required: boolean;
+    applicable_to: string;
+}>) => request<any>(`/api/admin/documents/requirements/${id}`, { method: "PUT", body: JSON.stringify(data) });
+
+export const deleteDocumentRequirement = (id: string) =>
+    request<any>(`/api/admin/documents/requirements/${id}`, { method: "DELETE" });
+
+/* ── Pending Documents paginated (A-P4-4) ── */
+export const getPendingDocuments = (params?: { limit?: number; cursor?: string; status?: string }) => {
+    const sp = new URLSearchParams();
+    if (params?.limit) sp.set("limit", String(params.limit));
+    if (params?.cursor) sp.set("cursor", params.cursor);
+    if (params?.status) sp.set("status", params.status);
+    const qs = sp.toString();
+    return request<{ items: any[]; next_cursor: string | null }>(`/api/admin/documents/pending${qs ? `?${qs}` : ""}`);
+};
+
+/* ── Payout retry (A-P4-2) ──────────────── */
+export const retryPayout = (id: string) =>
+    request<any>(`/api/admin/payouts/${id}/retry`, { method: "POST" });

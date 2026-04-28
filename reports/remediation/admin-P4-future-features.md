@@ -105,10 +105,10 @@ Cap at 100 per page; use `id`-based cursor (stable, indexed). Update the admin U
 
 ## Checklist
 
-- [ ] A-P4-1 Document requirements configuration UI (01-2)
-- [ ] A-P4-2 Payout management page at `/dashboard/earnings/payouts` (01-4)
-- [ ] A-P4-3 Admin password ≥20 chars + complexity + common-password blacklist (02-10)
-- [ ] A-P4-4 Cursor pagination on pending documents endpoint (08-5)
+- [x] A-P4-1 Document requirements configuration UI (01-2)
+- [x] A-P4-2 Payout management page at `/dashboard/earnings/payouts` (01-4)
+- [x] A-P4-3 Admin password ≥20 chars + complexity + common-password blacklist (02-10)
+- [x] A-P4-4 Cursor pagination on pending documents endpoint (08-5)
 
 ## After this file
 

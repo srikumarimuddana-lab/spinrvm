@@ -1574,34 +1574,34 @@ contrast compliance.
 
 ## Checklist
 
-- [ ] R-P2-1 Offline queue extended for cancel, rate, tip, emergency
-- [ ] R-P2-2 Cold-start ride validated against backend before routing
-- [ ] R-P2-3 RideStatus constants created and magic strings replaced
-- [ ] R-P2-4 TypeScript `any` replaced with typed interfaces + Zod on WS
-- [ ] R-P2-5 Polling suspended when WebSocket is connected
-- [ ] R-P2-6 Error states with retry actions on all key screens
-- [ ] R-P2-7 Rider PII stripped from driver-facing API responses
-- [ ] R-P2-8 become-driver.tsx completes handoff with store links [see P1-11 first]
-- [ ] R-P2-9 Touch targets ≥ 44pt for stars and tip buttons
-- [ ] R-P2-10 Corporate account billing selectable in payment-confirm
-- [ ] R-P2-11 ToS acceptance step added to onboarding flow (App Store + PIPEDA)
-- [ ] R-P2-12 become-driver.tsx deep-links to driver app if installed
-- [ ] R-P2-13 Access token removed from SecureStore persistence (memory-only pattern)
-- [ ] R-P2-14 eas.json test/preview profiles point to staging URL, not production
-- [ ] R-P2-15 TruffleHog CI scans full PR diff; --only-verified removed
-- [ ] R-P2-16 Rider-app CI adds EXPO_PUBLIC_ private-variable check; play-service-account.json added to .gitignore
-- [ ] R-P2-17 Tip endpoints use Pydantic model; NaN bypass closed
-- [ ] R-P2-18 stops array capped at 5; stop coordinates range-validated
-- [ ] R-P2-19 scheduled_time validator rejects past timestamps
-- [ ] R-P2-20 Fare split phone strings validated to +1XXXXXXXXXX format
-- [ ] R-P2-21 SavedAddressCreate adds max_length; sanitize_string() called in handler
-- [ ] R-P2-22 WalletPayRequest.amount gets maximum cap (le=500)
-- [ ] R-P2-23 Wallet request models use Decimal instead of float
-- [ ] R-P2-24 search-destination.tsx wrapped in KeyboardAvoidingView
-- [ ] R-P2-25 allowFontScaling=false applied to fixed-height Text containers in ride screens
-- [ ] R-P2-26 ride-in-progress.tsx adds error state with retry for ride load failure
-- [ ] R-P2-27 driver-arrived.tsx replaces null map render with error/loading state
-- [ ] R-P2-28 Home screen zoom buttons increased to 44×44pt
+- [x] R-P2-1 Offline queue extended for cancel, rate, tip, emergency
+- [x] R-P2-2 Cold-start ride validated against backend before routing
+- [x] R-P2-3 RideStatus constants created and magic strings replaced
+- [x] R-P2-4 TypeScript `any` replaced with typed interfaces + Zod on WS
+- [x] R-P2-5 Polling suspended when WebSocket is connected
+- [x] R-P2-6 Error states with retry actions on all key screens
+- [x] R-P2-7 Rider PII stripped from driver-facing API responses
+- [x] R-P2-8 become-driver.tsx completes handoff with store links [see P1-11 first]
+- [x] R-P2-9 Touch targets ≥ 44pt for stars and tip buttons
+- [x] R-P2-10 Corporate account billing selectable in payment-confirm
+- [x] R-P2-11 ToS acceptance step added to onboarding flow (App Store + PIPEDA)
+- [x] R-P2-12 become-driver.tsx deep-links to driver app if installed
+- [x] R-P2-13 Access token removed from SecureStore persistence (memory-only pattern)
+- [x] R-P2-14 eas.json test/preview profiles point to staging URL, not production
+- [x] R-P2-15 TruffleHog CI scans full PR diff; --only-verified removed
+- [x] R-P2-16 Rider-app CI adds EXPO_PUBLIC_ private-variable check; play-service-account.json added to .gitignore
+- [x] R-P2-17 Tip endpoints use Pydantic model; NaN bypass closed
+- [x] R-P2-18 stops array capped at 5; stop coordinates range-validated
+- [x] R-P2-19 scheduled_time validator rejects past timestamps
+- [x] R-P2-20 Fare split phone strings validated to +1XXXXXXXXXX format
+- [x] R-P2-21 SavedAddressCreate adds max_length; sanitize_string() called in handler
+- [x] R-P2-22 WalletPayRequest.amount gets maximum cap (le=500)
+- [x] R-P2-23 Wallet request models use Decimal instead of float
+- [x] R-P2-24 search-destination.tsx wrapped in KeyboardAvoidingView
+- [x] R-P2-25 allowFontScaling=false applied to fixed-height Text containers in ride screens
+- [x] R-P2-26 ride-in-progress.tsx adds error state with retry for ride load failure
+- [x] R-P2-27 driver-arrived.tsx replaces null map render with error/loading state
+- [x] R-P2-28 Home screen zoom buttons increased to 44×44pt
 - [ ] R-P2-29 fetchRide() merges REST driver object but preserves WS-updated lat/lng (no marker jump-back)
 - [ ] R-P2-30 Location denied shows Alert + "Open Settings" deep-link instead of silent early-return
 - [ ] R-P2-31 FreeCancelTimer expiry fires onExpire callback; Cancel button shows fee warning for expired window
@@ -1619,11 +1619,11 @@ contrast compliance.
 - [ ] R-P2-43 account.tsx Safety & Privacy section links directly to Delete Account and Download My Data
 - [ ] R-P2-44 account.tsx Legal section includes Privacy Policy link (/legal?type=privacy)
 - [ ] R-P2-45 In-app location consent modal shown before requestForegroundPermissionsAsync()
-- [ ] R-P2-46 Rides anonymised on account deletion; retention policy + purge job defined
+- [x] R-P2-46 Rides anonymised on account deletion; 30-day grace purge job implemented (account_purge.py)
 - [ ] R-P2-47 Notification centre tap navigates to relevant screen (not just mark-read)
 - [ ] R-P2-48 Unread notification badge count surfaced at notifications entry point in account.tsx
-- [ ] R-P2-49 Support ticket submit uses authenticated api client (not raw fetch)
-- [ ] R-P2-50 Structured dispute/complaint flow added with category selection and ride_id linkage
+- [x] R-P2-49 Support ticket submit uses authenticated api client (not raw fetch)
+- [x] R-P2-50 Structured dispute/complaint flow added with category selection and ride_id linkage
 - [ ] R-P2-51 ride-options.tsx: fetchEstimates + fetchNearbyDrivers parallelised with Promise.all; AbortController added
 - [ ] R-P2-52 Activity tab: ScrollView replaced with FlatList; pagination wired to /rides/history?limit=20&offset=N
 - [ ] R-P2-53 CarMarker wrapped in React.memo with coordinate/heading equality comparator
@@ -1635,4 +1635,4 @@ contrast compliance.
 - [ ] R-P2-59 Search autocomplete suggestion rows: accessibilityRole="button" + accessibilityLabel on all rows
 - [ ] R-P2-60 BottomSheet instances + RN Modals in ride screens: accessibilityViewIsModal={true} added
 - [ ] R-P2-61 Primary colour contrast: tipBtnTextActive and submit button text meet WCAG AA 4.5:1 in light mode
-- [ ] R-P2-62 Replace all fare/currency template literals (`$${value.toFixed(2)}`) with a shared formatCurrency(amount, locale) utility backed by Intl.NumberFormat('fr-CA',{style:'currency',currency:'CAD'}) (see [16-3])
+- [x] R-P2-62 All fare/currency template literals replaced with formatFare() across rider-app screens

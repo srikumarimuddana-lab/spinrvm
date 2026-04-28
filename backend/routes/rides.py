@@ -1293,6 +1293,21 @@ async def get_ride(ride_id: str, current_user: dict = Depends(get_current_user))
     ride["free_cancel_window_seconds"] = free_cancel_window
     ride["cancellation_fee"] = cancellation_fee_amount
 
+    # PIPEDA / threat-model RI-2: drivers only need pickup/dropoff addresses
+    # while the trip is active. Retaining exact addresses post-completion
+    # enables address-based stalking (attack tree RAT-1). Riders retain their
+    # own address history (is_rider check).
+    if is_driver and not is_rider and ride.get("status") in ("completed", "cancelled"):
+        for _addr_key in (
+            "pickup_address",
+            "dropoff_address",
+            "pickup_lat",
+            "pickup_lng",
+            "dropoff_lat",
+            "dropoff_lng",
+        ):
+            ride.pop(_addr_key, None)
+
     def serialize_doc(doc):
         return doc
 

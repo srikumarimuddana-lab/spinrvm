@@ -227,9 +227,12 @@ export default function RideDetailsScreen() {
         </View>
 
         {/* Help */}
-        <TouchableOpacity style={styles.helpBtn} onPress={() => router.push('/support' as any)}>
+        <TouchableOpacity
+          style={styles.helpBtn}
+          onPress={() => router.push({ pathname: '/support', params: { rideId, tab: 'contact' } } as any)}
+        >
           <Ionicons name="help-circle-outline" size={20} color={colors.primary} />
-          <Text style={styles.helpText}>Get help with this ride</Text>
+          <Text style={styles.helpText}>Dispute or get help with this ride</Text>
           <Ionicons name="chevron-forward" size={16} color={colors.border} />
         </TouchableOpacity>
       </ScrollView>

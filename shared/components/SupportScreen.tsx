@@ -23,6 +23,16 @@ import type { ThemeColors } from '@shared/theme/index';
 // ── Types ────────────────────────────────────────────────────────────────────
 type Role = 'rider' | 'driver';
 type Tab = 'faq' | 'chat' | 'contact';
+type DisputeCategory = 'overcharge' | 'wrong_route' | 'driver_behavior' | 'lost_item' | 'safety' | 'other';
+
+const DISPUTE_CATEGORIES: { value: DisputeCategory; label: string; icon: string }[] = [
+  { value: 'overcharge', label: 'Overcharge / Wrong Fare', icon: 'cash-outline' },
+  { value: 'wrong_route', label: 'Wrong Route Taken', icon: 'map-outline' },
+  { value: 'driver_behavior', label: 'Driver Behaviour', icon: 'person-outline' },
+  { value: 'lost_item', label: 'Lost Item', icon: 'bag-handle-outline' },
+  { value: 'safety', label: 'Safety Concern', icon: 'shield-outline' },
+  { value: 'other', label: 'Other', icon: 'ellipsis-horizontal-outline' },
+];
 
 interface ChatMessage {
   id: string;
@@ -111,9 +121,11 @@ interface Props {
   role: Role;
   /** Initial tab when the screen mounts. Defaults to 'faq'. */
   initialTab?: Tab;
+  /** If provided, pre-links the dispute to a specific ride. */
+  rideId?: string;
 }
 
-export default function SupportScreen({ role, initialTab = 'faq' }: Props) {
+export default function SupportScreen({ role, initialTab = 'faq', rideId }: Props) {
   const router = useRouter();
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -145,6 +157,8 @@ export default function SupportScreen({ role, initialTab = 'faq' }: Props) {
   // Contact form
   const [issue, setIssue] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [category, setCategory] = useState<DisputeCategory>('other');
+  const [linkedRideId, setLinkedRideId] = useState(rideId ?? '');
 
   const [alertState, setAlertState] = useState<{
     visible: boolean;
@@ -197,9 +211,10 @@ export default function SupportScreen({ role, initialTab = 'faq' }: Props) {
     setSubmitting(true);
     try {
       await api.post('/support/tickets', {
-        subject: 'App Support Request',
+        subject: DISPUTE_CATEGORIES.find((c) => c.value === category)?.label ?? 'App Support Request',
         message: issue,
-        category: 'general',
+        category,
+        ...(linkedRideId.trim() ? { ride_id: linkedRideId.trim() } : {}),
       });
       setIssue('');
       setAlertState({
@@ -499,7 +514,44 @@ export default function SupportScreen({ role, initialTab = 'faq' }: Props) {
             contentContainerStyle={styles.contactContent}
             keyboardShouldPersistTaps="handled"
           >
-            <Text style={styles.label}>How can we help you today?</Text>
+            <Text style={styles.label}>What is this about?</Text>
+            <View style={styles.categoryGrid}>
+              {DISPUTE_CATEGORIES.map((cat) => (
+                <TouchableOpacity
+                  key={cat.value}
+                  style={[styles.categoryChip, category === cat.value && styles.categoryChipActive]}
+                  onPress={() => setCategory(cat.value)}
+                  accessibilityRole="radio"
+                  accessibilityState={{ checked: category === cat.value }}
+                  accessibilityLabel={cat.label}
+                >
+                  <Ionicons
+                    name={cat.icon as any}
+                    size={16}
+                    color={category === cat.value ? '#FFF' : colors.textDim}
+                  />
+                  <Text style={[styles.categoryChipText, category === cat.value && styles.categoryChipTextActive]}>
+                    {cat.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <Text style={[styles.label, { marginTop: 16 }]}>Ride ID (optional)</Text>
+            <TextInput
+              style={[styles.input, styles.rideIdInput]}
+              placeholder="e.g. ride-abc123 — leave blank if not ride-related"
+              placeholderTextColor={colors.textDim}
+              value={linkedRideId}
+              onChangeText={setLinkedRideId}
+              autoCapitalize="none"
+              autoCorrect={false}
+              editable={!submitting}
+              accessibilityLabel="Ride ID"
+              accessibilityHint="Optional — paste the ride ID from your trip history"
+            />
+
+            <Text style={[styles.label, { marginTop: 4 }]}>Tell us what happened</Text>
             <TextInput
               style={styles.input}
               placeholder="Describe your issue in detail..."
@@ -744,6 +796,30 @@ function createStyles(colors: ThemeColors) {
     // Contact
     contactContent: { padding: 24 },
     label: { fontSize: 16, fontWeight: '500', color: colors.text, marginBottom: 12 },
+    categoryGrid: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 8,
+      marginBottom: 8,
+    },
+    categoryChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      paddingHorizontal: 12,
+      paddingVertical: 9,
+      borderRadius: 20,
+      borderWidth: 1.5,
+      borderColor: colors.border,
+      backgroundColor: colors.surfaceLight,
+    },
+    categoryChipActive: {
+      backgroundColor: colors.primary,
+      borderColor: colors.primary,
+    },
+    categoryChipText: { fontSize: 13, fontWeight: '500', color: colors.textDim },
+    categoryChipTextActive: { color: '#FFF' },
+    rideIdInput: { minHeight: 0, marginBottom: 8, fontSize: 14 },
     input: {
       backgroundColor: colors.surfaceLight,
       borderWidth: 1,

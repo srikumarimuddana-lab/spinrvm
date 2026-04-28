@@ -1880,8 +1880,8 @@ async def rate_driver(ride_id: str, rating_data: RideRatingRequest, current_user
         return {"success": True}
 
     if rating_data.tip_amount > 0:
-        new_tip = ride.get("tip_amount", 0) + rating_data.tip_amount
-        new_driver_earnings = ride.get("driver_earnings", 0) + rating_data.tip_amount
+        new_tip = (ride.get("tip_amount") or Decimal("0")) + rating_data.tip_amount
+        new_driver_earnings = (ride.get("driver_earnings") or Decimal("0")) + rating_data.tip_amount
         await db_supabase.update_ride(ride_id, {"tip_amount": new_tip, "driver_earnings": new_driver_earnings})
 
     # Aggregate driver rating using rolling average to avoid O(n) ride fetch.
@@ -1896,7 +1896,6 @@ async def rate_driver(ride_id: str, rating_data: RideRatingRequest, current_user
             {"id": driver_id},
             {
                 "rating": new_avg,
-                "average_rating": new_avg,
                 "total_ratings": new_count,
             },
         )

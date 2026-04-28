@@ -263,27 +263,39 @@ export default function HomeScreen() {
         {/* Map Controls Container - Right Side */}
         {/* Map Controls Container - Right Side */}
         <View style={styles.mapControls}>
-          <TouchableOpacity style={styles.mapControlButton} onPress={() => {
-            if (region && mapRef.current) {
-              mapRef.current.animateToRegion({
-                ...region,
-                latitudeDelta: region.latitudeDelta / 2,
-                longitudeDelta: region.longitudeDelta / 2,
-              }, 500);
-            }
-          }}>
+          <TouchableOpacity
+            style={styles.mapControlButton}
+            onPress={() => {
+              if (region && mapRef.current) {
+                mapRef.current.animateToRegion({
+                  ...region,
+                  latitudeDelta: region.latitudeDelta / 2,
+                  longitudeDelta: region.longitudeDelta / 2,
+                }, 500);
+              }
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Zoom in"
+            accessibilityHint="Zooms the map in"
+          >
             <Ionicons name="add" size={24} color={colors.text} />
           </TouchableOpacity>
           <View style={styles.divider} />
-          <TouchableOpacity style={styles.mapControlButton} onPress={() => {
-            if (region && mapRef.current) {
-              mapRef.current.animateToRegion({
-                ...region,
-                latitudeDelta: region.latitudeDelta * 2,
-                longitudeDelta: region.longitudeDelta * 2,
-              }, 500);
-            }
-          }}>
+          <TouchableOpacity
+            style={styles.mapControlButton}
+            onPress={() => {
+              if (region && mapRef.current) {
+                mapRef.current.animateToRegion({
+                  ...region,
+                  latitudeDelta: region.latitudeDelta * 2,
+                  longitudeDelta: region.longitudeDelta * 2,
+                }, 500);
+              }
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Zoom out"
+            accessibilityHint="Zooms the map out"
+          >
             <Ionicons name="remove" size={24} color={colors.text} />
           </TouchableOpacity>
         </View>
@@ -306,7 +318,12 @@ export default function HomeScreen() {
         {/* Current Location Button — always fetches a fresh fix. Tapping
             this is an explicit user request for "where am I now", so we
             bypass any cached state and hit getCurrentPositionAsync. */}
-        <TouchableOpacity style={styles.locationButton} onPress={async () => {
+        <TouchableOpacity
+          style={styles.locationButton}
+          accessibilityRole="button"
+          accessibilityLabel="Go to my location"
+          accessibilityHint="Centers the map on your current GPS position"
+          onPress={async () => {
           if (!mapRef.current) return;
           const { status } = await Location.requestForegroundPermissionsAsync();
           if (status !== 'granted') return;
@@ -371,21 +388,39 @@ export default function HomeScreen() {
 
         {/* Quick Actions */}
         <View style={styles.quickActions}>
-          <TouchableOpacity style={styles.quickAction} onPress={() => handleQuickAction('home')}>
+          <TouchableOpacity
+            style={styles.quickAction}
+            onPress={() => handleQuickAction('home')}
+            accessibilityRole="button"
+            accessibilityLabel="Go home"
+            accessibilityHint="Sets your saved home address as destination"
+          >
             <View style={styles.quickActionIcon}>
               <Ionicons name="home" size={22} color={colors.primary} />
             </View>
             <Text style={styles.quickActionText}>Home</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.quickAction} onPress={() => handleQuickAction('work')}>
+          <TouchableOpacity
+            style={styles.quickAction}
+            onPress={() => handleQuickAction('work')}
+            accessibilityRole="button"
+            accessibilityLabel="Go to work"
+            accessibilityHint="Sets your saved work address as destination"
+          >
             <View style={styles.quickActionIcon}>
               <Ionicons name="briefcase" size={22} color={colors.primary} />
             </View>
             <Text style={styles.quickActionText}>Work</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.quickAction} onPress={() => handleQuickAction('saved')}>
+          <TouchableOpacity
+            style={styles.quickAction}
+            onPress={() => handleQuickAction('saved')}
+            accessibilityRole="button"
+            accessibilityLabel="Saved places"
+            accessibilityHint="Browse your saved locations"
+          >
             <View style={styles.quickActionIcon}>
               <Ionicons name="star" size={22} color={colors.primary} />
             </View>
@@ -405,7 +440,12 @@ export default function HomeScreen() {
                 We take 0% commission. 100% of{"\n"}your fare goes to your driver.
               </Text>
             </View>
-            <TouchableOpacity onPress={() => setShowPromo(false)} style={styles.promoClose}>
+            <TouchableOpacity
+              onPress={() => setShowPromo(false)}
+              style={styles.promoClose}
+              accessibilityRole="button"
+              accessibilityLabel="Dismiss promotion banner"
+            >
               <Ionicons name="close" size={20} color={colors.textDim} />
             </TouchableOpacity>
           </View>

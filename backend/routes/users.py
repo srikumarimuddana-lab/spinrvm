@@ -4,10 +4,12 @@ try:
     from .. import db_supabase  # type: ignore
     from ..dependencies import get_current_user  # type: ignore
     from ..schemas import CreateProfileRequest, UserProfile  # type: ignore
+    from ..utils.audit_logger import log_admin_action  # type: ignore
 except ImportError:
     import db_supabase  # type: ignore
     from dependencies import get_current_user  # type: ignore
     from schemas import CreateProfileRequest, UserProfile  # type: ignore
+    from utils.audit_logger import log_admin_action  # type: ignore  # noqa: F811
 import base64
 import logging
 import uuid
@@ -85,14 +87,39 @@ async def request_data_export(current_user: dict = Depends(get_current_user)):
         }
         await db_supabase.insert_one("data_export_requests", export_record)
     except Exception as e:
-        logger.error(f"Could not record DSAR request for user {user_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=503, detail="Failed to submit data export request. Please try again.") from e
+        logger.error(f"Could not record data export request for user {user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=503, detail="data_export_request_failed") from e
     return {
         "success": True,
         "request_id": request_id,
         "response_due_at": response_due_at,
         "message": "Data export requested. We will respond within 30 days as required by PIPEDA.",
     }
+
+
+async def _anonymise_rides(user_id: str) -> None:
+    """Strip PII from all rides linked to a user (PIPEDA R-P2-46).
+
+    Ride records are retained for 7 years per Saskatchewan Transportation Act
+    but personal identifiers are removed immediately on deletion request.
+    Coordinates are rounded to 2 dp (~1 km precision) to remove exact addresses.
+    """
+    try:
+        rides = await db_supabase.get_rows("rides", {"rider_id": user_id}, limit=5000)
+        for ride in rides:
+            updates: dict = {"rider_id": None}
+            for lat_field in ("pickup_lat", "dropoff_lat"):
+                if ride.get(lat_field) is not None:
+                    updates[lat_field] = round(float(ride[lat_field]), 2)
+            for lng_field in ("pickup_lng", "dropoff_lng"):
+                if ride.get(lng_field) is not None:
+                    updates[lng_field] = round(float(ride[lng_field]), 2)
+            await db_supabase.update_one("rides", {"id": ride["id"]}, updates)
+        logger.info(f"Anonymised {len(rides)} rides for deleted user {user_id}")
+    except Exception as e:
+        # Log but don't fail the deletion — ride anonymisation is best-effort;
+        # the account is still marked pending_deletion so the purge loop retries.
+        logger.error(f"Ride anonymisation failed for user {user_id}: {e}", exc_info=True)
 
 
 @api_router.delete("/account")
@@ -110,6 +137,17 @@ async def delete_account_pipeda(current_user: dict = Depends(get_current_user)):
             {"deletion_requested_at": now, "deletion_scheduled_at": grace_period_end, "status": "pending_deletion"},
         )
         await db_supabase.update_one("drivers", {"user_id": user_id}, {"deleted_at": now})
+        # R-P2-46: strip PII from ride records immediately even though the account
+        # itself has a 30-day grace period.  Ride rows are retained for SK regulatory
+        # retention (7 years) but personal identifiers are removed now.
+        await _anonymise_rides(user_id)
+        await log_admin_action(
+            {"id": user_id, "role": "user"},
+            action="dsar_deletion_requested",
+            resource="users",
+            resource_id=user_id,
+            details={"grace_period_end": grace_period_end, "pipeda": True},
+        )
         logger.info(f"Account deletion scheduled for user {user_id} (grace period until {grace_period_end})")
         return {
             "success": True,
@@ -136,9 +174,17 @@ async def delete_account(current_user: dict = Depends(get_current_user)):
         await db_supabase.delete_many("driver_documents", {"driver_id": user_id})
         await db_supabase.delete_many("emergency_contacts", {"user_id": user_id})
         await db_supabase.delete_many("saved_addresses", {"user_id": user_id})
+        # R-P2-46: anonymise rides before unlinking user_id
+        await _anonymise_rides(user_id)
         # Soft-delete the user record
         await db_supabase.update_one("users", {"id": user_id}, {"deleted_at": now})
-
+        await log_admin_action(
+            {"id": user_id, "role": "user"},
+            action="dsar_deletion_executed",
+            resource="users",
+            resource_id=user_id,
+            details={"immediate": True, "pipeda": True},
+        )
         logger.info(f"Account deleted successfully for user {user_id}")
         return {"success": True, "message": "Account permanently deleted"}
     except Exception as e:
@@ -266,7 +312,7 @@ async def get_emergency_contacts(current_user: dict = Depends(get_current_user))
             await contacts_cursor.to_list(length=10) if hasattr(contacts_cursor, "to_list") else list(contacts_cursor)
         )
     except Exception as e:
-        logger.warning(f"Could not fetch emergency contacts: {e}")
+        logger.error(f"Could not fetch emergency contacts for user {current_user['id']}: {e}", exc_info=True)
         contacts = []
     return {"contacts": contacts}
 

@@ -227,8 +227,13 @@ async def admin_review_driver_document(
     try:
         await db_supabase.update_one("driver_documents", {"id": document_id}, updates)
     except Exception as e:
-        logger.error(f"Failed to update driver_document {document_id}: {e}")
-        raise HTTPException(status_code=500, detail="Document update failed. Please try again.") from e
+        # B-P3-leak-cleanup: full traceback to logs, generic detail
+        # to client. Supabase / postgrest errors carry table internals.
+        logger.exception(f"Failed to update driver_document {document_id}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to update document.",
+        ) from e
 
     # On approval, propagate the expiry to the legacy drivers.* column so the
     # go-online check stops blocking based on stale onboarding-time values.
@@ -251,11 +256,11 @@ async def admin_review_driver_document(
                     req_name = req_row.get("name")
             except Exception as _req_err:
                 logger.error(
-                    f"document_requirements lookup failed for req_id={existing_req_id!r}",
-                    extra={"req_id": existing_req_id, "document_id": document_id},
+                    "document requirement lookup failed — expiry won't propagate to legacy field",
+                    extra={"req_id": existing_req_id, "doc_id": document_id},
                     exc_info=True,
                 )
-                raise HTTPException(status_code=503, detail="doc_req_unavailable") from _req_err
+                req_name = None
         if not req_name:
             req_name = existing.get("document_type") or existing.get("requirement_key")
 
@@ -273,9 +278,12 @@ async def admin_review_driver_document(
                         "updated_at": datetime.now(timezone.utc).isoformat(),
                     },
                 )
-            except Exception as e:
-                logger.warning(
-                    f"Could not update legacy expiry field {legacy_field} for driver {existing.get('driver_id')}: {e}"
+            except Exception:
+                logger.error(
+                    "Could not update legacy expiry field %s for driver %s",
+                    legacy_field,
+                    existing.get("driver_id"),
+                    exc_info=True,
                 )
 
     # After approving, check if this driver has no more pending docs → clear needs_review

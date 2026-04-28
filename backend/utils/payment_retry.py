@@ -8,7 +8,6 @@ Also resolves driver payouts stuck as 'pending' after transfer failures.
 import asyncio
 import logging
 import random
-import time
 from datetime import datetime, timezone
 
 try:
@@ -23,8 +22,6 @@ except ImportError:
     from features import send_push_notification
     from settings_loader import get_app_settings
     from utils.datetime_utils import parse_iso_utc
-    from utils.metrics import inc as _metric_inc
-    from utils.metrics import set_gauge as _metric_gauge
 
 logger = logging.getLogger(__name__)
 
@@ -209,19 +206,16 @@ async def payment_retry_loop():
     """Background loop that retries failed payments every RETRY_INTERVAL_SECONDS."""
     logger.info(f"Payment retry service started (interval={RETRY_INTERVAL_SECONDS}s)")
     while True:
-        _t0 = time.monotonic()
-        _had_error = False
         try:
             await retry_failed_payments()
         except Exception as e:
             logger.error(f"Payment retry loop error: {e}")
-            _had_error = True
         try:
             await retry_stuck_payouts()
         except Exception as e:
             logger.error(f"Payout retry loop error: {e}")
-            _had_error = True
-        _metric_gauge("spinr_bgloop_duration_ms", (time.monotonic() - _t0) * 1000, {"loop": "payment_retry"})
-        if _had_error:
-            _metric_inc("spinr_bgloop_errors_total", {"loop": "payment_retry"})
-        await asyncio.sleep(RETRY_INTERVAL_SECONDS * (0.9 + random.random() * 0.2))
+        # B-P3-2: per-tick ±10% jitter so replicas don't tick in lockstep
+        # and create a thundering herd against Stripe + Supabase. Tested
+        # cap is RETRY_INTERVAL_SECONDS * 0.1 ≈ 30s on 5min interval.
+        delta = RETRY_INTERVAL_SECONDS * 0.1
+        await asyncio.sleep(RETRY_INTERVAL_SECONDS + random.uniform(-delta, delta))

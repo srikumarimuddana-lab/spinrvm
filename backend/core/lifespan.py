@@ -90,6 +90,18 @@ async def lifespan(app: FastAPI):
         logger.error(f"Failed to initialize database: {e}")
         raise
 
+    # Warn operators if Redis is absent in production. Without Redis, OTP
+    # lockout state and per-user rate-limit counters are in-process only and
+    # are lost on every restart — brute-force protection degrades silently.
+    if settings.ENV.lower() == "production" and not any(
+        [settings.REDIS_URL, settings.RATE_LIMIT_REDIS_URL, settings.WS_REDIS_URL]
+    ):
+        logger.error(
+            "No Redis URL configured in production. OTP lockout and rate-limit "
+            "state are stored in-process and reset on every restart. "
+            "Set REDIS_URL (or RATE_LIMIT_REDIS_URL + WS_REDIS_URL) before launch."
+        )
+
     # Start background tasks
     import asyncio
 
@@ -186,7 +198,12 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to import presence sweeper loop: {e}")
 
-    # PIPEDA / CRA retention purge — daily hard-delete/anonymize of expired rows.
+    # PII retention purge — daily SECURITY DEFINER call to anonymize
+    # ride GPS at 3y, hard-delete rides at 7y, delete location history
+    # / chat / stripe events at 90d, delete expired refresh tokens after
+    # a 30d grace period. Closes audit B-P1-6 (Saskatchewan Transportation
+    # Act + PIPEDA). The Postgres function is naturally idempotent; the
+    # Redis leader lock inside the loop is belt-and-braces.
     try:
         from utils.retention_purge import retention_purge_loop
 

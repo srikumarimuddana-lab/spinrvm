@@ -3,8 +3,13 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel, ConfigDict
+try:
+    from ...utils.audit_logger import log_admin_action  # noqa: F401
+except ImportError:
+    from utils.audit_logger import log_admin_action  # noqa: F401
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, ConfigDict, Field
 
 try:
     from ... import db_supabase
@@ -57,11 +62,11 @@ class SettingsUpdateRequest(BaseModel):
     twilio_auth_token: Optional[str] = None
     twilio_from_number: Optional[str] = None
     driver_matching_algorithm: Optional[str] = None
-    min_driver_rating: Optional[float] = None
-    search_radius_km: Optional[float] = None
-    cancellation_fee_admin: Optional[float] = None
-    cancellation_fee_driver: Optional[float] = None
-    platform_fee_percent: Optional[float] = None
+    min_driver_rating: Optional[float] = Field(default=None, ge=1.0, le=5.0)
+    search_radius_km: Optional[float] = Field(default=None, ge=1, le=100)
+    cancellation_fee_admin: Optional[float] = Field(default=None, ge=0, le=50)
+    cancellation_fee_driver: Optional[float] = Field(default=None, ge=0, le=50)
+    platform_fee_percent: Optional[float] = Field(default=None, ge=0, le=1.0)
     require_driver_subscription: Optional[bool] = None
     terms_of_service_text: Optional[str] = None
     privacy_policy_text: Optional[str] = None
@@ -69,9 +74,34 @@ class SettingsUpdateRequest(BaseModel):
 
 @router.get("/settings")
 async def admin_get_settings(admin: dict = Depends(get_admin_user)):
-    """Get all settings. Credential fields are masked — use the reveal endpoint to read a value."""
+    """Get all settings. Credential fields are masked — use /settings/reveal/{field} to read a value."""
     raw = await get_app_settings()
     return _mask_credentials(raw)
+
+
+@router.get("/settings/reveal/{field}")
+async def admin_reveal_setting(field: str, admin: dict = Depends(get_admin_user)):
+    """Return the plaintext value of a single credential field. super_admin only. Always audited."""
+    if admin.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Only super admins can reveal credential values")
+    if field not in _CREDENTIAL_FIELDS:
+        raise HTTPException(status_code=400, detail=f"Field '{field}' is not a revealable credential")
+    raw = await get_app_settings()
+    value = raw.get(field)
+    await db_supabase.insert_one(
+        "audit_logs",
+        {
+            "id": str(uuid.uuid4()),
+            "actor_id": admin["id"],
+            "actor_role": admin.get("role"),
+            "action": "settings_credential_revealed",
+            "resource": "settings",
+            "resource_id": field,
+            "details": {"field": field},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    return {"field": field, "value": value}
 
 
 @router.put("/settings")

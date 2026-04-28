@@ -1,18 +1,40 @@
 import { create } from 'zustand';
-import { persist, createJSONStorage } from 'zustand/middleware';
 
-// The access token lives in Zustand memory only (for Authorization headers).
-// The HttpOnly `admin_token` cookie used by Edge middleware (src/proxy.ts) is
-// set and rotated exclusively by the Next.js BFF routes:
-//   POST /api/admin/auth/login   → sets admin_token + spinr_admin_rt
-//   POST /api/admin/auth/refresh → rotates both cookies
-//   POST /api/admin/auth/logout  → clears both cookies
-// JS never writes to document.cookie for auth purposes (A-PE-P2-1).
+// ── Cookie helpers ───────────────────────────────────────────────
+// The JWT is dual-written to memory (Zustand) AND to an `admin_token`
+// HttpOnly cookie (for the Next.js middleware at src/middleware.ts, which
+// runs on the edge and cannot read in-memory state). No auth state is
+// written to sessionStorage — on every page load, initAuth() reads the
+// non-HttpOnly spinr_admin_csrf cookie to bootstrap the in-memory CSRF
+// token, then calls silentRefresh() to exchange the HttpOnly RT cookie
+// for a new short-lived access token. JS never sees the RT value.
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 const REFRESH_BEFORE_EXPIRY_MS = 5 * 60 * 1000; // refresh 5 min before access token expires
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes (F-19)
 
 let _refreshTimer: ReturnType<typeof setTimeout> | null = null;
+// Prevent initAuth from running more than once per page load.
+let _authInitialized = false;
+// Exposed only for unit tests — resets the once-per-load guard.
+export function _resetAuthInitializedForTesting() { _authInitialized = false; }
+
+// Cookie helpers — delegate to the Next.js API route so the cookie is set
+// HttpOnly by the server (F-02). document.cookie cannot set HttpOnly.
+// Fire-and-forget: the in-memory token drives API calls; the HttpOnly cookie
+// drives middleware route-protection checks on hard refreshes/SSR.
+function setAuthCookie(token: string): void {
+    if (typeof window === 'undefined') return;
+    fetch('/api/auth/set-cookie', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token }),
+    }).catch(() => { /* non-critical — middleware redirects to /login if missing */ });
+}
+
+function clearAuthCookie(): void {
+    if (typeof window === 'undefined') return;
+    fetch('/api/auth/set-cookie', { method: 'DELETE' }).catch(() => { /* non-critical */ });
+}
 
 function cancelRefreshTimer() {
     if (_refreshTimer) {
@@ -78,10 +100,10 @@ interface User {
 
 interface AuthState {
     user: User | null;
-    // Access token lives in memory only — never written to sessionStorage.
+    // Access token lives in memory only — never written to storage.
     token: string | null;
-    // CSRF double-submit token — read from the csrf_token cookie on refresh,
-    // sent as X-CSRF-Token on every state-changing request.
+    // CSRF double-submit token — in-memory only, bootstrapped from the
+    // non-HttpOnly spinr_admin_csrf cookie on page load by initAuth().
     csrfToken: string | null;
     isAuthenticated: boolean;
     isLoading: boolean;
@@ -93,156 +115,157 @@ interface AuthState {
     logout: () => void;
     checkAuth: () => Promise<void>;
     silentRefresh: () => Promise<void>;
+    initAuth: () => Promise<void>;
 }
 
-export const useAuthStore = create<AuthState>()(
-    persist(
-        (set, get) => ({
+export const useAuthStore = create<AuthState>()((set, get) => ({
+    user: null,
+    token: null,
+    csrfToken: null,
+    isAuthenticated: false,
+    isLoading: true,
+
+    setUser: (user) => {
+        set({
+            user,
+            isAuthenticated: !!user,
+            isLoading: false
+        });
+        if (user) {
+            startIdleWatch(get().logout);
+        } else {
+            stopIdleWatch();
+        }
+    },
+
+    setToken: (token) => {
+        set({ token });
+        if (token) {
+            setAuthCookie(token);
+        } else {
+            clearAuthCookie();
+        }
+    },
+
+    setCsrfToken: (token) => {
+        set({ csrfToken: token });
+    },
+
+    scheduleRefresh: (accessExpiresAt) => {
+        scheduleTokenRefresh(accessExpiresAt, get().silentRefresh);
+    },
+
+    setLoading: (loading) => {
+        set({ isLoading: loading });
+    },
+
+    logout: () => {
+        cancelRefreshTimer();
+        stopIdleWatch();
+        clearAuthCookie();
+        const csrfToken = get().csrfToken;
+        set({
             user: null,
             token: null,
             csrfToken: null,
             isAuthenticated: false,
-            isLoading: true,
+            isLoading: false
+        });
+        // Clear the HttpOnly RT cookie server-side (fire-and-forget).
+        fetch("/api/admin/auth/logout", {
+            method: "POST",
+            ...(csrfToken ? { headers: { "X-CSRF-Token": csrfToken } } : {}),
+        }).catch(() => {});
+    },
 
-            setUser: (user) => {
-                set({
-                    user,
-                    isAuthenticated: !!user,
-                    isLoading: false
-                });
-                if (user) {
-                    startIdleWatch(get().logout);
-                } else {
-                    stopIdleWatch();
-                }
-            },
-
-            setToken: (token) => {
-                set({ token });
-                // Cookie is set/cleared server-side by the BFF routes — no
-                // document.cookie writes here (A-PE-P2-1).
-            },
-
-            setCsrfToken: (token) => {
-                set({ csrfToken: token });
-            },
-
-            scheduleRefresh: (accessExpiresAt) => {
-                scheduleTokenRefresh(accessExpiresAt, get().silentRefresh);
-            },
-
-            setLoading: (loading) => {
-                set({ isLoading: loading });
-            },
-
-            logout: () => {
-                cancelRefreshTimer();
-                stopIdleWatch();
-                const csrfToken = get().csrfToken;
-                set({
-                    user: null,
-                    token: null,
-                    csrfToken: null,
-                    isAuthenticated: false,
-                    isLoading: false
-                });
-                // Clear the HttpOnly RT cookie server-side (fire-and-forget).
-                fetch("/api/admin/auth/logout", {
-                    method: "POST",
-                    headers: csrfToken ? { "X-CSRF-Token": csrfToken } : {},
-                }).catch(() => {});
-            },
-
-            // Exchange the HttpOnly refresh cookie for a new short-lived access
-            // token via the /api/admin/auth/refresh Next.js route (which reads the
-            // cookie server-side so JS never sees the token value). Called
-            // proactively by the scheduled timer and on every page reload.
-            // On failure, calls logout() to clear state.
-            silentRefresh: async () => {
-                try {
-                    // Read the csrf_token cookie (set on last login/refresh) to
-                    // bootstrap the CSRF header before the in-memory token is available.
-                    const csrfCookie = typeof document !== "undefined"
-                        ? (document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/)?.[1] ?? null)
-                        : null;
-                    const csrfHeader = csrfCookie ?? get().csrfToken;
-                    const res = await fetch(`${API_BASE}/api/admin/auth/refresh`, {
-                        method: "POST",
-                        headers: csrfHeader ? { "X-CSRF-Token": csrfHeader } : {},
-                    });
-                    if (!res.ok) {
-                        get().logout();
-                        return;
-                    }
-                    const data: { token: string; access_expires_at: string; csrf_token?: string } = await res.json();
-                    set({ token: data.token, csrfToken: data.csrf_token ?? null });
-                    scheduleTokenRefresh(data.access_expires_at, get().silentRefresh);
-                    startIdleWatch(get().logout);
-                } catch {
-                    get().logout();
-                }
-            },
-
-            checkAuth: async () => {
-                const token = get().token;
-                if (!token) {
-                    set({ isLoading: false });
-                    return;
-                }
-
-                try {
-                    const res = await fetch(`${API_BASE}/api/admin/auth/session`, {
-                        headers: {
-                            'Authorization': `Bearer ${token}`,
-                            'Content-Type': 'application/json',
-                        },
-                    });
-
-                    if (res.ok) {
-                        const data = await res.json();
-                        if (data.authenticated && data.user) {
-                            set({
-                                user: data.user,
-                                isAuthenticated: true,
-                                isLoading: false
-                            });
-                            startIdleWatch(get().logout);
-                        } else {
-                            get().logout();
-                        }
-                    } else {
-                        get().logout();
-                    }
-                } catch (error) {
-                    console.error('Auth check failed:', error);
-                    get().logout();
-                }
-            },
-        }),
-        {
-            name: 'auth-storage',
-            storage: createJSONStorage(() => sessionStorage),
-            // Only persist the user profile / auth flag for optimistic rendering.
-            // The access token and refresh token are intentionally NOT stored in
-            // sessionStorage. On page reload, silentRefresh() re-acquires a fresh
-            // access token by presenting the HttpOnly RT cookie to the Next.js
-            // /api/admin/auth/refresh route — JS never sees the RT value.
-            partialize: (state) => ({
-                user: state.user,
-                isAuthenticated: state.isAuthenticated,
-            }),
-            onRehydrateStorage: () => (state) => {
-                if (!state) return;
-                if (state.isAuthenticated) {
-                    // Verify the session is still valid and get a fresh access token.
-                    // silentRefresh calls logout() (sets isLoading=false) on failure.
-                    state.silentRefresh().then(() => {
-                        useAuthStore.getState().setLoading(false);
-                    });
-                } else {
-                    state.setLoading(false);
-                }
-            },
+    // Exchange the HttpOnly refresh cookie for a new short-lived access
+    // token via the /api/admin/auth/refresh Next.js route (which reads the
+    // cookie server-side so JS never sees the token value). Called
+    // proactively by the scheduled timer and by initAuth() on every page load.
+    // On failure, calls logout() to clear state and set isLoading=false.
+    silentRefresh: async () => {
+        try {
+            const csrfToken = get().csrfToken;
+            const res = await fetch(`${API_BASE}/api/admin/auth/refresh`, {
+                method: "POST",
+                ...(csrfToken ? { headers: { "X-CSRF-Token": csrfToken } } : {}),
+            });
+            if (!res.ok) {
+                get().logout();
+                return;
+            }
+            const data: { token: string; access_expires_at: string; csrf_token?: string } = await res.json();
+            // Always overwrite csrfToken — if absent the session is broken; next
+            // refresh will fail CSRF and trigger a clean logout.
+            set({ token: data.token, csrfToken: data.csrf_token ?? null });
+            setAuthCookie(data.token);
+            scheduleTokenRefresh(data.access_expires_at, get().silentRefresh);
+            startIdleWatch(get().logout);
+        } catch {
+            get().logout();
         }
-    )
-);
+    },
+
+    checkAuth: async () => {
+        const token = get().token;
+        if (!token) {
+            set({ isLoading: false });
+            return;
+        }
+
+        try {
+            const res = await fetch(`${API_BASE}/api/admin/auth/session`, {
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                },
+            });
+
+            if (res.ok) {
+                const data = await res.json();
+                if (data.authenticated && data.user) {
+                    set({
+                        user: data.user,
+                        isAuthenticated: true,
+                        isLoading: false
+                    });
+                    startIdleWatch(get().logout);
+                } else {
+                    get().logout();
+                }
+            } else {
+                get().logout();
+            }
+        } catch (error) {
+            console.error('Auth check failed:', error);
+            get().logout();
+        }
+    },
+
+    // Bootstrap auth on every page load. Runs exactly once per page lifetime.
+    // 1. Reads spinr_admin_csrf from document.cookie (non-HttpOnly, safe for JS)
+    //    to restore the in-memory CSRF token before calling silentRefresh.
+    // 2. Calls silentRefresh() to exchange the HttpOnly RT cookie for a new
+    //    access token. On failure, logout() is called (sets isLoading=false).
+    // 3. On success, calls checkAuth() to populate the user profile from the
+    //    /api/admin/auth/session endpoint.
+    initAuth: async () => {
+        if (_authInitialized) return;
+        _authInitialized = true;
+
+        if (typeof window !== 'undefined') {
+            const csrfCookie = document.cookie
+                .split('; ')
+                .find(c => c.startsWith('spinr_admin_csrf='))
+                ?.split('=')[1];
+            if (csrfCookie) {
+                set({ csrfToken: csrfCookie });
+            }
+        }
+
+        await get().silentRefresh();
+        if (get().token) {
+            await get().checkAuth();
+        }
+    },
+}));

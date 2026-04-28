@@ -149,10 +149,14 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             payload = None
 
         if payload:
-            # R-P1-12: Enforce rider app audience — reject tokens minted for the
-            # driver app (which would otherwise create/access rider accounts).
-            rider_app_id = getattr(settings, "FIREBASE_RIDER_APP_ID", None)
-            if rider_app_id and payload.get("aud") != rider_app_id:
+            # R-P1-12 / B-P1-1 / DV-10: enforce rider app audience unconditionally.
+            # Production fails fast in core/config._guard_production_secrets when
+            # FIREBASE_RIDER_APP_ID is unset, so the empty-string branch below is
+            # only reachable in dev/test.
+            rider_app_id = getattr(settings, "FIREBASE_RIDER_APP_ID", None) or ""
+            if not rider_app_id:
+                raise HTTPException(status_code=503, detail="Rider Firebase audience not configured")
+            if payload.get("aud") != rider_app_id:
                 raise HTTPException(status_code=401, detail="ERR_TOKEN_AUDIENCE")
 
             uid = payload.get("uid") or payload.get("user_id")
@@ -209,6 +213,9 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     _admin_roles = {"admin", "super_admin", "operations", "support", "finance", "custom"}
     if payload.get("role") in _admin_roles and payload.get("email"):
         user_id = payload["user_id"]
+        jti = payload.get("jti")
+        if jti and await redis_get(f"admin:revoked:{jti}"):
+            raise HTTPException(status_code=401, detail="ERR_TOKEN_REVOKED")
         if user_id != "admin-001":
             staff_rows = await db_supabase.get_rows("admin_staff", {"id": user_id}, limit=1)
             staff = staff_rows[0] if staff_rows else None
@@ -216,6 +223,27 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
                 raise HTTPException(status_code=401, detail="ERR_ACCOUNT_INACTIVE")
             if _token_version_mismatch(payload, staff):
                 raise HTTPException(status_code=401, detail="ERR_SESSION_REVOKED")
+            # Server-side idle timeout: 30 min of inactivity → force re-login
+            # (audit A-P2-2). admin-001 has no DB row so this only runs for
+            # staff accounts.
+            _IDLE_SECONDS = 30 * 60
+            last_active_raw = staff.get("last_activity_at")
+            if last_active_raw:
+                try:
+                    last_active = datetime.fromisoformat(last_active_raw.replace("Z", "+00:00"))
+                    if (datetime.now(timezone.utc) - last_active).total_seconds() > _IDLE_SECONDS:
+                        raise HTTPException(status_code=401, detail="ERR_IDLE_TIMEOUT")
+                except HTTPException:
+                    raise
+                except Exception:
+                    pass  # malformed timestamp — let it through, don't block auth
+            # Fire-and-forget activity timestamp update (best-effort; auth must not fail here)
+            try:
+                await db_supabase.update_one(
+                    "admin_staff", {"id": user_id}, {"last_activity_at": datetime.now(timezone.utc).isoformat()}
+                )
+            except Exception:
+                pass
         return {
             "id": user_id,
             "email": payload.get("email"),

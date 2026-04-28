@@ -1,2 +1,5 @@
+# Admin dashboard must never be indexed by search engines.
+# This is an authenticated internal tool — public indexing risks exposing
+# login page to targeted attacks and leaking route structure.
 User-agent: *
 Disallow: /

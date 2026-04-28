@@ -135,7 +135,7 @@ async def evaluate_policy_for_ride(
         )
 
     ride_context: dict = {
-        "estimated_fare": estimated_fare,
+        "estimated_fare": Decimal(str(estimated_fare)),
         "ride_type": ride_type,
         "pickup_time": pickup_time,
         "allowance": allowance,
@@ -227,7 +227,7 @@ def evaluate_policy(policy: dict, ride_context: dict) -> dict:
         if allowance.get("type") != "unlimited":
             amt = Decimal(str(allowance.get("amount") or 0))
             used = Decimal(str(allowance.get("used") or 0))
-            remaining = amt - max(used, Decimal(0))
+            remaining = amt - max(used, Decimal("0"))
             if remaining <= 0:
                 failed.append("allowed_payment_source")
 

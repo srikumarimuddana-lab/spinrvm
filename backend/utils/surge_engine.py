@@ -8,7 +8,6 @@ service_areas.surge_multiplier for areas where surge_source == 'auto'.
 
 import asyncio
 import random
-import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
@@ -25,8 +24,6 @@ except ImportError:
     from ..db import db
     from ..geo_utils import get_service_area_polygon, point_in_polygon
     from .driver_presence import present_driver_ids
-    from .metrics import inc as _metric_inc
-    from .metrics import set_gauge as _metric_gauge
 
 # ── Surge tier mapping ───────────────────────────────────────────────
 # Maps demand/supply ratio to multiplier. Thresholds are tuned for a
@@ -248,8 +245,6 @@ async def surge_recalculation_loop():
     """Background loop that recalculates surge every RECALC_INTERVAL_SECONDS."""
     logger.info(f"Surge engine started (interval={RECALC_INTERVAL_SECONDS}s)")
     while True:
-        _t0 = time.monotonic()
-        _had_error = False
         try:
             results = await recalculate_all_surges()
             if results:
@@ -257,8 +252,8 @@ async def surge_recalculation_loop():
                 logger.debug(f"Surge recalc complete: {len(results)} areas, {active} surging")
         except Exception as e:
             logger.error(f"Surge recalculation loop error: {e}")
-            _had_error = True
-        _metric_gauge("spinr_bgloop_duration_ms", (time.monotonic() - _t0) * 1000, {"loop": "surge_recalculation"})
-        if _had_error:
-            _metric_inc("spinr_bgloop_errors_total", {"loop": "surge_recalculation"})
-        await asyncio.sleep(RECALC_INTERVAL_SECONDS * (0.9 + random.random() * 0.2))
+        # B-P3-2: ±10% per-tick jitter so replicas don't all flip surge
+        # state on the same wall-clock tick (rider apps would receive a
+        # synchronised price-change notification storm).
+        delta = RECALC_INTERVAL_SECONDS * 0.1
+        await asyncio.sleep(RECALC_INTERVAL_SECONDS + random.uniform(-delta, delta))

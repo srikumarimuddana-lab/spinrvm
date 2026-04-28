@@ -25,10 +25,13 @@ class TestRequireRideInState:
         """
         Return a context manager that patches backend.routes.drivers.db
         so find_one returns results in the order given.
+
+        The production code calls the flat Supabase API:
+            db.find_one("rides", {...})
+        not the MongoDB-style collection attribute approach.
         """
         mock_db = MagicMock()
-        mock_db.rides = MagicMock()
-        mock_db.rides.find_one = AsyncMock(side_effect=find_results)
+        mock_db.find_one = AsyncMock(side_effect=find_results)
         return mock_db
 
     async def test_returns_ride_when_in_allowed_state(self):

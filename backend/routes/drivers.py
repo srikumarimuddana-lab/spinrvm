@@ -56,25 +56,42 @@ _VAULT_PII_FIELDS: frozenset = frozenset({"license_number", "vehicle_vin"})
 
 
 async def _vault_encrypt(value: str, hint: str = "") -> str:
-    """Encrypt a PII string via Supabase Vault (encrypt_driver_pii RPC)."""
+    """Encrypt a PII string via Supabase Vault (encrypt_driver_pii RPC).
+
+    Fail-closed: any failure raises 503 rather than storing plaintext PII.
+    Storing unencrypted license numbers or VINs is a PIPEDA violation.
+    """
     if not value:
         return value
     try:
         from supabase_client import supabase as _sb  # type: ignore[import]
-    except ImportError:
-        return value
+    except ImportError as exc:
+        logger.error(
+            "vault_encrypt: supabase_client unavailable for %s — refusing to store plaintext", hint, exc_info=True
+        )
+        raise HTTPException(status_code=503, detail="Encryption service unavailable") from exc
     if not _sb:
-        return value
+        logger.error("vault_encrypt: Supabase client not initialised for %s — refusing to store plaintext", hint)
+        raise HTTPException(status_code=503, detail="Encryption service unavailable")
     try:
         res = await db_supabase.run_sync(lambda: _sb.rpc("encrypt_driver_pii", {"plaintext": value}).execute())
-        return str(res.data) if res.data else value
+        if not res.data:
+            logger.error("vault_encrypt: RPC returned no data for %s — refusing to store plaintext", hint)
+            raise HTTPException(status_code=503, detail="Encryption service unavailable")
+        return str(res.data)
+    except HTTPException:
+        raise
     except Exception as exc:
-        logger.warning("vault encrypt unavailable for %s: %s — storing plaintext", hint, exc)
-        return value
+        logger.error("vault_encrypt: RPC failed for %s — refusing to store plaintext", hint, exc_info=True)
+        raise HTTPException(status_code=503, detail="Encryption service unavailable") from exc
 
 
 async def _vault_decrypt(value: str, hint: str = "") -> str:
-    """Decrypt a Vault-encrypted PII token via Supabase RPC (decrypt_driver_pii)."""
+    """Decrypt a Vault-encrypted PII token via Supabase RPC (decrypt_driver_pii).
+
+    On failure, returns the raw token rather than raising — the encrypted token
+    is not PII, so this degrades to unreadable data rather than a privacy leak.
+    """
     if not value:
         return value
     try:
@@ -86,8 +103,8 @@ async def _vault_decrypt(value: str, hint: str = "") -> str:
     try:
         res = await db_supabase.run_sync(lambda: _sb.rpc("decrypt_driver_pii", {"secret_id": value}).execute())
         return str(res.data) if res.data else value
-    except Exception as exc:
-        logger.warning("vault decrypt unavailable for %s: %s — returning raw value", hint, exc)
+    except Exception:
+        logger.error("vault_decrypt: RPC failed for %s — returning raw token", hint, exc_info=True)
         return value
 
 
@@ -575,7 +592,7 @@ async def register_driver(
                 {"role": "driver", "is_driver": True},
             )
         except Exception as exc:
-            logger.warning(f"register_driver: failed to flip users.role for {user_id}: {exc}")
+            logger.error(f"register_driver: failed to flip users.role for {user_id}: {exc}", exc_info=True)
 
     return serialize_doc(new_driver)
 
@@ -1472,8 +1489,16 @@ async def request_payout(
             status = "completed"
             stripe_payout_id = transfer.id
         except Exception as e:
-            logger.error(f"Stripe transfer failed: {e}")
-            raise HTTPException(status_code=500, detail=f"Payout failed: {str(e)}") from e
+            # B-P3-leak-cleanup: same pattern as the subscription
+            # charge fix — Stripe transfer errors carry account IDs
+            # (acct_…), transfer IDs (tr_…), and bank-account hints
+            # we must not ship. logger.exception captures the full
+            # traceback server-side.
+            logger.exception("Stripe transfer failed for driver payout")
+            raise HTTPException(
+                status_code=500,
+                detail="Payout failed. Please contact support.",
+            ) from e
 
     payout = {
         "id": str(uuid.uuid4()),
@@ -1499,11 +1524,14 @@ async def get_payout_history(
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
 
-    payouts_cursor = db_supabase.get_rows("payouts", {"driver_id": driver["id"]}, limit=100)
-    if hasattr(payouts_cursor, "sort"):
-        payouts_cursor = payouts_cursor.sort("created_at", -1).skip(offset).limit(limit)
-
-    payouts = await payouts_cursor.to_list(length=limit) if hasattr(payouts_cursor, "to_list") else list(payouts_cursor)
+    payouts = await db_supabase.get_rows(
+        "payouts",
+        {"driver_id": driver["id"]},
+        limit=limit,
+        offset=offset,
+        order="created_at",
+        desc=True,
+    )
     return {"success": True, "payouts": [serialize_doc(p) for p in payouts]}
 
 
@@ -1570,21 +1598,29 @@ async def export_driver_data(
 
 async def _build_and_email_data_export(user_id: str, email: str) -> None:
     """Background task: collect all driver data and email a JSON export."""
+    import asyncio  # noqa: PLC0415
     import json  # noqa: PLC0415
 
     try:
-        # Phase 1 — parallel: driver profile, user account, notification prefs
-        # (all only need user_id so there's no ordering dependency).
+        # B-P2-6: PIPEDA right-to-access has a 30-day SLA but riders/drivers
+        # judge "fast" by the email arrival, not the SLA. The previous
+        # 6-sequential-await pattern accumulated ~6× round-trip latency.
+        # Wave 1 (no driver_id needed) — 3 reads in parallel.
         driver_rows, user_rows, notification_prefs = await asyncio.gather(
             db_supabase.get_rows("drivers", {"user_id": user_id}, limit=1),
             db_supabase.get_rows("users", {"id": user_id}, limit=1),
             db_supabase.get_rows("notification_preferences", {"user_id": user_id}, limit=1),
         )
-        driver = driver_rows[0] if driver_rows else {}
-        user = user_rows[0] if user_rows else {}
+        driver = (driver_rows or [{}])[0] if driver_rows else {}
+        user = (user_rows or [{}])[0] if user_rows else {}
         driver_id = driver.get("id", "")
+        notification_prefs = notification_prefs or []
 
-        # Phase 2 — parallel: rides, payouts, documents (all need driver_id from phase 1).
+        # Wave 2 (driver_id-dependent) — 3 reads in parallel. Skip entirely
+        # if there's no driver row (rider-only account requesting export).
+        rides: list = []
+        payouts: list = []
+        documents: list = []
         if driver_id:
             rides, payouts, documents = await asyncio.gather(
                 db_supabase.get_rows("rides", {"driver_id": driver_id}, limit=500, order="created_at", desc=True),
@@ -1593,8 +1629,9 @@ async def _build_and_email_data_export(user_id: str, email: str) -> None:
                 ),
                 db_supabase.get_rows("driver_documents", {"driver_id": driver_id}, limit=50),
             )
-        else:
-            rides, payouts, documents = [], [], []
+            rides = rides or []
+            payouts = payouts or []
+            documents = documents or []
 
         export_payload = {
             "export_generated_at": datetime.now(timezone.utc).isoformat() + "Z",
@@ -1723,15 +1760,17 @@ async def get_ride_history(
         raise HTTPException(status_code=404, detail="Driver not found")
 
     try:
-        total = await db_supabase.count_documents("rides", {"driver_id": driver["id"]})
+        history_filter = {
+            "driver_id": driver["id"],
+            "status": {"$in": ["completed", "cancelled"]},
+        }
+        total = await db_supabase.count_documents("rides", history_filter)
         rides = await db_supabase.get_rows(
             "rides",
-            {
-                "driver_id": driver["id"],
-            },
+            history_filter,
             order="created_at",
             desc=True,
-            limit=limit,
+            limit=min(limit, 500),
             offset=offset,
         )
     except Exception as e:
@@ -1883,7 +1922,7 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
         asyncio.create_task(match_driver_to_ride(ride_id))
         logger.info(f"Re-matching ride {ride_id} after driver {driver['id']} declined")
     except Exception as e:
-        logger.warning(f"Could not trigger re-matching for ride {ride_id}: {e}")
+        logger.error(f"Could not trigger re-matching for ride {ride_id}: {e}", exc_info=True)
 
     return {"success": True}
 
@@ -2049,7 +2088,8 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             {
                 "ride_id": ride_id,
             },
-            limit=10000,
+            limit=1000,
+            order="timestamp",
         )
         all_breadcrumbs = [b for b in all_breadcrumbs if b.get("lat") and b.get("lng")]
         all_breadcrumbs.sort(key=lambda b: str(b.get("timestamp", "")))
@@ -3111,8 +3151,19 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
             else:
                 logger.info("Stripe not configured; marking subscription paid without charge")
         except Exception as _stripe_err:
-            logger.error(f"Stripe charge failed for driver {driver['id']}: {_stripe_err}")
-            raise HTTPException(status_code=402, detail=f"Payment failed: {_stripe_err}") from _stripe_err
+            # B-P2-1: NEVER interpolate the underlying exception into the
+            # client-facing detail. Stripe error strings carry charge IDs
+            # (ch_…), customer IDs (cus_…), decline codes, and sometimes
+            # last-4-digits — none of which the rider/driver app should
+            # see. logger.exception captures the full traceback server-
+            # side; the request_id in the response body lets support
+            # correlate against the log entry. This is the canonical
+            # pattern referenced by docs/runbooks/error-responses.md.
+            logger.exception(f"Stripe subscription charge failed for driver {driver['id']}")
+            raise HTTPException(
+                status_code=402,
+                detail="Payment failed. Please try another payment method or contact support.",
+            ) from _stripe_err
 
     subscription = {
         "id": str(uuid.uuid4()),

@@ -118,7 +118,7 @@ async def check_expiring_documents():
                 await db.update_one(
                     "drivers",
                     {"id": driver["id"]},
-                    {"$set": {"is_online": False, "is_available": False, "status": "suspended"}},
+                    {"is_online": False, "is_available": False, "status": "suspended"},
                 )
             except Exception as e:
                 logger.error(f"Doc expiry: failed to suspend driver {driver['id']}: {e}")
@@ -183,7 +183,7 @@ async def check_expiring_documents():
             await db.update_one(
                 "drivers",
                 {"id": driver["id"]},
-                {"$set": {"doc_expiry_warned_at": now.isoformat()}},
+                {"doc_expiry_warned_at": now.isoformat()},
             )
             notified += 1
         except Exception as e:

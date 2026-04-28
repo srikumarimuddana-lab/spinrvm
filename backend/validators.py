@@ -30,19 +30,11 @@ _SUSPICIOUS_PATTERN = re.compile(
 
 def validate_phone(phone: str, raise_exception: bool = True) -> Tuple[bool, Optional[str]]:
     """
-    Validate phone number in E.164 format.
+    Validate phone number in NANP format (+1 + 10 digits).
 
-    E.164 format: +[country code][number] (e.g., +1234567890, +447911123456)
-
-    Args:
-        phone: Phone number string to validate
-        raise_exception: If True, raise HTTPException on failure
-
-    Returns:
-        Tuple of (is_valid, normalized_phone)
-
-    Raises:
-        HTTPException: If raise_exception is True and validation fails
+    Spinr operates in Saskatchewan, Canada. Only North American Numbering Plan
+    (+1) numbers are accepted — this covers all Canadian and US area codes while
+    rejecting international numbers that can't receive a Saskatchewan ride.
     """
     if not phone or not isinstance(phone, str):
         if raise_exception:
@@ -52,22 +44,29 @@ def validate_phone(phone: str, raise_exception: bool = True) -> Tuple[bool, Opti
     # Remove common separators and whitespace
     cleaned = re.sub(r"[\s\-\.\(\)]", "", phone)
 
-    # Must start with + followed by digits
-    e164_pattern = re.compile(r"^\+[1-9]\d{6,14}$")
-
-    if e164_pattern.match(cleaned):
+    # NANP: +1 followed by exactly 10 digits, area code must start with 2-9
+    nanp_pattern = re.compile(r"^\+1[2-9]\d{9}$")
+    if nanp_pattern.match(cleaned):
         return True, cleaned
 
-    # Try to normalize a bare number (add +1 for North America as fallback)
-    bare_pattern = re.compile(r"^[1-9]\d{6,14}$")
-    if bare_pattern.match(cleaned):
+    # Bare 10-digit NANP number — prepend +1
+    bare_10_pattern = re.compile(r"^[2-9]\d{9}$")
+    if bare_10_pattern.match(cleaned):
+        normalized = f"+1{cleaned}"
+        logger.info(f"Normalized phone {phone} to {normalized}")
+        return True, normalized
+
+    # Bare 11-digit with leading 1 (e.g. 14165551234)
+    bare_11_pattern = re.compile(r"^1[2-9]\d{9}$")
+    if bare_11_pattern.match(cleaned):
         normalized = f"+{cleaned}"
-        logger.info(f"Normalized phone number {phone} to {normalized}")
+        logger.info(f"Normalized phone {phone} to {normalized}")
         return True, normalized
 
     if raise_exception:
         raise HTTPException(
-            status_code=400, detail="Invalid phone number format. Please use E.164 format (e.g., +1234567890)"
+            status_code=400,
+            detail="Invalid phone number. Spinr accepts Canadian and US numbers (+1).",
         )
 
     return False, None
@@ -351,9 +350,12 @@ def sanitize_string(
         value = re.sub(r"<[^>]*>", "", value)
 
     if _SUSPICIOUS_PATTERN.search(value):
-        if raise_exception:
-            raise HTTPException(status_code=400, detail="Invalid input: suspicious content detected")
-        return False, None
+        # Log for security monitoring but do not reject — these patterns appear
+        # in legitimate inputs such as street addresses (#4), SQL keywords in
+        # user-supplied notes, and inline comments. Rejecting them silently
+        # breaks valid use-cases without meaningfully blocking injections
+        # (which are stopped at the parameterised-query level in Supabase).
+        logger.warning(f"Suspicious pattern detected in user input (logged, not rejected): {value[:80]!r}")
 
     return True, value
 

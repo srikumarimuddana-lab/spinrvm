@@ -44,6 +44,9 @@ export const useMarkNotificationRead = () => {
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: queryKeys.notifications.list });
         },
+        onError: () => {
+            queryClient.invalidateQueries({ queryKey: queryKeys.notifications.list });
+        },
     });
 };
 
@@ -59,6 +62,9 @@ export const useMarkAllNotificationsRead = () => {
             return res.data;
         },
         onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: queryKeys.notifications.list });
+        },
+        onError: () => {
             queryClient.invalidateQueries({ queryKey: queryKeys.notifications.list });
         },
     });
@@ -87,6 +93,9 @@ export const useUpdateNotificationPreferences = () => {
             return res.data;
         },
         onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: queryKeys.notifications.preferences });
+        },
+        onError: () => {
             queryClient.invalidateQueries({ queryKey: queryKeys.notifications.preferences });
         },
     });

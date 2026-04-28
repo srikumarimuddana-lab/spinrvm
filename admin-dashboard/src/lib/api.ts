@@ -7,6 +7,58 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
 // Import Zustand store for token management
 import { useAuthStore } from "@/store/authStore";
 
+// ─── B-P1-8: typed rate-limit error ──────────────────────────────────
+// Mirrors shared/api/client.ts's RateLimitError so admin login,
+// staff "Sign out everywhere", and admin password-change screens can
+// show "try again in N seconds" UX. The contract is pinned in
+// docs/runbooks/rate-limits.md.
+export class RateLimitError extends Error {
+    readonly status = 429;
+    retryAfterSeconds: number;
+    limit: number | null;
+    remaining: number | null;
+    resetSeconds: number | null;
+    data: any;
+
+    constructor(opts: {
+        message: string;
+        retryAfterSeconds: number;
+        limit: number | null;
+        remaining: number | null;
+        resetSeconds: number | null;
+        data: any;
+    }) {
+        super(opts.message);
+        this.name = "RateLimitError";
+        this.retryAfterSeconds = opts.retryAfterSeconds;
+        this.limit = opts.limit;
+        this.remaining = opts.remaining;
+        this.resetSeconds = opts.resetSeconds;
+        this.data = opts.data;
+    }
+}
+
+// RFC 9110 §10.2.3: integer seconds OR HTTP-date. Negative clamped to 0.
+const parseRetryAfter = (header: string | null, fallback: number): number => {
+    if (!header) return fallback;
+    const trimmed = header.trim();
+    if (/^\d+$/.test(trimmed)) {
+        const seconds = parseInt(trimmed, 10);
+        return Number.isFinite(seconds) ? Math.max(seconds, 0) : fallback;
+    }
+    const dateMs = Date.parse(trimmed);
+    if (Number.isFinite(dateMs)) {
+        return Math.max(Math.ceil((dateMs - Date.now()) / 1000), 0);
+    }
+    return fallback;
+};
+
+const parseIntHeader = (header: string | null): number | null => {
+    if (!header) return null;
+    const n = parseInt(header.trim(), 10);
+    return Number.isFinite(n) ? n : null;
+};
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     // Get token from Zustand store
     const store = useAuthStore.getState();
@@ -60,6 +112,38 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
             }
         }
 
+        // B-P1-8: throw typed RateLimitError before the generic !res.ok
+        // path so the admin login / staff "Sign out everywhere"
+        // screens can render a countdown rather than a generic
+        // "Request failed". Always reads body so callers still get
+        // the backend's `message`/`detail` for display.
+        if (res.status === 429) {
+            const body = await res.json().catch(() => ({}));
+            const retryAfterSeconds = parseRetryAfter(
+                res.headers.get("Retry-After"),
+                typeof body?.retry_after === "number" ? body.retry_after : 60,
+            );
+            const limit =
+                parseIntHeader(res.headers.get("RateLimit-Limit")) ??
+                (typeof body?.limit === "number" ? body.limit : null);
+            const remaining = parseIntHeader(res.headers.get("RateLimit-Remaining"));
+            const resetSeconds = parseIntHeader(res.headers.get("RateLimit-Reset"));
+            const msg =
+                body?.message ||
+                body?.detail ||
+                body?.error?.message ||
+                body?.error?.detail ||
+                "Too many requests";
+            throw new RateLimitError({
+                message: msg,
+                retryAfterSeconds,
+                limit,
+                remaining,
+                resetSeconds,
+                data: body,
+            });
+        }
+
         if (!res.ok) {
             const body = await res.json().catch(() => ({}));
             if (process.env.NODE_ENV === "development") {
@@ -104,6 +188,7 @@ export interface AuthResponse {
 export interface AdminLoginResponse {
     token: string;
     access_expires_at: string;
+    csrf_token?: string;
     user: {
         id: string;
         email: string;
@@ -114,6 +199,13 @@ export interface AdminLoginResponse {
     };
 }
 
+export interface AdminMfaRequired {
+    mfa_required: true;
+    mfa_token: string;
+}
+
+export type AdminLoginResult = AdminLoginResponse | AdminMfaRequired;
+
 export const loginAdmin = (phone: string, code: string) =>
     request<AuthResponse>("/api/auth/verify-otp", {
         method: "POST",
@@ -121,15 +213,49 @@ export const loginAdmin = (phone: string, code: string) =>
     });
 
 export const loginAdminSession = (email: string, password: string) =>
-    request<AdminLoginResponse>("/api/admin/auth/login", {
+    request<AdminLoginResult>("/api/admin/auth/login", {
         method: "POST",
         body: JSON.stringify({ email, password }),
+    });
+
+export const mfaChallenge = (mfa_token: string, totp_code: string) =>
+    request<AdminLoginResponse>("/api/admin/auth/mfa/challenge", {
+        method: "POST",
+        body: JSON.stringify({ mfa_token, totp_code }),
+    });
+
+export const mfaStatus = () =>
+    request<{ mfa_enabled: boolean }>("/api/admin/auth/mfa/status");
+
+export const mfaEnroll = () =>
+    request<{ secret: string; otpauth_uri: string }>("/api/admin/auth/mfa/enroll", { method: "POST" });
+
+export const mfaConfirm = (totp_code: string) =>
+    request<{ backup_codes: string[] }>("/api/admin/auth/mfa/confirm", {
+        method: "POST",
+        body: JSON.stringify({ totp_code }),
+    });
+
+export const mfaDisable = (totp_code: string, password: string) =>
+    request<{ success: boolean }>("/api/admin/auth/mfa/disable", {
+        method: "POST",
+        body: JSON.stringify({ totp_code, password }),
     });
 
 export const sendOtp = (phone: string) =>
     request<{ success: boolean }>("/api/auth/send-otp", {
         method: "POST",
         body: JSON.stringify({ phone }),
+    });
+
+// Admin "sign out everywhere" — closes B-P1-13. Bumps
+// admin_staff.token_version (kills all in-flight admin access tokens
+// on next request) and revokes every refresh token for this staff row.
+// Refused server-side for admin-001 (env-var super admin); rotate
+// ADMIN_PASSWORD to globally kill that account.
+export const logoutAllAdmin = () =>
+    request<{ success: boolean; revoked_refresh_tokens: number }>("/api/admin/auth/logout-all", {
+        method: "POST",
     });
 
 /* ── Dashboard ────────────────────────────── */

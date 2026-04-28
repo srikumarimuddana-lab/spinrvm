@@ -1,3 +1,20 @@
+// Expo SDK 54's runtime.native.ts installs lazy getters for multiple globals via
+// installGlobal.ts. Eagerly trigger them during setupFiles (isInsideTestCode=true)
+// so they cache as static values before test module loading begins.
+const _EXPO_WINTER_GLOBALS = [
+  '__ExpoImportMetaRegistry', 'structuredClone',
+  'TextDecoder', 'TextDecoderStream', 'TextEncoderStream',
+  'URL', 'URLSearchParams',
+];
+for (const _name of _EXPO_WINTER_GLOBALS) {
+  const _desc = Object.getOwnPropertyDescriptor(global, _name);
+  if (_desc && typeof _desc.get === 'function') {
+    try { void global[_name]; } catch (_e) {
+      Object.defineProperty(global, _name, { value: undefined, configurable: true, writable: true });
+    }
+  }
+}
+
 // Mock expo-secure-store
 jest.mock('expo-secure-store', () => ({
   getItemAsync: jest.fn(() => Promise.resolve(null)),

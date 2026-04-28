@@ -343,7 +343,8 @@ _BILLING_ROWS = [
         "ride_id": "r3",
         "member_id": "m2",
         "allowance_debit_amount": 0.0,
-        "master_fallback_amount": 40.0,
+        # m2 total = 45.0, m1 total = 40.0 → m2 sorts first (desc) unambiguously.
+        "master_fallback_amount": 45.0,
         "created_at": "2026-04-10T10:00:00",
     },
 ]
@@ -370,12 +371,14 @@ def test_billing_summary_aggregates_rows(test_client, rider_override):
     assert body["month"] == "2026-04"
     assert body["ride_count"] == 3
     assert body["allowance_total"] == 35.0
-    assert body["master_total"] == 45.0
-    assert body["total"] == 80.0
+    # master_total: 5.0 + 0.0 + 45.0 = 50.0
+    assert body["master_total"] == 50.0
+    # total: allowance + master = 35.0 + 50.0 = 85.0
+    assert body["total"] == 85.0
     assert body["wallet_balance"] == 120.0
-    # by_member sorted by total desc
+    # by_member sorted by total desc — m2 (45.0) beats m1 (40.0) unambiguously
     assert body["by_member"][0]["member_id"] == "m2"
-    assert body["by_member"][0]["total"] == 40.0
+    assert body["by_member"][0]["total"] == 45.0
     assert body["by_member"][1]["member_id"] == "m1"
     assert body["by_member"][1]["ride_count"] == 2
 
@@ -427,8 +430,9 @@ def test_billing_statement_returns_line_items(test_client, rider_override):
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert len(body["line_items"]) == 3
-    assert body["summary"]["total"] == 80.0
-    assert body["summary"]["avg_fare"] == round(80.0 / 3, 2)
+    # total: 35.0 (allowance) + 50.0 (master) = 85.0
+    assert body["summary"]["total"] == 85.0
+    assert body["summary"]["avg_fare"] == round(85.0 / 3, 2)
 
 
 def test_billing_statement_rejects_bad_month(test_client, rider_override):

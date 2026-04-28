@@ -29,7 +29,7 @@ function beforeSend(event: Sentry.ErrorEvent): Sentry.ErrorEvent | null {
     }
     event.request.headers = safe;
   }
-  if (event.request?.cookies) event.request.cookies = {};
+  if (event.request?.cookies) event.request.cookies = { _filtered: '[Filtered]' };
   if (event.request?.query_string) event.request.query_string = '[Filtered]';
   if (event.request?.url) {
     event.request.url = event.request.url.replace(/\/[a-f0-9-]{8,}/gi, '/[id]');
@@ -57,14 +57,25 @@ function beforeSend(event: Sentry.ErrorEvent): Sentry.ErrorEvent | null {
   return event;
 }
 
+// [22-2] PIPEDA data residency: Sentry has no Canadian region.
+// Use the EU-region DSN (created at sentry.io → Settings → Data Storage → EU)
+// as the closest compliant option until Sentry launches a CA region.
+// EU DSN host pattern: o<org>.ingest.de.sentry.io
 Sentry.init({
   dsn: process.env.SENTRY_DSN || process.env.NEXT_PUBLIC_SENTRY_DSN,
-  // Match client config: 100% sampling on this low-traffic admin surface.
+  // Admin is low-traffic — 100% sampling catches all perf regressions ([21-2]).
   tracesSampleRate: 1.0,
   environment: process.env.NODE_ENV ?? 'development',
   release: process.env.VERCEL_GIT_COMMIT_SHA || process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA,
   enabled: !!(process.env.SENTRY_DSN || process.env.NEXT_PUBLIC_SENTRY_DSN),
   beforeSend,
+  // Required tags per CLAUDE.md observability conventions ([21-4]).
+  initialScope: {
+    tags: {
+      surface: 'admin',
+      env: process.env.NODE_ENV ?? 'development',
+    },
+  },
 });
 
 Sentry.setTag('surface', 'admin');

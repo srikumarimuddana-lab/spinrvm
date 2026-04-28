@@ -143,17 +143,26 @@ class TestVerifyOtpLockoutHelpers:
             "_clear_otp_failures missing — verify_otp will NameError on success path"
         )
 
-    def test_check_lockout_swallows_redis_errors(self):
-        """If Redis is down, login must NOT be bricked — the check should
-        return silently rather than bubble the exception out of auth."""
+    def test_check_lockout_raises_503_on_redis_error(self):
+        """If Redis is down the endpoint must fail closed (503) rather than
+        letting unauthenticated requests through.
+
+        The current implementation is intentionally fail-closed:
+        if we cannot consult the lockout store we cannot guarantee the
+        brute-force limit is being enforced, so we return 503 to tell
+        the client to retry when the store is back up.
+        """
+        from fastapi import HTTPException
+
         from backend.routes import auth
 
         with patch(
             "backend.routes.auth.redis_get",
             AsyncMock(side_effect=RuntimeError("redis down")),
         ):
-            # Must NOT raise — login should still proceed if Redis is unavailable.
-            asyncio.run(auth._check_otp_lockout(PHONE))
+            with pytest.raises(HTTPException) as excinfo:
+                asyncio.run(auth._check_otp_lockout(PHONE))
+        assert excinfo.value.status_code == 503
 
     def test_check_lockout_raises_429_when_locked(self):
         from fastapi import HTTPException

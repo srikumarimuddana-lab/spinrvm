@@ -25,6 +25,8 @@ import pytest
 
 from backend.utils.stripe_charge import ChargeOutcome
 
+pytestmark = pytest.mark.anyio
+
 RIDER_ID = "rider_p0"
 DRIVER_USER_ID = "driver_user_p0"
 DRIVER_ID = "driver_row_p0"
@@ -72,7 +74,6 @@ def _driver_row() -> dict:
 
 
 @pytest.mark.e2e
-@pytest.mark.asyncio
 class TestDriverCancelNotifiesRider:
     """When a driver cancels after accepting, the rider's app must learn
     immediately via WebSocket + push — otherwise the rider is stuck on a
@@ -136,7 +137,7 @@ class TestDriverCancelNotifiesRider:
         that's a safety / fraud vector."""
         from backend.routes import drivers as drv_mod
 
-        in_progress = _ride(status="trip_in_progress", driver_id=DRIVER_ID)
+        in_progress = _ride(status="in_progress", driver_id=DRIVER_ID)
 
         with (
             patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[_driver_row()])),
@@ -160,7 +161,6 @@ class TestDriverCancelNotifiesRider:
 
 
 @pytest.mark.e2e
-@pytest.mark.asyncio
 class TestNoDriversAvailableTimeout:
     """After ~5 min of searching with no match, the backend auto-cancels
     the ride, WS-notifies the rider, and pushes a notification.
@@ -239,7 +239,6 @@ class TestNoDriversAvailableTimeout:
 
 
 @pytest.mark.e2e
-@pytest.mark.asyncio
 class TestDuplicateRideRequestGuardHandler:
     """Direct handler tests — bypass FastAPI middleware so we can pin the
     actual guard logic regardless of auth/rate-limit config."""
@@ -491,7 +490,6 @@ class TestSurgeBoundaryConsistency:
 
 
 @pytest.mark.e2e
-@pytest.mark.asyncio
 class TestCreateRideHonorsEstimateToken:
     """End-to-end proof that POST /rides uses the token's surge rather
     than re-reading service_area. This is the behaviour the P0-4 gap
@@ -602,7 +600,6 @@ class TestCreateRideHonorsEstimateToken:
 
 
 @pytest.mark.e2e
-@pytest.mark.asyncio
 class TestPaymentFailureAtComplete:
     """When Stripe declines the rider's card at trip completion, the system
     must leave the ride in a recoverable state (rider can re-try or swap
@@ -779,7 +776,6 @@ _BASE_KW = dict(
 # ── E3-1: Happy path — PaymentIntent.confirm succeeds ───────────────────────
 
 
-@pytest.mark.asyncio
 class TestE3HappyPath:
     async def test_confirm_called_instead_of_create(self):
         """When payment_intent_id is supplied, confirm() is called, not create()."""
@@ -821,7 +817,6 @@ class TestE3HappyPath:
 # ── E3-2: Card declined — confirm raises CardError → HTTP 402 ───────────────
 
 
-@pytest.mark.asyncio
 class TestE3CardDecline:
     async def test_card_decline_marks_payment_failed_and_allows_retry(self):
         """stripe.PaymentIntent.confirm raises CardError → declined outcome.
@@ -868,7 +863,6 @@ class TestE3CardDecline:
 # ── E3-3: Stripe unavailable — network / import failure → graceful fallback ─
 
 
-@pytest.mark.asyncio
 class TestE3StripeUnavailable:
     async def test_stripe_base_error_returns_failed(self):
         """Non-card Stripe error (connection, rate-limit) → failed, not 5xx crash."""
@@ -929,6 +923,7 @@ def _make_ride(payment_intent_id: str | None = None) -> dict:
     return {
         "id": "ride_http_1",
         "rider_id": "user_1",
+        "status": "completed",
         "payment_method": "card",
         "payment_method_id": "pm_http",
         "payment_intent_id": payment_intent_id,
@@ -964,7 +959,6 @@ def _app_with_mocked_auth(user_id: str = "user_1"):
     return TestClient(app)
 
 
-@pytest.mark.asyncio
 class TestProcessPaymentHTTP:
     """HTTP surface tests for process_payment — verifies that charge_ride
     outcomes map to the correct HTTP status codes."""
@@ -1001,12 +995,13 @@ class TestProcessPaymentHTTP:
         with (
             patch.object(rides_mod, "db_supabase") as mock_db,
             patch.object(rides_mod, "charge_ride", AsyncMock(return_value=outcome)),
-            patch.object(rides_mod, "db") as _mock_legacy_db,
         ):
             mock_db.get_ride = AsyncMock(return_value=ride)
-            mock_db.get_user_by_id = AsyncMock(return_value={"stripe_customer_id": "cus_1"})
+            mock_db.get_user_by_id = AsyncMock(
+                return_value={"stripe_customer_id": "cus_1", "default_payment_method": "pm_1"}
+            )
             mock_db.update_ride = AsyncMock()
-            _mock_legacy_db.update_one = AsyncMock(return_value=MagicMock(modified_count=1))
+            mock_db.update_one = AsyncMock(return_value={"id": "ride_http_1"})
 
             client = _app_with_mocked_auth()
             resp = client.post("/rides/ride_http_1/process-payment", json={"tip_amount": "0"})
@@ -1027,12 +1022,13 @@ class TestProcessPaymentHTTP:
         with (
             patch.object(rides_mod, "db_supabase") as mock_db,
             patch.object(rides_mod, "charge_ride", AsyncMock(return_value=outcome)),
-            patch.object(rides_mod, "db") as _mock_legacy_db,
         ):
             mock_db.get_ride = AsyncMock(return_value=ride)
-            mock_db.get_user_by_id = AsyncMock(return_value={"stripe_customer_id": "cus_1"})
+            mock_db.get_user_by_id = AsyncMock(
+                return_value={"stripe_customer_id": "cus_1", "default_payment_method": "pm_1"}
+            )
             mock_db.update_ride = AsyncMock()
-            _mock_legacy_db.update_one = AsyncMock(return_value=MagicMock(modified_count=1))
+            mock_db.update_one = AsyncMock(return_value={"id": "ride_http_1"})
 
             client = _app_with_mocked_auth()
             resp = client.post("/rides/ride_http_1/process-payment", json={"tip_amount": "0"})
@@ -1042,8 +1038,8 @@ class TestProcessPaymentHTTP:
         assert detail.get("code") == "card_declined"
         assert detail.get("decline_code") == "insufficient_funds"
 
-    async def test_stripe_failed_returns_502(self):
-        """charge_ride returns failed (ops error) → process_payment returns 502."""
+    async def test_stripe_failed_returns_402(self):
+        """charge_ride returns failed (ops error) → process_payment returns 402 payment_error."""
         rides_mod = self._load_rides_module()
         ride = _make_ride()
         outcome = ChargeOutcome(
@@ -1054,16 +1050,17 @@ class TestProcessPaymentHTTP:
         with (
             patch.object(rides_mod, "db_supabase") as mock_db,
             patch.object(rides_mod, "charge_ride", AsyncMock(return_value=outcome)),
-            patch.object(rides_mod, "db") as _mock_legacy_db,
         ):
             mock_db.get_ride = AsyncMock(return_value=ride)
-            mock_db.get_user_by_id = AsyncMock(return_value={"stripe_customer_id": "cus_1"})
+            mock_db.get_user_by_id = AsyncMock(
+                return_value={"stripe_customer_id": "cus_1", "default_payment_method": "pm_1"}
+            )
             mock_db.update_ride = AsyncMock()
-            _mock_legacy_db.update_one = AsyncMock(return_value=MagicMock(modified_count=1))
+            mock_db.update_one = AsyncMock(return_value={"id": "ride_http_1"})
 
             client = _app_with_mocked_auth()
             resp = client.post("/rides/ride_http_1/process-payment", json={"tip_amount": "0"})
 
-        assert resp.status_code == 502
+        assert resp.status_code == 402
         detail = resp.json().get("detail", {})
-        assert detail.get("code") == "payment_processor_error"
+        assert detail.get("code") == "payment_error"

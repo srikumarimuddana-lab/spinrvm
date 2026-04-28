@@ -1,6 +1,6 @@
 module.exports = {
   preset: 'jest-expo',
-  setupFiles: ['<rootDir>/__mocks__/expo-jest-setup.js'],
+  setupFiles: ['./jest-setup-expo.js'],
   setupFilesAfterEnv: ['@testing-library/jest-native/extend-expect'],
   testPathIgnorePatterns: [
     '/node_modules/',
@@ -11,6 +11,11 @@ module.exports = {
   ],
   modulePaths: ['<rootDir>/node_modules'],
   moduleNameMapper: {
+    // Expo SDK 54 winter (WinterCG) runtime executes require('./ImportMetaRegistry')
+    // lazily via installGlobal — that require fails inside Jest's sandbox.
+    // Mock the index so jest-expo's setup.js gets a no-op instead of the real runtime.
+    '^expo/src/winter$': '<rootDir>/__mocks__/expo-winter-runtime.js',
+    '^expo/src/winter/ImportMetaRegistry$': '<rootDir>/__mocks__/expo-winter-runtime.js',
     '^@shared/(.*)$': '<rootDir>/../shared/$1',
     // Jest 30 + Expo SDK 54: the winter runtime installs global getters for
     // import.meta polyfills. The lazy require() inside those getters is called

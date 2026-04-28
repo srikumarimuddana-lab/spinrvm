@@ -69,6 +69,7 @@
   "devDependencies": {
     "@babel/core": "^7.25.2",
     "@playwright/test": "^1.48.0",
+    "@react-native/jest-preset": "0.85.2",
     "@testing-library/jest-native": "^5.4.3",
     "@testing-library/react-native": "^13.3.3",
     "@types/jest": "^30.0.0",
@@ -78,7 +79,7 @@
     "eslint": "^8.57.0",
     "eslint-config-expo": "~10.0.0",
     "jest": "^30.3.0",
-    "jest-expo": "~55.0.16",
+    "jest-expo": "~54.0.0",
     "patch-package": "^8.0.1",
     "react-test-renderer": "19.1.0",
     "typescript": "~5.9.2"

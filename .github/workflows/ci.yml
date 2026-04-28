@@ -42,7 +42,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('backend/requirements.txt') }}
+          key: ${{ runner.os }}-pip-${{ hashFiles('backend/requirements-locked.txt') }}
           restore-keys: |
             ${{ runner.os }}-pip-
 
@@ -50,13 +50,18 @@ jobs:
         working-directory: backend
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pytest-cov pytest-asyncio pytest-mock
+          # B-P1-10: install from the SHA-256 hash-pinned lockfile that ships
+          # to production. --require-hashes makes pip refuse any wheel whose
+          # digest doesn't match, blocking compromised mirrors / typosquats.
+          # pytest-mock is now declared in requirements.in and therefore present
+          # in requirements-locked.txt with a verified SHA-256 hash — no
+          # separate bare `pip install pytest-mock` needed.
+          pip install --require-hashes -r requirements-locked.txt
 
       - name: Python dependency CVE scan
         run: |
           pip install pip-audit
-          pip-audit -r backend/requirements.txt --fail-on-vuln
+          pip-audit -r backend/requirements-locked.txt --fail-on-vuln
 
       - name: Install ruff
         run: pip install ruff
@@ -251,15 +256,18 @@ jobs:
 
       - name: Build admin dashboard
         working-directory: admin-dashboard
+        env:
+          BACKEND_URL: https://api.spinr.ca
+          NEXT_PUBLIC_API_URL: https://api.spinr.ca
         run: npm run build
 
-  # E2E Tests — non-blocking on PRs, blocking on main merges.
-  # Findings during PR phase are uploaded as artifacts for review.
+  # E2E Tests — blocking on main, non-blocking on PRs while the suite stabilises ([17-1])
   e2e-test:
     name: E2E tests (Playwright)
     runs-on: ubuntu-latest
     needs: [backend-test]
-    continue-on-error: ${{ github.ref != 'refs/heads/main' }}
+    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
+    continue-on-error: ${{ github.event_name == 'pull_request' }}
     defaults:
       run:
         working-directory: admin-dashboard
@@ -309,22 +317,26 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Deploy to Render
-        env:
-          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
-          RENDER_SERVICE_ID: ${{ secrets.RENDER_BACKEND_SERVICE_ID }}
-        run: |
-          curl -X POST \
-            "https://api.render.com/v1/services/${{ secrets.RENDER_BACKEND_SERVICE_ID }}/deploys" \
-            -H "Authorization: Bearer ${{ secrets.RENDER_API_KEY }}"
-
-      - name: Deploy to Railway (fallback)
-        if: failure()
+      # Railway is the primary backend host (CLAUDE.md). --fail-with-body
+      # ensures a non-zero exit on HTTP 4xx/5xx so the Render fallback
+      # step actually triggers on API errors (previously curl exited 0
+      # on any HTTP response, silently skipping Render).
+      - name: Deploy to Railway (primary)
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           npm i -g @railway/cli@4.40.2
           railway up --service spinr-backend
+
+      - name: Deploy to Render (fallback)
+        if: failure()
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SERVICE_ID: ${{ secrets.RENDER_BACKEND_SERVICE_ID }}
+        run: |
+          curl --fail-with-body -X POST \
+            "https://api.render.com/v1/services/${{ secrets.RENDER_BACKEND_SERVICE_ID }}/deploys" \
+            -H "Authorization: Bearer ${{ secrets.RENDER_API_KEY }}"
 
   # Deploy Frontend
   deploy-frontend:
@@ -379,6 +391,15 @@ jobs:
       - name: Build for production
         working-directory: admin-dashboard
         run: npm run build
+
+      - name: Scan build output for accidentally bundled secrets ([17-5])
+        working-directory: admin-dashboard
+        run: |
+          GITLEAKS_VERSION=8.27.2
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz gitleaks
+          ./gitleaks detect --source .next --no-git --redact --exit-code 1
+          rm gitleaks
 
       - name: Deploy to Vercel
         uses: amondnet/vercel-action@v25
@@ -541,30 +562,61 @@ jobs:
     runs-on: ubuntu-latest
     needs: [deploy-backend]
     if: github.ref == 'refs/heads/main'
+    env:
+      BASE: ${{ secrets.RAILWAY_PUBLIC_URL }}
+      FALLBACK: https://spinr-api.onrender.com
     steps:
-      - name: Health check
-        env:
-          API_BASE_URL: ${{ secrets.RAILWAY_PUBLIC_URL }}
-          API_FALLBACK_URL: https://spinr-api.onrender.com
+      - name: Resolve live base URL
+        id: resolve
         run: |
-          curl -f --retry 3 --retry-delay 5 "$API_BASE_URL/health" || \
-            curl -f --retry 3 --retry-delay 5 "$API_FALLBACK_URL/health"
+          # Use Railway (primary); fall back to Render if unreachable.
+          if curl -sf --retry 2 --retry-delay 3 "$BASE/health" > /dev/null; then
+            echo "url=$BASE" >> "$GITHUB_OUTPUT"
+          else
+            echo "url=$FALLBACK" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Settings endpoint
-        env:
-          API_BASE_URL: ${{ secrets.RAILWAY_PUBLIC_URL }}
-          API_FALLBACK_URL: https://spinr-api.onrender.com
+      - name: Health check — confirm 200 + non-empty body
         run: |
-          curl -f "$API_BASE_URL/api/v1/settings" || \
-            curl -f "$API_FALLBACK_URL/api/v1/settings"
+          BODY=$(curl -sf --retry 3 --retry-delay 5 "${{ steps.resolve.outputs.url }}/health")
+          echo "$BODY"
+          echo "$BODY" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('status') in ('ok','healthy'), f'bad status: {d}'"
 
-      - name: Vehicle types endpoint
-        env:
-          API_BASE_URL: ${{ secrets.RAILWAY_PUBLIC_URL }}
-          API_FALLBACK_URL: https://spinr-api.onrender.com
+      - name: Settings endpoint — confirm 200 + JSON
         run: |
-          curl -f "$API_BASE_URL/api/v1/vehicle-types" || \
-            curl -f "$API_FALLBACK_URL/api/v1/vehicle-types"
+          curl -sf "${{ steps.resolve.outputs.url }}/api/v1/settings" | \
+            python3 -c "import json,sys; json.load(sys.stdin)"
+
+      - name: Vehicle types endpoint — confirm 200 + non-empty list
+        run: |
+          BODY=$(curl -sf "${{ steps.resolve.outputs.url }}/api/v1/vehicle-types")
+          echo "$BODY"
+          echo "$BODY" | python3 -c "import json,sys; d=json.load(sys.stdin); assert len(d) > 0, 'vehicle-types list is empty'"
+
+      - name: Auth middleware — confirm 401 not 500 on protected endpoint
+        # Verifies the auth middleware is wired: unauthenticated access to a
+        # protected route must return 401, not 500 (misconfigured JWT secret
+        # or missing middleware would return 500).
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            "${{ steps.resolve.outputs.url }}/api/v1/rides")
+          echo "GET /api/v1/rides → HTTP $STATUS"
+          [ "$STATUS" = "401" ] || [ "$STATUS" = "403" ] || {
+            echo "FAIL: expected 401/403, got $STATUS — auth middleware may be misconfigured"
+            exit 1
+          }
+
+      - name: Fare service — confirm 401 not 500 on fare estimate
+        # Verifies the fare service is mounted and responding (not crashed):
+        # unauthenticated request must return 401, not 500 or 404.
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            "${{ steps.resolve.outputs.url }}/api/v1/fares/estimate")
+          echo "GET /api/v1/fares/estimate → HTTP $STATUS"
+          [ "$STATUS" = "401" ] || [ "$STATUS" = "403" ] || [ "$STATUS" = "422" ] || {
+            echo "FAIL: expected 401/403/422, got $STATUS — fare service may be down or unregistered"
+            exit 1
+          }
 
   # Notify on failure
   notify-failure:
@@ -574,8 +626,17 @@ jobs:
 
     steps:
       - name: Send Slack notification
+        # continue-on-error so a missing/invalid SLACK_WEBHOOK secret does not
+        # itself count as a CI failure and obscure the real upstream failures.
+        continue-on-error: true
         uses: 8398a7/action-slack@v3
         with:
           status: failure
           webhook_url: ${{ secrets.SLACK_WEBHOOK }}
           text: 'CI/CD Pipeline Failed'
+
+      - name: Summarise failed jobs (fallback when Slack is unconfigured)
+        if: always()
+        run: |
+          echo "::warning::One or more CI jobs failed. Configure SLACK_WEBHOOK in repo secrets for Slack alerts."
+          echo "Failed needs: backend-test, frontend-test, rider-app-test, driver-app-test, or admin-test"

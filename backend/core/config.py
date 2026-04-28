@@ -1,6 +1,7 @@
 import os
 from typing import Optional
 
+import bcrypt
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -51,9 +52,8 @@ class Settings(BaseSettings):
     # Admin credentials — no defaults; app refuses to start if unset in production
     ADMIN_EMAIL: str = "admin@spinr.ca"
     ADMIN_PASSWORD: str
-    # A-P3-1: bcrypt hash computed once at startup; plaintext never compared directly.
-    # Set by _guard_production_secrets() via object.__setattr__ so pydantic model
-    # immutability is not violated. Empty string when ADMIN_PASSWORD is absent.
+    # Bcrypt hash of ADMIN_PASSWORD — computed once at startup so the plaintext
+    # is never compared directly in hot-path code (A-P3-1).
     admin_password_hash: str = ""
 
     # Rate limiting
@@ -87,12 +87,27 @@ class Settings(BaseSettings):
     sentry_dsn: Optional[str] = None
 
     @model_validator(mode="after")
-    def _guard_production_secrets(self) -> "Settings":
-        """Refuse to start in production with known-weak or insufficient secrets.
-        Also hashes ADMIN_PASSWORD with bcrypt once so auth.py never compares plaintext.
-        """
-        import bcrypt as _bcrypt  # local import keeps top-level clean for linters
+    def _hash_admin_password(self) -> "Settings":
+        """Hash ADMIN_PASSWORD with bcrypt at startup (A-P3-1).
 
+        The plaintext env var is read once here and the hash is stored in
+        `admin_password_hash`. All login code compares against the hash so
+        a leaked Settings object never exposes the plaintext.
+        """
+        if self.ADMIN_PASSWORD and not self.admin_password_hash:
+            self.admin_password_hash = bcrypt.hashpw(self.ADMIN_PASSWORD.encode(), bcrypt.gensalt(rounds=12)).decode()
+        return self
+
+    @model_validator(mode="after")
+    def _guard_production_secrets(self) -> "Settings":
+        """Refuse to start in production with weak placeholder values, short
+        secrets, or missing Firebase audience identifiers.
+
+        - JWT_SECRET: ≥32 chars (B-P1-2 / CLAUDE.md). HS256 with a short shared
+          secret is brute-forceable in seconds on a modern GPU.
+        - FIREBASE_DRIVER_APP_ID / FIREBASE_RIDER_APP_ID: required so the manual
+          audience check (B-P1-1 / DV-10) cannot be silently skipped.
+        """
         if self.ENV.lower() == "production":
             weak = {
                 "JWT_SECRET": ("your-strong-secret-key",),
@@ -107,22 +122,31 @@ class Settings(BaseSettings):
                     )
                     raise ValueError(msg)
 
-            # B-P1-2: HS256 is brute-forceable against short secrets.
-            if len(self.JWT_SECRET) < 32:
-                raise ValueError(f"JWT_SECRET must be ≥32 chars in production (got {len(self.JWT_SECRET)})")
+            jwt_secret = self.JWT_SECRET or ""
+            if len(jwt_secret) < 32:
+                raise ValueError(
+                    f"JWT_SECRET must be at least 32 characters in production "
+                    f"(got {len(jwt_secret)}). HS256 with a short shared secret "
+                    "is brute-forceable. Generate one with: "
+                    "python -c 'import secrets; print(secrets.token_urlsafe(48))'"
+                )
 
-            # B-P1-1: Firebase app IDs must be set so cross-app token replay is impossible.
-            if not self.FIREBASE_DRIVER_APP_ID:
-                raise ValueError("FIREBASE_DRIVER_APP_ID must be set in production")
-            if not self.FIREBASE_RIDER_APP_ID:
-                raise ValueError("FIREBASE_RIDER_APP_ID must be set in production")
+            for field in ("FIREBASE_DRIVER_APP_ID", "FIREBASE_RIDER_APP_ID"):
+                if not getattr(self, field, ""):
+                    raise ValueError(
+                        f"{field} must be set in production. The Firebase ID-token "
+                        "audience check is gated on this value; an unset env var "
+                        "would silently allow cross-app token reuse (DV-10)."
+                    )
 
-        # A-P3-1: hash ADMIN_PASSWORD with bcrypt cost=12 so auth.py can use
-        # checkpw() instead of a plaintext compare. Runs once at startup.
-        if self.ADMIN_PASSWORD:
-            _hash = _bcrypt.hashpw(self.ADMIN_PASSWORD.encode("utf-8"), _bcrypt.gensalt(rounds=12))
-            object.__setattr__(self, "admin_password_hash", _hash.decode("utf-8"))
-
+            for field in ("SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"):
+                if not getattr(self, field, ""):
+                    raise ValueError(
+                        f"{field} must be set in production. An empty value causes "
+                        "the Supabase client to initialise successfully but fail on "
+                        "every database call, producing a misleading 500 at runtime "
+                        "rather than a clean startup error."
+                    )
         return self
 
     @property

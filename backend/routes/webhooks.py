@@ -14,25 +14,19 @@ import logging
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
+api_router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
-# Event types we explicitly handle. Any type outside this set is rejected
-# with 400 and NOT marked processed — so it stays in the stripe_events table
-# for reconciliation and Stripe keeps it in the retry queue. Add new event
-# types here deliberately after writing the handler, not before.
-ALLOWED_STRIPE_EVENTS: frozenset[str] = frozenset(
+# B-P2-2: Explicit allowlist of Stripe event types we process. Any event type
+# NOT in this set is logged and acknowledged (200) without processing.
+# Return 200 (not 400) for unknown events — 400 causes Stripe to retry for
+# 3 days and creates noise; we want Stripe to stop re-sending them.
+_STRIPE_HANDLED_EVENTS = frozenset(
     {
         "payment_intent.succeeded",
         "payment_intent.payment_failed",
         "checkout.session.completed",
     }
 )
-
-# IMPORTANT: This router does NOT have a /api/ prefix in the original server.py
-# In server.py: app.post("/webhooks/stripe")
-# So we should probably mount it at root or handle it carefully.
-# However, for consistency with other modules, let's define the router here.
-# The user will need to mount it appropriately in server.py.
-api_router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
 
 @api_router.post("/stripe")
@@ -232,6 +226,26 @@ async def stripe_webhook(request: Request):
                 f"[WEBHOOK] checkout.session.completed but payment not yet paid: "
                 f"status={data_object.get('payment_status')} subscription={subscription_id}"
             )
+
+    else:
+        if event_type in _STRIPE_HANDLED_EVENTS:
+            logger.error(
+                "[WEBHOOK] Event type %r matched allowlist but fell through dispatch — "
+                "handler logic gap; check for missing elif branch",
+                event_type,
+                extra={"domain": "payments", "event_id": event_id},
+            )
+        else:
+            logger.warning(
+                "[WEBHOOK] Unhandled Stripe event type %r — not in _STRIPE_HANDLED_EVENTS. "
+                "Update Stripe dashboard to send only subscribed events.",
+                event_type,
+                extra={"domain": "payments", "event_id": event_id},
+            )
+        # Leave processed_at NULL for unknown/unhandled events so the nightly
+        # reconciliation job can replay them if they later become actionable.
+        # Return 200 to Stripe so it does not retry indefinitely.
+        return {"received": True, "unhandled": True, "event_id": event_id}
 
     # Success — stamp processed_at. Non-fatal if this fails (we've
     # already finished the side effects, and Stripe won't retry a 2xx).

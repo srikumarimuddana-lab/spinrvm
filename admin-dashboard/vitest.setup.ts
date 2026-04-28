@@ -16,8 +16,14 @@ const localStorageMock = (() => {
 
 Object.defineProperty(window, 'localStorage', { value: localStorageMock });
 
-// Mock fetch globally
-global.fetch = vi.fn();
+// Mock fetch globally — return a resolved Promise by default so callers that
+// chain .catch() (e.g. setAuthCookie, clearAuthCookie) don't throw a synchronous
+// TypeError when no per-test mockResolvedValueOnce is set.
+global.fetch = vi.fn().mockResolvedValue({
+  ok: false,
+  status: 0,
+  json: () => Promise.resolve({}),
+});
 
 // Mock URL.createObjectURL
 global.URL.createObjectURL = vi.fn(() => 'blob:mock-url');

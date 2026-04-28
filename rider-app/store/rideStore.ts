@@ -499,13 +499,27 @@ export const useRideStore = create<RideState>((set, get) => ({
   },
 
   triggerEmergency: async (rideId: string, latitude?: number, longitude?: number) => {
-    // Single-shot attempt — SOSButton owns retry logic and failure UX.
-    // Rethrowing lets SOSButton detect backendOk=false and show "Alert Not Sent".
-    await api.post(`/rides/${rideId}/emergency`, {
+    const payload = {
       message: 'Emergency assistance requested via app button',
       latitude,
       longitude,
-    });
+    };
+    const MAX_ATTEMPTS = 3;
+    let lastError: any;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        await api.post(`/rides/${rideId}/emergency`, payload);
+        return; // success
+      } catch (error: any) {
+        lastError = error;
+        if (attempt < MAX_ATTEMPTS) {
+          await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+        }
+      }
+    }
+    // All attempts failed — rethrow so SOSButton can set backendOk=false and
+    // show its own "Alert Not Sent" UI with the 911 prompt.
+    throw lastError;
   },
 
   fetchSavedAddresses: async () => {

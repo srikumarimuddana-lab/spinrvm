@@ -840,6 +840,9 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
             { text: 'Later', style: 'cancel' },
           ]
         );
+      } else if (data?.type) {
+        console.warn('[Push] Unknown notification type — navigating to notifications list:', data.type);
+        router.push('/driver/notifications' as any);
       }
     });
 

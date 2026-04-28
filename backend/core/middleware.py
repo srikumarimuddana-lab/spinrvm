@@ -105,9 +105,7 @@ class FirebaseAppCheckMiddleware(BaseHTTPMiddleware):
                     status_code=401,
                     content={"detail": "Invalid App Check token"},
                 )
-            logger.debug(
-                "App Check: token verification failed (enforcement disabled) req_id={}: {}", request_id, exc
-            )
+            logger.debug("App Check: token verification failed (enforcement disabled) req_id={}: {}", request_id, exc)
 
         return await call_next(request)
 

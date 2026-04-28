@@ -16,6 +16,7 @@ when uses has already reached max_uses.  These tests verify:
 Run:
     pytest backend/tests/test_p3_promo_concurrency.py -v
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -92,7 +93,6 @@ def _make_atomic_counter(capacity: int) -> MagicMock:
 
 
 class TestIncrementPromoUsesHelper:
-
     @pytest.mark.anyio
     async def test_returns_true_when_capacity_remains(self):
         """RPC data=True → helper returns True."""
@@ -157,9 +157,7 @@ class TestIncrementPromoUsesHelper:
         mock.rpc.return_value.execute.return_value = res
 
         with patch.object(dbs, "supabase", mock):
-            results = await asyncio.gather(
-                *[dbs.increment_promo_uses(PROMO_ID, max_uses=0) for _ in range(5)]
-            )
+            results = await asyncio.gather(*[dbs.increment_promo_uses(PROMO_ID, max_uses=0) for _ in range(5)])
 
         assert all(r is True for r in results)
 
@@ -168,15 +166,18 @@ class TestIncrementPromoUsesHelper:
 
 
 class TestPromoApplyRouteRaceHandling:
-
     @pytest.fixture
     def client(self):
-        import dependencies
-        from backend.server import app
         from fastapi.testclient import TestClient
 
+        import dependencies
+        from backend.server import app
+
         app.dependency_overrides[dependencies.get_current_user] = lambda: {
-            "id": USER_ID, "phone": "+11234567890", "role": "rider", "is_driver": False
+            "id": USER_ID,
+            "phone": "+11234567890",
+            "role": "rider",
+            "is_driver": False,
         }
         with TestClient(app) as c:
             yield c

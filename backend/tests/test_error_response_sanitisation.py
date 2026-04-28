@@ -61,12 +61,13 @@ class TestShouldSanitize5xxDetail:
         Stripe charge IDs, Supabase constraint names, JWT errors."""
         from utils.error_handling import _should_sanitize_5xx_detail
 
-        assert _should_sanitize_5xx_detail(
-            "Payment failed: Error 1002: Charge ch_1234567890abcdef declined"
-        ) is True
-        assert _should_sanitize_5xx_detail(
-            'Failed to create corporate account: duplicate key value violates unique constraint "corporate_accounts_legal_name_key"'
-        ) is True
+        assert _should_sanitize_5xx_detail("Payment failed: Error 1002: Charge ch_1234567890abcdef declined") is True
+        assert (
+            _should_sanitize_5xx_detail(
+                'Failed to create corporate account: duplicate key value violates unique constraint "corporate_accounts_legal_name_key"'
+            )
+            is True
+        )
         assert _should_sanitize_5xx_detail("Invalid token: kid not found") is True
 
     def test_sanitises_non_string_detail(self):

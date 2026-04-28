@@ -88,17 +88,29 @@ None currently open in production (pre-launch).
 
 **Sprint goal:** Close the top P1 backend safety and data-integrity gaps from the driver-app verification pass (2026-04-23): suspended-driver dispatch gap, document-expiry `$set` anti-pattern, and open items from `OPEN-ITEMS-TRACKER.md` section A/B.
 
-**Status (2026-04-28):** B-S2-1/2 shipped (#140). B-S2-3/4 shipped (#141). B-S2-5 shipped (#159).
+**Status (2026-04-28):** COMPLETE. All 5 B-S2 tickets shipped. Post-sprint hardening ongoing (audit_logger schema fix, migration 57, DV-9, F-section ops gaps).
 
 ## In-flight
 
-| Ticket | Owner | State | Notes |
-|---|---|---|---|
-| B-S2-1 | — | shipped (#140) | **DV-1 / P0-5**: Migration 55 — `status != 'suspended'` filter added to `find_nearby_drivers`. |
-| B-S2-2 | — | shipped (#140) | **DV-2 / P0-5**: `document_expiry.py` — `{"$set": ...}` wrapper removed from both `update_one` calls. |
-| B-S2-3 | — | shipped (#141) | **DV-17 / PIPEDA**: `users.py` both deletion endpoints now write `audit_logs` row on DSAR request/execution. |
-| B-S2-4 | — | shipped (#141) | **DV-8 / PIPEDA**: Migration 56 — `purge_pii_retention()` Step G anonymizes `pending_deletion` users after 30-day grace period. |
-| B-S2-5 | — | shipped (#159) | **DV-5 / CASL**: `notificationQueries.ts` + `settings.tsx` — onError rollback + feedbackAlert on preference PUT failure; toggle no longer silently sticks in wrong state. |
+_None._
+
+## Recently shipped (Sprint 2)
+
+| PR | Ticket | What |
+|---|---|---|
+| #140 | B-S2-1 | **DV-1**: Migration 55 — `status != 'suspended'` filter added to `find_nearby_drivers`. |
+| #140 | B-S2-2 | **DV-2**: `document_expiry.py` — `{"$set": ...}` wrapper removed from both `update_one` calls. |
+| #141 | B-S2-3 | **DV-17 / PIPEDA**: `users.py` both deletion endpoints now write `audit_logs` row on DSAR request/execution. |
+| #141 | B-S2-4 | **DV-8 / PIPEDA**: Migration 56 — `purge_pii_retention()` Step G anonymizes `pending_deletion` users after 30-day grace period. |
+| #159 | B-S2-5 | **DV-5 / CASL**: `notificationQueries.ts` + `settings.tsx` — onError rollback + feedbackAlert on preference PUT failure. |
+
+## Recently shipped (post-sprint hardening)
+
+| Commit / PR | What |
+|---|---|
+| `c5abb75` | **Critical regression fix**: `audit_logger.py` + migration 57 — `audit_logs` INSERT used non-existent columns `actor_id/actor_role/resource`; every admin audit write was a silent no-op; daily retention tick was rolling back. Fixed: `entity_type`/`entity_id` mapping; migration 57 uses `CREATE OR REPLACE` to repair `purge_pii_retention()`. |
+| `180bfd4` | **DV-9**: `driver-app/_layout.tsx` — `addNotificationResponseReceivedListener` added; push-notification taps now route to `/driver/` (ride offer) or `/driver/notifications` (all other types) instead of silent no-op. |
+| `99f7810` | **F-section**: `backend/utils/stripe_reconcile.py` — daily 02:00 UTC Stripe ↔ DB reconciliation cron; detects `DB_PAID_STRIPE_MISSING`, `DB_PAID_STRIPE_MISMATCH`, `DB_PAID_AMOUNT_MISMATCH`, `STRIPE_ORPHAN`; logs at ERROR (→ Sentry) + writes to `audit_logs`. |
 
 ## Deferred (non-code or future sprint)
 

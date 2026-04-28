@@ -16,6 +16,7 @@ impossible at the DB level. These tests verify the Python layer:
 Run:
     pytest backend/tests/test_p3_wallet_concurrency.py -v
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -73,7 +74,6 @@ def _mock_supabase_rpc_once_then_fail(success_data: str, failure_msg: str) -> Ma
 
 
 class TestWalletPayForRideHelper:
-
     @pytest.mark.anyio
     async def test_insufficient_funds_raises_value_error(self):
         """RPC exception containing 'insufficient_funds' → ValueError."""
@@ -167,12 +167,16 @@ class TestWalletPayRouteRaceHandling:
 
     @pytest.fixture
     def client(self):
-        import dependencies
-        from backend.server import app
         from fastapi.testclient import TestClient
 
+        import dependencies
+        from backend.server import app
+
         app.dependency_overrides[dependencies.get_current_user] = lambda: {
-            "id": USER_ID, "phone": "+11234567890", "role": "rider", "is_driver": False
+            "id": USER_ID,
+            "phone": "+11234567890",
+            "role": "rider",
+            "is_driver": False,
         }
         with TestClient(app) as c:
             yield c
@@ -241,7 +245,6 @@ class TestWalletPayRouteRaceHandling:
 
 
 class TestFareSplitPayShareHelper:
-
     @pytest.mark.anyio
     async def test_insufficient_funds_raises_value_error(self):
         """RPC exception containing 'insufficient_funds' → ValueError."""

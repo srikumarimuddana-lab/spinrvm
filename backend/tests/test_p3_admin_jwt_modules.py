@@ -17,6 +17,7 @@ claim lifecycle:
 Run:
     pytest backend/tests/test_p3_admin_jwt_modules.py -v
 """
+
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -60,7 +61,6 @@ def _decode(token: str) -> dict:
 
 
 class TestMintAdminAccessToken:
-
     def test_token_contains_required_claims(self):
         token = _mint(role="admin", modules=["dashboard", "drivers"])
         payload = _decode(token)
@@ -105,10 +105,24 @@ class TestMintAdminAccessToken:
 
     def test_super_admin_can_have_all_modules(self):
         all_modules = [
-            "dashboard", "users", "drivers", "rides", "earnings",
-            "promotions", "surge", "service_areas", "vehicle_types",
-            "pricing", "support", "disputes", "notifications", "settings",
-            "corporate_accounts", "documents", "heatmap", "staff",
+            "dashboard",
+            "users",
+            "drivers",
+            "rides",
+            "earnings",
+            "promotions",
+            "surge",
+            "service_areas",
+            "vehicle_types",
+            "pricing",
+            "support",
+            "disputes",
+            "notifications",
+            "settings",
+            "corporate_accounts",
+            "documents",
+            "heatmap",
+            "staff",
         ]
         token = _mint(role="super_admin", modules=all_modules)
         payload = _decode(token)
@@ -124,8 +138,9 @@ class TestGetCurrentUserAdminJWT:
     @pytest.mark.anyio
     async def test_admin_jwt_returns_modules_without_db_lookup(self):
         """admin-001 (env-seeded super admin) has no DB row — claims are trusted directly."""
-        from dependencies import get_current_user
         from fastapi.security import HTTPAuthorizationCredentials
+
+        from dependencies import get_current_user
 
         modules = ["dashboard", "promotions"]
         # admin-001 is the one user_id that bypasses the admin_staff DB lookup
@@ -140,8 +155,9 @@ class TestGetCurrentUserAdminJWT:
 
     @pytest.mark.anyio
     async def test_operations_role_passes_through(self):
-        from dependencies import get_current_user
         from fastapi.security import HTTPAuthorizationCredentials
+
+        from dependencies import get_current_user
 
         # Use admin-001 to bypass the admin_staff DB lookup — this test
         # verifies JWT claim parsing for operations role, not DB validation.
@@ -158,10 +174,11 @@ class TestGetCurrentUserAdminJWT:
         should not treat it as an admin token."""
         from unittest.mock import AsyncMock, patch
 
+        from fastapi.security import HTTPAuthorizationCredentials
+
         import db_supabase as dbs
         from core.config import settings
         from dependencies import get_current_user
-        from fastapi.security import HTTPAuthorizationCredentials
 
         now = datetime.now(timezone.utc)
         rider_token = jwt.encode(
@@ -196,7 +213,6 @@ class TestGetCurrentUserAdminJWT:
 
 
 class TestGetAdminUserRoleGating:
-
     @pytest.mark.anyio
     @pytest.mark.parametrize("role", ["admin", "super_admin", "operations", "support", "finance", "custom"])
     async def test_valid_admin_roles_pass(self, role):
@@ -223,7 +239,6 @@ class TestGetAdminUserRoleGating:
 
 
 class TestTokenVersionRevocation:
-
     def test_matching_version_is_not_stale(self):
         from dependencies import _token_version_mismatch
 
@@ -268,8 +283,9 @@ class TestAdminSessionEndpoint:
 
     @pytest.fixture
     def client(self):
-        from backend.server import app
         from fastapi.testclient import TestClient
+
+        from backend.server import app
 
         with TestClient(app) as c:
             yield c

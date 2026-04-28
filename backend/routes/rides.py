@@ -1171,6 +1171,7 @@ async def get_ride_history(
         "rides",
         {
             "rider_id": current_user["id"],
+            "status": {"$in": ["completed", "cancelled"]},
         },
         limit=2000,
     )

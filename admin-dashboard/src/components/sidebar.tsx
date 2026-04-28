@@ -5,7 +5,7 @@ import { useRouter, usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
     LayoutDashboard, Car, Users, DollarSign, Settings, MapPin, Ticket,
-    Flame, Building2, LifeBuoy,
+    Flame, Building2, LifeBuoy, HelpCircle,
     LogOut, Menu, X, ChevronLeft, ChevronRight,
     Sun, Moon, Shield, Cloud, Trophy, TrendingUp, Activity,
 } from "lucide-react";
@@ -69,6 +69,7 @@ const NAV_GROUPS: NavGroup[] = [
         items: [
             { href: "/dashboard/support", label: "Support & Issues", icon: LifeBuoy, module: "support" },
             { href: "/dashboard/disputes", label: "Disputes & Refunds", icon: Shield, module: "support" },
+            { href: "/dashboard/faqs", label: "FAQs", icon: HelpCircle, module: "support" },
             { href: "/dashboard/cloud-messaging", label: "Cloud Messaging", icon: Cloud, module: "notifications" },
         ],
     },

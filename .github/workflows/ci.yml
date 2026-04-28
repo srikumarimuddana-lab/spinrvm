@@ -61,10 +61,10 @@ jobs:
       - name: Python dependency CVE scan
         run: |
           pip install pip-audit
-          pip-audit -r backend/requirements-locked.txt --fail-on-vuln
+          pip-audit -r backend/requirements-locked.txt
 
       - name: Install ruff
-        run: pip install ruff
+        run: pip install "ruff==0.15.8"
 
       - name: Lint backend (ruff)
         working-directory: backend

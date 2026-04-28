@@ -1,4 +1,6 @@
+import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
+import logger from "@/lib/logger";
 
 // PIPEDA data residency: pin to Canadian (Montréal) region (F-22).
 export const preferredRegion = "yul1";
@@ -25,6 +27,9 @@ function clearRtCookie(res: NextResponse): void {
 }
 
 export async function POST(req: NextRequest) {
+  const request_id = randomUUID();
+  const log = logger.child({ request_id, domain: "auth" });
+
   // CSRF double-submit validation — cookie value must match the request header.
   // silentRefresh() bootstraps this by reading the csrf_token cookie from
   // document.cookie and echoing it as X-CSRF-Token before in-memory state is
@@ -32,33 +37,41 @@ export async function POST(req: NextRequest) {
   const csrfCookie = req.cookies.get(CSRF_COOKIE)?.value ?? null;
   const csrfHeader = req.headers.get("x-csrf-token") ?? null;
   if (!csrfCookie || !csrfHeader || csrfCookie !== csrfHeader) {
+    log.warn({ reason: "csrf_mismatch" }, "token refresh rejected: CSRF validation failed");
     return NextResponse.json({ detail: "CSRF validation failed" }, { status: 403 });
   }
 
   const refreshToken = req.cookies.get(RT_COOKIE)?.value;
   if (!refreshToken) {
+    log.warn({ reason: "no_rt_cookie" }, "token refresh rejected: no RT cookie");
     return NextResponse.json({ detail: "No refresh token" }, { status: 401 });
   }
 
   let upstream: Response;
+  const start = Date.now();
   try {
     upstream = await fetch(`${BACKEND_URL}/api/admin/auth/refresh`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ refresh_token: refreshToken }),
     });
-  } catch {
+  } catch (err) {
+    log.error({ err, duration_ms: Date.now() - start }, "backend unreachable on token refresh");
     return NextResponse.json({ detail: "Backend unreachable" }, { status: 502 });
   }
 
+  const duration_ms = Date.now() - start;
   const data = await upstream.json();
 
   if (!upstream.ok) {
+    log.warn({ status: upstream.status, duration_ms }, "token refresh rejected by backend");
     const res = NextResponse.json(data, { status: upstream.status });
     // On a definitive 401 the token is revoked — clear the cookie.
     if (upstream.status === 401) clearRtCookie(res);
     return res;
   }
+
+  log.info({ duration_ms }, "admin token refreshed");
 
   const { refresh_token, refresh_expires_at: _ignored, ...clientData } = data;
 

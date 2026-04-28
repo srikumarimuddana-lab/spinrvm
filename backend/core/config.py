@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     # IMPORTANT: Rotate this key before deploying — see docs/key-rotation.md
     SUPABASE_SERVICE_ROLE_KEY: str = ""
     USE_SUPABASE: bool = True  # Supabase is now the default database
+    # PIPEDA 22-2: must be "ca-central-1" in production; checked at startup.
+    SUPABASE_REGION: str = ""
 
     # Firebase settings
     FIREBASE_SERVICE_ACCOUNT_JSON: Optional[str] = None

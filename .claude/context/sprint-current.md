@@ -88,14 +88,14 @@ None currently open in production (pre-launch).
 
 **Sprint goal:** Close the top P1 backend safety and data-integrity gaps from the driver-app verification pass (2026-04-23): suspended-driver dispatch gap, document-expiry `$set` anti-pattern, and open items from `OPEN-ITEMS-TRACKER.md` section A/B.
 
-**Status (2026-04-28):** In progress.
+**Status (2026-04-28):** B-S2-1 and B-S2-2 shipped (#140).
 
 ## In-flight
 
 | Ticket | Owner | State | Notes |
 |---|---|---|---|
-| B-S2-1 | — | PR #140 | **DV-1 / P0-5**: Migration 55 — add `status != 'suspended'` to `find_nearby_drivers` RPC WHERE clause. Suspended drivers with `is_online=true` can currently receive ride offers. |
-| B-S2-2 | — | PR #140 | **DV-2 / P0-5**: `document_expiry.py` — remove `{"$set": ...}` wrapper from both `update_one` calls (lines 115, 180). The db layer strips it, but semantic pollution. |
+| B-S2-1 | — | shipped (#140) | **DV-1 / P0-5**: Migration 55 — `status != 'suspended'` filter added to `find_nearby_drivers`. |
+| B-S2-2 | — | shipped (#140) | **DV-2 / P0-5**: `document_expiry.py` — `{"$set": ...}` wrapper removed from both `update_one` calls. |
 
 ## Deferred (non-code or future sprint)
 

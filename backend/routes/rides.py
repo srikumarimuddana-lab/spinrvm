@@ -1451,22 +1451,22 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
         await db.update_one(
             "wallets",
             {"id": wallet["id"]},
-            {"$set": {"balance": float(new_balance), "updated_at": datetime.now(timezone.utc).isoformat()}},
+            {"$set": {"balance": _f(new_balance), "updated_at": datetime.now(timezone.utc).isoformat()}},
         )
         await _record_transaction(
             wallet_id=wallet["id"],
             user_id=current_user["id"],
             txn_type="ride_payment",
-            amount=-float(debit),
-            balance_after=float(new_balance),
+            amount=-_f(debit),
+            balance_after=_f(new_balance),
             reference_id=ride_id,
-            description=f"Ride payment ${float(debit):.2f}",
+            description=f"Ride payment ${_f(debit):.2f}",
         )
         await db_supabase.update_ride(
             ride_id,
             {
                 "payment_status": "paid",
-                "tip_amount": float(tip_amount),
+                "tip_amount": _f(tip_amount),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             },
         )
@@ -1513,7 +1513,7 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
                 wallet_id=_corp_wallet["id"],
                 allowance_id=_corp_allowance["id"],
                 member_id=_corp_membership["id"],
-                amount=float(_allowance_debit),
+                amount=_f(_allowance_debit),
                 notes=f"ride:{ride_id}:allowance",
             )
 
@@ -1521,7 +1521,7 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
         if _master_debit > 0 and _corp_wallet.get("id"):
             await corporate_wallet_service.apply_adjustment(
                 wallet_id=_corp_wallet["id"],
-                amount=-float(_master_debit),
+                amount=-_f(_master_debit),
                 notes=f"Ride fallback debit {ride_id}",
                 actor_user_id=ride.get("rider_id", "system"),
             )
@@ -1532,8 +1532,8 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
             {
                 "ride_id": ride_id,
                 "source_type": "company_allowance",
-                "allowance_debit_amount": float(_allowance_debit),
-                "master_fallback_amount": float(_master_debit),
+                "allowance_debit_amount": _f(_allowance_debit),
+                "master_fallback_amount": _f(_master_debit),
                 "member_id": _corp_membership["id"],
                 "company_id": _company_id,
                 "created_at": datetime.now(timezone.utc).isoformat(),
@@ -1542,7 +1542,7 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
 
         # 8. Policy re-check at completion (log only — never strand driver)
         _completion_ctx = {
-            "final_fare": float(_total),
+            "final_fare": _f(_total),
             "phase": "completion",
             "allowance": _corp_allowance,
         }
@@ -1566,7 +1566,7 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
             ride_id,
             {
                 "payment_status": "paid",
-                "tip_amount": float(tip_amount),
+                "tip_amount": _f(tip_amount),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             },
         )
@@ -1585,7 +1585,7 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
         outcome = await charge_ride(
             ride=ride,
             rider_id=current_user["id"],
-            total_amount=float(total_charge),
+            total_amount=_f(total_charge),
             payment_method_id=payment_method_id,
             stripe_customer_id=stripe_customer_id,
             payment_intent_id=ride.get("payment_intent_id"),
@@ -1597,12 +1597,12 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
                 {
                     "payment_status": "paid",
                     "payment_intent_id": outcome.payment_intent_id,
-                    "tip_amount": float(tip_amount),
+                    "tip_amount": _f(tip_amount),
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
             await manager.send_personal_message(
-                {"type": "payment_completed", "ride_id": ride_id, "charged_amount": float(total_charge)},
+                {"type": "payment_completed", "ride_id": ride_id, "charged_amount": _f(total_charge)},
                 f"rider_{current_user['id']}",
             )
         elif outcome.status == "requires_action":
@@ -1647,7 +1647,7 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
                 ride_id,
                 {
                     "payment_status": "paid",
-                    "tip_amount": float(tip_amount),
+                    "tip_amount": _f(tip_amount),
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
@@ -1681,11 +1681,11 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
     try:
         from utils.email_receipt import send_receipt_email
 
-        email_sent = await send_receipt_email(ride, rider or {}, driver_info, float(tip_amount))
+        email_sent = await send_receipt_email(ride, rider or {}, driver_info, _f(tip_amount))
     except Exception as e:
         logger.warning(f"Receipt email error: {e}")
 
-    return {"success": True, "charged_amount": float(total_charge), "email_sent": email_sent}
+    return {"success": True, "charged_amount": _f(total_charge), "email_sent": email_sent}
 
 
 # ============================================================
@@ -1963,17 +1963,17 @@ async def cancel_ride_rider(request: Request, ride_id: str, current_user: dict =
     # Pay out charged_driver to the driver's wallet and push-notify them.
     if driver_id and charged_driver > 0:
         try:
-            fee_amount = float(charged_driver)
+            fee_dec = _d(str(charged_driver))
             driver_for_fee = await db_supabase.get_driver_by_id(driver_id)
             driver_user_id = driver_for_fee.get("user_id") if driver_for_fee else None
             if driver_user_id:
                 wallet = await db.find_one("wallets", {"user_id": driver_user_id})
                 if wallet:
-                    new_balance = round(float(wallet.get("balance", 0)) + fee_amount, 2)
+                    new_balance = _round(_d(str(wallet.get("balance", 0))) + fee_dec)
                     await db.update_one(
                         "wallets",
                         {"id": wallet["id"]},
-                        {"$set": {"balance": new_balance, "updated_at": datetime.now(timezone.utc).isoformat()}},
+                        {"$set": {"balance": _f(new_balance), "updated_at": datetime.now(timezone.utc).isoformat()}},
                     )
                     await db.insert_one(
                         "wallet_transactions",
@@ -1982,8 +1982,8 @@ async def cancel_ride_rider(request: Request, ride_id: str, current_user: dict =
                             "wallet_id": wallet["id"],
                             "user_id": driver_user_id,
                             "type": "cancellation_fee",
-                            "amount": fee_amount,
-                            "balance_after": new_balance,
+                            "amount": _f(fee_dec),
+                            "balance_after": _f(new_balance),
                             "reference_id": ride_id,
                             "description": f"Cancellation fee for ride {ride_id}",
                             "metadata": {"ride_id": ride_id, "status_at_cancel": ride.get("status")},

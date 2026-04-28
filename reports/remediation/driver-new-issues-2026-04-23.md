@@ -545,23 +545,23 @@ compliance to the OPC.
 
 ## Triage Checklist
 
-| ID | Area | Recommended Sprint | Effort | Owner | Blocker for |
-|---|---|---|---:|---|---|
-| DV-1 | Dispatch suspended filter | P1 | 2 h | backend | device test |
-| DV-2 | `{"$set"}` Supabase wrapper | P1 | 4 h | backend | device test |
-| DV-3 | Ride state string mismatch | P1 | 4 h | backend | beta |
-| DV-4 | Stripe idempotency collision | P1 | 4 h | backend | launch |
-| DV-5 | Notification pref swallows error | P3 | 2 h | driver-app | — |
-| DV-6 | Rate limiter no SRE alert | P2 | 3 h | devops+backend | launch |
-| DV-7 | PII key rotation undocumented | P2 | 4 h | infra+compliance | launch |
-| DV-8 | No hard-delete at retention horizon | P2 | 5 h | data+backend | launch |
-| DV-9 | Notification deep-link no fallback | P3 | 2 h | driver-app | — |
-| DV-10 | Firebase audience not enforced | P1 | 4 h | backend | beta |
-| DV-11 | Stale panel component paths | P3 | 1 h | driver-app | — |
-| DV-12 | report-safety / legal nav wiring | P2 | 1 h | driver-app | launch |
-| DV-13 | P1-1 fee vs hard-block drift | P3 | 0.5 h | product | — |
-| DV-14 | P1-10 native keypad drift | P3 | 0.25 h | product | — |
-| DV-15 | P4-5 Maestro → Playwright drift | P3 | 0.25 h | product | — |
+| ID | Area | Recommended Sprint | Effort | Owner | Blocker for | Status |
+|---|---|---|---:|---|---|---|
+| DV-1 | Dispatch suspended filter | P1 | 2 h | backend | device test | ✅ Already fixed — `status: "active"` filter at dispatch_service.py:198 |
+| DV-2 | `{"$set"}` Supabase wrapper | P1 | 4 h | backend | device test | ✅ Already handled — `db_supabase.update_one:1145` strips `$set` wrapper; `db.py` is a shim |
+| DV-3 | Ride state string mismatch | P1 | 4 h | backend | beta | ✅ Fixed — drivers.py:2270 `"trip_in_progress"` → `RideStatus.IN_PROGRESS` (also blocks COMPLETED) |
+| DV-4 | Stripe idempotency collision | P1 | 4 h | backend | launch | ⬜ Open |
+| DV-5 | Notification pref swallows error | P3 | 2 h | driver-app | — | ⬜ Open |
+| DV-6 | Rate limiter no SRE alert | P2 | 3 h | devops+backend | launch | ⬜ Open |
+| DV-7 | PII key rotation undocumented | P2 | 4 h | infra+compliance | launch | ⬜ Open |
+| DV-8 | No hard-delete at retention horizon | P2 | 5 h | data+backend | launch | ⬜ Open |
+| DV-9 | Notification deep-link no fallback | P3 | 2 h | driver-app | — | ⬜ Open |
+| DV-10 | Firebase audience not enforced | P1 | 4 h | backend | beta | ✅ Partially fixed — manual `aud` check already present (B-P1-1); added `check_revoked=True` to auth.py:415 |
+| DV-11 | Stale panel component paths | P3 | 1 h | driver-app | — | ⬜ Open |
+| DV-12 | report-safety / legal nav wiring | P2 | 1 h | driver-app | launch | ⬜ Open |
+| DV-13 | P1-1 fee vs hard-block drift | P3 | 0.5 h | product | — | ⬜ Open |
+| DV-14 | P1-10 native keypad drift | P3 | 0.25 h | product | — | ⬜ Open |
+| DV-15 | P4-5 Maestro → Playwright drift | P3 | 0.25 h | product | — | ⬜ Open |
 | DV-16 | Gemini sub-processor missing | P2 | 2 h | legal | launch |
 | DV-17 | DSAR SLA + audit log | P2 | 4 h | backend+compliance | launch |
 

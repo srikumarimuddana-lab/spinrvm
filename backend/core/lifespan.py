@@ -29,6 +29,27 @@ async def init_database():
         logger.warning(f"{msg} — continuing in {settings.ENV} mode")
         return None
 
+    # PIPEDA data-residency check (Rider Phase E 22-2): Supabase must be in a
+    # Canadian region (ca-central-1). The URL alone doesn't embed the region,
+    # so we rely on the explicit SUPABASE_REGION env var. A missing or non-CA
+    # value logs ERROR in production so this surfaces in SRE alerting.
+    supabase_region = getattr(settings, "SUPABASE_REGION", "") or ""
+    if settings.ENV.lower() == "production":
+        if not supabase_region:
+            logger.error(
+                "PIPEDA 22-2: SUPABASE_REGION is not set. "
+                "Set SUPABASE_REGION=ca-central-1 to confirm Canadian data residency."
+            )
+        elif supabase_region.lower() != "ca-central-1":
+            logger.error(
+                f"PIPEDA 22-2: SUPABASE_REGION={supabase_region!r} — expected 'ca-central-1'. "
+                "Canadian data-residency compliance requires the Supabase project to be in ca-central-1."
+            )
+        else:
+            logger.info(f"Supabase data residency confirmed: region={supabase_region}")
+    else:
+        logger.info(f"Supabase region: {supabase_region or 'unset (non-production)'}")
+
     # Active health check — one trivial read against a table that always exists.
     # The `users` table is part of the core schema; a failure here means either
     # the service role key is invalid, the DB is unreachable, or the schema

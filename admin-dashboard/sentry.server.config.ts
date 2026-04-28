@@ -4,6 +4,21 @@
  */
 import * as Sentry from '@sentry/nextjs';
 
+// PIPEDA A-PE-P2-5: warn at cold-start if DSN is routing to US ingestion.
+// EU hosts contain ingest.de.sentry.io; US hosts contain ingest.sentry.io only.
+// Error appears in Vercel Function logs; does not throw (Sentry still initialises).
+function _checkSentryRegion(dsn: string | undefined): void {
+  if (!dsn || process.env.NODE_ENV !== 'production') return;
+  if (!dsn.includes('ingest.de.sentry.io')) {
+    console.error(
+      '[spinr-admin][PIPEDA] Sentry DSN routes to US ingestion. ' +
+      'Switch to EU (https://o<id>.ingest.de.sentry.io/...) or file a DPA addendum. ' +
+      'See docs/vendor-register.md § Sentry and A-PE-P2-5 in the remediation plan.'
+    );
+  }
+}
+_checkSentryRegion(process.env.SENTRY_DSN || process.env.NEXT_PUBLIC_SENTRY_DSN);
+
 /** Scrub PII fields from Sentry events before they leave the server (F-44/PIPEDA). */
 function beforeSend(event: Sentry.ErrorEvent): Sentry.ErrorEvent | null {
   if (event.request?.headers) {

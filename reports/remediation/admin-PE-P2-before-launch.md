@@ -103,6 +103,13 @@ Branch: `claude/plan-deferred-tasks-qtT8I`
 
 **How to fix:** Verify the configured DSN's region (`o<org-id>` prefix). If US: either (a) switch to Sentry EU (`https://o<id>.ingest.de.sentry.io`), or (b) add a DPA addendum to `docs/vendor-register.md` confirming scrubbed data is residency-exempt.
 
+**Engineering status (2026-04-28):**
+- `sentry.server.config.ts`: startup check `_checkSentryRegion()` logs a `console.error` with `[PIPEDA]` tag on every cold start in production until the DSN is switched to EU. Edge-runtime safe (no Node.js deps).
+- `.env.example`: EU vs US DSN format documented with setup instructions.
+- `docs/vendor-register.md`: Sentry row updated; open-items table has step-by-step EU migration path.
+
+**Remaining (legal/ops):** Request EU org migration at sentry.io or create a new EU org, then update `SENTRY_DSN` + `NEXT_PUBLIC_SENTRY_DSN` in Vercel project settings to use `ingest.de.sentry.io`. The startup check will stop firing once the env var is updated.
+
 **Effort:** 2–3 h (legal review + DSN swap) · **Audit ref:** 22-2
 
 ---
@@ -141,8 +148,8 @@ Branch: `claude/plan-deferred-tasks-qtT8I`
 
 - [x] A-PE-P2-1 Backend HttpOnly cookie (18-2) — done; access token set HttpOnly by BFF routes; `document.cookie` writes removed from authStore
 - [x] A-PE-P2-2 CSRF double-submit token (23-6) — already implemented (refresh/route.ts validates csrfCookie === csrfHeader; api.ts sends X-CSRF-Token)
-- [ ] A-PE-P2-3 ESLint 9 → 10 upgrade (19-4)
+- [ ] A-PE-P2-3 ESLint 9 → 10 upgrade (19-4) — ⚠ BLOCKED: `eslint-config-next@16.2.4` bundles `eslint-plugin-react` incompatible with ESLint 10; retry when eslint-config-next ships ESLint-10 support (track: https://github.com/vercel/next.js/issues)
 - [x] A-PE-P2-4 uuid 13 → 14 (19-5) — upgraded to ^14.0.0
-- [ ] A-PE-P2-5 Sentry DSN region / DPA addendum (22-2) — tracked in docs/vendor-register.md
+- [ ] A-PE-P2-5 Sentry DSN region / DPA addendum (22-2) — engineering done: startup PIPEDA check in sentry.server.config.ts warns in production until EU DSN is set; .env.example documents EU vs US format; vendor-register.md has migration steps. **Open legal/ops item:** request EU org migration from Sentry or create new EU org, then swap `SENTRY_DSN` + `NEXT_PUBLIC_SENTRY_DSN` in Vercel to `ingest.de.sentry.io`.
 - [x] A-PE-P2-6 Structured server-side logging (21-5) — pino@10 + src/lib/logger.ts; all BFF auth routes emit structured JSON with request_id, domain, duration_ms
 - [x] A-PE-P2-7 Branch protection + rollback runbook (17-4) — docs/runbooks/admin-rollback.md created; GitHub branch protection settings documented in §5

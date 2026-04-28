@@ -9,6 +9,11 @@ GET /rides/{id} endpoint.
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from starlette.requests import Request as StarletteRequest
+
+_MOCK_REQUEST = StarletteRequest(
+    {"type": "http", "method": "GET", "path": "/", "headers": [], "query_string": b"", "root_path": ""}
+)
 
 # ── P3-1: Parametrized PII guard ─────────────────────────────────────────────
 # These 14 fields must never appear in any rider-facing response. The test
@@ -149,7 +154,9 @@ class TestRidePIIFiltering:
         ):
             from backend.routes.rides import get_ride
 
-            response = await get_ride("ride_1", current_user={"id": "user_rider_1", "role": "rider"})
+            response = await get_ride(
+                request=_MOCK_REQUEST, ride_id="ride_1", current_user={"id": "user_rider_1", "role": "rider"}
+            )
 
             driver_in_response = response.get("driver", {})
             for field in FORBIDDEN_FIELDS:
@@ -167,7 +174,9 @@ class TestRidePIIFiltering:
         ):
             from backend.routes.rides import get_ride
 
-            response = await get_ride("ride_1", current_user={"id": "user_rider_1", "role": "rider"})
+            response = await get_ride(
+                request=_MOCK_REQUEST, ride_id="ride_1", current_user={"id": "user_rider_1", "role": "rider"}
+            )
 
             driver_in_response = response.get("driver", {})
             for field in ALLOWED_FIELDS:
@@ -189,6 +198,8 @@ class TestRidePIIFiltering:
         ):
             from backend.routes.rides import get_ride
 
-            response = await get_ride("ride_2", current_user={"id": "user_rider_1", "role": "rider"})
+            response = await get_ride(
+                request=_MOCK_REQUEST, ride_id="ride_2", current_user={"id": "user_rider_1", "role": "rider"}
+            )
 
             assert "driver" not in response or response.get("driver") is None

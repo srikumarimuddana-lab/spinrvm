@@ -77,7 +77,13 @@ export function FreeCancelTimer({
         {isWindowOpen ? (
           <>
             <Text style={styles.freeLabel}>Free cancellation</Text>
-            <Text style={styles.freeTimer}>{timerLabel} remaining</Text>
+            <Text
+              style={styles.freeTimer}
+              accessibilityLiveRegion="polite"
+              accessibilityLabel={`${timerLabel} remaining for free cancellation`}
+            >
+              {timerLabel} remaining
+            </Text>
           </>
         ) : (
           <>

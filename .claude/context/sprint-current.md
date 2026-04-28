@@ -99,6 +99,8 @@ None currently open in production (pre-launch).
 | B-S2-3 | — | shipped (#141) | **DV-17 / PIPEDA**: `users.py` both deletion endpoints now write `audit_logs` row on DSAR request/execution. |
 | B-S2-4 | — | shipped (#141) | **DV-8 / PIPEDA**: Migration 56 — `purge_pii_retention()` Step G anonymizes `pending_deletion` users after 30-day grace period. |
 
+> **Migration note (2026-04-28):** `55_drivers_dispatch_partial_index.sql` and `55_find_nearby_drivers_suspended_filter.sql` share the `55_` numeric prefix — a CLAUDE.md convention violation. The migration runner uses the full filename as the idempotency key, so both are applied correctly in alphabetical order. Cannot be renamed since they are already merged and may be applied in production. Next free slot is **57**.
+
 ## Deferred (non-code or future sprint)
 
 | Item | Reason |

@@ -24,7 +24,7 @@ try:
     from ..socket_manager import manager
     from ..utils.crypto import hash_otp
     from ..utils.idempotency import idempotent_endpoint
-    from ..utils.rate_limiter import cancel_ride_limit, ride_request_limit
+    from ..utils.rate_limiter import cancel_ride_limit, ride_read_limit, ride_request_limit
     from ..validators import validate_ride_location
 except ImportError:
     import db_supabase
@@ -40,7 +40,7 @@ except ImportError:
     from socket_manager import manager
     from utils.crypto import hash_otp
     from utils.idempotency import idempotent_endpoint
-    from utils.rate_limiter import cancel_ride_limit, ride_request_limit
+    from utils.rate_limiter import cancel_ride_limit, ride_read_limit, ride_request_limit
     from validators import validate_ride_location
 
 
@@ -1091,8 +1091,9 @@ async def create_ride(request: Request, body: CreateRideRequest, current_user: d
 from fastapi import Request  # noqa: E402
 
 
+@ride_read_limit
 @api_router.get("/active")
-async def get_active_ride(current_user: dict = Depends(get_current_user)):
+async def get_active_ride(request: Request, current_user: dict = Depends(get_current_user)):
     """Get rider's current active/pending ride (if any). Used on app launch to resume."""
     # First check for rides that need payment (completed but not paid)
     # Then check for active rides
@@ -1155,8 +1156,10 @@ async def get_active_ride(current_user: dict = Depends(get_current_user)):
     return {"active": True, "ride": ride_data}
 
 
+@ride_read_limit
 @api_router.get("/history")
 async def get_ride_history(
+    request: Request,
     limit: int = Query(default=20, ge=1, le=100),
     before: Optional[str] = Query(default=None),
     current_user: dict = Depends(get_current_user),
@@ -1198,8 +1201,9 @@ async def get_ride_history(
     return {"rides": rides, "limit": limit, "next_cursor": next_cursor}
 
 
+@ride_read_limit
 @api_router.get("/{ride_id}")
-async def get_ride(ride_id: str, current_user: dict = Depends(get_current_user)):
+async def get_ride(request: Request, ride_id: str, current_user: dict = Depends(get_current_user)):
     """Fetch details of a specific ride"""
     ride = await db_supabase.get_ride(ride_id)
     if not ride:

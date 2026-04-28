@@ -199,6 +199,17 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to import retention purge loop: {e}")
 
+    # Stripe ↔ DB daily reconciliation — runs at 02:00 UTC, one replica
+    # via Redis leader lock. Flags paid rides with no matching Stripe
+    # PaymentIntent, amount mismatches, and orphaned Stripe charges.
+    # Discrepancies logged at ERROR so they reach Sentry + audit_logs.
+    try:
+        from utils.stripe_reconcile import stripe_reconcile_loop
+
+        _spawn("stripe_reconcile (24h)", stripe_reconcile_loop)
+    except Exception as e:
+        logger.warning(f"Failed to import Stripe reconciliation loop: {e}")
+
     app.state.background_tasks = background_tasks
 
     # WebSocket pub/sub (audit P0-B3): before this, socket sends were

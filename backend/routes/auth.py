@@ -554,8 +554,14 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         # Self-heal the column so the next login is fast and consistent.
         try:
             await db_supabase.update_one("users", {"id": current_user["id"]}, {"profile_complete": True})
-        except Exception:
-            logger.warning("Could not self-heal profile_complete")
+        except Exception as e:
+            # B-P1-5 / CLAUDE.md: this is a DB write failure, not a
+            # recoverable anomaly. Mutating `current_user` in memory
+            # below masks the persistence failure for the next login.
+            logger.error(
+                f"Could not self-heal profile_complete for {current_user.get('id')}: {e}",
+                exc_info=True,
+            )
         current_user["profile_complete"] = True
 
     # Derive driver onboarding status (None for non-drivers).
@@ -717,7 +723,17 @@ async def logout_all(request: Request, current_user: dict = Depends(get_current_
             reason="logout_all",
         )
     except Exception as e:
-        logger.warning(f"logout-all: WS kick failed for {user_id}: {e}")
+        # B-P1-5 / CLAUDE.md: WS kick is the only signal that propagates
+        # logout to other devices in real time. The token-version bump and
+        # refresh-token revocation above will eventually catch the next
+        # API request, but the gap (up to 15 min for the access TTL) is
+        # exactly the window an attacker exploits. exc_info captures
+        # whether this was Redis pub/sub vs in-process registry vs socket
+        # send so on-call can target the fix.
+        logger.error(
+            f"logout-all: WS kick failed for {user_id}: {e}",
+            exc_info=True,
+        )
 
     logger.info(f"logout-all: user={user_id} token_version→{new_version} revoked_refresh={revoked}")
     return {"success": True, "revoked_refresh_tokens": revoked}

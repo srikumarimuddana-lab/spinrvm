@@ -126,8 +126,13 @@ async def test_admin_logout_blacklists_jti():
     redis_set_mock = AsyncMock()
     revoke_mock = AsyncMock()
 
-    request_mock = MagicMock()
+    # SlowAPI's @limiter.limit requires a Starlette Request — use spec so
+    # isinstance() passes without building a full ASGI scope dict.
+    from starlette.requests import Request as StarletteRequest
+
+    request_mock = MagicMock(spec=StarletteRequest)
     request_mock.state = MagicMock()
+    request_mock.client = MagicMock(host="127.0.0.1")
 
     from backend.routes.admin.auth import LogoutRequest
 

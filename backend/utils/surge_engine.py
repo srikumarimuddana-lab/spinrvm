@@ -15,6 +15,14 @@ from typing import Any, Dict, List
 from loguru import logger
 
 try:
+    from utils.loop_monitor import record_heartbeat as _record_heartbeat
+except ImportError:
+
+    def _record_heartbeat(name: str) -> None:  # type: ignore[misc]
+        pass
+
+
+try:
     from db import db
     from geo_utils import get_service_area_polygon, point_in_polygon
     from utils.driver_presence import present_driver_ids
@@ -250,6 +258,7 @@ async def surge_recalculation_loop():
                 logger.debug(f"Surge recalc complete: {len(results)} areas, {active} surging")
         except Exception as e:
             logger.error(f"Surge recalculation loop error: {e}")
+        _record_heartbeat("surge_engine (2min)")
         # B-P3-2: ±10% per-tick jitter so replicas don't all flip surge
         # state on the same wall-clock tick (rider apps would receive a
         # synchronised price-change notification storm).

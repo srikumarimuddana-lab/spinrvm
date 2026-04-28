@@ -1557,6 +1557,8 @@ async def get_t4a_summary(year: int, current_user: dict = Depends(get_current_us
         "total_trips": len(rides),
         "platform_fees": 0,
         "net_earnings": total_earnings,
+        "gst_registered": driver.get("gst_registered", False),
+        "gst_bn": driver.get("gst_bn") or "",
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -1568,7 +1570,17 @@ async def export_earnings(year: int = Query(None), current_user: dict = Depends(
 
     summary_data = await get_t4a_summary(year, current_user)
 
-    csv_data = f"Year,Total Earnings,Total Trips,Net Earnings\n{year},{summary_data['total_earnings']},{summary_data['total_trips']},{summary_data['net_earnings']}"
+    # CRA T4A-compatible CSV. GST/BN columns are required for drivers who
+    # earn above the T4A reporting threshold and hold a GST/HST account.
+    csv_data = (
+        "Year,Total Earnings,Total Trips,Net Earnings,GST Registered,GST/HST Business Number\n"
+        f"{year},"
+        f"{summary_data['total_earnings']},"
+        f"{summary_data['total_trips']},"
+        f"{summary_data['net_earnings']},"
+        f"{'Yes' if summary_data['gst_registered'] else 'No'},"
+        f"{summary_data['gst_bn']}"
+    )
     filename = f"earnings_export_{year}.csv"
 
     return {"data": csv_data, "filename": filename}

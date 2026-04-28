@@ -81,6 +81,18 @@ None currently open in production (pre-launch).
 ## Next sprint candidates
 
 - **Sentry alert rule**: Create a Sentry alert for `REFRESH TOKEN REUSE DETECTED` → PagerDuty. ~30 min in Sentry UI. No code required.
+- **L-P0-3 WAV dispatch**: Wheelchair-accessible vehicle matching in dispatch — needs `/plan` (5+ files + migration). Saskatchewan legal requirement.
+- **L-P1-2 authStore.ts**: 16+ `any` types on critical auth flows in `shared/store/authStore.ts`.
+- **L-P1-4 earnings GST/BN**: T4A export missing `gst_registered`/`gst_bn` — migration + drivers.py needed.
+
+## Launch readiness shipped
+
+| PR | Item | What |
+|---|---|---|
+| #172 | L-P0-1 | `SUPABASE_URL`/`SUPABASE_SERVICE_ROLE_KEY` validated at startup in production |
+| #172 | L-P1-1 | `logger.error` on startup if Redis missing in production |
+| #172 | L-P0-2 | Railway primary / Render fallback (was inverted); `--fail-with-body` on curl |
+| #172 | L-P0-4 | Smoke test extended: JSON validation + auth middleware (401 not 500) + fare service health |
 
 ---
 

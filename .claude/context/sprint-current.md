@@ -94,8 +94,8 @@ None currently open in production (pre-launch).
 
 | Ticket | Owner | State | Notes |
 |---|---|---|---|
-| B-S2-1 | — | pending | **DV-1 / P0-5**: Migration 55 — add `status != 'suspended'` to `find_nearby_drivers` RPC WHERE clause. Suspended drivers with `is_online=true` can currently receive ride offers. |
-| B-S2-2 | — | pending | **DV-2 / P0-5**: `document_expiry.py` — remove `{"$set": ...}` wrapper from both `update_one` calls (lines 115, 180). The db layer strips it, but semantic pollution. |
+| B-S2-1 | — | PR #140 | **DV-1 / P0-5**: Migration 55 — add `status != 'suspended'` to `find_nearby_drivers` RPC WHERE clause. Suspended drivers with `is_online=true` can currently receive ride offers. |
+| B-S2-2 | — | PR #140 | **DV-2 / P0-5**: `document_expiry.py` — remove `{"$set": ...}` wrapper from both `update_one` calls (lines 115, 180). The db layer strips it, but semantic pollution. |
 
 ## Deferred (non-code or future sprint)
 

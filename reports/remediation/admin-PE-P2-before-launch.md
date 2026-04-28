@@ -117,7 +117,9 @@ Branch: `claude/plan-deferred-tasks-qtT8I`
 
 **How to fix:** Adopt `pino` (or Vercel Edge Logger primitives). Emit structured JSON with `request_id`, `surface=admin`, and `domain` per CLAUDE.md observability conventions.
 
-**Effort:** 4–6 h · **Audit ref:** 21-5
+**Status:** Done. `pino@10` installed; `src/lib/logger.ts` created with `surface=admin`, `env`, `LOG_LEVEL` override. All three BFF auth routes (login, refresh, logout) now emit structured JSON with `request_id`, `domain=auth`, `duration_ms`, and appropriate log levels (`debug`/`info`/`warn`/`error`). No PII logged (only role-neutral status codes and boolean flags). Client-side `console.error` in `authStore.ts` is intentionally left as-is — it runs in the browser, outside server-side log collection.
+
+**Effort:** 4–6 h · **Audit ref:** 21-5 ✅
 
 ---
 
@@ -142,5 +144,5 @@ Branch: `claude/plan-deferred-tasks-qtT8I`
 - [ ] A-PE-P2-3 ESLint 9 → 10 upgrade (19-4)
 - [x] A-PE-P2-4 uuid 13 → 14 (19-5) — upgraded to ^14.0.0
 - [ ] A-PE-P2-5 Sentry DSN region / DPA addendum (22-2) — tracked in docs/vendor-register.md
-- [ ] A-PE-P2-6 Structured server-side logging (21-5)
+- [x] A-PE-P2-6 Structured server-side logging (21-5) — pino@10 + src/lib/logger.ts; all BFF auth routes emit structured JSON with request_id, domain, duration_ms
 - [x] A-PE-P2-7 Branch protection + rollback runbook (17-4) — docs/runbooks/admin-rollback.md created; GitHub branch protection settings documented in §5

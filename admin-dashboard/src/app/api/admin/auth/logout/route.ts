@@ -1,4 +1,6 @@
+import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
+import logger from "@/lib/logger";
 
 // PIPEDA data residency: pin to Canadian (Montréal) region (F-22).
 export const preferredRegion = "yul1";
@@ -13,7 +15,11 @@ const AT_COOKIE = "admin_token";
 const CSRF_COOKIE = "csrf_token";
 
 export async function POST(req: NextRequest) {
+  const request_id = randomUUID();
+  const log = logger.child({ request_id, domain: "auth" });
+
   const refreshToken = req.cookies.get(RT_COOKIE)?.value;
+  log.info({ has_rt: !!refreshToken }, "admin logout");
 
   // Fire revocation at the backend regardless of outcome — best-effort.
   if (refreshToken) {
@@ -21,7 +27,9 @@ export async function POST(req: NextRequest) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ refresh_token: refreshToken }),
-    }).catch(() => {});
+    }).catch((err) => {
+      log.warn({ err }, "backend RT revocation failed (best-effort)");
+    });
   }
 
   const res = NextResponse.json({ success: true });

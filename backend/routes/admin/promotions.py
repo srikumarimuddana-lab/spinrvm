@@ -280,17 +280,13 @@ async def admin_get_promo_usage(
 @router.get("/promotions/stats")
 async def admin_get_promo_stats(date_range: Optional[str] = Query(None, alias="range")):
     """Get promotion statistics with daily usage data."""
-    all_promos = await db_supabase.get_rows("promotions", {}, limit=10000)
-    try:
-        all_usage = await db_supabase.get_rows("promo_applications", {}, order="created_at", desc=True, limit=10000)
-    except Exception:
-        logger.warning("promo_applications table may not exist yet")
-        all_usage = []
+    # Promos table is bounded (< 10k ever in practice); load all for counts.
+    all_promos = await db_supabase.get_rows("promotions", {}, limit=2000)
 
     now = datetime.now(timezone.utc)
     today = now.strftime("%Y-%m-%d")
 
-    # Date range filtering
+    # Derive DB-level date cutoff so we never load more than 30d of usage rows.
     range_start = None
     if date_range == "today":
         range_start = today
@@ -302,11 +298,20 @@ async def admin_get_promo_stats(date_range: Optional[str] = Query(None, alias="r
         range_start = (now - timedelta(days=14)).strftime("%Y-%m-%d")
     elif date_range == "month":
         range_start = (now - timedelta(days=30)).strftime("%Y-%m-%d")
+    else:
+        # Default: last 30 days so we never do an unbounded table scan.
+        range_start = (now - timedelta(days=30)).strftime("%Y-%m-%d")
 
-    # Filter usage by range
+    usage_filter: Dict[str, Any] = {"created_at": {"$gte": range_start}}
+    try:
+        all_usage = await db_supabase.get_rows(
+            "promo_applications", usage_filter, order="created_at", desc=True, limit=5000
+        )
+    except Exception:
+        logger.warning("promo_applications table may not exist yet")
+        all_usage = []
+
     filtered_usage = all_usage
-    if range_start:
-        filtered_usage = [u for u in all_usage if u.get("created_at", "") >= range_start]
 
     # Promo counts
     total_codes = len([p for p in all_promos if p.get("promo_type") != "private"])

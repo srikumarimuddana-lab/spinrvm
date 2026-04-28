@@ -72,17 +72,25 @@ class FirebaseAppCheckMiddleware(BaseHTTPMiddleware):
         if not path.startswith("/api"):
             return await call_next(request)
 
+        # B-P2-3: bind request_id explicitly into App Check log lines.
+        # RequestIDMiddleware contextualises loguru, but App Check runs
+        # *outside* that context (it dispatches before the call_next that
+        # establishes the contextualize block — which it then never re-
+        # enters when it short-circuits with a 401). Read directly from
+        # request.state for correlation in those reject paths.
+        request_id = getattr(request.state, "request_id", "-")
+
         token = request.headers.get("X-Firebase-AppCheck")
 
         if not token:
             if self._enforce:
-                logger.warning("App Check: missing token for %s", path)
+                logger.warning("App Check: missing token for {} req_id={}", path, request_id)
                 return JSONResponse(
                     status_code=401,
                     content={"detail": "App Check token required"},
                 )
             # Enforcement off — let the request through but log it.
-            logger.debug("App Check: token absent (enforcement disabled) for %s", path)
+            logger.debug("App Check: token absent (enforcement disabled) for {} req_id={}", path, request_id)
             return await call_next(request)
 
         # Verify the token with the Firebase Admin SDK.
@@ -92,12 +100,14 @@ class FirebaseAppCheckMiddleware(BaseHTTPMiddleware):
             app_check.verify_token(token)
         except Exception as exc:
             if self._enforce:
-                logger.warning("App Check: invalid token for %s — %s", path, exc)
+                logger.warning("App Check: invalid token for {} req_id={} — {}", path, request_id, exc)
                 return JSONResponse(
                     status_code=401,
                     content={"detail": "Invalid App Check token"},
                 )
-            logger.debug("App Check: token verification failed (enforcement disabled): %s", exc)
+            logger.debug(
+                "App Check: token verification failed (enforcement disabled) req_id={}: {}", request_id, exc
+            )
 
         return await call_next(request)
 

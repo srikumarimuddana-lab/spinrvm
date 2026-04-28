@@ -381,6 +381,100 @@ jobs:
               print("PASS: No dangerous migration patterns found.")
           PYEOF
 
+      - name: Check for CREATE OR REPLACE conflicts across migrations
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'PYEOF'
+          import os, re, subprocess, sys
+
+          BASE_SHA = os.environ.get('BASE_SHA', '')
+          HEAD_SHA = os.environ.get('HEAD_SHA', '')
+
+          # Only added migration files in this PR
+          result = subprocess.run(
+              ['git', 'diff', '--name-only', '--diff-filter=A', BASE_SHA, HEAD_SHA],
+              capture_output=True, text=True,
+          )
+          new_migrations = [
+              f for f in result.stdout.strip().split('\n')
+              if f.startswith('backend/migrations/') and f.endswith('.sql')
+          ]
+
+          if not new_migrations:
+              print("PASS: No new migration files added in this PR.")
+              sys.exit(0)
+
+          print(f"New migration files: {new_migrations}")
+
+          COR = re.compile(
+              r'CREATE\s+OR\s+REPLACE\s+(?:FUNCTION|VIEW|TRIGGER|PROCEDURE)\s+(\w+)',
+              re.IGNORECASE,
+          )
+          OVERRIDE = re.compile(r'--\s*migration-override-ok\s*:', re.IGNORECASE)
+
+          # Collect targets defined by this PR's new migrations
+          pr_targets: dict[str, list[str]] = {}
+          for fpath in new_migrations:
+              try:
+                  content = open(fpath).read()
+              except OSError:
+                  continue
+              if OVERRIDE.search(content):
+                  print(f"  Skipping {fpath}: migration-override-ok annotation found.")
+                  continue
+              for name in COR.findall(content):
+                  pr_targets.setdefault(name.lower(), []).append(fpath)
+
+          if not pr_targets:
+              print("PASS: No CREATE OR REPLACE targets in new migrations.")
+              sys.exit(0)
+
+          print(f"CREATE OR REPLACE targets in this PR: {sorted(pr_targets)}")
+
+          # Walk all existing migrations not in this PR
+          new_set = {os.path.normpath(f) for f in new_migrations}
+          conflicts: list[dict] = []
+          for root, _dirs, files in os.walk('backend/migrations'):
+              for fname in sorted(files):
+                  if not fname.endswith('.sql'):
+                      continue
+                  fpath = os.path.normpath(os.path.join(root, fname))
+                  if fpath in new_set:
+                      continue
+                  try:
+                      content = open(fpath).read()
+                  except OSError:
+                      continue
+                  for name in COR.findall(content):
+                      if name.lower() in pr_targets:
+                          conflicts.append({
+                              'target': name,
+                              'existing': fpath,
+                              'pr_files': pr_targets[name.lower()],
+                          })
+
+          if conflicts:
+              seen: set[tuple] = set()
+              print(f"\nFAIL: {len(conflicts)} CREATE OR REPLACE conflict(s):")
+              for c in conflicts:
+                  key = (c['target'].lower(), c['existing'])
+                  if key in seen:
+                      continue
+                  seen.add(key)
+                  print(f"  Target : {c['target']}")
+                  print(f"  Already in : {c['existing']}")
+                  print(f"  PR file(s) : {', '.join(c['pr_files'])}")
+              print("\nTwo migrations redefine the same Postgres object.")
+              print("Options:")
+              print("  1. Add '-- migration-override-ok: <reason>' to the new migration to suppress.")
+              print("  2. Rename one target if the conflict is accidental.")
+              sys.exit(1)
+          else:
+              print(f"\nPASS: No CREATE OR REPLACE conflicts ({len(pr_targets)} target(s) checked).")
+          PYEOF
+
   # ─── 5. Breaking change detection ─────────────────────────────────────────
   breaking-change-gate:
     name: Breaking change detection

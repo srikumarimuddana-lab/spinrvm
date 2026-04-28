@@ -69,6 +69,17 @@ export function setInMemoryToken(token: string | null) {
   if (__DEV__) console.log('[API] In-memory token:', token ? 'SET' : 'CLEARED');
 }
 
+// ── CSRF double-submit token ──
+// Populated from the `csrf_token` field in AuthResponse after every
+// login/refresh. Sent as X-CSRF-Token on all state-changing requests.
+// The backend validates it against the csrf_token cookie; the cookie is
+// SameSite=Strict so cross-site requests can never present a matching pair.
+let _csrfToken: string | null = null;
+
+export function setCsrfToken(token: string | null): void {
+  _csrfToken = token;
+}
+
 // ── Token refresh callback ──
 // The auth store registers a refresh function here during initialization.
 // This avoids a circular import between client.ts ↔ authStore.ts.
@@ -389,6 +400,9 @@ const client = {
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
+    if (_csrfToken) {
+      headers['X-CSRF-Token'] = _csrfToken;
+    }
 
     const response = await fetchWithTimeout(`${API_URL}/api/v1${url}`, {
       method: 'POST',
@@ -417,6 +431,9 @@ const client = {
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
+    if (_csrfToken) {
+      headers['X-CSRF-Token'] = _csrfToken;
+    }
 
     const response = await fetchWithTimeout(`${API_URL}/api/v1${url}`, {
       method: 'PUT',
@@ -441,6 +458,9 @@ const client = {
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
+    if (_csrfToken) {
+      headers['X-CSRF-Token'] = _csrfToken;
+    }
 
     const response = await fetchWithTimeout(`${API_URL}/api/v1${url}`, {
       method: 'PATCH',
@@ -464,6 +484,9 @@ const client = {
     };
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
+    }
+    if (_csrfToken) {
+      headers['X-CSRF-Token'] = _csrfToken;
     }
 
     const response = await fetchWithTimeout(`${API_URL}/api/v1${url}`, {

@@ -4,13 +4,17 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 try:
     from ... import db_supabase
+    from ...dependencies import get_admin_user
+    from ...utils.audit_logger import log_admin_action
 except ImportError:
     import db_supabase
+    from dependencies import get_admin_user  # type: ignore[assignment]
+    from utils.audit_logger import log_admin_action  # type: ignore[assignment]
 
 db = db_supabase  # legacy alias
 
@@ -72,6 +76,7 @@ async def admin_send_cloud_message(
     payload: CloudMessageRequest,
     background_tasks: BackgroundTasks,
     response: Response,
+    admin: dict = Depends(get_admin_user),
 ):
     """Send or schedule a cloud message to users/drivers.
 
@@ -144,6 +149,13 @@ async def admin_send_cloud_message(
         background_tasks.add_task(_fan_out_push, doc["id"], target_users, title, description)
         response.status_code = 202
 
+    await log_admin_action(
+        admin,
+        "cloud_message_sent",
+        "cloud_message",
+        doc["id"],
+        {"audience": audience, "title": title, "status": status, "total_recipients": total_recipients},
+    )
     return {"success": True, "message": doc}
 
 
@@ -204,7 +216,7 @@ async def admin_get_cloud_message_stats():
 
 
 @router.delete("/cloud-messaging/{message_id}")
-async def admin_delete_cloud_message(message_id: str):
+async def admin_delete_cloud_message(message_id: str, admin: dict = Depends(get_admin_user)):
     """Cancel/delete a scheduled cloud message."""
     existing = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("cloud_messages", {"id": message_id}, limit=1)
@@ -216,4 +228,5 @@ async def admin_delete_cloud_message(message_id: str):
         raise HTTPException(status_code=400, detail="Cannot delete a sent message")
 
     await db_supabase.update_one("cloud_messages", {"id": message_id}, {"status": "cancelled"})
+    await log_admin_action(admin, "cloud_message_cancelled", "cloud_message", message_id, {})
     return {"message": "Message cancelled"}

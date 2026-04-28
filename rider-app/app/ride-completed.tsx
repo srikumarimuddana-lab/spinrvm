@@ -238,7 +238,13 @@ function RideCompletedScreenContent() {
         {/* Post-Trip Actions */}
         <View style={styles.postTripActions}>
           <View style={styles.receiptRow}>
-            <TouchableOpacity style={[styles.invoiceBtn, { flex: 1 }]} onPress={handleShareInvoice}>
+            <TouchableOpacity
+              style={[styles.invoiceBtn, { flex: 1 }]}
+              onPress={handleShareInvoice}
+              accessibilityRole="button"
+              accessibilityLabel="Share receipt"
+              accessibilityHint="Shares your trip receipt"
+            >
               <Ionicons name="receipt-outline" size={18} color={colors.primary} />
               <Text style={styles.invoiceBtnText}>Share Receipt</Text>
               <Ionicons name="share-outline" size={16} color={colors.textDim} />
@@ -249,6 +255,9 @@ function RideCompletedScreenContent() {
                 Clipboard.setString(buildReceiptText());
                 setAlertState({ visible: true, title: 'Copied!', message: 'Receipt copied to clipboard.', variant: 'success' });
               }}
+              accessibilityRole="button"
+              accessibilityLabel="Copy receipt to clipboard"
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
             >
               <Ionicons name="copy-outline" size={18} color={colors.textDim} />
             </TouchableOpacity>
@@ -256,6 +265,9 @@ function RideCompletedScreenContent() {
           <TouchableOpacity
             style={styles.chatBtn}
             onPress={() => router.push(`/chat-driver?rideId=${rideId}` as any)}
+            accessibilityRole="button"
+            accessibilityLabel="Message driver"
+            accessibilityHint="Opens a chat with your driver"
           >
             <Ionicons name="chatbubble-ellipses-outline" size={18} color="#3B82F6" />
             <Text style={styles.chatBtnText}>Message Driver</Text>
@@ -358,7 +370,7 @@ function RideCompletedScreenContent() {
 
         {/* Fare Card */}
         <View style={styles.fareCard}>
-          <Text style={styles.fareAmount}>${fare.toFixed(2)}</Text>
+          <Text style={styles.fareAmount} allowFontScaling={false}>${fare.toFixed(2)}</Text>
           <View style={styles.paymentBadge}>
             <Ionicons name="card" size={14} color={colors.textDim} />
             <Text style={styles.paymentText}>
@@ -367,7 +379,7 @@ function RideCompletedScreenContent() {
             {alreadyPaid && (
               <>
                 <Ionicons name="checkmark-circle" size={14} color="#10B981" />
-                <Text style={{ fontSize: 11, fontWeight: '700', color: '#10B981' }}>PAID</Text>
+                <Text style={{ fontSize: 11, fontWeight: '700', color: '#10B981' }} allowFontScaling={false}>PAID</Text>
               </>
             )}
           </View>
@@ -376,19 +388,19 @@ function RideCompletedScreenContent() {
           <View style={styles.statsRow}>
             <View style={styles.stat}>
               <Ionicons name="time-outline" size={18} color={colors.textDim} />
-              <Text style={styles.statVal}>{duration} min</Text>
+              <Text style={styles.statVal} allowFontScaling={false}>{duration} min</Text>
               <Text style={styles.statLbl}>Duration</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.stat}>
               <Ionicons name="speedometer-outline" size={18} color={colors.textDim} />
-              <Text style={styles.statVal}>{distance.toFixed(1)} km</Text>
+              <Text style={styles.statVal} allowFontScaling={false}>{distance.toFixed(1)} km</Text>
               <Text style={styles.statLbl}>Distance</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.stat}>
               <Ionicons name="cash-outline" size={18} color={colors.textDim} />
-              <Text style={styles.statVal}>${fare.toFixed(2)}</Text>
+              <Text style={styles.statVal} allowFontScaling={false}>${fare.toFixed(2)}</Text>
               <Text style={styles.statLbl}>Total</Text>
             </View>
           </View>
@@ -458,9 +470,9 @@ function RideCompletedScreenContent() {
                   key={amt}
                   style={[styles.tipBtn, selectedTip === amt && styles.tipBtnActive]}
                   onPress={() => { setSelectedTip(amt); setCustomTip(''); }}
+                  accessibilityRole="radio"
                   accessibilityLabel={`Tip $${amt}`}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: selectedTip === amt }}
+                  accessibilityState={{ checked: selectedTip === amt }}
                 >
                   <Text style={[styles.tipBtnText, selectedTip === amt && styles.tipBtnTextActive]}>${amt}</Text>
                 </TouchableOpacity>
@@ -474,6 +486,7 @@ function RideCompletedScreenContent() {
                   keyboardType="decimal-pad"
                   value={customTip}
                   onChangeText={(t) => { setCustomTip(t); setSelectedTip(null); }}
+                  returnKeyType="done"
                 />
               </View>
             </View>
@@ -490,6 +503,9 @@ function RideCompletedScreenContent() {
           onPress={handleSubmit}
           disabled={isSubmitting}
           activeOpacity={0.8}
+          accessibilityRole="button"
+          accessibilityLabel={alreadyPaid ? 'Rate and finish' : `Pay and finish`}
+          accessibilityState={{ disabled: isSubmitting, busy: isSubmitting }}
         >
           {isSubmitting ? (
             <ActivityIndicator size="small" color="#FFF" />

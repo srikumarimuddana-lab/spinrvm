@@ -88,7 +88,7 @@ None currently open in production (pre-launch).
 
 **Sprint goal:** Close the top P1 backend safety and data-integrity gaps from the driver-app verification pass (2026-04-23): suspended-driver dispatch gap, document-expiry `$set` anti-pattern, and open items from `OPEN-ITEMS-TRACKER.md` section A/B.
 
-**Status (2026-04-28):** B-S2-1/2 shipped (#140). B-S2-3/4 shipped (#141).
+**Status (2026-04-28):** B-S2-1/2 shipped (#140). B-S2-3/4 shipped (#141). CI unblock for future PRs in PR #151 (`claude/review-ci-errors-7gdBl`).
 
 ## In-flight
 

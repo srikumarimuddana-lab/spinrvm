@@ -101,7 +101,7 @@ PRs #138 and #141 both used migration slot 56 to `CREATE OR REPLACE` the same Po
 - **L-P1-4 earnings GST/BN**: T4A export missing `gst_registered`/`gst_bn` — migration + drivers.py needed.
 - **Dockerfile SHA256 digest pin** (B-P2-8 second half): manual step, follow `docs/runbooks/docker-image-pinning.md`. Quarterly cadence.
 - **Read-only-root-filesystem** (B-P2-8 third half): host migration off Railway (Fly.io / K8s / ECS); not gating launch.
-- **CI enhancement: cross-PR migration target check**: walk every open + recently-merged PR's `CREATE OR REPLACE` targets, fail when two PRs modify the same target without explicit annotation. Closes the gap that this session's incident exposed.
+- ~~**CI enhancement: cross-PR migration target check**~~ — shipped (PR in flight on `claude/ci-error-audit-system-HPjKP`): new step in `migration-safety-gate` scans new `.sql` files for `CREATE OR REPLACE` targets and cross-checks against all existing migrations; annotate with `-- migration-override-ok: reason` to suppress.
 
 ## Launch readiness shipped
 

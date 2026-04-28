@@ -48,6 +48,14 @@ import uuid
 from datetime import datetime, timezone
 
 try:
+    from utils.loop_monitor import record_heartbeat as _record_heartbeat
+except ImportError:
+
+    def _record_heartbeat(name: str) -> None:  # type: ignore[misc]
+        pass
+
+
+try:
     from .. import db_supabase
     from ..socket_manager import manager
     from .driver_presence import present_driver_ids
@@ -223,4 +231,5 @@ async def presence_sweeper_loop() -> None:
         _metric_gauge("spinr_bgloop_duration_ms", (time.monotonic() - _t0) * 1000, {"loop": "presence_sweeper"})
         if _had_error:
             _metric_inc("spinr_bgloop_errors_total", {"loop": "presence_sweeper"})
+        _record_heartbeat("presence_sweeper (60s)")
         await asyncio.sleep(SWEEP_INTERVAL_SECONDS * (0.9 + random.random() * 0.2))

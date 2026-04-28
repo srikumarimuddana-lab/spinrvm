@@ -477,19 +477,18 @@ describe('rideStore — syncOfflineRequests', () => {
 
 describe('rideStore — triggerEmergency network failure', () => {
   test('throws on API failure so SOSButton retry loop can detect it (R-P0-1)', async () => {
-    // Old behavior: swallowed the error → SOSButton always saw success → showed
-    // "Alert Sent" even when backend was unreachable.
-    // Fixed: triggerEmergency rethrows so SOSButton.triggerSOS() sets backendOk=false
-    // and shows "Alert Not Sent" with a retry option instead.
-    mockApi.post.mockRejectedValueOnce(new Error('Network error'));
+    // triggerEmergency retries up to MAX_ATTEMPTS (3) times before throwing.
+    // Mock all 3 attempts to fail so the function exhausts retries and rethrows.
+    mockApi.post
+      .mockRejectedValueOnce(new Error('Network error'))
+      .mockRejectedValueOnce(new Error('Network error'))
+      .mockRejectedValueOnce(new Error('Network error'));
 
     await expect(
-      act(async () =>
-        useRideStore.getState().triggerEmergency('ride-456', 43.65, -79.38)
-      )
+      useRideStore.getState().triggerEmergency('ride-456', 43.65, -79.38)
     ).rejects.toThrow('Network error');
 
     // triggerEmergency does NOT set store.error — failure UX is SOSButton's responsibility
     expect(useRideStore.getState().error).toBeNull();
-  });
+  }, 10000); // 3-attempt retry has 1s+2s back-off delays
 });

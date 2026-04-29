@@ -135,9 +135,10 @@ class TestCancelScheduledRide:
         from fastapi import HTTPException
 
         from backend.routes import rides as rides_mod
+        from backend.utils.error_handling import SpinrException
 
         with patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])):
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises((HTTPException, SpinrException)) as exc_info:
                 await rides_mod.cancel_scheduled_ride(
                     ride_id=RIDE_ID,
                     current_user={"id": "different-rider"},
@@ -149,28 +150,32 @@ class TestCancelScheduledRide:
         from fastapi import HTTPException
 
         from backend.routes import rides as rides_mod
+        from backend.utils.error_handling import SpinrException
 
         ride = _scheduled_ride(status="cancelled")
 
         with patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[ride])):
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises((HTTPException, SpinrException)) as exc_info:
                 await rides_mod.cancel_scheduled_ride(
                     ride_id=RIDE_ID,
                     current_user={"id": RIDER_ID},
                 )
 
         assert exc_info.value.status_code == 400
-        assert "cancel" in exc_info.value.detail.lower()
+        # SpinrException uses .message; HTTPException uses .detail
+        text = getattr(exc_info.value, "detail", None) or getattr(exc_info.value, "message", "")
+        assert "cancel" in str(text).lower()
 
     async def test_completed_ride_cannot_be_cancelled(self):
         from fastapi import HTTPException
 
         from backend.routes import rides as rides_mod
+        from backend.utils.error_handling import SpinrException
 
         ride = _scheduled_ride(status="completed")
 
         with patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[ride])):
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises((HTTPException, SpinrException)) as exc_info:
                 await rides_mod.cancel_scheduled_ride(
                     ride_id=RIDE_ID,
                     current_user={"id": RIDER_ID},

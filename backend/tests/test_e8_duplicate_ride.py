@@ -118,6 +118,7 @@ class TestActiveRideGuard:
         from fastapi import HTTPException
 
         from backend.routes import rides as rides_mod
+        from backend.utils.error_handling import SpinrException
 
         rider_row = {"id": RIDER_ID, "status": "active", "stripe_customer_id": "cus_x"}
 
@@ -127,7 +128,7 @@ class TestActiveRideGuard:
             patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[_active_ride(active_status)])),
             patch("backend.routes.rides.validate_ride_location", return_value=None),
         ):
-            with pytest.raises(HTTPException) as exc:
+            with pytest.raises((HTTPException, SpinrException)) as exc:
                 await rides_mod.create_ride(
                     request=_mock_request(),
                     body=_body(),
@@ -135,7 +136,7 @@ class TestActiveRideGuard:
                 )
 
         assert exc.value.status_code == 409
-        assert "active" in exc.value.detail.lower()
+        assert "active" in (getattr(exc.value, "detail", None) or getattr(exc.value, "message", "")).lower()
 
     async def test_new_ride_allowed_after_terminal_status(self):
         """Once the previous ride is completed/cancelled, a new one can be created."""
@@ -211,6 +212,7 @@ class TestIdempotencyKeyGuard:
         from fastapi import HTTPException
 
         from backend.routes import rides as rides_mod
+        from backend.utils.error_handling import SpinrException
 
         rider_row = {"id": RIDER_ID, "status": "active", "stripe_customer_id": "cus_x"}
 
@@ -232,7 +234,7 @@ class TestIdempotencyKeyGuard:
             patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[_active_ride()])),
             patch("backend.routes.rides.validate_ride_location", return_value=None),
         ):
-            with pytest.raises(HTTPException) as exc:
+            with pytest.raises((HTTPException, SpinrException)) as exc:
                 await rides_mod.create_ride(
                     request=_mock_request(idempotency_key="key-different-456"),
                     body=_body(),

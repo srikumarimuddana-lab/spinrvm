@@ -107,7 +107,6 @@ async def create_payment_intent(
             if requested != ride_fare:
                 raise PaymentException(
                     message=f"Payment amount {requested} does not match ride fare {ride_fare}",
-                    status_code=400,
                     message_key=ErrorKeys.RIDE_PRICE_MISMATCH,
                     action_hint="Refresh the fare estimate",
                 )
@@ -529,7 +528,6 @@ async def create_payment_sheet(
         if requested != ride_fare:
             raise PaymentException(
                 message=f"Payment amount {requested} does not match ride fare {ride_fare}",
-                status_code=400,
                 message_key=ErrorKeys.RIDE_PRICE_MISMATCH,
                 action_hint="Refresh the fare estimate",
             )

@@ -165,7 +165,14 @@ class AuthenticationException(SpinrException):
     """Base authentication exception."""
 
     def __init__(self, message: str = "Authentication required", **kwargs):
-        super().__init__(message=message, error_code=ErrorCode.AUTH_REQUIRED, status_code=401, **kwargs)
+        # Subclasses (TokenExpiredException, InvalidOTPException, …) pass
+        # their own ``error_code`` / ``status_code`` via super().__init__(…,
+        # **kwargs) — so honour those when present rather than hard-coding
+        # the AUTH_REQUIRED / 401 defaults, which previously caused a
+        # ``multiple values for keyword argument`` TypeError.
+        kwargs.setdefault("error_code", ErrorCode.AUTH_REQUIRED)
+        kwargs.setdefault("status_code", 401)
+        super().__init__(message=message, **kwargs)
 
 
 class InvalidTokenException(AuthenticationException):
@@ -222,7 +229,9 @@ class ValidationException(SpinrException):
     """Validation error."""
 
     def __init__(self, message: str = "Validation error", **kwargs):
-        super().__init__(message=message, error_code=ErrorCode.VALIDATION_ERROR, status_code=400, **kwargs)
+        kwargs.setdefault("error_code", ErrorCode.VALIDATION_ERROR)
+        kwargs.setdefault("status_code", 400)
+        super().__init__(message=message, **kwargs)
 
 
 class InvalidFormatException(ValidationException):
@@ -381,7 +390,9 @@ class PaymentException(SpinrException):
     """Payment processing error."""
 
     def __init__(self, message: str = "Payment failed", **kwargs):
-        super().__init__(message=message, error_code=ErrorCode.PAYMENT_FAILED, status_code=400, **kwargs)
+        kwargs.setdefault("error_code", ErrorCode.PAYMENT_FAILED)
+        kwargs.setdefault("status_code", 400)
+        super().__init__(message=message, **kwargs)
 
 
 class PaymentMethodInvalidException(PaymentException):
@@ -508,6 +519,12 @@ async def spinr_exception_handler(request: Request, exc: SpinrException) -> JSON
     content = exc.to_dict()
     if isinstance(content.get("error"), dict):
         content["error"]["request_id"] = request_id
+    # Top-level `detail` mirrors the shape of http_exception_handler — the
+    # mobile fetch wrapper, several backend tests, and ad-hoc clients read
+    # `errorData.detail` directly. Without this, migrating an HTTPException
+    # raise site to a SpinrException would silently drop the detail field
+    # and break the client's error message rendering.
+    content["detail"] = exc.message
     return JSONResponse(
         status_code=exc.status_code,
         content=content,

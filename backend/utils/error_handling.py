@@ -126,6 +126,7 @@ class SpinrException(Exception):
         should_log: bool = True,
         message_key: Optional[str] = None,
         action_hint: Optional[str] = None,
+        headers: Optional[Dict[str, str]] = None,
     ):
         self.message = message
         self.error_code = error_code
@@ -142,6 +143,11 @@ class SpinrException(Exception):
         # in Profile"). Optional; mobile apps render it as a secondary line in
         # Alert dialogs when present.
         self.action_hint = action_hint
+        # Extra HTTP response headers (e.g. Retry-After, RateLimit-* for 429s).
+        # Merged into the JSONResponse headers after CORS + X-Request-ID, so
+        # route-supplied values win over defaults for everything except the
+        # correlation id (X-Request-ID is re-pinned after the merge).
+        self.headers: Dict[str, str] = headers or {}
 
         super().__init__(self.message)
 
@@ -525,13 +531,20 @@ async def spinr_exception_handler(request: Request, exc: SpinrException) -> JSON
     # raise site to a SpinrException would silently drop the detail field
     # and break the client's error message rendering.
     content["detail"] = exc.message
+    response_headers: Dict[str, str] = {
+        **_cors_headers_for(request),
+        "X-Request-ID": request_id,
+    }
+    if exc.headers:
+        # Merge route-supplied headers (e.g. Retry-After, RateLimit-*) last so
+        # they take precedence, then re-pin X-Request-ID so a buggy raise site
+        # can't accidentally corrupt the correlation id.
+        response_headers.update(exc.headers)
+        response_headers["X-Request-ID"] = request_id
     return JSONResponse(
         status_code=exc.status_code,
         content=content,
-        headers={
-            **_cors_headers_for(request),
-            "X-Request-ID": request_id,
-        },
+        headers=response_headers,
     )
 
 

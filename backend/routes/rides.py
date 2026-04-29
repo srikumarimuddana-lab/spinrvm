@@ -930,6 +930,8 @@ async def create_ride(request: Request, body: CreateRideRequest, current_user: d
         stops=body.stops,
         is_scheduled=body.is_scheduled,
         requires_wav=body.requires_wav,
+        quiet_mode=body.quiet_mode,
+        rider_notes=body.rider_notes,
         scheduled_time=body.scheduled_time,
         driver_earnings=_f(driver_earnings),
         admin_earnings=_f(admin_earnings),
@@ -2246,10 +2248,7 @@ async def trigger_emergency(ride_id: str, request: EmergencyRequest, current_use
         user = await db_supabase.get_user_by_id(current_user["id"])
         user_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else "A Spinr user"
 
-        location_text = (
-            f" Location shared with emergency services." if request.latitude and request.longitude
-            else ""
-        )
+        location_text = " Location shared with emergency services." if request.latitude and request.longitude else ""
         sms_body = (
             f"URGENT: {user_name} triggered an emergency alert during a Spinr ride."
             f"{location_text} Call them or emergency services immediately."
@@ -2272,7 +2271,9 @@ async def trigger_emergency(ride_id: str, request: EmergencyRequest, current_use
                 logger.error(f"SOS SMS failed for contact {contact.get('id')}: {result.get('error')}")
 
         if contacts:
-            logger.info(f"SOS: notified {contacts_notified}/{len(contacts)} emergency contacts for user {current_user['id']}")
+            logger.info(
+                f"SOS: notified {contacts_notified}/{len(contacts)} emergency contacts for user {current_user['id']}"
+            )
     except Exception as e:
         logger.error(f"SOS emergency contact notification failed: {e}", exc_info=True)
 
@@ -2635,3 +2636,39 @@ async def get_ride_receipt(ride_id: str, current_user: dict = Depends(get_curren
     # Ideally send email here via SendGrid/Mailgun if POST
 
     return {"success": True, "receipt": receipt_data}
+
+
+# ---------------------------------------------------------------------------
+# Safety check-in response (Feature D — P3)
+# ---------------------------------------------------------------------------
+
+
+@api_router.post("/{ride_id}/safety-checkin")
+async def safety_checkin_response(
+    ride_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Rider taps 'I'm okay' on the safety check-in push notification.
+
+    Records the response in Redis so the safety_checkin_loop does not escalate
+    this ride to the trust-and-safety team.
+    """
+    try:
+        from ..utils.redis_client import redis_set
+    except ImportError:
+        from utils.redis_client import redis_set  # type: ignore
+
+    user_id = current_user.get("id")
+
+    # Verify the ride belongs to this rider and is still in_progress.
+    ride = await db_supabase.get_rows("rides", {"id": ride_id, "rider_id": user_id}, limit=1)
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    if ride[0].get("status") != "in_progress":
+        raise HTTPException(status_code=409, detail="Ride is not in progress")
+
+    # 4-hour TTL mirrors the sent/escalated keys in safety_checkin_loop.
+    await redis_set(f"safety:checkin:ok:{ride_id}", "1", ttl=4 * 3600)
+
+    logger.info(f"[SAFETY_CHECKIN] Rider {user_id} confirmed OK for ride {ride_id}")
+    return {"success": True}

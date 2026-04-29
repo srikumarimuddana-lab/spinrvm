@@ -421,4 +421,4 @@ class TestDriverEarningsIsolation:
         assert rides_q.get("driver_id") == DRIVER_ID, (
             f"Rides for earnings must be scoped to driver_id={DRIVER_ID}; got query={rides_q}"
         )
-        assert result["total_earnings"] == 15.0
+        assert result["total_earnings"] == "15.00"

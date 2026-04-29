@@ -167,6 +167,8 @@ When writing code that reads `ride.status`, treat any value not in the set above
 
 **JWT trust model** — admin JWTs are fully trusted (role+email+modules in claims). Rider/driver role is always re-read from the `users` table on every request; never trust the JWT role claim for non-admin tokens.
 
+**Driver online/available flags** — `is_online` is driver-toggled (a driver tapped "Go online"); `is_available` is system-computed (`is_online AND not on active ride AND not in offer-pending`). The invariant **`is_available ⇒ is_online`** must hold; the inverse does not. Dispatch reads `is_available`; admin filters read `is_online`. Never set `is_available = True` without `is_online = True`.
+
 **Stripe idempotency** — call `claim_stripe_event(event_id)` in the `stripe_events` table before processing any webhook; silently skip if already claimed.
 
 **OTP security** — OTPs are SHA-256 hashed at rest; 5 failures/hour triggers a 24-hour Redis lockout. Dev bypass `"1234"` only works when `ENV != production`.

@@ -18,7 +18,7 @@ Run:
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from starlette.requests import Request as StarletteRequest
@@ -99,6 +99,7 @@ class TestRefreshAccessToken:
 
             result = await auth_mod.refresh_access_token(
                 request=_make_request(user_agent="TestApp/1.0"),
+                response=MagicMock(),
                 body=_Body(),
             )
 
@@ -121,7 +122,7 @@ class TestRefreshAccessToken:
                 refresh_token = "bad-or-revoked-token"
 
             with pytest.raises(HTTPException) as exc_info:
-                await auth_mod.refresh_access_token(request=_make_request(), body=_Body())
+                await auth_mod.refresh_access_token(request=_make_request(), response=MagicMock(), body=_Body())
 
         assert exc_info.value.status_code == 401
 
@@ -144,7 +145,7 @@ class TestRefreshAccessToken:
                 refresh_token = "admin-refresh-token"
 
             with pytest.raises(HTTPException) as exc_info:
-                await auth_mod.refresh_access_token(request=_make_request(), body=_Body())
+                await auth_mod.refresh_access_token(request=_make_request(), response=MagicMock(), body=_Body())
 
         assert exc_info.value.status_code == 401
 
@@ -164,7 +165,7 @@ class TestRefreshAccessToken:
                 refresh_token = "valid-token-deleted-user"
 
             with pytest.raises(HTTPException) as exc_info:
-                await auth_mod.refresh_access_token(request=_make_request(), body=_Body())
+                await auth_mod.refresh_access_token(request=_make_request(), response=MagicMock(), body=_Body())
 
         assert exc_info.value.status_code == 401
 
@@ -190,7 +191,7 @@ class TestRefreshAccessToken:
             class _Body:
                 refresh_token = "old-raw"
 
-            await auth_mod.refresh_access_token(request=_make_request(user_agent="UA"), body=_Body())
+            await auth_mod.refresh_access_token(request=_make_request(user_agent="UA"), response=MagicMock(), body=_Body())
 
         assert issue_calls, "issue_refresh_token was not called"
         assert issue_calls[0]["replaces"] == OLD_REFRESH_ROW_ID, (

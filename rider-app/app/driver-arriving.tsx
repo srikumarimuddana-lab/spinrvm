@@ -141,7 +141,7 @@ function DriverArrivingScreenContent() {
 
   const handleBack = () => {
     const status = currentRide?.status;
-    const fare = currentRide?.total_fare || 0;
+    const fare = parseFloat(currentRide?.total_fare || '0');
 
     if (status === RideStatus.IN_PROGRESS) {
       // Ride started — full fare

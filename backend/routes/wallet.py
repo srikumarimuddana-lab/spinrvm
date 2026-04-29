@@ -36,6 +36,10 @@ def _d(v) -> Decimal:
     return Decimal(str(v)).quantize(_TWO, rounding=ROUND_HALF_UP)
 
 
+def _money_str(v) -> str:
+    return str(_d(v))
+
+
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
@@ -48,7 +52,7 @@ async def get_or_create_wallet(user_id: str) -> dict:
     wallet_data = {
         "id": str(uuid.uuid4()),
         "user_id": user_id,
-        "balance": 0.0,
+        "balance": "0.00",
         "currency": "CAD",
         "is_active": True,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -62,8 +66,8 @@ async def _record_transaction(
     wallet_id: str,
     user_id: str,
     txn_type: str,
-    amount: float,
-    balance_after: float,
+    amount: str,
+    balance_after: str,
     reference_id: str | None = None,
     description: str | None = None,
     metadata: dict | None = None,
@@ -111,7 +115,7 @@ async def get_wallet(current_user: dict = Depends(get_current_user)):
     wallet = await get_or_create_wallet(current_user["id"])
     return {
         "id": wallet["id"],
-        "balance": float(wallet.get("balance", 0)),
+        "balance": _money_str(wallet.get("balance", 0)),
         "currency": wallet.get("currency", "CAD"),
         "is_active": wallet.get("is_active", True),
     }
@@ -136,13 +140,13 @@ async def top_up_wallet(
         wallet_id=wallet["id"],
         user_id=current_user["id"],
         txn_type="top_up",
-        amount=float(_d(req.amount)),
-        balance_after=float(new_balance),
+        amount=_money_str(req.amount),
+        balance_after=_money_str(new_balance),
         description=f"Wallet top-up ${req.amount:.2f}",
     )
 
     return {
-        "balance": float(new_balance),
+        "balance": _money_str(new_balance),
         "transaction_id": txn["id"],
     }
 
@@ -185,14 +189,14 @@ async def wallet_pay(req: WalletPayRequest, current_user: dict = Depends(get_cur
         wallet_id=wallet["id"],
         user_id=current_user["id"],
         txn_type="ride_payment",
-        amount=-float(debit_amount),
-        balance_after=float(new_balance),
+        amount="-" + _money_str(debit_amount),
+        balance_after=_money_str(new_balance),
         reference_id=req.ride_id,
         description=f"Ride payment ${req.amount:.2f}",
     )
 
     return {
-        "balance": float(new_balance),
+        "balance": _money_str(new_balance),
         "transaction_id": txn["id"],
     }
 
@@ -268,17 +272,17 @@ async def transfer_to_user(
         wallet_id=sender_wallet["id"],
         user_id=current_user["id"],
         txn_type="fare_split_sent",
-        amount=-float(transfer_amount),
-        balance_after=float(new_sender_balance),
+        amount="-" + _money_str(transfer_amount),
+        balance_after=_money_str(new_sender_balance),
         description=f"Transfer to {req.recipient_phone}",
     )
     await _record_transaction(
         wallet_id=recipient_wallet["id"],
         user_id=recipient["id"],
         txn_type="fare_split_received",
-        amount=float(transfer_amount),
-        balance_after=float(new_recipient_balance),
+        amount=_money_str(transfer_amount),
+        balance_after=_money_str(new_recipient_balance),
         description=f"Received from {current_user.get('phone', 'user')}",
     )
 
-    return {"balance": float(new_sender_balance), "success": True}
+    return {"balance": _money_str(new_sender_balance), "success": True}

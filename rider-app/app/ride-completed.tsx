@@ -56,7 +56,7 @@ function RideCompletedScreenContent() {
   const mapRef = React.useRef<MapView>(null);
 
   const tipOptions = [2, 5, 10];
-  const fare = currentRide?.total_fare || 0;
+  const fare = parseFloat(currentRide?.total_fare || '0');
   const duration = currentRide?.duration_minutes || 0;
   const distance = currentRide?.distance_km || 0;
 
@@ -102,10 +102,10 @@ function RideCompletedScreenContent() {
       `▸ TO    ${currentRide?.dropoff_address || '—'}`,
       ``,
       `━━━━━━ FARE BREAKDOWN ━━━━━━`,
-      `Base fare:     $${(currentRide?.base_fare || 0).toFixed(2)}`,
-      `Distance fare: $${(currentRide?.distance_fare || 0).toFixed(2)}  (${distance.toFixed(1)} km)`,
-      `Time fare:     $${(currentRide?.time_fare || 0).toFixed(2)}  (${duration} min)`,
-      `Booking fee:   $${(currentRide?.booking_fee || 0).toFixed(2)}`,
+      `Base fare:     $${parseFloat(currentRide?.base_fare || '0').toFixed(2)}`,
+      `Distance fare: $${parseFloat((currentRide as any)?.distance_fare || '0').toFixed(2)}  (${distance.toFixed(1)} km)`,
+      `Time fare:     $${parseFloat((currentRide as any)?.time_fare || '0').toFixed(2)}  (${duration} min)`,
+      `Booking fee:   $${parseFloat((currentRide as any)?.booking_fee || '0').toFixed(2)}`,
       tipAmount > 0 ? `Tip:           $${tipAmount.toFixed(2)}` : null,
       `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
       `TOTAL:         $${total.toFixed(2)} CAD`,
@@ -198,11 +198,11 @@ function RideCompletedScreenContent() {
         return;
       }
 
-      const total = (currentRide?.total_fare || 0) + (tipAmount || 0);
+      const total = parseFloat(currentRide?.total_fare || '0') + (tipAmount || 0);
       Analytics.paymentCompleted({ method: 'default', amount: chargedAmount ?? total });
 
       Analytics.rideCompleted({
-        fare: currentRide?.total_fare || 0,
+        fare: parseFloat(currentRide?.total_fare || '0'),
         distance_km: currentRide?.distance_km,
       });
 
@@ -229,7 +229,7 @@ function RideCompletedScreenContent() {
     const tipAmount = selectedTip || (customTip ? parseFloat(customTip) : 0);
     const result = await presentSheet({
       rideId: rideId as string,
-      amount: currentRide?.total_fare || 0,
+      amount: parseFloat(currentRide?.total_fare || '0'),
       tipAmount,
     });
     if (!result.ok) {
@@ -241,9 +241,9 @@ function RideCompletedScreenContent() {
     try {
       await rateRide(rideId as string, rating, comment || undefined, tipAmount > 0 ? tipAmount : undefined);
     } catch { /* already rated guard */ }
-    const total = (currentRide?.total_fare || 0) + tipAmount;
+    const total = parseFloat(currentRide?.total_fare || '0') + tipAmount;
     Analytics.paymentCompleted({ method: 'google_pay', amount: total });
-    Analytics.rideCompleted({ fare: currentRide?.total_fare || 0, distance_km: currentRide?.distance_km });
+    Analytics.rideCompleted({ fare: parseFloat(currentRide?.total_fare || '0'), distance_km: currentRide?.distance_km });
     clearRide();
     router.replace('/(tabs)');
   };

@@ -433,6 +433,8 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
             "id": str(uuid.uuid4()),
             "user_id": current_user["id"],
             "name": f"{first} {last}".strip() or current_user.get("phone", ""),
+            "first_name": first or None,
+            "last_name": last or None,
             "phone": current_user.get("phone", ""),
             "status": "pending",
             "is_verified": False,
@@ -534,6 +536,16 @@ async def register_driver(
     full_name = (
         f"{first_name} {last_name}".strip() or current_user.get("name") or current_user.get("full_name") or "Driver"
     )
+    # Derive split first/last from whatever source produced full_name. Mirrors
+    # the migration backfill logic so a fresh row matches what the migration
+    # would produce.
+    if not first_name and not last_name:
+        _parts = full_name.split(" ", 1)
+        _first_name_split = _parts[0] if _parts else ""
+        _last_name_split = _parts[1].strip() if len(_parts) > 1 else ""
+    else:
+        _first_name_split = first_name
+        _last_name_split = last_name
 
     existing = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": user_id}, limit=1))
 
@@ -592,6 +604,8 @@ async def register_driver(
         "id": str(_uuid.uuid4()),
         "user_id": user_id,
         "name": full_name,
+        "first_name": _first_name_split or None,
+        "last_name": _last_name_split or None,
         "phone": current_user.get("phone", ""),
         "rating": 5.0,
         "total_rides": 0,
@@ -1433,7 +1447,7 @@ async def get_bank_account(current_user: dict = Depends(get_current_user)):
     if driver.get("stripe_account_onboarded"):
         return {
             "has_bank_account": True,
-            "bank_account": {"bank_name": "Stripe Connect", "account_number_last4": "****"},
+            "bank_account": {"bank_name": "Stripe Connect", "account_last4": "****"},
         }
 
     return {"has_bank_account": False, "bank_account": None}
@@ -1510,7 +1524,7 @@ async def save_bank_account(req: BankAccountCreate, current_user: dict = Depends
     trans = req.transit_number.zfill(5)
     account_data["routing_number"] = f"0{inst}{trans}"
 
-    account_data["account_number_last4"] = acc_num[-4:] if len(acc_num) >= 4 else acc_num
+    account_data["account_last4"] = acc_num[-4:] if len(acc_num) >= 4 else acc_num
     account_data["stripe_bank_id"] = None  # Would be populated after calling Stripe's API
     account_data["currency"] = "cad"
     account_data["country"] = "CA"
@@ -1598,7 +1612,7 @@ async def request_payout(
         "status": status,
         "stripe_payout_id": stripe_payout_id,
         "bank_name": account.get("bank_name") if account else "Stripe Connect",
-        "account_last4": account.get("account_number_last4") if account else "****",
+        "account_last4": account.get("account_last4") if account else "****",
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db_supabase.insert_one("payouts", payout)

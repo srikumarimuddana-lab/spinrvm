@@ -485,7 +485,6 @@ def init_middleware(app):
     app.add_middleware(FirebaseAppCheckMiddleware, enforcement_enabled=is_production)
 
     # FIX: Add CORS headers to exception responses (FastAPI bug fix)
-    @app.exception_handler(Exception)
     async def cors_exception_handler(request: Request, exc: Exception):
         origin = request.headers.get("origin")
 
@@ -519,6 +518,8 @@ def init_middleware(app):
         _apply_security_headers(response, request.url.path, enable_hsts=is_production)
 
         return response
+
+    app.add_exception_handler(Exception, cors_exception_handler)
 
     # Relative-redirect middleware — when FastAPI issues a 307 trailing-slash
     # redirect the Location header contains an absolute backend URL

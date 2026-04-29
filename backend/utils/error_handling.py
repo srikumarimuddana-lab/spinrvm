@@ -697,24 +697,12 @@ async def general_exception_handler(request: Request, exc: Exception) -> JSONRes
         # Never let logging take down the error handler itself.
         pass
 
-    # Only expose exception details in development — production responses
-    # should not leak internal error types or messages to clients.
-    try:
-        from core.config import settings as _cfg
-
-        _is_dev = _cfg.ENV.lower() in ("development", "local")
-    except Exception:
-        _is_dev = False
-
     error_body: Dict[str, Any] = {
         "code": ErrorCode.INTERNAL_ERROR.value,
         "message": "An unexpected error occurred",
         "request_id": request_id,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
-    if _is_dev:
-        error_body["exception_type"] = type(exc).__name__
-        error_body["detail"] = str(exc)[:500]
 
     return JSONResponse(
         status_code=500,

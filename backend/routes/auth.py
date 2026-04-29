@@ -34,6 +34,7 @@ try:
 except ImportError:
     import db_supabase
     from core.config import settings
+    from core.csrf import clear_csrf_cookie, generate_csrf_token, set_csrf_cookie
     from dependencies import (
         OTP_EXPIRY_MINUTES,
         create_jwt_token,

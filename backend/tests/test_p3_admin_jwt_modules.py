@@ -38,7 +38,7 @@ def _mint(
     ttl_hours: float = 12,
 ) -> str:
     """Mint a real (signed) admin JWT using the same code path as production."""
-    from routes.admin.auth import _mint_admin_access_token
+    from backend.routes.admin.auth import _mint_admin_access_token
 
     token, _ = _mint_admin_access_token(
         user_id=user_id,
@@ -52,7 +52,7 @@ def _mint(
 
 
 def _decode(token: str) -> dict:
-    from core.config import settings
+    from backend.core.config import settings
 
     return jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.ALGORITHM])
 
@@ -74,7 +74,7 @@ class TestMintAdminAccessToken:
 
     def test_token_expires_after_ttl(self):
         """The exp claim must be roughly ADMIN_ACCESS_TOKEN_TTL_HOURS in the future."""
-        from core.config import settings
+        from backend.core.config import settings
 
         token = _mint()
         payload = _decode(token)
@@ -177,7 +177,7 @@ class TestGetCurrentUserAdminJWT:
         from fastapi.security import HTTPAuthorizationCredentials
 
         import db_supabase as dbs
-        from core.config import settings
+        from backend.core.config import settings
         from dependencies import get_current_user
 
         now = datetime.now(timezone.utc)
@@ -314,7 +314,7 @@ class TestAdminSessionEndpoint:
 
     def test_session_rejects_expired_token(self, client):
         """An expired admin JWT must not authenticate."""
-        from core.config import settings
+        from backend.core.config import settings
 
         now = datetime.now(timezone.utc)
         expired_token = jwt.encode(

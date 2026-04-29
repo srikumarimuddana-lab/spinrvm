@@ -42,6 +42,19 @@ db = db_supabase  # legacy alias
 
 logger = logging.getLogger(__name__)
 
+_TWO_PLACES = Decimal("0.01")
+
+
+def _money_str(v) -> str:
+    """Serialise a money value as an exact 2-dp Decimal string (never float)."""
+    from decimal import ROUND_HALF_UP, InvalidOperation
+
+    try:
+        return str(Decimal(str(v)).quantize(_TWO_PLACES, rounding=ROUND_HALF_UP))
+    except (TypeError, ValueError, InvalidOperation):
+        return "0.00"
+
+
 # ── Vault encryption for driver PII (P2-5) ───────────────────────────────────
 # licence_number and vehicle_vin live in plain TEXT columns, but the values
 # stored there are vault.secrets UUIDs, not plaintext — actual ciphertext is
@@ -722,13 +735,14 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
         total_earnings = total_tips = total_rides = pending_payouts = 0
 
     return {
-        "total_earnings": total_earnings,
-        "available_balance": total_earnings - pending_payouts,
-        "pending_payouts": pending_payouts,
-        "total_paid_out": 0,
+        "total_earnings": _money_str(total_earnings),
+        # payable_balance = total_earnings - pending_payouts (NOT the same as wallet.balance)
+        "payable_balance": _money_str(Decimal(str(total_earnings)) - Decimal(str(pending_payouts))),
+        "pending_payouts": _money_str(pending_payouts),
+        "total_paid_out": "0.00",
         "has_bank_account": bool(driver.get("bank_account")),
         "stripe_account_onboarded": bool(driver.get("stripe_account_onboarded", False)),
-        "total_tips": total_tips,
+        "total_tips": _money_str(total_tips),
         "total_rides": total_rides,
     }
 
@@ -790,14 +804,14 @@ async def get_driver_earnings(period: str = Query("week"), current_user: dict = 
 
     return {
         "period": period,
-        "total_earnings": stats.get("total_earnings", 0),
-        "total_tips": stats.get("total_tips", 0),
+        "total_earnings": _money_str(stats.get("total_earnings", 0)),
+        "total_tips": _money_str(stats.get("total_tips", 0)),
         "total_rides": stats.get("total_rides", 0),
         "total_distance_km": stats.get("total_distance_km", 0),
         "total_duration_minutes": stats.get("total_duration_minutes", 0),
-        "average_per_ride": stats.get("total_earnings", 0) / stats.get("total_rides", 1)
+        "average_per_ride": _money_str(Decimal(str(stats.get("total_earnings", 0))) / stats.get("total_rides", 1))
         if stats.get("total_rides", 0) > 0
-        else 0,
+        else "0.00",
     }
 
 
@@ -1220,9 +1234,9 @@ async def get_driver_earnings_forecast(current_user: dict = Depends(get_current_
     projected_total = (this_week_earnings + projected_additional).quantize(Decimal("0.01"))
 
     return {
-        "this_week_earnings": float(this_week_earnings.quantize(Decimal("0.01"))),
-        "projected_weekly_total": float(projected_total),
-        "daily_avg_last_28d": float(daily_avg.quantize(Decimal("0.01"))),
+        "this_week_earnings": _money_str(this_week_earnings),
+        "projected_weekly_total": _money_str(projected_total),
+        "daily_avg_last_28d": _money_str(daily_avg),
         "days_remaining_this_week": days_remaining,
         "this_week_trips": len(this_week_rides),
     }
@@ -1522,7 +1536,7 @@ async def request_payout(
         raise HTTPException(status_code=404, detail="Driver profile not found")
 
     balance = await get_driver_balance(current_user)
-    if req.amount > balance.get("available_balance", 0):
+    if req.amount > Decimal(balance.get("payable_balance", "0")):
         raise HTTPException(status_code=400, detail="Insufficient funds")
 
     stripe_account_id = driver.get("stripe_account_id")
@@ -1616,13 +1630,13 @@ async def get_t4a_summary(year: int, current_user: dict = Depends(get_current_us
         limit=10000,
     )
 
-    total_earnings = sum(r.get("driver_earnings", 0) for r in rides)
+    total_earnings = _money_str(sum(Decimal(str(r.get("driver_earnings") or 0)) for r in rides))
 
     return {
         "year": year,
         "total_earnings": total_earnings,
         "total_trips": len(rides),
-        "platform_fees": 0,
+        "platform_fees": "0.00",
         "net_earnings": total_earnings,
         "gst_registered": driver.get("gst_registered", False),
         "gst_bn": driver.get("gst_bn") or "",
@@ -2652,8 +2666,8 @@ async def get_driver_leaderboard(
             period_rides = []
 
         total_rides = len(period_rides)
-        total_earnings = sum(float(r.get("driver_earnings", 0) or 0) for r in period_rides)
-        total_tips = sum(float(r.get("tip_amount", 0) or 0) for r in period_rides)
+        total_earnings = sum(Decimal(str(r.get("driver_earnings") or 0)) for r in period_rides)
+        total_tips = sum(Decimal(str(r.get("tip_amount") or 0)) for r in period_rides)
 
         user = await db.find_one("users", {"id": d.get("user_id")})
         name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else "Driver"
@@ -2663,15 +2677,15 @@ async def get_driver_leaderboard(
                 "driver_id": d_id,
                 "name": name,
                 "rides": total_rides,
-                "earnings": round(total_earnings, 2),
-                "tips": round(total_tips, 2),
+                "earnings": _money_str(total_earnings),
+                "tips": _money_str(total_tips),
                 "rating": d.get("rating", 0),
                 "is_current_user": d_id == driver["id"],
             }
         )
 
     # Sort by rides (primary), then earnings (secondary)
-    rankings.sort(key=lambda x: (x["rides"], x["earnings"]), reverse=True)
+    rankings.sort(key=lambda x: (x["rides"], Decimal(x["earnings"])), reverse=True)
 
     # Assign ranks
     for i, r in enumerate(rankings):

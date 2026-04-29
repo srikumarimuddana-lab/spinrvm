@@ -251,7 +251,7 @@ function PaymentConfirmScreenContent() {
             <View style={styles.fareRow}>
               <Text style={styles.fareTotalLabel}>Estimated Total</Text>
               <Text style={styles.fareTotalValue} allowFontScaling={false}>
-                ${((selectedEstimate as any).grand_total || selectedEstimate.total_fare).toFixed(2)}
+                ${parseFloat((selectedEstimate as any).grand_total || selectedEstimate.total_fare).toFixed(2)}
               </Text>
             </View>
           </View>
@@ -467,7 +467,7 @@ function PaymentConfirmScreenContent() {
       <View style={styles.footer}>
         <View style={styles.totalRow}>
           <Text style={styles.totalLabel}>Subtotal</Text>
-          <Text style={styles.totalAmount} allowFontScaling={false}>${selectedEstimate?.total_fare.toFixed(2)}</Text>
+          <Text style={styles.totalAmount} allowFontScaling={false}>${parseFloat(selectedEstimate?.total_fare || '0').toFixed(2)}</Text>
         </View>
         {promoDiscount > 0 && (
           <View style={styles.discountRow}>

@@ -1957,11 +1957,11 @@ async def cancel_ride_rider(request: Request, ride_id: str, current_user: dict =
     # Calculate cancellation fee based on time since driver accepted
     driver_id = ride.get("driver_id")
     settings = await get_app_settings()
-    cancellation_fee_admin = settings.get("cancellation_fee_admin", 0.50)
-    cancellation_fee_driver = settings.get("cancellation_fee_driver", 2.50)
+    cancellation_fee_admin = _d(str(settings.get("cancellation_fee_admin", "0.50")))
+    cancellation_fee_driver = _d(str(settings.get("cancellation_fee_driver", "2.50")))
 
-    charged_admin = 0.0
-    charged_driver = 0.0
+    charged_admin = Decimal("0")
+    charged_driver = Decimal("0")
 
     # Flat $5.00 fee when the driver has already arrived — overrides the
     # time-based check below because the driver has made the full trip to

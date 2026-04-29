@@ -174,8 +174,18 @@ class TestFirebaseAuthDbFailureRaises503:
                     AsyncMock(side_effect=Exception("DB write failed")),
                 ),
             ):
-                req = MagicMock()
-                req.headers.get.return_value = "test-agent"
+                from starlette.requests import Request as _Req
+
+                req = _Req(
+                    scope={
+                        "type": "http",
+                        "method": "POST",
+                        "path": "/api/auth/firebase",
+                        "query_string": b"",
+                        "headers": [(b"user-agent", b"test-agent")],
+                        "client": ("127.0.0.1", 0),
+                    }
+                )
                 resp = MagicMock()
                 body = auth_mod.FirebaseAuthRequest(firebase_token="fake_token")
 
@@ -204,8 +214,18 @@ class TestFirebaseAuthDbFailureRaises503:
                     AsyncMock(side_effect=Exception("DB update failed")),
                 ),
             ):
-                req = MagicMock()
-                req.headers.get.return_value = "test-agent"
+                from starlette.requests import Request as _Req
+
+                req = _Req(
+                    scope={
+                        "type": "http",
+                        "method": "POST",
+                        "path": "/api/auth/firebase",
+                        "query_string": b"",
+                        "headers": [(b"user-agent", b"test-agent")],
+                        "client": ("127.0.0.2", 0),
+                    }
+                )
                 resp = MagicMock()
                 body = auth_mod.FirebaseAuthRequest(firebase_token="fake_token")
 
@@ -213,4 +233,4 @@ class TestFirebaseAuthDbFailureRaises503:
                     await auth_mod.firebase_auth_login(req, resp, body)
 
         assert exc_info.value.status_code == 503
-        assert exc_info.value.detail == "auth_session_failed"
+        assert exc_info.value.detail == "auth_session_update_failed"

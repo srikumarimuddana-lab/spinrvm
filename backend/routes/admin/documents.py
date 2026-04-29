@@ -90,6 +90,43 @@ async def admin_delete_document_requirement(requirement_id: str):
     return {"message": "Document requirement deleted"}
 
 
+# ---------- Pending Documents (cursor-paginated, A-P4-4) ----------
+
+
+from fastapi import Query  # noqa: E402  (placed here to avoid circular at module top)
+
+
+@router.get("/documents/pending")
+async def admin_get_pending_documents(
+    limit: int = Query(50, ge=1, le=100),
+    cursor: Optional[str] = None,
+    status: str = Query("pending"),
+):
+    """Paginated list of driver documents awaiting review.
+
+    Cursor is the ``id`` of the last item from the previous page.
+    Pass it back as-is on subsequent requests to advance the window.
+    Returns at most ``limit`` items (max 100) plus a ``next_cursor``
+    field (null when the last page has been reached).
+    """
+    filters: Dict[str, Any] = {"status": status}
+    if cursor:
+        filters["id"] = {"$gt": cursor}
+
+    docs = await db_supabase.get_rows(
+        "driver_documents",
+        filters,
+        order="id",
+        limit=limit + 1,
+    )
+    has_more = len(docs) > limit
+    items = docs[:limit]
+    return {
+        "items": items,
+        "next_cursor": items[-1]["id"] if items and has_more else None,
+    }
+
+
 # ---------- Driver Documents ----------
 
 

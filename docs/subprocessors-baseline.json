@@ -1,0 +1,55 @@
+{
+  "_schema_version": "1",
+  "_note": "Managed by backend/utils/subprocessor_audit.py. DO NOT edit manually. Changes land via auto-PR from the quarterly audit workflow.",
+  "_last_audit": null,
+  "vendors": {
+    "stripe": {
+      "name": "Stripe, Inc.",
+      "subprocessor_url": "https://stripe.com/legal/service-providers/global",
+      "content_hash": null,
+      "etag": null,
+      "last_reviewed": null,
+      "last_changed": null
+    },
+    "twilio": {
+      "name": "Twilio Inc.",
+      "subprocessor_url": "https://www.twilio.com/en-us/legal/sub-processor-list",
+      "content_hash": null,
+      "etag": null,
+      "last_reviewed": null,
+      "last_changed": null
+    },
+    "google_cloud": {
+      "name": "Google LLC (Firebase / FCM / Maps / Gemini)",
+      "subprocessor_url": "https://cloud.google.com/terms/subprocessors",
+      "content_hash": null,
+      "etag": null,
+      "last_reviewed": null,
+      "last_changed": null
+    },
+    "supabase": {
+      "name": "Supabase Inc.",
+      "subprocessor_url": "https://supabase.com/privacy",
+      "content_hash": null,
+      "etag": null,
+      "last_reviewed": null,
+      "last_changed": null
+    },
+    "sentry": {
+      "name": "Functional Software, Inc. (Sentry)",
+      "subprocessor_url": "https://sentry.io/legal/subprocessors/",
+      "content_hash": null,
+      "etag": null,
+      "last_reviewed": null,
+      "last_changed": null
+    },
+    "railway": {
+      "name": "Railway Corp.",
+      "subprocessor_url": "https://railway.app/legal/privacy",
+      "content_hash": null,
+      "etag": null,
+      "last_reviewed": null,
+      "last_changed": null
+    }
+  }
+}

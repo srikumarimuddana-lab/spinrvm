@@ -252,7 +252,7 @@ async def _fares_for_location_impl(
     logger.info(f"Fares: Found {len(vehicle_types)} active vehicle types")
 
     if not vehicle_types:
-        logger.warning("Fares: No active vehicle types found in database!")
+        logger.error("Fares: No active vehicle types found in database!")
         return []
 
     matching_area = await resolve_service_area_for_point(lat, lng, all_areas=all_areas)

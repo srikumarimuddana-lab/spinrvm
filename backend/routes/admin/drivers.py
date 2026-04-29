@@ -226,8 +226,10 @@ async def admin_get_driver_stats(
     )
     users_map: Dict[str, Any] = {u["id"]: u for u in users_list if u.get("id")}
 
-    # Auto-detect needs_review: active drivers with expired docs or pending re-uploads
-    all_docs = await db_supabase.get_rows("driver_documents", {"status": "pending"}, limit=10000)
+    # Auto-detect needs_review: active drivers with expired docs or pending re-uploads.
+    # Capped at 500 for the inline needs_review flag; full paginated list via
+    # GET /documents/pending (A-P4-4).
+    all_docs = await db_supabase.get_rows("driver_documents", {"status": "pending"}, limit=500)
     pending_doc_driver_ids = {d.get("driver_id") for d in all_docs if d.get("driver_id")}
 
     now_iso = datetime.now(timezone.utc).isoformat()

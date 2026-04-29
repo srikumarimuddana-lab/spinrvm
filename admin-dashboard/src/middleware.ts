@@ -23,8 +23,6 @@ import { NextRequest, NextResponse } from "next/server";
  * On logout the HttpOnly cookie is deleted via DELETE /api/auth/set-cookie and
  * the Zustand store is reset (user=null, isAuthenticated=false) — see authStore.logout().
  *
- * NOTE: renamed from `middleware` → `proxy` per Next.js 16 convention.
- *
  * CSP (F-05):
  *   A fresh random nonce is generated per request and embedded in the
  *   Content-Security-Policy header. The nonce is forwarded to the app via the
@@ -129,7 +127,7 @@ function passThroughWithNonce(request: NextRequest, nonce: string): NextResponse
   return response;
 }
 
-export function proxy(request: NextRequest) {
+export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // IP allowlist check — runs before auth so blocked IPs see 403, not /login

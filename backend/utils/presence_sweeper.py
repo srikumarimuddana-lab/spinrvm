@@ -78,7 +78,7 @@ async def _sweep_once() -> int:
             limit=1000,
         )
     except Exception as exc:
-        logger.warning(f"[presence_sweeper] DB read failed, skipping tick: {exc}")
+        logger.error(f"[presence_sweeper] DB read failed, skipping tick: {exc}", exc_info=True)
         return 0
 
     if not online_drivers:
@@ -132,7 +132,7 @@ async def _sweep_once() -> int:
     except Exception as exc:
         # Fail safe: if we can't confirm active-ride state, skip the
         # sweep rather than risk flipping a driver mid-trip.
-        logger.warning(f"[presence_sweeper] active-ride lookup failed, skipping tick: {exc}")
+        logger.error(f"[presence_sweeper] active-ride lookup failed, skipping tick: {exc}", exc_info=True)
         return 0
 
     eligible = [d for d in eligible if d["id"] not in active_driver_ids]
@@ -146,7 +146,7 @@ async def _sweep_once() -> int:
         # Redis outage — don't sweep everyone offline because we can't
         # tell who's present. Dispatch's own fallback handles routing
         # during the outage.
-        logger.warning(f"[presence_sweeper] presence lookup failed, skipping tick: {exc}")
+        logger.error(f"[presence_sweeper] presence lookup failed, skipping tick: {exc}", exc_info=True)
         return 0
 
     ghosts = [d for d in eligible if d["id"] not in present]
@@ -188,7 +188,7 @@ async def _sweep_once() -> int:
                     },
                 )
             except Exception as _log_exc:  # pragma: no cover - best effort
-                logger.warning(f"[presence_sweeper] activity log insert failed for {d['id']}: {_log_exc}")
+                logger.error(f"[presence_sweeper] activity log insert failed for {d['id']}: {_log_exc}", exc_info=True)
             # Notify admin live-monitoring clients so the badge updates
             # without a page reload.
             try:
@@ -202,7 +202,7 @@ async def _sweep_once() -> int:
             except Exception:  # pragma: no cover - best effort  # noqa: S110
                 pass
         except Exception as exc:
-            logger.warning(f"[presence_sweeper] flip failed for {d['id']}: {exc}")
+            logger.error(f"[presence_sweeper] flip failed for {d['id']}: {exc}", exc_info=True)
 
     if flipped:
         logger.info(f"[presence_sweeper] flipped {flipped} ghost-online driver(s) offline")
@@ -221,6 +221,6 @@ async def presence_sweeper_loop() -> None:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning(f"[presence_sweeper] tick failed: {exc}")
+            logger.error(f"[presence_sweeper] tick failed: {exc}", exc_info=True)
         _record_heartbeat("presence_sweeper (60s)")
         await asyncio.sleep(SWEEP_INTERVAL_SECONDS)

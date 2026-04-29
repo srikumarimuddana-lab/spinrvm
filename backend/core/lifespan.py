@@ -114,7 +114,7 @@ async def lifespan(app: FastAPI):
             background_tasks.append(task)
             logger.info(f"Started background task: {name}")
         except Exception as e:
-            logger.warning(f"Failed to start background task {name}: {e}")
+            logger.error(f"Failed to start background task {name}: {e}", exc_info=True)
 
     # G5: Subscription expiry warning — checks every 6h for subscriptions
     # expiring within 24h and sends push notifications.
@@ -123,7 +123,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("subscription_expiry (6h)", check_expiring_subscriptions)
     except Exception as e:
-        logger.warning(f"Failed to import subscription expiry checker: {e}")
+        logger.error(f"Failed to import subscription expiry checker: {e}", exc_info=True)
 
     # Automated surge pricing — recalculates demand/supply ratio every 2 min
     # and updates service_areas.surge_multiplier for auto-managed areas.
@@ -132,7 +132,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("surge_engine (2min)", surge_recalculation_loop)
     except Exception as e:
-        logger.warning(f"Failed to import surge pricing engine: {e}")
+        logger.error(f"Failed to import surge pricing engine: {e}", exc_info=True)
 
     # Scheduled ride dispatcher — checks every 60s for rides due for dispatch
     # and sends 10-minute reminder notifications.
@@ -141,7 +141,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("scheduled_dispatcher (60s)", scheduled_ride_dispatcher_loop)
     except Exception as e:
-        logger.warning(f"Failed to import scheduled ride dispatcher: {e}")
+        logger.error(f"Failed to import scheduled ride dispatcher: {e}", exc_info=True)
 
     # Payment retry — retries failed Stripe payments every 5 minutes
     try:
@@ -149,7 +149,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("payment_retry (5min)", payment_retry_loop)
     except Exception as e:
-        logger.warning(f"Failed to import payment retry service: {e}")
+        logger.error(f"Failed to import payment retry service: {e}", exc_info=True)
 
     # Document expiry alerts — notifies drivers about expiring docs every 12h
     try:
@@ -157,7 +157,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("document_expiry (12h)", document_expiry_loop)
     except Exception as e:
-        logger.warning(f"Failed to import document expiry checker: {e}")
+        logger.error(f"Failed to import document expiry checker: {e}", exc_info=True)
 
     # Corporate wallet auto-top-up — kicks off off-session Stripe charges
     # every 10 minutes for wallets that have dropped below their threshold.
@@ -166,7 +166,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("corporate_autotopup (10min)", corporate_autotopup_loop)
     except Exception as e:
-        logger.warning(f"Failed to import corporate autotopup loop: {e}")
+        logger.error(f"Failed to import corporate autotopup loop: {e}", exc_info=True)
 
     # Corporate wallet low-balance email — for accounts with auto-topup OFF,
     # sends a reminder once every 12h while the balance stays below threshold.
@@ -175,7 +175,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("corporate_low_balance (1h)", corporate_low_balance_loop)
     except Exception as e:
-        logger.warning(f"Failed to import corporate low-balance loop: {e}")
+        logger.error(f"Failed to import corporate low-balance loop: {e}", exc_info=True)
 
     # Monthly allowance reset — rolls fixed_recurring periods forward and
     # zeroes `used` for non-rollover employee allowances once per hour.
@@ -184,7 +184,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("allowance_reset (1h)", allowance_reset_loop)
     except Exception as e:
-        logger.warning(f"Failed to import allowance reset loop: {e}")
+        logger.error(f"Failed to import allowance reset loop: {e}", exc_info=True)
 
     # Driver presence sweeper — reconciles drivers.is_online against Redis
     # presence heartbeats every 60s, so ghost-online rows (app killed,
@@ -196,7 +196,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("presence_sweeper (60s)", presence_sweeper_loop)
     except Exception as e:
-        logger.warning(f"Failed to import presence sweeper loop: {e}")
+        logger.error(f"Failed to import presence sweeper loop: {e}", exc_info=True)
 
     # PII retention purge — daily SECURITY DEFINER call to anonymize
     # ride GPS at 3y, hard-delete rides at 7y, delete location history
@@ -209,7 +209,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("retention_purge (24h)", retention_purge_loop)
     except Exception as e:
-        logger.warning(f"Failed to import retention purge loop: {e}")
+        logger.error(f"Failed to import retention purge loop: {e}", exc_info=True)
 
     # Stripe ↔ DB daily reconciliation — runs at 02:00 UTC, one replica
     # via Redis leader lock. Flags paid rides with no matching Stripe
@@ -251,7 +251,7 @@ async def lifespan(app: FastAPI):
                 "cross-machine delivery."
             )
     except Exception as e:
-        logger.warning(f"Failed to start WS pub/sub: {e}")
+        logger.error(f"Failed to start WS pub/sub: {e}", exc_info=True)
 
     # Perform startup checks
     logger.info(f"Spinr API startup complete ({len(background_tasks)} background tasks running)")

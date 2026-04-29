@@ -204,7 +204,7 @@ async def admin_cancel_ride(
         try:
             await db_supabase.set_driver_available(driver_id, True)
         except Exception as e:
-            logger.warning(f"admin_cancel_ride: could not free driver {driver_id}: {e}")
+            logger.error(f"admin_cancel_ride: could not free driver {driver_id}: {e}", exc_info=True)
 
         driver = await db_supabase.get_driver_by_id(driver_id)
         if driver and driver.get("user_id"):

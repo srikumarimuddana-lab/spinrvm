@@ -17,6 +17,25 @@ git branch --show-current
   is usually run from a human-authored feature branch. (The Claude workflow
   branches get their own automated PRs.)
 
+**Duplicate PR guard (mandatory):** Before calling `mcp__github__create_pull_request`,
+check whether the current branch already has an open PR:
+
+```bash
+# Replace BRANCH with the output of git branch --show-current
+gh pr list --head BRANCH --state open --json number,title,url
+```
+
+Or via MCP: call `mcp__github__list_pull_requests` with
+`head: "<owner>:<branch>"` and `state: "open"`.
+
+- If one or more open PRs exist → **STOP creating a new PR**. Push additional
+  commits to the existing branch; the existing PR will update automatically.
+  Report the existing PR URL to the user.
+- If the existing PR is a draft and the work is ready → promote it with
+  `mcp__github__update_pull_request` (`draft: false`) rather than opening a
+  new one.
+- Only proceed to create a new PR if **zero** open PRs exist for this branch.
+
 ## 1 · Gather facts
 
 Run these in parallel:

@@ -62,6 +62,7 @@ export async function POST(req: NextRequest) {
     return res;
   }
 
+  const log = logger.child({ domain: "auth" });
   const refreshToken = req.cookies.get(RT_COOKIE)?.value;
   log.info({ has_rt: !!refreshToken }, "admin logout");
 

@@ -2346,7 +2346,10 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         )
     )
 
-    # Update driver stats
+    # Update driver stats. Setting is_available=True is safe here because the
+    # ride has just transitioned to `completed`, and the driver's row already
+    # has is_online=True (a driver cannot be on an active trip while offline).
+    # See update_driver_status docstring for the is_online/is_available invariant.
     await db_supabase.update_one(
         "drivers", {"id": driver["id"]}, {"$inc": {"total_rides": 1}, "$set": {"is_available": True}}
     )
@@ -2724,6 +2727,25 @@ async def update_driver_status(
     is_online: bool = Body(..., embed=True),
     current_user: dict = Depends(get_current_user),
 ):
+    """Toggle the driver's online flag (driver-facing "Go online" / "Go offline").
+
+    Driver online/available flag contract
+    -------------------------------------
+    ``is_online``
+        Driver-toggled. ``True`` when the driver has tapped "Go online".
+        Independent of ride state; remains ``True`` while the driver is on
+        an active trip.
+    ``is_available``
+        System-computed. ``True`` only when (``is_online`` AND not currently
+        on an active ride AND not in offer-pending state). Used by dispatch
+        to decide who to offer the next ride to.
+
+    Invariant: ``is_available == True`` implies ``is_online == True``. The
+    inverse does NOT hold — an online driver mid-trip is ``is_online=True,
+    is_available=False``. Dispatch reads ``is_available``; admin filters
+    typically read ``is_online``. Never set ``is_available = True`` without
+    ``is_online = True``.
+    """
     driver = await db_supabase.get_driver_by_id(driver_id)
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
@@ -2971,6 +2993,11 @@ async def update_driver_status(
     # payload so the flip itself still lands.
     _now_iso = datetime.now(timezone.utc).isoformat()
     _base = {"is_online": is_online, "is_available": is_online, "updated_at": _now_iso}
+    # Invariant guardrail: is_available => is_online (see handler docstring).
+    # This is a sanity check on the payload we are about to write — never
+    # gate user behaviour on the assert; if it ever trips, the bug is in the
+    # logic that built _base, not in the driver's request.
+    assert not (_base["is_available"] and not _base["is_online"]), "is_available implies is_online"
     status_flipped = bool(driver.get("is_online")) != bool(is_online)
     _payload = {**_base, "last_status_changed_at": _now_iso} if status_flipped else _base
     try:

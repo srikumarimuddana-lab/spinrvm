@@ -93,6 +93,24 @@ export function setRefreshCallback(fn: RefreshFn): void {
   _refreshCallback = fn;
 }
 
+// ── Phase 4 (P1-9): outgoing W3C traceparent header ─────────────────
+// Callers that have started a trace span (e.g. screen-level RUM) can
+// register the active trace ID here; the request methods forward it as
+// the W3C `traceparent` header so the backend can stitch its loguru
+// request_id to the upstream client trace. Stub form: parent-id is
+// zeroed and only the trace-id is meaningful — full OTel SDK
+// integration is a follow-up. Set to `null` to disable.
+let _outgoingTraceId: string | null = null;
+export const setOutgoingTraceId = (id: string | null): void => {
+  _outgoingTraceId = id;
+};
+const traceparentHeader = (): Record<string, string> => {
+  if (!_outgoingTraceId) return {};
+  // version "00", flags "01" (sampled). parent-id is the 16-hex
+  // child-span; without an OTel SDK we don't have one yet, so zero it.
+  return { traceparent: `00-${_outgoingTraceId}-0000000000000000-01` };
+};
+
 // Helper to get stored token
 const getStoredToken = async (): Promise<string | null> => {
   try {
@@ -462,11 +480,27 @@ const handleApiError = async (response: Response, method: string, url: string, r
   const errorData = await response.json().catch(() => ({}));
   const extracted = extractError(errorData, response.status);
   const message = extracted.message;
-  const requestId = response.headers.get('x-request-id') || extracted.requestId;
+  // Phase 4 (P1-9): prefer body request_id, fall back to header. Header
+  // lookups go through both `x-request-id` and `X-Trace-ID` (the OTel
+  // alias the backend exposes) so plain HTTPException responses — which
+  // don't carry a structured body request_id — still correlate to the
+  // backend loguru line.
+  const headerRequestId =
+    response.headers.get('x-request-id') ||
+    response.headers.get('X-Request-ID') ||
+    response.headers.get('x-trace-id') ||
+    response.headers.get('X-Trace-ID') ||
+    undefined;
+  const requestId = extracted.requestId || headerRequestId;
   const exceptionType = errorData?.error?.exception_type;
-  // Ensure the structured object reflects the header request ID (which
-  // wins over the body) so downstream consumers see a single source.
+  // Ensure the structured object reflects the resolved request ID
+  // (header winning over body-only callers) so downstream consumers
+  // see a single source.
   if (requestId) extracted.requestId = requestId;
+  // TODO(diag): wire Sentry breadcrumb here including `requestId` so
+  // payment failures can be correlated mobile → backend → Stripe.
+  // Sentry SDK isn't currently imported in shared/api/client.ts —
+  // adding it as a dep is a separate PR.
   recordApiError({
     ts: new Date().toISOString(),
     method,
@@ -547,6 +581,7 @@ const client = {
       'Content-Type': 'application/json',
       'X-Request-ID': generateRequestId(),
       ...deadlineHeader(),
+      ...traceparentHeader(),
       ...config?.headers,
     };
     if (token) {
@@ -570,6 +605,7 @@ const client = {
       'Content-Type': 'application/json',
       'X-Request-ID': generateRequestId(),
       ...deadlineHeader(),
+      ...traceparentHeader(),
       ...config?.headers,
     };
     if (token) {
@@ -597,6 +633,7 @@ const client = {
     const headers: Record<string, string> = {
       ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
       'X-Request-ID': generateRequestId(),
+      ...traceparentHeader(),
       ...config?.headers,
     };
     // Strip any Content-Type for FormData so fetch can set the multipart boundary itself.
@@ -628,6 +665,7 @@ const client = {
       'Content-Type': 'application/json',
       'X-Request-ID': generateRequestId(),
       ...deadlineHeader(),
+      ...traceparentHeader(),
       ...config?.headers,
     };
     if (token) {
@@ -655,6 +693,7 @@ const client = {
       'Content-Type': 'application/json',
       'X-Request-ID': generateRequestId(),
       ...deadlineHeader(),
+      ...traceparentHeader(),
       ...config?.headers,
     };
     if (token) {

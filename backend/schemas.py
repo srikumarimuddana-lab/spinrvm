@@ -140,6 +140,9 @@ class AppSettings(BaseModel):
     company_website: str = ""
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
+    class Config:
+        json_encoders = {Decimal: str}
+
 
 class ServiceArea(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -151,6 +154,9 @@ class ServiceArea(BaseModel):
     airport_fee: Decimal = Decimal("0.0")
     surge_multiplier: float = 1.0
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    class Config:
+        json_encoders = {Decimal: str}
 
 
 class VehicleType(BaseModel):
@@ -175,6 +181,9 @@ class FareConfig(BaseModel):
     booking_fee: Decimal = Decimal("2.0")
     is_active: bool = True
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    class Config:
+        json_encoders = {Decimal: str}
 
 
 class SavedAddress(BaseModel):
@@ -300,11 +309,17 @@ class Ride(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
+    class Config:
+        json_encoders = {Decimal: str}
+
 
 class RideRatingRequest(BaseModel):
     rating: int = Field(ge=1, le=5, description="Rating must be between 1 and 5")
     comment: Optional[str] = None
     tip_amount: Decimal = Field(default=Decimal("0.0"), ge=0, description="Tip amount must be non-negative")
+
+    class Config:
+        json_encoders = {Decimal: str}
 
 
 class CreateRideRequest(BaseModel):

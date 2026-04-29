@@ -3310,7 +3310,7 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
                 _user = await db.find_one("users", {"id": current_user["id"]})
                 _customer_id = _user.get("stripe_customer_id") if _user else None
                 if _customer_id:
-                    _amount_cents = int(float(plan_price) * 100)
+                    _amount_cents = int(Decimal(str(plan_price)) * 100)
                     _charge = stripe.PaymentIntent.create(
                         amount=_amount_cents,
                         currency="cad",

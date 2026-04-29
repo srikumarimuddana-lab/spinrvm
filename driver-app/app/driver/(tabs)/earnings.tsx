@@ -15,6 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
+import api from '@shared/api/client';
 import { useDriverStore } from '../../../store/driverStore';
 import EarningsBarChart from '../../../components/charts/EarningsBarChart';
 import EarningsLineChart from '../../../components/charts/EarningsLineChart';
@@ -54,6 +55,21 @@ function EarningsScreen() {
   const [chartMode, setChartMode] = useState<ChartMode>('daily');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+
+  // Weekly earnings forecast widget (Feature B)
+  const [forecast, setForecast] = useState<{
+    this_week_earnings: number;
+    projected_weekly_total: number;
+    days_remaining_this_week: number;
+    this_week_trips: number;
+  } | null>(null);
+
+  useEffect(() => {
+    api
+      .get('/drivers/earnings/forecast')
+      .then((r) => setForecast(r.data))
+      .catch(() => {}); // forecast is informational — ignore errors silently
+  }, []);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -167,6 +183,32 @@ function EarningsScreen() {
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
       >
+        {/* Weekly Earnings Forecast (Feature B) */}
+        {forecast && (
+          <View style={styles.forecastCard}>
+            <View style={styles.forecastHeader}>
+              <Ionicons name="trending-up" size={16} color="#10B981" />
+              <Text style={styles.forecastTitle}>This Week's Projection</Text>
+            </View>
+            <View style={styles.forecastBody}>
+              <View style={styles.forecastStat}>
+                <Text style={styles.forecastAmount}>${forecast.this_week_earnings.toFixed(2)}</Text>
+                <Text style={styles.forecastLabel}>Earned so far</Text>
+              </View>
+              <View style={styles.forecastDivider} />
+              <View style={styles.forecastStat}>
+                <Text style={[styles.forecastAmount, { color: '#10B981' }]}>${forecast.projected_weekly_total.toFixed(2)}</Text>
+                <Text style={styles.forecastLabel}>Projected total</Text>
+              </View>
+              <View style={styles.forecastDivider} />
+              <View style={styles.forecastStat}>
+                <Text style={styles.forecastAmount}>{forecast.days_remaining_this_week}</Text>
+                <Text style={styles.forecastLabel}>Days left</Text>
+              </View>
+            </View>
+          </View>
+        )}
+
         {/* Modern Stats Grid */}
         <View style={styles.statsGrid}>
           <View style={styles.statCard}>
@@ -802,6 +844,56 @@ function createStyles(colors: ThemeColors) {
       fontSize: 11,
       fontWeight: '700',
       marginTop: 2,
+    },
+    forecastCard: {
+      marginHorizontal: 16,
+      marginTop: 16,
+      marginBottom: 4,
+      borderRadius: 16,
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: 'rgba(16, 185, 129, 0.2)',
+      padding: 14,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.06,
+      shadowRadius: 6,
+      elevation: 2,
+    },
+    forecastHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+      marginBottom: 10,
+    },
+    forecastTitle: {
+      fontSize: 13,
+      fontWeight: '700',
+      color: colors.text,
+    },
+    forecastBody: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-around',
+    },
+    forecastStat: {
+      alignItems: 'center',
+      flex: 1,
+    },
+    forecastAmount: {
+      fontSize: 18,
+      fontWeight: '800',
+      color: colors.text,
+    },
+    forecastLabel: {
+      fontSize: 11,
+      color: colors.textDim,
+      marginTop: 2,
+    },
+    forecastDivider: {
+      width: 1,
+      height: 36,
+      backgroundColor: colors.border,
     },
   });
 }

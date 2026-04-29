@@ -302,3 +302,119 @@ class TestGetT4ASummary:
                 await get_t4a_summary(year=2025, current_user={"id": "ghost"})
 
         assert exc_info.value.status_code == 404
+
+    async def test_t4a_includes_gst_fields_when_set(self):
+        """gst_registered=True + gst_bn propagate from driver row into summary."""
+        from backend.routes.drivers import get_t4a_summary
+
+        driver = {**_driver_row(), "gst_registered": True, "gst_bn": "123456789RT0001"}
+
+        with (
+            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[driver])),
+            patch("backend.routes.drivers.db_supabase.get_rides_for_driver", AsyncMock(return_value=[])),
+        ):
+            result = await get_t4a_summary(year=2025, current_user={"id": DRIVER_USER_ID})
+
+        assert result["gst_registered"] is True
+        assert result["gst_bn"] == "123456789RT0001"
+
+    async def test_t4a_gst_fields_default_when_absent(self):
+        """Driver rows without GST columns default to False / empty string."""
+        from backend.routes.drivers import get_t4a_summary
+
+        driver = _driver_row()  # no gst_registered / gst_bn keys
+
+        with (
+            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[driver])),
+            patch("backend.routes.drivers.db_supabase.get_rides_for_driver", AsyncMock(return_value=[])),
+        ):
+            result = await get_t4a_summary(year=2025, current_user={"id": DRIVER_USER_ID})
+
+        assert result["gst_registered"] is False
+        assert result["gst_bn"] == ""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PUT /drivers/me — gst_registered + gst_bn field write
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestUpdateDriverGstFields:
+    """Pins that gst_registered and gst_bn reach the DB via PUT /drivers/me.
+
+    L-P1-4: UpdateDriverProfileRequest previously used `gst_number` (wrong
+    column name) and was missing `gst_registered`.  The DB columns are
+    `gst_registered` (bool) and `gst_bn` (text), added in migration 58.
+    """
+
+    def _make_driver(self, **extra) -> dict:
+        return {"id": DRIVER_ID, "user_id": DRIVER_USER_ID, "status": "active", **extra}
+
+    def _patches(self, driver: dict, update_mock: AsyncMock):
+        """Return an ExitStack that covers all DB calls in update_my_driver."""
+        import contextlib
+
+        stack = contextlib.ExitStack()
+        stack.enter_context(patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[driver])))
+        stack.enter_context(patch("backend.routes.drivers.db_supabase.update_one", update_mock))
+        stack.enter_context(
+            patch("backend.routes.drivers.db_supabase.get_driver_by_id", AsyncMock(return_value=driver))
+        )
+        stack.enter_context(patch("backend.routes.drivers._encrypt_driver_pii", AsyncMock(side_effect=lambda d: d)))
+        stack.enter_context(patch("backend.routes.drivers._decrypt_driver_pii", AsyncMock(side_effect=lambda d: d)))
+        return stack
+
+    @pytest.mark.anyio
+    async def test_gst_registered_reaches_db(self):
+        """Setting gst_registered=True via PUT /drivers/me writes to drivers table."""
+        from backend.routes.drivers import UpdateDriverProfileRequest, update_my_driver
+
+        driver = self._make_driver()
+        update_mock = AsyncMock(return_value=None)
+
+        with self._patches(driver, update_mock):
+            await update_my_driver(
+                body=UpdateDriverProfileRequest(gst_registered=True),
+                current_user={"id": DRIVER_USER_ID},
+            )
+
+        update_mock.assert_called_once()
+        _, _filter, updates = update_mock.call_args.args
+        assert updates.get("gst_registered") is True
+        assert "gst_number" not in updates  # old wrong field must not appear
+
+    @pytest.mark.anyio
+    async def test_gst_bn_reaches_db(self):
+        """Setting gst_bn via PUT /drivers/me writes the correct column name."""
+        from backend.routes.drivers import UpdateDriverProfileRequest, update_my_driver
+
+        driver = self._make_driver()
+        update_mock = AsyncMock(return_value=None)
+
+        with self._patches(driver, update_mock):
+            await update_my_driver(
+                body=UpdateDriverProfileRequest(gst_registered=True, gst_bn="123456789RT0001"),
+                current_user={"id": DRIVER_USER_ID},
+            )
+
+        _, _filter, updates = update_mock.call_args.args
+        assert updates.get("gst_bn") == "123456789RT0001"
+        assert "gst_number" not in updates
+
+    @pytest.mark.anyio
+    async def test_omitted_gst_fields_not_written(self):
+        """Omitting GST fields from PUT body leaves driver row unchanged."""
+        from backend.routes.drivers import UpdateDriverProfileRequest, update_my_driver
+
+        driver = self._make_driver()
+        update_mock = AsyncMock(return_value=None)
+
+        with self._patches(driver, update_mock):
+            await update_my_driver(
+                body=UpdateDriverProfileRequest(preferred_language="fr"),
+                current_user={"id": DRIVER_USER_ID},
+            )
+
+        _, _filter, updates = update_mock.call_args.args
+        assert "gst_registered" not in updates
+        assert "gst_bn" not in updates

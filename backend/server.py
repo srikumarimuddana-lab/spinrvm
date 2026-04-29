@@ -35,6 +35,7 @@ from routes.promotions import api_router as promotions_router
 from routes.quests import api_router as quests_router
 from routes.rides import api_router as rides_router
 from routes.safety import api_router as safety_router
+from routes.service_areas import api_router as service_areas_router
 from routes.settings import api_router as settings_router
 from routes.support import api_router as support_chat_router
 from routes.users import api_router as users_router
@@ -147,6 +148,7 @@ v1_api_router.include_router(pricing_router)
 v1_api_router.include_router(faqs_router)
 v1_api_router.include_router(legal_documents_router)
 v1_api_router.include_router(safety_router)
+v1_api_router.include_router(service_areas_router)
 
 # Include API routers
 app.include_router(v1_api_router, prefix="/api/v1")

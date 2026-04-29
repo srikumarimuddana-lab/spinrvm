@@ -66,12 +66,12 @@ export interface RideInfo {
     pickup_lng: number;
     dropoff_lat: number;
     dropoff_lng: number;
-    estimated_fare: number;
+    total_fare: string;
     distance_km: number;
     duration_minutes: number;
     rider_id: string;
     driver_id?: string;
-    otp?: string;
+    pickup_otp?: string;
     surge_multiplier?: number;
     payment_method?: string;
     created_at: string;

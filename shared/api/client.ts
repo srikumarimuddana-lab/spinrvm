@@ -358,6 +358,34 @@ export interface ApiErrorLogEntry {
 const _errorLog: ApiErrorLogEntry[] = [];
 const MAX_ERROR_LOG = 500;
 
+// ── Phase 4 (P1-7): AsyncStorage persistence for the error ring buffer ─
+// The in-memory buffer is lost on process kill / crash — exactly when we
+// most need the trail. Mobile apps wire this up at startup by calling
+// `initApiErrorLogPersistence(AsyncStorage)`. We DO NOT import
+// `@react-native-async-storage/async-storage` here so `shared/` stays
+// framework-agnostic (admin-dashboard / Node tests don't have it).
+const ERROR_LOG_STORAGE_KEY = '@spinr/api-error-log';
+let _persistTimer: ReturnType<typeof setTimeout> | null = null;
+let _asyncStorage: {
+  getItem: (k: string) => Promise<string | null>;
+  setItem: (k: string, v: string) => Promise<void>;
+} | null = null;
+
+export const initApiErrorLogPersistence = async (
+  storage: typeof _asyncStorage,
+): Promise<void> => {
+  _asyncStorage = storage;
+  try {
+    const stored = await storage!.getItem(ERROR_LOG_STORAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (Array.isArray(parsed)) _errorLog.push(...parsed.slice(-MAX_ERROR_LOG));
+    }
+  } catch {
+    // Corrupt storage — start fresh, don't crash
+  }
+};
+
 // Default surface tag, set once at app startup via `setApiErrorSurface`.
 // Used as a fallback when individual call sites don't pass `surface`
 // explicitly. Lets us avoid touching every recordApiError caller in this
@@ -383,6 +411,17 @@ const recordApiError = (entry: ApiErrorLogEntry) => {
     (entry.surface ? ` | surface=${entry.surface}` : '') +
     (entry.screen ? ` | screen=${entry.screen}` : ''),
   );
+  // Debounced flush to AsyncStorage so a burst of 4xx responses doesn't
+  // hammer the disk. 1s window collapses bursts but still survives a
+  // crash within seconds of the last error.
+  if (_asyncStorage) {
+    if (_persistTimer) clearTimeout(_persistTimer);
+    _persistTimer = setTimeout(() => {
+      void _asyncStorage!
+        .setItem(ERROR_LOG_STORAGE_KEY, JSON.stringify(_errorLog))
+        .catch(() => {});
+    }, 1000);
+  }
 };
 
 const handleApiError = async (response: Response, method: string, url: string, retryFn?: () => Promise<never>): Promise<never> => {

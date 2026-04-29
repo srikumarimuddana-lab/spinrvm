@@ -467,6 +467,20 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         break;
       }
 
+      // Unified status event from socket_manager.broadcast_ride_status().
+      // Currently emitted to drivers on admin-initiated cancellations.
+      // Handlers are idempotent: specific events (ride_cancelled, etc.)
+      // may already have acted; these are reconciliation / catch-up paths.
+      case 'ride_status_changed': {
+        const status = data.status as string | undefined;
+        if (status === 'cancelled') {
+          resetRideState();
+        } else if (status === 'completed' && typeof data.total_fare === 'number') {
+          fetchEarnings('today');
+        }
+        break;
+      }
+
       default:
         console.warn('[WS] Unknown message type received:', data.type);
         break;

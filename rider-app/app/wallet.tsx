@@ -98,8 +98,8 @@ export default function WalletScreen() {
       setAlertState({ visible: true, title: 'Invalid Amount', message: 'Amount must be between $0.01 and $500.', variant: 'warning' });
       return;
     }
-    if ((wallet?.balance ?? 0) < amount) {
-      setAlertState({ visible: true, title: 'Insufficient Funds', message: `Your balance ($${(wallet?.balance ?? 0).toFixed(2)}) is less than $${amount.toFixed(2)}.`, variant: 'danger' });
+    if (parseFloat(wallet?.balance ?? '0') < amount) {
+      setAlertState({ visible: true, title: 'Insufficient Funds', message: `Your balance ($${parseFloat(wallet?.balance ?? '0').toFixed(2)}) is less than $${amount.toFixed(2)}.`, variant: 'danger' });
       return;
     }
     setTransferLoading(true);
@@ -126,7 +126,8 @@ export default function WalletScreen() {
   const renderTransaction = ({ item }: { item: WalletTransaction }) => {
     const icon = TXN_ICONS[item.type] || 'swap-horizontal';
     const color = TXN_COLORS[item.type] || colors.textDim;
-    const isCredit = item.amount > 0;
+    const amountNum = parseFloat(item.amount);
+    const isCredit = amountNum > 0;
 
     return (
       <View style={styles.txnRow}>
@@ -138,7 +139,7 @@ export default function WalletScreen() {
           <Text style={styles.txnDate}>{formatDate(item.created_at)}</Text>
         </View>
         <Text style={[styles.txnAmount, { color: isCredit ? '#10B981' : '#EF4444' }]}>
-          {isCredit ? '+' : ''}{item.amount < 0 ? '-' : ''}${Math.abs(item.amount).toFixed(2)}
+          {isCredit ? '+' : ''}{amountNum < 0 ? '-' : ''}${Math.abs(amountNum).toFixed(2)}
         </Text>
       </View>
     );
@@ -161,7 +162,7 @@ export default function WalletScreen() {
           <Text style={[styles.balanceAmount, { fontSize: 20 }]}>Balance unavailable</Text>
         ) : (
           <Text style={styles.balanceAmount}>
-            ${(wallet?.balance ?? 0).toFixed(2)}
+            ${parseFloat(wallet?.balance ?? '0').toFixed(2)}
           </Text>
         )}
         <Text style={styles.balanceCurrency}>{wallet?.currency || 'CAD'}</Text>
@@ -268,7 +269,7 @@ export default function WalletScreen() {
               <View style={styles.transferBalanceRow}>
                 <Ionicons name="wallet-outline" size={16} color={colors.textDim} />
                 <Text style={styles.transferBalanceText}>
-                  Available: <Text style={{ fontWeight: '700', color: colors.primary }}>${(wallet?.balance ?? 0).toFixed(2)}</Text>
+                  Available: <Text style={{ fontWeight: '700', color: colors.primary }}>${parseFloat(wallet?.balance ?? '0').toFixed(2)}</Text>
                 </Text>
               </View>
 

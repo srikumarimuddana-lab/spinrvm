@@ -123,6 +123,7 @@ interface RideState {
   selectedVehicle: VehicleType | null;
   currentRide: Ride | null;
   currentDriver: Driver | null;
+  driverEtaSeconds: number | null; // road-network ETA from last WS location_update
   _lastWsDriverPositionAt: number; // epoch ms of last WS-driven position update
   savedAddresses: SavedAddress[];
   recentSearches: Location[];
@@ -172,7 +173,7 @@ interface RideState {
   applyPromo: (promo: any | null) => void;
 
   // WebSocket-driven updates (see rider-app/hooks/useRiderSocket.ts).
-  updateDriverLocation: (lat: number, lng: number, speed?: number | null, heading?: number | null) => void;
+  updateDriverLocation: (lat: number, lng: number, speed?: number | null, heading?: number | null, etaSeconds?: number | null) => void;
   applyRideStatusFromWS: (rideId: string, status: string, extra?: Record<string, any>) => void;
 
   // Chat
@@ -190,6 +191,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   selectedVehicle: null,
   currentRide: null,
   currentDriver: null,
+  driverEtaSeconds: null,
   _lastWsDriverPositionAt: 0,
   chatMessages: [],
   savedAddresses: [],
@@ -631,7 +633,7 @@ export const useRideStore = create<RideState>((set, get) => ({
 
   // ── WebSocket-driven updates ────────────────────────────────────
 
-  updateDriverLocation: (lat, lng, speed, heading) => {
+  updateDriverLocation: (lat, lng, speed, heading, etaSeconds) => {
     const driver = get().currentDriver;
     if (!driver) return;
     // Only update the coordinate fields — leave everything else (name,
@@ -644,7 +646,13 @@ export const useRideStore = create<RideState>((set, get) => ({
       ...(heading !== null && heading !== undefined ? { heading } : {}),
     };
     // R-P2-29: record timestamp so fetchRide doesn't overwrite this WS position.
-    set({ currentDriver: updated, _lastWsDriverPositionAt: Date.now() });
+    // Also store the road-network ETA so the driver-arriving screen can show
+    // a live countdown instead of a static default.
+    set({
+      currentDriver: updated,
+      _lastWsDriverPositionAt: Date.now(),
+      ...(etaSeconds !== null && etaSeconds !== undefined ? { driverEtaSeconds: etaSeconds } : {}),
+    });
     _persistRide(get().currentRide, updated);
   },
 

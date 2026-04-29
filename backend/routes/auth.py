@@ -23,7 +23,11 @@ try:
     from ..settings_loader import get_app_settings
     from ..sms_service import send_otp_sms
     from ..utils.crypto import hash_otp
-    from ..utils.error_handling import InvalidOTPException, OTPExpiredException, TokenExpiredException
+    from ..utils.error_handling import (
+        ErrorCode,
+        SpinrException,
+        TokenExpiredException,
+    )
     from ..utils.error_keys import ErrorKeys
     from ..utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set
     from ..utils.refresh_tokens import (
@@ -47,6 +51,12 @@ except ImportError:
     from settings_loader import get_app_settings
     from sms_service import send_otp_sms
     from utils.crypto import hash_otp
+    from utils.error_handling import (
+        ErrorCode,
+        SpinrException,
+        TokenExpiredException,
+    )
+    from utils.error_keys import ErrorKeys
     from utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set
     from utils.refresh_tokens import (
         issue_refresh_token,
@@ -257,8 +267,9 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
     if not otp_record:
         # Wrong code — record the failure (may trigger lockout)
         await _record_otp_failure(phone)
-        raise InvalidOTPException(
+        raise SpinrException(
             message="ERR_OTP_INVALID",
+            error_code=ErrorCode.AUTH_OTP_INVALID,
             status_code=400,
             message_key=ErrorKeys.AUTH_OTP_INVALID,
             action_hint="Re-enter the 4-digit code",
@@ -287,8 +298,9 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
             await db_supabase.delete_otp_record(otp_record["id"])
         except Exception:  # noqa: S110
             pass
-        raise OTPExpiredException(
+        raise SpinrException(
             message="ERR_OTP_EXPIRED",
+            error_code=ErrorCode.AUTH_OTP_EXPIRED,
             status_code=400,
             message_key=ErrorKeys.AUTH_OTP_EXPIRED,
             action_hint="Request a new code",

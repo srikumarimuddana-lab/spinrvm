@@ -42,8 +42,12 @@ except ImportError:
     from utils.datetime_utils import parse_iso_utc
     from utils.driver_presence import clear_presence, mark_present, present_driver_ids
     from utils.error_handling import (
+        AccountDisabledException,
+        ErrorCode,
         RideStateError,
+        SpinrException,
     )
+    from utils.error_keys import ErrorKeys
     from utils.idempotency import idempotent_endpoint
 
 db = db_supabase  # legacy alias

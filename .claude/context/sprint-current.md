@@ -71,6 +71,8 @@ None currently open in production (pre-launch).
 
 | PR | What |
 |---|---|
+| #310 | **Admin middleware dead-auth fix** — `src/proxy.ts` → `src/middleware.ts`, `export function proxy` → `export function middleware`; Next.js was silently ignoring the misnamed file, leaving all `/dashboard/*` routes accessible without a valid `admin_token` cookie. JWT expiry check, IP allowlist (F-06), and CSP nonce injection (F-05) now all active. Identified in auth coverage audit 2026-04-29. |
+| #305 | Dead `carpool.tsx` screen removed (309 lines, zero nav callsites; superseded by `fare-split.tsx`) |
 | #128 | `logger.warning` → `error` sweep: `stripe_charge.py`, `payments.py`, `users.py`, `drivers.py` — payment/dispatch/safety failures now reach Sentry |
 | #132 | `_vault_encrypt` fail-closed: driver PII (`license_number`, `vehicle_vin`) no longer stored as plaintext when Supabase Vault is unavailable |
 | manual | [17-4] Branch protection on `main` — PR + 1 review required; `Post guard rail summary` + `Security gates summary` required checks; force-push + deletion blocked |

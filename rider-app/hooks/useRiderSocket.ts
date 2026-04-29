@@ -74,6 +74,7 @@ export function useRiderSocket() {
             data.lng,
             data.speed ?? null,
             data.heading ?? null,
+            data.eta_seconds ?? null,
           );
         }
         break;

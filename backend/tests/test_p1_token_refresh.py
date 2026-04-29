@@ -78,20 +78,23 @@ class TestRefreshAccessToken:
     """
 
     async def test_valid_rider_refresh_token_returns_new_tokens(self):
+        # Import via package attribute so auth_mod matches the live module object
+        # regardless of any sys.modules divergence caused by earlier test modules.
         from backend.routes import auth as auth_mod
 
         new_raw_token = "new-refresh-raw-xyz"
         refresh_expires = datetime.now(timezone.utc) + timedelta(days=30)
 
         with (
-            patch("backend.routes.auth.lookup_refresh_token", AsyncMock(return_value=_refresh_row())),
-            patch("backend.routes.auth.db.find_one", AsyncMock(return_value=_user_row())),
-            patch(
-                "backend.routes.auth.issue_refresh_token",
+            patch.object(auth_mod, "lookup_refresh_token", AsyncMock(return_value=_refresh_row())),
+            patch.object(auth_mod.db, "find_one", AsyncMock(return_value=_user_row())),
+            patch.object(
+                auth_mod,
+                "issue_refresh_token",
                 AsyncMock(return_value=(new_raw_token, "hashed", refresh_expires)),
             ),
-            patch("backend.routes.auth.create_jwt_token", return_value="new-access-token-abc"),
-            patch("backend.routes.auth.get_remote_address", return_value="127.0.0.1"),
+            patch.object(auth_mod, "create_jwt_token", return_value="new-access-token-abc"),
+            patch.object(auth_mod, "get_remote_address", return_value="127.0.0.1"),
         ):
 
             class _Body:
@@ -114,8 +117,8 @@ class TestRefreshAccessToken:
         from backend.routes import auth as auth_mod
 
         with (
-            patch("backend.routes.auth.lookup_refresh_token", AsyncMock(return_value=None)),
-            patch("backend.routes.auth.get_remote_address", return_value="127.0.0.1"),
+            patch.object(auth_mod, "lookup_refresh_token", AsyncMock(return_value=None)),
+            patch.object(auth_mod, "get_remote_address", return_value="127.0.0.1"),
         ):
 
             class _Body:
@@ -134,11 +137,12 @@ class TestRefreshAccessToken:
         from backend.routes import auth as auth_mod
 
         with (
-            patch(
-                "backend.routes.auth.lookup_refresh_token",
+            patch.object(
+                auth_mod,
+                "lookup_refresh_token",
                 AsyncMock(return_value=_refresh_row(audience="admin")),
             ),
-            patch("backend.routes.auth.get_remote_address", return_value="127.0.0.1"),
+            patch.object(auth_mod, "get_remote_address", return_value="127.0.0.1"),
         ):
 
             class _Body:
@@ -156,9 +160,9 @@ class TestRefreshAccessToken:
         from backend.routes import auth as auth_mod
 
         with (
-            patch("backend.routes.auth.lookup_refresh_token", AsyncMock(return_value=_refresh_row())),
-            patch("backend.routes.auth.db.find_one", AsyncMock(return_value=None)),
-            patch("backend.routes.auth.get_remote_address", return_value="127.0.0.1"),
+            patch.object(auth_mod, "lookup_refresh_token", AsyncMock(return_value=_refresh_row())),
+            patch.object(auth_mod.db, "find_one", AsyncMock(return_value=None)),
+            patch.object(auth_mod, "get_remote_address", return_value="127.0.0.1"),
         ):
 
             class _Body:
@@ -181,11 +185,11 @@ class TestRefreshAccessToken:
             return ("new-raw", "hashed", datetime.now(timezone.utc) + timedelta(days=30))
 
         with (
-            patch("backend.routes.auth.lookup_refresh_token", AsyncMock(return_value=_refresh_row())),
-            patch("backend.routes.auth.db.find_one", AsyncMock(return_value=_user_row())),
-            patch("backend.routes.auth.issue_refresh_token", AsyncMock(side_effect=_capture_issue)),
-            patch("backend.routes.auth.create_jwt_token", return_value="access-tok"),
-            patch("backend.routes.auth.get_remote_address", return_value="127.0.0.1"),
+            patch.object(auth_mod, "lookup_refresh_token", AsyncMock(return_value=_refresh_row())),
+            patch.object(auth_mod.db, "find_one", AsyncMock(return_value=_user_row())),
+            patch.object(auth_mod, "issue_refresh_token", AsyncMock(side_effect=_capture_issue)),
+            patch.object(auth_mod, "create_jwt_token", return_value="access-tok"),
+            patch.object(auth_mod, "get_remote_address", return_value="127.0.0.1"),
         ):
 
             class _Body:

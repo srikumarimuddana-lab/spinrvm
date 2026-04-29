@@ -80,6 +80,35 @@ function DriverDashboard() {
     refreshLocation,
   } = useDriverDashboard();
 
+  // Surge multiplier for the driver's service area — fetched on mount and
+  // refreshed every 2 minutes (matching the surge engine interval).
+  const [surgeMultiplier, setSurgeMultiplier] = useState<number>(1.0);
+  useEffect(() => {
+    let cancelled = false;
+    const fetchSurge = async () => {
+      try {
+        const res = await api.get('/service-areas');
+        if (cancelled) return;
+        const areaId = driverData?.service_area_id;
+        const areas: Array<{ id: string; surge_multiplier?: number; surge_active?: boolean }> = res.data || [];
+        const myArea = areaId ? areas.find((a) => a.id === areaId) : areas[0];
+        if (myArea?.surge_active && typeof myArea.surge_multiplier === 'number') {
+          setSurgeMultiplier(myArea.surge_multiplier);
+        } else {
+          setSurgeMultiplier(1.0);
+        }
+      } catch {
+        // surge badge is informational — silently ignore fetch failures
+      }
+    };
+    fetchSurge();
+    const timer = setInterval(fetchSurge, 2 * 60 * 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [driverData?.service_area_id]);
+
   // Route polyline coordinates for active rides
   const [routeCoords, setRouteCoords] = useState<{ latitude: number; longitude: number }[]>([]);
 
@@ -588,7 +617,7 @@ function DriverDashboard() {
       </View>
 
       {/* Top Bar */}
-      <DriverTopBar driverData={driverData} user={user} isOnline={isOnline} connectionState={connectionState} />
+      <DriverTopBar driverData={driverData} user={user} isOnline={isOnline} connectionState={connectionState} surgeMultiplier={surgeMultiplier} />
 
       {/* SOS Button — visible during active ride */}
       {(rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup' || rideState === 'trip_in_progress') && activeRide?.ride?.id && (

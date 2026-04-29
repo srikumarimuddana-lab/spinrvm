@@ -34,8 +34,6 @@ os.environ.setdefault("ENV", "test")
 # flow into FastAPI's route registration and cause FastAPIError at test setup.
 # Since Python caches modules in sys.modules, fixtures that later do
 # `from backend.server import app` get the already-built app with correct bindings.
-import backend.server as _backend_server_preload  # noqa: F401, E402
-
 # Force-stub slowapi AFTER route modules are cached. The real package IS
 # installed in CI (it's in requirements.txt for the rate-limiter), so the
 # `if _m not in sys.modules` guard in some test files leaves the real module
@@ -44,6 +42,8 @@ import backend.server as _backend_server_preload  # noqa: F401, E402
 # Replacing it here (conftest runs before collection) makes the stub visible
 # to every test file regardless of collection order.
 from slowapi.errors import RateLimitExceeded as _real_RateLimitExceeded  # noqa: E402
+
+import backend.server as _backend_server_preload  # noqa: F401, E402
 
 for _slowapi_mod in ("slowapi", "slowapi.extension", "slowapi.errors", "slowapi.util"):
     sys.modules[_slowapi_mod] = MagicMock()
@@ -61,10 +61,20 @@ sys.modules["slowapi.errors"].RateLimitExceeded = _real_RateLimitExceeded
 # decorators into MagicMocks. Mirroring the keys here prevents that re-import.
 for _bare_key in list(sys.modules.keys()):
     if _bare_key.split(".")[0] in {
-        "routes", "utils", "core", "documents", "features",
-        "dependencies", "socket_manager", "db_supabase",
-        "schemas", "validators", "sms_service", "settings_loader",
-        "logging_utils", "geo_utils",
+        "routes",
+        "utils",
+        "core",
+        "documents",
+        "features",
+        "dependencies",
+        "socket_manager",
+        "db_supabase",
+        "schemas",
+        "validators",
+        "sms_service",
+        "settings_loader",
+        "logging_utils",
+        "geo_utils",
     }:
         _qualified_key = "backend." + _bare_key
         if _qualified_key not in sys.modules:
@@ -336,6 +346,10 @@ def patch_external_dependencies(
         ("backend.core.security", "core.security", "firebase_admin", mock_firebase_admin),
         ("backend.sms_service", "sms_service", "send_sms", mock_sms_service.send),
         ("backend.sms_service", "sms_service", "send_otp_sms", mock_sms_service.send_otp),
+        # auth.py does `from sms_service import send_otp_sms` — a direct name binding
+        # that is NOT covered by patching the sms_service module attribute above.
+        # Must also patch the name in auth.py's own namespace.
+        ("backend.routes.auth", "routes.auth", "send_otp_sms", mock_sms_service.send_otp),
     ]
 
     patches = []
@@ -382,6 +396,33 @@ def reset_db_circuit_breaker() -> None:
                 breaker._failure_times = []
                 breaker._opened_at = None
                 breaker._probe_in_flight = False
+        except (ImportError, ModuleNotFoundError):
+            continue
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limiters() -> None:
+    """Reset in-process rate-limiter storage before each test.
+
+    The real SlowAPI Limiter is created at module import time (before conftest
+    mocks slowapi) and uses MemoryStorage whose hit counts persist across tests
+    in the same process.  After the limit threshold is reached (e.g. 3 hits to
+    /api/admin/auth/login in 30 min), all subsequent tests that hit the same
+    endpoint receive 429 instead of the expected 4xx/5xx — masking the real
+    auth logic under test.
+    """
+    import importlib
+
+    for mod_path in ("backend.routes.admin.auth", "routes.admin.auth"):
+        try:
+            mod = importlib.import_module(mod_path)
+            limiter = getattr(mod, "limiter", None)
+            if limiter is None:
+                continue
+            inner = getattr(limiter, "_limiter", None)
+            storage = getattr(inner, "storage", None) if inner is not None else None
+            if storage is not None and callable(getattr(storage, "reset", None)):
+                storage.reset()
         except (ImportError, ModuleNotFoundError):
             continue
 

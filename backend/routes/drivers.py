@@ -336,7 +336,8 @@ class UpdateDriverProfileRequest(BaseModel):
     """Strict schema for driver profile updates — only whitelisted fields accepted."""
 
     # Safe fields (no re-verification)
-    gst_number: Optional[str] = None
+    gst_registered: Optional[bool] = None
+    gst_bn: Optional[str] = None  # CRA Business Number, format 123456789RT0001
     preferred_language: Optional[str] = None
     photo_url: Optional[str] = None
     is_wav: Optional[bool] = None
@@ -371,7 +372,7 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
     )
 
     # Fields that always update without affecting verification
-    safe_fields = {"gst_number", "preferred_language", "photo_url", "is_wav"}
+    safe_fields = {"gst_registered", "gst_bn", "preferred_language", "photo_url", "is_wav"}
     # Vehicle/doc fields — changing these on a verified driver triggers re-review
     vehicle_fields = {
         "vehicle_type_id",
@@ -1163,6 +1164,67 @@ async def get_driver_earnings_comparison(period: str = Query("week"), current_us
             "rides": pct_change(current["rides"], previous["rides"]),
             "tips": pct_change(current["tips"], previous["tips"]),
         },
+    }
+
+
+@api_router.get("/earnings/forecast")
+async def get_driver_earnings_forecast(current_user: dict = Depends(get_current_user)):
+    """Weekly earnings projection for the driver home screen widget.
+
+    Algorithm:
+      1. Compute average daily earnings over the last 28 days of completed rides.
+      2. Multiply by 7 to get the weekly baseline.
+      3. Compute remaining days in the current week (Mon–Sun) and add
+         the *this-week* earnings already locked in.
+
+    The result is intentionally simple — it's a motivational nudge, not
+    a financial guarantee.  Decimal precision is kept to 2 dp throughout.
+    """
+    driver = await db.find_one("drivers", {"user_id": current_user["id"]})
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    now = datetime.now(timezone.utc)
+    # Rolling 28-day window for the daily average
+    window_start = (now - timedelta(days=28)).isoformat()
+    # Start of the current ISO week (Monday)
+    week_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    try:
+        recent_rides = await db.get_rows(
+            "rides",
+            {
+                "driver_id": driver["id"],
+                "status": "completed",
+                "ride_completed_at": {"$gte": window_start},
+            },
+            limit=5000,
+        )
+    except Exception as e:
+        logger.error(f"[FORECAST] earnings fetch failed driver={driver['id']}: {e}", exc_info=True)
+        recent_rides = []
+
+    this_week_rides = [r for r in recent_rides if (r.get("ride_completed_at") or "") >= week_start.isoformat()]
+    prev_28_rides = [r for r in recent_rides if (r.get("ride_completed_at") or "") < week_start.isoformat()]
+
+    this_week_earnings = sum(Decimal(str(r.get("driver_earnings") or 0)) for r in this_week_rides)
+    prev_28_earnings = sum(Decimal(str(r.get("driver_earnings") or 0)) for r in prev_28_rides)
+
+    # Daily average over the 28-day window excluding the current week
+    days_in_window = 28 - now.weekday()  # days before current week in window
+    daily_avg = (prev_28_earnings / days_in_window) if days_in_window > 0 else Decimal("0")
+
+    # Days remaining in current week (today = partially elapsed)
+    days_remaining = 6 - now.weekday()  # Mon=0 … Sun=6
+    projected_additional = daily_avg * days_remaining
+    projected_total = (this_week_earnings + projected_additional).quantize(Decimal("0.01"))
+
+    return {
+        "this_week_earnings": float(this_week_earnings.quantize(Decimal("0.01"))),
+        "projected_weekly_total": float(projected_total),
+        "daily_avg_last_28d": float(daily_avg.quantize(Decimal("0.01"))),
+        "days_remaining_this_week": days_remaining,
+        "this_week_trips": len(this_week_rides),
     }
 
 

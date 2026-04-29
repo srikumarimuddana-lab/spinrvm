@@ -17,6 +17,7 @@ import type { ThemeColors } from '@shared/theme/index';
 import Analytics from '@shared/analytics';
 import { useStripe } from '@stripe/stripe-react-native';
 import { attemptRidePayment, PaymentAlertButton } from '../utils/attemptRidePayment';
+import { useSpinrPaymentSheet } from '../hooks/useSpinrPaymentSheet';
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
@@ -30,6 +31,7 @@ function RideCompletedScreenContent() {
   // requires_action for 3DS / SCA. StripeProvider is wired at the app
   // root in app/_layout.tsx so useStripe() resolves here.
   const { confirmPayment } = useStripe();
+  const { presentSheet, isLoading: sheetLoading } = useSpinrPaymentSheet();
 
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -217,6 +219,33 @@ function RideCompletedScreenContent() {
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  // Google Pay path — presents the Stripe PaymentSheet modal so riders can
+  // pay without re-entering a card. Only shown for card payment rides on
+  // Android (Apple Pay uses the same sheet on iOS via handleSubmit in future).
+  const handleGooglePay = async () => {
+    if (isSubmitting || sheetLoading || alreadyPaid) return;
+    const tipAmount = selectedTip || (customTip ? parseFloat(customTip) : 0);
+    const result = await presentSheet({
+      rideId: rideId as string,
+      amount: currentRide?.total_fare || 0,
+      tipAmount,
+    });
+    if (!result.ok) {
+      if (result.errorMessage !== 'Payment cancelled.') {
+        setAlertState({ visible: true, title: 'Payment failed', message: result.errorMessage || 'Please try again.', variant: 'danger' });
+      }
+      return;
+    }
+    try {
+      await rateRide(rideId as string, rating, comment || undefined, tipAmount > 0 ? tipAmount : undefined);
+    } catch { /* already rated guard */ }
+    const total = (currentRide?.total_fare || 0) + tipAmount;
+    Analytics.paymentCompleted({ method: 'google_pay', amount: total });
+    Analytics.rideCompleted({ fare: currentRide?.total_fare || 0, distance_km: currentRide?.distance_km });
+    clearRide();
+    router.replace('/(tabs)');
   };
 
   return (
@@ -498,14 +527,35 @@ function RideCompletedScreenContent() {
 
       {/* Submit Button */}
       <View style={styles.bottomBar}>
+        {/* Google Pay button — Android only, card payments, not yet paid */}
+        {Platform.OS === 'android' && !alreadyPaid && currentRide?.payment_method === 'card' && (
+          <TouchableOpacity
+            style={[styles.submitBtn, styles.googlePayBtn]}
+            onPress={handleGooglePay}
+            disabled={isSubmitting || sheetLoading}
+            activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityLabel="Pay with Google Pay"
+            accessibilityState={{ disabled: isSubmitting || sheetLoading }}
+          >
+            {sheetLoading ? (
+              <ActivityIndicator size="small" color="#FFF" />
+            ) : (
+              <>
+                <Ionicons name="logo-google" size={18} color="#FFF" />
+                <Text style={styles.submitBtnText}>Pay with Google Pay</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        )}
         <TouchableOpacity
           style={styles.submitBtn}
           onPress={handleSubmit}
-          disabled={isSubmitting}
+          disabled={isSubmitting || sheetLoading}
           activeOpacity={0.8}
           accessibilityRole="button"
           accessibilityLabel={alreadyPaid ? 'Rate and finish' : `Pay and finish`}
-          accessibilityState={{ disabled: isSubmitting, busy: isSubmitting }}
+          accessibilityState={{ disabled: isSubmitting || sheetLoading, busy: isSubmitting }}
         >
           {isSubmitting ? (
             <ActivityIndicator size="small" color="#FFF" />
@@ -668,6 +718,9 @@ function createStyles(colors: ThemeColors) {
     submitBtn: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
       backgroundColor: colors.primary, paddingVertical: 16, borderRadius: 28,
+    },
+    googlePayBtn: {
+      backgroundColor: '#3C4043', marginBottom: 10,
     },
     submitBtnText: { fontSize: 17, fontWeight: '700', color: '#FFF' },
   });

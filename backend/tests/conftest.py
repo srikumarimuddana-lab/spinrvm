@@ -53,6 +53,23 @@ for _slowapi_mod in ("slowapi", "slowapi.extension", "slowapi.errors", "slowapi.
 # Starlette builds its ExceptionMiddleware during TestClient startup.
 sys.modules["slowapi.errors"].RateLimitExceeded = _real_RateLimitExceeded
 
+# server.py inserts backend/ into sys.path and uses bare imports, so route/util
+# modules land in sys.modules under bare keys ("routes.admin.auth") rather than
+# qualified keys ("backend.routes.admin.auth"). Test files that do qualified
+# imports during collection would otherwise trigger a second import of those
+# files — this time with slowapi already mocked — turning @limiter.limit
+# decorators into MagicMocks. Mirroring the keys here prevents that re-import.
+for _bare_key in list(sys.modules.keys()):
+    if _bare_key.split(".")[0] in {
+        "routes", "utils", "core", "documents", "features",
+        "dependencies", "socket_manager", "db_supabase",
+        "schemas", "validators", "sms_service", "settings_loader",
+        "logging_utils", "geo_utils",
+    }:
+        _qualified_key = "backend." + _bare_key
+        if _qualified_key not in sys.modules:
+            sys.modules[_qualified_key] = sys.modules[_bare_key]
+
 # TASK 9-11: explicitly load anyio plugin so @pytest.mark.anyio is available
 # alongside the asyncio_mode=auto setting in pytest.ini.
 pytest_plugins = ["anyio"]

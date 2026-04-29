@@ -102,6 +102,7 @@ async def test_payment_sheet_amount_mismatch():
     from fastapi import HTTPException
 
     from backend.routes.payments import PaymentSheetRequest, create_payment_sheet
+    from backend.utils.error_handling import SpinrException
 
     with (
         patch("backend.routes.payments.get_app_settings", new_callable=AsyncMock, return_value=_settings()),
@@ -109,7 +110,7 @@ async def test_payment_sheet_amount_mismatch():
     ):
         mock_db.get_ride = AsyncMock(return_value=_FAKE_RIDE)
 
-        with pytest.raises(HTTPException) as exc_info:
+        with pytest.raises((HTTPException, SpinrException)) as exc_info:
             await create_payment_sheet(
                 body=PaymentSheetRequest(amount=20.00, ride_id=_RIDE_ID),  # wrong amount
                 current_user=_USER,

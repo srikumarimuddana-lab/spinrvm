@@ -194,6 +194,7 @@ class TestRiderCancelIllegalStates:
         from fastapi import HTTPException
 
         from backend.routes import rides as rides_mod
+        from backend.utils.error_handling import SpinrException
 
         # First find_one (state-filter) returns None (ride not in allowed states).
         # Second find_one (existence check) returns the ride in its actual state.
@@ -204,7 +205,7 @@ class TestRiderCancelIllegalStates:
             patch("backend.routes.rides.get_app_settings", AsyncMock(return_value={})),
         ):
             fn = getattr(rides_mod.cancel_ride_rider, "__wrapped__", rides_mod.cancel_ride_rider)
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises((HTTPException, SpinrException)) as exc_info:
                 await fn(
                     request=MagicMock(),
                     ride_id=RIDE_ID,
@@ -212,19 +213,21 @@ class TestRiderCancelIllegalStates:
                 )
 
         assert exc_info.value.status_code == 409
-        assert status in exc_info.value.detail
+        text = getattr(exc_info.value, "detail", None) or getattr(exc_info.value, "message", "")
+        assert status in str(text)
 
     async def test_cancel_unknown_ride_raises_404(self):
         from fastapi import HTTPException
 
         from backend.routes import rides as rides_mod
+        from backend.utils.error_handling import SpinrException
 
         with (
             patch("backend.routes.rides.db.find_one", AsyncMock(return_value=None)),
             patch("backend.routes.rides.get_app_settings", AsyncMock(return_value={})),
         ):
             fn = getattr(rides_mod.cancel_ride_rider, "__wrapped__", rides_mod.cancel_ride_rider)
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises((HTTPException, SpinrException)) as exc_info:
                 await fn(
                     request=MagicMock(),
                     ride_id="nonexistent_ride",

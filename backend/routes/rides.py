@@ -25,6 +25,12 @@ try:
     from ..sms_service import send_sms
     from ..socket_manager import manager
     from ..utils.crypto import hash_otp
+    from ..utils.error_handling import (
+        ErrorCode,
+        RideNotFoundException,
+        SpinrException,
+    )
+    from ..utils.error_keys import ErrorKeys
     from ..utils.idempotency import idempotent_endpoint
     from ..utils.rate_limiter import cancel_ride_limit, ride_read_limit, ride_request_limit
     from ..validators import validate_ride_location
@@ -43,6 +49,12 @@ except ImportError:
     from sms_service import send_sms
     from socket_manager import manager
     from utils.crypto import hash_otp
+    from utils.error_handling import (
+        ErrorCode,
+        RideNotFoundException,
+        SpinrException,
+    )
+    from utils.error_keys import ErrorKeys
     from utils.idempotency import idempotent_endpoint
     from utils.rate_limiter import cancel_ride_limit, ride_read_limit, ride_request_limit
     from validators import validate_ride_location
@@ -111,11 +123,17 @@ async def _require_ride_in_state_rider(ride_id: str, rider_id: str, allowed_stat
     existing = await db.find_one("rides", {"id": ride_id, "rider_id": rider_id})
     if existing:
         current = existing.get("status", "unknown")
-        raise HTTPException(
+        raise SpinrException(
+            message=f"Ride is in status '{current}'; cannot perform this action from that state (allowed: {list(allowed_states)}).",
+            error_code=ErrorCode.RIDE_INVALID_STATUS,
             status_code=409,
-            detail=f"Ride is in status '{current}'; cannot perform this action from that state (allowed: {list(allowed_states)}).",
+            details={"current_status": current, "allowed": list(allowed_states)},
+            message_key=ErrorKeys.RIDE_INVALID_STATUS,
         )
-    raise HTTPException(status_code=404, detail="Ride not found or unauthorized")
+    raise RideNotFoundException(
+        ride_id=ride_id,
+        message_key=ErrorKeys.RIDE_NOT_FOUND,
+    )
 
 
 dispatch = DispatchService(db_supabase)  # module-level instance for legacy call sites
@@ -763,7 +781,12 @@ async def create_ride(request: Request, body: CreateRideRequest, current_user: d
         )
     )
     if existing_ride:
-        raise HTTPException(status_code=409, detail="You already have an active ride")
+        raise SpinrException(
+            message="You already have an active ride",
+            error_code=ErrorCode.RIDE_INVALID_STATUS,
+            status_code=409,
+            message_key=ErrorKeys.RIDE_INVALID_STATUS,
+        )
 
     distance_km = calculate_distance(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng)
     duration_minutes = int(distance_km / 30 * 60) + 5
@@ -1214,7 +1237,10 @@ async def get_ride(request: Request, ride_id: str, current_user: dict = Depends(
     """Fetch details of a specific ride"""
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
-        raise HTTPException(status_code=404, detail="Ride not found")
+        raise RideNotFoundException(
+            ride_id=ride_id,
+            message_key=ErrorKeys.RIDE_NOT_FOUND,
+        )
 
     # Security check: must be rider or driver of this ride
     is_rider = ride.get("rider_id") == current_user["id"]
@@ -2485,9 +2511,17 @@ async def cancel_scheduled_ride(ride_id: str, current_user: dict = Depends(get_c
         )
     )
     if not ride:
-        raise HTTPException(status_code=404, detail="Scheduled ride not found")
+        raise RideNotFoundException(
+            ride_id=ride_id,
+            message_key=ErrorKeys.RIDE_NOT_FOUND,
+        )
     if ride.get("status") in ["completed", "cancelled"]:
-        raise HTTPException(status_code=400, detail="Ride is already completed or cancelled")
+        raise SpinrException(
+            message="Ride is already completed or cancelled",
+            error_code=ErrorCode.RIDE_ALREADY_CANCELLED,
+            status_code=400,
+            message_key=ErrorKeys.RIDE_ALREADY_CANCELLED,
+        )
 
     _now = datetime.now(timezone.utc)
     _base = {

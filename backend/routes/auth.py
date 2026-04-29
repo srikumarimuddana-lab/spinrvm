@@ -23,6 +23,12 @@ try:
     from ..settings_loader import get_app_settings
     from ..sms_service import send_otp_sms
     from ..utils.crypto import hash_otp
+    from ..utils.error_handling import (
+        ErrorCode,
+        SpinrException,
+        TokenExpiredException,
+    )
+    from ..utils.error_keys import ErrorKeys
     from ..utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set
     from ..utils.refresh_tokens import (
         issue_refresh_token,
@@ -45,6 +51,12 @@ except ImportError:
     from settings_loader import get_app_settings
     from sms_service import send_otp_sms
     from utils.crypto import hash_otp
+    from utils.error_handling import (
+        ErrorCode,
+        SpinrException,
+        TokenExpiredException,
+    )
+    from utils.error_keys import ErrorKeys
     from utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set
     from utils.refresh_tokens import (
         issue_refresh_token,
@@ -255,7 +267,13 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
     if not otp_record:
         # Wrong code — record the failure (may trigger lockout)
         await _record_otp_failure(phone)
-        raise HTTPException(status_code=400, detail="ERR_OTP_INVALID")
+        raise SpinrException(
+            message="ERR_OTP_INVALID",
+            error_code=ErrorCode.AUTH_OTP_INVALID,
+            status_code=400,
+            message_key=ErrorKeys.AUTH_OTP_INVALID,
+            action_hint="Re-enter the 4-digit code",
+        )
     # Parse expires_at to datetime if it's a string (from Supabase)
     expires_at = otp_record.get("expires_at")
     if isinstance(expires_at, str):
@@ -280,7 +298,13 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
             await db_supabase.delete_otp_record(otp_record["id"])
         except Exception:  # noqa: S110
             pass
-        raise HTTPException(status_code=400, detail="ERR_OTP_EXPIRED")
+        raise SpinrException(
+            message="ERR_OTP_EXPIRED",
+            error_code=ErrorCode.AUTH_OTP_EXPIRED,
+            status_code=400,
+            message_key=ErrorKeys.AUTH_OTP_EXPIRED,
+            action_hint="Request a new code",
+        )
 
     try:
         await db_supabase.update_one("otp_records", {"id": otp_record["id"]}, {"verified": True})
@@ -637,17 +661,29 @@ async def refresh_access_token(request: Request, response: Response, body: Refre
     """
     row = await lookup_refresh_token(body.refresh_token)
     if not row:
-        raise HTTPException(status_code=401, detail="Invalid refresh token")
+        raise TokenExpiredException(
+            message="Invalid refresh token",
+            message_key=ErrorKeys.AUTH_TOKEN_EXPIRED,
+            action_hint="Sign in again",
+        )
 
     if row.get("audience") not in {"rider", "driver"}:
         # Admin refresh tokens go through /admin/auth/refresh. Only rider and
         # driver tokens are valid here; anything else is a privilege-escalation
         # attempt or a minted-for-wrong-endpoint token.
-        raise HTTPException(status_code=401, detail="Invalid refresh token")
+        raise TokenExpiredException(
+            message="Invalid refresh token",
+            message_key=ErrorKeys.AUTH_TOKEN_EXPIRED,
+            action_hint="Sign in again",
+        )
 
     user_id = row.get("user_id")
     if not user_id:
-        raise HTTPException(status_code=401, detail="Invalid refresh token")
+        raise TokenExpiredException(
+            message="Invalid refresh token",
+            message_key=ErrorKeys.AUTH_TOKEN_EXPIRED,
+            action_hint="Sign in again",
+        )
 
     user = None
     try:
@@ -655,7 +691,11 @@ async def refresh_access_token(request: Request, response: Response, body: Refre
     except Exception as e:
         logger.error(f"refresh: user lookup failed for {user_id}: {e}", exc_info=True)
     if not user:
-        raise HTTPException(status_code=401, detail="Invalid refresh token")
+        raise TokenExpiredException(
+            message="Invalid refresh token",
+            message_key=ErrorKeys.AUTH_TOKEN_EXPIRED,
+            action_hint="Sign in again",
+        )
 
     user_agent = request.headers.get("user-agent", "")
     client_ip = get_remote_address(request)

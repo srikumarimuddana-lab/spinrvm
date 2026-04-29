@@ -162,6 +162,7 @@ class TestAcceptRideFlipsStatus:
         from fastapi import HTTPException
 
         from backend.routes import drivers as drivers_mod
+        from backend.utils.error_handling import SpinrException
 
         pre_ride = _ride_row("driver_assigned", driver_id=DRIVER_ID)
 
@@ -180,7 +181,7 @@ class TestAcceptRideFlipsStatus:
             patch("backend.routes.drivers.manager.broadcast_ride_status", AsyncMock()),
             patch("backend.routes.drivers.send_push_notification", AsyncMock()),
         ):
-            with pytest.raises(HTTPException) as excinfo:
+            with pytest.raises((HTTPException, SpinrException)) as excinfo:
                 asyncio.run(
                     drivers_mod.accept_ride(
                         ride_id=RIDE_ID,
@@ -315,6 +316,7 @@ class TestAdminCancelRide:
 
         from backend.routes.admin import rides as admin_rides
         from backend.routes.admin.rides import AdminCancelRideRequest
+        from backend.utils.error_handling import SpinrException
 
         update_ride_mock = AsyncMock()
         with (
@@ -324,7 +326,7 @@ class TestAdminCancelRide:
             ),
             patch("backend.routes.admin.rides.db_supabase.update_ride", update_ride_mock),
         ):
-            with pytest.raises(HTTPException) as excinfo:
+            with pytest.raises((HTTPException, SpinrException)) as excinfo:
                 asyncio.run(
                     admin_rides.admin_cancel_ride(
                         ride_id=RIDE_ID,

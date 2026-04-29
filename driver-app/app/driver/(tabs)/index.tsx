@@ -326,7 +326,7 @@ function DriverDashboard() {
     // the visual bar stuck past 100%.
     const maxCountdown = configuredCountdownSeconds || 15;
     const progress = Math.max(0, Math.min(1, countdown / maxCountdown));
-    const fare = (incomingRide.fare || 0).toFixed(2);
+    const fare = parseFloat(incomingRide.fare || '0').toFixed(2);
 
     // Haversine distance from driver → pickup so the offer shows how far
     // the driver has to travel to start the trip (not just the trip

@@ -34,6 +34,10 @@ def _d(v) -> Decimal:
     return Decimal(str(v)).quantize(_TWO, rounding=ROUND_HALF_UP)
 
 
+def _money_str(v) -> str:
+    return str(_d(v))
+
+
 # ── Request Schemas ──────────────────────────────────────────────────
 
 
@@ -76,9 +80,9 @@ async def create_fare_split(req: CreateFareSplitRequest, current_user: dict = De
     if existing:
         raise HTTPException(status_code=400, detail="Fare split already exists for this ride")
 
-    total_fare = float(ride.get("grand_total") or ride.get("total_fare", 0))
+    total_fare = _d(ride.get("grand_total") or ride.get("total_fare", 0))
     split_count = len(req.participant_phones) + 1  # +1 for requester
-    share_amount = float(_d(total_fare / split_count))
+    share_amount = _money_str(total_fare / split_count)
 
     # Create the fare split record
     split_id = str(uuid.uuid4())
@@ -86,7 +90,7 @@ async def create_fare_split(req: CreateFareSplitRequest, current_user: dict = De
         "id": split_id,
         "ride_id": req.ride_id,
         "requester_id": current_user["id"],
-        "total_fare": total_fare,
+        "total_fare": _money_str(total_fare),
         "split_count": split_count,
         "status": "pending",
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -114,7 +118,7 @@ async def create_fare_split(req: CreateFareSplitRequest, current_user: dict = De
     return {
         "id": split_id,
         "ride_id": req.ride_id,
-        "total_fare": total_fare,
+        "total_fare": _money_str(total_fare),
         "split_count": split_count,
         "your_share": share_amount,
         "participants": [
@@ -147,7 +151,7 @@ async def get_fare_split(split_id: str, current_user: dict = Depends(get_current
     if split["requester_id"] != user_id and not is_participant:
         raise HTTPException(status_code=403, detail="Not authorized to view this fare split")
 
-    share_amount = float(_d(split["total_fare"] / split["split_count"]))
+    share_amount = _money_str(_d(split["total_fare"]) / split["split_count"])
 
     return {
         "id": split["id"],

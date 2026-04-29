@@ -78,44 +78,44 @@
   "errors": {
     "auth": {
       "account_suspended": "Your account has been suspended. Please contact support.",
-      "otp_invalid": "The verification code is incorrect. Please try again.",
-      "otp_expired": "Your verification code has expired. Request a new one.",
-      "otp_locked": "Too many failed attempts. Try again in 24 hours.",
-      "invalid_credentials": "Invalid login details. Please try again.",
+      "otp_invalid": "That code didn't match. Check the SMS and try again.",
+      "otp_expired": "That code has expired. Tap Resend to get a new one.",
+      "otp_locked": "Too many failed tries. Please wait a moment before trying again.",
+      "invalid_credentials": "Sign-in details didn't match. Please try again.",
       "token_expired": "Your session has expired. Please sign in again."
     },
     "driver": {
-      "documents_expired": "One or more of your documents have expired.",
-      "documents_pending": "Your documents are still being reviewed.",
-      "documents_rejected": "Your documents were rejected. Please re-upload.",
-      "subscription_required": "An active subscription is required to continue.",
-      "not_available": "No drivers are available right now.",
+      "documents_expired": "Your documents have expired. Please renew them to keep driving.",
+      "documents_pending": "Your documents are still under review. We'll notify you once approved.",
+      "documents_rejected": "Some of your documents were rejected. Please review and resubmit.",
+      "subscription_required": "An active Spinr Pass subscription is required to continue.",
+      "not_available": "This driver isn't available right now.",
       "offline": "The driver is currently offline."
     },
     "ride": {
-      "not_found": "We couldn't find that ride.",
+      "not_found": "We couldn't find that ride. It may have been removed.",
       "already_cancelled": "This ride has already been cancelled.",
-      "invalid_status": "This action is not allowed for the current ride status.",
-      "no_drivers_available": "No drivers are available in your area. Please try again shortly.",
-      "price_mismatch": "The fare has changed. Please review and try again.",
-      "taken": "Another driver accepted this ride first."
+      "invalid_status": "This action isn't allowed for the current ride state.",
+      "no_drivers_available": "No drivers are available right now. Please try again in a few minutes.",
+      "price_mismatch": "The price has changed since you last saw it. Please review and confirm again.",
+      "taken": "Another driver took this ride. We'll find you the next one."
     },
     "payment": {
-      "failed": "Payment failed. Please try again.",
-      "method_invalid": "This payment method is invalid. Choose another.",
-      "insufficient_funds": "Insufficient funds for this transaction.",
-      "refund_failed": "We couldn't process your refund. Please contact support."
+      "failed": "Your payment didn't go through. Please try again or use another method.",
+      "method_invalid": "That payment method isn't valid. Please add a different one.",
+      "insufficient_funds": "Not enough in your wallet. Please top up or use a card.",
+      "refund_failed": "We couldn't process the refund right now. Please contact support."
     },
     "wallet": {
       "transfer_self": "You can't transfer funds to yourself.",
-      "transfer_recipient_not_found": "We couldn't find that recipient."
+      "transfer_recipient_not_found": "We couldn't find that recipient. Please double-check and try again."
     },
     "system": {
       "internal": "Something went wrong on our end. Please try again.",
-      "service_unavailable": "Service is temporarily unavailable. Please try again shortly.",
-      "rate_limited": "You're doing that too often. Please slow down.",
-      "database": "We're having trouble loading your data. Please try again."
+      "service_unavailable": "Spinr is temporarily unavailable. Please try again shortly.",
+      "rate_limited": "You're going a bit fast. Please slow down and try again in a moment.",
+      "database": "We're having trouble reaching our systems. Please try again."
     },
-    "unknown": "An unexpected error occurred. Please try again."
+    "unknown": "Something went wrong. Please try again."
   }
 }

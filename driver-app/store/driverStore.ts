@@ -104,18 +104,18 @@ export interface ActiveRide {
 
 export interface EarningsSummary {
     period: string;
-    total_earnings: number;
-    total_tips: number;
+    total_earnings: string; // MoneyString
+    total_tips: string; // MoneyString
     total_rides: number;
     total_distance_km: number;
     total_duration_minutes: number;
-    average_per_ride: number;
+    average_per_ride: string; // MoneyString
 }
 
 export interface DailyEarning {
     date: string;
-    earnings: number;
-    tips: number;
+    earnings: string; // MoneyString
+    tips: string; // MoneyString
     rides: number;
     distance_km: number;
 }
@@ -126,11 +126,11 @@ export interface TripEarning {
     dropoff_address: string;
     distance_km: number;
     duration_minutes: number;
-    base_fare: number;
-    distance_fare: number;
-    time_fare: number;
-    driver_earnings: number;
-    tip_amount: number;
+    base_fare: string; // MoneyString
+    distance_fare: string; // MoneyString
+    time_fare: string; // MoneyString
+    driver_earnings: string; // MoneyString
+    tip_amount: string; // MoneyString
     rider_rating: number | null;
     completed_at: string;
 }
@@ -146,16 +146,16 @@ export interface BankAccount {
 }
 
 export interface DriverBalance {
-    total_earnings: number;
-    available_balance: number;
-    pending_payouts: number;
-    total_paid_out: number;
+    total_earnings: string; // MoneyString
+    payable_balance: string; // MoneyString — renamed from available_balance (NOT wallet.balance)
+    pending_payouts: string; // MoneyString
+    total_paid_out: string; // MoneyString
     has_bank_account: boolean;
 }
 
 export interface Payout {
     id: string;
-    amount: number;
+    amount: string; // MoneyString
     status: string;
     bank_name: string;
     account_last4: string;
@@ -166,10 +166,10 @@ export interface Payout {
 
 export interface T4ASummary {
     year: number;
-    total_earnings: number;
+    total_earnings: string; // MoneyString
     total_trips: number;
-    platform_fees: number;
-    net_earnings: number;
+    platform_fees: string; // MoneyString
+    net_earnings: string; // MoneyString
     generated_at: string;
 }
 
@@ -183,8 +183,8 @@ export interface T4ADocument {
 export interface WeeklyEarning {
     week_start: string;
     week_end: string;
-    earnings: number;
-    tips: number;
+    earnings: string; // MoneyString
+    tips: string; // MoneyString
     rides: number;
     online_hours: number;
     distance_km: number;
@@ -193,8 +193,8 @@ export interface WeeklyEarning {
 export interface MonthlyEarning {
     month: string;
     year: number;
-    earnings: number;
-    tips: number;
+    earnings: string; // MoneyString
+    tips: string; // MoneyString
     rides: number;
     online_hours: number;
     distance_km: number;
@@ -202,9 +202,9 @@ export interface MonthlyEarning {
 
 export interface EarningsComparison {
     period: string;
-    current: { earnings: number; rides: number; tips: number };
-    previous: { earnings: number; rides: number; tips: number };
-    change_pct: { earnings: number; rides: number; tips: number };
+    current: { earnings: string; rides: number; tips: string }; // MoneyString
+    previous: { earnings: string; rides: number; tips: string }; // MoneyString
+    change_pct: { earnings: number; rides: number; tips: number }; // percentages stay number
 }
 
 interface IncomingRide {
@@ -215,7 +215,7 @@ interface IncomingRide {
     pickup_lng: number;
     dropoff_lat: number;
     dropoff_lng: number;
-    fare: number;
+    fare: string; // MoneyString
     distance_km?: number;
     duration_minutes?: number;
     rider_name?: string;

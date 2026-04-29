@@ -87,7 +87,7 @@ class TestGetWallet:
 
         assert resp.status_code == 200
         data = resp.json()
-        assert data["balance"] == 50.0
+        assert data["balance"] == "50.00"
         assert data["currency"] == "CAD"
         assert data["is_active"] is True
 
@@ -100,7 +100,7 @@ class TestGetWallet:
 
         assert resp.status_code == 200
         data = resp.json()
-        assert data["balance"] == 0.0
+        assert data["balance"] == "0.00"
         assert data["currency"] == "CAD"
 
     def test_unauthenticated_request_rejected(self):
@@ -128,7 +128,7 @@ class TestTopUp:
 
         assert resp.status_code == 200
         data = resp.json()
-        assert data["balance"] == 75.0  # 50 + 25
+        assert data["balance"] == "75.00"  # 50 + 25
         assert "transaction_id" in data
 
     def test_top_up_suspended_wallet_returns_403(self, client):
@@ -176,7 +176,7 @@ class TestWalletPay:
 
         assert resp.status_code == 200
         data = resp.json()
-        assert data["balance"] == 35.0  # 50 - 15
+        assert data["balance"] == "35.00"  # 50 - 15
         assert "transaction_id" in data
 
     def test_insufficient_balance_returns_400(self, client):
@@ -269,7 +269,7 @@ class TestTransfer:
 
         assert resp.status_code == 200
         data = resp.json()
-        assert data["balance"] == 40.0  # 50 - 10
+        assert data["balance"] == "40.00"  # 50 - 10
         assert data["success"] is True
 
     def test_transfer_to_self_returns_400(self, client):

@@ -38,12 +38,12 @@ interface RideEstimate {
   vehicle_type: VehicleType;
   distance_km: number;
   duration_minutes: number;
-  base_fare: number;
-  distance_fare: number;
-  time_fare: number;
-  booking_fee: number;
-  surge_multiplier?: number;
-  total_fare: number;
+  base_fare: string; // MoneyString: "3.50"
+  distance_fare: string; // MoneyString
+  time_fare: string; // MoneyString
+  booking_fee: string; // MoneyString
+  surge_multiplier?: number; // ratio, not money — stays number
+  total_fare: string; // MoneyString
   available: boolean;
   eta_minutes: number;
   driver_count: number;
@@ -92,14 +92,14 @@ interface Ride {
   dropoff_lng: number;
   distance_km: number;
   duration_minutes: number;
-  base_fare: number;
-  total_fare: number;
+  base_fare: string; // MoneyString
+  total_fare: string; // MoneyString
   payment_method: string;
   payment_status?: string;
   card_last4?: string;
   status: string;
   pickup_otp: string;
-  tip_amount?: number;
+  tip_amount?: string; // MoneyString
   corporate_account_id?: string | null;
   is_scheduled?: boolean;
   scheduled_time?: string;

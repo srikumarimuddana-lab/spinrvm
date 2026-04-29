@@ -37,6 +37,14 @@ def _fd(v) -> float:
         return 0.0
 
 
+def _money_str(v) -> str:
+    """Serialise a money value as an exact 2-dp Decimal string (never float)."""
+    try:
+        return str(Decimal(str(v)).quantize(_TWO_PLACES, rounding=ROUND_HALF_UP))
+    except (TypeError, ValueError, decimal.InvalidOperation):
+        return "0.00"
+
+
 def serialize_doc(doc):
     """Identity passthrough kept for legacy callers (Supabase dicts)."""
     return doc
@@ -87,19 +95,18 @@ async def get_public_service_areas():
 def _build_default_fares(vt_list, surge=1.0):
     """Default fare rows when no service area / fare_configs apply.
 
-    Literal values go through ``_fd()`` so they are stored as exact 2-dp
-    floats rather than raw IEEE-754 representations — keeps downstream
-    Decimal arithmetic drift-free.
+    Money values serialised as exact 2-dp Decimal strings; surge_multiplier
+    stays float (it is a ratio, not a money amount).
     """
     return [
         serialize_doc(
             {
                 "vehicle_type": vt,
-                "base_fare": _fd(3.50),
-                "per_km_rate": _fd(1.50),
-                "per_minute_rate": _fd(0.25),
-                "minimum_fare": _fd(8.00),
-                "booking_fee": _fd(2.00),
+                "base_fare": _money_str(3.50),
+                "per_km_rate": _money_str(1.50),
+                "per_minute_rate": _money_str(0.25),
+                "minimum_fare": _money_str(8.00),
+                "booking_fee": _money_str(2.00),
                 "surge_multiplier": _fd(surge),
             }
         )
@@ -207,16 +214,16 @@ async def build_fares_for_area(matched_area, vehicle_types):
         pricing = _pick(vt)
         if not pricing:
             continue
-        # Normalise all monetary values from DB through _fd() so downstream
-        # Decimal arithmetic in rides.py starts from clean 2-dp floats.
+        # Normalise all monetary values from DB through _money_str() so they
+        # serialise as exact Decimal strings; surge_multiplier stays float.
         result.append(
             {
                 "vehicle_type": serialize_doc(vt),
-                "base_fare": _fd(pricing["base_fare"]),
-                "per_km_rate": _fd(pricing["per_km_rate"]),
-                "per_minute_rate": _fd(pricing["per_minute_rate"]),
-                "minimum_fare": _fd(pricing["minimum_fare"]),
-                "booking_fee": _fd(pricing["booking_fee"]),
+                "base_fare": _money_str(pricing["base_fare"]),
+                "per_km_rate": _money_str(pricing["per_km_rate"]),
+                "per_minute_rate": _money_str(pricing["per_minute_rate"]),
+                "minimum_fare": _money_str(pricing["minimum_fare"]),
+                "booking_fee": _money_str(pricing["booking_fee"]),
                 "surge_multiplier": _fd(surge),
             }
         )

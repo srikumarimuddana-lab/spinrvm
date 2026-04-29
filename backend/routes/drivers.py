@@ -21,7 +21,13 @@ try:
     from ..utils.crypto import hash_otp
     from ..utils.datetime_utils import parse_iso_utc
     from ..utils.driver_presence import clear_presence, mark_present, present_driver_ids
-    from ..utils.error_handling import RideStateError
+    from ..utils.error_handling import (
+        AccountDisabledException,
+        ErrorCode,
+        RideStateError,
+        SpinrException,
+    )
+    from ..utils.error_keys import ErrorKeys
     from ..utils.idempotency import idempotent_endpoint
 except ImportError:
     import db_supabase
@@ -35,7 +41,9 @@ except ImportError:
     from utils.crypto import hash_otp
     from utils.datetime_utils import parse_iso_utc
     from utils.driver_presence import clear_presence, mark_present, present_driver_ids
-    from utils.error_handling import RideStateError
+    from utils.error_handling import (
+        RideStateError,
+    )
     from utils.idempotency import idempotent_endpoint
 
 db = db_supabase  # legacy alias
@@ -1867,9 +1875,10 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
         raise HTTPException(status_code=404, detail="Driver not found")
 
     if driver.get("status") == "suspended":
-        raise HTTPException(
-            status_code=403,
-            detail="Your account is suspended. Please renew your documents to continue driving.",
+        raise AccountDisabledException(
+            message="Your account is suspended. Please renew your documents to continue driving.",
+            message_key=ErrorKeys.AUTH_ACCOUNT_SUSPENDED,
+            action_hint="Contact support",
         )
 
     ride = await db_supabase.get_ride(ride_id)
@@ -1929,7 +1938,13 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
             f"[ACCEPT] claim rejected ride_id={ride_id} "
             f"current_status={ride.get('status')} current_driver_id={ride.get('driver_id')}"
         )
-        raise HTTPException(status_code=409, detail="Ride already accepted by another driver")
+        raise SpinrException(
+            message="Ride already accepted by another driver",
+            error_code=ErrorCode.RESOURCE_CONFLICT,
+            status_code=409,
+            message_key=ErrorKeys.RIDE_TAKEN,
+            action_hint="Pick another ride",
+        )
 
     # Re-read the now-claimed ride so we can notify the rider with fresh data.
     ride = await db.find_one("rides", {"id": ride_id})
@@ -2719,20 +2734,34 @@ async def update_driver_status(
 
     # Ban check: prevent banned drivers from going online
     if is_online and driver.get("status") == "banned":
-        raise HTTPException(
-            status_code=403, detail="Your account has been permanently suspended due to policy violations."
+        raise AccountDisabledException(
+            message="Your account has been permanently suspended due to policy violations.",
+            message_key=ErrorKeys.AUTH_ACCOUNT_SUSPENDED,
+            action_hint="Contact support",
         )
     if is_online and driver.get("status") == "suspended":
-        raise HTTPException(status_code=403, detail="Your account is currently suspended. Please contact support.")
+        raise AccountDisabledException(
+            message="Your account is currently suspended. Please contact support.",
+            message_key=ErrorKeys.AUTH_ACCOUNT_SUSPENDED,
+            action_hint="Contact support",
+        )
     if is_online and driver.get("status") == "needs_review":
-        raise HTTPException(
-            status_code=400, detail="Your account is under review. Please wait for admin approval before going online."
+        raise SpinrException(
+            message="Your account is under review. Please wait for admin approval before going online.",
+            error_code=ErrorCode.DRIVER_DOCUMENTS_PENDING,
+            status_code=400,
+            message_key=ErrorKeys.DRIVER_DOCUMENTS_PENDING,
+            action_hint="Wait for verification",
         )
     if is_online and driver.get("status") not in ("active",):
         # Pending, rejected, or any unknown status
         if not driver.get("is_verified", False) and driver.get("status") != "active":
-            raise HTTPException(
-                status_code=400, detail="Your driver profile has not been verified yet. Please wait for admin approval."
+            raise SpinrException(
+                message="Your driver profile has not been verified yet. Please wait for admin approval.",
+                error_code=ErrorCode.DRIVER_DOCUMENTS_PENDING,
+                status_code=400,
+                message_key=ErrorKeys.DRIVER_DOCUMENTS_PENDING,
+                action_hint="Wait for verification",
             )
 
     if not is_online:
@@ -2836,9 +2865,12 @@ async def update_driver_status(
             latest = docs[0]
             exp = _parse_expiry(latest.get("expiry_date") or latest.get("expires_at"))
             if exp and exp < now:
-                raise HTTPException(
+                raise SpinrException(
+                    message=f"{req_name} has expired. Please update your documents before going online.",
+                    error_code=ErrorCode.DRIVER_DOCUMENTS_PENDING,
                     status_code=400,
-                    detail=f"{req_name} has expired. Please update your documents before going online.",
+                    message_key=ErrorKeys.DRIVER_DOCUMENTS_EXPIRED,
+                    action_hint="Renew documents in Profile",
                 )
             # This requirement was covered by a fresh doc — do not re-check
             # the legacy column for the same thing below.
@@ -2875,9 +2907,12 @@ async def update_driver_status(
                 if expiry_val.tzinfo is None:
                     expiry_val = expiry_val.replace(tzinfo=timezone.utc)
                 if expiry_val < now:
-                    raise HTTPException(
+                    raise SpinrException(
+                        message=f"{label} has expired ({field}). Please update your documents before going online.",
+                        error_code=ErrorCode.DRIVER_DOCUMENTS_PENDING,
                         status_code=400,
-                        detail=f"{label} has expired ({field}). Please update your documents before going online.",
+                        message_key=ErrorKeys.DRIVER_DOCUMENTS_EXPIRED,
+                        action_hint="Renew documents in Profile",
                     )
 
         # is_verified check removed — status field is the single source of truth now.
@@ -2927,9 +2962,12 @@ async def update_driver_status(
                 ) from e
 
             if not sub:
-                raise HTTPException(
+                raise SpinrException(
+                    message="You need an active Spinr Pass subscription to go online. Subscribe from your dashboard.",
+                    error_code=ErrorCode.PAYMENT_FAILED,
                     status_code=402,
-                    detail="You need an active Spinr Pass subscription to go online. Subscribe from your dashboard.",
+                    message_key=ErrorKeys.DRIVER_SUBSCRIPTION_REQUIRED,
+                    action_hint="Activate Spinr Pass",
                 )
 
             # Check expiry on the active subscription row. parse_iso_utc
@@ -2939,9 +2977,12 @@ async def update_driver_status(
                 exp = parse_iso_utc(sub["expires_at"])
                 if exp is not None and exp < datetime.now(timezone.utc):
                     await db_supabase.update_one("driver_subscriptions", {"id": sub["id"]}, {"status": "expired"})
-                    raise HTTPException(
+                    raise SpinrException(
+                        message="Your Spinr Pass has expired. Please renew to go online.",
+                        error_code=ErrorCode.PAYMENT_FAILED,
                         status_code=402,
-                        detail="Your Spinr Pass has expired. Please renew to go online.",
+                        message_key=ErrorKeys.DRIVER_SUBSCRIPTION_REQUIRED,
+                        action_hint="Activate Spinr Pass",
                     )
 
     logger.info(

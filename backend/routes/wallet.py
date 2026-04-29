@@ -18,12 +18,16 @@ try:
     from ..db_supabase import wallet_increment_balance, wallet_pay_for_ride
     from ..db_supabase import wallet_transfer as _wallet_transfer_rpc
     from ..dependencies import get_current_user
+    from ..utils.error_handling import ErrorCode, SpinrException
+    from ..utils.error_keys import ErrorKeys
     from ..utils.idempotency import idempotent_endpoint
 except ImportError:
     from db import db
     from db_supabase import wallet_increment_balance, wallet_pay_for_ride
     from db_supabase import wallet_transfer as _wallet_transfer_rpc
     from dependencies import get_current_user
+    from utils.error_handling import ErrorCode, SpinrException
+    from utils.error_keys import ErrorKeys
     from utils.idempotency import idempotent_endpoint
 
 logger = logging.getLogger(__name__)
@@ -171,7 +175,13 @@ async def wallet_pay(req: WalletPayRequest, current_user: dict = Depends(get_cur
         new_balance = await wallet_pay_for_ride(wallet["id"], req.ride_id, debit_amount)
     except ValueError as exc:
         if "insufficient_funds" in str(exc):
-            raise HTTPException(status_code=400, detail="Insufficient wallet balance") from exc
+            raise SpinrException(
+                message="Insufficient wallet balance",
+                error_code=ErrorCode.PAYMENT_INSUFFICIENT_FUNDS,
+                status_code=400,
+                message_key=ErrorKeys.PAYMENT_INSUFFICIENT_FUNDS,
+                action_hint="Top up your wallet",
+            ) from exc
         raise HTTPException(status_code=503, detail="Wallet payment failed — please retry") from exc
 
     # Mark the ride payment method (the RPC already set payment_status='paid')
@@ -242,10 +252,21 @@ async def transfer_to_user(
     # Find recipient
     recipient = await db.find_one("users", {"phone": req.recipient_phone})
     if not recipient:
-        raise HTTPException(status_code=404, detail="Recipient not found")
+        raise SpinrException(
+            message="Recipient not found",
+            error_code=ErrorCode.RESOURCE_NOT_FOUND,
+            status_code=404,
+            message_key=ErrorKeys.WALLET_TRANSFER_RECIPIENT_NOT_FOUND,
+            action_hint="Check the phone number",
+        )
 
     if recipient["id"] == current_user["id"]:
-        raise HTTPException(status_code=400, detail="Cannot transfer to yourself")
+        raise SpinrException(
+            message="Cannot transfer to yourself",
+            error_code=ErrorCode.VALIDATION_ERROR,
+            status_code=400,
+            message_key=ErrorKeys.WALLET_TRANSFER_SELF,
+        )
 
     sender_wallet = await get_or_create_wallet(current_user["id"])
     recipient_wallet = await get_or_create_wallet(recipient["id"])
@@ -261,7 +282,13 @@ async def transfer_to_user(
         )
     except ValueError as exc:
         if "insufficient_funds" in str(exc):
-            raise HTTPException(status_code=400, detail="Insufficient wallet balance") from exc
+            raise SpinrException(
+                message="Insufficient wallet balance",
+                error_code=ErrorCode.PAYMENT_INSUFFICIENT_FUNDS,
+                status_code=400,
+                message_key=ErrorKeys.PAYMENT_INSUFFICIENT_FUNDS,
+                action_hint="Top up your wallet",
+            ) from exc
         raise HTTPException(status_code=503, detail="Transfer failed — please retry") from exc
 
     await _record_transaction(

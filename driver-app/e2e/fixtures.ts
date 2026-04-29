@@ -44,12 +44,12 @@ export const MOCK_RIDE_OFFER = {
   dropoff_address: '456 Broadway Ave, Saskatoon, SK',
   dropoff_lat: 52.12,
   dropoff_lng: -106.65,
-  estimated_fare: 18.5,
+  total_fare: '18.50',
   distance_km: 3.2,
   duration_minutes: 8,
   surge_multiplier: 1.0,
   payment_method: 'card',
-  otp: '4242',
+  pickup_otp: '4242',
   created_at: '2026-04-20T10:00:00Z',
 };
 

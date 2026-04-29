@@ -8,11 +8,21 @@ try:
     from .. import db_supabase
     from ..dependencies import get_current_user
     from ..settings_loader import get_app_settings
+    from ..utils.error_handling import (
+        PaymentException,
+        PaymentMethodInvalidException,
+    )
+    from ..utils.error_keys import ErrorKeys
     from ..utils.idempotency import idempotent_endpoint
 except ImportError:
     import db_supabase
     from dependencies import get_current_user
     from settings_loader import get_app_settings
+    from utils.error_handling import (
+        PaymentException,
+        PaymentMethodInvalidException,
+    )
+    from utils.error_keys import ErrorKeys
     from utils.idempotency import idempotent_endpoint
 import logging
 
@@ -32,6 +42,14 @@ class PaymentIntentRequest(BaseModel):
     # the same fare amount on two separate rides within the same 24 h window.
     client_idempotency_key: Optional[str] = None
     payment_method_id: Optional[str] = None
+
+
+class PaymentSheetRequest(BaseModel):
+    """Request body for POST /payments/payment-sheet."""
+
+    amount: float = Field(..., gt=0, le=100000, description="Fare amount in CAD")
+    ride_id: Optional[str] = None
+    client_idempotency_key: Optional[str] = None
 
 
 async def get_or_create_stripe_customer(user_id: str, stripe_secret: str):
@@ -87,9 +105,10 @@ async def create_payment_intent(
             ride_fare = Decimal(str(ride.get("total_fare", 0)))
             requested = Decimal(str(body.amount))
             if requested != ride_fare:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(f"Payment amount {requested} does not match ride fare {ride_fare}"),
+                raise PaymentException(
+                    message=f"Payment amount {requested} does not match ride fare {ride_fare}",
+                    message_key=ErrorKeys.RIDE_PRICE_MISMATCH,
+                    action_hint="Refresh the fare estimate",
                 )
 
         amount = int(body.amount * 100)  # Convert dollars → cents
@@ -423,7 +442,11 @@ async def add_card(request: Request, current_user: dict = Depends(get_current_us
             "setup_intent_status": si.status,
         }
     except stripe.error.CardError as e:
-        raise HTTPException(status_code=400, detail=e.user_message or "Card declined") from e
+        raise PaymentMethodInvalidException(
+            message=e.user_message or "Card declined",
+            message_key=ErrorKeys.PAYMENT_METHOD_INVALID,
+            action_hint="Add a different card",
+        ) from e
     except Exception as e:
         logger.error(f"Add card error: {e}")
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
@@ -464,3 +487,89 @@ async def delete_card(card_id: str, current_user: dict = Depends(get_current_use
         await db_supabase.update_one("users", {"id": current_user["id"]}, {"default_payment_method": None})
 
     return {"success": True}
+
+
+@api_router.post("/payment-sheet")
+async def create_payment_sheet(
+    body: PaymentSheetRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Return the three secrets needed to initialise Stripe PaymentSheet.
+
+    The mobile client calls initPaymentSheet({ paymentIntent, ephemeralKey,
+    customer }) then presentPaymentSheet() to complete the payment in a
+    pre-built Stripe modal that supports Google Pay and Apple Pay without
+    any card-form UI on our side.
+
+    Returns:
+        paymentIntent:  PaymentIntent client_secret
+        ephemeralKey:   EphemeralKey secret (scoped to this customer)
+        customer:       Stripe customer ID
+        publishableKey: App should already have this; included for convenience
+    """
+    import time as _time
+
+    settings = await get_app_settings()
+    stripe_secret = settings.get("stripe_secret_key", "")
+    stripe_pk = settings.get("stripe_publishable_key", "")
+
+    if not stripe_secret:
+        raise HTTPException(
+            status_code=503,
+            detail="Payment processing is not configured. Please contact support.",
+        )
+
+    if body.ride_id:
+        ride = await db_supabase.get_ride(body.ride_id)
+        if not ride:
+            raise HTTPException(status_code=404, detail="Ride not found")
+        ride_fare = Decimal(str(ride.get("total_fare", 0)))
+        requested = Decimal(str(body.amount))
+        if requested != ride_fare:
+            raise PaymentException(
+                message=f"Payment amount {requested} does not match ride fare {ride_fare}",
+                message_key=ErrorKeys.RIDE_PRICE_MISMATCH,
+                action_hint="Refresh the fare estimate",
+            )
+
+    try:
+        customer_id = await get_or_create_stripe_customer(current_user["id"], stripe_secret)
+        amount_cents = int(body.amount * 100)
+
+        # EphemeralKey lets the PaymentSheet modal manage the customer's
+        # saved cards. Must match the Stripe API version the SDK expects.
+        ephemeral_key = stripe.EphemeralKey.create(
+            {"customer": customer_id},
+            api_version="2023-10-16",
+            api_key=stripe_secret,
+        )
+
+        if body.client_idempotency_key:
+            idempotency_key = body.client_idempotency_key
+        elif body.ride_id:
+            idempotency_key = f"ps-{body.ride_id}-{current_user['id']}"
+        else:
+            idempotency_key = f"ps-{current_user['id']}-{int(_time.time() // 60)}"
+
+        intent = stripe.PaymentIntent.create(
+            amount=amount_cents,
+            currency="cad",
+            customer=customer_id,
+            automatic_payment_methods={"enabled": True},
+            metadata={"user_id": current_user["id"], "ride_id": body.ride_id or ""},
+            api_key=stripe_secret,
+            idempotency_key=idempotency_key,
+        )
+
+        return {
+            "paymentIntent": intent.client_secret,
+            "ephemeralKey": ephemeral_key.secret,
+            "customer": customer_id,
+            "publishableKey": stripe_pk,
+        }
+    except stripe.error.StripeError as e:
+        logger.error("Stripe payment-sheet error", exc_info=True)
+        raise HTTPException(status_code=502, detail="Payment provider error. Please try again.") from e
+    except Exception as e:
+        logger.error("payment-sheet unexpected error", exc_info=True)
+        raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e

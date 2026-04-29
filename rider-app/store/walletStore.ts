@@ -4,7 +4,7 @@ import { recordNonFatal } from '../utils/crashlytics';
 
 export interface WalletInfo {
   id: string;
-  balance: number;
+  balance: string; // MoneyString: always "0.00" format, never IEEE-754 float
   currency: string;
   is_active: boolean;
 }
@@ -12,8 +12,8 @@ export interface WalletInfo {
 export interface WalletTransaction {
   id: string;
   type: string;
-  amount: number;
-  balance_after: number;
+  amount: string; // MoneyString: negative values arrive as "-12.50"
+  balance_after: string; // MoneyString
   description: string | null;
   reference_id: string | null;
   created_at: string;
@@ -22,9 +22,9 @@ export interface WalletTransaction {
 export interface FareSplit {
   id: string;
   ride_id: string;
-  total_fare: number;
+  total_fare: string; // MoneyString
   split_count: number;
-  your_share: number;
+  your_share: string; // MoneyString
   status: string;
   participants: FareSplitParticipant[];
   created_at?: string;
@@ -34,7 +34,7 @@ export interface FareSplitParticipant {
   id: string;
   phone?: string;
   user_id?: string;
-  share_amount: number;
+  share_amount: string; // MoneyString
   status: string;
   paid_at?: string;
 }

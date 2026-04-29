@@ -28,6 +28,7 @@ interface DriverTopBarProps {
   user?: { first_name?: string };
   isOnline: boolean;
   connectionState?: ConnectionState;
+  surgeMultiplier?: number;
 }
 
 export const DriverTopBar: React.FC<DriverTopBarProps> = ({
@@ -35,7 +36,9 @@ export const DriverTopBar: React.FC<DriverTopBarProps> = ({
   user,
   isOnline,
   connectionState,
+  surgeMultiplier,
 }) => {
+  const isSurgeActive = isOnline && typeof surgeMultiplier === 'number' && surgeMultiplier > 1.0;
   const { t } = useLanguageStore();
   const insets = useSafeAreaInsets();
   const statusBarHeight = StatusBar.currentHeight ?? 0;
@@ -78,10 +81,20 @@ export const DriverTopBar: React.FC<DriverTopBarProps> = ({
               </Text>
             </View>
           </View>
-          <View style={[styles.onlineBadge, isOnline ? styles.onlineBadgeActive : styles.onlineBadgeInactive]}>
-            <Text allowFontScaling={false} style={[styles.onlineBadgeText, isOnline ? styles.onlineBadgeTextActive : styles.onlineBadgeTextInactive]}>
-              {isOnline ? t('dashboard.statusOnline') : t('dashboard.statusOffline')}
-            </Text>
+          <View style={styles.badgesRow}>
+            {isSurgeActive && (
+              <View style={styles.surgeBadge}>
+                <Ionicons name="flash" size={11} color="#fff" />
+                <Text allowFontScaling={false} style={styles.surgeBadgeText}>
+                  {surgeMultiplier!.toFixed(1)}×
+                </Text>
+              </View>
+            )}
+            <View style={[styles.onlineBadge, isOnline ? styles.onlineBadgeActive : styles.onlineBadgeInactive]}>
+              <Text allowFontScaling={false} style={[styles.onlineBadgeText, isOnline ? styles.onlineBadgeTextActive : styles.onlineBadgeTextInactive]}>
+                {isOnline ? t('dashboard.statusOnline') : t('dashboard.statusOffline')}
+              </Text>
+            </View>
           </View>
         </View>
       </BlurView>
@@ -215,6 +228,26 @@ const styles = StyleSheet.create({
   },
   bannerTextDisconnected: {
     color: '#991B1B',
+  },
+  badgesRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  surgeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 20,
+    backgroundColor: '#F59E0B',
+  },
+  surgeBadgeText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#fff',
+    letterSpacing: 0.3,
   },
 });
 

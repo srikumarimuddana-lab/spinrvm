@@ -85,7 +85,7 @@ async def read_cached_response(cache_key: str) -> Optional[dict]:
     try:
         return _json.loads(raw)
     except Exception:
-        logger.warning(f"[IDEM] Corrupt cached response for {cache_key}")
+        logger.error(f"[IDEM] Corrupt cached response for {cache_key}")
         return None
 
 

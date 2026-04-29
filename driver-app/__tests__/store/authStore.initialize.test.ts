@@ -78,6 +78,7 @@ jest.mock('../../../shared/api/client', () => ({
   },
   setInMemoryToken: jest.fn(),
   setRefreshCallback: jest.fn(),
+  setCsrfToken: jest.fn(),
   getAuthHeader: jest.fn(() => Promise.resolve(null)),
 }));
 

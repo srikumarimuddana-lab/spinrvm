@@ -118,6 +118,9 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // socket (observed as a perpetual "Reconnecting…" banner).
   const isOnlineRef = useRef(isOnline);
   const locationRef = useRef<Location.LocationObject | null>(null);
+  // Throttle setLocation re-renders: map updates at most every 10 s.
+  // WS payloads still fire every watchPositionAsync callback (~5 s).
+  const lastRenderMsRef = useRef<number>(0);
   const userRef = useRef(user);
   useEffect(() => { userRef.current = user; }, [user]);
 
@@ -333,8 +336,12 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           distanceInterval: 10,
         },
         (loc) => {
-          setLocation(loc);
           locationRef.current = loc;
+          const now = Date.now();
+          if (now - lastRenderMsRef.current >= 10000) {
+            lastRenderMsRef.current = now;
+            setLocation(loc);
+          }
 
           const { rideState: currentRideState, activeRide: currentActiveRide } = useDriverStore.getState();
           const rideId = currentActiveRide?.ride?.id || null;
@@ -455,6 +462,20 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
             'success',
           );
           // Pull the fresh totals so the earnings chip updates on screen.
+          fetchEarnings('today');
+        }
+        break;
+      }
+
+      // Unified status event from socket_manager.broadcast_ride_status().
+      // Currently emitted to drivers on admin-initiated cancellations.
+      // Handlers are idempotent: specific events (ride_cancelled, etc.)
+      // may already have acted; these are reconciliation / catch-up paths.
+      case 'ride_status_changed': {
+        const status = data.status as string | undefined;
+        if (status === 'cancelled') {
+          resetRideState();
+        } else if (status === 'completed' && typeof data.total_fare === 'number') {
           fetchEarnings('today');
         }
         break;
@@ -811,7 +832,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           pickup_lng: parseFloat(data.pickup_lng || '0'),
           dropoff_lat: parseFloat(data.dropoff_lat || '0'),
           dropoff_lng: parseFloat(data.dropoff_lng || '0'),
-          fare: parseFloat(data.fare || '0'),
+          fare: String(data.fare ?? '0.00'),
           distance_km: data.distance_km ? parseFloat(data.distance_km) : undefined,
           duration_minutes: data.duration_minutes ? parseFloat(data.duration_minutes) : undefined,
           rider_name: data.rider_name,

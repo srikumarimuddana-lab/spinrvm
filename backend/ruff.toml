@@ -18,6 +18,7 @@ ignore = [
     "S311",  # random not for crypto (used for jitter/non-security)
     "B008",  # function calls in default args (FastAPI Depends pattern)
     "E501",  # line too long (handled by line-length above)
+    "E402",  # module-level import not at top (try/except ImportError dual-import pattern used throughout)
 ]
 
 [lint.per-file-ignores]

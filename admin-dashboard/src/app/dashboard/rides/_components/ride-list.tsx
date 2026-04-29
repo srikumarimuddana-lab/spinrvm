@@ -113,7 +113,7 @@ export default function RideList({
         // Column filters
         if (fareFilter !== "all") {
             data = data.filter(r => {
-                const f = r.total_fare || 0;
+                const f = parseFloat(String(r.total_fare ?? 0));
                 if (fareFilter === "under10") return f < 10;
                 if (fareFilter === "10to25") return f >= 10 && f < 25;
                 if (fareFilter === "25to50") return f >= 25 && f < 50;
@@ -134,7 +134,7 @@ export default function RideList({
         data.sort((a, b) => {
             let av: any, bv: any;
             if (sortKey === "total_fare") {
-                av = a.total_fare || 0; bv = b.total_fare || 0;
+                av = parseFloat(String(a.total_fare ?? 0)); bv = parseFloat(String(b.total_fare ?? 0));
             } else if (sortKey === "created_at") {
                 av = a.created_at || ""; bv = b.created_at || "";
             } else {
@@ -395,7 +395,7 @@ export default function RideList({
                                     </td>
                                     <td className="py-3 px-4 text-right">
                                         <p className="text-sm font-bold">{formatCurrency(ride.total_fare || 0)}</p>
-                                        {(ride.tip_amount || 0) > 0 && (
+                                        {parseFloat(String(ride.tip_amount ?? 0)) > 0 && (
                                             <p className="text-[10px] font-semibold text-emerald-600 mt-0.5">+{formatCurrency(ride.tip_amount)} tip</p>
                                         )}
                                     </td>

@@ -21,7 +21,13 @@ try:
     from ..utils.crypto import hash_otp
     from ..utils.datetime_utils import parse_iso_utc
     from ..utils.driver_presence import clear_presence, mark_present, present_driver_ids
-    from ..utils.error_handling import RideStateError
+    from ..utils.error_handling import (
+        AccountDisabledException,
+        ErrorCode,
+        RideStateError,
+        SpinrException,
+    )
+    from ..utils.error_keys import ErrorKeys
     from ..utils.idempotency import idempotent_endpoint
 except ImportError:
     import db_supabase
@@ -35,12 +41,31 @@ except ImportError:
     from utils.crypto import hash_otp
     from utils.datetime_utils import parse_iso_utc
     from utils.driver_presence import clear_presence, mark_present, present_driver_ids
-    from utils.error_handling import RideStateError
+    from utils.error_handling import (
+        AccountDisabledException,
+        ErrorCode,
+        RideStateError,
+        SpinrException,
+    )
+    from utils.error_keys import ErrorKeys
     from utils.idempotency import idempotent_endpoint
 
 db = db_supabase  # legacy alias
 
 logger = logging.getLogger(__name__)
+
+_TWO_PLACES = Decimal("0.01")
+
+
+def _money_str(v) -> str:
+    """Serialise a money value as an exact 2-dp Decimal string (never float)."""
+    from decimal import ROUND_HALF_UP, InvalidOperation
+
+    try:
+        return str(Decimal(str(v)).quantize(_TWO_PLACES, rounding=ROUND_HALF_UP))
+    except (TypeError, ValueError, InvalidOperation):
+        return "0.00"
+
 
 # ── Vault encryption for driver PII (P2-5) ───────────────────────────────────
 # licence_number and vehicle_vin live in plain TEXT columns, but the values
@@ -336,9 +361,11 @@ class UpdateDriverProfileRequest(BaseModel):
     """Strict schema for driver profile updates — only whitelisted fields accepted."""
 
     # Safe fields (no re-verification)
-    gst_number: Optional[str] = None
+    gst_registered: Optional[bool] = None
+    gst_bn: Optional[str] = None  # CRA Business Number, format 123456789RT0001
     preferred_language: Optional[str] = None
     photo_url: Optional[str] = None
+    is_wav: Optional[bool] = None
     # Vehicle/document fields (triggers re-review on verified drivers)
     vehicle_type_id: Optional[str] = None
     vehicle_make: Optional[str] = None
@@ -370,7 +397,7 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
     )
 
     # Fields that always update without affecting verification
-    safe_fields = {"gst_number", "preferred_language", "photo_url"}
+    safe_fields = {"gst_registered", "gst_bn", "preferred_language", "photo_url", "is_wav"}
     # Vehicle/doc fields — changing these on a verified driver triggers re-review
     vehicle_fields = {
         "vehicle_type_id",
@@ -720,13 +747,14 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
         total_earnings = total_tips = total_rides = pending_payouts = 0
 
     return {
-        "total_earnings": total_earnings,
-        "available_balance": total_earnings - pending_payouts,
-        "pending_payouts": pending_payouts,
-        "total_paid_out": 0,
+        "total_earnings": _money_str(total_earnings),
+        # payable_balance = total_earnings - pending_payouts (NOT the same as wallet.balance)
+        "payable_balance": _money_str(Decimal(str(total_earnings)) - Decimal(str(pending_payouts))),
+        "pending_payouts": _money_str(pending_payouts),
+        "total_paid_out": "0.00",
         "has_bank_account": bool(driver.get("bank_account")),
         "stripe_account_onboarded": bool(driver.get("stripe_account_onboarded", False)),
-        "total_tips": total_tips,
+        "total_tips": _money_str(total_tips),
         "total_rides": total_rides,
     }
 
@@ -788,14 +816,14 @@ async def get_driver_earnings(period: str = Query("week"), current_user: dict = 
 
     return {
         "period": period,
-        "total_earnings": stats.get("total_earnings", 0),
-        "total_tips": stats.get("total_tips", 0),
+        "total_earnings": _money_str(stats.get("total_earnings", 0)),
+        "total_tips": _money_str(stats.get("total_tips", 0)),
         "total_rides": stats.get("total_rides", 0),
         "total_distance_km": stats.get("total_distance_km", 0),
         "total_duration_minutes": stats.get("total_duration_minutes", 0),
-        "average_per_ride": stats.get("total_earnings", 0) / stats.get("total_rides", 1)
+        "average_per_ride": _money_str(Decimal(str(stats.get("total_earnings", 0))) / stats.get("total_rides", 1))
         if stats.get("total_rides", 0) > 0
-        else 0,
+        else "0.00",
     }
 
 
@@ -1165,6 +1193,67 @@ async def get_driver_earnings_comparison(period: str = Query("week"), current_us
     }
 
 
+@api_router.get("/earnings/forecast")
+async def get_driver_earnings_forecast(current_user: dict = Depends(get_current_user)):
+    """Weekly earnings projection for the driver home screen widget.
+
+    Algorithm:
+      1. Compute average daily earnings over the last 28 days of completed rides.
+      2. Multiply by 7 to get the weekly baseline.
+      3. Compute remaining days in the current week (Mon–Sun) and add
+         the *this-week* earnings already locked in.
+
+    The result is intentionally simple — it's a motivational nudge, not
+    a financial guarantee.  Decimal precision is kept to 2 dp throughout.
+    """
+    driver = await db.find_one("drivers", {"user_id": current_user["id"]})
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    now = datetime.now(timezone.utc)
+    # Rolling 28-day window for the daily average
+    window_start = (now - timedelta(days=28)).isoformat()
+    # Start of the current ISO week (Monday)
+    week_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    try:
+        recent_rides = await db.get_rows(
+            "rides",
+            {
+                "driver_id": driver["id"],
+                "status": "completed",
+                "ride_completed_at": {"$gte": window_start},
+            },
+            limit=5000,
+        )
+    except Exception as e:
+        logger.error(f"[FORECAST] earnings fetch failed driver={driver['id']}: {e}", exc_info=True)
+        recent_rides = []
+
+    this_week_rides = [r for r in recent_rides if (r.get("ride_completed_at") or "") >= week_start.isoformat()]
+    prev_28_rides = [r for r in recent_rides if (r.get("ride_completed_at") or "") < week_start.isoformat()]
+
+    this_week_earnings = sum(Decimal(str(r.get("driver_earnings") or 0)) for r in this_week_rides)
+    prev_28_earnings = sum(Decimal(str(r.get("driver_earnings") or 0)) for r in prev_28_rides)
+
+    # Daily average over the 28-day window excluding the current week
+    days_in_window = 28 - now.weekday()  # days before current week in window
+    daily_avg = (prev_28_earnings / days_in_window) if days_in_window > 0 else Decimal("0")
+
+    # Days remaining in current week (today = partially elapsed)
+    days_remaining = 6 - now.weekday()  # Mon=0 … Sun=6
+    projected_additional = daily_avg * days_remaining
+    projected_total = (this_week_earnings + projected_additional).quantize(Decimal("0.01"))
+
+    return {
+        "this_week_earnings": _money_str(this_week_earnings),
+        "projected_weekly_total": _money_str(projected_total),
+        "daily_avg_last_28d": _money_str(daily_avg),
+        "days_remaining_this_week": days_remaining,
+        "this_week_trips": len(this_week_rides),
+    }
+
+
 @api_router.get("/nearby")
 async def get_nearby_drivers_public(
     lat: float = Query(...),
@@ -1459,7 +1548,7 @@ async def request_payout(
         raise HTTPException(status_code=404, detail="Driver profile not found")
 
     balance = await get_driver_balance(current_user)
-    if req.amount > balance.get("available_balance", 0):
+    if req.amount > Decimal(balance.get("payable_balance", "0")):
         raise HTTPException(status_code=400, detail="Insufficient funds")
 
     stripe_account_id = driver.get("stripe_account_id")
@@ -1553,13 +1642,13 @@ async def get_t4a_summary(year: int, current_user: dict = Depends(get_current_us
         limit=10000,
     )
 
-    total_earnings = sum(r.get("driver_earnings", 0) for r in rides)
+    total_earnings = _money_str(sum(Decimal(str(r.get("driver_earnings") or 0)) for r in rides))
 
     return {
         "year": year,
         "total_earnings": total_earnings,
         "total_trips": len(rides),
-        "platform_fees": 0,
+        "platform_fees": "0.00",
         "net_earnings": total_earnings,
         "gst_registered": driver.get("gst_registered", False),
         "gst_bn": driver.get("gst_bn") or "",
@@ -1804,9 +1893,10 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
         raise HTTPException(status_code=404, detail="Driver not found")
 
     if driver.get("status") == "suspended":
-        raise HTTPException(
-            status_code=403,
-            detail="Your account is suspended. Please renew your documents to continue driving.",
+        raise AccountDisabledException(
+            message="Your account is suspended. Please renew your documents to continue driving.",
+            message_key=ErrorKeys.AUTH_ACCOUNT_SUSPENDED,
+            action_hint="Contact support",
         )
 
     ride = await db_supabase.get_ride(ride_id)
@@ -1866,7 +1956,13 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
             f"[ACCEPT] claim rejected ride_id={ride_id} "
             f"current_status={ride.get('status')} current_driver_id={ride.get('driver_id')}"
         )
-        raise HTTPException(status_code=409, detail="Ride already accepted by another driver")
+        raise SpinrException(
+            message="Ride already accepted by another driver",
+            error_code=ErrorCode.RESOURCE_CONFLICT,
+            status_code=409,
+            message_key=ErrorKeys.RIDE_TAKEN,
+            action_hint="Pick another ride",
+        )
 
     # Re-read the now-claimed ride so we can notify the rider with fresh data.
     ride = await db.find_one("rides", {"id": ride_id})
@@ -2269,7 +2365,10 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         )
     )
 
-    # Update driver stats
+    # Update driver stats. Setting is_available=True is safe here because the
+    # ride has just transitioned to `completed`, and the driver's row already
+    # has is_online=True (a driver cannot be on an active trip while offline).
+    # See update_driver_status docstring for the is_online/is_available invariant.
     await db_supabase.update_one(
         "drivers", {"id": driver["id"]}, {"$inc": {"total_rides": 1}, "$set": {"is_available": True}}
     )
@@ -2589,8 +2688,8 @@ async def get_driver_leaderboard(
             period_rides = []
 
         total_rides = len(period_rides)
-        total_earnings = sum(float(r.get("driver_earnings", 0) or 0) for r in period_rides)
-        total_tips = sum(float(r.get("tip_amount", 0) or 0) for r in period_rides)
+        total_earnings = sum(Decimal(str(r.get("driver_earnings") or 0)) for r in period_rides)
+        total_tips = sum(Decimal(str(r.get("tip_amount") or 0)) for r in period_rides)
 
         user = await db.find_one("users", {"id": d.get("user_id")})
         name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else "Driver"
@@ -2600,15 +2699,15 @@ async def get_driver_leaderboard(
                 "driver_id": d_id,
                 "name": name,
                 "rides": total_rides,
-                "earnings": round(total_earnings, 2),
-                "tips": round(total_tips, 2),
+                "earnings": _money_str(total_earnings),
+                "tips": _money_str(total_tips),
                 "rating": d.get("rating", 0),
                 "is_current_user": d_id == driver["id"],
             }
         )
 
     # Sort by rides (primary), then earnings (secondary)
-    rankings.sort(key=lambda x: (x["rides"], x["earnings"]), reverse=True)
+    rankings.sort(key=lambda x: (x["rides"], Decimal(x["earnings"])), reverse=True)
 
     # Assign ranks
     for i, r in enumerate(rankings):
@@ -2647,6 +2746,25 @@ async def update_driver_status(
     is_online: bool = Body(..., embed=True),
     current_user: dict = Depends(get_current_user),
 ):
+    """Toggle the driver's online flag (driver-facing "Go online" / "Go offline").
+
+    Driver online/available flag contract
+    -------------------------------------
+    ``is_online``
+        Driver-toggled. ``True`` when the driver has tapped "Go online".
+        Independent of ride state; remains ``True`` while the driver is on
+        an active trip.
+    ``is_available``
+        System-computed. ``True`` only when (``is_online`` AND not currently
+        on an active ride AND not in offer-pending state). Used by dispatch
+        to decide who to offer the next ride to.
+
+    Invariant: ``is_available == True`` implies ``is_online == True``. The
+    inverse does NOT hold — an online driver mid-trip is ``is_online=True,
+    is_available=False``. Dispatch reads ``is_available``; admin filters
+    typically read ``is_online``. Never set ``is_available = True`` without
+    ``is_online = True``.
+    """
     driver = await db_supabase.get_driver_by_id(driver_id)
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
@@ -2656,20 +2774,34 @@ async def update_driver_status(
 
     # Ban check: prevent banned drivers from going online
     if is_online and driver.get("status") == "banned":
-        raise HTTPException(
-            status_code=403, detail="Your account has been permanently suspended due to policy violations."
+        raise AccountDisabledException(
+            message="Your account has been permanently suspended due to policy violations.",
+            message_key=ErrorKeys.AUTH_ACCOUNT_SUSPENDED,
+            action_hint="Contact support",
         )
     if is_online and driver.get("status") == "suspended":
-        raise HTTPException(status_code=403, detail="Your account is currently suspended. Please contact support.")
+        raise AccountDisabledException(
+            message="Your account is currently suspended. Please contact support.",
+            message_key=ErrorKeys.AUTH_ACCOUNT_SUSPENDED,
+            action_hint="Contact support",
+        )
     if is_online and driver.get("status") == "needs_review":
-        raise HTTPException(
-            status_code=400, detail="Your account is under review. Please wait for admin approval before going online."
+        raise SpinrException(
+            message="Your account is under review. Please wait for admin approval before going online.",
+            error_code=ErrorCode.DRIVER_DOCUMENTS_PENDING,
+            status_code=400,
+            message_key=ErrorKeys.DRIVER_DOCUMENTS_PENDING,
+            action_hint="Wait for verification",
         )
     if is_online and driver.get("status") not in ("active",):
         # Pending, rejected, or any unknown status
         if not driver.get("is_verified", False) and driver.get("status") != "active":
-            raise HTTPException(
-                status_code=400, detail="Your driver profile has not been verified yet. Please wait for admin approval."
+            raise SpinrException(
+                message="Your driver profile has not been verified yet. Please wait for admin approval.",
+                error_code=ErrorCode.DRIVER_DOCUMENTS_PENDING,
+                status_code=400,
+                message_key=ErrorKeys.DRIVER_DOCUMENTS_PENDING,
+                action_hint="Wait for verification",
             )
 
     if not is_online:
@@ -2773,9 +2905,12 @@ async def update_driver_status(
             latest = docs[0]
             exp = _parse_expiry(latest.get("expiry_date") or latest.get("expires_at"))
             if exp and exp < now:
-                raise HTTPException(
+                raise SpinrException(
+                    message=f"{req_name} has expired. Please update your documents before going online.",
+                    error_code=ErrorCode.DRIVER_DOCUMENTS_PENDING,
                     status_code=400,
-                    detail=f"{req_name} has expired. Please update your documents before going online.",
+                    message_key=ErrorKeys.DRIVER_DOCUMENTS_EXPIRED,
+                    action_hint="Renew documents in Profile",
                 )
             # This requirement was covered by a fresh doc — do not re-check
             # the legacy column for the same thing below.
@@ -2812,9 +2947,12 @@ async def update_driver_status(
                 if expiry_val.tzinfo is None:
                     expiry_val = expiry_val.replace(tzinfo=timezone.utc)
                 if expiry_val < now:
-                    raise HTTPException(
+                    raise SpinrException(
+                        message=f"{label} has expired ({field}). Please update your documents before going online.",
+                        error_code=ErrorCode.DRIVER_DOCUMENTS_PENDING,
                         status_code=400,
-                        detail=f"{label} has expired ({field}). Please update your documents before going online.",
+                        message_key=ErrorKeys.DRIVER_DOCUMENTS_EXPIRED,
+                        action_hint="Renew documents in Profile",
                     )
 
         # is_verified check removed — status field is the single source of truth now.
@@ -2864,9 +3002,12 @@ async def update_driver_status(
                 ) from e
 
             if not sub:
-                raise HTTPException(
+                raise SpinrException(
+                    message="You need an active Spinr Pass subscription to go online. Subscribe from your dashboard.",
+                    error_code=ErrorCode.PAYMENT_FAILED,
                     status_code=402,
-                    detail="You need an active Spinr Pass subscription to go online. Subscribe from your dashboard.",
+                    message_key=ErrorKeys.DRIVER_SUBSCRIPTION_REQUIRED,
+                    action_hint="Activate Spinr Pass",
                 )
 
             # Check expiry on the active subscription row. parse_iso_utc
@@ -2876,9 +3017,12 @@ async def update_driver_status(
                 exp = parse_iso_utc(sub["expires_at"])
                 if exp is not None and exp < datetime.now(timezone.utc):
                     await db_supabase.update_one("driver_subscriptions", {"id": sub["id"]}, {"status": "expired"})
-                    raise HTTPException(
+                    raise SpinrException(
+                        message="Your Spinr Pass has expired. Please renew to go online.",
+                        error_code=ErrorCode.PAYMENT_FAILED,
                         status_code=402,
-                        detail="Your Spinr Pass has expired. Please renew to go online.",
+                        message_key=ErrorKeys.DRIVER_SUBSCRIPTION_REQUIRED,
+                        action_hint="Activate Spinr Pass",
                     )
 
     logger.info(
@@ -2894,6 +3038,11 @@ async def update_driver_status(
     # payload so the flip itself still lands.
     _now_iso = datetime.now(timezone.utc).isoformat()
     _base = {"is_online": is_online, "is_available": is_online, "updated_at": _now_iso}
+    # Invariant guardrail: is_available => is_online (see handler docstring).
+    # This is a sanity check on the payload we are about to write — never
+    # gate user behaviour on the assert; if it ever trips, the bug is in the
+    # logic that built _base, not in the driver's request.
+    assert not (_base["is_available"] and not _base["is_online"]), "is_available implies is_online"
     status_flipped = bool(driver.get("is_online")) != bool(is_online)
     _payload = {**_base, "last_status_changed_at": _now_iso} if status_flipped else _base
     try:

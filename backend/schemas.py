@@ -262,6 +262,8 @@ class Ride(BaseModel):
     stops: Optional[List[Dict[str, Any]]] = []
     is_scheduled: bool = False
     requires_wav: bool = False
+    quiet_mode: bool = False
+    rider_notes: Optional[str] = None
     scheduled_time: Optional[datetime] = None
     corporate_account_id: Optional[str] = None
     distance_km: float
@@ -316,6 +318,8 @@ class CreateRideRequest(BaseModel):
     stops: Optional[List[Dict[str, Any]]] = Field(default=[], max_length=5)
     is_scheduled: bool = False
     requires_wav: bool = False
+    quiet_mode: bool = False
+    rider_notes: Optional[str] = None
     scheduled_timezone: Optional[str] = None  # IANA name e.g. "America/Toronto"; used for DST-gap guard
     scheduled_time: Optional[datetime] = None
     corporate_account_id: Optional[str] = None

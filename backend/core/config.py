@@ -94,6 +94,11 @@ class Settings(BaseSettings):
     # Observability — optional; Sentry only initialises when this is set
     sentry_dsn: Optional[str] = None
 
+    # Operational alerting — Slack-compatible incoming webhook URL.
+    # When set, the loop watchdog posts a message here whenever a background
+    # loop goes stale.  Leave unset in development; required in production.
+    ALERT_WEBHOOK_URL: Optional[str] = None
+
     @model_validator(mode="after")
     def _hash_admin_password(self) -> "Settings":
         """Hash ADMIN_PASSWORD with bcrypt at startup (A-P3-1).

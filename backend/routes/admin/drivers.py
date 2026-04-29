@@ -89,7 +89,7 @@ async def _log_driver_activity(
             },
         )
     except Exception as e:
-        logger.warning(f"Failed to log driver activity: {e}")
+        logger.error(f"Failed to log driver activity: {e}", exc_info=True)
 
 
 # ---------- Pydantic models ----------

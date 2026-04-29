@@ -204,9 +204,15 @@ jobs:
         env:
           NEXT_PUBLIC_API_URL: http://localhost:8000
       - name: Scan bundle for secrets
+        # Scan only static/ — that is what browsers receive. The server/
+        # directory holds source maps (.map) and server-rendered code; real
+        # secrets there are a server-side concern covered by G5a + G3, not a
+        # client-bundle-leakage concern. Scanning the full .next/ directory
+        # with gitleaks causes source-map false positives on placeholder
+        # strings (pk_test_..., sk_test_...) from the settings form.
         uses: gitleaks/gitleaks-action@v2
         with:
-          args: detect --source admin-dashboard/.next --no-git --redact
+          args: detect --source admin-dashboard/.next/static --no-git --redact
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

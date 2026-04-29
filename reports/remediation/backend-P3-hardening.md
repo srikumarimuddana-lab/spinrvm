@@ -75,9 +75,9 @@ async def broadcast(self, msg: dict) -> None:
 
 ## Checklist
 
-- [ ] B-P3-1 Concurrent `asyncio.gather` broadcast with per-message timeout (14-6)
-- [ ] B-P3-2 ±10% jitter on every background loop; per-loop metrics (14-7)
-- [ ] B-P3-3 Quarterly sub-processor diff job; auto-PR on changes (22-3B)
+- [x] B-P3-1 Concurrent `asyncio.gather` broadcast with per-message timeout (14-6)
+- [x] B-P3-2 ±10% jitter on every background loop; per-loop metrics (14-7)
+- [x] B-P3-3 Quarterly sub-processor diff job; auto-PR on changes (22-3B)
 
 ## After this file
 

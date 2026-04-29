@@ -14,6 +14,7 @@ try:
     from ..utils.driver_presence import clear_presence, mark_present
 except ImportError:
     import db_supabase
+    from core.config import settings
     from dependencies import verify_jwt_token
     from socket_manager import manager
     from utils.driver_presence import clear_presence, mark_present

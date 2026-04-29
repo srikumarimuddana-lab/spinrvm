@@ -16,7 +16,8 @@ try:
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user
-    from utils.password import hash_password
+    from utils.password import hash_password, verify_password
+    from utils.password_policy import validate_admin_password
     from utils.rate_limiter import admin_staff_delete_limit
     from utils.refresh_tokens import revoke_all_for_user
 

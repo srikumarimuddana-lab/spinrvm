@@ -27,6 +27,8 @@ _STRIPE_HANDLED_EVENTS = frozenset(
         "checkout.session.completed",
     }
 )
+# Public alias so tests can import and assert the allowlist
+ALLOWED_STRIPE_EVENTS = _STRIPE_HANDLED_EVENTS
 
 
 @api_router.post("/stripe")

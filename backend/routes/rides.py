@@ -22,6 +22,7 @@ try:
         filter_and_rank_drivers,
     )
     from ..settings_loader import get_app_settings
+    from ..sms_service import send_sms
     from ..socket_manager import manager
     from ..utils.crypto import hash_otp
     from ..utils.idempotency import idempotent_endpoint
@@ -39,6 +40,7 @@ except ImportError:
         filter_and_rank_drivers,
     )
     from settings_loader import get_app_settings
+    from sms_service import send_sms
     from socket_manager import manager
     from utils.crypto import hash_otp
     from utils.idempotency import idempotent_endpoint
@@ -1895,8 +1897,9 @@ async def rate_driver(ride_id: str, rating_data: RideRatingRequest, current_user
         return {"success": True}
 
     if rating_data.tip_amount > 0:
-        new_tip = ride.get("tip_amount", 0) + rating_data.tip_amount
-        new_driver_earnings = ride.get("driver_earnings", 0) + rating_data.tip_amount
+        _tip = _d(rating_data.tip_amount)
+        new_tip = _d(ride.get("tip_amount") or 0) + _tip
+        new_driver_earnings = _d(ride.get("driver_earnings") or 0) + _tip
         await db_supabase.update_ride(ride_id, {"tip_amount": new_tip, "driver_earnings": new_driver_earnings})
 
     # Aggregate driver rating using rolling average to avoid O(n) ride fetch.
@@ -1958,11 +1961,11 @@ async def cancel_ride_rider(request: Request, ride_id: str, current_user: dict =
     # Calculate cancellation fee based on time since driver accepted
     driver_id = ride.get("driver_id")
     settings = await get_app_settings()
-    cancellation_fee_admin = settings.get("cancellation_fee_admin", 0.50)
-    cancellation_fee_driver = settings.get("cancellation_fee_driver", 2.50)
+    cancellation_fee_admin = _d(settings.get("cancellation_fee_admin", "0.50"))
+    cancellation_fee_driver = _d(settings.get("cancellation_fee_driver", "2.50"))
 
-    charged_admin = 0.0
-    charged_driver = 0.0
+    charged_admin = _d(0)
+    charged_driver = _d(0)
 
     # Flat $5.00 fee when the driver has already arrived — overrides the
     # time-based check below because the driver has made the full trip to
@@ -2233,33 +2236,50 @@ async def trigger_emergency(ride_id: str, request: EmergencyRequest, current_use
         logger.error(f"emergency_alert admin broadcast failed: {_exc}", exc_info=True)
     logger.critical(f"EMERGENCY ALERT TRIGGERED for ride {ride_id} by user {current_user['id']}")
 
-    # GAP FIX: Notify emergency contacts via SMS/push
+    # Notify emergency contacts via SMS (Twilio when configured, console log in dev)
+    contacts_notified = 0
     try:
-        contacts_cursor = db_supabase.get_rows("emergency_contacts", {"user_id": current_user["id"]}, limit=100)
-        contacts = (
-            await contacts_cursor.to_list(length=5) if hasattr(contacts_cursor, "to_list") else list(contacts_cursor)
-        )
+        sms_settings = await get_app_settings()
+        contacts_rows = await db_supabase.get_rows("emergency_contacts", {"user_id": current_user["id"]}, limit=5)
+        contacts = list(contacts_rows) if contacts_rows else []
 
         user = await db_supabase.get_user_by_id(current_user["id"])
         user_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else "A Spinr user"
 
+        location_text = (
+            f" Location shared with emergency services." if request.latitude and request.longitude
+            else ""
+        )
+        sms_body = (
+            f"URGENT: {user_name} triggered an emergency alert during a Spinr ride."
+            f"{location_text} Call them or emergency services immediately."
+        )
+
         for contact in contacts:
-            # In production, this would send an actual SMS via Twilio
-            logger.info(
-                f"EMERGENCY SMS to {contact.get('name')} ({contact.get('phone')}): "
-                f"{user_name} triggered an emergency alert during their Spinr ride. "
-                f"Location: {request.latitude}, {request.longitude}"
+            phone = contact.get("phone", "")
+            if not phone:
+                continue
+            result = await send_sms(
+                phone,
+                sms_body,
+                twilio_sid=sms_settings.get("twilio_account_sid", "") if sms_settings else "",
+                twilio_token=sms_settings.get("twilio_auth_token", "") if sms_settings else "",
+                twilio_from=sms_settings.get("twilio_from_number", "") if sms_settings else "",
             )
+            if result.get("success"):
+                contacts_notified += 1
+            else:
+                logger.error(f"SOS SMS failed for contact {contact.get('id')}: {result.get('error')}")
 
         if contacts:
-            logger.info(f"Notified {len(contacts)} emergency contacts for user {current_user['id']}")
+            logger.info(f"SOS: notified {contacts_notified}/{len(contacts)} emergency contacts for user {current_user['id']}")
     except Exception as e:
-        logger.error(f"Could not notify emergency contacts: {e}", exc_info=True)
+        logger.error(f"SOS emergency contact notification failed: {e}", exc_info=True)
 
     return {
         "success": True,
         "incident_id": incident["id"],
-        "contacts_notified": len(contacts) if "contacts" in dir() else 0,
+        "contacts_notified": contacts_notified,
     }
 
 

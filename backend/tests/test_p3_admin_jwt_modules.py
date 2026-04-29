@@ -176,9 +176,9 @@ class TestGetCurrentUserAdminJWT:
 
         from fastapi.security import HTTPAuthorizationCredentials
 
-        import db_supabase as dbs
+        import backend.db_supabase as dbs
         from backend.core.config import settings
-        from dependencies import get_current_user
+        from backend.dependencies import get_current_user
 
         now = datetime.now(timezone.utc)
         rider_token = jwt.encode(

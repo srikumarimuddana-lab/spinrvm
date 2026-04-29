@@ -1897,8 +1897,9 @@ async def rate_driver(ride_id: str, rating_data: RideRatingRequest, current_user
         return {"success": True}
 
     if rating_data.tip_amount > 0:
-        new_tip = (ride.get("tip_amount") or Decimal("0")) + rating_data.tip_amount
-        new_driver_earnings = (ride.get("driver_earnings") or Decimal("0")) + rating_data.tip_amount
+        _tip = _d(rating_data.tip_amount)
+        new_tip = _d(ride.get("tip_amount") or 0) + _tip
+        new_driver_earnings = _d(ride.get("driver_earnings") or 0) + _tip
         await db_supabase.update_ride(ride_id, {"tip_amount": new_tip, "driver_earnings": new_driver_earnings})
 
     # Aggregate driver rating using rolling average to avoid O(n) ride fetch.
@@ -1913,6 +1914,7 @@ async def rate_driver(ride_id: str, rating_data: RideRatingRequest, current_user
             {"id": driver_id},
             {
                 "rating": new_avg,
+                "average_rating": new_avg,
                 "total_ratings": new_count,
             },
         )
@@ -1959,11 +1961,11 @@ async def cancel_ride_rider(request: Request, ride_id: str, current_user: dict =
     # Calculate cancellation fee based on time since driver accepted
     driver_id = ride.get("driver_id")
     settings = await get_app_settings()
-    cancellation_fee_admin = settings.get("cancellation_fee_admin", 0.50)
-    cancellation_fee_driver = settings.get("cancellation_fee_driver", 2.50)
+    cancellation_fee_admin = _d(settings.get("cancellation_fee_admin", "0.50"))
+    cancellation_fee_driver = _d(settings.get("cancellation_fee_driver", "2.50"))
 
-    charged_admin = 0.0
-    charged_driver = 0.0
+    charged_admin = _d(0)
+    charged_driver = _d(0)
 
     # Flat $5.00 fee when the driver has already arrived — overrides the
     # time-based check below because the driver has made the full trip to

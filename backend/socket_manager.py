@@ -324,21 +324,20 @@ class ConnectionManager:
         ride_id: str,
         status: str,
         rider_id: str | None = None,
+        driver_user_id: str | None = None,
         **extra,
     ):
         """Emit a unified ``ride_status_changed`` event for a ride transition.
 
-        Both the rider app and the admin dashboard listen for this single
+        Rider app, driver app, and admin dashboard all listen for this single
         event type and switch on ``status``. Individual specific events
         (``driver_accepted``, ``ride_started``, …) still fire for
         backward-compat, but every backend state transition should also
-        call this so admin live-monitoring stays consistent without
-        per-event wiring.
+        call this so live-monitoring stays consistent without per-event wiring.
 
-        ``rider_id`` is optional — pass None for transitions that shouldn't
-        fan out to the rider (e.g. the initial driver_assigned pick, which
-        shouldn't trigger a rider UI update until the driver actually
-        accepts).
+        ``rider_id`` and ``driver_user_id`` are optional — pass None for
+        connections that shouldn't receive the event (e.g. driver_user_id=None
+        for transitions the driver triggers themselves and already knows about).
         """
         payload = {"type": "ride_status_changed", "ride_id": ride_id, "status": status, **extra}
         if rider_id:
@@ -346,6 +345,11 @@ class ConnectionManager:
                 await self.send_personal_message(payload, f"rider_{rider_id}")
             except Exception as e:
                 logger.warning(f"broadcast_ride_status: rider send failed for {rider_id}: {e}")
+        if driver_user_id:
+            try:
+                await self.send_personal_message(payload, f"driver_{driver_user_id}")
+            except Exception as e:
+                logger.warning(f"broadcast_ride_status: driver send failed for {driver_user_id}: {e}")
         try:
             await self.broadcast_to_admins(payload)
         except Exception as e:

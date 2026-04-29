@@ -70,8 +70,8 @@ class RideStatus(str, Enum):
 
 ## Checklist
 
-- [ ] B-P0-1 Initialize `average_rating` before the conditional in `routes/rides.py:1796`
-- [ ] B-P0-2 Accept `'completed'` in `process_payment` (short fix) **and** plan the `RideStatus` enum sweep (DV-3)
+- [x] B-P0-1 Fix `rider_rating` field name in `rate_driver` aggregation (`driver_rating` was synthetic/never in raw `get_rows` results); initialize `average_rating` before conditional — regression tests in `tests/test_p0_rating_and_payment.py`
+- [x] B-P0-2 Introduced `backend/models/ride_status.py` (`RideStatus(str, Enum)`); updated `process_payment` guard and `complete_ride` state constants in `rides.py` and `drivers.py` to use enum — regression tests in `tests/test_p0_rating_and_payment.py`
 
 ## After this file
 

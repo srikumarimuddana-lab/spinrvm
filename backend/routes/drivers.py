@@ -15,6 +15,7 @@ try:
     from ..features import send_email, send_push_notification
     from ..geo_utils import calculate_distance
     from ..logging_utils import diag_logger
+    from ..models.ride_status import RideStatus
     from ..schemas import Driver, RideRatingRequest
     from ..socket_manager import manager
     from ..utils.crypto import hash_otp
@@ -28,6 +29,7 @@ except ImportError:
     from features import send_email, send_push_notification
     from geo_utils import calculate_distance
     from logging_utils import diag_logger
+    from models.ride_status import RideStatus  # noqa: F401
     from schemas import Driver, RideRatingRequest
     from socket_manager import manager
     from utils.crypto import hash_otp
@@ -140,11 +142,11 @@ api_router = APIRouter(prefix="/drivers", tags=["Drivers"])
 #   • restarting a cancelled ride
 #   • marking "arrived" on a completed ride
 # Idempotent destination states are included to make retries safe.
-ARRIVE_FROM_STATES = ("driver_assigned", "driver_accepted", "driver_arrived")
+ARRIVE_FROM_STATES = (RideStatus.DRIVER_ASSIGNED, RideStatus.DRIVER_ACCEPTED, RideStatus.DRIVER_ARRIVED)
 # verify-otp and start both move driver_arrived → in_progress.
 # in_progress is idempotent for both (retry after network blip).
-START_FROM_STATES = ("driver_arrived", "in_progress")
-COMPLETE_FROM_STATES = ("in_progress",)
+START_FROM_STATES = (RideStatus.DRIVER_ARRIVED, RideStatus.IN_PROGRESS)
+COMPLETE_FROM_STATES = (RideStatus.IN_PROGRESS,)
 
 
 async def _generate_and_store_ride_snapshot(
@@ -216,12 +218,12 @@ async def _generate_and_store_ride_snapshot(
                 ),
             )
         except Exception as upload_exc:
-            logger.warning(f"Supabase Storage upload failed for ride {ride_id}: {upload_exc}")
+            logger.error(f"Supabase Storage upload failed for ride {ride_id}: {upload_exc}", exc_info=True)
             return
 
         base = (settings.SUPABASE_URL or "").rstrip("/")
         if not base:
-            logger.warning("SUPABASE_URL not configured; cannot build public snapshot URL")
+            logger.error("SUPABASE_URL not configured; cannot build public snapshot URL")
             return
         url = f"{base}/storage/v1/object/public/{bucket}/{storage_path}"
 
@@ -230,9 +232,11 @@ async def _generate_and_store_ride_snapshot(
         try:
             await db_supabase.update_one("rides", {"id": ride_id}, {"route_snapshot_url": url})
         except Exception as exc:
-            logger.warning(f"route_snapshot_url write failed for ride {ride_id} (migration 41 missing?): {exc}")
+            logger.error(
+                f"route_snapshot_url write failed for ride {ride_id} (migration 41 missing?): {exc}", exc_info=True
+            )
     except Exception as exc:
-        logger.warning(f"Ride snapshot pipeline failed for {ride_id}: {exc}")
+        logger.error(f"Ride snapshot pipeline failed for {ride_id}: {exc}", exc_info=True)
 
 
 async def _require_ride_in_state(ride_id: str, driver_id: str, allowed_states: tuple) -> Dict[str, Any]:
@@ -291,7 +295,7 @@ async def get_driver_config(current_user: dict = Depends(get_current_user)):
     try:
         app_settings = await get_app_settings() or {}
     except Exception as e:
-        logger.warning(f"get_driver_config: failed to read app_settings: {e}")
+        logger.error(f"get_driver_config: failed to read app_settings: {e}", exc_info=True)
         app_settings = {}
 
     def _clamp(value, lo, hi, default):
@@ -1734,14 +1738,14 @@ async def get_active_ride(current_user: dict = Depends(get_current_user)):
     try:
         rider = await db_supabase.get_user_by_id(ride["rider_id"])
     except Exception as e:
-        logger.warning(f"get_active_ride: failed to load rider {ride['rider_id']}: {e}")
+        logger.error(f"get_active_ride: failed to load rider {ride['rider_id']}: {e}", exc_info=True)
         rider = None
     try:
         vehicle_type = (lambda _r: _r[0] if _r else None)(
             await db_supabase.get_rows("vehicle_types", {"id": ride["vehicle_type_id"]}, limit=1)
         )
     except Exception as e:
-        logger.warning(f"get_active_ride: failed to load vehicle_type {ride['vehicle_type_id']}: {e}")
+        logger.error(f"get_active_ride: failed to load vehicle_type {ride['vehicle_type_id']}: {e}", exc_info=True)
         vehicle_type = None
 
     # R-P1-28: Strip PII fields from the rider object — drivers only need
@@ -1922,7 +1926,7 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
             },
         )
     except Exception as _e:
-        logger.warning(f"Could not log ride decline to audit_logs: {_e}")
+        logger.error(f"Could not log ride decline to audit_logs: {_e}", exc_info=True)
 
     # GAP FIX: Re-match to find the next available driver
     try:
@@ -2173,7 +2177,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
                     [round(p["lat"], 6), round(p["lng"], 6), p.get("tracking_phase", "")] for p in sampled
                 ]
     except Exception as e:
-        logger.warning(f"Could not aggregate GPS data for ride {ride_id}: {e}")
+        logger.error(f"Could not aggregate GPS data for ride {ride_id}: {e}", exc_info=True)
 
     # ── Build update payload ──
     # P0-5: do NOT write payment_status here. The driver completing the
@@ -2185,7 +2189,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     # payment_status value, and it masked genuine failures from the
     # webhook dispatcher in webhooks.py.
     update_fields: Dict[str, Any] = {
-        "status": "completed",
+        "status": RideStatus.COMPLETED,
         "ride_completed_at": datetime.now(timezone.utc),
         "updated_at": datetime.now(timezone.utc),
         "planned_distance_km": planned_distance,
@@ -2318,8 +2322,8 @@ async def cancel_ride(ride_id: str, reason: str = Query(""), current_user: dict 
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
-    if ride.get("status") == "in_progress":
-        raise RideStateError("Cannot cancel a trip that is already in progress")
+    if ride.get("status") in (RideStatus.IN_PROGRESS, RideStatus.COMPLETED):
+        raise RideStateError(f"Cannot cancel a ride in state '{ride.get('status')}'")
 
     now = datetime.now(timezone.utc)
     base_update = {
@@ -3241,7 +3245,7 @@ async def verify_subscription_session(
     try:
         session = stripe.checkout.Session.retrieve(session_id, api_key=stripe_key)
     except Exception as e:
-        logger.warning(f"[SUBSCRIBE] verify-session Stripe error: {e}")
+        logger.error(f"[SUBSCRIBE] verify-session Stripe error: {e}", exc_info=True)
         return {"status": "pending"}
 
     if session.payment_status == "paid":
@@ -3381,7 +3385,9 @@ async def check_expiring_subscriptions():
                 app_settings = await get_app_settings()
                 require_sub = bool(app_settings.get("require_driver_subscription", False))
             except Exception as e:
-                logger.warning(f"[SUB-EXPIRY] get_app_settings failed, skipping enforcement this tick: {e}")
+                logger.error(
+                    f"[SUB-EXPIRY] get_app_settings failed, skipping enforcement this tick: {e}", exc_info=True
+                )
                 require_sub = False
 
             warned_count = 0
@@ -3412,7 +3418,7 @@ async def check_expiring_subscriptions():
                             {"status": "expired"},
                         )
                     except Exception as e:
-                        logger.warning(f"[SUB-EXPIRY] Failed to mark sub {sub['id']} expired: {e}")
+                        logger.error(f"[SUB-EXPIRY] Failed to mark sub {sub['id']} expired: {e}", exc_info=True)
                         continue
 
                     if not require_sub:
@@ -3443,7 +3449,7 @@ async def check_expiring_subscriptions():
                     try:
                         await clear_presence(driver["id"])
                     except Exception as e:
-                        logger.warning(f"[SUB-EXPIRY] clear_presence failed for {driver['id']}: {e}")
+                        logger.error(f"[SUB-EXPIRY] clear_presence failed for {driver['id']}: {e}", exc_info=True)
 
                     if driver.get("user_id"):
                         manager.disconnect(f"driver_{driver['user_id']}")
@@ -3467,7 +3473,7 @@ async def check_expiring_subscriptions():
                             },
                         )
                     except Exception as e:
-                        logger.warning(f"[SUB-EXPIRY] activity log insert failed for {driver['id']}: {e}")
+                        logger.error(f"[SUB-EXPIRY] activity log insert failed for {driver['id']}: {e}", exc_info=True)
 
                     if driver.get("user_id"):
                         try:
@@ -3526,7 +3532,7 @@ async def check_expiring_subscriptions():
             )
 
         except Exception as e:
-            logger.warning(f"[SUB-EXPIRY] Background check error: {e}")
+            logger.error(f"[SUB-EXPIRY] Background check error: {e}", exc_info=True)
 
         try:
             from utils.loop_monitor import record_heartbeat as _lm_hb

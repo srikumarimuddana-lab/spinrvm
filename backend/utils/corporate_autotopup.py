@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
+import time
 
 import stripe
 
@@ -40,6 +42,13 @@ except ImportError:
         sum_autotopups_today,
     )
     from settings_loader import get_app_settings  # type: ignore
+
+try:
+    from .metrics import inc as _metric_inc
+    from .metrics import set_gauge as _metric_gauge
+except ImportError:
+    from utils.metrics import inc as _metric_inc
+    from utils.metrics import set_gauge as _metric_gauge
 
 
 logger = logging.getLogger(__name__)
@@ -108,9 +117,15 @@ async def corporate_autotopup_loop() -> None:
     """Background loop — one tick every 10 minutes."""
     logger.info("Corporate auto-topup loop started")
     while True:
+        _t0 = time.monotonic()
+        _had_error = False
         try:
             await run_autotopup_tick()
         except Exception as e:
             logger.error("autotopup loop error: %s", e)
+            _had_error = True
+        _metric_gauge("spinr_bgloop_duration_ms", (time.monotonic() - _t0) * 1000, {"loop": "corporate_autotopup"})
+        if _had_error:
+            _metric_inc("spinr_bgloop_errors_total", {"loop": "corporate_autotopup"})
         _record_heartbeat("corporate_autotopup (10min)")
-        await asyncio.sleep(600)
+        await asyncio.sleep(600 * (0.9 + random.random() * 0.2))

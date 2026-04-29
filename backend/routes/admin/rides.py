@@ -799,6 +799,58 @@ async def admin_get_payouts(
     return enriched
 
 
+@router.get("/payouts/{payout_id}")
+async def admin_get_payout(payout_id: str, _: dict = Depends(get_admin_user)):
+    """Return a single payout record by ID."""
+    payout = await db.find_one("payouts", {"id": payout_id})
+    if not payout:
+        raise HTTPException(status_code=404, detail="Payout not found")
+    driver: dict = {}
+    if payout.get("driver_id"):
+        try:
+            driver = await db.find_one("drivers", {"id": payout["driver_id"]}) or {}
+        except Exception:
+            pass
+    payout["driver_name"] = driver.get("full_name") or driver.get("name") or payout.get("driver_name")
+    payout["driver_email"] = driver.get("email")
+    payout["driver_phone"] = driver.get("phone")
+    return payout
+
+
+@router.post("/payouts/{payout_id}/retry")
+async def admin_retry_payout(payout_id: str, admin: dict = Depends(get_admin_user)):
+    """Retry a failed payout.
+
+    Re-queues the payout for processing by setting its status back to
+    'pending'. The payment-retry background loop picks it up within its
+    next tick. Gated to finance and super_admin roles.
+    """
+    allowed_roles = {"finance", "super_admin"}
+    if admin.get("role") not in allowed_roles:
+        raise HTTPException(status_code=403, detail="role_required:finance")
+
+    payout = await db.find_one("payouts", {"id": payout_id})
+    if not payout:
+        raise HTTPException(status_code=404, detail="Payout not found")
+    if payout.get("status") not in ("failed", "cancelled"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot retry a payout in status '{payout.get('status')}' — only failed or cancelled payouts can be retried",
+        )
+
+    await db.update_one(
+        "payouts",
+        {"id": payout_id},
+        {
+            "status": "pending",
+            "retry_requested_by": admin.get("id"),
+            "retry_requested_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    logger.info(f"Payout {payout_id} queued for retry by admin {admin.get('id')}")
+    return {"success": True, "payout_id": payout_id, "status": "pending"}
+
+
 @router.get("/payouts/stats")
 async def admin_get_payout_stats():
     """Get payout stats: total paid, pending, failed."""

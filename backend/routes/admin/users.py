@@ -113,3 +113,80 @@ async def admin_update_user_status(user_id: str, status_data: UserStatusRequest,
     )
 
     return {"message": f"User status updated to {new_status}"}
+
+
+# ---------- DSAR (Data Subject Access Requests) ----------
+
+
+@router.get("/dsars")
+async def admin_list_dsars(
+    status: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    admin: dict = Depends(get_admin_user),
+):
+    """DV-17: List PIPEDA data-export requests with SLA deadline tracking.
+
+    PIPEDA s.9 requires a response within 30 days. Requests approaching or
+    past their `response_due_at` should be prioritised.
+    """
+    filters: Dict[str, Any] = {}
+    if status in ("pending", "in_progress", "completed", "rejected"):
+        filters["status"] = status
+
+    requests = await db_supabase.get_rows(
+        "data_export_requests",
+        filters,
+        order="response_due_at",
+        desc=False,
+        limit=limit,
+        offset=offset,
+    )
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for req in requests:
+        due = req.get("response_due_at")
+        if due and req.get("status") == "pending":
+            req["overdue"] = due < now_iso
+
+    return {"dsars": requests, "total": len(requests)}
+
+
+@router.patch("/dsars/{request_id}/status")
+async def admin_update_dsar_status(
+    request_id: str,
+    status: str,
+    admin: dict = Depends(get_admin_user),
+):
+    """Update DSAR status (in_progress, completed, rejected)."""
+    if status not in ("in_progress", "completed", "rejected"):
+        raise HTTPException(status_code=400, detail="status must be one of in_progress, completed, rejected")
+
+    req = await db_supabase.get_one("data_export_requests", {"id": request_id})
+    if not req:
+        raise HTTPException(status_code=404, detail="DSAR request not found")
+
+    update: Dict[str, Any] = {
+        "status": status,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if status == "completed":
+        update["completed_at"] = datetime.now(timezone.utc).isoformat()
+
+    await db_supabase.update_one("data_export_requests", {"id": request_id}, update)
+
+    await db_supabase.insert_one(
+        "audit_logs",
+        {
+            "id": str(uuid.uuid4()),
+            "actor_id": admin["id"],
+            "actor_role": admin.get("role"),
+            "action": f"dsar_{status}",
+            "resource": "data_export_request",
+            "resource_id": request_id,
+            "details": {"user_id": req.get("user_id"), "new_status": status},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+
+    return {"message": f"DSAR {request_id} marked {status}"}

@@ -16,6 +16,8 @@ if ride.status in ('driver_arrived', 'trip_in_progress'):
     raise RideStateError("Cannot cancel after driver has arrived")
 ```
 
+> **DV-13 (2026-04-23) product decision:** A $5 cancellation fee is charged for `driver_arrived` state (rides.py:1892–1957) rather than a hard block. Hard block is enforced for `in_progress` only. The `$5` amount is sourced from `app_settings` (not hard-coded). This is intentional per product review — the remediation description above should be read as "fee applied" not "hard block."
+
 **Effort:** 1 hour
 
 ---
@@ -49,7 +51,9 @@ if ride.status not in COMPLETE_FROM_STATES:
 
 **What's wrong:** On Android, pressing the hardware back button while accepting or on a ride dismisses the screen and returns the driver to the home screen. This leaves the app in a broken state (driver thinks they have a job, app shows idle).
 
-**File to fix:** `driver-app/components/panels/RideOfferPanel.tsx`, `ActiveRidePanel.tsx`, `TripCompletedPanel.tsx` — add:
+**File to fix:** `driver-app/components/panels/RideOfferPanel.tsx`, `driver-app/components/dashboard/ActiveRidePanel.tsx`, `driver-app/components/dashboard/TripCompletedPanel.tsx` — add:
+
+> **DV-11 (2026-04-23):** `ActiveRidePanel` and `TripCompletedPanel` have moved from `components/panels/` to `components/dashboard/`. If a path is not found, use `find driver-app -name '<filename>'` to locate it.
 ```tsx
 import { BackHandler } from 'react-native';
 useEffect(() => {
@@ -143,6 +147,8 @@ is_valid = hmac.compare_digest(stored_hash, hashlib.sha256(input_otp.encode()).h
 style={{ minWidth: 64, minHeight: 64 }}
 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
 ```
+
+> **DV-14 (2026-04-23) SUPERSEDED:** The app uses the native system keypad for OTP entry at HEAD. Custom-keypad button sizing is no longer applicable. This item is retained for audit trail purposes.
 
 **Effort:** 1 hour
 

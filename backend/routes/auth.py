@@ -105,7 +105,12 @@ async def _check_otp_lockout(phone: str) -> None:
         raise
     except Exception as e:
         logger.error(f"Redis unavailable in OTP lockout check: {e}")
-        raise HTTPException(status_code=503, detail="ERR_AUTH_UNAVAILABLE") from None
+        raise SpinrException(
+            message="Auth service temporarily unavailable, please try again",
+            error_code=ErrorCode.SERVICE_UNAVAILABLE,
+            status_code=503,
+            message_key=ErrorKeys.SYSTEM_SERVICE_UNAVAILABLE,
+        ) from None
 
 
 async def _record_otp_failure(phone: str) -> None:
@@ -191,7 +196,12 @@ async def send_otp(request: Request, body: SendOTPRequest):
 
     if not twilio_configured and not is_dev:
         # In production, refuse to silently fall back to a known OTP.
-        raise HTTPException(status_code=503, detail="SMS service not configured")
+        raise SpinrException(
+            message="SMS service not configured",
+            error_code=ErrorCode.SERVICE_UNAVAILABLE,
+            status_code=503,
+            message_key=ErrorKeys.SYSTEM_SERVICE_UNAVAILABLE,
+        )
 
     # Dev fallback: fixed OTP so local testing doesn't need Twilio.
     # The 4-digit length matches the real generated OTP so OTP screens accept it.
@@ -212,7 +222,12 @@ async def send_otp(request: Request, body: SendOTPRequest):
         # the user typed because the row to compare against didn't exist.
         # Surface as 503 so the client retries the send-otp call.
         logger.error(f"Could not store OTP in DB: {e}", exc_info=True)
-        raise HTTPException(status_code=503, detail="otp_store_failed") from e
+        raise SpinrException(
+            message="Could not store OTP, please try again",
+            error_code=ErrorCode.DATABASE_ERROR,
+            status_code=503,
+            message_key=ErrorKeys.SYSTEM_DATABASE,
+        ) from e
 
     # Send OTP via SMS (Twilio when configured, console log otherwise)
     sms_result = await send_otp_sms(
@@ -224,7 +239,12 @@ async def send_otp(request: Request, body: SendOTPRequest):
     )
     if not sms_result.get("success"):
         logger.error(f"Failed to send OTP SMS: {sms_result.get('error')}")
-        raise HTTPException(status_code=500, detail="Failed to send verification code")
+        raise SpinrException(
+            message="Failed to send verification code",
+            error_code=ErrorCode.SERVICE_UNAVAILABLE,
+            status_code=503,
+            message_key=ErrorKeys.SYSTEM_SERVICE_UNAVAILABLE,
+        )
 
     response = {"success": True, "message": f"OTP sent to {phone}"}
     # Dev OTP is logged to server console via sms_service.py — never return it
@@ -283,11 +303,21 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
             expires_at = datetime.fromisoformat(expires_at)
         except ValueError:
             logger.error(f"Invalid date format for OTP expires_at: {expires_at}")
-            raise HTTPException(status_code=500, detail="ERR_INTERNAL") from None
+            raise SpinrException(
+                message="Internal error processing OTP record",
+                error_code=ErrorCode.INTERNAL_ERROR,
+                status_code=500,
+                message_key=ErrorKeys.SYSTEM_INTERNAL,
+            ) from None
 
     if not expires_at:
         logger.error("OTP record missing expires_at field")
-        raise HTTPException(status_code=500, detail="ERR_INTERNAL")
+        raise SpinrException(
+            message="Internal error processing OTP record",
+            error_code=ErrorCode.INTERNAL_ERROR,
+            status_code=500,
+            message_key=ErrorKeys.SYSTEM_INTERNAL,
+        )
 
     # Ensure expires_at is timezone-aware for comparison
     if expires_at.tzinfo is None:
@@ -334,9 +364,11 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
             # new row here generates duplicate accounts on every retry and
             # locks the real user out of their own profile, wallet, and
             # ride history. Fail the login so the client retries.
-            raise HTTPException(
+            raise SpinrException(
+                message="Service temporarily unavailable, please try again",
+                error_code=ErrorCode.DATABASE_ERROR,
                 status_code=503,
-                detail="Service temporarily unavailable, please try again",
+                message_key=ErrorKeys.SYSTEM_DATABASE,
             ) from e
 
         user_agent = request.headers.get("user-agent", "")
@@ -412,7 +444,12 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
                 # the client retries verify-otp instead of pretending login
                 # succeeded.
                 logger.error(f"Could not persist new user to DB: {e}", exc_info=True)
-                raise HTTPException(status_code=503, detail="user_create_failed") from e
+                raise SpinrException(
+                    message="Could not create user account, please try again",
+                    error_code=ErrorCode.DATABASE_ERROR,
+                    status_code=503,
+                    message_key=ErrorKeys.SYSTEM_DATABASE,
+                ) from e
             await redis_set(
                 f"session:{user_id}",
                 session_id,
@@ -436,8 +473,8 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
                 refresh_expires_at=refresh_expires_at,
                 csrf_token=csrf,
             )
-    except HTTPException:
-        # Already a well-formed HTTP error (e.g. the 503 raised when
+    except (HTTPException, SpinrException):
+        # Already a well-formed HTTP/Spinr error (e.g. the 503 raised when
         # get_user_by_phone fails) — let it propagate unchanged instead
         # of being re-wrapped as a generic 500.
         raise
@@ -452,9 +489,11 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
         # next contributor doesn't copy the pattern. logger.exception
         # captures the full traceback server-side automatically.
         logger.exception("CRITICAL ERROR IN VERIFY_OTP")
-        raise HTTPException(
+        raise SpinrException(
+            message="Internal Login Error",
+            error_code=ErrorCode.INTERNAL_ERROR,
             status_code=500,
-            detail="Internal Login Error",
+            message_key=ErrorKeys.SYSTEM_INTERNAL,
         ) from e
 
 
@@ -476,16 +515,31 @@ async def firebase_auth_login(request: Request, response: Response, body: Fireba
 
         payload = _firebase_auth.verify_id_token(body.firebase_token, check_revoked=True)
     except Exception as e:
-        raise HTTPException(status_code=401, detail="Invalid Firebase token") from e
+        raise SpinrException(
+            message="Invalid Firebase token",
+            error_code=ErrorCode.AUTH_INVALID_CREDENTIALS,
+            status_code=401,
+            message_key=ErrorKeys.AUTH_INVALID_CREDENTIALS,
+        ) from e
 
     # B-P1-1 / DV-10: enforce audience binding unconditionally. Production fails
     # fast in core/config._guard_production_secrets when FIREBASE_DRIVER_APP_ID
     # is unset, so this branch is only reachable in dev/test.
     driver_app_id = settings.FIREBASE_DRIVER_APP_ID
     if not driver_app_id:
-        raise HTTPException(status_code=503, detail="Driver Firebase audience not configured")
+        raise SpinrException(
+            message="Driver Firebase audience not configured",
+            error_code=ErrorCode.SERVICE_UNAVAILABLE,
+            status_code=503,
+            message_key=ErrorKeys.SYSTEM_SERVICE_UNAVAILABLE,
+        )
     if payload.get("aud") != driver_app_id:
-        raise HTTPException(status_code=401, detail="Token not issued for driver app")
+        raise SpinrException(
+            message="Token not issued for driver app",
+            error_code=ErrorCode.AUTH_INVALID_CREDENTIALS,
+            status_code=401,
+            message_key=ErrorKeys.AUTH_INVALID_CREDENTIALS,
+        )
 
     uid: str = payload.get("uid") or payload.get("user_id") or ""
     phone: str = payload.get("phone_number") or ""
@@ -499,7 +553,12 @@ async def firebase_auth_login(request: Request, response: Response, body: Fireba
             user = await db_supabase.get_user_by_phone(phone)
     except Exception as e:
         logger.error(f"firebase_auth: user lookup failed uid={uid}: {e}", exc_info=True)
-        raise HTTPException(status_code=503, detail="auth_lookup_failed") from e
+        raise SpinrException(
+            message="User lookup failed, please try again",
+            error_code=ErrorCode.DATABASE_ERROR,
+            status_code=503,
+            message_key=ErrorKeys.SYSTEM_DATABASE,
+        ) from e
 
     is_new_user = False
     session_id = str(uuid.uuid4())
@@ -526,7 +585,12 @@ async def firebase_auth_login(request: Request, response: Response, body: Fireba
                 f"firebase_auth: could not persist user {uid}: {e}",
                 exc_info=True,
             )
-            raise HTTPException(status_code=503, detail="auth_persist_failed") from e
+            raise SpinrException(
+                message="Could not persist user account, please try again",
+                error_code=ErrorCode.DATABASE_ERROR,
+                status_code=503,
+                message_key=ErrorKeys.SYSTEM_DATABASE,
+            ) from e
         user = new_user
     else:
         try:
@@ -541,7 +605,12 @@ async def firebase_auth_login(request: Request, response: Response, body: Fireba
                 f"firebase_auth: could not update session_id for {uid}: {e}",
                 exc_info=True,
             )
-            raise HTTPException(status_code=503, detail="auth_session_update_failed") from e
+            raise SpinrException(
+                message="Could not update session, please try again",
+                error_code=ErrorCode.DATABASE_ERROR,
+                status_code=503,
+                message_key=ErrorKeys.SYSTEM_DATABASE,
+            ) from e
         user["current_session_id"] = session_id
 
     user_id = user["id"]
@@ -772,7 +841,12 @@ async def logout_all(request: Request, response: Response, current_user: dict = 
         await db.update_one("users", {"id": user_id}, {"$set": {"token_version": new_version}})
     except Exception as e:
         logger.error(f"logout-all: could not bump token_version for {user_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Could not invalidate sessions") from e
+        raise SpinrException(
+            message="Could not invalidate sessions",
+            error_code=ErrorCode.DATABASE_ERROR,
+            status_code=503,
+            message_key=ErrorKeys.SYSTEM_DATABASE,
+        ) from e
 
     revoked = await revoke_all_for_user(user_id)
 

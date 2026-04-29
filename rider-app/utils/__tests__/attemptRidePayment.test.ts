@@ -311,6 +311,12 @@ describe('attemptRidePayment', () => {
       };
 
       const promise = attemptRidePayment({ api, stripe: makeStripe(), rideId: 'r1', tipAmount: 0 });
+      // Flush microtasks so the first api.post() rejection is processed and
+      // the setTimeout(1500) inside the catch handler is registered before we
+      // advance fake timers — without this, advanceTimersByTime fires before
+      // the timer exists and the promise never resolves.
+      await Promise.resolve();
+      await Promise.resolve();
       jest.advanceTimersByTime(1500);
       const result = await promise;
 

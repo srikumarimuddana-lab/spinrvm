@@ -293,6 +293,7 @@ jobs:
         run: npm run build
         env:
           NEXT_PUBLIC_API_URL: http://localhost:8000
+          BACKEND_URL: http://localhost:8000
 
       - name: Start Next.js and run E2E tests
         run: |

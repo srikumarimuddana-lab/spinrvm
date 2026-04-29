@@ -11,6 +11,7 @@ import { MonitoringMap, MapHandles, MonitoringServiceArea } from "./monitoring-m
 import { MonitoringToolbar } from "./toolbar";
 import { DriverPanel } from "./driver-panel";
 import { RidePanel } from "./ride-panel";
+import { AlertFeed } from "./alert-feed";
 import type {
   AlertEvent,
   MonitoringCounts,
@@ -353,6 +354,22 @@ export default function MonitoringPage() {
     driversMapRef.current.forEach((d) => applyDriver(d));
   }, [applyDriver]);
 
+  // Auto-select the first match when search query is unambiguous
+  useEffect(() => {
+    if (searchQuery.length < 3) return;
+    const q = searchQuery.toLowerCase();
+    // Check rides first (ID match is unambiguous)
+    const rideMatch = Array.from(ridesMapRef.current.values()).find(
+      (r) => r.id.includes(q) || r.rider_name?.toLowerCase().includes(q)
+    );
+    if (rideMatch) { handleSelectRide(rideMatch.id); return; }
+    // Then check driver name
+    const driverMatch = Array.from(driversMapRef.current.values()).find(
+      (d) => d.name?.toLowerCase().includes(q)
+    );
+    if (driverMatch) handleSelectDriver(driverMatch.id);
+  }, [searchQuery]); // intentionally omit handleSelect* — they're stable useCallbacks
+
   // ── Selection handlers ──────────────────────────────────────────────
   const handleSelectDriver = useCallback((id: string) => {
     const driver = driversMapRef.current.get(id);
@@ -371,6 +388,16 @@ export default function MonitoringPage() {
     setSelectedDriver(null);
     mapHandlesRef.current?.panTo(ride.pickup_lat, ride.pickup_lng);
   }, []);
+
+  const handleAlertEventClick = useCallback((event: AlertEvent) => {
+    if (event.driver_id) {
+      const driver = driversMapRef.current.get(event.driver_id);
+      if (driver) handleSelectDriver(event.driver_id);
+    } else if (event.ride_id) {
+      const ride = ridesMapRef.current.get(event.ride_id);
+      if (ride) handleSelectRide(event.ride_id);
+    }
+  }, [handleSelectDriver, handleSelectRide]);
 
   const handleAreaFit = useCallback((areaId: string) => {
     mapHandlesRef.current?.fitArea(areaId);
@@ -398,10 +425,6 @@ export default function MonitoringPage() {
       return true;
     });
   }, [filters.serviceAreaId, searchQuery, counts]); // counts triggers recompute on poll
-
-  const alertIconMap: Record<AlertEvent["icon"], string> = {
-    online: "🟢", offline: "⚫", ride_new: "🚗", ride_done: "✅", ride_cancelled: "❌",
-  };
 
   return (
     <div className="flex h-[calc(100vh-4rem)] flex-col overflow-hidden">
@@ -477,24 +500,12 @@ export default function MonitoringPage() {
             )}
           </div>
 
-          {/* Recent alerts */}
-          <div className="border-t border-border">
-            <div className="px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Activity
-            </div>
-            <div className="max-h-40 overflow-y-auto">
-              {alerts.length === 0 ? (
-                <p className="pb-3 text-center text-xs text-muted-foreground">No activity yet</p>
-              ) : (
-                alerts.slice(0, 15).map((a) => (
-                  <div key={a.id} className="flex items-start gap-1.5 px-3 py-1 text-[11px]">
-                    <span>{alertIconMap[a.icon]}</span>
-                    <span className="flex-1 text-muted-foreground">{a.message}</span>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
+          {/* Activity feed (clickable) */}
+          <AlertFeed
+            events={alerts}
+            onClear={() => setAlerts([])}
+            onEventClick={handleAlertEventClick}
+          />
         </div>
 
         {/* ── Centre: Map ─────────────────────────────────────────── */}

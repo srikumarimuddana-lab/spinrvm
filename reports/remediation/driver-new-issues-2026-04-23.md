@@ -545,25 +545,25 @@ compliance to the OPC.
 
 ## Triage Checklist
 
-| ID | Area | Recommended Sprint | Effort | Owner | Blocker for |
-|---|---|---|---:|---|---|
-| DV-1 | Dispatch suspended filter | P1 | 2 h | backend | device test |
-| DV-2 | `{"$set"}` Supabase wrapper | P1 | 4 h | backend | device test |
-| DV-3 | Ride state string mismatch | P1 | 4 h | backend | beta |
-| DV-4 | Stripe idempotency collision | P1 | 4 h | backend | launch |
-| DV-5 | Notification pref swallows error | P3 | 2 h | driver-app | — |
-| DV-6 | Rate limiter no SRE alert | P2 | 3 h | devops+backend | launch |
-| DV-7 | PII key rotation undocumented | P2 | 4 h | infra+compliance | launch |
-| DV-8 | No hard-delete at retention horizon | P2 | 5 h | data+backend | launch |
-| DV-9 | Notification deep-link no fallback | P3 | 2 h | driver-app | — |
-| DV-10 | Firebase audience not enforced | P1 | 4 h | backend | beta |
-| DV-11 | Stale panel component paths | P3 | 1 h | driver-app | — |
-| DV-12 | report-safety / legal nav wiring | P2 | 1 h | driver-app | launch |
-| DV-13 | P1-1 fee vs hard-block drift | P3 | 0.5 h | product | — |
-| DV-14 | P1-10 native keypad drift | P3 | 0.25 h | product | — |
-| DV-15 | P4-5 Maestro → Playwright drift | P3 | 0.25 h | product | — |
-| DV-16 | Gemini sub-processor missing | P2 | 2 h | legal | launch |
-| DV-17 | DSAR SLA + audit log | P2 | 4 h | backend+compliance | launch |
+| ID | Area | Recommended Sprint | Effort | Owner | Blocker for | Status |
+|---|---|---|---:|---|---|---|
+| DV-1 | Dispatch suspended filter | P1 | 2 h | backend | device test | ✅ Already fixed — `status: "active"` filter at dispatch_service.py:198 |
+| DV-2 | `{"$set"}` Supabase wrapper | P1 | 4 h | backend | device test | ✅ Already handled — `db_supabase.update_one:1145` strips `$set` wrapper; `db.py` is a shim |
+| DV-3 | Ride state string mismatch | P1 | 4 h | backend | beta | ✅ Fixed — drivers.py:2270 `"trip_in_progress"` → `RideStatus.IN_PROGRESS` (also blocks COMPLETED) |
+| DV-4 | Stripe idempotency collision | P1 | 4 h | backend | launch | ✅ Fixed — payments.py: three-tier key (client UUID > ride-scoped > 1-min bucket) |
+| DV-5 | Notification pref swallows error | P3 | 2 h | driver-app | — | ✅ Fixed — settings.tsx: `mutate` onError reverts toggle + shows feedbackAlert |
+| DV-6 | Rate limiter no SRE alert | P2 | 3 h | devops+backend | launch | ✅ Fixed — rate_limiter.py: `logger.warning` → `logger.error` on both Redis-unavailable paths |
+| DV-7 | PII key rotation undocumented | P2 | 4 h | infra+compliance | launch | ✅ Already done — `docs/runbooks/pii-key-rotation.md` exists with cadence + SOC2 evidence |
+| DV-8 | No hard-delete at retention horizon | P2 | 5 h | data+backend | launch | ✅ Already done — `backend/utils/retention_purge.py` spawned from lifespan.py |
+| DV-9 | Notification deep-link no fallback | P3 | 2 h | driver-app | — | ✅ Fixed — useDriverDashboard.ts: `else if (data?.type)` fallback logs warn + navigates to /driver/notifications |
+| DV-10 | Firebase audience not enforced | P1 | 4 h | backend | beta | ✅ Partially fixed — manual `aud` check already present (B-P1-1); added `check_revoked=True` to auth.py:415 |
+| DV-11 | Stale panel component paths | P3 | 1 h | driver-app | — | ✅ Fixed — P1-before-beta.md: updated `components/panels/` → `components/dashboard/` for ActiveRidePanel + TripCompletedPanel |
+| DV-12 | report-safety / legal nav wiring | P2 | 1 h | driver-app | launch | ✅ Confirmed — settings.tsx:286,323 both screens navigable; no code change needed |
+| DV-13 | P1-1 fee vs hard-block drift | P3 | 0.5 h | product | — | ✅ Fixed — P1-before-beta.md P1-1: added DV-13 product decision note (fee not hard-block) |
+| DV-14 | P1-10 native keypad drift | P3 | 0.25 h | product | — | ✅ Fixed — P1-before-beta.md P1-10: added DV-14 SUPERSEDED note (native keypad in use) |
+| DV-15 | P4-5 Maestro → Playwright drift | P3 | 0.25 h | product | — | ✅ Fixed — P4-future-features.md P4-5: Maestro replaced with "Playwright-style E2E (driver-app/e2e/)" |
+| DV-16 | Gemini sub-processor missing | P2 | 2 h | legal | launch | ✅ Fixed — Gemini row + 4 open items added to `docs/vendor-register.md` |
+| DV-17 | DSAR SLA + audit log | P2 | 4 h | backend+compliance | launch | ✅ Fixed — users.py: `response_due_at` + error log; admin/users.py: `/admin/dsars` list + status PATCH |
 
 **Total estimated effort:** ~43 h  
 **P1 blockers (beta):** DV-1, DV-2, DV-3, DV-10 — 14 h combined  

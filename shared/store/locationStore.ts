@@ -104,10 +104,14 @@ export const useLocationStore = create<LocationState>()(
           // If a new feature needs continuous background position in
           // the shared store, add an explicit `startWatching()` action
           // that callers opt into rather than running on init.
-        } catch (err: any) {
-          set({ 
-            error: err.message || 'Failed to initialize location services',
-            isInitialized: true 
+        } catch (err: unknown) {
+          const message =
+            typeof err === 'object' && err !== null && 'message' in err
+              ? String((err as { message: unknown }).message)
+              : 'Failed to initialize location services';
+          set({
+            error: message,
+            isInitialized: true,
           });
         }
       },

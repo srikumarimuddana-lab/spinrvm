@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     # IMPORTANT: Rotate this key before deploying — see docs/key-rotation.md
     SUPABASE_SERVICE_ROLE_KEY: str = ""
     USE_SUPABASE: bool = True  # Supabase is now the default database
+    # PIPEDA 22-2: must be "ca-central-1" in production; checked at startup.
+    SUPABASE_REGION: str = ""
 
     # Firebase settings
     FIREBASE_SERVICE_ACCOUNT_JSON: Optional[str] = None
@@ -91,6 +93,11 @@ class Settings(BaseSettings):
 
     # Observability — optional; Sentry only initialises when this is set
     sentry_dsn: Optional[str] = None
+
+    # Operational alerting — Slack-compatible incoming webhook URL.
+    # When set, the loop watchdog posts a message here whenever a background
+    # loop goes stale.  Leave unset in development; required in production.
+    ALERT_WEBHOOK_URL: Optional[str] = None
 
     @model_validator(mode="after")
     def _hash_admin_password(self) -> "Settings":

@@ -27,11 +27,18 @@ function beforeSend(event: Sentry.ErrorEvent): Sentry.ErrorEvent | null {
     event.request.query_string = '[Filtered]';
   }
 
+  // Scrub dynamic entity IDs from URL paths (PIPEDA — A-PE-P1-3).
+  // e.g. /dashboard/drivers/abc123ef → /dashboard/drivers/[id]
+  if (event.request?.url) {
+    event.request.url = event.request.url.replace(/\/[a-f0-9-]{8,}/gi, '/[id]');
+  }
+
   // Strip known PII keys from all extra/contexts
   const PII_KEYS = new Set([
     'email', 'phone', 'phone_number', 'address', 'lat', 'lng',
     'latitude', 'longitude', 'token', 'password', 'authorization',
     'full_name', 'first_name', 'last_name',
+    'driver_id', 'rider_id', 'ride_id',
   ]);
 
   function scrubObj(obj: Record<string, unknown>): void {
@@ -60,9 +67,6 @@ function beforeSend(event: Sentry.ErrorEvent): Sentry.ErrorEvent | null {
 Sentry.init({
   dsn: process.env.NEXT_PUBLIC_SENTRY_DSN,
 
-  // Vercel injects NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA at build time ([21-6]).
-  release: process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA,
-
   // Admin is low-traffic (<5k req/day) — 100% sampling catches all perf regressions
   // on a surface where slow loads have high operational cost ([21-2]).
   tracesSampleRate: 1.0,
@@ -72,6 +76,9 @@ Sentry.init({
   replaysOnErrorSampleRate: 1.0,
 
   environment: process.env.NODE_ENV ?? 'development',
+
+  // Release tag enables regression-tracking per deploy (Vercel injects the var).
+  release: process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA,
 
   // Only initialize when a DSN is present — keeps local dev clean.
   enabled: !!process.env.NEXT_PUBLIC_SENTRY_DSN,
@@ -96,3 +103,6 @@ Sentry.init({
     }),
   ],
 });
+
+// Tag every event with the surface so cross-surface dashboards stay clean.
+Sentry.setTag('surface', 'admin');

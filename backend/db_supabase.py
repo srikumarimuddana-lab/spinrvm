@@ -151,8 +151,15 @@ _BACKOFFS_BY_POLICY: Dict[str, list] = {
 # new SPOF.
 
 import os as _os  # noqa: E402
+from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor  # noqa: E402
 
 _RETRY_BUDGET_PER_SEC = int(_os.environ.get("RETRY_BUDGET_PER_SEC", "50"))
+
+# Dedicated executor for all Supabase calls. Sized independently of the
+# default event-loop executor so DB thread saturation doesn't affect other
+# background tasks. Override with DB_THREAD_POOL_MAX env var.
+_DB_POOL_MAX = int(_os.environ.get("DB_THREAD_POOL_MAX", "64"))
+_db_executor = _ThreadPoolExecutor(max_workers=_DB_POOL_MAX, thread_name_prefix="spinr-db")
 
 
 async def _consume_retry_token() -> bool:
@@ -225,6 +232,7 @@ async def run_sync(
             result = await loop.run_in_executor(_DB_EXECUTOR, func)  # type: ignore
             _breaker.record_success()
             _metric_gauge("spinr_db_circuit_state", 0, {"state": "closed"})
+            _metric_gauge("spinr_db_thread_pool_threads", len(_db_executor._threads))
             return result
         except Exception as exc:
             # ValueError signals a deliberate application-level outcome

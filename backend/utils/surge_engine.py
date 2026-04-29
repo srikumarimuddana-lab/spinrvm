@@ -26,6 +26,8 @@ try:
     from db import db
     from geo_utils import get_service_area_polygon, point_in_polygon
     from utils.driver_presence import present_driver_ids
+    from utils.metrics import inc as _metric_inc
+    from utils.metrics import set_gauge as _metric_gauge
 except ImportError:
     from ..db import db
     from ..geo_utils import get_service_area_polygon, point_in_polygon

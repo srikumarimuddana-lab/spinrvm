@@ -438,6 +438,72 @@ async def get_infrastructure_stats(current_admin: dict = Depends(get_admin_user)
     }
 
 
+@router.get("/health")
+async def get_dashboard_health(current_admin: dict = Depends(get_admin_user)) -> Dict[str, Any]:
+    """Concise operational health for uptime checkers and ops dashboards.
+
+    Returns status 'ok' | 'degraded' | 'down' based on DB circuit breaker
+    state and Redis connectivity.  Active ride / online driver counts are
+    informational — they never affect the overall status.
+
+    Responds 503 when status == 'down' so external monitors can alert
+    without parsing the body.  Unlike /infrastructure, this endpoint is
+    intentionally terse: one widget, one answer.
+    """
+    checks: Dict[str, Any] = {}
+    overall = "ok"
+
+    # DB health — circuit breaker is the fastest signal we have
+    db_state = _db_breaker._state  # "closed" | "open" | "half-open"
+    db_failures = len(_db_breaker._failure_times)
+    if db_state == "open":
+        checks["db"] = {"status": "down", "circuit": db_state, "recent_failures": db_failures}
+        overall = "down"
+    elif db_state == "half-open" or db_failures > 0:
+        checks["db"] = {"status": "degraded", "circuit": db_state, "recent_failures": db_failures}
+        if overall == "ok":
+            overall = "degraded"
+    else:
+        checks["db"] = {"status": "ok", "circuit": "closed", "recent_failures": 0}
+
+    # Redis health
+    redis_stats = await get_redis_stats()
+    redis_connected = redis_stats.get("connected", False)
+    checks["redis"] = {"status": "ok" if redis_connected else "degraded", "connected": redis_connected}
+    if not redis_connected and overall == "ok":
+        overall = "degraded"
+
+    # Operational counts — best-effort; query failures don't change overall status
+    try:
+        active_res = await run_sync(
+            lambda: supabase.table("rides").select("id", count="exact").in_("status", ACTIVE_RIDE_STATUSES).execute()
+        )
+        active_rides: Optional[int] = getattr(active_res, "count", None) or len(_rows_from_res(active_res))
+    except Exception:
+        active_rides = None
+
+    try:
+        online_res = await run_sync(
+            lambda: supabase.table("drivers").select("id", count="exact").eq("is_online", True).execute()
+        )
+        online_drivers: Optional[int] = getattr(online_res, "count", None) or len(_rows_from_res(online_res))
+    except Exception:
+        online_drivers = None
+
+    checks["operations"] = {"active_rides": active_rides, "online_drivers": online_drivers}
+
+    payload: Dict[str, Any] = {
+        "status": overall,
+        "checks": checks,
+        "uptime_seconds": int(_time.monotonic() - _PROCESS_START_TIME),
+    }
+
+    if overall == "down":
+        raise HTTPException(status_code=503, detail=payload)
+
+    return payload
+
+
 def _humanize_bytes_local(n: Optional[int]) -> Optional[str]:
     """Small duplicate of the helper in redis_client — keeps this route
     free of the circular import that would happen if we imported it

@@ -14,11 +14,14 @@ export async function uploadFile(uri: string, name: string, type: string): Promi
     // would fire an empty body.
     const buildFormData = () => {
         const fd = new FormData();
+        // React Native's FormData.append accepts { uri, name, type } as a
+        // file descriptor, but the standard TS lib only knows about Blob.
+        // Double-cast via unknown to avoid any while keeping runtime behaviour.
         fd.append('file', {
             uri,
             name: name || 'upload',
             type: type || 'application/octet-stream',
-        } as any);
+        } as unknown as Blob);
         return fd;
     };
 

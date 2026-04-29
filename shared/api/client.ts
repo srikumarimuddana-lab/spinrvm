@@ -46,10 +46,10 @@ const fetchWithTimeout = async (
     });
     clearTimeout(timeoutId);
     return response;
-  } catch (error: any) {
+  } catch (error: unknown) {
     clearTimeout(timeoutId);
-    if (error.name === 'AbortError') {
-      const timeoutError: any = new Error('Network request timed out');
+    if (error instanceof Error && error.name === 'AbortError') {
+      const timeoutError = new Error('Network request timed out');
       timeoutError.name = 'TimeoutError';
       throw timeoutError;
     }
@@ -67,6 +67,17 @@ let _inMemoryToken: string | null = null;
 export function setInMemoryToken(token: string | null) {
   _inMemoryToken = token;
   if (__DEV__) console.log('[API] In-memory token:', token ? 'SET' : 'CLEARED');
+}
+
+// ── CSRF double-submit token ──
+// Populated from the `csrf_token` field in AuthResponse after every
+// login/refresh. Sent as X-CSRF-Token on all state-changing requests.
+// The backend validates it against the csrf_token cookie; the cookie is
+// SameSite=Strict so cross-site requests can never present a matching pair.
+let _csrfToken: string | null = null;
+
+export function setCsrfToken(token: string | null): void {
+  _csrfToken = token;
 }
 
 // ── Token refresh callback ──
@@ -92,8 +103,8 @@ const getStoredToken = async (): Promise<string | null> => {
       const token = await SecureStore.getItemAsync('auth_token');
       return token;
     }
-  } catch (e: any) {
-    console.error('[API] SecureStore error:', e?.message || e);
+  } catch (e: unknown) {
+    console.error('[API] SecureStore error:', e instanceof Error ? e.message : e);
     return null;
   }
 };
@@ -115,8 +126,8 @@ export const getAuthHeader = async (): Promise<string | null> => {
     }
     // 3. SecureStore fallback (for cold starts where in-memory is empty)
     return await getStoredToken();
-  } catch (error: any) {
-    console.error('[API] Error getting auth token:', error?.message || error);
+  } catch (error: unknown) {
+    console.error('[API] Error getting auth token:', error instanceof Error ? error.message : error);
     return null;
   }
 };
@@ -128,14 +139,22 @@ export const getAuthHeader = async (): Promise<string | null> => {
 //   - FastAPI RequestValidationError: { detail: [...] }  (array of field errors)
 //   - Plain text "Internal Server Error" (pre-handler-register crash): body not JSON
 // This helper returns a human-readable message from any of them.
-const extractErrorMessage = (data: any): string => {
+/** Loosely-typed shape of the error body the FastAPI backend can return. */
+interface ApiErrorBody {
+  detail?: string | Array<{ msg?: string; loc?: unknown[]; type?: string } | string>;
+  error?: { message?: string; detail?: string; request_id?: string; exception_type?: string };
+  retry_after?: number;
+  limit?: number;
+}
+
+const extractErrorMessage = (data: ApiErrorBody | null | undefined): string => {
   if (!data) return 'Request failed';
   // Plain FastAPI HTTPException shape: detail is a string
   if (typeof data.detail === 'string') return data.detail;
   // RequestValidationError: detail is an array of {loc, msg, type}
   if (Array.isArray(data.detail)) {
     return data.detail
-      .map((d: any) => (typeof d === 'string' ? d : d?.msg || JSON.stringify(d)))
+      .map((d) => (typeof d === 'string' ? d : (d as { msg?: string })?.msg || JSON.stringify(d)))
       .join('; ');
   }
   // Our custom handlers: structured error object
@@ -162,7 +181,7 @@ export class RateLimitError extends Error {
   limit: number | null;
   remaining: number | null;
   resetSeconds: number | null;
-  data: any;
+  data: ApiErrorBody;
   requestId?: string;
 
   constructor(opts: {
@@ -171,7 +190,7 @@ export class RateLimitError extends Error {
     limit: number | null;
     remaining: number | null;
     resetSeconds: number | null;
-    data: any;
+    data: ApiErrorBody;
     requestId?: string;
   }) {
     super(opts.message);
@@ -226,7 +245,7 @@ export interface ApiErrorLogEntry {
   message: string;
   request_id?: string;
   exception_type?: string;
-  data?: any;
+  data?: ApiErrorBody;
 }
 const _errorLog: ApiErrorLogEntry[] = [];
 const MAX_ERROR_LOG = 50;
@@ -243,7 +262,7 @@ const recordApiError = (entry: ApiErrorLogEntry) => {
   );
 };
 
-const handleApiError = async (response: Response, method: string, url: string, retryFn?: () => Promise<any>): Promise<never> => {
+const handleApiError = async (response: Response, method: string, url: string, retryFn?: () => Promise<never>): Promise<never> => {
   // On 401, attempt a single silent token refresh then retry the original request.
   if (response.status === 401 && _refreshCallback && retryFn && url !== '/auth/refresh') {
     try {
@@ -255,7 +274,7 @@ const handleApiError = async (response: Response, method: string, url: string, r
       }
       const refreshed = await _refreshPromise;
       if (refreshed) {
-        return retryFn() as any; // retry with the new token now in _inMemoryToken
+        return retryFn(); // retry with the new token now in _inMemoryToken
       }
     } catch {
       // refresh failed — fall through to throw the original 401
@@ -272,7 +291,7 @@ const handleApiError = async (response: Response, method: string, url: string, r
   if (response.status === 503 && retryFn && url !== '/auth/refresh') {
     await new Promise(r => setTimeout(r, 1500));
     try {
-      return retryFn() as any;
+      return retryFn();
     } catch {
       // retry threw — fall through to the original error surface below
     }
@@ -347,7 +366,11 @@ const handleApiError = async (response: Response, method: string, url: string, r
     } catch { /* store may not be initialized yet on cold start */ }
   }
 
-  const error: any = new Error(message);
+  interface ApiError extends Error {
+    response: { data: ApiErrorBody; status: number };
+    requestId?: string;
+  }
+  const error = new Error(message) as ApiError;
   error.response = { data: errorData, status: response.status };
   error.requestId = requestId;
   throw error;
@@ -355,7 +378,7 @@ const handleApiError = async (response: Response, method: string, url: string, r
 
 // Custom API client using fetch
 const client = {
-  async get<T = any>(url: string, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
+  async get<T = unknown>(url: string, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
     const token = await getAuthHeader();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -378,7 +401,7 @@ const client = {
     return { data, status: response.status };
   },
 
-  async post<T = any>(url: string, body?: any, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
+  async post<T = unknown>(url: string, body?: unknown, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
     const token = await getAuthHeader();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -388,6 +411,9 @@ const client = {
     };
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
+    }
+    if (_csrfToken) {
+      headers['X-CSRF-Token'] = _csrfToken;
     }
 
     const response = await fetchWithTimeout(`${API_URL}/api/v1${url}`, {
@@ -402,7 +428,7 @@ const client = {
     return { data, status: response.status };
   },
 
-  async put<T = any>(url: string, body?: any, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
+  async put<T = unknown>(url: string, body?: unknown, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
     const token = await getAuthHeader();
     const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
     const headers: Record<string, string> = {
@@ -417,6 +443,9 @@ const client = {
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
+    if (_csrfToken) {
+      headers['X-CSRF-Token'] = _csrfToken;
+    }
 
     const response = await fetchWithTimeout(`${API_URL}/api/v1${url}`, {
       method: 'PUT',
@@ -430,7 +459,7 @@ const client = {
     return { data, status: response.status };
   },
 
-  async patch<T = any>(url: string, body?: any, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
+  async patch<T = unknown>(url: string, body?: unknown, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
     const token = await getAuthHeader();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -440,6 +469,9 @@ const client = {
     };
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
+    }
+    if (_csrfToken) {
+      headers['X-CSRF-Token'] = _csrfToken;
     }
 
     const response = await fetchWithTimeout(`${API_URL}/api/v1${url}`, {
@@ -454,7 +486,7 @@ const client = {
     return { data, status: response.status };
   },
 
-  async delete<T = any>(url: string, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
+  async delete<T = unknown>(url: string, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
     const token = await getAuthHeader();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -464,6 +496,9 @@ const client = {
     };
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
+    }
+    if (_csrfToken) {
+      headers['X-CSRF-Token'] = _csrfToken;
     }
 
     const response = await fetchWithTimeout(`${API_URL}/api/v1${url}`, {

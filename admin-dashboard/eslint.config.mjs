@@ -68,6 +68,13 @@ const eslintConfig = defineConfig([
       "jsx-a11y/tabindex-no-positive": "warn",
     },
   },
+  // Defence-in-depth: require rel="noopener noreferrer" on blank-target links.
+  // Modern browsers default to noopener but we don't rely on that (A-PE-P3-6).
+  {
+    rules: {
+      "react/jsx-no-target-blank": "error",
+    },
+  },
 ]);
 
 export default eslintConfig;

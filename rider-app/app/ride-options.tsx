@@ -12,6 +12,7 @@ import {
   Platform,
   Switch,
   Modal,
+  TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -50,6 +51,12 @@ function RideOptionsScreenContent() {
     error: storeError,
     scheduledTime,
     setScheduledTime,
+    requiresWav,
+    setRequiresWav,
+    quietMode,
+    setQuietMode,
+    riderNotes,
+    setRiderNotes,
     availablePromos,
     appliedPromo,
     fetchAvailablePromos,
@@ -691,6 +698,68 @@ function RideOptionsScreenContent() {
             )
           )}
 
+          {/* WAV toggle */}
+          <View style={styles.scheduleRow} accessibilityRole="none">
+            <View style={styles.scheduleInfo}>
+              <Ionicons name="accessibility" size={20} color="#1A1A1A" />
+              <View>
+                <Text style={styles.scheduleLabel}>Wheelchair-accessible vehicle</Text>
+                <Text style={styles.wavSubLabel}>Only match me with WAV drivers</Text>
+              </View>
+            </View>
+            <Switch
+              value={requiresWav}
+              onValueChange={setRequiresWav}
+              trackColor={{ false: '#D1D5DB', true: colors.primary + '60' }}
+              thumbColor={requiresWav ? colors.primary : '#F3F4F6'}
+              accessibilityLabel="Request wheelchair-accessible vehicle"
+              accessibilityRole="switch"
+            />
+          </View>
+          {requiresWav && (
+            <View style={styles.wavBanner}>
+              <Ionicons name="information-circle-outline" size={14} color="#1D4ED8" />
+              <Text style={styles.wavBannerText}>
+                WAV rides may have longer wait times depending on driver availability.
+              </Text>
+            </View>
+          )}
+
+          {/* Quiet mode toggle */}
+          <View style={styles.scheduleRow} accessibilityRole="none">
+            <View style={styles.scheduleInfo}>
+              <Ionicons name="volume-mute" size={20} color="#1A1A1A" />
+              <View>
+                <Text style={styles.scheduleLabel}>Quiet ride</Text>
+                <Text style={styles.wavSubLabel}>Prefer minimal conversation</Text>
+              </View>
+            </View>
+            <Switch
+              value={quietMode}
+              onValueChange={setQuietMode}
+              trackColor={{ false: '#D1D5DB', true: colors.primary + '60' }}
+              thumbColor={quietMode ? colors.primary : '#F3F4F6'}
+              accessibilityLabel="Request quiet ride"
+              accessibilityRole="switch"
+            />
+          </View>
+
+          {/* Notes to driver */}
+          <View style={styles.notesRow}>
+            <Ionicons name="chatbubble-outline" size={18} color="#6B7280" style={{ marginTop: 2 }} />
+            <TextInput
+              style={styles.notesInput}
+              placeholder="Note for driver (optional)"
+              placeholderTextColor="#9CA3AF"
+              value={riderNotes}
+              onChangeText={setRiderNotes}
+              maxLength={200}
+              multiline={false}
+              returnKeyType="done"
+              accessibilityLabel="Note for your driver"
+            />
+          </View>
+
           {/* Payment method row */}
           <TouchableOpacity style={styles.paymentRow}>
             <Ionicons name="card" size={20} color="#1A1A1A" />
@@ -1170,6 +1239,31 @@ function createStyles(colors: ThemeColors, mapHeight: number = 280) {
     fontFamily: 'PlusJakartaSans_500Medium',
     color: colors.text,
   },
+  wavSubLabel: {
+    fontSize: 11,
+    fontFamily: 'PlusJakartaSans_400Regular',
+    color: colors.textDim,
+    marginTop: 1,
+  },
+  wavBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+    backgroundColor: '#EFF6FF',
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  wavBannerText: {
+    flex: 1,
+    fontSize: 12,
+    fontFamily: 'PlusJakartaSans_400Regular',
+    color: '#1D4ED8',
+    lineHeight: 17,
+  },
   scheduledTimeRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1332,6 +1426,22 @@ function createStyles(colors: ThemeColors, mapHeight: number = 280) {
     fontSize: 17,
     fontFamily: 'PlusJakartaSans_700Bold',
     color: colors.primary,
+  },
+  notesRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    backgroundColor: colors.surfaceLight,
+    borderRadius: 12,
+    marginTop: 8,
+  },
+  notesInput: {
+    flex: 1,
+    fontSize: 14,
+    fontFamily: 'PlusJakartaSans_400Regular',
+    color: colors.text,
   },
   });
 }

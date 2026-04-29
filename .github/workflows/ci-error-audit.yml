@@ -46,7 +46,7 @@ on:
           - P3
 
 permissions:
-  contents: write   # H5: write needed to commit reports to repo
+  contents: read
   issues: write
   actions: read
   pull-requests: read
@@ -99,12 +99,12 @@ jobs:
       error_summary: ${{ steps.parse.outputs.error_summary }}
       top_severity:  ${{ steps.parse.outputs.top_severity }}  # C1/H8: needed by notify-critical
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -145,7 +145,7 @@ jobs:
           PYEOF
 
       - name: Upload classified errors
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ci-audit-classified-errors
           path: /tmp/classified_errors.json
@@ -164,18 +164,18 @@ jobs:
       report_file: ${{ steps.generate-report.outputs.report_file }}
     steps:
       # C4: checkout the FAILING commit so git diff / impact analysis is correct
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
           ref: ${{ needs.check-trigger.outputs.head_sha || github.sha }}
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Download classified errors
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ci-audit-classified-errors
           path: /tmp/
@@ -229,7 +229,7 @@ jobs:
             --output /tmp/change_requests.json
 
       - name: Upload full audit bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ci-audit-full-report
           path: |
@@ -239,30 +239,6 @@ jobs:
             /tmp/audit_report.md
             /tmp/change_requests.json
           retention-days: 90
-
-      # H5: commit the report to the repo so it persists beyond artifact retention
-      - name: Commit audit report to repository
-        env:
-          REPORT_FILE: ${{ steps.generate-report.outputs.report_file }}
-          RUN_ID: ${{ needs.check-trigger.outputs.run_id }}
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          # Switch to main to commit the report (we're on a detached HEAD from the failing SHA)
-          git fetch origin main
-          git checkout main
-          mkdir -p "$(dirname "$REPORT_FILE")"
-          cp /tmp/audit_report.md "$REPORT_FILE"
-          git add "$REPORT_FILE"
-          if git diff --cached --quiet; then
-            echo "No report changes to commit (duplicate run?)"
-          else
-            git commit -m "ci: audit report for run ${RUN_ID} [skip ci]"
-            for i in 1 2 3; do
-              git pull --rebase origin main && git push origin main && break
-              sleep $((i * 2))
-            done
-          fi
 
   # ─── Create GitHub issues for P0/P1 findings ──────────────────────────────
   create-audit-issues:
@@ -274,15 +250,15 @@ jobs:
       needs.check-trigger.outputs.should_run == 'true' &&
       needs.run-audit.result == 'success'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Download audit bundle
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ci-audit-full-report
           path: /tmp/audit/

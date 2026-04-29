@@ -1,0 +1,117 @@
+name: Quarterly Sub-processor Audit
+
+# PIPEDA principle-3 compliance: detect when vendors add/change sub-processors
+# before the drift reaches 90 days. Runs on the 1st of Jan/Apr/Jul/Oct.
+# On any diff it opens a PR so the change is reviewed and the privacy policy
+# re-disclosed before it merges.
+
+on:
+  schedule:
+    # 09:00 UTC on the 1st of January, April, July, October
+    - cron: "0 9 1 1,4,7,10 *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run — check only, do not update baseline or open PR"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  audit:
+    name: Sub-processor diff check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          # Full history so the PR branch can be pushed without conflicts
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Run audit
+        id: audit
+        env:
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          set +e
+          if [ "$DRY_RUN" = "true" ]; then
+            python -m backend.utils.subprocessor_audit --dry-run 2>&1 | tee /tmp/audit-report.txt
+          else
+            python -m backend.utils.subprocessor_audit 2>&1 | tee /tmp/audit-report.txt
+          fi
+          EXIT_CODE=$?
+          echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
+          # Embed the report in the step summary
+          echo "## Sub-processor Audit Report" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          cat /tmp/audit-report.txt >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Open PR on changes
+        if: >
+          steps.audit.outputs.exit_code == '1' &&
+          github.event.inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="subprocessor-audit-$(date -u +%Y-%m-%d)"
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add docs/subprocessors-baseline.json
+          git commit -m "chore: quarterly sub-processor baseline update $(date -u +%Y-%m-%d)
+
+          Automated update from the quarterly sub-processor audit workflow.
+          One or more vendor sub-processor pages changed since the last audit.
+
+          Review the diff, update docs/vendor-inventory.md if new sub-processors
+          appear, and confirm the privacy policy discloses them before merging."
+          git push origin "$BRANCH"
+
+          REPORT=$(cat /tmp/audit-report.txt)
+          gh pr create \
+            --title "chore: quarterly sub-processor audit — changes detected $(date -u +%Y-%m-%d)" \
+            --body "## Sub-processor changes detected
+
+          The quarterly PIPEDA sub-processor audit found that one or more vendor
+          sub-processor pages have changed since the last baseline.
+
+          ### Required actions before merging
+
+          - [ ] Review the diff below and identify which vendor(s) changed
+          - [ ] Cross-reference against \`docs/vendor-inventory.md\` — add any new sub-processors
+          - [ ] Confirm the Spinr privacy policy discloses every new sub-processor
+          - [ ] If a high-risk sub-processor was added, file a DPIA
+          - [ ] Update \`docs/vendor-inventory.md\` change log
+
+          ### Audit report
+
+          \`\`\`
+          ${REPORT}
+          \`\`\`
+
+          ---
+          *Opened automatically by the quarterly sub-processor audit workflow.*
+          *Audit ref: B-P3-3 · PIPEDA principle-3 · SOC2 CC9.2*" \
+            --label "compliance,security" \
+            --base main \
+            --head "$BRANCH"
+
+      - name: Fail job if fatal error
+        if: steps.audit.outputs.exit_code == '2'
+        run: |
+          echo "::error::Sub-processor audit failed (exit 2) — all vendor fetches failed. Check network connectivity or vendor URL changes."
+          exit 2

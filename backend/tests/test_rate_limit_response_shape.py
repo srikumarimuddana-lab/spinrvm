@@ -168,7 +168,8 @@ class TestOtpLockout429ResponseShape:
     paths must emit the same header set so the client parser is
     single-shape."""
 
-    def test_otp_lockout_emits_retry_after_and_ratelimit_headers(self):
+    @pytest.mark.anyio
+    async def test_otp_lockout_emits_retry_after_and_ratelimit_headers(self):
         # Force ENV != production so dev OTP bypass is irrelevant; the
         # lockout check runs ahead of OTP validation either way.
         os.environ.setdefault("ENV", "test")
@@ -177,15 +178,21 @@ class TestOtpLockout429ResponseShape:
 
         from fastapi import HTTPException
 
-        from core.config import settings
+        from backend.core.config import settings
 
-        with patch("backend.routes.auth.redis_get", AsyncMock(return_value="1")):
-            from backend.routes import auth as auth_mod
+        # Import auth via package attribute (from … import) so auth_mod
+        # matches the live module object. Then patch redis_get on that
+        # exact object. Using patch("backend.routes.auth.redis_get") can
+        # target a stale sys.modules entry after test_p1_auth_hardening
+        # deletes and re-imports backend.routes.auth inside a patch.dict
+        # context — the sys.modules key is restored but the package
+        # attribute sys.modules["backend.routes"].auth may still point to
+        # the re-imported module.
+        from backend.routes import auth as auth_mod
 
+        with patch.object(auth_mod, "redis_get", AsyncMock(return_value="1")):
             with pytest.raises(HTTPException) as exc:
-                import asyncio
-
-                asyncio.run(auth_mod._check_otp_lockout("+15555550100"))
+                await auth_mod._check_otp_lockout("+15555550100")
 
         assert exc.value.status_code == 429
         # Retry-After = OTP_LOCKOUT_DURATION_SECONDS — that's the

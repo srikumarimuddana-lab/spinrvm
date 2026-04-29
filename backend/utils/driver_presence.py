@@ -67,7 +67,7 @@ async def mark_present(driver_id: str, ttl: int = PRESENCE_TTL) -> None:
     try:
         await redis_set(_key(driver_id), "1", ttl=ttl)
     except Exception as exc:  # pragma: no cover - defensive
-        logger.warning(f"[presence] mark_present({driver_id}) failed: {exc}")
+        logger.error(f"[presence] mark_present({driver_id}) failed: {exc}", exc_info=True)
 
 
 async def is_present(driver_id: str) -> bool:
@@ -89,7 +89,7 @@ async def clear_presence(driver_id: str) -> None:
     try:
         await redis_delete(_key(driver_id))
     except Exception as exc:  # pragma: no cover - defensive
-        logger.warning(f"[presence] clear_presence({driver_id}) failed: {exc}")
+        logger.error(f"[presence] clear_presence({driver_id}) failed: {exc}", exc_info=True)
 
 
 async def present_driver_ids(candidate_ids: List[str]) -> set:

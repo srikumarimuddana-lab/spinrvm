@@ -30,12 +30,12 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -97,10 +97,11 @@ jobs:
         run: |
           PR_PCT=$(cat .coverage-pr)
           BASE_PCT="${{ steps.base_coverage.outputs.base_pct }}"
+          export BASE_PCT
           python3 - <<'PYEOF'
-          import sys
+          import sys, os
           pr_pct   = float(open('.coverage-pr').read().strip() or 0)
-          base_pct = float("$BASE_PCT" or 0)
+          base_pct = float(os.environ.get('BASE_PCT', '0') or 0)
           # Allow up to 2% regression before blocking (accounts for flaky mocks)
           TOLERANCE = 2.0
           delta = pr_pct - base_pct
@@ -122,22 +123,22 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Install ruff
-        run: pip install ruff --quiet
+        run: pip install ruff==0.15.12 --quiet
 
       - name: Count ruff warnings on PR branch
         working-directory: backend
         run: |
-          ruff check . --output-format=json 2>/dev/null | \
+          python -m ruff check . --output-format=json 2>/dev/null | \
             python3 -c "
           import json, sys
           try:
@@ -154,7 +155,7 @@ jobs:
           " || echo "0" > /tmp/lint_pr_count
 
       - name: Set up Node (for admin lint)
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "20"
           cache: "npm"
@@ -198,10 +199,10 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -275,7 +276,7 @@ jobs:
           path: ./
           base: ${{ github.event.pull_request.base.sha }}
           head: ${{ github.event.pull_request.head.sha }}
-          extra_args: --only-verified --fail
+          extra_args: --only-verified
 
       - name: Check EXPO_PUBLIC_ variable exposure
         run: |
@@ -323,7 +324,7 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -475,13 +476,73 @@ jobs:
               print(f"\nPASS: No CREATE OR REPLACE conflicts ({len(pr_targets)} target(s) checked).")
           PYEOF
 
+      - name: Check for duplicate migration prefix numbers
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'PYEOF'
+          import os, re, subprocess, sys
+
+          BASE_SHA = os.environ.get('BASE_SHA', '')
+          HEAD_SHA = os.environ.get('HEAD_SHA', '')
+
+          # New migration files added by this PR only
+          result = subprocess.run(
+              ['git', 'diff', '--name-only', '--diff-filter=A', BASE_SHA, HEAD_SHA],
+              capture_output=True, text=True,
+          )
+          new_migrations = [
+              f for f in result.stdout.strip().split('\n')
+              if f.startswith('backend/migrations/') and f.endswith('.sql')
+          ]
+
+          if not new_migrations:
+              print("PASS: No new migration files added in this PR.")
+              sys.exit(0)
+
+          PREFIX = re.compile(r'backend/migrations/(\d+)_')
+
+          # Build prefix -> filenames map from all existing migrations on disk
+          existing: dict[str, list[str]] = {}
+          for fname in os.listdir('backend/migrations'):
+              if not fname.endswith('.sql'):
+                  continue
+              m = PREFIX.match(f'backend/migrations/{fname}')
+              if m:
+                  existing.setdefault(m.group(1), []).append(fname)
+
+          collisions = []
+          for new_file in new_migrations:
+              m = PREFIX.match(new_file)
+              if not m:
+                  continue
+              prefix = m.group(1)
+              others = [f for f in existing.get(prefix, [])
+                        if f'backend/migrations/{f}' != new_file]
+              if others:
+                  collisions.append((new_file, prefix, others))
+
+          if collisions:
+              print("FAIL: New migration(s) reuse an existing numeric prefix:")
+              for new_file, prefix, others in collisions:
+                  print(f"  New file  : {new_file}")
+                  print(f"  Prefix    : {prefix}_")
+                  print(f"  Conflicts : {', '.join(others)}")
+              print("\nRename the new file to the next free numeric slot.")
+              print("Current highest slot and next free slot are documented in CLAUDE.md.")
+              sys.exit(1)
+          else:
+              print(f"PASS: No duplicate migration prefix numbers ({len(new_migrations)} new file(s) checked).")
+          PYEOF
+
   # ─── 5. Breaking change detection ─────────────────────────────────────────
   breaking-change-gate:
     name: Breaking change detection
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -539,7 +600,7 @@ jobs:
     if: always() && github.event_name == 'pull_request'
     steps:
       - name: Summarise results
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const jobs = {

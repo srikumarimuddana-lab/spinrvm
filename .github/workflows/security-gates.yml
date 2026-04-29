@@ -137,7 +137,14 @@ jobs:
       - name: Audit
         working-directory: ${{ matrix.module }}
         run: |
-          if [ -f yarn.lock ]; then yarn audit --level high
+          if [ -f yarn.lock ]; then
+            # yarn 1.x exit codes are a bitmask: 4=moderate, 8=high, 16=critical.
+            # --level high controls display only; the exit code still reflects all
+            # severities found. We only want to fail on HIGH(8) or CRITICAL(16).
+            # Use `|| rc=$?` not `; rc=$?` — bash -e (GitHub's default shell) exits
+            # immediately on non-zero before the semicolon-separated assignment runs.
+            rc=0; yarn audit --level high || rc=$?
+            if [ $((rc & 24)) -ne 0 ]; then exit 1; fi
           elif [ -f package-lock.json ]; then npm audit --audit-level=high
           else echo "No lockfile in ${{ matrix.module }}"
           fi
@@ -197,9 +204,15 @@ jobs:
         env:
           NEXT_PUBLIC_API_URL: http://localhost:8000
       - name: Scan bundle for secrets
+        # Scan only static/ — that is what browsers receive. The server/
+        # directory holds source maps (.map) and server-rendered code; real
+        # secrets there are a server-side concern covered by G5a + G3, not a
+        # client-bundle-leakage concern. Scanning the full .next/ directory
+        # with gitleaks causes source-map false positives on placeholder
+        # strings (pk_test_..., sk_test_...) from the settings form.
         uses: gitleaks/gitleaks-action@v2
         with:
-          args: detect --source admin-dashboard/.next --no-git --redact
+          args: detect --source admin-dashboard/.next/static --no-git --redact
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

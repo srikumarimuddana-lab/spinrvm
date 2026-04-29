@@ -357,6 +357,7 @@ class TestWalletPay:
         from fastapi import HTTPException
 
         from backend.routes.wallet import WalletPayRequest, wallet_pay
+        from backend.utils.error_handling import SpinrException
 
         req = WalletPayRequest(ride_id=RIDE_ID, amount=Decimal("100.00"))
 
@@ -375,11 +376,12 @@ class TestWalletPay:
                 AsyncMock(side_effect=ValueError("insufficient_funds")),
             ),
         ):
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises((HTTPException, SpinrException)) as exc_info:
                 await wallet_pay(req=req, current_user={"id": USER_ID})
 
         assert exc_info.value.status_code == 400
-        assert "insufficient" in exc_info.value.detail.lower()
+        text = getattr(exc_info.value, "detail", None) or getattr(exc_info.value, "message", "")
+        assert "insufficient" in str(text).lower()
 
     async def test_amount_exceeds_fare_raises_400(self):
         """Client cannot pay more than the server-stored fare (fare-inflation guard)."""

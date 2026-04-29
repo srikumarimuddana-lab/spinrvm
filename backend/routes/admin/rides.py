@@ -198,22 +198,24 @@ async def admin_cancel_ride(
             detail="Cancel did not persist — see backend logs.",
         )
 
+    driver_user_id: str | None = None
     driver_id = ride.get("driver_id")
     if driver_id:
         try:
             await db_supabase.set_driver_available(driver_id, True)
         except Exception as e:
-            logger.warning(f"admin_cancel_ride: could not free driver {driver_id}: {e}")
+            logger.error(f"admin_cancel_ride: could not free driver {driver_id}: {e}", exc_info=True)
 
         driver = await db_supabase.get_driver_by_id(driver_id)
         if driver and driver.get("user_id"):
+            driver_user_id = driver["user_id"]
             await manager.send_personal_message(
                 {"type": "ride_cancelled", "ride_id": ride_id, "reason": reason},
-                f"driver_{driver['user_id']}",
+                f"driver_{driver_user_id}",
             )
             try:
                 await send_push_notification(
-                    driver["user_id"],
+                    driver_user_id,
                     "Ride Cancelled",
                     reason,
                     {"type": "ride_cancelled", "ride_id": ride_id},
@@ -237,7 +239,14 @@ async def admin_cancel_ride(
         except Exception as e:
             logger.warning(f"admin_cancel_ride: rider push failed: {e}")
 
-    await manager.broadcast_ride_status(ride_id, "cancelled", rider_id=rider_id, reason=reason, source="admin")
+    await manager.broadcast_ride_status(
+        ride_id,
+        "cancelled",
+        rider_id=rider_id,
+        driver_user_id=driver_user_id,
+        reason=reason,
+        source="admin",
+    )
     try:
         await manager.broadcast_to_admins(
             {"type": "ride_cancelled", "ride_id": ride_id, "reason": reason, "source": "admin"}

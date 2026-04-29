@@ -61,13 +61,10 @@ export function MonitoringToolbar({
                     <span className="h-2 w-2 rounded-full bg-green-500" />
                     {counts.online} Online
                 </button>
-                <button
-                    onClick={() => onFilterChange({ showOnline: !filters.showOnline })}
-                    className="flex items-center gap-1 rounded bg-amber-500/10 px-2 py-1 text-amber-600 ring-1 ring-amber-500/30"
-                >
+                <div className="flex items-center gap-1 rounded bg-amber-500/10 px-2 py-1 text-amber-600 ring-1 ring-amber-500/30">
                     <span className="h-2 w-2 rounded-full bg-amber-500" />
                     {counts.onRide} On Ride
-                </button>
+                </div>
                 <button
                     onClick={() => onFilterChange({ showOffline: !filters.showOffline })}
                     className={`flex items-center gap-1 rounded px-2 py-1 transition-colors ${

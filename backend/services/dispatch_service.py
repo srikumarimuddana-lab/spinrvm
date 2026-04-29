@@ -189,15 +189,18 @@ class DispatchService:
         prefer dispatching to "online-per-DB" drivers over dispatching to
         nobody.
         """
+        driver_filter: Dict[str, Any] = {
+            "is_online": True,
+            "is_available": True,
+            "is_verified": True,
+            "status": "active",
+            "vehicle_type_id": ride["vehicle_type_id"],
+        }
+        if ride.get("requires_wav"):
+            driver_filter["is_wav"] = True
         rows = await self.db.get_rows(
             "drivers",
-            {
-                "is_online": True,
-                "is_available": True,
-                "is_verified": True,
-                "status": "active",
-                "vehicle_type_id": ride["vehicle_type_id"],
-            },
+            driver_filter,
             limit=500,
         )
         if not rows:

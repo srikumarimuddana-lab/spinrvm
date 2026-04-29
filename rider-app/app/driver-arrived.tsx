@@ -42,7 +42,7 @@ export default function DriverArrivedScreen() {
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
-  const fare = currentRide?.total_fare || 0;
+  const fare = parseFloat(currentRide?.total_fare || '0');
   // Use server-provided cancellation fee; fall back to $3 default (matches app_settings).
   // The old Math.min(5, fare * 0.2) formula did not match the server-side value.
   const cancellationFee = (currentRide as any)?.cancellation_fee ?? 3.0;

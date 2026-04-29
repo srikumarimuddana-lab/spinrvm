@@ -46,10 +46,10 @@ const fetchWithTimeout = async (
     });
     clearTimeout(timeoutId);
     return response;
-  } catch (error: any) {
+  } catch (error: unknown) {
     clearTimeout(timeoutId);
-    if (error.name === 'AbortError') {
-      const timeoutError: any = new Error('Network request timed out');
+    if (error instanceof Error && error.name === 'AbortError') {
+      const timeoutError = new Error('Network request timed out');
       timeoutError.name = 'TimeoutError';
       throw timeoutError;
     }
@@ -93,6 +93,24 @@ export function setRefreshCallback(fn: RefreshFn): void {
   _refreshCallback = fn;
 }
 
+// ── Phase 4 (P1-9): outgoing W3C traceparent header ─────────────────
+// Callers that have started a trace span (e.g. screen-level RUM) can
+// register the active trace ID here; the request methods forward it as
+// the W3C `traceparent` header so the backend can stitch its loguru
+// request_id to the upstream client trace. Stub form: parent-id is
+// zeroed and only the trace-id is meaningful — full OTel SDK
+// integration is a follow-up. Set to `null` to disable.
+let _outgoingTraceId: string | null = null;
+export const setOutgoingTraceId = (id: string | null): void => {
+  _outgoingTraceId = id;
+};
+const traceparentHeader = (): Record<string, string> => {
+  if (!_outgoingTraceId) return {};
+  // version "00", flags "01" (sampled). parent-id is the 16-hex
+  // child-span; without an OTel SDK we don't have one yet, so zero it.
+  return { traceparent: `00-${_outgoingTraceId}-0000000000000000-01` };
+};
+
 // Helper to get stored token
 const getStoredToken = async (): Promise<string | null> => {
   try {
@@ -103,8 +121,8 @@ const getStoredToken = async (): Promise<string | null> => {
       const token = await SecureStore.getItemAsync('auth_token');
       return token;
     }
-  } catch (e: any) {
-    console.error('[API] SecureStore error:', e?.message || e);
+  } catch (e: unknown) {
+    console.error('[API] SecureStore error:', e instanceof Error ? e.message : e);
     return null;
   }
 };
@@ -126,8 +144,8 @@ export const getAuthHeader = async (): Promise<string | null> => {
     }
     // 3. SecureStore fallback (for cold starts where in-memory is empty)
     return await getStoredToken();
-  } catch (error: any) {
-    console.error('[API] Error getting auth token:', error?.message || error);
+  } catch (error: unknown) {
+    console.error('[API] Error getting auth token:', error instanceof Error ? error.message : error);
     return null;
   }
 };
@@ -139,21 +157,97 @@ export const getAuthHeader = async (): Promise<string | null> => {
 //   - FastAPI RequestValidationError: { detail: [...] }  (array of field errors)
 //   - Plain text "Internal Server Error" (pre-handler-register crash): body not JSON
 // This helper returns a human-readable message from any of them.
-const extractErrorMessage = (data: any): string => {
-  if (!data) return 'Request failed';
+/** Loosely-typed shape of the error body the FastAPI backend can return. */
+export interface ApiErrorBody {
+  detail?: string | Array<{ msg?: string; loc?: unknown[]; type?: string } | string>;
+  error?: {
+    message?: string;
+    detail?: string;
+    request_id?: string;
+    exception_type?: string;
+    code?: number;
+    message_key?: string;
+    action_hint?: string;
+  };
+  retry_after?: number;
+  limit?: number;
+}
+
+/**
+ * Phase 2B: structured representation of a backend error.
+ *
+ * Backend Phase 2A emits `error.code`, `error.message_key`, and
+ * `error.action_hint`. This client falls back gracefully to the
+ * existing English `message` field when those new fields are absent
+ * (i.e. when Phase 2A has not yet shipped).
+ */
+export interface ExtractedError {
+  /** Numeric ErrorCode value, or 0 if unknown */
+  code: number;
+  /** English fallback message, always populated */
+  message: string;
+  /** i18n lookup key, e.g. "errors.auth.otp_invalid". Undefined for legacy/raw errors */
+  messageKey?: string;
+  /** Short user-action hint from backend, plain English */
+  actionHint?: string;
+  /** Backend-provided request ID for support tickets */
+  requestId?: string;
+  /** HTTP status code */
+  status?: number;
+  /** For 429 only */
+  retryAfterSeconds?: number;
+}
+
+/**
+ * Extract a structured error from any of the backend error response
+ * shapes. Preserves the previous fallback ladder (FastAPI plain
+ * `detail`, validation array, `error.message`, `error.detail`) and
+ * additionally surfaces Phase 2A fields when present.
+ */
+export const extractError = (
+  data: ApiErrorBody | null | undefined,
+  status?: number,
+): ExtractedError => {
+  // Default skeleton — populated below.
+  const result: ExtractedError = {
+    code: 0,
+    message: 'Request failed',
+    status,
+  };
+
+  if (!data) return result;
+
   // Plain FastAPI HTTPException shape: detail is a string
-  if (typeof data.detail === 'string') return data.detail;
-  // RequestValidationError: detail is an array of {loc, msg, type}
-  if (Array.isArray(data.detail)) {
-    return data.detail
-      .map((d: any) => (typeof d === 'string' ? d : d?.msg || JSON.stringify(d)))
+  if (typeof data.detail === 'string') {
+    result.message = data.detail;
+  } else if (Array.isArray(data.detail)) {
+    // RequestValidationError: detail is an array of {loc, msg, type}
+    result.message = data.detail
+      .map((d) => (typeof d === 'string' ? d : (d as { msg?: string })?.msg || JSON.stringify(d)))
       .join('; ');
+  } else if (data.error?.message) {
+    result.message = data.error.message;
+  } else if (data.error?.detail) {
+    result.message = data.error.detail;
   }
-  // Our custom handlers: structured error object
-  if (data.error?.message) return data.error.message;
-  if (data.error?.detail) return data.error.detail;
-  return 'Request failed';
+
+  // Phase 2A structured fields (gracefully absent on legacy responses).
+  if (data.error) {
+    if (typeof data.error.code === 'number') result.code = data.error.code;
+    if (data.error.message_key) result.messageKey = data.error.message_key;
+    if (data.error.action_hint) result.actionHint = data.error.action_hint;
+    if (data.error.request_id) result.requestId = data.error.request_id;
+  }
+
+  return result;
 };
+
+/**
+ * Backwards-compatible string extractor — every existing caller of
+ * `extractErrorMessage` continues to work unchanged.
+ */
+const extractErrorMessage = (data: ApiErrorBody | null | undefined): string =>
+  extractError(data).message;
 
 // ─── B-P1-8: typed rate-limit error ────────────────────────────────────
 // Backend (utils/rate_limiter.py + routes/auth.py::_check_otp_lockout)
@@ -173,7 +267,7 @@ export class RateLimitError extends Error {
   limit: number | null;
   remaining: number | null;
   resetSeconds: number | null;
-  data: any;
+  data: ApiErrorBody;
   requestId?: string;
 
   constructor(opts: {
@@ -182,7 +276,7 @@ export class RateLimitError extends Error {
     limit: number | null;
     remaining: number | null;
     resetSeconds: number | null;
-    data: any;
+    data: ApiErrorBody;
     requestId?: string;
   }) {
     super(opts.message);
@@ -193,6 +287,38 @@ export class RateLimitError extends Error {
     this.resetSeconds = opts.resetSeconds;
     this.data = opts.data;
     this.requestId = opts.requestId;
+  }
+}
+
+/**
+ * Phase 2B: typed error class for any non-429 backend failure. Carries
+ * the structured fields from `ExtractedError` so callers (alert helper,
+ * screens) can resolve the i18n key without re-parsing the body.
+ *
+ * 429s remain `RateLimitError` for source-compatibility with existing
+ * `instanceof RateLimitError` checks at OTP/login screens.
+ */
+export class SpinrApiError extends Error {
+  status: number;
+  code: number;
+  messageKey?: string;
+  actionHint?: string;
+  requestId?: string;
+  data: ApiErrorBody;
+  // Mirror the pre-Phase-2B `error.response` shape so that callers
+  // doing `error.response.data` / `error.response.status` keep working.
+  response: { data: ApiErrorBody; status: number };
+
+  constructor(extracted: ExtractedError, data: ApiErrorBody) {
+    super(extracted.message);
+    this.name = 'SpinrApiError';
+    this.status = extracted.status ?? 0;
+    this.code = extracted.code;
+    this.messageKey = extracted.messageKey;
+    this.actionHint = extracted.actionHint;
+    this.requestId = extracted.requestId;
+    this.data = data;
+    this.response = { data, status: this.status };
   }
 }
 
@@ -228,7 +354,13 @@ const parseIntHeader = (header: string | null): number | null => {
 
 // In-memory ring buffer of recent API errors so we can surface them in a
 // debug screen (or just logcat them) without the user having to reproduce
-// on-device with Metro attached. Capped at 50 entries.
+// on-device with Metro attached. Capped at MAX_ERROR_LOG entries.
+//
+// Phase 4 (P1-7): added optional `surface` + `screen` tags so support can
+// tell which surface (rider-app/driver-app/admin-dashboard) and which
+// screen-level flow ("ride-options", "payment-confirm", …) produced the
+// failure without asking the user to reproduce. Both fields are optional
+// — call sites are migrated incrementally.
 export interface ApiErrorLogEntry {
   ts: string;
   method: string;
@@ -237,24 +369,80 @@ export interface ApiErrorLogEntry {
   message: string;
   request_id?: string;
   exception_type?: string;
-  data?: any;
+  data?: ApiErrorBody;
+  surface?: 'rider-app' | 'driver-app' | 'admin-dashboard' | 'shared';
+  screen?: string;
 }
 const _errorLog: ApiErrorLogEntry[] = [];
-const MAX_ERROR_LOG = 50;
+const MAX_ERROR_LOG = 500;
+
+// ── Phase 4 (P1-7): AsyncStorage persistence for the error ring buffer ─
+// The in-memory buffer is lost on process kill / crash — exactly when we
+// most need the trail. Mobile apps wire this up at startup by calling
+// `initApiErrorLogPersistence(AsyncStorage)`. We DO NOT import
+// `@react-native-async-storage/async-storage` here so `shared/` stays
+// framework-agnostic (admin-dashboard / Node tests don't have it).
+const ERROR_LOG_STORAGE_KEY = '@spinr/api-error-log';
+let _persistTimer: ReturnType<typeof setTimeout> | null = null;
+let _asyncStorage: {
+  getItem: (k: string) => Promise<string | null>;
+  setItem: (k: string, v: string) => Promise<void>;
+} | null = null;
+
+export const initApiErrorLogPersistence = async (
+  storage: typeof _asyncStorage,
+): Promise<void> => {
+  _asyncStorage = storage;
+  try {
+    const stored = await storage!.getItem(ERROR_LOG_STORAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (Array.isArray(parsed)) _errorLog.push(...parsed.slice(-MAX_ERROR_LOG));
+    }
+  } catch {
+    // Corrupt storage — start fresh, don't crash
+  }
+};
+
+// Default surface tag, set once at app startup via `setApiErrorSurface`.
+// Used as a fallback when individual call sites don't pass `surface`
+// explicitly. Lets us avoid touching every recordApiError caller in this
+// PR — downstream PRs migrate per-screen `screen` tags incrementally.
+let _defaultSurface: ApiErrorLogEntry['surface'] = undefined;
+export const setApiErrorSurface = (surface: ApiErrorLogEntry['surface']): void => {
+  _defaultSurface = surface;
+};
+
 export const getApiErrorLog = (): ApiErrorLogEntry[] => [..._errorLog];
 export const clearApiErrorLog = (): void => { _errorLog.length = 0; };
 const recordApiError = (entry: ApiErrorLogEntry) => {
+  if (entry.surface === undefined && _defaultSurface !== undefined) {
+    entry.surface = _defaultSurface;
+  }
   _errorLog.push(entry);
   if (_errorLog.length > MAX_ERROR_LOG) _errorLog.shift();
   // Also console.log so it shows up in Metro / Railway mirror. Tagged so
   // it's easy to grep. Keep this concise — full data is in the buffer.
   console.log(
     `[API-ERR] ${entry.method} ${entry.url} → ${entry.status} | ${entry.message}` +
-    (entry.request_id ? ` | req=${entry.request_id}` : ''),
+    (entry.request_id ? ` | req=${entry.request_id}` : '') +
+    (entry.surface ? ` | surface=${entry.surface}` : '') +
+    (entry.screen ? ` | screen=${entry.screen}` : ''),
   );
+  // Debounced flush to AsyncStorage so a burst of 4xx responses doesn't
+  // hammer the disk. 1s window collapses bursts but still survives a
+  // crash within seconds of the last error.
+  if (_asyncStorage) {
+    if (_persistTimer) clearTimeout(_persistTimer);
+    _persistTimer = setTimeout(() => {
+      void _asyncStorage!
+        .setItem(ERROR_LOG_STORAGE_KEY, JSON.stringify(_errorLog))
+        .catch(() => {});
+    }, 1000);
+  }
 };
 
-const handleApiError = async (response: Response, method: string, url: string, retryFn?: () => Promise<any>): Promise<never> => {
+const handleApiError = async (response: Response, method: string, url: string, retryFn?: () => Promise<never>): Promise<never> => {
   // On 401, attempt a single silent token refresh then retry the original request.
   if (response.status === 401 && _refreshCallback && retryFn && url !== '/auth/refresh') {
     try {
@@ -266,7 +454,7 @@ const handleApiError = async (response: Response, method: string, url: string, r
       }
       const refreshed = await _refreshPromise;
       if (refreshed) {
-        return retryFn() as any; // retry with the new token now in _inMemoryToken
+        return retryFn(); // retry with the new token now in _inMemoryToken
       }
     } catch {
       // refresh failed — fall through to throw the original 401
@@ -283,16 +471,36 @@ const handleApiError = async (response: Response, method: string, url: string, r
   if (response.status === 503 && retryFn && url !== '/auth/refresh') {
     await new Promise(r => setTimeout(r, 1500));
     try {
-      return retryFn() as any;
+      return retryFn();
     } catch {
       // retry threw — fall through to the original error surface below
     }
   }
 
   const errorData = await response.json().catch(() => ({}));
-  const message = extractErrorMessage(errorData);
-  const requestId = response.headers.get('x-request-id') || errorData?.error?.request_id;
+  const extracted = extractError(errorData, response.status);
+  const message = extracted.message;
+  // Phase 4 (P1-9): prefer body request_id, fall back to header. Header
+  // lookups go through both `x-request-id` and `X-Trace-ID` (the OTel
+  // alias the backend exposes) so plain HTTPException responses — which
+  // don't carry a structured body request_id — still correlate to the
+  // backend loguru line.
+  const headerRequestId =
+    response.headers.get('x-request-id') ||
+    response.headers.get('X-Request-ID') ||
+    response.headers.get('x-trace-id') ||
+    response.headers.get('X-Trace-ID') ||
+    undefined;
+  const requestId = extracted.requestId || headerRequestId;
   const exceptionType = errorData?.error?.exception_type;
+  // Ensure the structured object reflects the resolved request ID
+  // (header winning over body-only callers) so downstream consumers
+  // see a single source.
+  if (requestId) extracted.requestId = requestId;
+  // TODO(diag): wire Sentry breadcrumb here including `requestId` so
+  // payment failures can be correlated mobile → backend → Stripe.
+  // Sentry SDK isn't currently imported in shared/api/client.ts —
+  // adding it as a dep is a separate PR.
   recordApiError({
     ts: new Date().toISOString(),
     method,
@@ -358,20 +566,22 @@ const handleApiError = async (response: Response, method: string, url: string, r
     } catch { /* store may not be initialized yet on cold start */ }
   }
 
-  const error: any = new Error(message);
-  error.response = { data: errorData, status: response.status };
-  error.requestId = requestId;
-  throw error;
+  // Phase 2B: throw SpinrApiError so consumers can read messageKey,
+  // actionHint, and code. The class also exposes the legacy
+  // `response` / `requestId` shape so existing callers that read
+  // `err.response.data` or `err.requestId` keep working unchanged.
+  throw new SpinrApiError(extracted, errorData);
 };
 
 // Custom API client using fetch
 const client = {
-  async get<T = any>(url: string, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
+  async get<T = unknown>(url: string, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
     const token = await getAuthHeader();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'X-Request-ID': generateRequestId(),
       ...deadlineHeader(),
+      ...traceparentHeader(),
       ...config?.headers,
     };
     if (token) {
@@ -389,12 +599,13 @@ const client = {
     return { data, status: response.status };
   },
 
-  async post<T = any>(url: string, body?: any, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
+  async post<T = unknown>(url: string, body?: unknown, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
     const token = await getAuthHeader();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'X-Request-ID': generateRequestId(),
       ...deadlineHeader(),
+      ...traceparentHeader(),
       ...config?.headers,
     };
     if (token) {
@@ -416,12 +627,13 @@ const client = {
     return { data, status: response.status };
   },
 
-  async put<T = any>(url: string, body?: any, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
+  async put<T = unknown>(url: string, body?: unknown, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
     const token = await getAuthHeader();
     const isFormData = typeof FormData !== 'undefined' && body instanceof FormData;
     const headers: Record<string, string> = {
       ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
       'X-Request-ID': generateRequestId(),
+      ...traceparentHeader(),
       ...config?.headers,
     };
     // Strip any Content-Type for FormData so fetch can set the multipart boundary itself.
@@ -447,12 +659,13 @@ const client = {
     return { data, status: response.status };
   },
 
-  async patch<T = any>(url: string, body?: any, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
+  async patch<T = unknown>(url: string, body?: unknown, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
     const token = await getAuthHeader();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'X-Request-ID': generateRequestId(),
       ...deadlineHeader(),
+      ...traceparentHeader(),
       ...config?.headers,
     };
     if (token) {
@@ -474,12 +687,13 @@ const client = {
     return { data, status: response.status };
   },
 
-  async delete<T = any>(url: string, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
+  async delete<T = unknown>(url: string, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
     const token = await getAuthHeader();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'X-Request-ID': generateRequestId(),
       ...deadlineHeader(),
+      ...traceparentHeader(),
       ...config?.headers,
     };
     if (token) {

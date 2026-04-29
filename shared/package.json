@@ -22,6 +22,7 @@
     "./utils/logger": "./utils/logger.ts",
     "./utils/responsive": "./utils/responsive.ts",
     "./cache": "./cache/index.ts",
+    "./types": "./types/index.ts",
     "./types/*": "./types/*",
     "./components/*": "./components/*"
   },

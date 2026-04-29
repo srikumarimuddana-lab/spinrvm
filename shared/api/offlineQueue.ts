@@ -23,7 +23,7 @@ export interface QueuedRequest {
   id: string;
   method: string;
   url: string;
-  body?: any;
+  body?: unknown;
   createdAt: string;
   retries: number;
 }
@@ -36,7 +36,7 @@ let _initialized = false;
 // ── Error callback ──
 // Screens register here to receive a notification when a queued request
 // fails with a 4xx error after replay, so they can show a toast.
-type QueueErrorFn = (request: QueuedRequest, error: any) => void;
+type QueueErrorFn = (request: QueuedRequest, error: unknown) => void;
 let _onQueueError: QueueErrorFn | null = null;
 
 export function setQueueErrorCallback(fn: QueueErrorFn): void {
@@ -57,7 +57,7 @@ export function getQueue(): QueuedRequest[] {
   return [..._queue];
 }
 
-export async function enqueueRequest(method: string, url: string, body?: any): Promise<void> {
+export async function enqueueRequest(method: string, url: string, body?: unknown): Promise<void> {
   if (_queue.length >= MAX_QUEUE_SIZE) {
     _queue.shift(); // Drop oldest
   }
@@ -119,6 +119,24 @@ export async function initOfflineQueue(): Promise<void> {
 
 // ── Internal ──
 
+/** Narrows an unknown caught value to an object with optional name/message fields. */
+function isErrorLike(e: unknown): e is { name?: string; message?: string } {
+  return typeof e === 'object' && e !== null;
+}
+
+/** Narrows an unknown caught value to an Axios-style response error with a numeric status. */
+function isResponseError(e: unknown): e is { response: { status: number } } {
+  return (
+    typeof e === 'object' &&
+    e !== null &&
+    'response' in e &&
+    typeof (e as { response: unknown }).response === 'object' &&
+    (e as { response: unknown }).response !== null &&
+    'status' in (e as { response: { status: unknown } }).response &&
+    typeof (e as { response: { status: unknown } }).response.status === 'number'
+  );
+}
+
 async function processQueue(): Promise<void> {
   if (_isProcessing || _queue.length === 0 || !_isOnline) return;
   _isProcessing = true;
@@ -143,14 +161,15 @@ async function processQueue(): Promise<void> {
         _queue.shift();
         await _persist();
         console.log(`[OfflineQueue] Replayed ${request.method} ${request.url} — ${_queue.length} remaining`);
-      } catch (error: any) {
+      } catch (error: unknown) {
         // If it's still a network error, stop processing
-        if (error?.name === 'TimeoutError' || error?.message?.includes('Network request failed')) {
+        const errLike = isErrorLike(error);
+        if (errLike && (error.name === 'TimeoutError' || error.message?.includes('Network request failed'))) {
           console.log('[OfflineQueue] Still offline — pausing replay');
           break;
         }
         // 4xx errors — the request is logically invalid; drop and surface to UI
-        const status: number | undefined = error?.response?.status;
+        const status: number | undefined = isResponseError(error) ? error.response.status : undefined;
         const is4xx = status !== undefined && status >= 400 && status < 500;
         if (is4xx) {
           console.log(`[OfflineQueue] 4xx (${status}) on ${request.method} ${request.url} — dropping and notifying`);

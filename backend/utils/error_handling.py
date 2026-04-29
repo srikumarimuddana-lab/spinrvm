@@ -124,6 +124,8 @@ class SpinrException(Exception):
         status_code: int = 500,
         details: Optional[Dict[str, Any]] = None,
         should_log: bool = True,
+        message_key: Optional[str] = None,
+        action_hint: Optional[str] = None,
     ):
         self.message = message
         self.error_code = error_code
@@ -131,20 +133,31 @@ class SpinrException(Exception):
         self.details = details or {}
         self.should_log = should_log
         self.timestamp = datetime.now(timezone.utc).isoformat()
+        # i18n lookup key resolved client-side (e.g. "errors.auth.account_suspended").
+        # Mobile apps prefer this over `message` so the user sees the localised
+        # string. Backwards compatible: callers that don't set it omit the
+        # field entirely (see to_dict).
+        self.message_key = message_key
+        # Short user-action hint shown alongside the error (e.g. "Renew documents
+        # in Profile"). Optional; mobile apps render it as a secondary line in
+        # Alert dialogs when present.
+        self.action_hint = action_hint
 
         super().__init__(self.message)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert exception to dictionary for JSON response."""
-        return {
-            "success": False,
-            "error": {
-                "code": self.error_code.value,
-                "message": self.message,
-                "details": self.details if self.details else None,
-                "timestamp": self.timestamp,
-            },
+        error: Dict[str, Any] = {
+            "code": self.error_code.value,
+            "message": self.message,
+            "details": self.details if self.details else None,
+            "timestamp": self.timestamp,
         }
+        if self.message_key is not None:
+            error["message_key"] = self.message_key
+        if self.action_hint is not None:
+            error["action_hint"] = self.action_hint
+        return {"success": False, "error": error}
 
 
 # Authentication exceptions
@@ -152,56 +165,63 @@ class AuthenticationException(SpinrException):
     """Base authentication exception."""
 
     def __init__(self, message: str = "Authentication required", **kwargs):
-        super().__init__(message=message, error_code=ErrorCode.AUTH_REQUIRED, status_code=401, **kwargs)
+        # Subclasses (TokenExpiredException, InvalidOTPException, …) pass
+        # their own ``error_code`` / ``status_code`` via super().__init__(…,
+        # **kwargs) — so honour those when present rather than hard-coding
+        # the AUTH_REQUIRED / 401 defaults, which previously caused a
+        # ``multiple values for keyword argument`` TypeError.
+        kwargs.setdefault("error_code", ErrorCode.AUTH_REQUIRED)
+        kwargs.setdefault("status_code", 401)
+        super().__init__(message=message, **kwargs)
 
 
 class InvalidTokenException(AuthenticationException):
     """Invalid authentication token."""
 
-    def __init__(self, message: str = "Invalid authentication token"):
-        super().__init__(message=message, error_code=ErrorCode.AUTH_INVALID_TOKEN, status_code=401)
+    def __init__(self, message: str = "Invalid authentication token", **kwargs):
+        super().__init__(message=message, error_code=ErrorCode.AUTH_INVALID_TOKEN, status_code=401, **kwargs)
 
 
 class TokenExpiredException(AuthenticationException):
     """Expired authentication token."""
 
-    def __init__(self, message: str = "Token has expired"):
-        super().__init__(message=message, error_code=ErrorCode.AUTH_TOKEN_EXPIRED, status_code=401)
+    def __init__(self, message: str = "Token has expired", **kwargs):
+        super().__init__(message=message, error_code=ErrorCode.AUTH_TOKEN_EXPIRED, status_code=401, **kwargs)
 
 
 class InvalidCredentialsException(AuthenticationException):
     """Invalid login credentials."""
 
-    def __init__(self, message: str = "Invalid credentials"):
-        super().__init__(message=message, error_code=ErrorCode.AUTH_INVALID_CREDENTIALS, status_code=401)
+    def __init__(self, message: str = "Invalid credentials", **kwargs):
+        super().__init__(message=message, error_code=ErrorCode.AUTH_INVALID_CREDENTIALS, status_code=401, **kwargs)
 
 
 class InsufficientPermissionsException(AuthenticationException):
     """User lacks required permissions."""
 
-    def __init__(self, message: str = "Insufficient permissions"):
-        super().__init__(message=message, error_code=ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS, status_code=403)
+    def __init__(self, message: str = "Insufficient permissions", **kwargs):
+        super().__init__(message=message, error_code=ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS, status_code=403, **kwargs)
 
 
 class AccountDisabledException(AuthenticationException):
     """User account is disabled."""
 
-    def __init__(self, message: str = "Account is disabled"):
-        super().__init__(message=message, error_code=ErrorCode.AUTH_ACCOUNT_DISABLED, status_code=403)
+    def __init__(self, message: str = "Account is disabled", **kwargs):
+        super().__init__(message=message, error_code=ErrorCode.AUTH_ACCOUNT_DISABLED, status_code=403, **kwargs)
 
 
 class OTPExpiredException(AuthenticationException):
     """OTP code has expired."""
 
-    def __init__(self, message: str = "OTP code has expired"):
-        super().__init__(message=message, error_code=ErrorCode.AUTH_OTP_EXPIRED, status_code=401)
+    def __init__(self, message: str = "OTP code has expired", **kwargs):
+        super().__init__(message=message, error_code=ErrorCode.AUTH_OTP_EXPIRED, status_code=401, **kwargs)
 
 
 class InvalidOTPException(AuthenticationException):
     """Invalid OTP code."""
 
-    def __init__(self, message: str = "Invalid OTP code"):
-        super().__init__(message=message, error_code=ErrorCode.AUTH_OTP_INVALID, status_code=401)
+    def __init__(self, message: str = "Invalid OTP code", **kwargs):
+        super().__init__(message=message, error_code=ErrorCode.AUTH_OTP_INVALID, status_code=401, **kwargs)
 
 
 # Validation exceptions
@@ -209,7 +229,9 @@ class ValidationException(SpinrException):
     """Validation error."""
 
     def __init__(self, message: str = "Validation error", **kwargs):
-        super().__init__(message=message, error_code=ErrorCode.VALIDATION_ERROR, status_code=400, **kwargs)
+        kwargs.setdefault("error_code", ErrorCode.VALIDATION_ERROR)
+        kwargs.setdefault("status_code", 400)
+        super().__init__(message=message, **kwargs)
 
 
 class InvalidFormatException(ValidationException):
@@ -253,24 +275,26 @@ class InvalidRangeException(ValidationException):
 class ResourceNotFoundException(SpinrException):
     """Requested resource not found."""
 
-    def __init__(self, resource_type: str, resource_id: str):
+    def __init__(self, resource_type: str, resource_id: str, **kwargs):
         super().__init__(
             message=f"{resource_type} not found: {resource_id}",
             error_code=ErrorCode.RESOURCE_NOT_FOUND,
             status_code=404,
             details={"resource_type": resource_type, "resource_id": resource_id},
+            **kwargs,
         )
 
 
 class ResourceAlreadyExistsException(SpinrException):
     """Resource already exists."""
 
-    def __init__(self, resource_type: str, field: str, value: str):
+    def __init__(self, resource_type: str, field: str, value: str, **kwargs):
         super().__init__(
             message=f"{resource_type} already exists with {field}: {value}",
             error_code=ErrorCode.RESOURCE_ALREADY_EXISTS,
             status_code=409,
             details={"resource_type": resource_type, "field": field, "value": value},
+            **kwargs,
         )
 
 
@@ -285,42 +309,45 @@ class ResourceConflictException(SpinrException):
 class RideNotFoundException(ResourceNotFoundException):
     """Ride not found."""
 
-    def __init__(self, ride_id: str):
-        super().__init__("Ride", ride_id)
+    def __init__(self, ride_id: str, **kwargs):
+        super().__init__("Ride", ride_id, **kwargs)
 
 
 class RideInvalidStatusException(SpinrException):
     """Invalid ride status transition."""
 
-    def __init__(self, current_status: str, requested_status: str):
+    def __init__(self, current_status: str, requested_status: str, **kwargs):
         super().__init__(
             message=f"Cannot transition from {current_status} to {requested_status}",
             error_code=ErrorCode.RIDE_INVALID_STATUS,
             status_code=400,
             details={"current_status": current_status, "requested_status": requested_status},
+            **kwargs,
         )
 
 
 class RideStateError(SpinrException):
     """Ride is in an invalid state for the requested operation."""
 
-    def __init__(self, message: str):
+    def __init__(self, message: str, **kwargs):
         super().__init__(
             message=message,
             error_code=ErrorCode.RIDE_INVALID_STATUS,
             status_code=422,
+            **kwargs,
         )
 
 
 class RideNoDriversAvailableException(SpinrException):
     """No drivers available for ride."""
 
-    def __init__(self, location: Optional[Dict[str, float]] = None):
+    def __init__(self, location: Optional[Dict[str, float]] = None, **kwargs):
         super().__init__(
             message="No drivers available in your area",
             error_code=ErrorCode.RIDE_NO_DRIVERS_AVAILABLE,
             status_code=404,
             details={"location": location},
+            **kwargs,
         )
 
 
@@ -328,31 +355,33 @@ class RideNoDriversAvailableException(SpinrException):
 class DriverNotFoundException(ResourceNotFoundException):
     """Driver not found."""
 
-    def __init__(self, driver_id: str):
-        super().__init__("Driver", driver_id)
+    def __init__(self, driver_id: str, **kwargs):
+        super().__init__("Driver", driver_id, **kwargs)
 
 
 class DriverNotAvailableException(SpinrException):
     """Driver not available."""
 
-    def __init__(self, driver_id: str):
+    def __init__(self, driver_id: str, **kwargs):
         super().__init__(
             message="Driver is not available",
             error_code=ErrorCode.DRIVER_NOT_AVAILABLE,
             status_code=400,
             details={"driver_id": driver_id},
+            **kwargs,
         )
 
 
 class DriverOfflineException(SpinrException):
     """Driver is offline."""
 
-    def __init__(self, driver_id: str):
+    def __init__(self, driver_id: str, **kwargs):
         super().__init__(
             message="Driver is currently offline",
             error_code=ErrorCode.DRIVER_OFFLINE,
             status_code=400,
             details={"driver_id": driver_id},
+            **kwargs,
         )
 
 
@@ -361,23 +390,26 @@ class PaymentException(SpinrException):
     """Payment processing error."""
 
     def __init__(self, message: str = "Payment failed", **kwargs):
-        super().__init__(message=message, error_code=ErrorCode.PAYMENT_FAILED, status_code=400, **kwargs)
+        kwargs.setdefault("error_code", ErrorCode.PAYMENT_FAILED)
+        kwargs.setdefault("status_code", 400)
+        super().__init__(message=message, **kwargs)
 
 
 class PaymentMethodInvalidException(PaymentException):
     """Invalid payment method."""
 
-    def __init__(self, message: str = "Invalid payment method"):
-        super().__init__(message=message)
+    def __init__(self, message: str = "Invalid payment method", **kwargs):
+        super().__init__(message=message, **kwargs)
 
 
 class InsufficientFundsException(PaymentException):
     """Insufficient funds."""
 
-    def __init__(self, required: float, available: float):
+    def __init__(self, required: float, available: float, **kwargs):
         super().__init__(
             message=f"Insufficient funds. Required: ${required:.2f}, Available: ${available:.2f}",
             details={"required": required, "available": available},
+            **kwargs,
         )
 
 
@@ -385,65 +417,69 @@ class InsufficientFundsException(PaymentException):
 class InternalErrorException(SpinrException):
     """Internal server error."""
 
-    def __init__(self, message: str = "Internal server error"):
-        super().__init__(message=message, error_code=ErrorCode.INTERNAL_ERROR, status_code=500)
+    def __init__(self, message: str = "Internal server error", **kwargs):
+        super().__init__(message=message, error_code=ErrorCode.INTERNAL_ERROR, status_code=500, **kwargs)
 
 
 class ServiceUnavailableException(SpinrException):
     """Service temporarily unavailable."""
 
-    def __init__(self, service_name: str = ""):
+    def __init__(self, service_name: str = "", **kwargs):
         message = "Service temporarily unavailable"
         if service_name:
             message += f": {service_name}"
-        super().__init__(message=message, error_code=ErrorCode.SERVICE_UNAVAILABLE, status_code=503)
+        super().__init__(message=message, error_code=ErrorCode.SERVICE_UNAVAILABLE, status_code=503, **kwargs)
 
 
 class RateLimitExceededException(SpinrException):
     """Rate limit exceeded."""
 
-    def __init__(self, limit: int, retry_after: int):
+    def __init__(self, limit: int, retry_after: int, **kwargs):
         super().__init__(
             message="Rate limit exceeded",
             error_code=ErrorCode.RATE_LIMIT_EXCEEDED,
             status_code=429,
             details={"limit": limit, "retry_after": retry_after},
+            **kwargs,
         )
 
 
 class ExternalServiceException(SpinrException):
     """External service error."""
 
-    def __init__(self, service_name: str, message: str):
+    def __init__(self, service_name: str, message: str, **kwargs):
         super().__init__(
             message=f"{service_name} error: {message}",
             error_code=ErrorCode.EXTERNAL_SERVICE_ERROR,
             status_code=502,
             details={"service": service_name},
+            **kwargs,
         )
 
 
 class DatabaseError(SpinrException):
     """Database operation failed (transient or permanent)."""
 
-    def __init__(self, message: str = "Database operation failed", details: Optional[Dict[str, Any]] = None):
+    def __init__(self, message: str = "Database operation failed", details: Optional[Dict[str, Any]] = None, **kwargs):
         super().__init__(
             message=message,
             error_code=ErrorCode.DATABASE_ERROR,
             status_code=503,
             details=details or {},
+            **kwargs,
         )
 
 
 class DuplicateRecordError(SpinrException):
     """Unique constraint violation — record already exists."""
 
-    def __init__(self, message: str = "Record already exists", details: Optional[Dict[str, Any]] = None):
+    def __init__(self, message: str = "Record already exists", details: Optional[Dict[str, Any]] = None, **kwargs):
         super().__init__(
             message=message,
             error_code=ErrorCode.DUPLICATE_RECORD,
             status_code=409,
             details=details or {},
+            **kwargs,
         )
 
 
@@ -483,6 +519,12 @@ async def spinr_exception_handler(request: Request, exc: SpinrException) -> JSON
     content = exc.to_dict()
     if isinstance(content.get("error"), dict):
         content["error"]["request_id"] = request_id
+    # Top-level `detail` mirrors the shape of http_exception_handler — the
+    # mobile fetch wrapper, several backend tests, and ad-hoc clients read
+    # `errorData.detail` directly. Without this, migrating an HTTPException
+    # raise site to a SpinrException would silently drop the detail field
+    # and break the client's error message rendering.
+    content["detail"] = exc.message
     return JSONResponse(
         status_code=exc.status_code,
         content=content,
@@ -697,24 +739,12 @@ async def general_exception_handler(request: Request, exc: Exception) -> JSONRes
         # Never let logging take down the error handler itself.
         pass
 
-    # Only expose exception details in development — production responses
-    # should not leak internal error types or messages to clients.
-    try:
-        from core.config import settings as _cfg
-
-        _is_dev = _cfg.ENV.lower() in ("development", "local")
-    except Exception:
-        _is_dev = False
-
     error_body: Dict[str, Any] = {
         "code": ErrorCode.INTERNAL_ERROR.value,
         "message": "An unexpected error occurred",
         "request_id": request_id,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
-    if _is_dev:
-        error_body["exception_type"] = type(exc).__name__
-        error_body["detail"] = str(exc)[:500]
 
     return JSONResponse(
         status_code=500,

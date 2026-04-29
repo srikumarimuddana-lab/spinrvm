@@ -11,6 +11,12 @@
 
 import { useRideStore } from '../rideStore';
 
+jest.mock('@react-native-async-storage/async-storage', () => ({
+  setItem: jest.fn(() => Promise.resolve()),
+  getItem: jest.fn(() => Promise.resolve(null)),
+  removeItem: jest.fn(() => Promise.resolve()),
+}));
+
 jest.mock('@shared/api/client', () => ({
   __esModule: true,
   default: {
@@ -45,7 +51,7 @@ function setBaseState() {
 
 describe('rideStore WAV flag', () => {
   beforeEach(() => {
-    useRideStore.setState({ requiresWav: false } as any);
+    useRideStore.setState({ requiresWav: false, currentRide: null } as any);
     jest.clearAllMocks();
   });
 

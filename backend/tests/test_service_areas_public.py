@@ -31,8 +31,11 @@ _AREA_ROW = {
     "is_active": True,
     "is_airport": False,
     "search_radius_km": 10.0,
-    # Admin-only fields that must NOT leak to the public endpoint:
+    # surge_multiplier + surge_active are intentionally public (rider/driver
+    # surge badge; surge must be visible before booking per regulatory rules).
     "surge_multiplier": 1.5,
+    "surge_active": True,
+    # Admin-only fields that must NOT leak to the public endpoint:
     "gst_rate": 5.0,
     "pst_rate": 6.0,
     "driver_matching_algorithm": "nearest",
@@ -69,7 +72,11 @@ class TestPublicServiceAreas:
             r = client.get("/api/v1/service-areas")
 
         area = r.json()[0]
-        assert "surge_multiplier" not in area
+        # surge_multiplier + surge_active are intentionally public so clients
+        # can render the surge badge and gate booking behind visibility rules.
+        assert area["surge_multiplier"] == 1.5
+        assert area["surge_active"] is True
+        # These remain admin-only and must never reach the public response.
         assert "gst_rate" not in area
         assert "pst_rate" not in area
         assert "driver_matching_algorithm" not in area

@@ -123,6 +123,7 @@ interface RideState {
   selectedVehicle: VehicleType | null;
   currentRide: Ride | null;
   currentDriver: Driver | null;
+  driverEtaSeconds: number | null; // road-network ETA from last WS location_update
   _lastWsDriverPositionAt: number; // epoch ms of last WS-driven position update
   savedAddresses: SavedAddress[];
   recentSearches: Location[];
@@ -132,6 +133,8 @@ interface RideState {
   availablePromos: any[];
   appliedPromo: any | null;
   requiresWav: boolean;
+  quietMode: boolean;
+  riderNotes: string;
   isLoading: boolean;
   error: string | null;
 
@@ -165,6 +168,8 @@ interface RideState {
   clearRecentSearches: () => void;
   setScheduledTime: (time: Date | null) => void;
   setRequiresWav: (value: boolean) => void;
+  setQuietMode: (v: boolean) => void;
+  setRiderNotes: (v: string) => void;
   fetchScheduledRides: () => Promise<void>;
   cancelScheduledRide: (rideId: string) => Promise<void>;
   setUserLocation: (loc: { latitude: number; longitude: number } | null) => void;
@@ -172,7 +177,7 @@ interface RideState {
   applyPromo: (promo: any | null) => void;
 
   // WebSocket-driven updates (see rider-app/hooks/useRiderSocket.ts).
-  updateDriverLocation: (lat: number, lng: number, speed?: number | null, heading?: number | null) => void;
+  updateDriverLocation: (lat: number, lng: number, speed?: number | null, heading?: number | null, etaSeconds?: number | null) => void;
   applyRideStatusFromWS: (rideId: string, status: string, extra?: Record<string, any>) => void;
 
   // Chat
@@ -190,6 +195,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   selectedVehicle: null,
   currentRide: null,
   currentDriver: null,
+  driverEtaSeconds: null,
   _lastWsDriverPositionAt: 0,
   chatMessages: [],
   savedAddresses: [],
@@ -197,6 +203,8 @@ export const useRideStore = create<RideState>((set, get) => ({
   availablePromos: [],
   appliedPromo: null,
   requiresWav: false,
+  quietMode: false,
+  riderNotes: '',
   scheduledTime: null,
   scheduledRides: [],
   userLocation: null,
@@ -361,7 +369,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   },
 
   createRide: async (paymentMethod, corporateAccountId, paymentMethodId) => {
-    const { pickup, dropoff, selectedVehicle, stops, scheduledTime, estimates, requiresWav } = get();
+    const { pickup, dropoff, selectedVehicle, stops, scheduledTime, estimates, requiresWav, quietMode, riderNotes } = get();
     if (!pickup || !dropoff || !selectedVehicle) {
       throw new Error('Missing ride details');
     }
@@ -391,6 +399,8 @@ export const useRideStore = create<RideState>((set, get) => ({
         corporate_account_id: corporateAccountId || null,
         estimate_token: selectedEstimate?.estimate_token,
         requires_wav: requiresWav,
+        quiet_mode: quietMode,
+        rider_notes: riderNotes || null,
         created_at: new Date().toISOString(),
       };
 
@@ -404,7 +414,7 @@ export const useRideStore = create<RideState>((set, get) => ({
       const response = await api.post('/rides', rideData, {
         headers: { 'Idempotency-Key': idempotencyKey },
       });
-      set({ currentRide: response.data, isLoading: false, scheduledTime: null, requiresWav: false });
+      set({ currentRide: response.data, isLoading: false, scheduledTime: null, requiresWav: false, quietMode: false, riderNotes: '' });
       _persistRide(response.data, null);
       return response.data;
     } catch (error: any) {
@@ -608,6 +618,8 @@ export const useRideStore = create<RideState>((set, get) => ({
 
   setScheduledTime: (time) => set({ scheduledTime: time }),
   setRequiresWav: (value) => set({ requiresWav: value }),
+  setQuietMode: (v) => set({ quietMode: v }),
+  setRiderNotes: (v) => set({ riderNotes: v }),
 
   fetchScheduledRides: async () => {
     try {
@@ -631,7 +643,7 @@ export const useRideStore = create<RideState>((set, get) => ({
 
   // ── WebSocket-driven updates ────────────────────────────────────
 
-  updateDriverLocation: (lat, lng, speed, heading) => {
+  updateDriverLocation: (lat, lng, speed, heading, etaSeconds) => {
     const driver = get().currentDriver;
     if (!driver) return;
     // Only update the coordinate fields — leave everything else (name,
@@ -644,7 +656,13 @@ export const useRideStore = create<RideState>((set, get) => ({
       ...(heading !== null && heading !== undefined ? { heading } : {}),
     };
     // R-P2-29: record timestamp so fetchRide doesn't overwrite this WS position.
-    set({ currentDriver: updated, _lastWsDriverPositionAt: Date.now() });
+    // Also store the road-network ETA so the driver-arriving screen can show
+    // a live countdown instead of a static default.
+    set({
+      currentDriver: updated,
+      _lastWsDriverPositionAt: Date.now(),
+      ...(etaSeconds !== null && etaSeconds !== undefined ? { driverEtaSeconds: etaSeconds } : {}),
+    });
     _persistRide(get().currentRide, updated);
   },
 

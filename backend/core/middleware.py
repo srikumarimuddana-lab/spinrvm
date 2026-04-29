@@ -151,6 +151,10 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
         with logger.contextualize(request_id=request_id):
             response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
+        # OTel/W3C-compatible alias: clients that look for X-Trace-ID
+        # (per OTel HTTP semantic conventions) get the same UUID without
+        # us having to introduce a separate trace ID generator yet.
+        response.headers["X-Trace-ID"] = request_id
         return response
 
 

@@ -20,7 +20,7 @@ class DriverPublicView(BaseModel):
     name: str
     rating: Optional[float] = None
     total_rides: Optional[int] = None
-    profile_image_url: Optional[str] = None
+    photo_url: Optional[str] = None
     vehicle_make: Optional[str] = None
     vehicle_model: Optional[str] = None
     vehicle_color: Optional[str] = None
@@ -209,6 +209,8 @@ class Driver(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     user_id: Optional[str] = None
     name: str
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
     phone: str
     photo_url: str = ""
     vehicle_type_id: str

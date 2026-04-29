@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Stack, router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { View, ActivityIndicator, StyleSheet, Text, Platform } from 'react-native';
+import { Alert, View, ActivityIndicator, StyleSheet, Text, Platform } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { StripeProvider } from '@stripe/stripe-react-native';
 import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold, PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans';
@@ -329,6 +329,27 @@ export default function RootLayout() {
           }).catch(() => {});
         }
         return; // don't also refetch ride for reminder events
+      }
+
+      // Safety check-in — ask the rider if they're okay; POST confirmation on tap.
+      if (remoteMessage?.data?.type === 'safety_checkin') {
+        const checkinRideId = remoteMessage?.data?.ride_id as string | undefined;
+        if (checkinRideId) {
+          Alert.alert(
+            'Safety check-in',
+            "Just checking in — are you okay?\n\nIf you don't respond, we'll follow up with you shortly.",
+            [
+              {
+                text: "I'm okay",
+                onPress: () => {
+                  api.post(`/rides/${checkinRideId}/safety-checkin`).catch(() => {});
+                },
+              },
+            ],
+            { cancelable: false },
+          );
+        }
+        return;
       }
 
       // All other FCM types — refresh the active ride state

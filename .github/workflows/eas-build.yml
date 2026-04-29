@@ -100,6 +100,17 @@ jobs:
           MESSAGE=$(echo "$MESSAGE" | head -1 | cut -c1-1000)
           eas update --channel "$CHANNEL" --auto --non-interactive --message "$MESSAGE"
 
+      # Pre-build gate: runs only when a native build is about to happen.
+      # Blocks the expensive EAS build credit spend on broken code.
+      - name: Pre-build validation (lint + type-check + tests)
+        if: |
+          (github.event_name == 'push' && contains(github.event.head_commit.message, '[build]')) ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'build')
+        run: |
+          yarn tsc --noEmit
+          yarn lint --max-warnings 0
+          yarn test --ci --passWithNoTests
+
       # Native build — only on explicit opt-in via `[build]` commit marker or
       # manual dispatch. Expensive (~20min) and queues against EAS credits.
       - name: Native build
@@ -141,6 +152,15 @@ jobs:
           MESSAGE="${MSG:-manual update}"
           MESSAGE=$(echo "$MESSAGE" | head -1 | cut -c1-1000)
           eas update --channel "$CHANNEL" --auto --non-interactive --message "$MESSAGE"
+
+      - name: Pre-build validation (lint + type-check + tests)
+        if: |
+          (github.event_name == 'push' && contains(github.event.head_commit.message, '[build]')) ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'build')
+        run: |
+          yarn tsc --noEmit
+          yarn lint --max-warnings 0
+          yarn test --ci --passWithNoTests
 
       - name: Native build
         if: |

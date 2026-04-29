@@ -79,12 +79,17 @@ class TestProductionStartupGuards:
         for k, v in base.items():
             os.environ[k] = v
         try:
-            from importlib import reload
+            # Import Settings class directly — do NOT reload the module.
+            # reload() replaces the module-level `settings` singleton in
+            # sys.modules["backend.core.config"], which breaks JWT signing
+            # in tests that run after this one (InvalidSignatureError) because
+            # the bare "core.config" entry is left unchanged while
+            # "backend.core.config" now holds a Settings instance with a
+            # different JWT_SECRET. pydantic-settings reads env vars at
+            # instantiation time, so calling Settings() is sufficient.
+            from backend.core.config import Settings
 
-            import backend.core.config as cfg_mod
-
-            reload(cfg_mod)
-            return cfg_mod.Settings()
+            return Settings()
         finally:
             for k in base:
                 os.environ.pop(k, None)
@@ -124,12 +129,9 @@ class TestProductionStartupGuards:
         for k, v in base.items():
             os.environ[k] = v
         try:
-            from importlib import reload
+            from backend.core.config import Settings
 
-            import backend.core.config as cfg_mod
-
-            reload(cfg_mod)
-            cfg_mod.Settings()  # must not raise
+            Settings()  # must not raise
         finally:
             for k in base:
                 os.environ.pop(k, None)
@@ -172,8 +174,18 @@ class TestFirebaseAuthDbFailureRaises503:
                     AsyncMock(side_effect=Exception("DB write failed")),
                 ),
             ):
-                req = MagicMock()
-                req.headers.get.return_value = "test-agent"
+                from starlette.requests import Request as _Req
+
+                req = _Req(
+                    scope={
+                        "type": "http",
+                        "method": "POST",
+                        "path": "/api/auth/firebase",
+                        "query_string": b"",
+                        "headers": [(b"user-agent", b"test-agent")],
+                        "client": ("127.0.0.1", 0),
+                    }
+                )
                 resp = MagicMock()
                 body = auth_mod.FirebaseAuthRequest(firebase_token="fake_token")
 
@@ -202,8 +214,18 @@ class TestFirebaseAuthDbFailureRaises503:
                     AsyncMock(side_effect=Exception("DB update failed")),
                 ),
             ):
-                req = MagicMock()
-                req.headers.get.return_value = "test-agent"
+                from starlette.requests import Request as _Req
+
+                req = _Req(
+                    scope={
+                        "type": "http",
+                        "method": "POST",
+                        "path": "/api/auth/firebase",
+                        "query_string": b"",
+                        "headers": [(b"user-agent", b"test-agent")],
+                        "client": ("127.0.0.2", 0),
+                    }
+                )
                 resp = MagicMock()
                 body = auth_mod.FirebaseAuthRequest(firebase_token="fake_token")
 
@@ -211,4 +233,4 @@ class TestFirebaseAuthDbFailureRaises503:
                     await auth_mod.firebase_auth_login(req, resp, body)
 
         assert exc_info.value.status_code == 503
-        assert exc_info.value.detail == "auth_session_failed"
+        assert exc_info.value.detail == "auth_session_update_failed"

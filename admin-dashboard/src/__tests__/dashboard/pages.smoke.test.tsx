@@ -21,6 +21,7 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(),
   usePathname: () => "/dashboard",
   redirect: vi.fn(),
+  notFound: vi.fn(),
 }));
 
 vi.mock("next/link", () => ({
@@ -44,28 +45,28 @@ vi.mock("@/store/authStore", () => ({
 }));
 
 // Stub every API function to avoid real network calls.
-vi.mock("@/lib/api", () => {
+// importOriginal enumerates the real module's exports so Vitest 4 strict-ESM
+// validation passes (Proxy-based mocks don't satisfy the named-export check).
+vi.mock("@/lib/api", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
   const noop = vi.fn().mockResolvedValue({});
   const list = vi.fn().mockResolvedValue([]);
-  return new Proxy(
-    {},
-    {
-      get(_, key) {
-        // Functions that return arrays
-        if (
-          String(key).startsWith("get") ||
-          String(key).startsWith("list") ||
-          String(key).startsWith("fetch")
-        ) {
-          return list;
-        }
-        return noop;
-      },
-      has() {
-        return true;
-      },
-    }
-  );
+  // Shape-specific overrides for APIs whose callers destructure the response.
+  const overrides: Record<string, unknown> = {
+    getRides: vi.fn().mockResolvedValue({ rides: [], total_count: 0 }),
+    getDrivers: vi.fn().mockResolvedValue({ drivers: [], total_count: 0 }),
+  };
+  return {
+    ...Object.fromEntries(
+      Object.entries(actual).map(([key, val]) => {
+        if (typeof val !== "function") return [key, val];
+        if (key.startsWith("get") || key.startsWith("list") || key.startsWith("fetch"))
+          return [key, list];
+        return [key, noop];
+      })
+    ),
+    ...overrides,
+  };
 });
 
 vi.mock("@/lib/utils", () => ({
@@ -77,20 +78,37 @@ vi.mock("@/lib/utils", () => ({
 vi.mock("@/lib/export-csv", () => ({ exportToCsv: vi.fn() }));
 
 // Stub all Lucide icons to avoid SVG rendering issues.
-vi.mock("lucide-react", () =>
-  new Proxy(
-    {},
-    {
-      get(_, key) {
-        const Icon = ({ className }: { className?: string }) => (
-          <span className={className} data-icon={String(key)} />
-        );
-        Icon.displayName = String(key);
-        return Icon;
-      },
-    }
-  )
-);
+// Vitest 4 strict-ESM rejects Proxy-based factories; all named exports must be
+// present as own properties of the returned object.
+vi.mock("lucide-react", () => {
+  const Icon = ({ className }: { className?: string }) => (
+    <span className={className} />
+  );
+  return {
+    Activity: Icon, AlertCircle: Icon, AlertTriangle: Icon, ArrowDown: Icon, ArrowLeft: Icon,
+    ArrowUp: Icon, ArrowUpDown: Icon, Ban: Icon, Bell: Icon, BookOpen: Icon,
+    Building2: Icon, Calendar: Icon, CalendarClock: Icon, CalendarRange: Icon,
+    Car: Icon, Check: Icon, CheckCircle: Icon, CheckIcon: Icon,
+    ChevronDown: Icon, ChevronDownIcon: Icon, ChevronLeft: Icon,
+    ChevronRight: Icon, ChevronRightIcon: Icon, ChevronUp: Icon, ChevronUpIcon: Icon,
+    CircleIcon: Icon, Clock: Icon, Copy: Icon, CreditCard: Icon, DollarSign: Icon,
+    Download: Icon, Edit: Icon, ExternalLink: Icon, Eye: Icon, EyeOff: Icon,
+    FileCheck: Icon, FileQuestion: Icon, FileText: Icon, FileWarning: Icon,
+    Flag: Icon, Gift: Icon, GitCompareArrows: Icon, Globe: Icon, HelpCircle: Icon,
+    Image: Icon, ImageIcon: Icon, LifeBuoy: Icon, Loader: Icon, Loader2: Icon, Lock: Icon, Mail: Icon,
+    MapPin: Icon, MessageSquare: Icon, Minus: Icon, Navigation: Icon,
+    PackageSearch: Icon, Pause: Icon, PauseCircle: Icon, Pencil: Icon,
+    Phone: Icon, Plane: Icon, PlayCircle: Icon, Plus: Icon, Radar: Icon,
+    Radio: Icon, RefreshCw: Icon, Save: Icon, ScrollText: Icon, Search: Icon,
+    Send: Icon, Settings: Icon, Shield: Icon, ShieldAlert: Icon,
+    ShieldCheck: Icon, ShieldOff: Icon, SlidersHorizontal: Icon, Star: Icon,
+    Tag: Icon, Target: Icon, ToggleLeft: Icon, ToggleRight: Icon, Trash2: Icon,
+    TrendingDown: Icon, TrendingUp: Icon,
+    User: Icon, UserCheck: Icon, UserPlus: Icon, UserX: Icon, Users: Icon, Wallet: Icon,
+    Wifi: Icon, WifiOff: Icon, X: Icon, XCircle: Icon, XIcon: Icon,
+    BarChart3: Icon, Ticket: Icon, Zap: Icon, ZoomIn: Icon,
+  };
+});
 
 // Stub shadcn/ui components to lightweight HTML equivalents.
 const stubComponents = (names: string[]) =>
@@ -268,6 +286,23 @@ vi.mock("@/app/dashboard/rides/_components/ride-stats-cards", () => ({
 }));
 vi.mock("@/app/dashboard/rides/_components/ride-list", () => pageSubComponentStub("RideList"));
 vi.mock("@/app/dashboard/rides/_components/ride-detail-modal", () => pageSubComponentStub("RideDetailModal"));
+
+// Monitoring page: stub WebSocket hook + heavy sub-components to prevent hangs
+vi.mock("@/hooks/use-monitoring-socket", () => ({
+  useMonitoringSocket: () => ({ status: "disconnected" }),
+}));
+vi.mock("@/app/dashboard/monitoring/monitoring-map", () => ({
+  MonitoringMap: () => <div data-sub="MonitoringMap" />,
+}));
+vi.mock("@/app/dashboard/monitoring/toolbar", () => ({
+  MonitoringToolbar: () => <div data-sub="MonitoringToolbar" />,
+}));
+vi.mock("@/app/dashboard/monitoring/driver-panel", () => ({
+  DriverPanel: () => <div data-sub="DriverPanel" />,
+}));
+vi.mock("@/app/dashboard/monitoring/ride-panel", () => ({
+  RidePanel: () => <div data-sub="RidePanel" />,
+}));
 
 // ---------------------------------------------------------------------------
 // Helper

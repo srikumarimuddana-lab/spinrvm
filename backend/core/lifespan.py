@@ -219,6 +219,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to import presence sweeper loop: {e}")
 
+    # Safety check-in — every 30s: sends a push to riders whose trip has been
+    # in_progress for ≥ 20 minutes.  If the rider does not respond within 90s,
+    # an open safety incident is created for the trust-and-safety team.
+    try:
+        from utils.safety_checkin_loop import safety_checkin_loop
+
+        _spawn("safety_checkin (30s)", safety_checkin_loop)
+    except Exception as e:
+        logger.warning(f"Failed to import safety checkin loop: {e}")
+
     # PII retention purge — daily SECURITY DEFINER call to anonymize
     # ride GPS at 3y, hard-delete rides at 7y, delete location history
     # / chat / stripe events at 90d, delete expired refresh tokens after
@@ -252,6 +262,48 @@ async def lifespan(app: FastAPI):
         _spawn("stripe_reconcile (24h)", stripe_reconcile_loop)
     except Exception as e:
         logger.warning(f"Failed to import Stripe reconciliation loop: {e}")
+
+    # Loop watchdog — scans heartbeats every 5 minutes and posts a
+    # Slack-compatible alert when any loop has gone stale.  No-op when
+    # ALERT_WEBHOOK_URL is unset.
+    _WATCHDOG_LOOP_NAMES = list(
+        [
+            "subscription_expiry (6h)",
+            "surge_engine (2min)",
+            "scheduled_dispatcher (60s)",
+            "payment_retry (5min)",
+            "document_expiry (12h)",
+            "corporate_autotopup (10min)",
+            "corporate_low_balance (1h)",
+            "allowance_reset (1h)",
+            "presence_sweeper (60s)",
+            "retention_purge (24h)",
+            "stripe_reconcile (24h)",
+        ]
+    )
+
+    async def _loop_watchdog():
+        import asyncio as _asyncio
+
+        try:
+            from utils.loop_alert import check_and_alert
+            from utils.loop_monitor import record_heartbeat
+        except ImportError:
+            from utils.loop_alert import check_and_alert  # type: ignore
+            from utils.loop_monitor import record_heartbeat  # type: ignore
+
+        while True:
+            try:
+                await check_and_alert(
+                    registered_names=_WATCHDOG_LOOP_NAMES,
+                    webhook_url=settings.ALERT_WEBHOOK_URL,
+                )
+                record_heartbeat("loop_watchdog (5min)")
+            except Exception:
+                logger.error("loop_watchdog tick failed", exc_info=True)
+            await _asyncio.sleep(300)
+
+    _spawn("loop_watchdog (5min)", _loop_watchdog)
 
     app.state.background_tasks = background_tasks
 

@@ -2,6 +2,18 @@ import { Platform } from 'react-native';
 import { appCache, CACHE_CONFIG, CACHE_KEYS } from '../cache';
 import SpinrConfig from '../config/spinr.config';
 
+/** Loosely-typed shape of the error body returned by the FastAPI backend. */
+interface ApiErrorBody {
+  detail?: string | Array<{ msg?: string; loc?: unknown[]; type?: string } | string>;
+  error?: { message?: string; detail?: string; request_id?: string; exception_type?: string };
+  retry_after?: number;
+  limit?: number;
+}
+
+interface ApiError extends Error {
+  response: { data: ApiErrorBody; status: number };
+}
+
 // Endpoints that should be cached with their TTL
 const CACHED_ENDPOINTS: Array<{
     pattern: RegExp;
@@ -33,7 +45,7 @@ const getStoredToken = async (): Promise<string | null> => {
             const SecureStore = require('expo-secure-store');
             return await SecureStore.getItemAsync('auth_token');
         }
-    } catch (e) { }
+    } catch (_e: unknown) { }
     return null;
 };
 
@@ -46,12 +58,12 @@ const getAuthHeader = async (): Promise<string | null> => {
             if (auth?.currentUser) {
                 return await auth.currentUser.getIdToken();
             }
-        } catch (firebaseError) {
+        } catch (_firebaseError: unknown) {
             // Firebase not available, fall through to stored token
         }
         // Backend JWT flow — use stored token
         return await getStoredToken();
-    } catch (error) {
+    } catch (error: unknown) {
         console.error('Error getting auth token:', error);
         return null;
     }
@@ -95,8 +107,10 @@ export const cachedClient = {
         if (!useCache) {
             const response = await fetchWithAuth(url, { method: 'GET', headers });
             if (!response.ok) {
-                const errorData = await response.json().catch(() => ({ detail: 'Request failed' }));
-                const error: any = new Error(errorData.detail || 'Request failed');
+                const errorData: ApiErrorBody = await response.json().catch(() => ({ detail: 'Request failed' }));
+                const error = new Error(
+                    (typeof errorData.detail === 'string' ? errorData.detail : null) ?? 'Request failed'
+                ) as ApiError;
                 error.response = { data: errorData, status: response.status };
                 throw error;
             }
@@ -119,8 +133,10 @@ export const cachedClient = {
         const response = await fetchWithAuth(url, { method: 'GET', headers });
 
         if (!response.ok) {
-            const errorData = await response.json().catch(() => ({ detail: 'Request failed' }));
-            const error: any = new Error(errorData.detail || 'Request failed');
+            const errorData: ApiErrorBody = await response.json().catch(() => ({ detail: 'Request failed' }));
+            const error = new Error(
+                (typeof errorData.detail === 'string' ? errorData.detail : null) ?? 'Request failed'
+            ) as ApiError;
             error.response = { data: errorData, status: response.status };
             throw error;
         }
@@ -136,7 +152,7 @@ export const cachedClient = {
     /**
      * POST request (not cached)
      */
-    async post<T>(url: string, data?: any, config?: { headers?: Record<string, string> }): Promise<T> {
+    async post<T>(url: string, data?: unknown, config?: { headers?: Record<string, string> }): Promise<T> {
         const response = await fetchWithAuth(url, {
             method: 'POST',
             body: data ? JSON.stringify(data) : undefined,
@@ -144,8 +160,10 @@ export const cachedClient = {
         });
 
         if (!response.ok) {
-            const errorData = await response.json().catch(() => ({ detail: 'Request failed' }));
-            const error: any = new Error(errorData.detail || 'Request failed');
+            const errorData: ApiErrorBody = await response.json().catch(() => ({ detail: 'Request failed' }));
+            const error = new Error(
+                (typeof errorData.detail === 'string' ? errorData.detail : null) ?? 'Request failed'
+            ) as ApiError;
             error.response = { data: errorData, status: response.status };
             throw error;
         }
@@ -156,7 +174,7 @@ export const cachedClient = {
     /**
      * PUT request (not cached)
      */
-    async put<T>(url: string, data?: any, config?: { headers?: Record<string, string> }): Promise<T> {
+    async put<T>(url: string, data?: unknown, config?: { headers?: Record<string, string> }): Promise<T> {
         const response = await fetchWithAuth(url, {
             method: 'PUT',
             body: data ? JSON.stringify(data) : undefined,
@@ -164,8 +182,10 @@ export const cachedClient = {
         });
 
         if (!response.ok) {
-            const errorData = await response.json().catch(() => ({ detail: 'Request failed' }));
-            const error: any = new Error(errorData.detail || 'Request failed');
+            const errorData: ApiErrorBody = await response.json().catch(() => ({ detail: 'Request failed' }));
+            const error = new Error(
+                (typeof errorData.detail === 'string' ? errorData.detail : null) ?? 'Request failed'
+            ) as ApiError;
             error.response = { data: errorData, status: response.status };
             throw error;
         }
@@ -183,8 +203,10 @@ export const cachedClient = {
         });
 
         if (!response.ok) {
-            const errorData = await response.json().catch(() => ({ detail: 'Request failed' }));
-            const error: any = new Error(errorData.detail || 'Request failed');
+            const errorData: ApiErrorBody = await response.json().catch(() => ({ detail: 'Request failed' }));
+            const error = new Error(
+                (typeof errorData.detail === 'string' ? errorData.detail : null) ?? 'Request failed'
+            ) as ApiError;
             error.response = { data: errorData, status: response.status };
             throw error;
         }
@@ -218,55 +240,63 @@ export const cachedClient = {
 
 // Export a default client object similar to the regular client
 const client = {
-    async get<T = any>(url: string, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
+    async get<T = unknown>(url: string, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
         const response = await fetchWithAuth(url, { method: 'GET', headers: config?.headers });
         if (!response.ok) {
-            const errorData = await response.json().catch(() => ({ detail: 'Request failed' }));
-            const error: any = new Error(errorData.detail || 'Request failed');
+            const errorData: ApiErrorBody = await response.json().catch(() => ({ detail: 'Request failed' }));
+            const error = new Error(
+                (typeof errorData.detail === 'string' ? errorData.detail : null) ?? 'Request failed'
+            ) as ApiError;
             error.response = { data: errorData, status: response.status };
             throw error;
         }
         return { data: await response.json(), status: response.status };
     },
 
-    async post<T = any>(url: string, body?: any, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
+    async post<T = unknown>(url: string, body?: unknown, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
         const response = await fetchWithAuth(url, {
             method: 'POST',
             body: body ? JSON.stringify(body) : undefined,
             headers: config?.headers,
         });
         if (!response.ok) {
-            const errorData = await response.json().catch(() => ({ detail: 'Request failed' }));
-            const error: any = new Error(errorData.detail || 'Request failed');
+            const errorData: ApiErrorBody = await response.json().catch(() => ({ detail: 'Request failed' }));
+            const error = new Error(
+                (typeof errorData.detail === 'string' ? errorData.detail : null) ?? 'Request failed'
+            ) as ApiError;
             error.response = { data: errorData, status: response.status };
             throw error;
         }
         return { data: await response.json(), status: response.status };
     },
 
-    async put<T = any>(url: string, body?: any, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
+    async put<T = unknown>(url: string, body?: unknown, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
         const response = await fetchWithAuth(url, {
             method: 'PUT',
             body: body ? JSON.stringify(body) : undefined,
             headers: config?.headers,
         });
         if (!response.ok) {
-            const errorData = await response.json().catch(() => ({ detail: 'Request failed' }));
-            const error: any = new Error(errorData.detail || 'Request failed');
+            const errorData: ApiErrorBody = await response.json().catch(() => ({ detail: 'Request failed' }));
+            const error = new Error(
+                (typeof errorData.detail === 'string' ? errorData.detail : null) ?? 'Request failed'
+            ) as ApiError;
             error.response = { data: errorData, status: response.status };
             throw error;
         }
         return { data: await response.json(), status: response.status };
     },
 
-    async delete<T = any>(url: string, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
+    async delete<T = unknown>(url: string, config?: { headers?: Record<string, string> }): Promise<{ data: T; status: number }> {
         const response = await fetchWithAuth(url, {
             method: 'DELETE',
             headers: config?.headers,
         });
         if (!response.ok) {
-            const errorData = await response.json().catch(() => ({ detail: 'Request failed' }));
-            const error: any = new Error(errorData.detail || 'Request failed');
+            const errorData: ApiErrorBody = await response.json().catch(() => ({ detail: 'Request failed' }));
+            const error = new Error(
+                (typeof errorData.detail === 'string' ? errorData.detail : null) ?? 'Request failed'
+            ) as ApiError;
             error.response = { data: errorData, status: response.status };
             throw error;
         }

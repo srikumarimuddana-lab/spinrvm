@@ -71,7 +71,6 @@ regexes = [
 id = "stripe-webhook-secret"
 description = "Stripe webhook signing secret (test stubs allowed)"
 regex = '''(?i)whsec_[0-9a-zA-Z]{10,}'''
-secretGroup = 1
 [rules.allowlist]
 paths = [
     '''backend/tests/''',

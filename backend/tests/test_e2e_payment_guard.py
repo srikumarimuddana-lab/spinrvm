@@ -131,7 +131,7 @@ class TestPaymentAtomicGuard:
                 "backend.routes.rides.db_supabase.update_one",
                 AsyncMock(side_effect=update_side_effects),
             ),
-            patch("backend.routes.rides.charge_ride_stripe", stripe_mock),
+            patch("backend.routes.rides.charge_ride", stripe_mock),
             patch("backend.routes.rides.db_supabase.update_ride", AsyncMock()),
         ):
             results = await asyncio.gather(

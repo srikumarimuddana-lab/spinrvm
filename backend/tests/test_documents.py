@@ -425,7 +425,7 @@ class TestDocumentRegressions:
         included in server.py, causing all WebSocket upgrade requests to return
         403 Forbidden instead of 101 Switching Protocols.
         """
-        from server import app
+        from backend.server import app
 
         ws_routes = [r for r in app.routes if hasattr(r, "path") and r.path.startswith("/ws/")]
         assert len(ws_routes) > 0, (

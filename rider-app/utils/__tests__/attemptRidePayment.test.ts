@@ -291,5 +291,51 @@ describe('attemptRidePayment', () => {
       expect(result.ok).toBe(false);
       expect(result.alert?.title).toBe('Payment error');
     });
+
+    it('retries once on 409 requires-completed-state and succeeds', async () => {
+      jest.useFakeTimers();
+      let calls = 0;
+      const api = {
+        post: jest.fn().mockImplementation(async () => {
+          calls += 1;
+          if (calls === 1) {
+            const err: any = new Error('409');
+            err.response = {
+              status: 409,
+              data: { detail: "Ride is in status 'in_progress'; payment requires completed state." },
+            };
+            throw err;
+          }
+          return { data: { success: true, charged_amount: 12.5 } };
+        }),
+      };
+
+      const promise = attemptRidePayment({ api, stripe: makeStripe(), rideId: 'r1', tipAmount: 0 });
+      // Flush microtasks so the first api.post() rejection is processed and
+      // the setTimeout(1500) inside the catch handler is registered before we
+      // advance fake timers — without this, advanceTimersByTime fires before
+      // the timer exists and the promise never resolves.
+      await Promise.resolve();
+      await Promise.resolve();
+      jest.advanceTimersByTime(1500);
+      const result = await promise;
+
+      expect(result.ok).toBe(true);
+      expect(result.charged).toBe(12.5);
+      expect(api.post).toHaveBeenCalledTimes(2);
+      jest.useRealTimers();
+    });
+
+    it('does not retry on 409 with a different message', async () => {
+      const err: any = new Error('409');
+      err.response = { status: 409, data: { detail: 'ride_taken' } };
+      const api = { post: jest.fn().mockRejectedValue(err) };
+
+      const result = await attemptRidePayment({ api, stripe: makeStripe(), rideId: 'r1', tipAmount: 0 });
+
+      expect(result.ok).toBe(false);
+      expect(result.alert?.title).toBe('Payment error');
+      expect(api.post).toHaveBeenCalledTimes(1);
+    });
   });
 });

@@ -13,31 +13,66 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-# TASK 9-11: explicitly load anyio plugin so @pytest.mark.anyio is available
-# alongside the asyncio_mode=auto setting in pytest.ini.
-pytest_plugins = ["anyio"]
-
-# Add backend dir and project root to path.
-# backend/ on sys.path enables bare imports (e.g. `from routes.drivers import …`).
-# project root on sys.path enables package imports (e.g. `from backend.routes import …`)
-# which are required for mock.patch targets such as "backend.db_supabase.supabase".
+# Add backend dir and project root to path FIRST so subsequent backend imports work.
 _backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _project_root = os.path.dirname(_backend_dir)
 sys.path.insert(0, _backend_dir)
 if _project_root not in sys.path:
     sys.path.insert(1, _project_root)
 
-# pytest.ini has an `env = …` block but that's pytest-env syntax and we don't
-# install pytest-env. CI sets these via the job-level env: block; to make
-# `pytest` work locally without any ceremony, default the same values here if
-# the ambient env hasn't already provided them. Must run before any backend
-# module is imported so core/config.py's Settings model sees them.
+# Set env vars before importing any backend module so core/config.py sees them.
 os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test_key")
 os.environ.setdefault("JWT_SECRET", "test-secret-key-for-ci-only-32chars!!")
 os.environ.setdefault("ADMIN_PASSWORD", "TestAdminPass123!")
 os.environ.setdefault("ADMIN_EMAIL", "admin@spinr.ca")
 os.environ.setdefault("ENV", "test")
+
+# Pre-import backend.server with REAL slowapi so all route module-level decorators
+# bind real types. rate_limiter.py does `from slowapi import Limiter` at module
+# level — if that runs inside the slowapi mock context below, MagicMock children
+# flow into FastAPI's route registration and cause FastAPIError at test setup.
+# Since Python caches modules in sys.modules, fixtures that later do
+# `from backend.server import app` get the already-built app with correct bindings.
+import backend.server as _backend_server_preload  # noqa: F401, E402
+
+# Force-stub slowapi AFTER route modules are cached. The real package IS
+# installed in CI (it's in requirements.txt for the rate-limiter), so the
+# `if _m not in sys.modules` guard in some test files leaves the real module
+# in place.  The real Limiter class has no .return_value attribute, which
+# breaks tests that do  sys.modules["slowapi"].Limiter.return_value.limit = fn.
+# Replacing it here (conftest runs before collection) makes the stub visible
+# to every test file regardless of collection order.
+from slowapi.errors import RateLimitExceeded as _real_RateLimitExceeded  # noqa: E402
+
+for _slowapi_mod in ("slowapi", "slowapi.extension", "slowapi.errors", "slowapi.util"):
+    sys.modules[_slowapi_mod] = MagicMock()
+
+# Restore RateLimitExceeded as a real Exception subclass so that
+# app.add_exception_handler(RateLimitExceeded, ...) passes issubclass() when
+# Starlette builds its ExceptionMiddleware during TestClient startup.
+sys.modules["slowapi.errors"].RateLimitExceeded = _real_RateLimitExceeded
+
+# server.py inserts backend/ into sys.path and uses bare imports, so route/util
+# modules land in sys.modules under bare keys ("routes.admin.auth") rather than
+# qualified keys ("backend.routes.admin.auth"). Test files that do qualified
+# imports during collection would otherwise trigger a second import of those
+# files — this time with slowapi already mocked — turning @limiter.limit
+# decorators into MagicMocks. Mirroring the keys here prevents that re-import.
+for _bare_key in list(sys.modules.keys()):
+    if _bare_key.split(".")[0] in {
+        "routes", "utils", "core", "documents", "features",
+        "dependencies", "socket_manager", "db_supabase",
+        "schemas", "validators", "sms_service", "settings_loader",
+        "logging_utils", "geo_utils",
+    }:
+        _qualified_key = "backend." + _bare_key
+        if _qualified_key not in sys.modules:
+            sys.modules[_qualified_key] = sys.modules[_bare_key]
+
+# TASK 9-11: explicitly load anyio plugin so @pytest.mark.anyio is available
+# alongside the asyncio_mode=auto setting in pytest.ini.
+pytest_plugins = ["anyio"]
 
 
 @pytest.fixture(scope="session")

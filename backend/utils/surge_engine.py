@@ -76,7 +76,7 @@ async def _count_demand_in_area(area_id: str) -> int:
         active_statuses = {"searching", "driver_assigned", "driver_en_route"}
         return sum(1 for r in rides if r.get("status") in active_statuses)
     except Exception as e:
-        logger.warning(f"Surge: failed to count demand for area {area_id}: {e}")
+        logger.error(f"Surge: failed to count demand for area {area_id}: {e}", exc_info=True)
         return 0
 
 
@@ -111,7 +111,7 @@ async def _count_supply_in_area(area: Dict[str, Any]) -> int:
                     count += 1
         return count
     except Exception as e:
-        logger.warning(f"Surge: failed to count supply for area {area.get('id')}: {e}")
+        logger.error(f"Surge: failed to count supply for area {area.get('id')}: {e}", exc_info=True)
         return 0
 
 
@@ -204,7 +204,7 @@ async def recalculate_all_surges() -> List[Dict[str, Any]]:
 
             results.append(metrics)
         except Exception as e:
-            logger.warning(f"Surge: failed to update area {area.get('id')}: {e}")
+            logger.error(f"Surge: failed to update area {area.get('id')}: {e}", exc_info=True)
 
     return results
 

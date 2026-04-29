@@ -130,7 +130,7 @@ async def check_expiring_documents():
             try:
                 await clear_presence(driver["id"])
             except Exception as e:
-                logger.warning(f"Doc expiry: clear_presence failed for {driver['id']}: {e}")
+                logger.error(f"Doc expiry: clear_presence failed for {driver['id']}: {e}", exc_info=True)
             manager.disconnect(f"driver_{user_id}")
             # 2. Notification
             try:

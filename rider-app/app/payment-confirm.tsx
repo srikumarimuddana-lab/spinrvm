@@ -132,7 +132,7 @@ function PaymentConfirmScreenContent() {
     setPromoValidating(true);
     setPromoMessage('');
     try {
-      const fare = selectedEstimate?.total_fare || 0;
+      const fare = parseFloat(selectedEstimate?.total_fare || '0');
       const res = await api.post('/promo/validate', { code, ride_fare: fare });
       setPromoDiscount(res.data.discount_amount);
       setPromoApplied(true);
@@ -147,7 +147,7 @@ function PaymentConfirmScreenContent() {
     }
   };
 
-  const totalFare = (selectedEstimate?.total_fare || 0) - promoDiscount;
+  const totalFare = parseFloat(selectedEstimate?.total_fare || '0') - promoDiscount;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -178,7 +178,7 @@ function PaymentConfirmScreenContent() {
               <Text style={styles.vehicleName}>{selectedVehicle?.name}</Text>
               <Text style={styles.vehicleDesc} allowFontScaling={false}>{selectedEstimate?.duration_minutes} min • {selectedEstimate?.distance_km} km</Text>
             </View>
-            <Text style={styles.totalPrice} allowFontScaling={false}>${selectedEstimate?.total_fare.toFixed(2)}</Text>
+            <Text style={styles.totalPrice} allowFontScaling={false}>${parseFloat(selectedEstimate?.total_fare || '0').toFixed(2)}</Text>
           </View>
 
           <View style={styles.routeContainer}>
@@ -207,19 +207,19 @@ function PaymentConfirmScreenContent() {
 
             <View style={styles.fareRow}>
               <Text style={styles.fareLabel}>Base fare</Text>
-              <Text style={styles.fareValue} allowFontScaling={false}>${selectedEstimate.base_fare.toFixed(2)}</Text>
+              <Text style={styles.fareValue} allowFontScaling={false}>${parseFloat(selectedEstimate.base_fare).toFixed(2)}</Text>
             </View>
             <View style={styles.fareRow}>
               <Text style={styles.fareLabel}>Distance ({selectedEstimate.distance_km} km)</Text>
-              <Text style={styles.fareValue} allowFontScaling={false}>${selectedEstimate.distance_fare.toFixed(2)}</Text>
+              <Text style={styles.fareValue} allowFontScaling={false}>${parseFloat(selectedEstimate.distance_fare).toFixed(2)}</Text>
             </View>
             <View style={styles.fareRow}>
               <Text style={styles.fareLabel}>Time ({selectedEstimate.duration_minutes} min)</Text>
-              <Text style={styles.fareValue} allowFontScaling={false}>${selectedEstimate.time_fare.toFixed(2)}</Text>
+              <Text style={styles.fareValue} allowFontScaling={false}>${parseFloat(selectedEstimate.time_fare).toFixed(2)}</Text>
             </View>
             <View style={styles.fareRow}>
               <Text style={styles.fareLabel}>Booking fee</Text>
-              <Text style={styles.fareValue} allowFontScaling={false}>${selectedEstimate.booking_fee.toFixed(2)}</Text>
+              <Text style={styles.fareValue} allowFontScaling={false}>${parseFloat(selectedEstimate.booking_fee).toFixed(2)}</Text>
             </View>
 
             <View style={styles.fareDivider} />

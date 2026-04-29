@@ -336,7 +336,13 @@ const parseIntHeader = (header: string | null): number | null => {
 
 // In-memory ring buffer of recent API errors so we can surface them in a
 // debug screen (or just logcat them) without the user having to reproduce
-// on-device with Metro attached. Capped at 50 entries.
+// on-device with Metro attached. Capped at MAX_ERROR_LOG entries.
+//
+// Phase 4 (P1-7): added optional `surface` + `screen` tags so support can
+// tell which surface (rider-app/driver-app/admin-dashboard) and which
+// screen-level flow ("ride-options", "payment-confirm", …) produced the
+// failure without asking the user to reproduce. Both fields are optional
+// — call sites are migrated incrementally.
 export interface ApiErrorLogEntry {
   ts: string;
   method: string;
@@ -346,19 +352,36 @@ export interface ApiErrorLogEntry {
   request_id?: string;
   exception_type?: string;
   data?: ApiErrorBody;
+  surface?: 'rider-app' | 'driver-app' | 'admin-dashboard' | 'shared';
+  screen?: string;
 }
 const _errorLog: ApiErrorLogEntry[] = [];
-const MAX_ERROR_LOG = 50;
+const MAX_ERROR_LOG = 500;
+
+// Default surface tag, set once at app startup via `setApiErrorSurface`.
+// Used as a fallback when individual call sites don't pass `surface`
+// explicitly. Lets us avoid touching every recordApiError caller in this
+// PR — downstream PRs migrate per-screen `screen` tags incrementally.
+let _defaultSurface: ApiErrorLogEntry['surface'] = undefined;
+export const setApiErrorSurface = (surface: ApiErrorLogEntry['surface']): void => {
+  _defaultSurface = surface;
+};
+
 export const getApiErrorLog = (): ApiErrorLogEntry[] => [..._errorLog];
 export const clearApiErrorLog = (): void => { _errorLog.length = 0; };
 const recordApiError = (entry: ApiErrorLogEntry) => {
+  if (entry.surface === undefined && _defaultSurface !== undefined) {
+    entry.surface = _defaultSurface;
+  }
   _errorLog.push(entry);
   if (_errorLog.length > MAX_ERROR_LOG) _errorLog.shift();
   // Also console.log so it shows up in Metro / Railway mirror. Tagged so
   // it's easy to grep. Keep this concise — full data is in the buffer.
   console.log(
     `[API-ERR] ${entry.method} ${entry.url} → ${entry.status} | ${entry.message}` +
-    (entry.request_id ? ` | req=${entry.request_id}` : ''),
+    (entry.request_id ? ` | req=${entry.request_id}` : '') +
+    (entry.surface ? ` | surface=${entry.surface}` : '') +
+    (entry.screen ? ` | screen=${entry.screen}` : ''),
   );
 };
 

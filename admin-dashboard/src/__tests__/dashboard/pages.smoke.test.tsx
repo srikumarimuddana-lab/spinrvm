@@ -20,6 +20,7 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), back: vi.fn() }),
   useSearchParams: () => new URLSearchParams(),
   usePathname: () => "/dashboard",
+  redirect: vi.fn(),
 }));
 
 vi.mock("next/link", () => ({
@@ -59,6 +60,9 @@ vi.mock("@/lib/api", () => {
           return list;
         }
         return noop;
+      },
+      has() {
+        return true;
       },
     }
   );

@@ -131,6 +131,7 @@ interface RideState {
   userLocation: { latitude: number; longitude: number } | null;
   availablePromos: any[];
   appliedPromo: any | null;
+  requiresWav: boolean;
   isLoading: boolean;
   error: string | null;
 
@@ -163,6 +164,7 @@ interface RideState {
   syncOfflineRequests: () => Promise<void>;
   clearRecentSearches: () => void;
   setScheduledTime: (time: Date | null) => void;
+  setRequiresWav: (value: boolean) => void;
   fetchScheduledRides: () => Promise<void>;
   cancelScheduledRide: (rideId: string) => Promise<void>;
   setUserLocation: (loc: { latitude: number; longitude: number } | null) => void;
@@ -194,6 +196,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   recentSearches: [],
   availablePromos: [],
   appliedPromo: null,
+  requiresWav: false,
   scheduledTime: null,
   scheduledRides: [],
   userLocation: null,
@@ -358,7 +361,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   },
 
   createRide: async (paymentMethod, corporateAccountId, paymentMethodId) => {
-    const { pickup, dropoff, selectedVehicle, stops, scheduledTime, estimates } = get();
+    const { pickup, dropoff, selectedVehicle, stops, scheduledTime, estimates, requiresWav } = get();
     if (!pickup || !dropoff || !selectedVehicle) {
       throw new Error('Missing ride details');
     }
@@ -387,6 +390,7 @@ export const useRideStore = create<RideState>((set, get) => ({
         payment_method_id: paymentMethodId ?? null,
         corporate_account_id: corporateAccountId || null,
         estimate_token: selectedEstimate?.estimate_token,
+        requires_wav: requiresWav,
         created_at: new Date().toISOString(),
       };
 
@@ -400,7 +404,7 @@ export const useRideStore = create<RideState>((set, get) => ({
       const response = await api.post('/rides', rideData, {
         headers: { 'Idempotency-Key': idempotencyKey },
       });
-      set({ currentRide: response.data, isLoading: false, scheduledTime: null });
+      set({ currentRide: response.data, isLoading: false, scheduledTime: null, requiresWav: false });
       _persistRide(response.data, null);
       return response.data;
     } catch (error: any) {
@@ -603,6 +607,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   },
 
   setScheduledTime: (time) => set({ scheduledTime: time }),
+  setRequiresWav: (value) => set({ requiresWav: value }),
 
   fetchScheduledRides: async () => {
     try {

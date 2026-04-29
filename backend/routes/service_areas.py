@@ -21,8 +21,19 @@ logger = logging.getLogger(__name__)
 
 api_router = APIRouter(tags=["Service Areas"])
 
-# Fields safe to expose to unauthenticated clients (no pricing internals).
-_PUBLIC_FIELDS = ("id", "name", "city", "is_active", "is_airport", "search_radius_km")
+# Fields safe to expose to unauthenticated clients.
+# surge_multiplier is already visible to riders before booking, so it is not a
+# pricing secret — drivers see it here to decide when to go online.
+_PUBLIC_FIELDS = (
+    "id",
+    "name",
+    "city",
+    "is_active",
+    "is_airport",
+    "search_radius_km",
+    "surge_multiplier",
+    "surge_active",
+)
 
 
 @api_router.get("/service-areas")

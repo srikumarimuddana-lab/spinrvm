@@ -219,6 +219,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to import presence sweeper loop: {e}")
 
+    # Safety check-in — every 30s: sends a push to riders whose trip has been
+    # in_progress for ≥ 20 minutes.  If the rider does not respond within 90s,
+    # an open safety incident is created for the trust-and-safety team.
+    try:
+        from utils.safety_checkin_loop import safety_checkin_loop
+
+        _spawn("safety_checkin (30s)", safety_checkin_loop)
+    except Exception as e:
+        logger.warning(f"Failed to import safety checkin loop: {e}")
+
     # PII retention purge — daily SECURITY DEFINER call to anonymize
     # ride GPS at 3y, hard-delete rides at 7y, delete location history
     # / chat / stripe events at 90d, delete expired refresh tokens after

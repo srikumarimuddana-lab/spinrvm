@@ -221,7 +221,7 @@ class TestWalletPayRouteRaceHandling:
 
         assert resp.status_code == 200
         data = resp.json()
-        assert data["balance"] == 0.0
+        assert data["balance"] == "0.00"
 
     def test_non_insufficient_funds_value_error_returns_503(self, client):
         """An unexpected ValueError from the RPC escalates to 503."""

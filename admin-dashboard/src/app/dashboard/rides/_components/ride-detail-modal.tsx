@@ -320,7 +320,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                         {(ride.airport_fee || 0) > 0 && <FR l="Airport fee" v={ride.airport_fee} />}
                                         <div className="border-t my-2" />
                                         <FR l="Subtotal" v={ride.total_fare} b />
-                                        {((ride.tip_amount || 0) > 0 || ride.promo_code) && (
+                                        {(parseFloat(String(ride.tip_amount ?? 0)) > 0 || ride.promo_code) && (
                                             <>
                                                 <div className="border-t my-2" />
                                                 {ride.promo_code && (
@@ -329,7 +329,7 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                         <span className="text-sm font-semibold text-emerald-600">-{formatCurrency(ride.promo_discount || 0)}</span>
                                                     </div>
                                                 )}
-                                                {(ride.tip_amount || 0) > 0 && (
+                                                {parseFloat(String(ride.tip_amount ?? 0)) > 0 && (
                                                     <div className="flex justify-between items-center">
                                                         <span className="flex items-center gap-2 text-sm"><DollarSign className="h-4 w-4 text-amber-500" />Tip</span>
                                                         <span className="text-sm font-semibold text-amber-600">{formatCurrency(ride.tip_amount)}</span>
@@ -356,13 +356,13 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                         <div className="flex justify-between items-center mt-3 pt-3 border-t">
                                             <span className="text-sm font-bold">Total Charged</span>
                                             <span className="text-lg font-extrabold text-primary">
-                                                {formatCurrency((ride.total_fare || 0) + (ride.tip_amount || 0) - (ride.promo_discount || 0))}
+                                                {formatCurrency(parseFloat(String(ride.total_fare ?? 0)) + parseFloat(String(ride.tip_amount ?? 0)) - parseFloat(String(ride.promo_discount ?? 0)))}
                                             </span>
                                         </div>
                                         <div className="mt-2.5 pt-2.5 border-t space-y-1.5">
-                                            <FR l="Rider paid" v={(ride.total_fare || 0) + (ride.tip_amount || 0) - (ride.promo_discount || 0)} />
-                                            <FR l="Driver gets" v={(ride.driver_earnings || 0) + (ride.tip_amount || 0)} />
-                                            <FR l="Admin gets" v={ride.admin_earnings || 0} />
+                                            <FR l="Rider paid" v={parseFloat(String(ride.total_fare ?? 0)) + parseFloat(String(ride.tip_amount ?? 0)) - parseFloat(String(ride.promo_discount ?? 0))} />
+                                            <FR l="Driver gets" v={parseFloat(String(ride.driver_earnings ?? 0)) + parseFloat(String(ride.tip_amount ?? 0))} />
+                                            <FR l="Admin gets" v={ride.admin_earnings ?? 0} />
                                         </div>
                                     </Sec>
                                 </div>

@@ -81,7 +81,7 @@ export interface DriverPublicView {
   name: string;
   rating?: number;
   total_rides?: number;
-  profile_image_url?: string;
+  photo_url?: string;
   vehicle_make?: string;
   vehicle_model?: string;
   vehicle_color?: string;

@@ -98,7 +98,7 @@ PRs #138 and #141 both used migration slot 56 to `CREATE OR REPLACE` the same Po
 ## Next sprint candidates
 
 - **Sentry alert rule**: Create a Sentry alert for `REFRESH TOKEN REUSE DETECTED` → PagerDuty. ~30 min in Sentry UI. No code required.
-- ~~**L-P0-3 WAV dispatch**~~ — in-flight PR #240 (draft on `claude/ci-error-audit-system-HPjKP`); uses migrations 60 + 61. Saskatchewan legal requirement. Ready to merge once draft is promoted.
+- ~~**L-P0-3 WAV dispatch**~~ — shipped PR #240 (merged 2026-04-29); migrations 60 + 61; `is_wav` on drivers, `requires_wav` on rides; WAV-only dispatch matching. Saskatchewan Transportation Act accessibility mandate now satisfied.
 - ~~**L-P1-2 authStore.ts**~~ — shipped in #207 (2026-04-28): 10 `any` types tightened in `shared/store/authStore.ts`.
 - ~~**L-P1-4 earnings GST/BN**~~ — shipped in #207 (2026-04-28): `gst_registered`/`gst_bn` fields added via migration 58 + `GET /drivers/me/t4a-summary` updated.
 - **Dockerfile SHA256 digest pin** (B-P2-8 second half): manual step, follow `docs/runbooks/docker-image-pinning.md`. Quarterly cadence.

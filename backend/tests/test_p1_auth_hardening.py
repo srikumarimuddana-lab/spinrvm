@@ -79,12 +79,17 @@ class TestProductionStartupGuards:
         for k, v in base.items():
             os.environ[k] = v
         try:
-            from importlib import reload
+            # Import Settings class directly — do NOT reload the module.
+            # reload() replaces the module-level `settings` singleton in
+            # sys.modules["backend.core.config"], which breaks JWT signing
+            # in tests that run after this one (InvalidSignatureError) because
+            # the bare "core.config" entry is left unchanged while
+            # "backend.core.config" now holds a Settings instance with a
+            # different JWT_SECRET. pydantic-settings reads env vars at
+            # instantiation time, so calling Settings() is sufficient.
+            from backend.core.config import Settings
 
-            import backend.core.config as cfg_mod
-
-            reload(cfg_mod)
-            return cfg_mod.Settings()
+            return Settings()
         finally:
             for k in base:
                 os.environ.pop(k, None)
@@ -124,12 +129,9 @@ class TestProductionStartupGuards:
         for k, v in base.items():
             os.environ[k] = v
         try:
-            from importlib import reload
+            from backend.core.config import Settings
 
-            import backend.core.config as cfg_mod
-
-            reload(cfg_mod)
-            cfg_mod.Settings()  # must not raise
+            Settings()  # must not raise
         finally:
             for k in base:
                 os.environ.pop(k, None)

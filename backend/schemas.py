@@ -104,6 +104,8 @@ class AuthResponse(BaseModel):
     expires_in: int  # access token lifetime in seconds
     access_expires_at: Optional[datetime] = None
     refresh_expires_at: Optional[datetime] = None
+    # CSRF double-submit token — echo back as X-CSRF-Token on state-changing requests
+    csrf_token: Optional[str] = None
 
 
 class AppSettings(BaseModel):
@@ -259,6 +261,9 @@ class Ride(BaseModel):
     dropoff_lng: float
     stops: Optional[List[Dict[str, Any]]] = []
     is_scheduled: bool = False
+    requires_wav: bool = False
+    quiet_mode: bool = False
+    rider_notes: Optional[str] = None
     scheduled_time: Optional[datetime] = None
     corporate_account_id: Optional[str] = None
     distance_km: float
@@ -312,6 +317,9 @@ class CreateRideRequest(BaseModel):
     dropoff_lng: float
     stops: Optional[List[Dict[str, Any]]] = Field(default=[], max_length=5)
     is_scheduled: bool = False
+    requires_wav: bool = False
+    quiet_mode: bool = False
+    rider_notes: Optional[str] = None
     scheduled_timezone: Optional[str] = None  # IANA name e.g. "America/Toronto"; used for DST-gap guard
     scheduled_time: Optional[datetime] = None
     corporate_account_id: Optional[str] = None

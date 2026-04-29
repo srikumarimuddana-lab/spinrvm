@@ -189,15 +189,18 @@ class DispatchService:
         prefer dispatching to "online-per-DB" drivers over dispatching to
         nobody.
         """
+        driver_filter: Dict[str, Any] = {
+            "is_online": True,
+            "is_available": True,
+            "is_verified": True,
+            "status": "active",
+            "vehicle_type_id": ride["vehicle_type_id"],
+        }
+        if ride.get("requires_wav"):
+            driver_filter["is_wav"] = True
         rows = await self.db.get_rows(
             "drivers",
-            {
-                "is_online": True,
-                "is_available": True,
-                "is_verified": True,
-                "status": "active",
-                "vehicle_type_id": ride["vehicle_type_id"],
-            },
+            driver_filter,
             limit=500,
         )
         if not rows:
@@ -268,8 +271,10 @@ class DispatchService:
         recently assigned ride. Returns None if no ride has ever been
         assigned (first-dispatch case).
         """
+        # assigned_at is indexed by idx_rides_driver_assigned_at (migration 54);
+        # ordering by it is semantically correct and uses the index.
         _last_rides = await self.db.get_rows(
-            "rides", {"driver_id": {"$ne": None}}, order="created_at", desc=True, limit=1
+            "rides", {"driver_id": {"$ne": None}}, order="assigned_at", desc=True, limit=1
         )
         last_ride = _last_rides[0] if _last_rides else None
         return last_ride["driver_id"] if last_ride else None

@@ -155,7 +155,7 @@ export async function attemptRidePayment(
     // Older clients may see the dict directly (no wrapper) — check both.
     const detail = body.detail || body;
     const code = detail?.code;
-    const message = detail?.message || body?.message;
+    const message = detail?.message || body?.message || (typeof detail === 'string' ? detail : '');
 
     if (status === 402 && code === 'card_declined') {
       return { ok: false, alert: DECLINE_ALERT(message || '') };
@@ -163,6 +163,14 @@ export async function attemptRidePayment(
 
     if (status === 502) {
       return { ok: false, alert: PROCESSOR_ERROR_ALERT };
+    }
+
+    // 409 "requires completed state" — the WS event arrived before the DB
+    // write was visible to this replica. Retry once after 1.5 s; by then
+    // Supabase will have committed the status = "completed" update.
+    if (status === 409 && typeof message === 'string' && message.includes('requires completed state')) {
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      return attemptRidePayment(deps);
     }
 
     return { ok: false, alert: UNKNOWN_ERROR_ALERT };

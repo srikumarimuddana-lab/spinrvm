@@ -124,7 +124,8 @@ jobs:
   yarn-audit:
     name: G4b · yarn audit (JS deps)
     runs-on: ubuntu-latest
-    continue-on-error: true
+    # Blocking on HIGH+ CVEs — baseline was clean when this was enabled (2026-04-27).
+    continue-on-error: false
     strategy:
       matrix:
         module: [rider-app, driver-app, admin-dashboard, shared]
@@ -136,8 +137,15 @@ jobs:
       - name: Audit
         working-directory: ${{ matrix.module }}
         run: |
-          if [ -f yarn.lock ]; then yarn audit --level high || true
-          elif [ -f package-lock.json ]; then npm audit --audit-level=high || true
+          if [ -f yarn.lock ]; then
+            # yarn 1.x exit codes are a bitmask: 4=moderate, 8=high, 16=critical.
+            # --level high controls display only; the exit code still reflects all
+            # severities found. We only want to fail on HIGH(8) or CRITICAL(16).
+            # Use `|| rc=$?` not `; rc=$?` — bash -e (GitHub's default shell) exits
+            # immediately on non-zero before the semicolon-separated assignment runs.
+            rc=0; yarn audit --level high || rc=$?
+            if [ $((rc & 24)) -ne 0 ]; then exit 1; fi
+          elif [ -f package-lock.json ]; then npm audit --audit-level=high
           else echo "No lockfile in ${{ matrix.module }}"
           fi
 
@@ -162,9 +170,9 @@ jobs:
         working-directory: admin-dashboard
         run: npm audit --audit-level=high
 
-  # G5 — Secret scanning
+  # G5 — Secret scanning (git history)
   gitleaks:
-    name: G5 · Gitleaks (secrets)
+    name: G5a · Gitleaks (git history)
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -175,10 +183,43 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # G5b — Scan compiled Next.js bundle for leaked NEXT_PUBLIC_* secrets.
+  # A build-time env var that should have been server-only can slip into
+  # the bundle (e.g. NEXT_PUBLIC_API_KEY) and pass git-history scanning
+  # while still being present in the shipped artefact.
+  bundle-secrets:
+    name: G5b · Gitleaks (admin bundle)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+      - name: Build admin dashboard
+        working-directory: admin-dashboard
+        run: |
+          if [ -f package-lock.json ]; then npm ci; fi
+          npm run build
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8000
+      - name: Scan bundle for secrets
+        # Scan only static/ — that is what browsers receive. The server/
+        # directory holds source maps (.map) and server-rendered code; real
+        # secrets there are a server-side concern covered by G5a + G3, not a
+        # client-bundle-leakage concern. Scanning the full .next/ directory
+        # with gitleaks causes source-map false positives on placeholder
+        # strings (pk_test_..., sk_test_...) from the settings form.
+        uses: gitleaks/gitleaks-action@v2
+        with:
+          args: detect --source admin-dashboard/.next/static --no-git --redact
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   # Summary job — required check for branch protection once gates are enforced
   summary:
     name: Security gates summary
-    needs: [bandit, eslint-security, semgrep, pip-audit, yarn-audit, npm-audit-admin, gitleaks]
+    needs: [bandit, eslint-security, semgrep, pip-audit, yarn-audit, npm-audit-admin, gitleaks, bundle-secrets]
     if: always()
     runs-on: ubuntu-latest
     steps:

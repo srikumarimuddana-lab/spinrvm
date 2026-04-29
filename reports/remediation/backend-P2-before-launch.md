@@ -234,15 +234,15 @@ await db.insert_row("financial_events", {
 
 ## Checklist
 
-- [ ] B-P2-1 Replace `float()` with `Decimal(str(...))` in corporate paths; extend pre-commit hook (04-1)
-- [ ] B-P2-2 Stripe webhook event-type allowlist; reject 400 on unknown (08-1)
-- [ ] B-P2-3 Bind `request_id` to App Check log lines (10-2)
-- [ ] B-P2-4 Append-only trigger on `audit_logs` (12-3)
-- [ ] B-P2-5 Composite partial index on `drivers(is_online,is_available,vehicle_type_id)` (14-3)
-- [ ] B-P2-6 `asyncio.gather()` the DSAR export (14-4)
-- [ ] B-P2-7 Explicit ThreadPoolExecutor + queue-depth metric (14-5)
-- [ ] B-P2-8 Pin Dockerfile base by content digest; read-only root FS; seccomp baseline (22-2B)
-- [ ] B-P2-9 `financial_events` row per payment retry attempt (20-1B, blocked on rider 20-3)
+- [x] B-P2-1 Replace `float()` with `Decimal(str(...))` in corporate paths (04-1) — fixed in `corporate_rider.py`, `corporate_company.py`, `corporate_wallet.py`, `corporate_policy_service.py`; 8 regression tests green
+- [x] B-P2-2 Stripe webhook event-type allowlist; reject 400 on unknown (08-1) — `ALLOWED_STRIPE_EVENTS` frozenset in `webhooks.py`; dead `else` branch removed; 2 tests green
+- [x] B-P2-3 Bind `request_id` to App Check log lines (10-2) — both warning log lines in `middleware.py` now carry `extra={"request_id": _req_id}` with header-level fallback
+- [x] B-P2-4 Append-only trigger on `audit_logs` (12-3) — **ALREADY DONE**: `50_audit_logs_append_only.sql` ships UPDATE/DELETE-blocking triggers with `SECURITY DEFINER`
+- [x] B-P2-5 Composite partial index on `drivers(is_online,is_available,vehicle_type_id)` (14-3) — migration `55_drivers_dispatch_composite_index.sql`
+- [x] B-P2-6 `asyncio.gather()` the DSAR export (14-4) — `_build_and_email_data_export` now issues two parallel gather groups (phase 1: driver/user/prefs; phase 2: rides/payouts/documents)
+- [x] B-P2-7 Explicit ThreadPoolExecutor + thread-count metric (14-5) — `_db_executor` created at module level in `db_supabase.py`; `run_sync` uses it instead of default executor; reports `spinr_db_thread_pool_threads` metric
+- [ ] B-P2-8 Pin Dockerfile base by content digest; read-only root FS; seccomp baseline (22-2B) — **DEFERRED**: infrastructure/Dockerfile change requires DevOps coordination
+- [ ] B-P2-9 `financial_events` row per payment retry attempt (20-1B, blocked on rider 20-3) — **DEFERRED**: blocked on `financial_events` table from rider Phase E item 20-3
 
 ## After this file
 

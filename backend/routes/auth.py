@@ -1,9 +1,10 @@
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import Response
 from pydantic import BaseModel
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -11,6 +12,7 @@ from slowapi.util import get_remote_address
 try:
     from .. import db_supabase
     from ..core.config import settings
+    from ..core.csrf import clear_csrf_cookie, generate_csrf_token, set_csrf_cookie
     from ..dependencies import (
         OTP_EXPIRY_MINUTES,
         create_jwt_token,
@@ -32,6 +34,7 @@ try:
 except ImportError:
     import db_supabase
     from core.config import settings
+    from core.csrf import clear_csrf_cookie, generate_csrf_token, set_csrf_cookie
     from dependencies import (
         OTP_EXPIRY_MINUTES,
         create_jwt_token,
@@ -134,6 +137,7 @@ def _make_auth_response(
     is_new_user: bool,
     access_expires_at: datetime,
     refresh_expires_at: datetime,
+    csrf_token: Optional[str] = None,
 ) -> AuthResponse:
     return AuthResponse(
         token=token,
@@ -143,6 +147,7 @@ def _make_auth_response(
         is_new_user=is_new_user,
         access_expires_at=access_expires_at,
         refresh_expires_at=refresh_expires_at,
+        csrf_token=csrf_token,
     )
 
 
@@ -218,7 +223,7 @@ async def send_otp(request: Request, body: SendOTPRequest):
 
 @api_router.post("/verify-otp", response_model=AuthResponse)
 @limiter.limit("5/minute")
-async def verify_otp(request: Request, body: VerifyOTPRequest):
+async def verify_otp(request: Request, response: Response, body: VerifyOTPRequest):
     phone = body.phone.strip()
     code = body.code.strip()
 
@@ -347,6 +352,10 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
             except Exception as e:
                 logger.error(f"UserProfile validation failed, falling back to raw dict: {e}", exc_info=True)
                 user_obj = existing_user
+            csrf = generate_csrf_token()
+            set_csrf_cookie(
+                response, csrf, secure=settings.ENV == "production", max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+            )
             return _make_auth_response(
                 token,
                 refresh_raw,
@@ -354,6 +363,7 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
                 is_new_user=False,
                 access_expires_at=access_expires_at,
                 refresh_expires_at=refresh_expires_at,
+                csrf_token=csrf,
             )
         else:
             logger.info("Creating new user")
@@ -389,6 +399,10 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
             refresh_raw, _, refresh_expires_at = await issue_refresh_token(
                 user_id, audience="rider", user_agent=user_agent, ip=client_ip
             )
+            csrf = generate_csrf_token()
+            set_csrf_cookie(
+                response, csrf, secure=settings.ENV == "production", max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+            )
             return _make_auth_response(
                 token,
                 refresh_raw,
@@ -396,6 +410,7 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
                 is_new_user=True,
                 access_expires_at=access_expires_at,
                 refresh_expires_at=refresh_expires_at,
+                csrf_token=csrf,
             )
     except HTTPException:
         # Already a well-formed HTTP error (e.g. the 503 raised when
@@ -425,7 +440,7 @@ class FirebaseAuthRequest(BaseModel):
 
 @api_router.post("/firebase", response_model=AuthResponse)
 @limiter.limit("10/minute")
-async def firebase_auth_login(request: Request, body: FirebaseAuthRequest):
+async def firebase_auth_login(request: Request, response: Response, body: FirebaseAuthRequest):
     """Exchange a Firebase ID token for Spinr access + refresh tokens.
 
     Mirrors the OTP verify flow: verify identity, find-or-create the user
@@ -435,7 +450,7 @@ async def firebase_auth_login(request: Request, body: FirebaseAuthRequest):
     try:
         from firebase_admin import auth as _firebase_auth  # type: ignore
 
-        payload = _firebase_auth.verify_id_token(body.firebase_token)
+        payload = _firebase_auth.verify_id_token(body.firebase_token, check_revoked=True)
     except Exception as e:
         raise HTTPException(status_code=401, detail="Invalid Firebase token") from e
 
@@ -518,6 +533,10 @@ async def firebase_auth_login(request: Request, body: FirebaseAuthRequest):
     except Exception:
         user_obj = user  # type: ignore[assignment]
 
+    csrf = generate_csrf_token()
+    set_csrf_cookie(
+        response, csrf, secure=settings.ENV == "production", max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    )
     return _make_auth_response(
         token,
         refresh_raw,
@@ -525,6 +544,7 @@ async def firebase_auth_login(request: Request, body: FirebaseAuthRequest):
         is_new_user=is_new_user,
         access_expires_at=access_expires_at,
         refresh_expires_at=refresh_expires_at,
+        csrf_token=csrf,
     )
 
 
@@ -598,6 +618,7 @@ class RefreshResponse(BaseModel):
     refresh_token: str
     access_expires_at: datetime
     refresh_expires_at: datetime
+    csrf_token: Optional[str] = None
 
 
 class LogoutRequest(BaseModel):
@@ -607,7 +628,7 @@ class LogoutRequest(BaseModel):
 
 @api_router.post("/refresh", response_model=RefreshResponse)
 @limiter.limit("20/minute")
-async def refresh_access_token(request: Request, body: RefreshRequest):
+async def refresh_access_token(request: Request, response: Response, body: RefreshRequest):
     """Exchange a refresh token for a new access token + rotated refresh token.
 
     Returns 401 on any lookup failure (revoked / expired / unknown) —
@@ -660,17 +681,24 @@ async def refresh_access_token(request: Request, body: RefreshRequest):
         token_version=token_version,
     )
 
+    csrf = generate_csrf_token()
+    set_csrf_cookie(
+        response, csrf, secure=settings.ENV == "production", max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    )
     return RefreshResponse(
         token=token,
         refresh_token=new_raw,
         access_expires_at=access_expires_at,
         refresh_expires_at=refresh_expires_at,
+        csrf_token=csrf,
     )
 
 
 @api_router.post("/logout")
 @limiter.limit("3/minute")
-async def logout(request: Request, body: LogoutRequest, current_user: dict = Depends(get_current_user)):
+async def logout(
+    request: Request, response: Response, body: LogoutRequest, current_user: dict = Depends(get_current_user)
+):
     """Revoke the presented refresh token.
 
     Previously a no-op (the endpoint didn't exist). Now stamps
@@ -683,12 +711,13 @@ async def logout(request: Request, body: LogoutRequest, current_user: dict = Dep
     # Delete the Redis session key so the revocation propagates instantly
     # to all replicas rather than waiting for the access-token TTL.
     await redis_delete(f"session:{current_user['id']}")
+    clear_csrf_cookie(response)
     return {"success": True}
 
 
 @api_router.post("/logout-all")
 @limiter.limit("5/minute")
-async def logout_all(request: Request, current_user: dict = Depends(get_current_user)):
+async def logout_all(request: Request, response: Response, current_user: dict = Depends(get_current_user)):
     """Force-invalidate every session for the caller.
 
     Bumps ``users.token_version`` so all outstanding access tokens are
@@ -737,4 +766,5 @@ async def logout_all(request: Request, current_user: dict = Depends(get_current_
         )
 
     logger.info(f"logout-all: user={user_id} token_version→{new_version} revoked_refresh={revoked}")
+    clear_csrf_cookie(response)
     return {"success": True, "revoked_refresh_tokens": revoked}

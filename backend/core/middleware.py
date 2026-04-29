@@ -11,6 +11,27 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from core.config import settings
 from utils.rate_limiter import default_limiter, rate_limit_exceeded_handler
 
+# ── CSRF double-submit constants ─────────────────────────────────────
+_CSRF_COOKIE = "csrf_token"
+_CSRF_HEADER = "x-csrf-token"
+_CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
+# Paths that have no established session yet — no CSRF cookie exists.
+# Pre-auth endpoints and server-to-server paths are exempt.
+_CSRF_EXEMPT_EXACT = frozenset(
+    {
+        "/health",
+        "/docs",
+        "/redoc",
+        "/openapi.json",
+        "/api/v1/auth/send-otp",
+        "/api/v1/auth/verify-otp",
+        "/api/v1/auth/firebase",
+        "/api/admin/auth/login",
+        "/api/v1/stripe/webhook",
+    }
+)
+_CSRF_EXEMPT_PREFIXES = ("/ws/",)
+
 # ── Firebase App Check Middleware ─────────────────────────────────────
 # Enforcement is tied to ENV: on in production, off in development/staging.
 # When off, missing or invalid tokens are logged but requests still go
@@ -81,6 +102,10 @@ class FirebaseAppCheckMiddleware(BaseHTTPMiddleware):
         request_id = getattr(request.state, "request_id", "-")
 
         token = request.headers.get("X-Firebase-AppCheck")
+        # Prefer the request_id already set by RequestIDMiddleware; fall back
+        # to the caller-supplied header so App Check failures are always
+        # cross-correlatable even if middleware ordering changes.
+        _req_id = getattr(request.state, "request_id", None) or request.headers.get("X-Request-ID", "-")
 
         if not token:
             if self._enforce:
@@ -197,6 +222,56 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         _apply_security_headers(response, request.url.path, self._enable_hsts)
         return response
+
+
+class CSRFMiddleware(BaseHTTPMiddleware):
+    """Double-submit cookie CSRF protection for state-changing requests.
+
+    Only enforced when the request carries an Origin header (browser context).
+    Native mobile apps and server-to-server calls lack Origin and are implicitly
+    exempt — CSRF is impossible without a cookie-based session attack vector.
+
+    Validation: X-CSRF-Token header must equal the csrf_token cookie value.
+    Both values are set by the server on login/refresh (see core/csrf.py).
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        if request.method.upper() in _CSRF_SAFE_METHODS:
+            return await call_next(request)
+
+        path = request.url.path
+        if path in _CSRF_EXEMPT_EXACT or any(path.startswith(p) for p in _CSRF_EXEMPT_PREFIXES):
+            return await call_next(request)
+
+        # Only enforce for browser-originated requests (Origin header present).
+        if not request.headers.get("origin"):
+            return await call_next(request)
+
+        csrf_cookie = request.cookies.get(_CSRF_COOKIE)
+        csrf_header = request.headers.get(_CSRF_HEADER)
+
+        if not csrf_cookie or not csrf_header:
+            logger.warning("CSRF token missing: %s %s", request.method, path)
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "CSRF token missing"},
+            )
+
+        import hmac as _hmac  # noqa: PLC0415
+
+        if not _hmac.compare_digest(csrf_cookie.encode(), csrf_header.encode()):
+            logger.warning(
+                "CSRF token mismatch: %s %s origin=%s",
+                request.method,
+                path,
+                request.headers.get("origin"),
+            )
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "CSRF token invalid"},
+            )
+
+        return await call_next(request)
 
 
 _INSECURE_JWT_DEFAULTS = {
@@ -410,7 +485,6 @@ def init_middleware(app):
     app.add_middleware(FirebaseAppCheckMiddleware, enforcement_enabled=is_production)
 
     # FIX: Add CORS headers to exception responses (FastAPI bug fix)
-    @app.exception_handler(Exception)
     async def cors_exception_handler(request: Request, exc: Exception):
         origin = request.headers.get("origin")
 
@@ -444,6 +518,8 @@ def init_middleware(app):
         _apply_security_headers(response, request.url.path, enable_hsts=is_production)
 
         return response
+
+    app.add_exception_handler(Exception, cors_exception_handler)
 
     # Relative-redirect middleware — when FastAPI issues a 307 trailing-slash
     # redirect the Location header contains an absolute backend URL
@@ -508,11 +584,16 @@ def init_middleware(app):
 
     app.add_middleware(DeadlineMiddleware)
 
+    # CSRF double-submit cookie protection — validates X-CSRF-Token header
+    # against the csrf_token cookie on every state-changing browser request.
+    # Mobile apps and server-to-server calls (no Origin header) bypass this.
+    app.add_middleware(CSRFMiddleware)
+
     # Rate Limiting Middleware
     app.state.limiter = default_limiter
     app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
     logger.info(
-        f"Middleware initialized: CORS, Security Headers (HSTS={'on' if is_production else 'off'}), "
+        f"Middleware initialized: CORS, CSRF, Security Headers (HSTS={'on' if is_production else 'off'}), "
         f"App Check enforcement={'on' if is_production else 'off'}, Rate Limiting"
     )

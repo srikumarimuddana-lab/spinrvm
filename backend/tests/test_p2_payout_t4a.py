@@ -42,7 +42,7 @@ def _bank_account() -> dict:
         "id": "bank-001",
         "driver_id": DRIVER_ID,
         "bank_name": "Test Bank",
-        "account_number_last4": "1234",
+        "account_last4": "1234",
     }
 
 

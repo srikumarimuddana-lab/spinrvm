@@ -91,9 +91,11 @@ async def _check_otp_lockout(phone: str) -> None:
         locked = await redis_get(_LOCK_KEY.format(phone))
         if locked:
             retry_after = int(settings.OTP_LOCKOUT_DURATION_SECONDS)
-            raise HTTPException(
+            raise SpinrException(
+                message="Too many failed attempts — try again later",
+                error_code=ErrorCode.RATE_LIMIT_EXCEEDED,
                 status_code=429,
-                detail="ERR_OTP_LOCKED",
+                message_key=ErrorKeys.AUTH_OTP_LOCKED,
                 headers={
                     "Retry-After": str(retry_after),
                     "RateLimit-Limit": str(int(settings.OTP_MAX_FAILURES)),
@@ -101,7 +103,7 @@ async def _check_otp_lockout(phone: str) -> None:
                     "RateLimit-Reset": str(retry_after),
                 },
             )
-    except HTTPException:
+    except SpinrException:
         raise
     except Exception as e:
         logger.error(f"Redis unavailable in OTP lockout check: {e}")

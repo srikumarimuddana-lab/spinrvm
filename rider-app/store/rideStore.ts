@@ -75,6 +75,8 @@ interface Driver {
   total_rides: number;
   lat: number;
   lng: number;
+  speed?: number | null;
+  heading?: number | null;
 }
 
 interface Ride {

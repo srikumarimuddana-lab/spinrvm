@@ -140,28 +140,96 @@ export const getAuthHeader = async (): Promise<string | null> => {
 //   - Plain text "Internal Server Error" (pre-handler-register crash): body not JSON
 // This helper returns a human-readable message from any of them.
 /** Loosely-typed shape of the error body the FastAPI backend can return. */
-interface ApiErrorBody {
+export interface ApiErrorBody {
   detail?: string | Array<{ msg?: string; loc?: unknown[]; type?: string } | string>;
-  error?: { message?: string; detail?: string; request_id?: string; exception_type?: string };
+  error?: {
+    message?: string;
+    detail?: string;
+    request_id?: string;
+    exception_type?: string;
+    code?: number;
+    message_key?: string;
+    action_hint?: string;
+  };
   retry_after?: number;
   limit?: number;
 }
 
-const extractErrorMessage = (data: ApiErrorBody | null | undefined): string => {
-  if (!data) return 'Request failed';
+/**
+ * Phase 2B: structured representation of a backend error.
+ *
+ * Backend Phase 2A emits `error.code`, `error.message_key`, and
+ * `error.action_hint`. This client falls back gracefully to the
+ * existing English `message` field when those new fields are absent
+ * (i.e. when Phase 2A has not yet shipped).
+ */
+export interface ExtractedError {
+  /** Numeric ErrorCode value, or 0 if unknown */
+  code: number;
+  /** English fallback message, always populated */
+  message: string;
+  /** i18n lookup key, e.g. "errors.auth.otp_invalid". Undefined for legacy/raw errors */
+  messageKey?: string;
+  /** Short user-action hint from backend, plain English */
+  actionHint?: string;
+  /** Backend-provided request ID for support tickets */
+  requestId?: string;
+  /** HTTP status code */
+  status?: number;
+  /** For 429 only */
+  retryAfterSeconds?: number;
+}
+
+/**
+ * Extract a structured error from any of the backend error response
+ * shapes. Preserves the previous fallback ladder (FastAPI plain
+ * `detail`, validation array, `error.message`, `error.detail`) and
+ * additionally surfaces Phase 2A fields when present.
+ */
+export const extractError = (
+  data: ApiErrorBody | null | undefined,
+  status?: number,
+): ExtractedError => {
+  // Default skeleton — populated below.
+  const result: ExtractedError = {
+    code: 0,
+    message: 'Request failed',
+    status,
+  };
+
+  if (!data) return result;
+
   // Plain FastAPI HTTPException shape: detail is a string
-  if (typeof data.detail === 'string') return data.detail;
-  // RequestValidationError: detail is an array of {loc, msg, type}
-  if (Array.isArray(data.detail)) {
-    return data.detail
+  if (typeof data.detail === 'string') {
+    result.message = data.detail;
+  } else if (Array.isArray(data.detail)) {
+    // RequestValidationError: detail is an array of {loc, msg, type}
+    result.message = data.detail
       .map((d) => (typeof d === 'string' ? d : (d as { msg?: string })?.msg || JSON.stringify(d)))
       .join('; ');
+  } else if (data.error?.message) {
+    result.message = data.error.message;
+  } else if (data.error?.detail) {
+    result.message = data.error.detail;
   }
-  // Our custom handlers: structured error object
-  if (data.error?.message) return data.error.message;
-  if (data.error?.detail) return data.error.detail;
-  return 'Request failed';
+
+  // Phase 2A structured fields (gracefully absent on legacy responses).
+  if (data.error) {
+    if (typeof data.error.code === 'number') result.code = data.error.code;
+    if (data.error.message_key) result.messageKey = data.error.message_key;
+    if (data.error.action_hint) result.actionHint = data.error.action_hint;
+    if (data.error.request_id) result.requestId = data.error.request_id;
+  }
+
+  return result;
 };
+
+/**
+ * Backwards-compatible string extractor — every existing caller of
+ * `extractErrorMessage` continues to work unchanged.
+ */
+const extractErrorMessage = (data: ApiErrorBody | null | undefined): string =>
+  extractError(data).message;
 
 // ─── B-P1-8: typed rate-limit error ────────────────────────────────────
 // Backend (utils/rate_limiter.py + routes/auth.py::_check_otp_lockout)
@@ -201,6 +269,38 @@ export class RateLimitError extends Error {
     this.resetSeconds = opts.resetSeconds;
     this.data = opts.data;
     this.requestId = opts.requestId;
+  }
+}
+
+/**
+ * Phase 2B: typed error class for any non-429 backend failure. Carries
+ * the structured fields from `ExtractedError` so callers (alert helper,
+ * screens) can resolve the i18n key without re-parsing the body.
+ *
+ * 429s remain `RateLimitError` for source-compatibility with existing
+ * `instanceof RateLimitError` checks at OTP/login screens.
+ */
+export class SpinrApiError extends Error {
+  status: number;
+  code: number;
+  messageKey?: string;
+  actionHint?: string;
+  requestId?: string;
+  data: ApiErrorBody;
+  // Mirror the pre-Phase-2B `error.response` shape so that callers
+  // doing `error.response.data` / `error.response.status` keep working.
+  response: { data: ApiErrorBody; status: number };
+
+  constructor(extracted: ExtractedError, data: ApiErrorBody) {
+    super(extracted.message);
+    this.name = 'SpinrApiError';
+    this.status = extracted.status ?? 0;
+    this.code = extracted.code;
+    this.messageKey = extracted.messageKey;
+    this.actionHint = extracted.actionHint;
+    this.requestId = extracted.requestId;
+    this.data = data;
+    this.response = { data, status: this.status };
   }
 }
 
@@ -298,9 +398,13 @@ const handleApiError = async (response: Response, method: string, url: string, r
   }
 
   const errorData = await response.json().catch(() => ({}));
-  const message = extractErrorMessage(errorData);
-  const requestId = response.headers.get('x-request-id') || errorData?.error?.request_id;
+  const extracted = extractError(errorData, response.status);
+  const message = extracted.message;
+  const requestId = response.headers.get('x-request-id') || extracted.requestId;
   const exceptionType = errorData?.error?.exception_type;
+  // Ensure the structured object reflects the header request ID (which
+  // wins over the body) so downstream consumers see a single source.
+  if (requestId) extracted.requestId = requestId;
   recordApiError({
     ts: new Date().toISOString(),
     method,
@@ -366,14 +470,11 @@ const handleApiError = async (response: Response, method: string, url: string, r
     } catch { /* store may not be initialized yet on cold start */ }
   }
 
-  interface ApiError extends Error {
-    response: { data: ApiErrorBody; status: number };
-    requestId?: string;
-  }
-  const error = new Error(message) as ApiError;
-  error.response = { data: errorData, status: response.status };
-  error.requestId = requestId;
-  throw error;
+  // Phase 2B: throw SpinrApiError so consumers can read messageKey,
+  // actionHint, and code. The class also exposes the legacy
+  // `response` / `requestId` shape so existing callers that read
+  // `err.response.data` or `err.requestId` keep working unchanged.
+  throw new SpinrApiError(extracted, errorData);
 };
 
 // Custom API client using fetch

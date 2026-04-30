@@ -408,6 +408,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           try {
             const token = await firebaseUser.getIdToken();
             if (__DEV__) console.log('[Auth] Got Firebase token');
+            // Set in-memory token immediately so subsequent API calls don't hang on Firebase
+            setInMemoryToken(token);
 
             let userData: User | null = null;
             let driverData: Driver | null = null;

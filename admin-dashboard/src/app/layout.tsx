@@ -5,7 +5,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/toaster";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { ThemeProvider } from "@/components/theme-provider";
-import { Analytics } from "@vercel/analytics/next";
+import { AnalyticsWrapper } from "@/components/analytics-wrapper";
 import { AuthInitializer } from "@/components/auth-initializer";
 
 export const metadata: Metadata = {
@@ -38,14 +38,7 @@ export default async function RootLayout({
             </TooltipProvider>
           </SidebarProvider>
         </ThemeProvider>
-        {/* Strip dynamic entity IDs from page paths before they reach Vercel's US
-            edge ingestion — /dashboard/drivers/abc123 → /dashboard/drivers/[id] ([22-3]) */}
-        <Analytics
-          beforeSend={(event) => ({
-            ...event,
-            url: event.url.replace(/\/[0-9a-f-]{8,}(?=\/|$)/gi, '/[id]'),
-          })}
-        />
+        <AnalyticsWrapper />
       </body>
     </html>
   );

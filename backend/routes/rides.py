@@ -1462,7 +1462,13 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
         {"payment_status": "processing", "updated_at": datetime.now(timezone.utc).isoformat()},
     )
     if guard_row is None:
-        return {"success": True, "already_paid": True, "charged_amount": 0}
+        # Another concurrent request already claimed the processing lock.
+        # Return the fare we already fetched — not a misleading 0.
+        return {
+            "success": True,
+            "already_paid": True,
+            "charged_amount": _f(_round(_d(str(ride.get("total_fare", 0) or 0)))),
+        }
 
     if tip_amount < 0:
         raise HTTPException(status_code=400, detail="Tip amount cannot be negative")

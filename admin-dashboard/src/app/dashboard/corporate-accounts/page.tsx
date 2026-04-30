@@ -51,6 +51,7 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { Building2, Plus, Pencil, Trash2, Search, Mail, Phone, RefreshCw, ShieldCheck } from "lucide-react";
+import { useRequireModule } from "@/hooks/useRequireModule";
 
 const STATUS_PILL_CLASSES: Record<CompanyStatus, string> = {
     pending_verification: "bg-yellow-100 text-yellow-800 hover:bg-yellow-100",
@@ -70,6 +71,7 @@ function StatusPill({ status }: { status: CompanyStatus }) {
 const PAGE_SIZE = 50;
 
 export default function CorporateAccountsPage() {
+    const { allowed } = useRequireModule("corporate_accounts");
     const [accounts, setAccounts] = useState<CorporateAccount[]>([]);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState("");
@@ -192,6 +194,8 @@ export default function CorporateAccountsPage() {
             setFormLoading(false);
         }
     };
+
+    if (!allowed) return null;
 
     return (
         <div className="space-y-6">

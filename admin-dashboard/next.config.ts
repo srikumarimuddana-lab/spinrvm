@@ -69,6 +69,12 @@ const nextConfig: NextConfig = {
   },
   async rewrites() {
     return [
+      // Local API routes (must be before the catch-all /api rewrite)
+      {
+        source: "/api/auth/:path*",
+        destination: "/api/auth/:path*",
+      },
+      // Proxy everything else to backend
       {
         source: "/api/:path*",
         destination: `${BACKEND_URL}/api/:path*`,

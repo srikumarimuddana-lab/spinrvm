@@ -129,9 +129,23 @@ async def lifespan(app: FastAPI):
     # Track task handles so we can cancel them cleanly on shutdown.
     background_tasks: list[asyncio.Task] = []
 
+    async def _restartable(name: str, coro_factory):
+        """Wrap a background loop so an uncaught crash auto-restarts after 5s."""
+        while True:
+            try:
+                await coro_factory()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.error(
+                    f"Background task {name!r} crashed — restarting in 5s",
+                    exc_info=True,
+                )
+                await asyncio.sleep(5)
+
     def _spawn(name: str, coro_factory):
         try:
-            task = asyncio.create_task(coro_factory(), name=name)
+            task = asyncio.create_task(_restartable(name, coro_factory), name=name)
             background_tasks.append(task)
             logger.info(f"Started background task: {name}")
         except Exception as e:

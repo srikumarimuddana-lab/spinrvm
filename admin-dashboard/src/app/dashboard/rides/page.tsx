@@ -5,10 +5,12 @@ import { getRides, getServiceAreas } from "@/lib/api";
 import RideStatsCards, { RidesChart } from "./_components/ride-stats-cards";
 import RideList from "./_components/ride-list";
 import RideDetailModal from "./_components/ride-detail-modal";
+import { useRequireModule } from "@/hooks/useRequireModule";
 
 const PAGE_SIZE = 50;
 
 export default function RidesPage() {
+    const { allowed } = useRequireModule("rides");
     const [rides, setRides] = useState<any[]>([]);
     const [totalCount, setTotalCount] = useState(0);
     const [page, setPage] = useState(0);
@@ -97,6 +99,8 @@ export default function RidesPage() {
     });
 
     const totalPages = Math.ceil(totalCount / PAGE_SIZE);
+
+    if (!allowed) return null;
 
     return (
         <div className="space-y-6 pb-8">

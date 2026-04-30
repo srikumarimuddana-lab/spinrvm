@@ -311,14 +311,26 @@ export const useRideStore = create<RideState>((set, get) => ({
       const queueStr = await AsyncStorage.getItem('offline_queue');
       if (!queueStr) return;
 
-      const queue: Array<{
+      // Corrupted AsyncStorage (partial write, app upgrade migration miss,
+      // device disk full mid-write) used to crash the entire sync flow.
+      // Treat a bad payload as an empty queue and discard it.
+      type OfflineRequest = {
         id: string;
         type: 'create_ride' | 'cancel_ride' | 'rate_ride' | 'tip' | 'emergency';
         rideId?: string;
         data?: any;
         retryCount?: number;
         timestamp?: number;
-      }> = JSON.parse(queueStr);
+      };
+      let queue: OfflineRequest[];
+      try {
+        const parsed = JSON.parse(queueStr);
+        queue = Array.isArray(parsed) ? (parsed as OfflineRequest[]) : [];
+      } catch (parseErr) {
+        if (__DEV__) console.warn('[offline_queue] discarding corrupted queue:', parseErr);
+        await AsyncStorage.removeItem('offline_queue');
+        return;
+      }
       if (queue.length === 0) return;
 
       const successfulSyncs: string[] = [];

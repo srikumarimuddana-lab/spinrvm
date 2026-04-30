@@ -468,7 +468,16 @@ def init_middleware(app):
         allow_origins=origins,
         allow_credentials=allow_credentials,
         allow_methods=["*"],
-        allow_headers=["*"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "X-Requested-With",
+            "Idempotency-Key",
+            "X-Forwarded-For",
+            "Accept",
+            "Accept-Language",
+            "Cache-Control",
+        ],
     )
 
     # Security headers — applied after CORS so that every response
@@ -508,7 +517,10 @@ def init_middleware(app):
                 if allow_credentials:
                     response.headers["Access-Control-Allow-Credentials"] = "true"
                 response.headers["Access-Control-Allow-Methods"] = "*"
-                response.headers["Access-Control-Allow-Headers"] = "*"
+                response.headers["Access-Control-Allow-Headers"] = (
+                    "Authorization, Content-Type, X-Requested-With, "
+                    "Idempotency-Key, X-Forwarded-For, Accept, Accept-Language, Cache-Control"
+                )
                 response.headers["Vary"] = "Origin"
             elif wildcard:
                 # Wildcard (dev only) — credentials already disabled above

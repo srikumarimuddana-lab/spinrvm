@@ -81,7 +81,7 @@ export default function WalletScreen() {
       setAlertState({ visible: true, title: 'Success', message: `$${amount.toFixed(2)} added to your wallet`, variant: 'success' });
       fetchTransactions(30);
     } catch (err: any) {
-      setAlertState({ visible: true, title: 'Top-up Failed', message: err.message || 'Please try again', variant: 'danger' });
+      setAlertState({ visible: true, title: 'Top-up Failed', message: err.response?.data?.detail || err.message || 'Please try again', variant: 'danger' });
     } finally {
       setTopUpLoading(false);
     }
@@ -112,7 +112,7 @@ export default function WalletScreen() {
       fetchWallet();
       fetchTransactions(30);
     } catch (err: any) {
-      setAlertState({ visible: true, title: 'Transfer Failed', message: err.message || 'Please try again.', variant: 'danger' });
+      setAlertState({ visible: true, title: 'Transfer Failed', message: err.response?.data?.detail || err.message || 'Please try again.', variant: 'danger' });
     } finally {
       setTransferLoading(false);
     }
@@ -259,7 +259,7 @@ export default function WalletScreen() {
       {/* Transfer Modal */}
       <Modal visible={showTransfer} animationType="slide" transparent onRequestClose={() => setShowTransfer(false)}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowTransfer(false)}>
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+          <KeyboardAvoidingView behavior="padding" keyboardVerticalOffset={Platform.OS === 'android' ? 24 : 0}>
             <TouchableOpacity activeOpacity={1} style={styles.transferSheet}>
               <View style={styles.sheetHandle} />
               <Text style={styles.transferTitle}>Send Money</Text>

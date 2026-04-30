@@ -314,7 +314,7 @@ function createStyles(colors: ThemeColors) {
     buttonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
     buttonTextInactive: { color: colors.textDim },
     footer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
-    footerText: { fontSize: 12, color: colors.textDim },
+    footerText: { fontSize: 12, color: colors.textDim, flex: 1 },
     terms: { paddingHorizontal: 24, alignItems: 'center' },
     termsText: { fontSize: 12, color: '#B0B0B0', textAlign: 'center', lineHeight: 18 },
     termsLink: { color: colors.primary, fontWeight: '600' },

@@ -1597,6 +1597,8 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
             _flag_violation = True
 
         # 5. Apply allowance debit (calls corporate_allowance_apply_delta RPC)
+        # Track whether we applied it so we can compensate in step 6 on failure.
+        _allowance_applied = False
         if _allowance_debit > 0 and _corp_allowance.get("id") and _corp_wallet.get("id"):
             await corporate_allowance_service.apply_rollback(
                 wallet_id=_corp_wallet["id"],
@@ -1605,15 +1607,51 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
                 amount=_f(_allowance_debit),
                 notes=f"ride:{ride_id}:allowance",
             )
+            _allowance_applied = True
 
-        # 6. Apply master wallet debit (calls corporate_wallet_apply_delta RPC)
+        # 6. Apply master wallet debit (calls corporate_wallet_apply_delta RPC).
+        # Saga compensation: if this fails, reverse the allowance debit from step 5
+        # so the ride stays in 'processing' and can be retried cleanly.
         if _master_debit > 0 and _corp_wallet.get("id"):
-            await corporate_wallet_service.apply_adjustment(
-                wallet_id=_corp_wallet["id"],
-                amount=-_f(_master_debit),
-                notes=f"Ride fallback debit {ride_id}",
-                actor_user_id=ride.get("rider_id", "system"),
-            )
+            try:
+                await corporate_wallet_service.apply_adjustment(
+                    wallet_id=_corp_wallet["id"],
+                    amount=-_f(_master_debit),
+                    notes=f"Ride fallback debit {ride_id}",
+                    actor_user_id=ride.get("rider_id", "system"),
+                )
+            except Exception as _master_err:
+                # Compensate: re-grant the allowance that was debited in step 5.
+                if _allowance_applied:
+                    try:
+                        await corporate_allowance_service.apply_grant(
+                            wallet_id=_corp_wallet["id"],
+                            allowance_id=_corp_allowance["id"],
+                            member_id=_corp_membership["id"],
+                            amount=_f(_allowance_debit),
+                            notes=f"ride:{ride_id}:allowance_compensation",
+                        )
+                    except Exception as _comp_err:
+                        logger.error(
+                            "[PAYMENT] Allowance compensation failed for ride %s — "
+                            "allowance %.2f was debited but master wallet was NOT; "
+                            "manual ledger fix required. comp_err=%s",
+                            ride_id,
+                            _allowance_debit,
+                            _comp_err,
+                            exc_info=True,
+                        )
+                await db_supabase.update_ride(ride_id, {"payment_status": "pending"})
+                logger.error(
+                    "[PAYMENT] Master wallet debit failed for ride %s: %s",
+                    ride_id,
+                    _master_err,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=503,
+                    detail="Corporate payment failed — please retry.",
+                ) from _master_err
 
         # 7. Insert ride_payment_sources row
         await db_supabase.insert_one(

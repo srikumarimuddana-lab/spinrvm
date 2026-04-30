@@ -19,8 +19,10 @@ import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Save, Check, ShieldCheck, ShieldOff } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
+import { useRequireModule } from "@/hooks/useRequireModule";
 
 export default function SettingsPage() {
+    const { allowed } = useRequireModule("settings");
     const { toast } = useToast();
     const [settings, setSettings] = useState<any>(null);
     const [loading, setLoading] = useState(true);
@@ -91,6 +93,8 @@ export default function SettingsPage() {
             </div>
         );
     }
+
+    if (!allowed) return null;
 
     return (
         <div className="space-y-6">

@@ -4,6 +4,7 @@ import { useEffect, useState, lazy, Suspense } from "react";
 import { useRouter } from "next/navigation";
 import { getServiceAreas, createServiceArea, updateServiceArea, deleteServiceArea, getSubscriptionPlans, createSubscriptionPlan, updateSubscriptionPlan, deleteSubscriptionPlan, getDriverSubscriptions, getAreaFees, createAreaFee, updateAreaFee, deleteAreaFee, getVehicleTypes } from "@/lib/api";
 import { Plus, Trash2, Pencil, MapPin, Settings, DollarSign, Car, CreditCard, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, FileText, Clock, ShieldCheck, ShieldAlert, CheckCircle, Image, Plane, Radar } from "lucide-react";
+import { useRequireModule } from "@/hooks/useRequireModule";
 
 const GeofenceMap = lazy(() => import("@/components/geofence-map"));
 
@@ -47,6 +48,7 @@ function getAreaCenter(area: any): { lat: number; lng: number } {
 }
 
 export default function ServiceAreasPage() {
+  const { allowed } = useRequireModule("service_areas");
   const router = useRouter();
   const [areas, setAreas] = useState<any[]>([]);
   const [plans, setPlans] = useState<any[]>([]);
@@ -182,6 +184,8 @@ export default function ServiceAreasPage() {
     await deleteServiceArea(id);
     load();
   };
+
+  if (!allowed) return null;
 
   return (
     <div>

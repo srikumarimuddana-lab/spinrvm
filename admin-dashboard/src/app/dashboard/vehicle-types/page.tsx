@@ -20,6 +20,7 @@ import {
     DialogTitle,
 } from "@/components/ui/dialog";
 import { Car, Plus, Pencil, Trash2, Users, Image as ImageIcon } from "lucide-react";
+import { useRequireModule } from "@/hooks/useRequireModule";
 
 interface VehicleType {
     id: string;
@@ -42,6 +43,7 @@ const EMPTY_FORM: Omit<VehicleType, "id" | "created_at"> = {
 };
 
 export default function VehicleTypesPage() {
+    const { allowed } = useRequireModule("pricing");
     const [types, setTypes] = useState<VehicleType[]>([]);
     const [loading, setLoading] = useState(true);
     const [dialogOpen, setDialogOpen] = useState(false);
@@ -123,6 +125,8 @@ export default function VehicleTypesPage() {
             console.error("Error toggling vehicle type:", err);
         }
     };
+
+    if (!allowed) return null;
 
     return (
         <div className="space-y-6">

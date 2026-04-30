@@ -64,6 +64,7 @@ from .fares import _fares_for_location_impl, get_fares_for_location
 
 try:
     from ..utils.datetime_utils import parse_iso_utc
+    from ..utils.insurance_periods import record_period_transition
     from ..utils.ride_code import generate_ride_code
 except ImportError:
     from utils.datetime_utils import parse_iso_utc
@@ -363,6 +364,10 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
                 "updated_at": datetime.now(timezone.utc),
             },
         )
+        # M-5: SGI insurance period audit — driver_assigned starts period 2
+        # (en route to pickup). Helper swallows its own exceptions so a
+        # broken audit write cannot block dispatch.
+        await record_period_transition(selected_driver["id"], 2, ride_id=ride_id)
 
         logger.info(
             f"[DISPATCH] ride {ride_id} assigned to driver_id={selected_driver['id']} "
@@ -536,6 +541,9 @@ async def _offer_timeout_handler(
                 }
             },
         )
+        # M-5: SGI insurance period audit — offer timeout releases the
+        # driver from period 2 back to period 1 (online, no ride).
+        await record_period_transition(driver_id, 1)
 
         # Notify rider via WebSocket.
         if rider_id:
@@ -2241,6 +2249,10 @@ async def cancel_ride_rider(request: Request, ride_id: str, current_user: dict =
 
     if driver_id:
         await db_supabase.set_driver_available(driver_id, True)
+        # M-5: SGI insurance period audit — rider-side cancel after the
+        # driver was assigned releases the driver back to period 1. If
+        # the ride had no driver_id we never left period 1, so no row.
+        await record_period_transition(driver_id, 1)
 
         # Notify driver
         driver = await db_supabase.get_driver_by_id(driver_id)

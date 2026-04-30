@@ -55,6 +55,7 @@ function EarningsScreen() {
   const [chartMode, setChartMode] = useState<ChartMode>('daily');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   // Weekly earnings forecast widget (Feature B)
   const [forecast, setForecast] = useState<{
@@ -73,16 +74,22 @@ function EarningsScreen() {
 
   const loadData = useCallback(async () => {
     setLoading(true);
-    await Promise.all([
-      fetchEarnings(period),
-      fetchDailyEarnings(period === 'today' ? 1 : period === 'week' ? 7 : period === 'month' ? 30 : 30),
-      fetchWeeklyEarnings(4),
-      fetchMonthlyEarnings(6),
-      fetchEarningsComparison(period === 'month' ? 'month' : 'week'),
-      fetchTripEarnings(),
-      fetchDriverBalance(),
-    ]);
-    setLoading(false);
+    setFetchError(null);
+    try {
+      await Promise.all([
+        fetchEarnings(period),
+        fetchDailyEarnings(period === 'today' ? 1 : period === 'week' ? 7 : period === 'month' ? 30 : 30),
+        fetchWeeklyEarnings(4),
+        fetchMonthlyEarnings(6),
+        fetchEarningsComparison(period === 'month' ? 'month' : 'week'),
+        fetchTripEarnings(),
+        fetchDriverBalance(),
+      ]);
+    } catch {
+      setFetchError('Could not load earnings. Pull down to retry.');
+    } finally {
+      setLoading(false);
+    }
   }, [period]);
 
   useEffect(() => {
@@ -96,18 +103,18 @@ function EarningsScreen() {
   };
 
   // Prepare chart data based on current mode
-  const barChartData = dailyEarnings.map((d) => ({
+  const barChartData = (dailyEarnings ?? []).map((d) => ({
     label: new Date(d.date + 'T00:00:00').toLocaleDateString('en', { weekday: 'narrow' }),
     value: parseFloat(d.earnings),
     secondary: parseFloat(d.tips),
   }));
 
-  const weeklyChartData = weeklyEarnings.map((w) => ({
+  const weeklyChartData = (weeklyEarnings ?? []).map((w) => ({
     label: new Date(w.week_start + 'T00:00:00').toLocaleDateString('en', { month: 'short', day: 'numeric' }),
     value: parseFloat(w.earnings),
   }));
 
-  const monthlyChartData = monthlyEarnings.map((m) => ({
+  const monthlyChartData = (monthlyEarnings ?? []).map((m) => ({
     label: new Date(m.month + '-01T00:00:00').toLocaleDateString('en', { month: 'short' }),
     value: parseFloat(m.earnings),
   }));
@@ -176,6 +183,18 @@ function EarningsScreen() {
       </LinearGradient>
 
       {renderFilterTabs()}
+
+      {fetchError && (
+        <View
+          style={styles.errorBanner}
+          accessibilityRole="alert"
+          accessibilityLiveRegion="polite"
+          accessibilityLabel={fetchError}
+        >
+          <Ionicons name="alert-circle-outline" size={16} color="#fff" />
+          <Text style={styles.errorBannerText}>{fetchError}</Text>
+        </View>
+      )}
 
       <ScrollView
         style={styles.content}
@@ -330,7 +349,7 @@ function EarningsScreen() {
               <Text style={styles.emptyStateDesc}>Complete rides to start seeing your earnings breakdown here.</Text>
             </View>
           ) : (
-            tripEarnings.map((trip) => (
+            (tripEarnings ?? []).map((trip) => (
               <TouchableOpacity
                   key={trip.ride_id}
                   style={styles.rideCard}
@@ -703,6 +722,19 @@ function createStyles(colors: ThemeColors) {
       color: colors.textDim,
       textAlign: 'center',
       lineHeight: 22,
+    },
+    errorBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.error,
+      paddingHorizontal: 16,
+      paddingVertical: 10,
+      gap: 8,
+    },
+    errorBannerText: {
+      color: '#fff',
+      fontSize: 13,
+      flex: 1,
     },
     // Trips Section
     tripsSection: {

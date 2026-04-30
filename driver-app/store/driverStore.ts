@@ -612,7 +612,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             const res = await api.get(`/drivers/earnings?period=${period}`);
             set({ earnings: res.data });
         } catch (err) {
-            console.log('Fetch earnings error:', err);
+            throw err;
         }
     },
 
@@ -621,7 +621,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             const res = await api.get(`/drivers/earnings/daily?days=${days}`);
             set({ dailyEarnings: res.data || [] });
         } catch (err) {
-            console.log('Fetch daily earnings error:', err);
+            throw err;
         }
     },
 
@@ -630,7 +630,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             const res = await api.get(`/drivers/earnings/weekly?weeks=${weeks}`);
             set({ weeklyEarnings: res.data || [] });
         } catch (err) {
-            console.log('Fetch weekly earnings error:', err);
+            throw err;
         }
     },
 
@@ -639,7 +639,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             const res = await api.get(`/drivers/earnings/monthly?months=${months}`);
             set({ monthlyEarnings: res.data || [] });
         } catch (err) {
-            console.log('Fetch monthly earnings error:', err);
+            throw err;
         }
     },
 
@@ -648,7 +648,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             const res = await api.get(`/drivers/earnings/comparison?period=${period}`);
             set({ earningsComparison: res.data || null });
         } catch (err) {
-            console.log('Fetch earnings comparison error:', err);
+            throw err;
         }
     },
 
@@ -661,7 +661,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             // "undefined is not a function".
             set({ tripEarnings: res.data?.trips || [] });
         } catch (err) {
-            console.log('Fetch trip earnings error:', err);
+            throw err;
         }
     },
 
@@ -769,7 +769,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             const res = await api.get('/drivers/balance');
             set({ driverBalance: res.data });
         } catch (err) {
-            console.log('Fetch balance error:', err);
+            throw err;
         }
     },
 

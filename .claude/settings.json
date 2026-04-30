@@ -20,6 +20,7 @@
       "Bash(git pull*)",
       "Bash(git push -u origin claude/*)",
       "Bash(git push origin claude/*)",
+      "Bash(git push origin main)",
       "Bash(git push origin feature/*)",
       "Bash(git push origin fix/*)",
       "Bash(git push origin hotfix/*)",
@@ -77,7 +78,6 @@
     "deny": [
       "Bash(rm -rf*)",
       "Bash(git push --force origin*)",
-      "Bash(git push origin main*)",
       "Bash(git reset --hard*)",
       "Write(.env*)",
       "Write(*.pem)",

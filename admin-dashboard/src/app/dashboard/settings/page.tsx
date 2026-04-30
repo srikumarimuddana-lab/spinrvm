@@ -134,7 +134,7 @@ export default function SettingsPage() {
                                     onChange={(e) =>
                                         update("stripe_publishable_key", e.target.value)
                                     }
-                                    placeholder="pk_test_..."
+                                    placeholder="Stripe publishable key"
                                 />
                             </div>
                             <div className="space-y-2">
@@ -145,7 +145,7 @@ export default function SettingsPage() {
                                     onChange={(e) =>
                                         update("stripe_secret_key", e.target.value)
                                     }
-                                    placeholder="sk_test_..."
+                                    placeholder="Stripe secret key"
                                 />
                             </div>
                             <div className="space-y-2">
@@ -156,7 +156,7 @@ export default function SettingsPage() {
                                     onChange={(e) =>
                                         update("stripe_webhook_secret", e.target.value)
                                     }
-                                    placeholder="whsec_..."
+                                    placeholder="Stripe webhook secret"
                                 />
                                 <p className="text-xs text-muted-foreground">
                                     From Stripe Dashboard &rarr; Developers &rarr; Webhooks

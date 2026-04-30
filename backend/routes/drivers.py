@@ -50,6 +50,7 @@ except ImportError:
     )
     from utils.error_keys import ErrorKeys
     from utils.idempotency import idempotent_endpoint
+    from utils.insurance_periods import record_period_transition  # type: ignore[assignment]
 
 db = db_supabase  # legacy alias
 

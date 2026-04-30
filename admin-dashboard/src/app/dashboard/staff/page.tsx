@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { getStaff, createStaff, updateStaff, deleteStaff } from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
+import { useRequireModule } from "@/hooks/useRequireModule";
 import { Users, Plus, Shield, Eye, EyeOff, Trash2, Edit, Check, X } from "lucide-react";
 
 const ALL_MODULES = [
@@ -54,6 +55,7 @@ interface Staff {
 }
 
 export default function StaffPage() {
+  const { allowed } = useRequireModule("staff");
   const { user } = useAuthStore();
   const [staff, setStaff] = useState<Staff[]>([]);
   const [loading, setLoading] = useState(true);
@@ -150,8 +152,8 @@ export default function StaffPage() {
     setForm({ email: "", password: "", first_name: "", last_name: "", role: "custom", modules: ["dashboard"] });
   };
 
-  // Only super_admin can access this page
-  if (user?.role !== "super_admin" && user?.role !== "admin") {
+  // useRequireModule("staff") handles redirect; return null to avoid content flash.
+  if (!allowed) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
         <div className="text-center">

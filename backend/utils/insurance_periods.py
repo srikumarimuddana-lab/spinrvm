@@ -1,0 +1,196 @@
+"""Driver insurance-period audit logging (M-5).
+
+Every moment a driver spends in the app maps to one of four insurance
+periods (0=offline, 1=available, 2=en-route, 3=passenger). SGI and the
+Saskatchewan Transportation Act require an append-only audit trail of
+those transitions; the schema lives in migration 64.
+
+This module owns the close-and-open atomicity around the partial unique
+index `driver_insurance_periods_open` (one open row per driver). Callers
+in the ride/driver state machine fire-and-forget into
+``record_period_transition`` whenever the driver moves between periods.
+
+Compliance trade-off
+--------------------
+The CLAUDE.md "do not silently swallow errors" rule has an explicit
+exception for compliance-grade audit writes: a missed audit row is
+preferable to blocking the driver state machine. Failures here are
+logged at ERROR (so they show up in Sentry / log search and can be
+backfilled from the rides table) but never raised.
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timezone
+from typing import Optional
+
+try:
+    from .. import db_supabase
+except ImportError:  # pragma: no cover - dual-import per CLAUDE.md
+    import db_supabase  # type: ignore
+
+try:
+    from . import metrics as _metrics
+except ImportError:  # pragma: no cover - dual-import per CLAUDE.md
+    try:
+        from utils import metrics as _metrics  # type: ignore
+    except ImportError:  # pragma: no cover
+        _metrics = None  # type: ignore
+
+logger = logging.getLogger(__name__)
+
+_VALID_PERIODS = (0, 1, 2, 3)
+# PostgreSQL unique_violation SQLSTATE — postgrest-py surfaces this
+# verbatim in the error message when an INSERT conflicts with the
+# partial unique index on (driver_id) WHERE ended_at IS NULL.
+_PG_UNIQUE_VIOLATION = "23505"
+
+
+def _is_unique_violation(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return (
+        _PG_UNIQUE_VIOLATION in msg or "duplicate key" in msg or "unique constraint" in msg or "already exists" in msg
+    )
+
+
+def _metric_inc(name: str, labels: Optional[dict] = None) -> None:
+    if _metrics is None:
+        return
+    try:
+        _metrics.inc(name, labels)
+    except Exception:  # noqa: BLE001, S110 - metrics are best-effort by design
+        pass
+
+
+async def record_period_transition(
+    driver_id: str,
+    new_period: int,
+    ride_id: Optional[str] = None,
+) -> None:
+    """Close the driver's currently-open period (if any) and open a new one.
+
+    Compliance-grade: failures are logged at ERROR but never raised. A
+    missed transition row is preferable to blocking the driver state
+    machine. The partial unique index on ``(driver_id) WHERE
+    ended_at IS NULL`` is the source of truth — racing callers will
+    serialise on the index, and the loser turns into a logged warning.
+
+    Args:
+        driver_id: The drivers.id PK (NOT users.id).
+        new_period: One of 0, 1, 2, 3. See module docstring.
+        ride_id: Required when ``new_period == 3``; optional otherwise.
+
+    Raises:
+        ValueError: programmer error — invalid period or missing ride_id
+            for period 3. These are pre-DB checks; they should never
+            fire in production and surfacing them helps catch
+            wiring bugs at call sites early.
+    """
+    if new_period not in _VALID_PERIODS:
+        raise ValueError(f"new_period must be one of {_VALID_PERIODS}, got {new_period!r}")
+    if new_period == 3 and not ride_id:
+        raise ValueError("ride_id is required when new_period == 3 (passenger aboard)")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    try:
+        supabase = db_supabase.supabase
+        if supabase is None:  # pragma: no cover - prod always has a client
+            logger.error(
+                "insurance_periods: supabase client unavailable, dropping transition "
+                "driver_id=%s new_period=%s ride_id=%s",
+                driver_id,
+                new_period,
+                ride_id,
+            )
+            _metric_inc(
+                "spinr_insurance_period_write_failed_total",
+                {"reason": "no_client"},
+            )
+            return
+
+        # Step 1: close the currently-open row for this driver, if any.
+        # The DB trigger only allows the close transition (ended_at
+        # NULL → non-NULL) so this is the only legal mutation.
+        def _close() -> int:
+            res = (
+                supabase.table("driver_insurance_periods")
+                .update({"ended_at": now_iso})
+                .eq("driver_id", driver_id)
+                .is_("ended_at", "null")
+                .execute()
+            )
+            data = getattr(res, "data", None) or []
+            return len(data)
+
+        closed_rows = await db_supabase.run_sync(_close, retry_policy="idempotent_write")
+
+        # Step 2: open the new row. The partial unique index serialises
+        # racing callers — if another replica beat us to it, we'll get
+        # a 23505 here and fall through to the unique-violation branch.
+        new_row = {
+            "driver_id": driver_id,
+            "period": new_period,
+            "started_at": now_iso,
+        }
+        if ride_id is not None:
+            new_row["ride_id"] = ride_id
+
+        def _insert() -> None:
+            supabase.table("driver_insurance_periods").insert(new_row).execute()
+
+        try:
+            await db_supabase.run_sync(_insert, retry_policy="write")
+        except Exception as exc:
+            if _is_unique_violation(exc):
+                # Race: another replica/coroutine opened a period for
+                # this driver between our close and our insert. If
+                # closed_rows == 0 it's the "no-op transition" case
+                # (driver already in this period); otherwise a real
+                # race that the index correctly resolved.
+                if closed_rows == 0:
+                    logger.info(
+                        "insurance_periods: no-op transition (already open) driver_id=%s new_period=%s ride_id=%s",
+                        driver_id,
+                        new_period,
+                        ride_id,
+                    )
+                    _metric_inc(
+                        "spinr_insurance_period_noop_total",
+                        {"period": str(new_period)},
+                    )
+                else:
+                    logger.warning(
+                        "insurance_periods: unique-violation on insert (concurrent "
+                        "transition) driver_id=%s new_period=%s ride_id=%s",
+                        driver_id,
+                        new_period,
+                        ride_id,
+                    )
+                    _metric_inc(
+                        "spinr_insurance_period_race_total",
+                        {"period": str(new_period)},
+                    )
+                return
+            raise
+
+        _metric_inc(
+            "spinr_insurance_period_recorded_total",
+            {"period": str(new_period)},
+        )
+    except Exception:
+        # Compliance-grade: log loudly, swallow. The state machine must
+        # not be blocked by an audit-write failure. Operations can
+        # backfill from the rides table if needed.
+        logger.error(
+            "insurance_periods: transition write FAILED (swallowed) driver_id=%s new_period=%s ride_id=%s",
+            driver_id,
+            new_period,
+            ride_id,
+            exc_info=True,
+        )
+        _metric_inc(
+            "spinr_insurance_period_write_failed_total",
+            {"reason": "exception", "period": str(new_period)},
+        )

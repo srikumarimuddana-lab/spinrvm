@@ -142,12 +142,6 @@ async def _clear_otp_failures(phone: str) -> None:
         logger.error(f"_clear_otp_failures: {e}", exc_info=True)
 
 
-def _is_dev_otp_bypass(otp: str) -> bool:
-    if settings.ENV.lower() != "development":
-        return False
-    return otp in ("1234", "123456")
-
-
 # ── Helpers for Auth Responses ──────────────────────────────────────────
 def _make_auth_response(
     token: str,
@@ -278,14 +272,6 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
     except Exception as e:
         logger.error(f"Could not query OTP from DB: {e}", exc_info=True)
 
-    if not otp_record and _is_dev_otp_bypass(code):
-        logger.info("Dev mode: accepting bypass OTP")
-        otp_record = {
-            "id": "dev",
-            "phone": phone,
-            "code": hash_otp(code),
-            "expires_at": datetime.now(timezone.utc) + timedelta(minutes=5),
-        }
     if not otp_record:
         # Wrong code — record the failure (may trigger lockout)
         await _record_otp_failure(phone)

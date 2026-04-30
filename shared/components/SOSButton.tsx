@@ -17,7 +17,10 @@ interface SOSButtonProps {
  * 1. Vibrates device
  * 2. Calls backend emergency endpoint (notifies admin + emergency contacts)
  * 3. Only shows success + 911 prompt AFTER backend confirms (fail-safe)
- * 4. On network failure: shows retry dialog, never shows "Alert Sent" falsely
+ * 4. On network failure: shows retry dialog AND button stays in FAILED state
+ *    until the alert is confirmed by the backend — a dismissed alert does NOT
+ *    reset the button to idle so the driver always knows the alert was not sent.
+ * 5. While in FAILED state a single tap (no hold) retries immediately.
  */
 const SOS_HOLD_MS = 1200;
 const SOS_RETRY_DELAY_MS = 2000;
@@ -27,6 +30,10 @@ export function SOSButton({ rideId, onTrigger, size = 'small' }: SOSButtonProps)
   const [triggered, setTriggered] = useState(false);
   const [sending, setSending] = useState(false);
   const [pressing, setPressing] = useState(false);
+  // Persistent failure flag: stays true until the backend confirms the alert.
+  // Dismissing the failure dialog does NOT clear it — the button stays amber
+  // so the driver always has a visible reminder that the alert was NOT sent.
+  const [failed, setFailed] = useState(false);
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -74,8 +81,8 @@ export function SOSButton({ rideId, onTrigger, size = 'small' }: SOSButtonProps)
 
   const showFailureAlert = (retry: () => void) => {
     Alert.alert(
-      'Alert Not Sent',
-      'Could not reach Spinr. Your device will keep trying. You can call 911 directly.',
+      '⚠️ Alert Not Sent',
+      'Could not reach Spinr. The button will stay red — tap it to retry.\n\nYou can call 911 directly right now.',
       [
         {
           text: 'Call 911',
@@ -83,15 +90,19 @@ export function SOSButton({ rideId, onTrigger, size = 'small' }: SOSButtonProps)
           onPress: () => Linking.openURL('tel:911'),
         },
         {
-          text: 'Retry',
+          text: 'Retry Now',
           onPress: retry,
         },
-        { text: 'Cancel', style: 'cancel' },
+        // "Dismiss" intentionally does NOT reset the button — failed state
+        // persists so the driver always knows the alert was not sent.
+        { text: 'Dismiss', style: 'cancel' },
       ]
     );
   };
 
   const triggerSOS = async () => {
+    // Clear any prior failure so the button transitions to "Sending…" visually.
+    setFailed(false);
     setPressing(false);
     setSending(true);
     Vibration.vibrate([0, 200, 100, 200, 100, 200]);
@@ -124,14 +135,32 @@ export function SOSButton({ rideId, onTrigger, size = 'small' }: SOSButtonProps)
       setTriggered(true);
       showSuccessAlert();
     } else {
-      // Do NOT set triggered — the alert was NOT sent.
+      // Mark failed BEFORE showing the alert so the button is already amber
+      // when the dialog appears. Dismissing the dialog leaves failed=true.
+      setFailed(true);
       showFailureAlert(triggerSOS);
     }
   };
 
   const isLarge = size === 'large';
-  const iconName = triggered ? 'checkmark-circle' : sending ? 'hourglass' : 'shield';
-  const labelText = pressing ? 'Hold...' : sending ? 'Sending…' : triggered ? 'Alert Sent' : 'SOS';
+
+  const iconName = triggered
+    ? 'checkmark-circle'
+    : sending
+    ? 'hourglass'
+    : failed
+    ? 'alert-circle'
+    : 'shield';
+
+  const labelText = pressing
+    ? 'Hold...'
+    : sending
+    ? 'Sending…'
+    : triggered
+    ? 'Alert Sent'
+    : failed
+    ? 'FAILED'
+    : 'SOS';
 
   return (
     <Animated.View style={[{ transform: [{ scale: pressing ? pulseAnim : 1 }] }]}>
@@ -142,16 +171,28 @@ export function SOSButton({ rideId, onTrigger, size = 'small' }: SOSButtonProps)
           triggered && styles.btnTriggered,
           sending && styles.btnSending,
           pressing && styles.btnPressing,
+          failed && styles.btnFailed,
         ]}
-        onPressIn={sending || triggered ? undefined : startPress}
-        onPressOut={sending || triggered ? undefined : endPress}
+        // In failed state a single tap retries immediately — no hold required.
+        onPressIn={sending || triggered ? undefined : (failed ? triggerSOS : startPress)}
+        onPressOut={sending || triggered || failed ? undefined : endPress}
         activeOpacity={0.9}
         disabled={sending}
         accessibilityLabel={
-          triggered ? 'Emergency alert sent' : sending ? 'Sending emergency alert' : 'Emergency SOS'
+          triggered
+            ? 'Emergency alert sent'
+            : sending
+            ? 'Sending emergency alert'
+            : failed
+            ? 'Emergency alert failed — tap to retry'
+            : 'Emergency SOS'
         }
         accessibilityRole="button"
-        accessibilityHint="Hold for 1.2 seconds to send an emergency alert"
+        accessibilityHint={
+          failed
+            ? 'Tap to retry sending the emergency alert'
+            : 'Hold for 1.2 seconds to send an emergency alert'
+        }
         accessibilityState={{ selected: triggered, busy: sending }}
       >
         <Ionicons name={iconName} size={isLarge ? 28 : 20} color="#FFF" />
@@ -160,6 +201,11 @@ export function SOSButton({ rideId, onTrigger, size = 'small' }: SOSButtonProps)
       {pressing && (
         <View style={[styles.holdHint, isLarge && { bottom: -24 }]}>
           <Text style={styles.holdHintText}>Hold for 1.2 seconds</Text>
+        </View>
+      )}
+      {failed && !sending && (
+        <View style={[styles.holdHint, isLarge && { bottom: -24 }]}>
+          <Text style={styles.holdHintText}>Tap to retry</Text>
         </View>
       )}
     </Animated.View>
@@ -192,6 +238,13 @@ const styles = StyleSheet.create({
   },
   btnTriggered: {
     backgroundColor: '#10B981',
+  },
+  // Distinct amber style for failed state — clearly different from normal red.
+  // Border draws attention even on dark backgrounds.
+  btnFailed: {
+    backgroundColor: '#92400E',
+    borderWidth: 2,
+    borderColor: '#FCD34D',
   },
   btnText: {
     color: '#FFF', fontSize: 12, fontWeight: '800', letterSpacing: 0.5,

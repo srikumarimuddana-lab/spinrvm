@@ -24,6 +24,7 @@ import {
     Phone, ChevronLeft, ChevronRight, Info, AlertCircle, MapPin, Flame, X, Check,
 } from "lucide-react";
 import { cn, formatDate } from "@/lib/utils";
+import { useRequireModule } from "@/hooks/useRequireModule";
 import {
     getCloudMessages, sendCloudMessage, getCloudMessageStats,
     deleteCloudMessage, getUsers, getDrivers,
@@ -97,6 +98,7 @@ const emptyStats: MessageStats = { total_messages: 0, total_sent: 0, total_sched
 // --- Component ---
 
 export default function CloudMessagingPage() {
+    const { allowed } = useRequireModule("notifications");
     const [messages, setMessages] = useState<CloudMessage[]>([]);
     const [stats, setStats] = useState<MessageStats>(emptyStats);
     const [loading, setLoading] = useState(true);
@@ -287,6 +289,8 @@ export default function CloudMessagingPage() {
     };
 
     const getChannels = (m: CloudMessage) => m.channels || (m.channel ? [m.channel] : ["push"]);
+
+    if (!allowed) return null;
 
     return (
         <div className="space-y-6">

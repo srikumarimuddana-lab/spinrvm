@@ -20,6 +20,7 @@ import AreaStatsTable from "./_components/area-stats-table";
 import DriverActionBar from "./_components/driver-action-bar";
 import DriverNotes from "./_components/driver-notes";
 import DriverTimeline from "./_components/driver-timeline";
+import { useRequireModule } from "@/hooks/useRequireModule";
 
 const STATUS_TABS = [
     { value: "all", label: "All", icon: Users },
@@ -34,6 +35,7 @@ const STATUS_TABS = [
 const PAGE_SIZE = 50;
 
 export default function DriversPage() {
+    const { allowed } = useRequireModule("drivers");
     const [data, setData] = useState<any>(null);
     const [drivers, setDrivers] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
@@ -281,6 +283,8 @@ export default function DriversPage() {
         const legacyField = _docKeyToExpiryField(rdKey);
         return legacyField ? selected?.[legacyField] : undefined;
     }
+
+    if (!allowed) return null;
 
     return (
         <div className="space-y-5">

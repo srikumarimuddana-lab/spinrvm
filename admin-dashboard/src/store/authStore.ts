@@ -28,7 +28,9 @@ function setAuthCookie(token: string): void {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token }),
-    }).catch(() => { /* non-critical — middleware redirects to /login if missing */ });
+    }).catch((error) => {
+        console.error('[AuthStore] Failed to set auth cookie:', error);
+    });
 }
 
 function clearAuthCookie(): void {

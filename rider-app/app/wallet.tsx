@@ -44,7 +44,7 @@ export default function WalletScreen() {
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   const {
-    wallet, transactions, isLoading,
+    wallet, transactions, walletLoading, transactionsLoading,
     fetchWallet, topUp, fetchTransactions, transfer, clearError,
   } = useWalletStore();
 
@@ -236,7 +236,7 @@ export default function WalletScreen() {
         <Text style={styles.txnTitle}>Recent Activity</Text>
       </View>
 
-      {isLoading && transactions.length === 0 ? (
+      {(walletLoading || transactionsLoading) && transactions.length === 0 ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={colors.primary} />
         </View>

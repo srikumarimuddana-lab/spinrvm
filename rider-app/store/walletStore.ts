@@ -44,6 +44,8 @@ interface WalletState {
   transactions: WalletTransaction[];
   currentSplit: FareSplit | null;
   isLoading: boolean;
+  walletLoading: boolean;
+  transactionsLoading: boolean;
   error: string | null;
 
   fetchWallet: () => Promise<void>;
@@ -68,28 +70,26 @@ export const useWalletStore = create<WalletState>((set, get) => ({
   transactions: [],
   currentSplit: null,
   isLoading: false,
+  walletLoading: false,
+  transactionsLoading: false,
   error: null,
 
   fetchWallet: async () => {
     try {
-      set({ isLoading: true, error: null });
+      set({ walletLoading: true, error: null });
       const res = await api.get('/wallet');
-      set({ wallet: res.data, isLoading: false });
+      set({ wallet: res.data, walletLoading: false });
     } catch (error: any) {
-      set({ error: error.message, isLoading: false });
+      set({ error: error.message, walletLoading: false });
     }
   },
 
   topUp: async (amount: number) => {
     try {
       set({ isLoading: true, error: null });
-      const res = await api.post('/wallet/top-up', { amount });
-      const wallet = get().wallet;
-      if (wallet) {
-        set({ wallet: { ...wallet, balance: res.data.balance }, isLoading: false });
-      } else {
-        set({ isLoading: false });
-      }
+      await api.post('/wallet/top-up', { amount });
+      await get().fetchWallet();
+      set({ isLoading: false });
     } catch (error: any) {
       set({ error: error.response?.data?.detail || error.message, isLoading: false });
       throw error;
@@ -99,11 +99,9 @@ export const useWalletStore = create<WalletState>((set, get) => ({
   payWithWallet: async (rideId: string, amount: number) => {
     try {
       set({ isLoading: true, error: null });
-      const res = await api.post('/wallet/pay', { ride_id: rideId, amount });
-      const wallet = get().wallet;
-      if (wallet) {
-        set({ wallet: { ...wallet, balance: res.data.balance }, isLoading: false });
-      }
+      await api.post('/wallet/pay', { ride_id: rideId, amount });
+      await get().fetchWallet();
+      set({ isLoading: false });
     } catch (error: any) {
       recordNonFatal(error, { store: 'walletStore', action: 'payWithWallet' });
       set({ error: error.response?.data?.detail || error.message, isLoading: false });
@@ -113,22 +111,20 @@ export const useWalletStore = create<WalletState>((set, get) => ({
 
   fetchTransactions: async (limit = 20) => {
     try {
-      set({ isLoading: true, error: null });
+      set({ transactionsLoading: true, error: null });
       const res = await api.get(`/wallet/transactions?limit=${limit}`);
-      set({ transactions: res.data.transactions || [], isLoading: false });
+      set({ transactions: res.data.transactions || [], transactionsLoading: false });
     } catch (error: any) {
-      set({ error: error.message, isLoading: false });
+      set({ error: error.message, transactionsLoading: false });
     }
   },
 
   transfer: async (phone: string, amount: number) => {
     try {
       set({ isLoading: true, error: null });
-      const res = await api.post('/wallet/transfer', { recipient_phone: phone, amount });
-      const wallet = get().wallet;
-      if (wallet) {
-        set({ wallet: { ...wallet, balance: res.data.balance }, isLoading: false });
-      }
+      await api.post('/wallet/transfer', { recipient_phone: phone, amount });
+      await get().fetchWallet();
+      set({ isLoading: false });
     } catch (error: any) {
       set({ error: error.response?.data?.detail || error.message, isLoading: false });
       throw error;

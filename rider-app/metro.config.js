@@ -41,6 +41,12 @@ const WEB_STUBS = {
   'react-native-maps-directions': path.resolve(__dirname, 'web/stubs/react-native-maps-directions.js'),
 };
 
+// RN 0.85 moved NativeComponent specs into src/private/ using types that
+// Expo 54's Babel codegen plugin can't parse. Stub them out — the native
+// bridge is compiled into the binary at build time, so this doesn't affect
+// OTA updates.
+const NATIVE_COMPONENT_STUB = path.resolve(__dirname, '__stubs__/emptyNativeComponent.js');
+
 config.resolver.resolveRequest = (context, moduleName, platform) => {
   if (platform === 'web') {
     // Stub file-based native-only packages (react-native-maps, etc.)
@@ -54,6 +60,21 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
       return { type: 'empty' };
     }
   }
+
+  // Stub RN 0.85 private NativeComponent specs that Expo 54 codegen can't parse.
+  const origin = context.originModulePath || '';
+  const isFromRNPrivate =
+    origin.includes('react-native\\src\\private') ||
+    origin.includes('react-native/src/private');
+  const isNativeComponentImport = moduleName.includes('NativeComponent');
+  const isDirectPrivateImport =
+    (moduleName.includes('/src/private/') || moduleName.includes('\\src\\private\\')) &&
+    isNativeComponentImport;
+
+  if ((isFromRNPrivate && isNativeComponentImport) || isDirectPrivateImport) {
+    return { type: 'sourceFile', filePath: NATIVE_COMPONENT_STUB };
+  }
+
   // Fall through to the default resolver for everything else
   return context.resolveRequest(context, moduleName, platform);
 };

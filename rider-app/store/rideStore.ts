@@ -561,6 +561,7 @@ export const useRideStore = create<RideState>((set, get) => ({
       set({ savedAddresses: [...get().savedAddresses, response.data] });
     } catch (error: any) {
       set({ error: error.message });
+      throw error;
     }
   },
 

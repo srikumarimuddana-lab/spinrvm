@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 
 import jwt
 import pyotp
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -15,8 +15,8 @@ from slowapi.util import get_remote_address
 try:
     from ... import db_supabase
     from ...core.config import settings
-    from ...dependencies import JWT_AUD_ADMIN
-    from ...utils.audit_logger import log_admin_action  # noqa: F401
+    from ...dependencies import JWT_AUD_ADMIN, get_admin_user
+    from ...utils.audit_logger import log_admin_action
     from ...utils.password import hash_password, verify_password
     from ...utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set
     from ...utils.refresh_tokens import (
@@ -28,8 +28,8 @@ try:
 except ImportError:
     import db_supabase
     from core.config import settings
-    from dependencies import JWT_AUD_ADMIN
-    from utils.audit_logger import log_admin_action  # noqa: F401
+    from dependencies import JWT_AUD_ADMIN, get_admin_user
+    from utils.audit_logger import log_admin_action
     from utils.password import hash_password, verify_password
     from utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set
     from utils.refresh_tokens import (
@@ -920,3 +920,92 @@ async def break_glass_access(request: Request, body: BreakGlassRequest):
         "ttl_hours": _BG_TOKEN_TTL_HOURS,
         "warning": "This token is time-limited and every use is audited. Use only in genuine emergencies.",
     }
+
+
+# ----------------------------------------------------------------------
+# Admin unlock (L-12)
+# ----------------------------------------------------------------------
+# When an admin trips the per-account lockout (5 failed logins → 24h ban),
+# they have no self-service path back in. If a typo storm freezes the only
+# super_admin, ops is stuck. This endpoint lets a *different* super_admin
+# clear another admin's lockout. Every call is audit-logged.
+
+
+class UnlockRequest(BaseModel):
+    email: str
+
+
+@admin_auth_router.post("/unlock")
+async def admin_unlock(
+    request: Request,
+    body: UnlockRequest,
+    actor: dict = Depends(get_admin_user),
+):
+    """Clear the 24h login lockout on another admin account.
+
+    Caller must be a super_admin. Body: {"email": "<target>"}.
+    - 404 if the target admin doesn't exist.
+    - 200 {"unlocked": false, "reason": "not_locked"} if not currently locked
+      (idempotent — safe to call repeatedly without false positives).
+    - 200 {"unlocked": true} on success.
+    """
+    if actor.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="role_required:super_admin")
+
+    target_email = (body.email or "").strip().lower()
+    if not target_email:
+        raise HTTPException(status_code=422, detail="email required")
+
+    # Verify the target exists in admin_staff (don't leak which emails are
+    # registered to non-super_admins, but super_admin already has staff list).
+    rows = await db_supabase.get_rows("admin_staff", {"email": target_email}, limit=1)
+    target = rows[0] if rows else None
+    if not target:
+        raise HTTPException(status_code=404, detail="admin not found")
+
+    # Check current lock state. Redis key holds failure count; lock is in
+    # effect when count >= _LOGIN_MAX_FAILURES (see _is_account_locked).
+    try:
+        raw = await redis_get(_lockout_key(target_email))
+    except Exception as e:
+        logger.error(
+            "[REDIS] admin_unlock could not read lockout state for %s: %s",
+            target_email,
+            e,
+        )
+        raise HTTPException(status_code=503, detail="ERR_AUTH_UNAVAILABLE") from None
+
+    failure_count = int(raw) if raw is not None else 0
+    was_locked = failure_count >= _LOGIN_MAX_FAILURES
+
+    if not was_locked:
+        # Idempotent: nothing to clear. Still audit the no-op so we have a
+        # record that someone tried (helps detect coordination issues).
+        await log_admin_action(
+            actor,
+            "admin_unlock_noop",
+            "admin_staff",
+            target["id"],
+            {"target_email": target_email, "failure_count": failure_count},
+        )
+        return {"unlocked": False, "reason": "not_locked"}
+
+    # Clear the failure counter (deletes the Redis key with TTL).
+    await _clear_login_failures(target_email)
+
+    await log_admin_action(
+        actor,
+        "admin_unlocked",
+        "admin_staff",
+        target["id"],
+        {"target_email": target_email, "prior_failure_count": failure_count},
+    )
+
+    logger.info(
+        "admin unlock: actor=%s target=%s prior_failures=%s",
+        actor.get("id"),
+        target["id"],
+        failure_count,
+    )
+
+    return {"unlocked": True}

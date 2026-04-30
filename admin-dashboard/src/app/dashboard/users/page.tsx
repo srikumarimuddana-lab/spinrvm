@@ -31,10 +31,12 @@ import { Pagination } from "@/components/ui/pagination";
 import { Users, Search, Mail, Phone, MapPin, Star, Calendar, Car, ShieldCheck, Download, RefreshCw, Ban, CheckCircle, AlertTriangle, Wallet, Plus, Minus } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { getUsersPaginated, updateUserStatus, getStats, getUserWallet, creditUserWallet, debitUserWallet } from "@/lib/api";
+import { useRequireModule } from "@/hooks/useRequireModule";
 
 const PAGE_SIZE = 50;
 
 export default function UsersPage() {
+    const { allowed } = useRequireModule("users");
     const [users, setUsers] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
@@ -186,6 +188,8 @@ export default function UsersPage() {
         : roleFilter === "rider"
             ? (stats && (stats.total_users - (stats.total_drivers || 0)))
             : stats?.total_users;
+
+    if (!allowed) return null;
 
     return (
         <div className="space-y-6">

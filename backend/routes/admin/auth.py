@@ -15,6 +15,7 @@ from slowapi.util import get_remote_address
 try:
     from ... import db_supabase
     from ...core.config import settings
+    from ...dependencies import JWT_AUD_ADMIN
     from ...utils.audit_logger import log_admin_action  # noqa: F401
     from ...utils.password import hash_password, verify_password
     from ...utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set
@@ -27,6 +28,7 @@ try:
 except ImportError:
     import db_supabase
     from core.config import settings
+    from dependencies import JWT_AUD_ADMIN
     from utils.audit_logger import log_admin_action  # noqa: F401
     from utils.password import hash_password, verify_password
     from utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set
@@ -158,6 +160,7 @@ def _mint_admin_access_token(
             "role": role,
             "modules": modules,
             "phone": phone,
+            "aud": JWT_AUD_ADMIN,
             "token_version": int(token_version or 0),
             "jti": secrets.token_hex(16),
             "iat": now,

@@ -44,11 +44,10 @@ export default function WalletScreen() {
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   const {
-    wallet, transactions, walletLoading, transactionsLoading,
+    wallet, transactions, walletLoading, transactionsLoading, error: storeError,
     fetchWallet, topUp, fetchTransactions, transfer, clearError,
   } = useWalletStore();
 
-  const [walletError, setWalletError] = useState<string | null>(null);
   const [showTopUp, setShowTopUp] = useState(false);
   const [showTransfer, setShowTransfer] = useState(false);
   const [customAmount, setCustomAmount] = useState('');
@@ -62,10 +61,8 @@ export default function WalletScreen() {
   }>({ visible: false, title: '', message: '', variant: 'info' });
 
   useEffect(() => {
-    setWalletError(null);
-    Promise.all([fetchWallet(), fetchTransactions(30)]).catch(() => {
-      setWalletError('Balance unavailable');
-    });
+    clearError();
+    Promise.all([fetchWallet(), fetchTransactions(30)]);
   }, []);
 
   const handleTopUp = async (amount: number) => {
@@ -158,7 +155,7 @@ export default function WalletScreen() {
       {/* Balance Card */}
       <View style={styles.balanceCard}>
         <Text style={styles.balanceLabel}>Available Balance</Text>
-        {walletError ? (
+        {storeError ? (
           <Text style={[styles.balanceAmount, { fontSize: 20 }]}>Balance unavailable</Text>
         ) : (
           <Text style={styles.balanceAmount}>

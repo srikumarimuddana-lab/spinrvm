@@ -476,7 +476,7 @@ function RideOptionsScreenContent() {
       <View style={styles.sectionHeader}>
         <Text style={styles.sectionTitle}>Choose a ride</Text>
         <View style={styles.commissionBadge}>
-          <Text style={styles.commissionText}>% 0% Commission</Text>
+          <Text style={styles.commissionText}>0% Commission</Text>
         </View>
       </View>
 

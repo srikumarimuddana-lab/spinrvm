@@ -1421,6 +1421,40 @@ async def add_tip(
     return {"success": True, "tip_amount": _f(new_tip)}
 
 
+async def _record_payment_event(
+    ride_id: str,
+    user_id: str,
+    amount_cents: int,
+    payment_intent_id: str | None = None,
+) -> None:
+    """Append a stripe_charge row to the financial_events ledger.
+
+    Called BEFORE the ride DB update so a recovery record always exists even
+    if the ride row stays stuck in 'processing'. Never raises — logs and returns.
+    """
+    try:
+        await db_supabase.insert_one(
+            "financial_events",
+            {
+                "event_type": "stripe_charge",
+                "user_id": user_id,
+                "ride_id": ride_id,
+                "delta_cents": amount_cents,
+                "ref": payment_intent_id,
+                "metadata": {"source": "process_payment"},
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+    except Exception as ledger_err:
+        logger.error(
+            "[PAYMENT] financial_events write failed for ride %s pi=%s: %s",
+            ride_id,
+            payment_intent_id,
+            ledger_err,
+            exc_info=True,
+        )
+
+
 class ProcessPaymentRequest(BaseModel):
     tip_amount: Decimal = Field(default=Decimal("0"), ge=0, le=500)
 
@@ -1647,15 +1681,39 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
         )
 
         if outcome.status == "succeeded":
-            await db_supabase.update_ride(
-                ride_id,
-                {
-                    "payment_status": "paid",
-                    "payment_intent_id": outcome.payment_intent_id,
-                    "tip_amount": _f(tip_amount),
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                },
+            # Write ledger BEFORE the ride update.  If the ride update fails,
+            # financial_events already has a stripe_charge row keyed on
+            # outcome.payment_intent_id — ops can reconcile rides stuck in
+            # "processing" against this table.
+            await _record_payment_event(
+                ride_id=ride_id,
+                user_id=current_user["id"],
+                amount_cents=int(_round(total_charge * Decimal("100"))),
+                payment_intent_id=outcome.payment_intent_id,
             )
+            try:
+                await db_supabase.update_ride(
+                    ride_id,
+                    {
+                        "payment_status": "paid",
+                        "payment_intent_id": outcome.payment_intent_id,
+                        "tip_amount": _f(tip_amount),
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
+            except Exception as db_err:
+                logger.error(
+                    "[PAYMENT] Stripe charge %s confirmed but ride %s DB update failed — "
+                    "ride stuck in 'processing'; financial_events written for recovery. err=%s",
+                    outcome.payment_intent_id,
+                    ride_id,
+                    db_err,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=503,
+                    detail=("Payment was captured but confirmation failed. Do not retry — our team has been notified."),
+                ) from db_err
             await manager.send_personal_message(
                 {"type": "payment_completed", "ride_id": ride_id, "charged_amount": _f(total_charge)},
                 f"rider_{current_user['id']}",

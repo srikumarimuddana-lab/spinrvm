@@ -185,14 +185,27 @@ export default function OtpScreen() {
         message: 'A new verification code has been sent to your phone.',
         variant: 'success',
       });
-    } catch (e) {
-      console.log('[Auth] resend failed', e);
-      setAlertState({
-        visible: true,
-        title: 'Failed',
-        message: 'Could not resend code. Please try again.',
-        variant: 'danger',
-      });
+    } catch (e: any) {
+      if (e?.response?.status === 429) {
+        // Parse retry-after from header or detail message (e.g. "Try again in 60s")
+        const retryAfterHeader = parseInt(e.response.headers?.['retry-after'] ?? '0', 10);
+        const detailMatch = String(e.response?.data?.detail ?? '').match(/(\d+)\s*s/i);
+        const retrySeconds = retryAfterHeader || (detailMatch ? parseInt(detailMatch[1], 10) : 60);
+        setCountdown(retrySeconds > 0 ? retrySeconds : 60);
+        setAlertState({
+          visible: true,
+          title: 'Too Many Attempts',
+          message: `Please wait ${retrySeconds > 0 ? retrySeconds : 60} seconds before requesting another code.`,
+          variant: 'warning',
+        });
+      } else {
+        setAlertState({
+          visible: true,
+          title: 'Failed',
+          message: 'Could not resend code. Please try again.',
+          variant: 'danger',
+        });
+      }
     } finally {
       resendInFlight.current = false;
     }

@@ -1322,6 +1322,39 @@ async def get_ride(request: Request, ride_id: str, current_user: dict = Depends(
     ride["free_cancel_window_seconds"] = free_cancel_window
     ride["cancellation_fee"] = cancellation_fee_amount
 
+    # M-4: Expose offer expiry so the rider app can show an accurate
+    # countdown progress bar while waiting for the driver to accept.
+    # Only meaningful in driver_assigned state; cleared once accepted.
+    if ride.get("status") == "driver_assigned":
+        driver_notified_at = ride.get("driver_notified_at")
+        offer_timeout_seconds = 15
+        if get_app_settings:
+            try:
+                settings = await get_app_settings()
+                offer_timeout_seconds = int(settings.get("ride_offer_timeout_seconds", 15))
+            except Exception:  # noqa: S110
+                pass
+        ride["offer_timeout_seconds"] = offer_timeout_seconds
+        if driver_notified_at:
+            try:
+                from datetime import datetime, timedelta, timezone
+
+                if isinstance(driver_notified_at, str):
+                    notified_dt = datetime.fromisoformat(driver_notified_at.replace("Z", "+00:00"))
+                else:
+                    notified_dt = driver_notified_at
+                if notified_dt.tzinfo is None:
+                    notified_dt = notified_dt.replace(tzinfo=timezone.utc)
+                expires_dt = notified_dt + timedelta(seconds=offer_timeout_seconds)
+                ride["offer_expires_at"] = expires_dt.isoformat()
+            except Exception:
+                ride["offer_expires_at"] = None
+        else:
+            ride["offer_expires_at"] = None
+    else:
+        ride["offer_expires_at"] = None
+        ride["offer_timeout_seconds"] = None
+
     # PIPEDA / threat-model RI-2: drivers only need pickup/dropoff addresses
     # while the trip is active. Retaining exact addresses post-completion
     # enables address-based stalking (attack tree RAT-1). Riders retain their

@@ -29,6 +29,7 @@ try:
     )
     from ..utils.error_keys import ErrorKeys
     from ..utils.idempotency import idempotent_endpoint
+    from ..utils.insurance_periods import record_period_transition
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user, get_current_user
@@ -462,6 +463,11 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
 
     updates["updated_at"] = datetime.now(timezone.utc).isoformat()
     await db_supabase.update_one("drivers", {"id": driver["id"]}, await _encrypt_driver_pii(updates))
+    # M-5: SGI insurance period audit — vehicle/document edits flip an
+    # active driver to needs_review and force them offline. If they were
+    # actually online before this update, that's a 1→0 transition.
+    if changed_vehicle and driver.get("status") == "active" and driver.get("is_online"):
+        await record_period_transition(driver["id"], 0)
     updated = await db_supabase.get_driver_by_id(driver["id"])
     return serialize_doc(await _decrypt_driver_pii(updated))
 
@@ -2017,6 +2023,9 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
     await db_supabase.update_ride(
         ride_id, {"driver_id": None, "status": "searching", "updated_at": datetime.now(timezone.utc)}
     )
+    # M-5: SGI insurance period audit — decline releases the driver from
+    # period 2 back to period 1.
+    await record_period_transition(driver["id"], 1)
 
     # Record the decline in audit_logs so daily stats can count it
     try:
@@ -2130,6 +2139,9 @@ async def verify_pickup_otp(ride_id: str, request: RideOTPRequest, current_user:
             "updated_at": datetime.now(timezone.utc),
         },
     )
+    # M-5: SGI insurance period audit — in_progress = period 3 (passenger
+    # aboard, full TNC commercial coverage).
+    await record_period_transition(driver["id"], 3, ride_id=ride_id)
 
     if ride.get("rider_id"):
         await manager.send_personal_message({"type": "ride_started", "ride_id": ride_id}, f"rider_{ride['rider_id']}")
@@ -2162,6 +2174,9 @@ async def start_ride(ride_id: str, current_user: dict = Depends(get_current_user
             "updated_at": datetime.now(timezone.utc),
         },
     )
+    # M-5: SGI insurance period audit — in_progress = period 3 (passenger
+    # aboard, full TNC commercial coverage).
+    await record_period_transition(driver["id"], 3, ride_id=ride_id)
 
     ride = await db_supabase.get_ride(ride_id)
     if ride and ride.get("rider_id"):
@@ -2386,6 +2401,9 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     await db_supabase.update_one(
         "drivers", {"id": driver["id"]}, {"$inc": {"total_rides": 1}, "$set": {"is_available": True}}
     )
+    # M-5: SGI insurance period audit — ride completed, driver returns to
+    # period 1 (still online, no ride). No ride_id on period 1.
+    await record_period_transition(driver["id"], 1)
 
     completed_ride = await db_supabase.get_ride(ride_id)
 
@@ -2467,6 +2485,12 @@ async def cancel_ride(ride_id: str, reason: str = Query(""), current_user: dict 
 
     # Make driver available again
     await db_supabase.set_driver_available(driver["id"], True)
+    # M-5: SGI insurance period audit — driver-side cancel after the
+    # driver was assigned/accepted/arrived returns them to period 1.
+    # If the ride was still in searching the driver was never in period
+    # 2; skip to avoid a phantom 1→1 transition.
+    if ride.get("status") in ("driver_assigned", "driver_accepted", "driver_arrived"):
+        await record_period_transition(driver["id"], 1)
 
     ride = await db_supabase.get_ride(ride_id)
     if ride and ride.get("rider_id"):
@@ -3115,6 +3139,13 @@ async def update_driver_status(
             ),
         )
 
+    # M-5: SGI insurance period audit — only on actual flips. Idempotent
+    # toggles (driver re-asserts the same state) shouldn't open a new
+    # period row; the helper's no-op branch would absorb it but we save
+    # the round-trip by gating on status_flipped.
+    if status_flipped:
+        await record_period_transition(driver_id, 1 if is_online else 0)
+
     # Presence: Go Online is the strongest possible liveness signal — the
     # driver is actively using the app. Refresh the TTL now so dispatch can
     # see them immediately without waiting for the next WS heartbeat. Go
@@ -3607,6 +3638,9 @@ async def check_expiring_subscriptions():
                     except Exception as e:
                         logger.error(f"[SUB-EXPIRY] Failed to flip driver {driver['id']} offline: {e}")
                         continue
+                    # M-5: SGI insurance period audit — driver was online
+                    # (period 1) and we just forced them offline (period 0).
+                    await record_period_transition(driver["id"], 0)
 
                     try:
                         await clear_presence(driver["id"])

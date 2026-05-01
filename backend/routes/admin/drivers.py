@@ -125,6 +125,7 @@ async def admin_get_drivers(
     search: Optional[str] = None,
     is_verified: Optional[bool] = None,
     is_online: Optional[bool] = None,
+    is_available: Optional[bool] = None,
     status: Optional[str] = None,
     service_area_id: Optional[str] = None,
 ):
@@ -136,12 +137,14 @@ async def admin_get_drivers(
     ever restores old state, the admin UI won't show duplicate rows.
     """
     import re
-    
+
     filters = {}
     if is_verified is not None:
         filters["is_verified"] = is_verified
     if is_online is not None:
         filters["is_online"] = is_online
+    if is_available is not None:
+        filters["is_available"] = is_available
     if status:
         filters["status"] = status
     if service_area_id:
@@ -157,15 +160,14 @@ async def admin_get_drivers(
                     {"email": {"$regex": re.escape(term), "$options": "i"}},
                     {"first_name": {"$regex": re.escape(term), "$options": "i"}},
                     {"last_name": {"$regex": re.escape(term), "$options": "i"}},
-                    {"name": {"$regex": re.escape(term), "$options": "i"}},
                 ]
             }
             matching_users = await db_supabase.get_rows("users", user_filters, limit=100)
             matching_uids = [u["id"] for u in matching_users if u.get("id")]
             
-            # Combine driver direct match (name/phone) OR matched user_ids
+            # Match driver rows by phone/plate directly OR by user_id from user search above.
+            # `name` is not a column on drivers — it's derived from the joined users row.
             filters["$or"] = [
-                {"name": {"$regex": re.escape(term), "$options": "i"}},
                 {"phone": {"$regex": re.escape(term), "$options": "i"}},
                 {"license_plate": {"$regex": re.escape(term), "$options": "i"}},
             ]
@@ -208,6 +210,27 @@ async def admin_get_drivers(
             }
         )
     return out
+
+
+class DriverSearchRequest(BaseModel):
+    search: str
+    limit: int = 5
+    is_online: Optional[bool] = None
+    is_available: Optional[bool] = None
+
+
+@router.post("/drivers/search")
+async def admin_search_drivers(
+    body: DriverSearchRequest,
+    admin_user: dict = Depends(get_admin_user),
+):
+    """Typeahead search for drivers via POST body to keep search terms out of server logs."""
+    return await admin_get_drivers(
+        limit=body.limit,
+        search=body.search,
+        is_online=body.is_online,
+        is_available=body.is_available,
+    )
 
 
 @router.get("/drivers/stats")

@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel
 
 try:
@@ -16,6 +16,7 @@ try:
     from ...socket_manager import manager
     from ...utils.audit_logger import log_admin_action
     from ...utils.insurance_periods import record_period_transition
+    from ...utils.rate_limiter import default_limiter as limiter
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user
@@ -25,6 +26,7 @@ except ImportError:
     from socket_manager import manager
     from utils.audit_logger import log_admin_action
     from utils.insurance_periods import record_period_transition
+    from utils.rate_limiter import default_limiter as limiter
 
 from .drivers import _batch_fetch_drivers_and_users, _user_display_name
 
@@ -358,75 +360,96 @@ async def admin_complete_ride(
 
 
 @router.get("/places/autocomplete")
+@limiter.limit("60/minute")
 async def admin_places_autocomplete(
+    request: Request,
     input: str = Query(..., min_length=1),
+    session_token: Optional[str] = None,
     admin_user: dict = Depends(get_admin_user),
 ):
-    """Proxy Google Maps Places Autocomplete API to avoid exposing key to browser."""
+    """Proxy Google Maps Places Autocomplete API to avoid exposing key to browser.
+
+    Pass session_token to bundle N autocomplete + 1 details call into one billing session
+    ($0.017 flat vs per-call). Generate one UUID per user typing session on the client.
+    """
     import httpx
-    
+
     settings_row = await get_app_settings()
     api_key = (settings_row or {}).get("google_maps_api_key") or ""
     if not api_key:
         raise HTTPException(status_code=503, detail="Google Maps API key not configured")
 
     url = "https://maps.googleapis.com/maps/api/place/autocomplete/json"
-    params = {
+    params: dict = {
         "input": input,
         "key": api_key,
         "types": "address",
     }
-    
+    if session_token:
+        params["sessiontoken"] = session_token
+
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(url, params=params)
             data = resp.json()
             if data.get("status") not in ("OK", "ZERO_RESULTS"):
-                logger.error(f"Places API error: {data.get('status')}")
+                logger.error(f"Places autocomplete API error: {data.get('status')}")
                 raise HTTPException(status_code=502, detail="Places API error")
             return {"predictions": data.get("predictions", [])}
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Failed to call Places API: {e}")
-        raise HTTPException(status_code=502, detail="Failed to call Places API")
+        logger.error(f"Failed to call Places autocomplete API: {e}")
+        raise HTTPException(status_code=502, detail="Failed to call Places API") from e
 
 
 @router.get("/places/details")
+@limiter.limit("60/minute")
 async def admin_places_details(
+    request: Request,
     place_id: str = Query(...),
+    session_token: Optional[str] = None,
     admin_user: dict = Depends(get_admin_user),
 ):
-    """Proxy Google Maps Place Details API to get lat/lng."""
+    """Proxy Google Maps Place Details API to get lat/lng.
+
+    Pass the same session_token used for autocomplete to close the billing session.
+    """
     import httpx
-    
+
     settings_row = await get_app_settings()
     api_key = (settings_row or {}).get("google_maps_api_key") or ""
     if not api_key:
         raise HTTPException(status_code=503, detail="Google Maps API key not configured")
 
     url = "https://maps.googleapis.com/maps/api/place/details/json"
-    params = {
+    params: dict = {
         "place_id": place_id,
         "fields": "geometry,formatted_address",
         "key": api_key,
     }
-    
+    if session_token:
+        params["sessiontoken"] = session_token
+
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(url, params=params)
             data = resp.json()
             if data.get("status") != "OK":
-                logger.error(f"Places Details API error: {data.get('status')}")
+                logger.error(f"Places details API error: {data.get('status')}")
                 raise HTTPException(status_code=502, detail="Places API error")
-            
+
             loc = data.get("result", {}).get("geometry", {}).get("location", {})
             return {
                 "lat": loc.get("lat"),
                 "lng": loc.get("lng"),
                 "formatted_address": data.get("result", {}).get("formatted_address"),
             }
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Failed to call Places Details API: {e}")
-        raise HTTPException(status_code=502, detail="Failed to call Places API")
+        logger.error(f"Failed to call Places details API: {e}")
+        raise HTTPException(status_code=502, detail="Failed to call Places API") from e
 
 
 class AdminCreateRideRequest(BaseModel):

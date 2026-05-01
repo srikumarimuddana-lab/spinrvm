@@ -69,10 +69,21 @@ const nextConfig: NextConfig = {
   },
   async rewrites() {
     return [
-      // Local API routes (must be before the catch-all /api rewrite)
+      // Local API routes (must be before the catch-all /api rewrite).
+      // Next.js file-system routes *should* take priority over rewrites,
+      // but on Vercel the catch-all can shadow them depending on build
+      // order and edge-function resolution. Explicit identity rewrites
+      // guarantee the Next.js route handlers are always used.
       {
         source: "/api/auth/:path*",
         destination: "/api/auth/:path*",
+      },
+      // Admin auth routes (login, refresh, logout, mfa) are Next.js API
+      // routes that manage HttpOnly cookies — they must NOT be proxied
+      // to the backend or the RT cookie is never set / read.
+      {
+        source: "/api/admin/auth/:path*",
+        destination: "/api/admin/auth/:path*",
       },
       // Proxy everything else to backend
       {

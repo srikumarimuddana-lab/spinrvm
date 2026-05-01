@@ -193,6 +193,12 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
                 ...(csrfToken ? { headers: { "X-CSRF-Token": csrfToken } } : {}),
             });
             if (!res.ok) {
+                // 401 = no RT cookie (fresh visit, no session to restore) — just
+                // stop the loading spinner without destroying any existing state.
+                if (res.status === 401) {
+                    set({ isLoading: false });
+                    return;
+                }
                 get().logout();
                 return;
             }

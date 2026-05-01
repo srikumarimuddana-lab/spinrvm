@@ -55,18 +55,18 @@ function verifyCsrf(req: NextRequest): boolean {
 }
 
 export async function POST(req: NextRequest) {
-  if (!verifyCsrf(req)) {
-    // Clear session cookies on CSRF failure so a logout race (in-flight
-    // silentRefresh fired after logout cleared the in-memory token) does not
-    // leave a live RT cookie in the browser.
-    const res = NextResponse.json({ detail: "CSRF validation failed" }, { status: 403 });
-    clearSessionCookies(res);
-    return res;
-  }
-
+  // Check RT cookie first — if absent there is no session to protect, so
+  // return a clean 401 rather than running CSRF validation (which would
+  // return 403 and destroy any existing cookies on a fresh page load).
   const refreshToken = req.cookies.get(RT_COOKIE)?.value;
   if (!refreshToken) {
     return NextResponse.json({ detail: "No refresh token" }, { status: 401 });
+  }
+
+  if (!verifyCsrf(req)) {
+    const res = NextResponse.json({ detail: "CSRF validation failed" }, { status: 403 });
+    clearSessionCookies(res);
+    return res;
   }
 
   let upstream: Response;

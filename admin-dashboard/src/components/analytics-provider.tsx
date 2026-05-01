@@ -1,6 +1,6 @@
 'use client';
 
-import { Analytics } from '@vercel/analytics/next';
+import { Analytics } from '@vercel/analytics/react';
 
 // Scrubs dynamic entity IDs from page-view paths before Vercel ingests them,
 // preventing UUIDs and hex IDs in admin routes from appearing in analytics.

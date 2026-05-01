@@ -20,9 +20,9 @@ CREATE OR REPLACE FUNCTION find_nearby_drivers(
   radius_meters double precision
 )
 RETURNS TABLE (
-  id uuid,
+  id text,
   name text,
-  vehicle_type_id uuid,
+  vehicle_type_id text,
   lat double precision,
   lng double precision,
   distance_meters double precision

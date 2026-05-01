@@ -81,7 +81,7 @@ export async function POST(req: NextRequest) {
       httpOnly: false,
       sameSite: "strict",
       secure: isProduction,
-      path: "/api/admin/auth",
+      path: "/",
       maxAge: SESSION_MAX_AGE,
     });
     return res;

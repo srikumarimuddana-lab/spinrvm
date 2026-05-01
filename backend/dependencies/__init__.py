@@ -38,6 +38,12 @@ db = db_supabase  # legacy alias
 # with DIFFERENT secrets — a silent auth hazard. Unified here so both
 # `routes/admin/auth.py` and this module share the same source of truth.
 JWT_ALGORITHM = "HS256"
+# Audience constants — present in every token we mint so cross-environment
+# token reuse is rejected at decode time (rider token can't hit admin endpoint
+# and vice-versa). Missing aud is tolerated during the 15-min rollout window
+# when old tokens (no aud) are still in circulation; wrong aud is always rejected.
+JWT_AUD_MOBILE = "spinr:rider"
+JWT_AUD_ADMIN = "spinr:admin"
 OTP_EXPIRY_MINUTES = 5
 # Product decision: 4-digit OTP across the whole app (login + ride pickup).
 # Trade-off: 1/10,000 guess odds per attempt vs 1/1,000,000 for 6 digits.
@@ -96,6 +102,7 @@ def create_jwt_token(
     payload: dict = {
         "user_id": user_id,
         "phone": phone,
+        "aud": JWT_AUD_MOBILE,
         "iat": now,
         "exp": now + ttl,
         "token_version": int(token_version or 0),
@@ -108,7 +115,7 @@ def create_jwt_token(
 
 def verify_jwt_token(token: str) -> dict:
     try:
-        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[JWT_ALGORITHM], options={"verify_aud": False})
         return payload
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token has expired") from None
@@ -205,12 +212,16 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         logger.error(f"JWT verification failed: {e}")
         raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}") from e
 
-    # Admin tokens are minted by routes/admin/auth.py and carry `role` +
-    # `email` + `modules` claims that regular rider/driver tokens do not
-    # have. admin-001 (super admin from env) has no DB row — trust JWT claims
-    # directly. All other staff are validated against admin_staff to enforce
-    # is_active and token_version revocation (fixes audit [03-2/03-3]).
+    # Audience enforcement — reject cross-environment token reuse.
+    # Tokens minted before this fix carry no 'aud' claim; allow them through
+    # for one 15-minute TTL window, then they naturally expire and new tokens
+    # carry the claim. A present-but-wrong aud is always rejected immediately.
     _admin_roles = {"admin", "super_admin", "operations", "support", "finance", "custom"}
+    _is_admin_payload = payload.get("role") in _admin_roles and bool(payload.get("email"))
+    _expected_aud = JWT_AUD_ADMIN if _is_admin_payload else JWT_AUD_MOBILE
+    _token_aud = payload.get("aud")
+    if _token_aud is not None and _token_aud != _expected_aud:
+        raise HTTPException(status_code=401, detail="ERR_TOKEN_AUDIENCE")
     if payload.get("role") in _admin_roles and payload.get("email"):
         user_id = payload["user_id"]
         jti = payload.get("jti")

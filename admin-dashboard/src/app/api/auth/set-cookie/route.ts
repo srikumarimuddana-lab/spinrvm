@@ -8,10 +8,13 @@ export async function POST(request: NextRequest) {
     try {
         const body = await request.json();
         token = body?.token;
-    } catch {
+        console.log('[POST /api/auth/set-cookie] Received token:', token ? `${token.substring(0, 20)}...` : 'undefined');
+    } catch (error) {
+        console.error('[POST /api/auth/set-cookie] JSON parse error:', error);
         return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 });
     }
     if (!token || typeof token !== 'string') {
+        console.error('[POST /api/auth/set-cookie] Token validation failed:', { token, type: typeof token });
         return NextResponse.json({ error: 'Missing token' }, { status: 400 });
     }
 
@@ -23,6 +26,7 @@ export async function POST(request: NextRequest) {
         maxAge: COOKIE_MAX_AGE,
         path: '/',
     });
+    console.log('[POST /api/auth/set-cookie] Cookie set successfully. NODE_ENV:', process.env.NODE_ENV, 'secure:', process.env.NODE_ENV === 'production');
     return response;
 }
 

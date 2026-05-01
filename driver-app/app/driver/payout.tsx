@@ -158,8 +158,8 @@ function PayoutScreen() {
             showAlert('Error', 'Minimum payout amount is $10', 'danger');
             return;
         }
-        if (driverBalance && amount > driverBalance.available_balance) {
-            showAlert('Error', `Insufficient balance. Available: $${driverBalance.available_balance.toFixed(2)}`, 'danger');
+        if (driverBalance && amount > parseFloat(driverBalance.payable_balance)) {
+            showAlert('Error', `Insufficient balance. Available: $${parseFloat(driverBalance.payable_balance).toFixed(2)}`, 'danger');
             return;
         }
 
@@ -219,7 +219,7 @@ function PayoutScreen() {
         }
     };
 
-    const formatCurrency = (amount: number) => `$${amount.toFixed(2)}`;
+    const formatCurrency = (amount: string | number) => `$${parseFloat(String(amount)).toFixed(2)}`;
 
     const isStripeReady = stripeAccountStatus === 'active' || hasBankAccount;
 
@@ -253,7 +253,7 @@ function PayoutScreen() {
                 <View style={styles.balanceCard}>
                     <Text style={styles.balanceLabel}>AVAILABLE BALANCE</Text>
                     <Text style={styles.balanceAmount}>
-                        {driverBalance ? formatCurrency(driverBalance.available_balance) : '$0.00'}
+                        {driverBalance ? formatCurrency(driverBalance.payable_balance) : '$0.00'}
                     </Text>
 
                     <View style={styles.balanceDetails}>
@@ -430,7 +430,7 @@ function PayoutScreen() {
                 )}
 
                 {/* Payout Request */}
-                {isStripeReady && driverBalance && driverBalance.available_balance > 0 && (
+                {isStripeReady && driverBalance && parseFloat(driverBalance.payable_balance) > 0 && (
                     <View style={styles.section}>
                         <Text style={styles.sectionTitle}>Request Payout</Text>
                         <View style={styles.payoutCard}>
@@ -460,10 +460,10 @@ function PayoutScreen() {
                                 </TouchableOpacity>
                             </View>
                             <TouchableOpacity
-                                onPress={() => setPayoutAmount(driverBalance.available_balance.toString())}
+                                onPress={() => setPayoutAmount(driverBalance.payable_balance)}
                             >
                                 <Text style={styles.maxAmount}>
-                                    Available: {formatCurrency(driverBalance.available_balance)} · Min $10.00
+                                    Available: {formatCurrency(driverBalance.payable_balance)} · Min $10.00
                                 </Text>
                             </TouchableOpacity>
                         </View>

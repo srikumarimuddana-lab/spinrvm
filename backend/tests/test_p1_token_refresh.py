@@ -115,6 +115,7 @@ class TestRefreshAccessToken:
         from fastapi import HTTPException
 
         from backend.routes import auth as auth_mod
+        from backend.utils.error_handling import SpinrException
 
         with (
             patch.object(auth_mod, "lookup_refresh_token", AsyncMock(return_value=None)),
@@ -124,7 +125,7 @@ class TestRefreshAccessToken:
             class _Body:
                 refresh_token = "bad-or-revoked-token"
 
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises((HTTPException, SpinrException)) as exc_info:
                 await auth_mod.refresh_access_token(request=_make_request(), response=MagicMock(), body=_Body())
 
         assert exc_info.value.status_code == 401
@@ -135,6 +136,7 @@ class TestRefreshAccessToken:
         from fastapi import HTTPException
 
         from backend.routes import auth as auth_mod
+        from backend.utils.error_handling import SpinrException
 
         with (
             patch.object(
@@ -148,7 +150,7 @@ class TestRefreshAccessToken:
             class _Body:
                 refresh_token = "admin-refresh-token"
 
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises((HTTPException, SpinrException)) as exc_info:
                 await auth_mod.refresh_access_token(request=_make_request(), response=MagicMock(), body=_Body())
 
         assert exc_info.value.status_code == 401
@@ -158,6 +160,7 @@ class TestRefreshAccessToken:
         from fastapi import HTTPException
 
         from backend.routes import auth as auth_mod
+        from backend.utils.error_handling import SpinrException
 
         with (
             patch.object(auth_mod, "lookup_refresh_token", AsyncMock(return_value=_refresh_row())),
@@ -168,7 +171,7 @@ class TestRefreshAccessToken:
             class _Body:
                 refresh_token = "valid-token-deleted-user"
 
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises((HTTPException, SpinrException)) as exc_info:
                 await auth_mod.refresh_access_token(request=_make_request(), response=MagicMock(), body=_Body())
 
         assert exc_info.value.status_code == 401
@@ -195,7 +198,9 @@ class TestRefreshAccessToken:
             class _Body:
                 refresh_token = "old-raw"
 
-            await auth_mod.refresh_access_token(request=_make_request(user_agent="UA"), response=MagicMock(), body=_Body())
+            await auth_mod.refresh_access_token(
+                request=_make_request(user_agent="UA"), response=MagicMock(), body=_Body()
+            )
 
         assert issue_calls, "issue_refresh_token was not called"
         assert issue_calls[0]["replaces"] == OLD_REFRESH_ROW_ID, (

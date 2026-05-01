@@ -30,14 +30,14 @@ export interface DriverData {
     vehicle_make?: string;
     vehicle_model?: string;
     license_plate?: string;
-    profile_image_url?: string;
+    photo_url?: string;
 }
 
 export interface Rider {
     id: string;
     name: string;
     rating?: number;
-    profile_image_url?: string;
+    photo_url?: string;
     phone?: string;
 }
 

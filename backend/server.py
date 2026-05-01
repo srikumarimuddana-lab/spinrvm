@@ -66,11 +66,15 @@ async def health():
 # Counters cover: DB retries by policy/reason, cache hit/miss by
 # prefix, circuit-breaker state, call-level totals, and Redis stats.
 # See utils/metrics.py for the counter definitions.
+from fastapi import Request as _Request  # noqa: E402
 from fastapi import Response as _MetricsResponse  # noqa: E402
+
+from utils.rate_limiter import default_limiter as _metrics_limiter  # noqa: E402
 
 
 @app.get("/metrics")
-async def metrics() -> _MetricsResponse:
+@_metrics_limiter.limit("10/minute")
+async def metrics(request: _Request) -> _MetricsResponse:
     from utils.metrics import render_prometheus, set_gauge
     from utils.redis_client import get_redis_stats
 

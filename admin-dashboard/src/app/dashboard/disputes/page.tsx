@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { getDisputes, getDisputeStats, resolveDispute } from "@/lib/api";
+import { useRequireModule } from "@/hooks/useRequireModule";
 
 const STATUS_COLORS: Record<string, string> = {
   open: "bg-red-100 text-red-700",
@@ -49,6 +50,7 @@ interface DisputeStats {
 }
 
 export default function DisputesPage() {
+  const { allowed } = useRequireModule("support");
   const [disputes, setDisputes] = useState<any[]>([]);
   const [stats, setStats] = useState<DisputeStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -132,6 +134,8 @@ export default function DisputesPage() {
       setResolving(false);
     }
   };
+
+  if (!allowed) return null;
 
   return (
     <div className="space-y-6">

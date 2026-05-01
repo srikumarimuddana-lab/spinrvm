@@ -9,7 +9,7 @@ import logging
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from db_supabase import (  # noqa: E402
@@ -89,27 +89,51 @@ class CorporateAccountResponse(CorporateAccountBase):
 @router.get("", response_model=List[CorporateAccountDetailResponse])
 async def get_corporate_accounts(
     request: Request,
-    skip: int = 0,
-    limit: int = 100,
+    response: Response,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+    offset: Optional[int] = Query(None, ge=0, description="Alias for skip"),
     search: Optional[str] = None,
     status: Optional[CompanyStatus] = None,
     size_tier: Optional[SizeTier] = None,
     is_active: Optional[bool] = None,
     current_admin: dict = Depends(get_current_admin),
 ):
-    """List corporate accounts with optional filters and pagination."""
-    from db_supabase import list_corporate_accounts_filtered
+    """List corporate accounts with optional filters and pagination.
+
+    Returns a flat array (backwards compatible). Total row count and the
+    applied limit are exposed via the ``X-Total-Count`` and ``X-Limit``
+    response headers. ``offset`` is accepted as an alias for the existing
+    ``skip`` query param so callers can use the standard offset/limit
+    convention. Default limit is 100 — the admin dashboard already pages
+    through this endpoint with PAGE_SIZE=50 so this is a no-op for the
+    current frontend.
+    """
+    from db_supabase import count_documents, list_corporate_accounts_filtered
+
+    effective_skip = offset if offset is not None else skip
+    capped_limit = min(limit, 500)
 
     try:
         rows = await list_corporate_accounts_filtered(
             status=status.value if status else None,
             size_tier=size_tier.value if size_tier else None,
             search=search,
-            skip=skip,
-            limit=min(limit, 500),
+            skip=effective_skip,
+            limit=capped_limit,
         )
         if is_active is not None:
             rows = [r for r in rows if bool(r.get("is_active")) == is_active]
+        # X-Total-Count reflects unfiltered table size when no server-side
+        # filters are active; with status/size_tier/search applied we'd need
+        # a parallel filtered count query — kept simple for now and the
+        # frontend uses hasNextPage (limit+1 trick) regardless.
+        try:
+            total = await count_documents("corporate_accounts")
+            response.headers["X-Total-Count"] = str(total)
+        except Exception:
+            logger.warning("Failed to compute corporate_accounts total count", exc_info=True)
+        response.headers["X-Limit"] = str(capped_limit)
         return rows
     except Exception as e:
         # B-P3-leak-cleanup: Postgres error strings carry constraint

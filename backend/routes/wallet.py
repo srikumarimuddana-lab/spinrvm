@@ -18,12 +18,16 @@ try:
     from ..db_supabase import wallet_increment_balance, wallet_pay_for_ride
     from ..db_supabase import wallet_transfer as _wallet_transfer_rpc
     from ..dependencies import get_current_user
+    from ..utils.error_handling import ErrorCode, SpinrException
+    from ..utils.error_keys import ErrorKeys
     from ..utils.idempotency import idempotent_endpoint
 except ImportError:
     from db import db
     from db_supabase import wallet_increment_balance, wallet_pay_for_ride
     from db_supabase import wallet_transfer as _wallet_transfer_rpc
     from dependencies import get_current_user
+    from utils.error_handling import ErrorCode, SpinrException
+    from utils.error_keys import ErrorKeys
     from utils.idempotency import idempotent_endpoint
 
 logger = logging.getLogger(__name__)
@@ -34,6 +38,10 @@ _TWO = Decimal("0.01")
 
 def _d(v) -> Decimal:
     return Decimal(str(v)).quantize(_TWO, rounding=ROUND_HALF_UP)
+
+
+def _money_str(v) -> str:
+    return str(_d(v))
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -48,7 +56,7 @@ async def get_or_create_wallet(user_id: str) -> dict:
     wallet_data = {
         "id": str(uuid.uuid4()),
         "user_id": user_id,
-        "balance": 0.0,
+        "balance": "0.00",
         "currency": "CAD",
         "is_active": True,
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -62,8 +70,8 @@ async def _record_transaction(
     wallet_id: str,
     user_id: str,
     txn_type: str,
-    amount: float,
-    balance_after: float,
+    amount: str,
+    balance_after: str,
     reference_id: str | None = None,
     description: str | None = None,
     metadata: dict | None = None,
@@ -111,7 +119,7 @@ async def get_wallet(current_user: dict = Depends(get_current_user)):
     wallet = await get_or_create_wallet(current_user["id"])
     return {
         "id": wallet["id"],
-        "balance": float(wallet.get("balance", 0)),
+        "balance": _money_str(wallet.get("balance", 0)),
         "currency": wallet.get("currency", "CAD"),
         "is_active": wallet.get("is_active", True),
     }
@@ -136,13 +144,13 @@ async def top_up_wallet(
         wallet_id=wallet["id"],
         user_id=current_user["id"],
         txn_type="top_up",
-        amount=float(_d(req.amount)),
-        balance_after=float(new_balance),
+        amount=_money_str(req.amount),
+        balance_after=_money_str(new_balance),
         description=f"Wallet top-up ${req.amount:.2f}",
     )
 
     return {
-        "balance": float(new_balance),
+        "balance": _money_str(new_balance),
         "transaction_id": txn["id"],
     }
 
@@ -171,7 +179,13 @@ async def wallet_pay(req: WalletPayRequest, current_user: dict = Depends(get_cur
         new_balance = await wallet_pay_for_ride(wallet["id"], req.ride_id, debit_amount)
     except ValueError as exc:
         if "insufficient_funds" in str(exc):
-            raise HTTPException(status_code=400, detail="Insufficient wallet balance") from exc
+            raise SpinrException(
+                message="Insufficient wallet balance",
+                error_code=ErrorCode.PAYMENT_INSUFFICIENT_FUNDS,
+                status_code=400,
+                message_key=ErrorKeys.PAYMENT_INSUFFICIENT_FUNDS,
+                action_hint="Top up your wallet",
+            ) from exc
         raise HTTPException(status_code=503, detail="Wallet payment failed — please retry") from exc
 
     # Mark the ride payment method (the RPC already set payment_status='paid')
@@ -185,14 +199,14 @@ async def wallet_pay(req: WalletPayRequest, current_user: dict = Depends(get_cur
         wallet_id=wallet["id"],
         user_id=current_user["id"],
         txn_type="ride_payment",
-        amount=-float(debit_amount),
-        balance_after=float(new_balance),
+        amount="-" + _money_str(debit_amount),
+        balance_after=_money_str(new_balance),
         reference_id=req.ride_id,
         description=f"Ride payment ${req.amount:.2f}",
     )
 
     return {
-        "balance": float(new_balance),
+        "balance": _money_str(new_balance),
         "transaction_id": txn["id"],
     }
 
@@ -242,10 +256,21 @@ async def transfer_to_user(
     # Find recipient
     recipient = await db.find_one("users", {"phone": req.recipient_phone})
     if not recipient:
-        raise HTTPException(status_code=404, detail="Recipient not found")
+        raise SpinrException(
+            message="Recipient not found",
+            error_code=ErrorCode.RESOURCE_NOT_FOUND,
+            status_code=404,
+            message_key=ErrorKeys.WALLET_TRANSFER_RECIPIENT_NOT_FOUND,
+            action_hint="Check the phone number",
+        )
 
     if recipient["id"] == current_user["id"]:
-        raise HTTPException(status_code=400, detail="Cannot transfer to yourself")
+        raise SpinrException(
+            message="Cannot transfer to yourself",
+            error_code=ErrorCode.VALIDATION_ERROR,
+            status_code=400,
+            message_key=ErrorKeys.WALLET_TRANSFER_SELF,
+        )
 
     sender_wallet = await get_or_create_wallet(current_user["id"])
     recipient_wallet = await get_or_create_wallet(recipient["id"])
@@ -261,24 +286,30 @@ async def transfer_to_user(
         )
     except ValueError as exc:
         if "insufficient_funds" in str(exc):
-            raise HTTPException(status_code=400, detail="Insufficient wallet balance") from exc
+            raise SpinrException(
+                message="Insufficient wallet balance",
+                error_code=ErrorCode.PAYMENT_INSUFFICIENT_FUNDS,
+                status_code=400,
+                message_key=ErrorKeys.PAYMENT_INSUFFICIENT_FUNDS,
+                action_hint="Top up your wallet",
+            ) from exc
         raise HTTPException(status_code=503, detail="Transfer failed — please retry") from exc
 
     await _record_transaction(
         wallet_id=sender_wallet["id"],
         user_id=current_user["id"],
         txn_type="fare_split_sent",
-        amount=-float(transfer_amount),
-        balance_after=float(new_sender_balance),
+        amount="-" + _money_str(transfer_amount),
+        balance_after=_money_str(new_sender_balance),
         description=f"Transfer to {req.recipient_phone}",
     )
     await _record_transaction(
         wallet_id=recipient_wallet["id"],
         user_id=recipient["id"],
         txn_type="fare_split_received",
-        amount=float(transfer_amount),
-        balance_after=float(new_recipient_balance),
+        amount=_money_str(transfer_amount),
+        balance_after=_money_str(new_recipient_balance),
         description=f"Received from {current_user.get('phone', 'user')}",
     )
 
-    return {"balance": float(new_sender_balance), "success": True}
+    return {"balance": _money_str(new_sender_balance), "success": True}

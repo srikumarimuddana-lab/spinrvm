@@ -116,7 +116,7 @@ export default function SavedPlacesScreen() {
       setShowAdd(false);
       resetForm();
     } catch (err: any) {
-      setAlertState({ visible: true, title: 'Error', message: err.message || 'Failed to save place', variant: 'danger' });
+      setAlertState({ visible: true, title: 'Error', message: err.response?.data?.detail || err.message || 'Failed to save place', variant: 'danger' });
     } finally { setSaving(false); }
   };
 

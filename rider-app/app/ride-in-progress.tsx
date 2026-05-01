@@ -63,28 +63,45 @@ function RideInProgressScreenContent() {
   );
 
   useEffect(() => {
-    if (currentRide && mapRef.current) {
-        if (currentDriver?.lat && currentDriver?.lng) {
-          mapRef.current.fitToCoordinates(
-            [
-              { latitude: currentDriver.lat, longitude: currentDriver.lng },
-              { latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }
-            ],
-            {
-              edgePadding: { top: 50, right: 50, bottom: 250, left: 50 },
-              animated: true,
-            }
-          );
-        } else {
-             mapRef.current.animateToRegion({
-                latitude: currentRide.pickup_lat || currentRide.dropoff_lat,
-                longitude: currentRide.pickup_lng || currentRide.dropoff_lng,
-                latitudeDelta: 0.05,
-                longitudeDelta: 0.05,
-             });
+    // Snapshot props at effect entry — the closure shouldn't reach into
+    // currentRide / currentDriver after an async state change.
+    const ride = currentRide;
+    const driver = currentDriver;
+    const map = mapRef.current;
+    if (!ride || !map) return;
+
+    const isCoord = (n: unknown): n is number =>
+      typeof n === 'number' && Number.isFinite(n);
+
+    const dropLat = ride.dropoff_lat;
+    const dropLng = ride.dropoff_lng;
+
+    if (isCoord(driver?.lat) && isCoord(driver?.lng) && isCoord(dropLat) && isCoord(dropLng)) {
+      map.fitToCoordinates(
+        [
+          { latitude: driver.lat, longitude: driver.lng },
+          { latitude: dropLat, longitude: dropLng },
+        ],
+        {
+          edgePadding: { top: 50, right: 50, bottom: 250, left: 50 },
+          animated: true,
         }
+      );
+      return;
     }
-  }, [currentRide?.dropoff_lat, currentRide?.dropoff_lng, currentDriver?.lat, currentDriver?.lng]);
+
+    // No driver fix yet — center on pickup, fall back to dropoff.
+    const centerLat = isCoord(ride.pickup_lat) ? ride.pickup_lat : dropLat;
+    const centerLng = isCoord(ride.pickup_lng) ? ride.pickup_lng : dropLng;
+    if (isCoord(centerLat) && isCoord(centerLng)) {
+      map.animateToRegion({
+        latitude: centerLat,
+        longitude: centerLng,
+        latitudeDelta: 0.05,
+        longitudeDelta: 0.05,
+      });
+    }
+  }, [currentRide, currentDriver?.lat, currentDriver?.lng]);
 
   useEffect(() => {
     if (!rideId) return;
@@ -113,7 +130,7 @@ function RideInProgressScreenContent() {
       setAlertState({
         visible: true,
         title: 'End ride early?',
-        message: `Full fare of $${(currentRide?.total_fare || 0).toFixed(2)} applies. Your driver will continue.`,
+        message: `Full fare of $${parseFloat(currentRide?.total_fare || '0').toFixed(2)} applies. Your driver will continue.`,
         variant: 'warning',
         buttons: [
           { text: 'Continue Ride', style: 'cancel' },
@@ -317,7 +334,7 @@ I've shared my live location with you for safety.
         <View style={styles.fareRow}>
           <View style={styles.fareItem}>
             <Ionicons name="cash-outline" size={16} color={colors.textDim} />
-            <Text style={styles.fareValue} allowFontScaling={false}>${(currentRide?.total_fare || 0).toFixed(2)}</Text>
+            <Text style={styles.fareValue} allowFontScaling={false}>${parseFloat(currentRide?.total_fare || '0').toFixed(2)}</Text>
             <Text style={styles.fareLabel}>Fare</Text>
           </View>
           <View style={styles.fareDivider} />
@@ -387,7 +404,7 @@ I've shared my live location with you for safety.
           setAlertState({
             visible: true,
             title: 'End ride early?',
-            message: `You will be charged the full agreed fare of $${(currentRide?.total_fare || 0).toFixed(2)}. This cannot be undone.`,
+            message: `You will be charged the full agreed fare of $${parseFloat(currentRide?.total_fare || '0').toFixed(2)}. This cannot be undone.`,
             variant: 'warning',
             buttons: [
               { text: 'Continue Ride', style: 'cancel' },

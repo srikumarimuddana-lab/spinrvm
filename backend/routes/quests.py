@@ -369,7 +369,7 @@ async def admin_list_quests(
             "quests",
             filters,
             limit=limit,
-            skip=offset,
+            offset=offset,
             order="created_at",
         )
     except Exception as e:
@@ -451,7 +451,7 @@ async def admin_get_quest_participants(
             "quest_progress",
             filters,
             limit=limit,
-            skip=offset,
+            offset=offset,
             order="created_at",
         )
     except Exception as e:

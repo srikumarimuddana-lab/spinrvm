@@ -26,6 +26,15 @@ import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 
 const { width } = Dimensions.get('window');
 
+// Safe currency display: avoids float drift for 2-decimal-place Decimal strings
+// from the backend (e.g. "15.75" → 15.75, never 15.749999…).
+const toMoney = (s: string | number | null | undefined): string => {
+  const n = Math.round((parseFloat(String(s ?? '0')) || 0) * 100) / 100;
+  return n.toFixed(2);
+};
+const parseMoney = (s: string | number | null | undefined): number =>
+  Math.round((parseFloat(String(s ?? '0')) || 0) * 100) / 100;
+
 type Period = 'today' | 'week' | 'month' | 'all';
 type ChartMode = 'daily' | 'weekly' | 'monthly';
 
@@ -55,6 +64,7 @@ function EarningsScreen() {
   const [chartMode, setChartMode] = useState<ChartMode>('daily');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   // Weekly earnings forecast widget (Feature B)
   const [forecast, setForecast] = useState<{
@@ -73,16 +83,22 @@ function EarningsScreen() {
 
   const loadData = useCallback(async () => {
     setLoading(true);
-    await Promise.all([
-      fetchEarnings(period),
-      fetchDailyEarnings(period === 'today' ? 1 : period === 'week' ? 7 : period === 'month' ? 30 : 30),
-      fetchWeeklyEarnings(4),
-      fetchMonthlyEarnings(6),
-      fetchEarningsComparison(period === 'month' ? 'month' : 'week'),
-      fetchTripEarnings(),
-      fetchDriverBalance(),
-    ]);
-    setLoading(false);
+    setFetchError(null);
+    try {
+      await Promise.all([
+        fetchEarnings(period),
+        fetchDailyEarnings(period === 'today' ? 1 : period === 'week' ? 7 : period === 'month' ? 30 : 30),
+        fetchWeeklyEarnings(4),
+        fetchMonthlyEarnings(6),
+        fetchEarningsComparison(period === 'month' ? 'month' : 'week'),
+        fetchTripEarnings(),
+        fetchDriverBalance(),
+      ]);
+    } catch {
+      setFetchError('Could not load earnings. Pull down to retry.');
+    } finally {
+      setLoading(false);
+    }
   }, [period]);
 
   useEffect(() => {
@@ -96,20 +112,20 @@ function EarningsScreen() {
   };
 
   // Prepare chart data based on current mode
-  const barChartData = dailyEarnings.map((d) => ({
+  const barChartData = (dailyEarnings ?? []).map((d) => ({
     label: new Date(d.date + 'T00:00:00').toLocaleDateString('en', { weekday: 'narrow' }),
-    value: d.earnings,
-    secondary: d.tips,
+    value: parseMoney(d.earnings),
+    secondary: parseMoney(d.tips),
   }));
 
-  const weeklyChartData = weeklyEarnings.map((w) => ({
+  const weeklyChartData = (weeklyEarnings ?? []).map((w) => ({
     label: new Date(w.week_start + 'T00:00:00').toLocaleDateString('en', { month: 'short', day: 'numeric' }),
-    value: w.earnings,
+    value: parseMoney(w.earnings),
   }));
 
-  const monthlyChartData = monthlyEarnings.map((m) => ({
+  const monthlyChartData = (monthlyEarnings ?? []).map((m) => ({
     label: new Date(m.month + '-01T00:00:00').toLocaleDateString('en', { month: 'short' }),
-    value: m.earnings,
+    value: parseMoney(m.earnings),
   }));
 
   const compPct = earningsComparison?.change_pct?.earnings ?? 0;
@@ -163,19 +179,31 @@ function EarningsScreen() {
         <View style={styles.totalBox}>
           <Text style={styles.totalLabel}>{t('earnings.totalEarnings')}</Text>
           <Text style={styles.totalAmount}>
-            ${loading ? '--' : (earnings?.total_earnings || 0).toFixed(2)}
+            ${loading ? '--' : toMoney(earnings?.total_earnings)}
           </Text>
 
-          {(earnings?.total_tips ? earnings.total_tips > 0 : false) && (
+          {parseMoney(earnings?.total_tips) > 0 && (
             <View style={styles.tipsBadge}>
               <Ionicons name="gift" size={14} color={colors.gold} style={{ marginRight: 2 }} />
-              <Text style={styles.tipsText}>+${earnings?.total_tips?.toFixed(2)} tips included</Text>
+              <Text style={styles.tipsText}>+${toMoney(earnings?.total_tips)} tips included</Text>
             </View>
           )}
         </View>
       </LinearGradient>
 
       {renderFilterTabs()}
+
+      {fetchError && (
+        <View
+          style={styles.errorBanner}
+          accessibilityRole="alert"
+          accessibilityLiveRegion="polite"
+          accessibilityLabel={fetchError}
+        >
+          <Ionicons name="alert-circle-outline" size={16} color="#fff" />
+          <Text style={styles.errorBannerText}>{fetchError}</Text>
+        </View>
+      )}
 
       <ScrollView
         style={styles.content}
@@ -248,7 +276,7 @@ function EarningsScreen() {
                 <Ionicons name="trending-up" size={18} color="#38BDF8" />
             </View>
             <View>
-                <Text style={styles.statValue}>${loading ? '--' : (earnings?.average_per_ride || 0).toFixed(2)}</Text>
+                <Text style={styles.statValue}>${loading ? '--' : toMoney(earnings?.average_per_ride)}</Text>
                 <Text style={styles.statLabel}>Avg per Trip</Text>
             </View>
           </View>
@@ -330,7 +358,7 @@ function EarningsScreen() {
               <Text style={styles.emptyStateDesc}>Complete rides to start seeing your earnings breakdown here.</Text>
             </View>
           ) : (
-            tripEarnings.map((trip) => (
+            (tripEarnings ?? []).map((trip) => (
               <TouchableOpacity
                   key={trip.ride_id}
                   style={styles.rideCard}
@@ -408,9 +436,9 @@ function EarningsScreen() {
 
                     <View style={styles.fareContainer}>
                       <Text style={styles.fareLabel}>Earned</Text>
-                      <Text style={styles.fareText}>${trip.driver_earnings.toFixed(2)}</Text>
-                      {trip.tip_amount > 0 && (
-                          <Text style={styles.tipAmountText}>+ ${trip.tip_amount.toFixed(2)} tip</Text>
+                      <Text style={styles.fareText}>${toMoney(trip.driver_earnings)}</Text>
+                      {parseMoney(trip.tip_amount) > 0 && (
+                          <Text style={styles.tipAmountText}>+ ${toMoney(trip.tip_amount)} tip</Text>
                       )}
                     </View>
                   </View>
@@ -703,6 +731,19 @@ function createStyles(colors: ThemeColors) {
       color: colors.textDim,
       textAlign: 'center',
       lineHeight: 22,
+    },
+    errorBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.error,
+      paddingHorizontal: 16,
+      paddingVertical: 10,
+      gap: 8,
+    },
+    errorBannerText: {
+      color: '#fff',
+      fontSize: 13,
+      flex: 1,
     },
     // Trips Section
     tripsSection: {

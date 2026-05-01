@@ -88,7 +88,7 @@ async def run_retention_purge_tick(dry_run: bool = False) -> Optional[dict]:
         data = res.get("data")
 
     if not isinstance(data, dict):
-        logger.warning(
+        logger.error(
             "retention_purge: unexpected rpc response shape: %r",
             type(data).__name__,
         )

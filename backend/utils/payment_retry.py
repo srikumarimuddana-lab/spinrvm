@@ -183,7 +183,7 @@ async def retry_failed_payments():
                 )
 
         except Exception as e:
-            logger.warning(f"Payment retry failed for ride {ride_id}: {e}")
+            logger.error(f"Payment retry failed for ride {ride_id}: {e}", exc_info=True)
             await db.update_one(
                 "rides",
                 {"id": ride_id},

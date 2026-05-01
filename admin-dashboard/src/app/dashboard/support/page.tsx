@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { LifeBuoy, HelpCircle, PackageSearch, Flag, FileWarning, BookOpen, ScrollText } from "lucide-react";
 import dynamic from "next/dynamic";
+import { useRequireModule } from "@/hooks/useRequireModule";
 
 const TicketsTab = dynamic(() => import("./_tabs/tickets"), { ssr: false, loading: () => <TabLoader /> });
 const DisputesTab = dynamic(() => import("./_tabs/disputes"), { ssr: false, loading: () => <TabLoader /> });
@@ -27,8 +28,10 @@ function TabLoader() {
 }
 
 export default function SupportPage() {
+    const { allowed } = useRequireModule("support");
     const [activeTab, setActiveTab] = useState("tickets");
 
+    if (!allowed) return null;
     return (
         <div className="px-1 sm:px-0">
             <div className="mb-4">

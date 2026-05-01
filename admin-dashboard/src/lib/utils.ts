@@ -5,11 +5,13 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
-export function formatCurrency(amount: number) {
+export function formatCurrency(amount: string | number | null | undefined) {
+  // MoneyString values arrive as "15.50"; parseFloat handles both strings and numbers.
+  const num = typeof amount === "string" ? parseFloat(amount) : (amount ?? 0);
   return new Intl.NumberFormat("en-CA", {
     style: "currency",
     currency: "CAD",
-  }).format(amount);
+  }).format(isNaN(num) ? 0 : num);
 }
 
 export function formatDate(date: string | Date | undefined | null) {

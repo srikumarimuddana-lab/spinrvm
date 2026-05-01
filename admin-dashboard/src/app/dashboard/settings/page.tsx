@@ -19,8 +19,10 @@ import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Save, Check, ShieldCheck, ShieldOff } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
+import { useRequireModule } from "@/hooks/useRequireModule";
 
 export default function SettingsPage() {
+    const { allowed } = useRequireModule("settings");
     const { toast } = useToast();
     const [settings, setSettings] = useState<any>(null);
     const [loading, setLoading] = useState(true);
@@ -92,6 +94,8 @@ export default function SettingsPage() {
         );
     }
 
+    if (!allowed) return null;
+
     return (
         <div className="space-y-6">
             <div className="flex items-center justify-between">
@@ -130,7 +134,7 @@ export default function SettingsPage() {
                                     onChange={(e) =>
                                         update("stripe_publishable_key", e.target.value)
                                     }
-                                    placeholder="pk_test_..."
+                                    placeholder="Stripe publishable key"
                                 />
                             </div>
                             <div className="space-y-2">
@@ -141,7 +145,7 @@ export default function SettingsPage() {
                                     onChange={(e) =>
                                         update("stripe_secret_key", e.target.value)
                                     }
-                                    placeholder="sk_test_..."
+                                    placeholder="Stripe secret key"
                                 />
                             </div>
                             <div className="space-y-2">
@@ -152,7 +156,7 @@ export default function SettingsPage() {
                                     onChange={(e) =>
                                         update("stripe_webhook_secret", e.target.value)
                                     }
-                                    placeholder="whsec_..."
+                                    placeholder="Stripe webhook secret"
                                 />
                                 <p className="text-xs text-muted-foreground">
                                     From Stripe Dashboard &rarr; Developers &rarr; Webhooks

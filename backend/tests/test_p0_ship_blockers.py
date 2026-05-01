@@ -250,6 +250,7 @@ class TestDuplicateRideRequestGuardHandler:
 
         from backend.routes import rides as rides_mod
         from backend.schemas import CreateRideRequest
+        from backend.utils.error_handling import SpinrException
 
         active = _ride(status="searching")
         rider_row = {"id": RIDER_ID, "status": "active", "stripe_customer_id": "cus_x"}
@@ -276,11 +277,11 @@ class TestDuplicateRideRequestGuardHandler:
             patch("backend.routes.rides.db.find_one", AsyncMock(return_value=rider_row)),
             patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[active])),
         ):
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises((HTTPException, SpinrException)) as exc_info:
                 await rides_mod.create_ride(request=fake_request, body=body, current_user={"id": RIDER_ID})
 
         assert exc_info.value.status_code == 409
-        assert "active" in exc_info.value.detail.lower()
+        assert "active" in (getattr(exc_info.value, "detail", None) or getattr(exc_info.value, "message", "")).lower()
 
     async def test_handler_returns_existing_ride_on_idempotency_key_replay(self):
         """Idempotency-Key guard: replay returns the original ride."""
@@ -652,6 +653,7 @@ class TestPaymentFailureAtComplete:
         from fastapi import HTTPException
 
         from backend.routes import rides as rides_mod
+        from backend.utils.error_handling import SpinrException
 
         completed = _ride(status="completed", payment_method="wallet", total_fare=50.0)
         wallet = {"id": "w1", "user_id": RIDER_ID, "balance": 5.0, "is_active": True}
@@ -675,7 +677,7 @@ class TestPaymentFailureAtComplete:
 
             req = ProcessPaymentRequest(tip_amount=0)
 
-            with pytest.raises(HTTPException) as exc:
+            with pytest.raises((HTTPException, SpinrException)) as exc:
                 await rides_mod.process_payment(ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID})
 
         assert exc.value.status_code == 400
@@ -695,6 +697,7 @@ class TestPaymentFailureAtComplete:
         from fastapi import HTTPException
 
         from backend.routes import rides as rides_mod
+        from backend.utils.error_handling import SpinrException
         from backend.utils.stripe_charge import ChargeOutcome
 
         completed = _ride(
@@ -728,7 +731,7 @@ class TestPaymentFailureAtComplete:
             from backend.routes.rides import ProcessPaymentRequest
 
             req = ProcessPaymentRequest(tip_amount=0)
-            with pytest.raises(HTTPException) as exc:
+            with pytest.raises((HTTPException, SpinrException)) as exc:
                 await rides_mod.process_payment(ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID})
 
         assert exc.value.status_code == 402

@@ -17,22 +17,28 @@
 -- the legacy resource/resource_id/details columns) remain valid and readable.
 
 -- Add standardized columns alongside legacy ones (no DROP here — append-only).
+-- entity_type and entity_id already exist from migration 06; IF NOT EXISTS is a
+-- safe no-op for those two. actor_id is added here as a proper top-level column
+-- (previously embedded in the details TEXT blob by audit_logger.py).
 ALTER TABLE audit_logs
-    ADD COLUMN IF NOT EXISTS entity_type TEXT        DEFAULT NULL,
-    ADD COLUMN IF NOT EXISTS entity_id   TEXT        DEFAULT NULL,
-    ADD COLUMN IF NOT EXISTS old_value   JSONB       DEFAULT NULL,
-    ADD COLUMN IF NOT EXISTS new_value   JSONB       DEFAULT NULL,
-    ADD COLUMN IF NOT EXISTS reason      TEXT        DEFAULT NULL,
+    ADD COLUMN IF NOT EXISTS entity_type TEXT          DEFAULT NULL,
+    ADD COLUMN IF NOT EXISTS entity_id   TEXT          DEFAULT NULL,
+    ADD COLUMN IF NOT EXISTS actor_id    TEXT          DEFAULT NULL,
+    ADD COLUMN IF NOT EXISTS old_value   JSONB         DEFAULT NULL,
+    ADD COLUMN IF NOT EXISTS new_value   JSONB         DEFAULT NULL,
+    ADD COLUMN IF NOT EXISTS reason      TEXT          DEFAULT NULL,
     ADD COLUMN IF NOT EXISTS amount      NUMERIC(12,2) DEFAULT NULL;
 
--- Backfill entity_type/entity_id from legacy resource/resource_id columns
--- for rows that pre-date this migration (e.g. ride_declined entries).
+-- Backfill actor_id from the details TEXT blob for rows written before this
+-- migration. No backfill needed for entity_type/entity_id — they were the
+-- original columns in migration 06 and are already populated.
+-- Guard: only cast rows that look like JSON objects (start with '{"') —
+-- legacy rows may contain plain text or Python repr() strings that are
+-- not valid JSON and would cause a 22P02 cast error.
 UPDATE audit_logs
-SET
-    entity_type = resource,
-    entity_id   = resource_id
-WHERE entity_type IS NULL
-  AND resource    IS NOT NULL;
+SET actor_id = (details::jsonb)->>'actor_id'
+WHERE actor_id IS NULL
+  AND details LIKE '{"actor_id"%';
 
 -- Composite indexes for the two query patterns on the audit-logs dashboard:
 --   1. "Show all events for this entity"

@@ -4,9 +4,10 @@ Runs once per day (aligned to 02:00 UTC) comparing Stripe PaymentIntent
 totals against financial_events rows and alerting finance on any discrepancy
 > $0.01.
 
-Replay-safety: the claim key is the ISO date string written to a Redis key
-``spinr:reconciliation:last_run``. Only the first replica to successfully
-acquire the key runs the tick for that calendar day.
+Replay-safety: a date-suffixed Redis key (``spinr:reconciliation:<YYYY-MM-DD>``)
+is claimed via SET NX EX. Only the first replica to acquire it runs the tick
+for that calendar day; the in-process fallback in `redis_client` makes this
+behave correctly in single-replica dev as well.
 
 Required env / settings: ``stripe_secret_key`` in app_settings table.
 """
@@ -17,11 +18,20 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
+try:
+    from .redis_client import redis_set_nx  # type: ignore
+except ImportError:
+    from utils.redis_client import redis_set_nx  # type: ignore
+
 logger = logging.getLogger(__name__)
 
 # Run once per day; loop wakes every 60 s to stay aligned to 02:00 UTC.
 _LOOP_POLL_SECONDS = 60
 _DISCREPANCY_THRESHOLD_CENTS = 1  # $0.01 — alert on any cent-level drift
+# 25 h: the date-suffixed lock key only needs to outlive the current calendar
+# day's 02:00 UTC window. Tomorrow's tick uses a different key entirely, so
+# the TTL is just defensive cleanup.
+_LOCK_TTL_SECONDS = 25 * 60 * 60
 
 
 async def reconciliation_loop() -> None:
@@ -41,22 +51,15 @@ async def _maybe_run_tick() -> None:
         return
 
     today_key = now.date().isoformat()
+    lock_key = f"spinr:reconciliation:{today_key}"
 
-    # Redis leader-lock: only one replica runs the daily tick.
-    try:
-        from utils.redis_client import get_redis  # type: ignore
-
-        redis = get_redis()
-        lock_key = "spinr:reconciliation:last_run"
-        last_run = await redis.get(lock_key)
-        if last_run and last_run.decode() == today_key:
-            return
-        # Claim today's slot (TTL = 25 h so it survives the next 02:00 window)
-        await redis.set(lock_key, today_key, ex=90000)
-    except Exception:
-        # Redis unavailable — fall back to always running (safe: reconciliation
-        # is idempotent but may fire on every replica without Redis).
-        logger.warning("reconciliation_loop: Redis unavailable; running without leader lock")
+    # Redis leader-lock via SET NX EX: only the first replica to acquire the
+    # date-suffixed key for today runs the tick. The redis_client wrapper
+    # falls back to an in-process dict when REDIS_URL is unset (dev/test),
+    # so this is also correct in single-replica mode.
+    acquired = await redis_set_nx(lock_key, "1", _LOCK_TTL_SECONDS)
+    if not acquired:
+        return
 
     yesterday = (now - timedelta(days=1)).date()
     await _run_reconciliation(yesterday)
@@ -68,6 +71,12 @@ async def _run_reconciliation(date) -> None:  # noqa: ANN001
 
     try:
         stripe_total_cents = await _sum_stripe_intents(date)
+    except RuntimeError as e:
+        if str(e) == "stripe_secret_key not configured":
+            logger.info(f"reconciliation: {e} — skipping for {date}")
+            return
+        logger.error(f"reconciliation: failed to query Stripe for {date}", exc_info=True)
+        return
     except Exception:
         logger.error(f"reconciliation: failed to query Stripe for {date}", exc_info=True)
         return

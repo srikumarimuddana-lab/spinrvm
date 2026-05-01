@@ -1,8 +1,6 @@
-// Use relative URL to go through Next.js proxy (avoids CORS and IPv6 issues)
-// For production, set NEXT_PUBLIC_API_URL to your backend URL.
-// Default is "" (empty) so /api/* requests route through next.config.ts rewrites
-// → http://127.0.0.1:8001. Never talk directly to the backend from the browser.
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
+// Always use relative URL so /api/* requests route through next.config.ts rewrites.
+// Never talk directly to the backend from the browser — that bypasses the proxy and triggers CORS.
+const API_BASE = "";
 
 // Import Zustand store for token management
 import { useAuthStore } from "@/store/authStore";
@@ -424,19 +422,46 @@ export const getDrivers = (opts: {
     offset?: number;
     is_verified?: boolean;
     is_online?: boolean;
+    is_available?: boolean;
     status?: string;
     service_area_id?: string;
+    search?: string;
 } = {}) => {
     const sp = new URLSearchParams();
     if (opts.limit != null) sp.set("limit", String(opts.limit));
     if (opts.offset != null) sp.set("offset", String(opts.offset));
     if (opts.is_verified != null) sp.set("is_verified", String(opts.is_verified));
     if (opts.is_online != null) sp.set("is_online", String(opts.is_online));
+    if (opts.is_available != null) sp.set("is_available", String(opts.is_available));
     if (opts.status) sp.set("status", opts.status);
     if (opts.service_area_id) sp.set("service_area_id", opts.service_area_id);
+    if (opts.search) sp.set("search", opts.search);
     const qs = sp.toString();
     return request<any[]>(`/api/admin/drivers${qs ? `?${qs}` : ""}`);
 };
+
+/** POST-based typeahead search — keeps search terms (may include phone digits) out of URL/server logs. */
+export const adminSearchDrivers = (opts: {
+    search: string;
+    limit?: number;
+    is_online?: boolean;
+    is_available?: boolean;
+}) =>
+    request<any[]>("/api/admin/drivers/search", {
+        method: "POST",
+        body: JSON.stringify(opts),
+    });
+
+/** POST-based typeahead search — keeps search terms out of URL/server logs. */
+export const adminSearchUsers = (opts: {
+    search: string;
+    role?: "all" | "rider" | "driver" | "admin";
+    limit?: number;
+}) =>
+    request<any[]>("/api/admin/users/search", {
+        method: "POST",
+        body: JSON.stringify(opts),
+    });
 export const getDriverRides = (id: string) =>
     request<any>(`/api/admin/drivers/${id}/rides`);
 
@@ -1453,6 +1478,46 @@ export const adminCancelRide = (rideId: string, reason?: string) =>
         {
             method: "POST",
             body: JSON.stringify({ reason: reason ?? "Cancelled by admin" }),
+        },
+    );
+
+export const adminCompleteRide = (rideId: string) =>
+    request<{ success: boolean; ride_id: string; status: string }>(
+        `/api/admin/rides/${rideId}/complete`,
+        { method: "POST" },
+    );
+
+export const adminPlacesAutocomplete = (input: string, sessionToken?: string) => {
+    const sp = new URLSearchParams({ input });
+    if (sessionToken) sp.set("session_token", sessionToken);
+    return request<{ predictions: any[] }>(`/api/admin/places/autocomplete?${sp.toString()}`);
+};
+
+export const adminPlacesDetails = (placeId: string, sessionToken?: string) => {
+    const sp = new URLSearchParams({ place_id: placeId });
+    if (sessionToken) sp.set("session_token", sessionToken);
+    return request<{ lat: number; lng: number; formatted_address: string }>(`/api/admin/places/details?${sp.toString()}`);
+};
+
+export const adminCreateRide = (data: {
+    rider_id: string;
+    driver_id?: string;
+    pickup_address: string;
+    pickup_lat: number;
+    pickup_lng: number;
+    dropoff_address: string;
+    dropoff_lat: number;
+    dropoff_lng: number;
+    // Pass as string to preserve Decimal precision on the backend
+    // (Pydantic Decimal accepts string/number; string avoids float drift).
+    total_fare?: string | number;
+    vehicle_type_id?: string;
+}) =>
+    request<{ success: boolean; ride_id: string; status: string }>(
+        "/api/admin/rides/create",
+        {
+            method: "POST",
+            body: JSON.stringify(data),
         },
     );
 

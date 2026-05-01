@@ -38,12 +38,12 @@ interface RideEstimate {
   vehicle_type: VehicleType;
   distance_km: number;
   duration_minutes: number;
-  base_fare: number;
-  distance_fare: number;
-  time_fare: number;
-  booking_fee: number;
-  surge_multiplier?: number;
-  total_fare: number;
+  base_fare: string; // MoneyString: "3.50"
+  distance_fare: string; // MoneyString
+  time_fare: string; // MoneyString
+  booking_fee: string; // MoneyString
+  surge_multiplier?: number; // ratio, not money — stays number
+  total_fare: string; // MoneyString
   available: boolean;
   eta_minutes: number;
   driver_count: number;
@@ -92,14 +92,14 @@ interface Ride {
   dropoff_lng: number;
   distance_km: number;
   duration_minutes: number;
-  base_fare: number;
-  total_fare: number;
+  base_fare: string; // MoneyString
+  total_fare: string; // MoneyString
   payment_method: string;
   payment_status?: string;
   card_last4?: string;
   status: string;
   pickup_otp: string;
-  tip_amount?: number;
+  tip_amount?: string; // MoneyString
   corporate_account_id?: string | null;
   is_scheduled?: boolean;
   scheduled_time?: string;
@@ -311,14 +311,26 @@ export const useRideStore = create<RideState>((set, get) => ({
       const queueStr = await AsyncStorage.getItem('offline_queue');
       if (!queueStr) return;
 
-      const queue: Array<{
+      // Corrupted AsyncStorage (partial write, app upgrade migration miss,
+      // device disk full mid-write) used to crash the entire sync flow.
+      // Treat a bad payload as an empty queue and discard it.
+      type OfflineRequest = {
         id: string;
         type: 'create_ride' | 'cancel_ride' | 'rate_ride' | 'tip' | 'emergency';
         rideId?: string;
         data?: any;
         retryCount?: number;
         timestamp?: number;
-      }> = JSON.parse(queueStr);
+      };
+      let queue: OfflineRequest[];
+      try {
+        const parsed = JSON.parse(queueStr);
+        queue = Array.isArray(parsed) ? (parsed as OfflineRequest[]) : [];
+      } catch (parseErr) {
+        if (__DEV__) console.warn('[offline_queue] discarding corrupted queue:', parseErr);
+        await AsyncStorage.removeItem('offline_queue');
+        return;
+      }
       if (queue.length === 0) return;
 
       const successfulSyncs: string[] = [];
@@ -561,6 +573,7 @@ export const useRideStore = create<RideState>((set, get) => ({
       set({ savedAddresses: [...get().savedAddresses, response.data] });
     } catch (error: any) {
       set({ error: error.message });
+      throw error;
     }
   },
 

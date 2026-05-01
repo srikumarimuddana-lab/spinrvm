@@ -198,8 +198,7 @@ async def test_rate_driver_tip_with_null_ride_fields():
         "tip_amount": None,
         "driver_earnings": None,
     }
-    driver = {"id": "driver-tip", "user_id": "user-tip", "name": "Tip Driver",
-              "rating": 4.0, "total_ratings": 1}
+    driver = {"id": "driver-tip", "user_id": "user-tip", "name": "Tip Driver", "rating": 4.0, "total_ratings": 1}
     update_ride_mock = AsyncMock(return_value=base_ride)
     update_one_mock = AsyncMock(return_value={})
 

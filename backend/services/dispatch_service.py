@@ -259,6 +259,7 @@ class DispatchService:
                 "$set": {
                     "driver_id": driver_id,
                     "status": "driver_assigned",
+                    "assigned_at": now,
                     "driver_notified_at": now,
                     "updated_at": now,
                 }

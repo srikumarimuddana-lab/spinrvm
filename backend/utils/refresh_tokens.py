@@ -111,7 +111,7 @@ async def issue_refresh_token(
                 {"$set": {"replaced_by": row_id, "revoked_at": now.isoformat()}},
             )
         except Exception as e:  # pragma: no cover
-            logger.warning(f"Could not chain refresh token {replaces} → {row_id}: {e}")
+            logger.error(f"Could not chain refresh token {replaces} → {row_id}: {e}", exc_info=True)
 
     return raw, row_id, expires_at
 
@@ -242,8 +242,8 @@ async def _handle_refresh_token_reuse(row: dict) -> None:
         except Exception as e:
             logger.error(f"reuse-cascade: WS kick failed (user={user_id} audience={audience}): {e}")
 
-    # Step 4: audit_logs row. Production schema (migration 06):
-    # id TEXT PK / action / entity_type / entity_id / user_email / details TEXT.
+    # Step 4: audit_logs row. Production schema (migration 57):
+    # id TEXT PK / action / entity_type / entity_id / actor_id / details TEXT.
     try:
         details_payload = {
             "replayed_row_id": row_id,
@@ -263,7 +263,7 @@ async def _handle_refresh_token_reuse(row: dict) -> None:
                 "action": "refresh_token_reuse_detected",
                 "entity_type": "user",
                 "entity_id": user_id or "unknown",
-                "user_email": "system:refresh_reuse_detector",
+                "actor_id": "system:refresh_reuse_detector",
                 "details": json.dumps(details_payload),
             },
         )
@@ -282,7 +282,7 @@ async def revoke_refresh_token(raw: str) -> bool:
     try:
         row = await db.find_one("refresh_tokens", {"token_hash": token_hash})
     except Exception as e:
-        logger.warning(f"revoke_refresh_token lookup failed: {e}")
+        logger.error(f"revoke_refresh_token lookup failed: {e}", exc_info=True)
         return False
     if not row or row.get("revoked_at"):
         return False
@@ -294,7 +294,7 @@ async def revoke_refresh_token(raw: str) -> bool:
         )
         return True
     except Exception as e:
-        logger.warning(f"revoke_refresh_token update failed: {e}")
+        logger.error(f"revoke_refresh_token update failed: {e}", exc_info=True)
         return False
 
 
@@ -315,7 +315,7 @@ async def revoke_all_for_user(user_id: str) -> int:
     try:
         rows = await db.get_rows("refresh_tokens", {"user_id": user_id}, limit=1000)
     except Exception as e:
-        logger.warning(f"refresh_tokens scan failed for user {user_id}: {e}")
+        logger.error(f"refresh_tokens scan failed for user {user_id}: {e}", exc_info=True)
         return 0
     n = 0
     for row in rows or []:
@@ -329,5 +329,5 @@ async def revoke_all_for_user(user_id: str) -> int:
             )
             n += 1
         except Exception as e:  # pragma: no cover
-            logger.warning(f"revoke_all_for_user: could not revoke {row.get('id')}: {e}")
+            logger.error(f"revoke_all_for_user: could not revoke {row.get('id')}: {e}", exc_info=True)
     return n

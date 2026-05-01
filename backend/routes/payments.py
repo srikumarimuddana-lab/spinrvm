@@ -8,11 +8,21 @@ try:
     from .. import db_supabase
     from ..dependencies import get_current_user
     from ..settings_loader import get_app_settings
+    from ..utils.error_handling import (
+        PaymentException,
+        PaymentMethodInvalidException,
+    )
+    from ..utils.error_keys import ErrorKeys
     from ..utils.idempotency import idempotent_endpoint
 except ImportError:
     import db_supabase
     from dependencies import get_current_user
     from settings_loader import get_app_settings
+    from utils.error_handling import (
+        PaymentException,
+        PaymentMethodInvalidException,
+    )
+    from utils.error_keys import ErrorKeys
     from utils.idempotency import idempotent_endpoint
 import logging
 
@@ -95,9 +105,10 @@ async def create_payment_intent(
             ride_fare = Decimal(str(ride.get("total_fare", 0)))
             requested = Decimal(str(body.amount))
             if requested != ride_fare:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(f"Payment amount {requested} does not match ride fare {ride_fare}"),
+                raise PaymentException(
+                    message=f"Payment amount {requested} does not match ride fare {ride_fare}",
+                    message_key=ErrorKeys.RIDE_PRICE_MISMATCH,
+                    action_hint="Refresh the fare estimate",
                 )
 
         amount = int(body.amount * 100)  # Convert dollars → cents
@@ -431,7 +442,11 @@ async def add_card(request: Request, current_user: dict = Depends(get_current_us
             "setup_intent_status": si.status,
         }
     except stripe.error.CardError as e:
-        raise HTTPException(status_code=400, detail=e.user_message or "Card declined") from e
+        raise PaymentMethodInvalidException(
+            message=e.user_message or "Card declined",
+            message_key=ErrorKeys.PAYMENT_METHOD_INVALID,
+            action_hint="Add a different card",
+        ) from e
     except Exception as e:
         logger.error(f"Add card error: {e}")
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
@@ -511,9 +526,10 @@ async def create_payment_sheet(
         ride_fare = Decimal(str(ride.get("total_fare", 0)))
         requested = Decimal(str(body.amount))
         if requested != ride_fare:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Payment amount {requested} does not match ride fare {ride_fare}",
+            raise PaymentException(
+                message=f"Payment amount {requested} does not match ride fare {ride_fare}",
+                message_key=ErrorKeys.RIDE_PRICE_MISMATCH,
+                action_hint="Refresh the fare estimate",
             )
 
     try:

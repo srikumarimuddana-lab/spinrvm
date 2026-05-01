@@ -155,6 +155,7 @@ class TestRideLifecycleHappyPath:
             COMPLETE_FROM_STATES,
             _require_ride_in_state,
         )
+        from backend.utils.error_handling import SpinrException
 
         mock_db = MagicMock()
         # Production code uses flat API: db.find_one("rides", {...})
@@ -165,7 +166,7 @@ class TestRideLifecycleHappyPath:
             ]
         )
         with patch("backend.routes.drivers.db", mock_db):
-            with pytest.raises(HTTPException) as exc:
+            with pytest.raises((HTTPException, SpinrException)) as exc:
                 await _require_ride_in_state(RIDE_ID, DRIVER_ID, COMPLETE_FROM_STATES)
         assert exc.value.status_code == 409
 

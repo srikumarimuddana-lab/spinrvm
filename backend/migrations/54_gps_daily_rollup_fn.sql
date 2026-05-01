@@ -1,6 +1,6 @@
 -- 54_gps_daily_rollup_fn.sql
 --
--- Rollback: DROP FUNCTION IF EXISTS compute_driver_phase_distances(TEXT, TIMESTAMPTZ, TIMESTAMPTZ);
+-- Rollback: DROP FUNCTION IF EXISTS compute_driver_phase_distances(UUID, TIMESTAMPTZ, TIMESTAMPTZ);
 --           DROP INDEX IF EXISTS idx_dlh_driver_ts_notnull;
 --
 -- Purpose: replace the Python haversine loop in routes/admin/maintenance.py
@@ -14,7 +14,7 @@
 -- search_path is pinned to prevent search_path injection.
 
 CREATE OR REPLACE FUNCTION compute_driver_phase_distances(
-    p_driver_id    TEXT,
+    p_driver_id    UUID,
     p_day_start    TIMESTAMPTZ,
     p_day_end      TIMESTAMPTZ
 )

@@ -422,6 +422,7 @@ export const getDrivers = (opts: {
     offset?: number;
     is_verified?: boolean;
     is_online?: boolean;
+    is_available?: boolean;
     status?: string;
     service_area_id?: string;
     search?: string;
@@ -431,12 +432,36 @@ export const getDrivers = (opts: {
     if (opts.offset != null) sp.set("offset", String(opts.offset));
     if (opts.is_verified != null) sp.set("is_verified", String(opts.is_verified));
     if (opts.is_online != null) sp.set("is_online", String(opts.is_online));
+    if (opts.is_available != null) sp.set("is_available", String(opts.is_available));
     if (opts.status) sp.set("status", opts.status);
     if (opts.service_area_id) sp.set("service_area_id", opts.service_area_id);
     if (opts.search) sp.set("search", opts.search);
     const qs = sp.toString();
     return request<any[]>(`/api/admin/drivers${qs ? `?${qs}` : ""}`);
 };
+
+/** POST-based typeahead search — keeps search terms (may include phone digits) out of URL/server logs. */
+export const adminSearchDrivers = (opts: {
+    search: string;
+    limit?: number;
+    is_online?: boolean;
+    is_available?: boolean;
+}) =>
+    request<any[]>("/api/admin/drivers/search", {
+        method: "POST",
+        body: JSON.stringify(opts),
+    });
+
+/** POST-based typeahead search — keeps search terms out of URL/server logs. */
+export const adminSearchUsers = (opts: {
+    search: string;
+    role?: "all" | "rider" | "driver" | "admin";
+    limit?: number;
+}) =>
+    request<any[]>("/api/admin/users/search", {
+        method: "POST",
+        body: JSON.stringify(opts),
+    });
 export const getDriverRides = (id: string) =>
     request<any>(`/api/admin/drivers/${id}/rides`);
 
@@ -1462,11 +1487,17 @@ export const adminCompleteRide = (rideId: string) =>
         { method: "POST" },
     );
 
-export const adminPlacesAutocomplete = (input: string) =>
-    request<{ predictions: any[] }>(`/api/admin/places/autocomplete?input=${encodeURIComponent(input)}`);
+export const adminPlacesAutocomplete = (input: string, sessionToken?: string) => {
+    const sp = new URLSearchParams({ input });
+    if (sessionToken) sp.set("session_token", sessionToken);
+    return request<{ predictions: any[] }>(`/api/admin/places/autocomplete?${sp.toString()}`);
+};
 
-export const adminPlacesDetails = (placeId: string) =>
-    request<{ lat: number; lng: number; formatted_address: string }>(`/api/admin/places/details?place_id=${encodeURIComponent(placeId)}`);
+export const adminPlacesDetails = (placeId: string, sessionToken?: string) => {
+    const sp = new URLSearchParams({ place_id: placeId });
+    if (sessionToken) sp.set("session_token", sessionToken);
+    return request<{ lat: number; lng: number; formatted_address: string }>(`/api/admin/places/details?${sp.toString()}`);
+};
 
 export const adminCreateRide = (data: {
     rider_id: string;

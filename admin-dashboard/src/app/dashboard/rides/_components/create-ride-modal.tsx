@@ -3,12 +3,12 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { 
-    adminCreateRide, 
-    getUsersPaginated, 
-    getDrivers, 
-    adminPlacesAutocomplete, 
-    adminPlacesDetails 
+import {
+    adminCreateRide,
+    adminSearchUsers,
+    adminSearchDrivers,
+    adminPlacesAutocomplete,
+    adminPlacesDetails,
 } from "@/lib/api";
 import { Search, MapPin, User, Car } from "lucide-react";
 
@@ -19,6 +19,11 @@ function useDebounce<T>(value: T, delay: number): T {
         return () => clearTimeout(handler);
     }, [value, delay]);
     return debouncedValue;
+}
+
+/** One UUID per modal open — groups all autocomplete + 1 details call into one billing session. */
+function newSessionToken() {
+    return crypto.randomUUID();
 }
 
 export function CreateRideModal({
@@ -62,26 +67,33 @@ export function CreateRideModal({
 
     const [fare, setFare] = useState("");
 
-    // Fetch Riders
+    // One session token per modal open; resets on close.
+    const sessionTokenRef = useRef<string>(newSessionToken());
+
+    // Fetch Riders — POST to keep phone digits out of URL logs
     useEffect(() => {
         if (!debouncedRiderSearch || selectedRider?.name === debouncedRiderSearch) {
             setRiderResults([]);
             return;
         }
-        getUsersPaginated({ role: "rider", search: debouncedRiderSearch, limit: 5 })
-            .then(res => setRiderResults(res))
-            .catch(() => setRiderResults([]));
+        const ctrl = new AbortController();
+        adminSearchUsers({ role: "rider", search: debouncedRiderSearch, limit: 5 })
+            .then((res) => { if (!ctrl.signal.aborted) setRiderResults(res); })
+            .catch(() => { if (!ctrl.signal.aborted) setRiderResults([]); });
+        return () => ctrl.abort();
     }, [debouncedRiderSearch, selectedRider]);
 
-    // Fetch Drivers
+    // Fetch Drivers — only online + available; POST to keep search terms out of URL logs
     useEffect(() => {
         if (!debouncedDriverSearch || selectedDriver?.name === debouncedDriverSearch) {
             setDriverResults([]);
             return;
         }
-        getDrivers({ search: debouncedDriverSearch, limit: 5 })
-            .then(res => setDriverResults(res))
-            .catch(() => setDriverResults([]));
+        const ctrl = new AbortController();
+        adminSearchDrivers({ search: debouncedDriverSearch, limit: 5, is_online: true, is_available: true })
+            .then((res) => { if (!ctrl.signal.aborted) setDriverResults(res); })
+            .catch(() => { if (!ctrl.signal.aborted) setDriverResults([]); });
+        return () => ctrl.abort();
     }, [debouncedDriverSearch, selectedDriver]);
 
     // Fetch Pickup Places
@@ -90,9 +102,11 @@ export function CreateRideModal({
             setPickupResults([]);
             return;
         }
-        adminPlacesAutocomplete(debouncedPickupInput)
-            .then(res => setPickupResults(res.predictions || []))
-            .catch(() => setPickupResults([]));
+        const ctrl = new AbortController();
+        adminPlacesAutocomplete(debouncedPickupInput, sessionTokenRef.current)
+            .then((res) => { if (!ctrl.signal.aborted) setPickupResults(res.predictions || []); })
+            .catch(() => { if (!ctrl.signal.aborted) setPickupResults([]); });
+        return () => ctrl.abort();
     }, [debouncedPickupInput, selectedPickup]);
 
     // Fetch Dropoff Places
@@ -101,9 +115,11 @@ export function CreateRideModal({
             setDropoffResults([]);
             return;
         }
-        adminPlacesAutocomplete(debouncedDropoffInput)
-            .then(res => setDropoffResults(res.predictions || []))
-            .catch(() => setDropoffResults([]));
+        const ctrl = new AbortController();
+        adminPlacesAutocomplete(debouncedDropoffInput, sessionTokenRef.current)
+            .then((res) => { if (!ctrl.signal.aborted) setDropoffResults(res.predictions || []); })
+            .catch(() => { if (!ctrl.signal.aborted) setDropoffResults([]); });
+        return () => ctrl.abort();
     }, [debouncedDropoffInput, selectedDropoff]);
 
 
@@ -117,19 +133,23 @@ export function CreateRideModal({
         }
 
         try {
-            const details = await adminPlacesDetails(placeId);
+            // Passing the same session token closes the billing session (autocomplete + details = one charge).
+            const details = await adminPlacesDetails(placeId, sessionTokenRef.current);
+            // Rotate token so the next address search starts a fresh session.
+            sessionTokenRef.current = newSessionToken();
+
             if (type === "pickup") {
                 setSelectedPickup({
                     lat: details.lat,
                     lng: details.lng,
-                    address: details.formatted_address || description
+                    address: details.formatted_address || description,
                 });
                 setPickupInput(details.formatted_address || description);
             } else {
                 setSelectedDropoff({
                     lat: details.lat,
                     lng: details.lng,
-                    address: details.formatted_address || description
+                    address: details.formatted_address || description,
                 });
                 setDropoffInput(details.formatted_address || description);
             }
@@ -151,19 +171,19 @@ export function CreateRideModal({
         try {
             await adminCreateRide({
                 rider_id: selectedRider.id,
-                driver_id: selectedDriver?.id || undefined,
+                driver_id: selectedDriver?.id,
                 pickup_address: selectedPickup.address,
                 pickup_lat: selectedPickup.lat,
                 pickup_lng: selectedPickup.lng,
                 dropoff_address: selectedDropoff.address,
                 dropoff_lat: selectedDropoff.lat,
                 dropoff_lng: selectedDropoff.lng,
-                total_fare: fare ? fare : undefined,
-            } as any);
+                total_fare: fare || undefined,
+            });
             onSuccess();
             handleClose();
-        } catch (err: any) {
-            setError(err.message || "Failed to create ride");
+        } catch (err: unknown) {
+            setError(err instanceof Error ? err.message : "Failed to create ride");
         } finally {
             setLoading(false);
         }
@@ -180,6 +200,7 @@ export function CreateRideModal({
         setSelectedDropoff(null);
         setFare("");
         setError("");
+        sessionTokenRef.current = newSessionToken();
         onClose();
     };
 
@@ -192,7 +213,7 @@ export function CreateRideModal({
                     <DialogTitle>Create Ride Manually</DialogTitle>
                 </DialogHeader>
                 <form onSubmit={handleSubmit} className="space-y-5">
-                    
+
                     {/* Rider Selection */}
                     <div className="relative">
                         <Label>Rider</Label>
@@ -217,10 +238,12 @@ export function CreateRideModal({
                                     <div
                                         key={u.id}
                                         className="flex cursor-pointer items-center gap-3 px-3 py-2 hover:bg-muted"
+                                        onMouseDown={(e) => e.preventDefault()}
                                         onClick={() => {
                                             const name = `${u.first_name || ""} ${u.last_name || ""}`.trim() || u.email || u.phone;
                                             setSelectedRider({ id: u.id, name });
                                             setRiderSearch(name);
+                                            setRiderFocused(false);
                                         }}
                                     >
                                         <User className="h-4 w-4 text-muted-foreground" />
@@ -236,7 +259,7 @@ export function CreateRideModal({
 
                     {/* Driver Selection */}
                     <div className="relative">
-                        <Label>Driver (Optional)</Label>
+                        <Label>Driver (Optional — online &amp; available only)</Label>
                         <div className="relative mt-1">
                             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                             <Input
@@ -257,9 +280,11 @@ export function CreateRideModal({
                                     <div
                                         key={d.id}
                                         className="flex cursor-pointer items-center gap-3 px-3 py-2 hover:bg-muted"
+                                        onMouseDown={(e) => e.preventDefault()}
                                         onClick={() => {
                                             setSelectedDriver({ id: d.id, name: d.name });
                                             setDriverSearch(d.name);
+                                            setDriverFocused(false);
                                         }}
                                     >
                                         <Car className="h-4 w-4 text-muted-foreground" />
@@ -297,6 +322,7 @@ export function CreateRideModal({
                                     <div
                                         key={place.place_id}
                                         className="flex cursor-pointer flex-col px-3 py-2 hover:bg-muted"
+                                        onMouseDown={(e) => e.preventDefault()}
                                         onClick={() => handlePlaceSelect(place.place_id, place.description, "pickup")}
                                     >
                                         <span className="text-sm font-medium text-foreground">{place.structured_formatting?.main_text || place.description}</span>
@@ -333,6 +359,7 @@ export function CreateRideModal({
                                     <div
                                         key={place.place_id}
                                         className="flex cursor-pointer flex-col px-3 py-2 hover:bg-muted"
+                                        onMouseDown={(e) => e.preventDefault()}
                                         onClick={() => handlePlaceSelect(place.place_id, place.description, "dropoff")}
                                     >
                                         <span className="text-sm font-medium text-foreground">{place.structured_formatting?.main_text || place.description}</span>
@@ -350,19 +377,19 @@ export function CreateRideModal({
                         <Label>Total Fare (Optional)</Label>
                         <div className="relative">
                             <span className="absolute left-3 top-2.5 text-sm text-muted-foreground">$</span>
-                            <Input 
-                                type="number" 
-                                step="0.01" 
+                            <Input
+                                type="number"
+                                step="0.01"
                                 placeholder="0.00"
-                                value={fare} 
-                                onChange={(e) => setFare(e.target.value)} 
+                                value={fare}
+                                onChange={(e) => setFare(e.target.value)}
                                 className="pl-7"
                             />
                         </div>
                     </div>
 
                     {error && <p className="text-sm font-medium text-red-500">{error}</p>}
-                    
+
                     <DialogFooter className="pt-2">
                         <Button type="button" variant="outline" onClick={handleClose} disabled={loading}>
                             Cancel

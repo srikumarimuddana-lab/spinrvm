@@ -51,7 +51,7 @@ function buildCsp(nonce: string): string {
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob: https:",
     "font-src 'self'",
-    "connect-src 'self' https:",
+    "connect-src 'self' https: wss: ws:",
     "frame-ancestors 'none'",
   ].join("; ");
 }

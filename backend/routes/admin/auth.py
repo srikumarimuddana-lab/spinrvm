@@ -186,9 +186,17 @@ async def get_session(authorization: Optional[str] = Header(None)):
     except ValueError:
         return SessionResponse(user=None, authenticated=False)
 
-    # Verify the JWT token
+    # Verify the JWT token. ``audience=JWT_AUD_ADMIN`` makes PyJWT
+    # reject any token whose ``aud`` claim is missing or wrong, so a
+    # rider/driver token cannot be presented here for an admin
+    # session even if it was signed with the same JWT_SECRET.
     try:
-        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.ALGORITHM])
+        payload = jwt.decode(
+            token,
+            settings.JWT_SECRET,
+            algorithms=[settings.ALGORITHM],
+            audience=JWT_AUD_ADMIN,
+        )
         user_id = payload.get("user_id")
         role = payload.get("role")
         email = payload.get("email")
@@ -461,7 +469,12 @@ async def admin_logout_all(request: Request, authorization: Optional[str] = Head
         scheme, token = authorization.split()
         if scheme.lower() != "bearer":
             raise HTTPException(status_code=401, detail="Invalid auth scheme")
-        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.ALGORITHM])
+        payload = jwt.decode(
+            token,
+            settings.JWT_SECRET,
+            algorithms=[settings.ALGORITHM],
+            audience=JWT_AUD_ADMIN,
+        )
     except (ValueError, jwt.InvalidTokenError) as e:
         # B-P3-leak-cleanup: JWT library error strings carry hints
         # about token shape (algorithm, kid, exp, audience). Don't
@@ -536,7 +549,12 @@ async def change_password(request: Request, body: ChangePasswordRequest, authori
         scheme, token = authorization.split()
         if scheme.lower() != "bearer":
             raise HTTPException(status_code=401, detail="Invalid auth scheme")
-        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.ALGORITHM])
+        payload = jwt.decode(
+            token,
+            settings.JWT_SECRET,
+            algorithms=[settings.ALGORITHM],
+            audience=JWT_AUD_ADMIN,
+        )
     except (ValueError, jwt.InvalidTokenError) as e:
         # B-P3-leak-cleanup: JWT library error strings carry hints
         # about token shape (algorithm, kid, exp, audience). Don't
@@ -638,7 +656,12 @@ async def _require_staff_from_token(authorization: str | None) -> dict:
         scheme, token = authorization.split()
         if scheme.lower() != "bearer":
             raise HTTPException(status_code=401, detail="Invalid auth scheme")
-        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.ALGORITHM])
+        payload = jwt.decode(
+            token,
+            settings.JWT_SECRET,
+            algorithms=[settings.ALGORITHM],
+            audience=JWT_AUD_ADMIN,
+        )
     except (ValueError, jwt.InvalidTokenError) as e:
         raise HTTPException(status_code=401, detail=f"Invalid token: {e}") from e
     user_id = payload.get("user_id")
@@ -870,6 +893,7 @@ async def break_glass_access(request: Request, body: BreakGlassRequest):
             "role": "super_admin",
             "modules": ALL_MODULES,
             "phone": "",
+            "aud": JWT_AUD_ADMIN,
             "token_version": 0,
             "jti": secrets.token_hex(16),
             "iat": now,

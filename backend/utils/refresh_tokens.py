@@ -242,8 +242,8 @@ async def _handle_refresh_token_reuse(row: dict) -> None:
         except Exception as e:
             logger.error(f"reuse-cascade: WS kick failed (user={user_id} audience={audience}): {e}")
 
-    # Step 4: audit_logs row. Production schema (migration 06):
-    # id TEXT PK / action / entity_type / entity_id / user_email / details TEXT.
+    # Step 4: audit_logs row. Production schema (migration 57):
+    # id TEXT PK / action / entity_type / entity_id / actor_id / details TEXT.
     try:
         details_payload = {
             "replayed_row_id": row_id,
@@ -263,7 +263,7 @@ async def _handle_refresh_token_reuse(row: dict) -> None:
                 "action": "refresh_token_reuse_detected",
                 "entity_type": "user",
                 "entity_id": user_id or "unknown",
-                "user_email": "system:refresh_reuse_detector",
+                "actor_id": "system:refresh_reuse_detector",
                 "details": json.dumps(details_payload),
             },
         )

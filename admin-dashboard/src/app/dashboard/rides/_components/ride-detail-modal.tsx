@@ -8,7 +8,8 @@ import {
     Car, User, Phone, Mail, Star, Route, Clock, Percent,
     DollarSign, Receipt, Ticket, AlertTriangle, Flag, Radio,
     FileWarning, MapPinned, CalendarDays, Hash,
-    Gauge, Shield, Users,
+    Gauge, Shield, Users, MapPin, CheckCircle2, XCircle,
+    TrendingUp, CreditCard,
 } from "lucide-react";
 import { Sec, FR, MStat, TL, getStatusBadge, fmtTime, isRideLive, computePhaseDistances } from "./ride-ui-helpers";
 import RideInvoice from "./ride-invoice";
@@ -19,13 +20,54 @@ import dynamic from "next/dynamic";
 
 const RideRouteMap = dynamic(() => import("./ride-route-map"), { ssr: false });
 
-const PHASE_COLORS: Record<string, string> = {
-    navigating_to_pickup: "text-blue-600 bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400",
-    arrived_at_pickup: "text-violet-600 bg-violet-100 dark:bg-violet-900/30 dark:text-violet-400",
-    trip_in_progress: "text-emerald-600 bg-emerald-100 dark:bg-emerald-900/30 dark:text-emerald-400",
-    online_idle: "text-gray-600 bg-gray-100 dark:bg-gray-800/50 dark:text-gray-400",
-    unknown: "text-gray-500 bg-gray-50 dark:bg-gray-800/30 dark:text-gray-500",
+// ── Status meta ──────────────────────────────────────────────────────────────
+const STATUS_META: Record<string, { label: string; gradient: string; ring: string; icon: React.ElementType }> = {
+    searching:        { label: "Searching",        gradient: "from-amber-500 to-orange-500",    ring: "ring-amber-400",   icon: Route },
+    driver_assigned:  { label: "Driver Assigned",  gradient: "from-blue-500 to-cyan-500",       ring: "ring-blue-400",    icon: Car },
+    driver_accepted:  { label: "Driver Accepted",  gradient: "from-violet-500 to-purple-500",   ring: "ring-violet-400",  icon: Car },
+    driver_arrived:   { label: "Driver Arrived",   gradient: "from-indigo-500 to-blue-500",     ring: "ring-indigo-400",  icon: MapPin },
+    in_progress:      { label: "In Progress",      gradient: "from-emerald-500 to-teal-500",    ring: "ring-emerald-400", icon: TrendingUp },
+    completed:        { label: "Completed",         gradient: "from-green-500 to-emerald-600",   ring: "ring-green-400",   icon: CheckCircle2 },
+    cancelled:        { label: "Cancelled",         gradient: "from-red-500 to-rose-600",        ring: "ring-red-400",     icon: XCircle },
 };
+
+const PHASE_COLORS: Record<string, string> = {
+    navigating_to_pickup: "text-blue-600 bg-blue-50 dark:bg-blue-900/30 dark:text-blue-400",
+    arrived_at_pickup:    "text-violet-600 bg-violet-50 dark:bg-violet-900/30 dark:text-violet-400",
+    trip_in_progress:     "text-emerald-600 bg-emerald-50 dark:bg-emerald-900/30 dark:text-emerald-400",
+    online_idle:          "text-gray-600 bg-gray-50 dark:bg-gray-800/50 dark:text-gray-400",
+    unknown:              "text-gray-500 bg-gray-50 dark:bg-gray-800/30 dark:text-gray-500",
+};
+
+// ── Small reusable card wrapper ───────────────────────────────────────────────
+function Card({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+    return (
+        <div className={`rounded-xl border bg-card shadow-sm ${className}`}>
+            {children}
+        </div>
+    );
+}
+
+function CardHead({ title, icon: Icon, accent }: { title: string; icon?: React.ElementType; accent?: string }) {
+    return (
+        <div className={`flex items-center gap-2 px-4 py-3 border-b ${accent || "bg-muted/30"} rounded-t-xl`}>
+            {Icon && <Icon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />}
+            <p className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">{title}</p>
+        </div>
+    );
+}
+
+function StatPill({ label, value, icon: Icon, color = "bg-muted/60 text-foreground" }: {
+    label: string; value: string; icon: React.ElementType; color?: string;
+}) {
+    return (
+        <div className={`flex flex-col items-center justify-center rounded-xl px-4 py-3 ${color} flex-1 min-w-0`}>
+            <Icon className="h-4 w-4 mb-1 opacity-70" />
+            <p className="text-sm font-extrabold tabular-nums leading-none">{value}</p>
+            <p className="text-[10px] opacity-60 mt-0.5">{label}</p>
+        </div>
+    );
+}
 
 interface Props {
     rideId: string | null;
@@ -38,11 +80,6 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
     const [loading, setLoading] = useState(false);
     const [flagTarget, setFlagTarget] = useState<{ type: "rider" | "driver"; name: string } | null>(null);
     const [showComplaint, setShowComplaint] = useState(false);
-    // Which polyline the replay map renders:
-    //   "pickup"  — Phase 2 GPS trail (driver → pickup)
-    //   "actual"  — Phase 3 GPS trail (pickup → dropoff, actual)
-    //   "planned" — straight-line reference pickup → dropoff
-    // Default is "actual" — the answer to "did this ride happen?".
     const [selectedPhase, setSelectedPhase] = useState<"pickup" | "actual" | "planned">("actual");
 
     const loadRide = useCallback(async () => {
@@ -58,16 +95,11 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
     useEffect(() => {
         if (open && rideId) loadRide();
         if (!open) setRide(null);
-        // Every open of the modal resets to the Actual Trip view so the
-        // operator sees the real recorded path first.
         setSelectedPhase("actual");
     }, [open, rideId, loadRide]);
 
     if (!open) return null;
 
-    // Prefer stored aggregates (set once at ride completion) over on-the-fly
-    // computation from raw GPS points. Historical rides read directly from
-    // the ride row — no join against driver_location_history needed.
     const storedPhases: Record<string, number> | null = ride?.phase_distances && Object.keys(ride.phase_distances).length > 0
         ? ride.phase_distances : null;
 
@@ -78,7 +110,6 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
     const phaseMap: Record<string, number> = {};
     for (const p of phaseDistances) phaseMap[p.phase] = p.distance_km;
 
-    // Fallback: if we still have nothing, derive from the ride record fields.
     const haversine = (lat1: number, lng1: number, lat2: number, lng2: number) => {
         const R = 6371;
         const dLat = ((lat2 - lat1) * Math.PI) / 180;
@@ -101,591 +132,530 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
         phaseMap.trip_in_progress = ride.actual_distance_km || ride.distance_km || 0;
     }
 
+    const meta = STATUS_META[ride?.status] ?? STATUS_META.searching;
+    const StatusIcon = meta.icon;
+
     return (
         <>
             <Dialog open={open} onOpenChange={v => !v && onClose()}>
-                <DialogContent className="sm:max-w-5xl max-h-[90vh] overflow-y-auto p-0" showCloseButton={true}>
+                <DialogContent className="sm:max-w-5xl max-h-[90vh] overflow-y-auto p-0 gap-0" showCloseButton={true}>
                     <DialogTitle className="sr-only">
                         {ride ? `Ride ${ride.ride_code || ride.id}` : "Ride Details"}
                     </DialogTitle>
+
                     {loading || !ride ? (
                         <div className="flex flex-col items-center justify-center py-24">
                             <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
                             <p className="text-sm text-muted-foreground mt-3">Loading ride details...</p>
                         </div>
                     ) : (
-                        <div className="divide-y divide-border">
-                            {/* Header */}
-                            <div className="px-6 py-5 bg-muted/20">
-                                <div className="flex items-start justify-between gap-4">
-                                    <div className="flex-1 min-w-0">
-                                        {ride.ride_code ? (
-                                            <>
-                                                <p className="text-base font-bold tracking-wide mb-0.5">{ride.ride_code}</p>
-                                                <p className="text-[10px] text-muted-foreground/70 font-mono mb-2 truncate" title={ride.id}>
-                                                    UUID: {ride.id}
-                                                </p>
-                                            </>
-                                        ) : (
-                                            <p className="text-[11px] text-muted-foreground font-mono mb-1.5">Ride ID: {ride.id}</p>
-                                        )}
-                                        <div className="flex items-center gap-2.5 flex-wrap">
-                                            {getStatusBadge(ride.status)}
-                                            {isRideLive(ride.status) && (
-                                                <a href={`/dashboard/rides/live/${ride.id}`}
-                                                    className="flex items-center gap-1.5 text-xs font-semibold text-blue-600 bg-blue-100 dark:bg-blue-900/30 dark:text-blue-400 px-2.5 py-1 rounded-lg hover:bg-blue-200 dark:hover:bg-blue-900/50 transition-colors">
-                                                    <Radio className="h-3 w-3 animate-pulse" /> Live Track
-                                                </a>
-                                            )}
-                                            <RideInvoice rideId={ride.id} status={ride.status} />
+                        <div className="flex flex-col">
+
+                            {/* ── Hero Header ──────────────────────────────── */}
+                            <div className={`relative bg-gradient-to-r ${meta.gradient} px-6 py-5 text-white overflow-hidden`}>
+                                {/* background pattern */}
+                                <div className="absolute inset-0 opacity-10" style={{ backgroundImage: "radial-gradient(circle at 80% 50%, white 0%, transparent 60%)" }} />
+
+                                <div className="relative flex items-start justify-between gap-4">
+                                    <div className="flex items-center gap-4">
+                                        <div className={`w-12 h-12 rounded-2xl bg-white/20 backdrop-blur-sm flex items-center justify-center ring-2 ${meta.ring} ring-offset-0 shrink-0`}>
+                                            <StatusIcon className="h-6 w-6 text-white" />
                                         </div>
+                                        <div>
+                                            <p className="text-white/70 text-xs font-medium mb-0.5">
+                                                {ride.ride_code ? `Ride #${ride.ride_code}` : "Ride Detail"}
+                                            </p>
+                                            <p className="text-2xl font-extrabold tracking-tight leading-none">{meta.label}</p>
+                                            {ride.created_at && (
+                                                <p className="text-white/60 text-xs mt-1">
+                                                    {new Date(ride.created_at).toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" })}
+                                                </p>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">
+                                        {isRideLive(ride.status) && (
+                                            <a href={`/dashboard/rides/live/${ride.id}`}
+                                                className="flex items-center gap-1.5 text-xs font-semibold bg-white/20 hover:bg-white/30 text-white px-3 py-1.5 rounded-lg transition-colors backdrop-blur-sm">
+                                                <Radio className="h-3 w-3 animate-pulse" /> Live Track
+                                            </a>
+                                        )}
+                                        <RideInvoice rideId={ride.id} status={ride.status} />
                                     </div>
                                 </div>
+
+                                {/* UUID footer */}
+                                <p className="relative text-[10px] font-mono text-white/40 mt-3 truncate" title={ride.id}>
+                                    {ride.id}
+                                </p>
                             </div>
 
-                            {/* Route addresses. The top map was removed — all
-                                route visualisation lives in the Route Replay
-                                section below, which has three explicit
-                                options (Pickup / Actual Trip / Planned Trip). */}
-                            <div className="px-6 py-5">
-                                <Sec title="Route">
-                                    <div className="flex gap-3">
-                                        <div className="flex flex-col items-center pt-1">
-                                            <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-emerald-200 dark:ring-emerald-900/50" />
-                                            <div className="w-0.5 flex-1 bg-border my-1.5" />
-                                            <div className="w-2.5 h-2.5 rounded-full bg-primary ring-2 ring-primary/20" />
-                                        </div>
-                                        <div className="flex-1">
-                                            <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider">Pickup</p>
-                                            <p className="text-sm font-medium mt-0.5">{ride.pickup_address || "—"}</p>
-                                            <div className="h-4" />
-                                            <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider">Dropoff</p>
-                                            <p className="text-sm font-medium mt-0.5">{ride.dropoff_address || "—"}</p>
-                                        </div>
-                                    </div>
-                                    <div className="flex gap-2 mt-3 pt-3 border-t">
-                                        <MStat label="Distance" value={`${(ride.distance_km || 0).toFixed(1)} km`} icon={Route} />
-                                        <MStat label="Duration" value={`${ride.duration_minutes || 0} min`} icon={Clock} />
-                                        <MStat label="Surge" value={`${ride.surge_multiplier || 1.0}x`} icon={Percent} />
-                                    </div>
-                                </Sec>
-                            </div>
+                            {/* ── Body ─────────────────────────────────────── */}
+                            <div className="p-5 space-y-4 bg-muted/20">
 
-                            {/* Customer & Driver */}
-                            <div className="px-6 py-5">
-                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-                                    {/* Customer Section */}
-                                    <Sec title="Customer">
-                                        <div className="flex items-center gap-3">
-                                            <div className="w-11 h-11 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center shrink-0 ring-2 ring-blue-200/50 dark:ring-blue-800/30">
-                                                {ride.rider_profile_image ? (
-                                                    <img src={ride.rider_profile_image} alt="" className="w-11 h-11 rounded-full object-cover" />
-                                                ) : (
-                                                    <User className="h-5 w-5 text-blue-600 dark:text-blue-400" />
-                                                )}
-                                            </div>
-                                            <div className="flex-1 min-w-0">
-                                                <p className="text-sm font-semibold">{ride.rider_name || ride.rider_id?.slice(0, 12) || "—"}</p>
-                                                <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5 flex-wrap">
-                                                    {ride.rider_phone && <span className="flex items-center gap-1"><Phone className="h-3 w-3" />{ride.rider_phone}</span>}
-                                                    {ride.rider_email && <span className="flex items-center gap-1"><Mail className="h-3 w-3" />{ride.rider_email}</span>}
+                                {/* Row 1: Route + Stats */}
+                                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+
+                                    {/* Route card — 2/3 width */}
+                                    <Card className="lg:col-span-2">
+                                        <CardHead title="Route" icon={MapPin} />
+                                        <div className="p-4">
+                                            <div className="flex gap-3">
+                                                <div className="flex flex-col items-center pt-1.5 shrink-0">
+                                                    <div className="w-2.5 h-2.5 rounded-full bg-blue-500 ring-2 ring-blue-200 dark:ring-blue-900/50" />
+                                                    <div className="w-0.5 flex-1 bg-gradient-to-b from-blue-400 to-red-400 my-1.5" style={{ minHeight: 32 }} />
+                                                    <div className="w-2.5 h-2.5 rounded-full bg-red-500 ring-2 ring-red-200 dark:ring-red-900/50" />
+                                                </div>
+                                                <div className="flex-1 min-w-0 space-y-3">
+                                                    <div>
+                                                        <p className="text-[10px] font-bold uppercase tracking-wider text-blue-500 mb-0.5">Pickup</p>
+                                                        <p className="text-sm font-medium">{ride.pickup_address || "—"}</p>
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-[10px] font-bold uppercase tracking-wider text-red-500 mb-0.5">Dropoff</p>
+                                                        <p className="text-sm font-medium">{ride.dropoff_address || "—"}</p>
+                                                    </div>
                                                 </div>
                                             </div>
-                                            <div className="flex items-center gap-2 shrink-0">
+                                        </div>
+                                    </Card>
+
+                                    {/* Stats — 1/3 width */}
+                                    <Card>
+                                        <CardHead title="Trip Stats" icon={Gauge} />
+                                        <div className="p-3 space-y-2">
+                                            <div className="flex gap-2">
+                                                <StatPill label="Distance" value={`${(ride.distance_km || 0).toFixed(1)} km`} icon={Route} color="bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" />
+                                                <StatPill label="Duration" value={`${ride.duration_minutes || 0} min`} icon={Clock} color="bg-violet-50 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300" />
+                                            </div>
+                                            <div className="flex gap-2">
+                                                <StatPill label="Surge" value={`${ride.surge_multiplier || 1.0}×`} icon={Percent} color="bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300" />
+                                                <StatPill label="Total Fare" value={formatCurrency(ride.total_fare || 0)} icon={DollarSign} color="bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" />
+                                            </div>
+                                        </div>
+                                    </Card>
+                                </div>
+
+                                {/* Row 2: Rider + Driver */}
+                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+
+                                    {/* Rider Card */}
+                                    <Card>
+                                        <CardHead title="Rider" icon={User} accent="bg-blue-50/80 dark:bg-blue-900/20 border-blue-100 dark:border-blue-900/30" />
+                                        <div className="p-4">
+                                            <div className="flex items-center gap-3">
+                                                <div className="w-11 h-11 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center shrink-0 ring-2 ring-blue-200/50 dark:ring-blue-800/30">
+                                                    {ride.rider_profile_image
+                                                        ? <img src={ride.rider_profile_image} alt="" className="w-11 h-11 rounded-full object-cover" />
+                                                        : <User className="h-5 w-5 text-blue-600 dark:text-blue-400" />}
+                                                </div>
+                                                <div className="flex-1 min-w-0">
+                                                    <p className="text-sm font-semibold">{ride.rider_name || ride.rider_id?.slice(0, 12) || "—"}</p>
+                                                    <div className="flex items-center gap-2 text-xs text-muted-foreground mt-0.5 flex-wrap">
+                                                        {ride.rider_phone && <span className="flex items-center gap-1"><Phone className="h-3 w-3" />{ride.rider_phone}</span>}
+                                                        {ride.rider_email && <span className="flex items-center gap-1"><Mail className="h-3 w-3" />{ride.rider_email}</span>}
+                                                    </div>
+                                                </div>
                                                 {ride.rider_flag_count > 0 && (
-                                                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md ${ride.rider_flag_count >= 2 ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" : "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"}`}>
+                                                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md shrink-0 ${ride.rider_flag_count >= 2 ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" : "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"}`}>
                                                         {ride.rider_flag_count} flag{ride.rider_flag_count > 1 ? "s" : ""}
                                                     </span>
                                                 )}
                                             </div>
-                                        </div>
-                                        <div className="grid grid-cols-3 gap-2 mt-3 pt-3 border-t">
-                                            <div className="bg-background rounded-lg p-2.5 text-center">
-                                                <Hash className="h-3.5 w-3.5 text-muted-foreground mx-auto mb-0.5" />
-                                                <p className="text-xs font-bold">{ride.rider_total_rides ?? "—"}</p>
-                                                <p className="text-[9px] text-muted-foreground">Total Rides</p>
-                                            </div>
-                                            <div className="bg-background rounded-lg p-2.5 text-center">
-                                                <MapPinned className="h-3.5 w-3.5 text-muted-foreground mx-auto mb-0.5" />
-                                                <p className="text-xs font-bold truncate">{ride.rider_region || ride.rider_city || "—"}</p>
-                                                <p className="text-[9px] text-muted-foreground">Region</p>
-                                            </div>
-                                            <div className="bg-background rounded-lg p-2.5 text-center">
-                                                <CalendarDays className="h-3.5 w-3.5 text-muted-foreground mx-auto mb-0.5" />
-                                                <p className="text-xs font-bold">{ride.rider_joined ? new Date(ride.rider_joined).toLocaleDateString("en-CA", { month: "short", year: "numeric" }) : "—"}</p>
-                                                <p className="text-[9px] text-muted-foreground">Member Since</p>
+                                            <div className="grid grid-cols-3 gap-2 mt-4">
+                                                {[
+                                                    { icon: Hash, value: ride.rider_total_rides ?? "—", label: "Rides" },
+                                                    { icon: MapPinned, value: ride.rider_region || ride.rider_city || "—", label: "Region" },
+                                                    { icon: CalendarDays, value: ride.rider_joined ? new Date(ride.rider_joined).toLocaleDateString("en-CA", { month: "short", year: "numeric" }) : "—", label: "Since" },
+                                                ].map(({ icon: Icon, value, label }) => (
+                                                    <div key={label} className="bg-muted/40 rounded-lg p-2.5 text-center">
+                                                        <Icon className="h-3.5 w-3.5 text-muted-foreground mx-auto mb-0.5" />
+                                                        <p className="text-xs font-bold truncate">{value}</p>
+                                                        <p className="text-[9px] text-muted-foreground">{label}</p>
+                                                    </div>
+                                                ))}
                                             </div>
                                         </div>
-                                    </Sec>
+                                    </Card>
 
-                                    {/* Driver Section */}
-                                    <Sec title="Driver">
-                                        {ride.driver_id ? (
-                                            <>
-                                                <div className="flex items-center gap-3">
-                                                    <div className="w-11 h-11 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center shrink-0 ring-2 ring-emerald-200/50 dark:ring-emerald-800/30">
-                                                        {ride.driver_photo_url ? (
-                                                            <img src={ride.driver_photo_url} alt="" className="w-11 h-11 rounded-full object-cover" />
-                                                        ) : (
-                                                            <Car className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
-                                                        )}
-                                                    </div>
-                                                    <div className="flex-1 min-w-0">
-                                                        <p className="text-sm font-semibold">{ride.driver_name || ride.driver_id?.slice(0, 12)}</p>
-                                                        <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5 flex-wrap">
-                                                            {ride.driver_phone && <span className="flex items-center gap-1"><Phone className="h-3 w-3" />{ride.driver_phone}</span>}
-                                                            {ride.driver_license_plate && <span className="font-mono font-bold text-foreground bg-muted px-1.5 py-0.5 rounded text-[11px]">{ride.driver_license_plate}</span>}
+                                    {/* Driver Card */}
+                                    <Card>
+                                        <CardHead title="Driver" icon={Car} accent="bg-emerald-50/80 dark:bg-emerald-900/20 border-emerald-100 dark:border-emerald-900/30" />
+                                        <div className="p-4">
+                                            {ride.driver_id ? (
+                                                <>
+                                                    <div className="flex items-center gap-3">
+                                                        <div className="w-11 h-11 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center shrink-0 ring-2 ring-emerald-200/50 dark:ring-emerald-800/30">
+                                                            {ride.driver_photo_url
+                                                                ? <img src={ride.driver_photo_url} alt="" className="w-11 h-11 rounded-full object-cover" />
+                                                                : <Car className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />}
                                                         </div>
-                                                    </div>
-                                                    <div className="flex items-center gap-2 shrink-0">
-                                                        {ride.driver_flag_count > 0 && (
-                                                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md ${ride.driver_flag_count >= 2 ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" : "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"}`}>
-                                                                {ride.driver_flag_count} flag{ride.driver_flag_count > 1 ? "s" : ""}
-                                                            </span>
-                                                        )}
-                                                        {ride.driver_rating != null && (
-                                                            <span className="flex items-center gap-0.5 bg-amber-50 dark:bg-amber-900/20 px-2 py-0.5 rounded-md">
-                                                                <Star className="h-3.5 w-3.5 text-amber-400 fill-amber-400" />
-                                                                <span className="text-xs font-bold">{Number(ride.driver_rating).toFixed(1)}</span>
-                                                            </span>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                                {/* Vehicle details */}
-                                                <div className="mt-3 pt-3 border-t space-y-2">
-                                                    <div className="flex items-center gap-2 text-xs">
-                                                        <Car className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                                                        <span className="font-medium">
-                                                            {[ride.driver_vehicle_color, ride.driver_vehicle_year, ride.driver_vehicle_make, ride.driver_vehicle_model].filter(Boolean).join(" ") || "—"}
-                                                        </span>
-                                                    </div>
-                                                    {ride.driver_vehicle_type_name && (
-                                                        <div className="flex items-center gap-2 text-xs">
-                                                            <Users className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                                                            <span>{ride.driver_vehicle_type_name}</span>
-                                                            {ride.driver_vehicle_capacity > 0 && (
-                                                                <span className="text-muted-foreground">({ride.driver_vehicle_capacity} seats)</span>
+                                                        <div className="flex-1 min-w-0">
+                                                            <p className="text-sm font-semibold">{ride.driver_name || ride.driver_id?.slice(0, 12)}</p>
+                                                            <div className="flex items-center gap-2 text-xs text-muted-foreground mt-0.5 flex-wrap">
+                                                                {ride.driver_phone && <span className="flex items-center gap-1"><Phone className="h-3 w-3" />{ride.driver_phone}</span>}
+                                                                {ride.driver_license_plate && <span className="font-mono font-bold text-foreground bg-muted px-1.5 py-0.5 rounded text-[11px]">{ride.driver_license_plate}</span>}
+                                                            </div>
+                                                        </div>
+                                                        <div className="flex items-center gap-1.5 shrink-0">
+                                                            {ride.driver_flag_count > 0 && (
+                                                                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md ${ride.driver_flag_count >= 2 ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400" : "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"}`}>
+                                                                    {ride.driver_flag_count} flag{ride.driver_flag_count > 1 ? "s" : ""}
+                                                                </span>
+                                                            )}
+                                                            {ride.driver_rating != null && (
+                                                                <span className="flex items-center gap-0.5 bg-amber-50 dark:bg-amber-900/20 px-2 py-0.5 rounded-md">
+                                                                    <Star className="h-3 w-3 text-amber-400 fill-amber-400" />
+                                                                    <span className="text-xs font-bold">{Number(ride.driver_rating).toFixed(1)}</span>
+                                                                </span>
                                                             )}
                                                         </div>
-                                                    )}
-                                                    {ride.driver_vehicle_vin && (
-                                                        <div className="flex items-center gap-2 text-xs">
-                                                            <Shield className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                                                            <span className="font-mono text-muted-foreground">VIN: {ride.driver_vehicle_vin}</span>
+                                                    </div>
+
+                                                    {/* Vehicle */}
+                                                    <div className="mt-3 pt-3 border-t space-y-1.5 text-xs text-muted-foreground">
+                                                        {[ride.driver_vehicle_color, ride.driver_vehicle_year, ride.driver_vehicle_make, ride.driver_vehicle_model].filter(Boolean).length > 0 && (
+                                                            <div className="flex items-center gap-2">
+                                                                <Car className="h-3.5 w-3.5 shrink-0" />
+                                                                <span className="font-medium text-foreground">{[ride.driver_vehicle_color, ride.driver_vehicle_year, ride.driver_vehicle_make, ride.driver_vehicle_model].filter(Boolean).join(" ")}</span>
+                                                            </div>
+                                                        )}
+                                                        {ride.driver_vehicle_type_name && (
+                                                            <div className="flex items-center gap-2">
+                                                                <Users className="h-3.5 w-3.5 shrink-0" />
+                                                                <span>{ride.driver_vehicle_type_name}</span>
+                                                                {ride.driver_vehicle_capacity > 0 && <span>({ride.driver_vehicle_capacity} seats)</span>}
+                                                            </div>
+                                                        )}
+                                                        {ride.driver_vehicle_vin && (
+                                                            <div className="flex items-center gap-2">
+                                                                <Shield className="h-3.5 w-3.5 shrink-0" />
+                                                                <span className="font-mono">VIN: {ride.driver_vehicle_vin}</span>
+                                                            </div>
+                                                        )}
+                                                    </div>
+
+                                                    {/* Driver stats */}
+                                                    <div className="grid grid-cols-4 gap-2 mt-3">
+                                                        {[
+                                                            { icon: Hash, value: ride.driver_total_rides ?? ride.driver_completed_rides ?? "—", label: "Rides" },
+                                                            { icon: Gauge, value: ride.driver_acceptance_rate != null ? `${ride.driver_acceptance_rate}%` : "—", label: "Compl." },
+                                                            { icon: Star, value: ride.driver_rating ? Number(ride.driver_rating).toFixed(1) : "—", label: "Rating" },
+                                                            { icon: MapPinned, value: ride.driver_region || ride.driver_city || "—", label: "Region" },
+                                                        ].map(({ icon: Icon, value, label }) => (
+                                                            <div key={label} className="bg-muted/40 rounded-lg p-2.5 text-center">
+                                                                <Icon className="h-3.5 w-3.5 text-muted-foreground mx-auto mb-0.5" />
+                                                                <p className="text-xs font-bold truncate">{value}</p>
+                                                                <p className="text-[9px] text-muted-foreground">{label}</p>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                </>
+                                            ) : (
+                                                <div className="flex flex-col items-center py-8 text-muted-foreground">
+                                                    <Car className="h-8 w-8 opacity-20 mb-2" />
+                                                    <p className="text-sm">No driver assigned</p>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </Card>
+                                </div>
+
+                                {/* Row 3: Fare Breakdown + Revenue Split */}
+                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                                    <Card>
+                                        <CardHead title="Fare Breakdown" icon={Receipt} />
+                                        <div className="p-4 space-y-1">
+                                            <FR l="Base fare" v={ride.base_fare} />
+                                            <FR l={`Distance (${(ride.distance_km || 0).toFixed(1)} km)`} v={ride.distance_fare} />
+                                            <FR l={`Time (${ride.duration_minutes || 0} min)`} v={ride.time_fare} />
+                                            <FR l="Booking fee" v={ride.booking_fee} />
+                                            {(ride.airport_fee || 0) > 0 && <FR l="Airport fee" v={ride.airport_fee} />}
+                                            <div className="border-t my-2" />
+                                            <FR l="Subtotal" v={ride.total_fare} b />
+                                            {(parseFloat(String(ride.tip_amount ?? 0)) > 0 || ride.promo_code) && (
+                                                <>
+                                                    <div className="border-t my-2" />
+                                                    {ride.promo_code && (
+                                                        <div className="flex justify-between items-center">
+                                                            <span className="flex items-center gap-2 text-sm"><Ticket className="h-4 w-4 text-violet-500" />Promo: <b className="font-mono text-xs bg-violet-50 dark:bg-violet-900/20 px-1.5 py-0.5 rounded">{ride.promo_code}</b></span>
+                                                            <span className="text-sm font-semibold text-emerald-600">-{formatCurrency(ride.promo_discount || 0)}</span>
                                                         </div>
                                                     )}
-                                                </div>
-                                                {/* Driver stats */}
-                                                <div className="grid grid-cols-4 gap-2 mt-3 pt-3 border-t">
-                                                    <div className="bg-background rounded-lg p-2.5 text-center">
-                                                        <Hash className="h-3.5 w-3.5 text-muted-foreground mx-auto mb-0.5" />
-                                                        <p className="text-xs font-bold">{ride.driver_total_rides ?? ride.driver_completed_rides ?? "—"}</p>
-                                                        <p className="text-[9px] text-muted-foreground">Total Rides</p>
-                                                    </div>
-                                                    <div className="bg-background rounded-lg p-2.5 text-center">
-                                                        <Gauge className="h-3.5 w-3.5 text-muted-foreground mx-auto mb-0.5" />
-                                                        <p className="text-xs font-bold">{ride.driver_acceptance_rate != null ? `${ride.driver_acceptance_rate}%` : "—"}</p>
-                                                        <p className="text-[9px] text-muted-foreground">Completion</p>
-                                                    </div>
-                                                    <div className="bg-background rounded-lg p-2.5 text-center">
-                                                        <Star className="h-3.5 w-3.5 text-muted-foreground mx-auto mb-0.5" />
-                                                        <p className="text-xs font-bold">{ride.driver_rating ? Number(ride.driver_rating).toFixed(1) : "—"}</p>
-                                                        <p className="text-[9px] text-muted-foreground">Rating</p>
-                                                    </div>
-                                                    <div className="bg-background rounded-lg p-2.5 text-center">
-                                                        <MapPinned className="h-3.5 w-3.5 text-muted-foreground mx-auto mb-0.5" />
-                                                        <p className="text-xs font-bold truncate">{ride.driver_region || ride.driver_city || "—"}</p>
-                                                        <p className="text-[9px] text-muted-foreground">Region</p>
-                                                    </div>
-                                                </div>
-                                            </>
-                                        ) : (
-                                            <div className="flex flex-col items-center py-4 text-muted-foreground">
-                                                <Car className="h-6 w-6 opacity-30 mb-2" />
-                                                <p className="text-sm">No driver assigned</p>
-                                            </div>
-                                        )}
-                                    </Sec>
-                                </div>
-                            </div>
+                                                    {parseFloat(String(ride.tip_amount ?? 0)) > 0 && (
+                                                        <div className="flex justify-between items-center">
+                                                            <span className="flex items-center gap-2 text-sm"><DollarSign className="h-4 w-4 text-amber-500" />Tip</span>
+                                                            <span className="text-sm font-semibold text-amber-600">{formatCurrency(ride.tip_amount)}</span>
+                                                        </div>
+                                                    )}
+                                                </>
+                                            )}
+                                        </div>
+                                    </Card>
 
-                            {/* Fare & Revenue */}
-                            <div className="px-6 py-5">
-                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-                                    <Sec title="Fare Breakdown">
-                                        <FR l="Base fare" v={ride.base_fare} />
-                                        <FR l={`Distance (${(ride.distance_km || 0).toFixed(1)} km)`} v={ride.distance_fare} />
-                                        <FR l={`Time (${ride.duration_minutes || 0} min)`} v={ride.time_fare} />
-                                        <FR l="Booking fee" v={ride.booking_fee} />
-                                        {(ride.airport_fee || 0) > 0 && <FR l="Airport fee" v={ride.airport_fee} />}
-                                        <div className="border-t my-2" />
-                                        <FR l="Subtotal" v={ride.total_fare} b />
-                                        {(parseFloat(String(ride.tip_amount ?? 0)) > 0 || ride.promo_code) && (
-                                            <>
-                                                <div className="border-t my-2" />
-                                                {ride.promo_code && (
-                                                    <div className="flex justify-between items-center">
-                                                        <span className="flex items-center gap-2 text-sm"><Ticket className="h-4 w-4 text-violet-500" />Promo: <b className="font-mono text-xs bg-violet-50 dark:bg-violet-900/20 px-1.5 py-0.5 rounded">{ride.promo_code}</b></span>
-                                                        <span className="text-sm font-semibold text-emerald-600">-{formatCurrency(ride.promo_discount || 0)}</span>
-                                                    </div>
-                                                )}
-                                                {parseFloat(String(ride.tip_amount ?? 0)) > 0 && (
-                                                    <div className="flex justify-between items-center">
-                                                        <span className="flex items-center gap-2 text-sm"><DollarSign className="h-4 w-4 text-amber-500" />Tip</span>
-                                                        <span className="text-sm font-semibold text-amber-600">{formatCurrency(ride.tip_amount)}</span>
-                                                    </div>
-                                                )}
-                                            </>
-                                        )}
-                                    </Sec>
-                                    <Sec title="Revenue Split">
-                                        <div className="grid grid-cols-3 gap-2.5">
-                                            <div className="bg-emerald-50 dark:bg-emerald-900/20 rounded-xl p-3.5 text-center">
-                                                <p className="text-lg font-extrabold text-emerald-600 dark:text-emerald-400">{formatCurrency(ride.driver_earnings || 0)}</p>
-                                                <p className="text-[11px] text-muted-foreground mt-1 font-medium">Driver</p>
+                                    <Card>
+                                        <CardHead title="Revenue Split" icon={TrendingUp} />
+                                        <div className="p-4">
+                                            <div className="grid grid-cols-3 gap-2.5 mb-4">
+                                                <div className="bg-emerald-50 dark:bg-emerald-900/20 rounded-xl p-3.5 text-center">
+                                                    <p className="text-lg font-extrabold text-emerald-600 dark:text-emerald-400">{formatCurrency(ride.driver_earnings || 0)}</p>
+                                                    <p className="text-[11px] text-muted-foreground mt-1 font-medium">Driver</p>
+                                                </div>
+                                                <div className="bg-violet-50 dark:bg-violet-900/20 rounded-xl p-3.5 text-center">
+                                                    <p className="text-lg font-extrabold text-violet-600 dark:text-violet-400">{formatCurrency(ride.admin_earnings || 0)}</p>
+                                                    <p className="text-[11px] text-muted-foreground mt-1 font-medium">Platform</p>
+                                                </div>
+                                                <div className="bg-amber-50 dark:bg-amber-900/20 rounded-xl p-3.5 text-center">
+                                                    <p className="text-lg font-extrabold text-amber-600 dark:text-amber-400">{formatCurrency(ride.tip_amount || 0)}</p>
+                                                    <p className="text-[11px] text-muted-foreground mt-1 font-medium">Tip</p>
+                                                </div>
                                             </div>
-                                            <div className="bg-violet-50 dark:bg-violet-900/20 rounded-xl p-3.5 text-center">
-                                                <p className="text-lg font-extrabold text-violet-600 dark:text-violet-400">{formatCurrency(ride.admin_earnings || 0)}</p>
-                                                <p className="text-[11px] text-muted-foreground mt-1 font-medium">Platform</p>
-                                            </div>
-                                            <div className="bg-amber-50 dark:bg-amber-900/20 rounded-xl p-3.5 text-center">
-                                                <p className="text-lg font-extrabold text-amber-600 dark:text-amber-400">{formatCurrency(ride.tip_amount || 0)}</p>
-                                                <p className="text-[11px] text-muted-foreground mt-1 font-medium">Tip</p>
+                                            <div className="border-t pt-3 space-y-1.5">
+                                                <FR l="Rider paid" v={parseFloat(String(ride.total_fare ?? 0)) + parseFloat(String(ride.tip_amount ?? 0)) - parseFloat(String(ride.promo_discount ?? 0))} b />
+                                                <FR l="Driver gets" v={parseFloat(String(ride.driver_earnings ?? 0)) + parseFloat(String(ride.tip_amount ?? 0))} />
+                                                <FR l="Platform gets" v={ride.admin_earnings ?? 0} />
                                             </div>
                                         </div>
-                                        <div className="flex justify-between items-center mt-3 pt-3 border-t">
-                                            <span className="text-sm font-bold">Total Charged</span>
-                                            <span className="text-lg font-extrabold text-primary">
-                                                {formatCurrency(parseFloat(String(ride.total_fare ?? 0)) + parseFloat(String(ride.tip_amount ?? 0)) - parseFloat(String(ride.promo_discount ?? 0)))}
+                                    </Card>
+                                </div>
+
+                                {/* Row 4: Payment + Rating */}
+                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                                    <Card>
+                                        <CardHead title="Payment" icon={CreditCard} />
+                                        <div className="p-4 flex items-center justify-between">
+                                            <span className="flex items-center gap-2 text-sm font-medium">
+                                                <Receipt className="h-4 w-4 text-muted-foreground" />
+                                                {ride.payment_method || "Card"}
+                                            </span>
+                                            <span className={`text-xs font-bold px-2.5 py-1 rounded-lg ${
+                                                ride.payment_status === "paid" || ride.payment_status === "waived_admin"
+                                                    ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"
+                                                    : ride.payment_status === "failed"
+                                                        ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400"
+                                                        : "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"
+                                            }`}>
+                                                {(ride.payment_status || "pending").replace(/_/g, " ").toUpperCase()}
                                             </span>
                                         </div>
-                                        <div className="mt-2.5 pt-2.5 border-t space-y-1.5">
-                                            <FR l="Rider paid" v={parseFloat(String(ride.total_fare ?? 0)) + parseFloat(String(ride.tip_amount ?? 0)) - parseFloat(String(ride.promo_discount ?? 0))} />
-                                            <FR l="Driver gets" v={parseFloat(String(ride.driver_earnings ?? 0)) + parseFloat(String(ride.tip_amount ?? 0))} />
-                                            <FR l="Admin gets" v={ride.admin_earnings ?? 0} />
-                                        </div>
-                                    </Sec>
-                                </div>
-                            </div>
+                                    </Card>
 
-                            {/* Payment & Rating */}
-                            <div className="px-6 py-5">
-                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-                                    <Sec title="Payment">
-                                        <div className="flex items-center justify-between">
-                                            <span className="flex items-center gap-2 text-sm font-medium"><Receipt className="h-4 w-4 text-muted-foreground" />{ride.payment_method || "Card"}</span>
-                                            <span className={`text-xs font-bold px-2.5 py-1 rounded-md ${ride.payment_status === "paid" ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400" : "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"}`}>
-                                                {(ride.payment_status || "pending").toUpperCase()}
-                                            </span>
-                                        </div>
-                                    </Sec>
-                                    <Sec title="Rating">
-                                        {ride.rider_rating ? (
-                                            <div>
-                                                <div className="flex items-center gap-1">
-                                                    {[1, 2, 3, 4, 5].map(i => (
-                                                        <Star key={i} className={`h-4.5 w-4.5 ${i <= ride.rider_rating ? "text-amber-400 fill-amber-400" : "text-gray-200 dark:text-gray-700"}`} />
-                                                    ))}
-                                                    <span className="text-sm font-bold ml-2">{ride.rider_rating}/5</span>
+                                    <Card>
+                                        <CardHead title="Rating" icon={Star} />
+                                        <div className="p-4">
+                                            {ride.rider_rating ? (
+                                                <div>
+                                                    <div className="flex items-center gap-1 mb-2">
+                                                        {[1, 2, 3, 4, 5].map(i => (
+                                                            <Star key={i} className={`h-5 w-5 ${i <= ride.rider_rating ? "text-amber-400 fill-amber-400" : "text-muted/30"}`} />
+                                                        ))}
+                                                        <span className="text-sm font-bold ml-1.5">{ride.rider_rating}/5</span>
+                                                    </div>
+                                                    {ride.rider_comment && (
+                                                        <p className="text-sm text-muted-foreground italic bg-muted/40 rounded-lg px-3 py-2">&quot;{ride.rider_comment}&quot;</p>
+                                                    )}
                                                 </div>
-                                                {ride.rider_comment && <p className="text-sm text-muted-foreground mt-2 italic">&quot;{ride.rider_comment}&quot;</p>}
+                                            ) : (
+                                                <p className="text-sm text-muted-foreground py-1">No rating yet</p>
+                                            )}
+                                        </div>
+                                    </Card>
+                                </div>
+
+                                {/* Cancellation */}
+                                {ride.status === "cancelled" && (
+                                    <Card className="border-red-200 dark:border-red-900/30">
+                                        <CardHead title="Cancellation" icon={XCircle} accent="bg-red-50 dark:bg-red-900/20 border-red-100 dark:border-red-900/30" />
+                                        <div className="p-4 space-y-1">
+                                            <FR l="Cancelled by" v={ride.cancelled_by ? String(ride.cancelled_by).replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase()) : "—"} t />
+                                            <FR l="Type" v={ride.cancellation_type === "no_drivers_found" ? "No drivers found" : ride.cancellation_type ? String(ride.cancellation_type).replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase()) : "—"} t />
+                                            <FR l="Reason" v={ride.cancellation_reason || "—"} t />
+                                            <FR l="Driver fee" v={ride.cancellation_fee_driver} />
+                                            <FR l="Admin fee" v={ride.cancellation_fee_admin} />
+                                        </div>
+                                    </Card>
+                                )}
+
+                                {/* Booking Logs + Route Replay */}
+                                <Card>
+                                    <CardHead title="Timeline & Route Replay" icon={Clock} />
+                                    <div className="p-4 space-y-3">
+                                        {/* Timeline */}
+                                        <div className="space-y-0.5">
+                                            <TL l="Requested" t={ride.ride_requested_at || ride.created_at} />
+                                            <TL l="Driver notified" t={ride.driver_notified_at} />
+                                            <TL l="Driver accepted" t={ride.driver_accepted_at} km={phaseMap.navigating_to_pickup} />
+                                            <TL l="Driver arrived" t={ride.driver_arrived_at} km={phaseMap.arrived_at_pickup} />
+                                            <TL l="Ride started" t={ride.ride_started_at} />
+                                            <TL l="Ride completed" t={ride.ride_completed_at} km={phaseMap.trip_in_progress} />
+                                            {ride.cancelled_at && <TL l="Cancelled" t={ride.cancelled_at} d />}
+                                        </div>
+
+                                        {/* Phase selector */}
+                                        <div className="pt-3 border-t">
+                                            <div className="flex items-center justify-between mb-2.5">
+                                                <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider">Route Views</p>
+                                                <p className="text-[10px] text-muted-foreground/70">Click to replay on map</p>
                                             </div>
-                                        ) : (
-                                            <p className="text-sm text-muted-foreground py-1">No rating yet</p>
-                                        )}
-                                    </Sec>
-                                </div>
-                            </div>
-
-                            {/* Cancellation */}
-                            {ride.status === "cancelled" && (
-                                <div className="px-6 py-5">
-                                    <Sec title="Cancellation">
-                                        <FR
-                                            l="Cancelled by"
-                                            v={
-                                                ride.cancelled_by
-                                                    ? String(ride.cancelled_by)
-                                                        .replace(/_/g, " ")
-                                                        .replace(/\b\w/g, (c: string) => c.toUpperCase())
-                                                    : "—"
-                                            }
-                                            t
-                                        />
-                                        <FR
-                                            l="Type"
-                                            v={
-                                                ride.cancellation_type === "no_drivers_found"
-                                                    ? "No drivers found"
-                                                    : ride.cancellation_type
-                                                      ? String(ride.cancellation_type)
-                                                            .replace(/_/g, " ")
-                                                            .replace(/\b\w/g, (c: string) => c.toUpperCase())
-                                                      : "—"
-                                            }
-                                            t
-                                        />
-                                        <FR l="Reason" v={ride.cancellation_reason || "—"} t />
-                                        <FR l="Driver fee" v={ride.cancellation_fee_driver} />
-                                        <FR l="Admin fee" v={ride.cancellation_fee_admin} />
-                                    </Sec>
-                                </div>
-                            )}
-
-                            {/* Lost & Found */}
-                            <div className="px-6 py-5">
-                                <RideLostFound rideId={ride.id} items={ride.lost_and_found || []} onRefresh={loadRide} />
-                            </div>
-
-                            {/* Complaints & Flags */}
-                            <div className="px-6 py-5">
-                                <Sec title="Complaints & Flags">
-                                    {ride.flags && ride.flags.length > 0 ? (
-                                        <div className="space-y-2 mb-3">
-                                            {ride.flags.map((f: any, i: number) => (
-                                                <div key={f.id || i} className="flex items-center gap-2.5 bg-background rounded-lg p-2.5">
-                                                    <Flag className={`h-3.5 w-3.5 shrink-0 ${f._party === "rider" ? "text-blue-500" : "text-emerald-500"}`} />
-                                                    <span className="text-xs font-semibold">{f._party === "rider" ? "Rider" : "Driver"}</span>
-                                                    <span className="text-xs bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded-md font-medium">{f.reason?.replace(/_/g, " ")}</span>
-                                                    {f.description && <span className="text-xs text-muted-foreground truncate flex-1">{f.description}</span>}
-                                                    <span className="text-[10px] text-muted-foreground tabular-nums">{fmtTime(f.created_at)}</span>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    ) : (
-                                        <p className="text-sm text-muted-foreground mb-3">No flags or complaints</p>
-                                    )}
-
-                                    {ride.complaints && ride.complaints.length > 0 && (
-                                        <div className="space-y-2 mb-3">
-                                            {ride.complaints.map((c: any) => (
-                                                <div key={c.id} className="flex items-center gap-2.5 bg-background rounded-lg p-2.5">
-                                                    <FileWarning className="h-3.5 w-3.5 shrink-0 text-amber-500" />
-                                                    <span className="text-xs font-semibold">{c.against_type}</span>
-                                                    <span className="text-xs bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 px-1.5 py-0.5 rounded-md font-medium">{c.category}</span>
-                                                    <span className="text-xs text-muted-foreground truncate flex-1">{c.description}</span>
-                                                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md ${c.status === "open" ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"}`}>{c.status}</span>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    )}
-
-                                    {(ride.rider_flag_count >= 2 || ride.driver_flag_count >= 2) && (
-                                        <div className="flex items-center gap-2.5 bg-red-50 dark:bg-red-900/20 rounded-lg p-3 mb-3">
-                                            <AlertTriangle className="h-4 w-4 text-red-500 shrink-0" />
-                                            <p className="text-xs font-semibold text-red-600 dark:text-red-400">
-                                                {ride.rider_flag_count >= 2 && `Rider has ${ride.rider_flag_count} flags (1 more = ban). `}
-                                                {ride.driver_flag_count >= 2 && `Driver has ${ride.driver_flag_count} flags (1 more = ban).`}
-                                            </p>
-                                        </div>
-                                    )}
-
-                                    <div className="flex gap-2 flex-wrap pt-1">
-                                        {ride.rider_id && (
-                                            <button onClick={() => setFlagTarget({ type: "rider", name: ride.rider_name || "Rider" })}
-                                                className="flex items-center gap-1.5 text-xs font-semibold text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 px-3 py-2 rounded-lg border border-red-200 dark:border-red-900/30 transition-colors">
-                                                <Flag className="h-3.5 w-3.5" /> Flag Rider
-                                            </button>
-                                        )}
-                                        {ride.driver_id && (
-                                            <button onClick={() => setFlagTarget({ type: "driver", name: ride.driver_name || "Driver" })}
-                                                className="flex items-center gap-1.5 text-xs font-semibold text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 px-3 py-2 rounded-lg border border-red-200 dark:border-red-900/30 transition-colors">
-                                                <Flag className="h-3.5 w-3.5" /> Flag Driver
-                                            </button>
-                                        )}
-                                        <button onClick={() => setShowComplaint(true)}
-                                            className="flex items-center gap-1.5 text-xs font-semibold text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20 px-3 py-2 rounded-lg border border-amber-200 dark:border-amber-900/30 transition-colors">
-                                            <FileWarning className="h-3.5 w-3.5" /> Raise Complaint
-                                        </button>
-                                    </div>
-                                </Sec>
-                            </div>
-
-                            {/* Booking Logs */}
-                            <div className="px-6 py-5">
-                                <Sec title="Booking Logs">
-                                    <div className="space-y-0.5">
-                                        <TL l="Requested" t={ride.ride_requested_at || ride.created_at} />
-                                        <TL l="Driver notified" t={ride.driver_notified_at} />
-                                        <TL l="Driver accepted" t={ride.driver_accepted_at}
-                                            km={phaseMap.navigating_to_pickup} />
-                                        <TL l="Driver arrived" t={ride.driver_arrived_at}
-                                            km={phaseMap.arrived_at_pickup} />
-                                        <TL l="Ride started" t={ride.ride_started_at} />
-                                        <TL l="Ride completed" t={ride.ride_completed_at}
-                                            km={phaseMap.trip_in_progress} />
-                                        {ride.cancelled_at && <TL l="Cancelled" t={ride.cancelled_at} d />}
-                                    </div>
-
-                                    {/* Three-way route selector: Pickup / Actual Trip /
-                                        Planned Trip. Clicking a card replays the
-                                        corresponding polyline on the map below. Pickup +
-                                        Actual Trip come from migration 39's
-                                        phase_polylines (real GPS). Planned is the
-                                        straight-line pickup→dropoff reference — we
-                                        don't yet store a road-snapped planned route. */}
-                                    <div className="mt-3 pt-3 border-t">
-                                        <div className="flex items-center justify-between mb-2.5">
-                                            <p className="text-[11px] font-bold text-muted-foreground uppercase tracking-wider">
-                                                Route Views
-                                            </p>
-                                            <p className="text-[10px] text-muted-foreground/70">
-                                                Click to replay on map below
-                                            </p>
-                                        </div>
-                                        <div className="grid grid-cols-3 gap-2">
-                                            {(() => {
-                                                const pickupKm = ride.phase_distances?.navigating_to_pickup;
-                                                const pickupSecs = ride.phase_durations?.navigating_to_pickup;
-                                                const tripKm = ride.phase_distances?.trip_in_progress ?? ride.actual_distance_km;
-                                                const tripSecs = ride.phase_durations?.trip_in_progress;
-                                                const plannedKm = ride.planned_distance_km;
-                                                const fmtDur = (s: number | undefined) =>
-                                                    typeof s === "number" && s > 0
-                                                        ? s >= 60
-                                                            ? `${Math.round(s / 60)} min`
-                                                            : `${s}s`
-                                                        : null;
-                                                const fmtKm = (v: number | undefined | null) =>
-                                                    typeof v === "number" ? `${Number(v).toFixed(2)} km` : "—";
-                                                type CardKey = "pickup" | "actual" | "planned";
-                                                const cards: {
-                                                    key: CardKey;
-                                                    label: string;
-                                                    km: string;
-                                                    sub: string | null;
-                                                    colorCls: string;
-                                                }[] = [
-                                                    {
-                                                        key: "pickup",
-                                                        label: "Pickup",
-                                                        km: fmtKm(pickupKm),
-                                                        sub: fmtDur(pickupSecs),
-                                                        colorCls: PHASE_COLORS.navigating_to_pickup,
-                                                    },
-                                                    {
-                                                        key: "actual",
-                                                        label: "Actual Trip",
-                                                        km: fmtKm(tripKm),
-                                                        sub: fmtDur(tripSecs),
-                                                        colorCls: PHASE_COLORS.trip_in_progress,
-                                                    },
-                                                    {
-                                                        key: "planned",
-                                                        label: "Planned Trip",
-                                                        km: fmtKm(plannedKm),
-                                                        sub: "Straight-line reference",
-                                                        colorCls: "bg-muted/60 text-foreground",
-                                                    },
-                                                ];
-                                                return cards.map((c) => {
-                                                    const selected = selectedPhase === c.key;
-                                                    return (
-                                                        <button
-                                                            key={c.key}
-                                                            type="button"
-                                                            onClick={() => setSelectedPhase(c.key)}
-                                                            className={`text-left rounded-lg px-3 py-2.5 transition ring-offset-1 ring-offset-background ${c.colorCls} hover:brightness-95 dark:hover:brightness-110 ${
-                                                                selected ? "ring-2 ring-primary" : "ring-0"
-                                                            }`}
-                                                        >
+                                            <div className="grid grid-cols-3 gap-2">
+                                                {(() => {
+                                                    const fmtDur = (s: number | undefined) => typeof s === "number" && s > 0 ? s >= 60 ? `${Math.round(s / 60)} min` : `${s}s` : null;
+                                                    const fmtKm = (v: number | undefined | null) => typeof v === "number" ? `${Number(v).toFixed(2)} km` : "—";
+                                                    type CardKey = "pickup" | "actual" | "planned";
+                                                    const cards: { key: CardKey; label: string; km: string; sub: string | null; colorCls: string; }[] = [
+                                                        { key: "pickup",  label: "Pickup",       km: fmtKm(ride.phase_distances?.navigating_to_pickup), sub: fmtDur(ride.phase_durations?.navigating_to_pickup), colorCls: PHASE_COLORS.navigating_to_pickup },
+                                                        { key: "actual",  label: "Actual Trip",  km: fmtKm(ride.phase_distances?.trip_in_progress ?? ride.actual_distance_km), sub: fmtDur(ride.phase_durations?.trip_in_progress), colorCls: PHASE_COLORS.trip_in_progress },
+                                                        { key: "planned", label: "Planned Trip", km: fmtKm(ride.planned_distance_km), sub: "Straight-line reference", colorCls: "bg-muted/60 text-foreground" },
+                                                    ];
+                                                    return cards.map(c => (
+                                                        <button key={c.key} type="button" onClick={() => setSelectedPhase(c.key)}
+                                                            className={`text-left rounded-xl px-3 py-2.5 transition ring-offset-1 ring-offset-background ${c.colorCls} hover:brightness-95 dark:hover:brightness-110 ${selectedPhase === c.key ? "ring-2 ring-primary" : "ring-0"}`}>
                                                             <p className="text-xs font-bold">{c.km}</p>
                                                             <p className="text-[10px] opacity-80">{c.label}</p>
                                                             <p className="text-[9px] opacity-60">{c.sub || "—"}</p>
                                                         </button>
-                                                    );
-                                                });
-                                            })()}
+                                                    ));
+                                                })()}
+                                            </div>
+                                        </div>
+
+                                        {/* Map */}
+                                        {ride.pickup_lat && ride.dropoff_lat && (() => {
+                                            const pp = ride.phase_polylines || {};
+                                            const pickupPts = Array.isArray(pp.navigating_to_pickup)
+                                                ? pp.navigating_to_pickup.map((p: any) => ({ lat: p[0], lng: p[1], timestamp: p[2] })) : [];
+                                            const tripPts = Array.isArray(pp.trip_in_progress)
+                                                ? pp.trip_in_progress.map((p: any) => ({ lat: p[0], lng: p[1], timestamp: p[2] })) : [];
+
+                                            let pickupProp: typeof pickupPts | undefined;
+                                            let tripProp: typeof tripPts | undefined;
+                                            let trailForMap: typeof tripPts | undefined;
+                                            let label = "";
+                                            let emptyHint: string | null = null;
+
+                                            if (selectedPhase === "pickup") {
+                                                label = "Driver → Pickup (actual GPS)";
+                                                if (pickupPts.length > 1) pickupProp = pickupPts;
+                                                else emptyHint = "No Phase 2 GPS trail for this ride";
+                                            } else if (selectedPhase === "actual") {
+                                                label = "Pickup → Dropoff (actual GPS)";
+                                                if (tripPts.length > 1) { tripProp = tripPts; }
+                                                else {
+                                                    const legacy = Array.isArray(ride.route_polyline) && ride.route_polyline.length > 1
+                                                        ? ride.route_polyline.map((p: any) => ({ lat: p[0], lng: p[1] })) : [];
+                                                    if (legacy.length > 1) trailForMap = legacy;
+                                                    else emptyHint = "No trip GPS trail for this ride";
+                                                }
+                                            } else {
+                                                label = "Planned Trip (straight-line reference)";
+                                            }
+
+                                            return (
+                                                <div className="pt-3 border-t">
+                                                    <div className="flex items-center justify-between mb-2">
+                                                        <p className="text-xs text-muted-foreground">{label}</p>
+                                                        {emptyHint && <p className="text-[10px] text-muted-foreground/70">{emptyHint}</p>}
+                                                    </div>
+                                                    <div className="rounded-xl overflow-hidden">
+                                                        <RideRouteMap
+                                                            key={selectedPhase}
+                                                            pickupLat={ride.pickup_lat}
+                                                            pickupLng={ride.pickup_lng}
+                                                            dropoffLat={ride.dropoff_lat}
+                                                            dropoffLng={ride.dropoff_lng}
+                                                            pickupTrail={pickupProp}
+                                                            tripTrail={tripProp}
+                                                            locationTrail={trailForMap}
+                                                        />
+                                                    </div>
+                                                </div>
+                                            );
+                                        })()}
+                                    </div>
+                                </Card>
+
+                                {/* Lost & Found */}
+                                <Card>
+                                    <div className="p-4">
+                                        <RideLostFound rideId={ride.id} items={ride.lost_and_found || []} onRefresh={loadRide} />
+                                    </div>
+                                </Card>
+
+                                {/* Complaints & Flags */}
+                                <Card>
+                                    <CardHead title="Complaints & Flags" icon={Flag} />
+                                    <div className="p-4 space-y-3">
+                                        {ride.flags && ride.flags.length > 0 && (
+                                            <div className="space-y-2">
+                                                {ride.flags.map((f: any, i: number) => (
+                                                    <div key={f.id || i} className="flex items-center gap-2.5 bg-muted/40 rounded-lg p-2.5">
+                                                        <Flag className={`h-3.5 w-3.5 shrink-0 ${f._party === "rider" ? "text-blue-500" : "text-emerald-500"}`} />
+                                                        <span className="text-xs font-semibold">{f._party === "rider" ? "Rider" : "Driver"}</span>
+                                                        <span className="text-xs bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 px-1.5 py-0.5 rounded font-medium">{f.reason?.replace(/_/g, " ")}</span>
+                                                        {f.description && <span className="text-xs text-muted-foreground truncate flex-1">{f.description}</span>}
+                                                        <span className="text-[10px] text-muted-foreground tabular-nums">{fmtTime(f.created_at)}</span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+
+                                        {ride.complaints && ride.complaints.length > 0 && (
+                                            <div className="space-y-2">
+                                                {ride.complaints.map((c: any) => (
+                                                    <div key={c.id} className="flex items-center gap-2.5 bg-muted/40 rounded-lg p-2.5">
+                                                        <FileWarning className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+                                                        <span className="text-xs font-semibold">{c.against_type}</span>
+                                                        <span className="text-xs bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 px-1.5 py-0.5 rounded font-medium">{c.category}</span>
+                                                        <span className="text-xs text-muted-foreground truncate flex-1">{c.description}</span>
+                                                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${c.status === "open" ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"}`}>{c.status}</span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+
+                                        {!ride.flags?.length && !ride.complaints?.length && (
+                                            <p className="text-sm text-muted-foreground">No flags or complaints on this ride.</p>
+                                        )}
+
+                                        {(ride.rider_flag_count >= 2 || ride.driver_flag_count >= 2) && (
+                                            <div className="flex items-center gap-2.5 bg-red-50 dark:bg-red-900/20 rounded-lg p-3">
+                                                <AlertTriangle className="h-4 w-4 text-red-500 shrink-0" />
+                                                <p className="text-xs font-semibold text-red-600 dark:text-red-400">
+                                                    {ride.rider_flag_count >= 2 && `Rider has ${ride.rider_flag_count} flags (1 more = ban). `}
+                                                    {ride.driver_flag_count >= 2 && `Driver has ${ride.driver_flag_count} flags (1 more = ban).`}
+                                                </p>
+                                            </div>
+                                        )}
+
+                                        <div className="flex gap-2 flex-wrap pt-1 border-t">
+                                            {ride.rider_id && (
+                                                <button onClick={() => setFlagTarget({ type: "rider", name: ride.rider_name || "Rider" })}
+                                                    className="flex items-center gap-1.5 text-xs font-semibold text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 px-3 py-2 rounded-lg border border-red-200 dark:border-red-900/30 transition-colors">
+                                                    <Flag className="h-3.5 w-3.5" /> Flag Rider
+                                                </button>
+                                            )}
+                                            {ride.driver_id && (
+                                                <button onClick={() => setFlagTarget({ type: "driver", name: ride.driver_name || "Driver" })}
+                                                    className="flex items-center gap-1.5 text-xs font-semibold text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 px-3 py-2 rounded-lg border border-red-200 dark:border-red-900/30 transition-colors">
+                                                    <Flag className="h-3.5 w-3.5" /> Flag Driver
+                                                </button>
+                                            )}
+                                            <button onClick={() => setShowComplaint(true)}
+                                                className="flex items-center gap-1.5 text-xs font-semibold text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20 px-3 py-2 rounded-lg border border-amber-200 dark:border-amber-900/30 transition-colors">
+                                                <FileWarning className="h-3.5 w-3.5" /> Raise Complaint
+                                            </button>
                                         </div>
                                     </div>
-                                </Sec>
-                            </div>
+                                </Card>
 
-                            {/* Route Replay — shows the map for the selected view.
-                                Pickup / Actual Trip use the real GPS polylines from
-                                migration 39. Planned uses a straight-line reference
-                                since we don't store a road-snapped planned route. */}
-                            {(() => {
-                                if (!ride.pickup_lat || !ride.dropoff_lat) return null;
-
-                                const pp = ride.phase_polylines || {};
-                                const pickupPts: { lat: number; lng: number; timestamp?: string }[] =
-                                    Array.isArray(pp.navigating_to_pickup)
-                                        ? pp.navigating_to_pickup.map((p: any) => ({ lat: p[0], lng: p[1], timestamp: p[2] }))
-                                        : [];
-                                const tripPts: { lat: number; lng: number; timestamp?: string }[] =
-                                    Array.isArray(pp.trip_in_progress)
-                                        ? pp.trip_in_progress.map((p: any) => ({ lat: p[0], lng: p[1], timestamp: p[2] }))
-                                        : [];
-
-                                let label = "";
-                                let emptyHint: string | null = null;
-                                let trailForMap: { lat: number; lng: number; timestamp?: string }[] | undefined;
-                                let pickupProp: typeof pickupPts | undefined;
-                                let tripProp: typeof tripPts | undefined;
-
-                                if (selectedPhase === "pickup") {
-                                    label = "Driver → Pickup (actual GPS)";
-                                    if (pickupPts.length > 1) {
-                                        pickupProp = pickupPts;
-                                    } else {
-                                        emptyHint = "No Phase 2 GPS trail for this ride";
-                                    }
-                                } else if (selectedPhase === "actual") {
-                                    label = "Pickup → Dropoff (actual GPS)";
-                                    if (tripPts.length > 1) {
-                                        tripProp = tripPts;
-                                    } else {
-                                        // Fall back to legacy combined polyline for pre-
-                                        // migration-39 rides that still have route_polyline.
-                                        const legacy =
-                                            Array.isArray(ride.route_polyline) && ride.route_polyline.length > 1
-                                                ? ride.route_polyline.map((p: any) => ({ lat: p[0], lng: p[1] }))
-                                                : [];
-                                        if (legacy.length > 1) {
-                                            trailForMap = legacy;
-                                        } else {
-                                            emptyHint = "No trip GPS trail for this ride";
-                                        }
-                                    }
-                                } else {
-                                    // planned — straight-line reference rendered by
-                                    // RideRouteMap's built-in dashed fallback when no
-                                    // trails are passed in.
-                                    label = "Planned Trip (straight-line reference)";
-                                }
-
-                                return (
-                                    <div className="px-6 py-5">
-                                        <Sec title="Route Replay">
-                                            <div className="flex items-center justify-between mb-2.5">
-                                                <p className="text-xs text-muted-foreground">{label}</p>
-                                                {emptyHint && (
-                                                    <p className="text-[10px] text-muted-foreground/70">{emptyHint}</p>
-                                                )}
-                                            </div>
-                                            <RideRouteMap
-                                                key={selectedPhase}
-                                                pickupLat={ride.pickup_lat}
-                                                pickupLng={ride.pickup_lng}
-                                                dropoffLat={ride.dropoff_lat}
-                                                dropoffLng={ride.dropoff_lng}
-                                                pickupTrail={pickupProp}
-                                                tripTrail={tripProp}
-                                                locationTrail={trailForMap}
-                                            />
-                                        </Sec>
-                                    </div>
-                                );
-                            })()}
-
-                            {/* Metadata */}
-                            <div className="px-6 py-4 bg-muted/20">
-                                <div className="flex flex-wrap gap-x-6 gap-y-1 text-[11px] text-muted-foreground">
+                                {/* Metadata footer */}
+                                <div className="flex flex-wrap gap-x-6 gap-y-1 text-[11px] text-muted-foreground px-1">
                                     <p>Vehicle type: <span className="font-medium text-foreground/70">{ride.vehicle_type_id?.slice(0, 8) || "—"}</span></p>
                                     <p>OTP: <span className="font-mono font-medium text-foreground/70">{ride.pickup_otp || "—"}</span></p>
                                     {ride.shared_trip_token && <p>Shared trip: <span className="font-mono font-medium text-foreground/70">{ride.shared_trip_token}</span></p>}
                                 </div>
+
                             </div>
                         </div>
                     )}

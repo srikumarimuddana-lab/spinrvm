@@ -1454,6 +1454,28 @@ export const adminCancelRide = (rideId: string, reason?: string) =>
         },
     );
 
+export const adminCompleteRide = (rideId: string) =>
+    request<{ success: boolean; ride_id: string; status: string }>(
+        `/api/admin/rides/${rideId}/complete`,
+        { method: "POST" },
+    );
+
+export const adminCreateRide = (data: {
+    rider_id: string;
+    driver_id?: string;
+    pickup_address: string;
+    pickup_lat: number;
+    pickup_lng: number;
+    dropoff_address: string;
+    dropoff_lat: number;
+    dropoff_lng: number;
+    total_fare?: number;
+}) =>
+    request<any>("/api/admin/rides/create", {
+        method: "POST",
+        body: JSON.stringify(data),
+    });
+
 // ── Monitoring: Redis + Infrastructure ────────────────────────────────
 
 export type RedisStats = {

@@ -2,9 +2,12 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { getRides, getServiceAreas } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { PlusCircle } from "lucide-react";
 import RideStatsCards, { RidesChart } from "./_components/ride-stats-cards";
 import RideList from "./_components/ride-list";
 import RideDetailModal from "./_components/ride-detail-modal";
+import { CreateRideModal } from "./_components/create-ride-modal";
 import { useRequireModule } from "@/hooks/useRequireModule";
 
 const PAGE_SIZE = 50;
@@ -22,6 +25,7 @@ export default function RidesPage() {
     const [dateFrom, setDateFrom] = useState("");
     const [dateTo, setDateTo] = useState("");
     const [selectedRideId, setSelectedRideId] = useState<string | null>(null);
+    const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
 
     // Scheduled rides live as status="searching" + is_scheduled=true until
     // their scheduled_time, so they are not on the default feed — re-query
@@ -105,11 +109,17 @@ export default function RidesPage() {
     return (
         <div className="space-y-6 pb-8">
             {/* Page Header */}
-            <div>
-                <h1 className="text-3xl font-bold tracking-tight">Rides</h1>
-                <p className="text-muted-foreground mt-1">
-                    Monitor and manage all ride activity across your platform.
-                </p>
+            <div className="flex items-center justify-between">
+                <div>
+                    <h1 className="text-3xl font-bold tracking-tight">Rides</h1>
+                    <p className="text-muted-foreground mt-1">
+                        Monitor and manage all ride activity across your platform.
+                    </p>
+                </div>
+                <Button onClick={() => setIsCreateModalOpen(true)} className="gap-2">
+                    <PlusCircle className="h-4 w-4" />
+                    Create Ride
+                </Button>
             </div>
 
             {/* Stats Overview */}
@@ -146,6 +156,12 @@ export default function RidesPage() {
                 rideId={selectedRideId}
                 open={!!selectedRideId}
                 onClose={() => setSelectedRideId(null)}
+            />
+
+            <CreateRideModal
+                open={isCreateModalOpen}
+                onClose={() => setIsCreateModalOpen(false)}
+                onSuccess={() => loadRides(0, statusFilter)}
             />
         </div>
     );

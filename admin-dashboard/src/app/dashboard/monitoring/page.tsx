@@ -600,6 +600,21 @@ export default function MonitoringPage() {
                     );
                   }
                 }}
+                onCompleteRide={async (id) => {
+                  try {
+                    const { adminCompleteRide } = await import("@/lib/api");
+                    await adminCompleteRide(id);
+                    ridesMapRef.current.delete(id);
+                    mapHandlesRef.current?.removeRideMarkers(id);
+                    refreshCounts();
+                    setSelected(null);
+                    setSelectedRide(null);
+                  } catch (err: any) {
+                    window.alert(
+                      `Failed to complete ride: ${err?.message ?? "unknown error"}`,
+                    );
+                  }
+                }}
               />
             </div>
           ) : null}

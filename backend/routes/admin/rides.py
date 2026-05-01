@@ -257,6 +257,150 @@ async def admin_cancel_ride(
     return {"success": True, "ride_id": ride_id, "status": "cancelled"}
 
 
+@router.post("/rides/{ride_id}/complete")
+async def admin_complete_ride(
+    ride_id: str,
+    admin_user: dict = Depends(get_admin_user),
+):
+    """Admin force-completes an in-flight ride from the live monitoring page.
+
+    Driver (if assigned) is freed so they can immediately accept new requests.
+    Rider + driver both receive a ws ride_completed push so their apps reset
+    out of the active-ride flow.
+    """
+    ride = await db_supabase.get_ride(ride_id)
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+
+    if ride.get("status") in ("completed", "cancelled"):
+        raise HTTPException(status_code=400, detail="Ride already completed or cancelled")
+
+    now = datetime.now(timezone.utc)
+
+    update_data = {
+        "status": "completed",
+        "updated_at": now,
+        "ride_completed_at": now,
+    }
+    
+    try:
+        await db_supabase.update_ride(ride_id, update_data)
+    except Exception as e:
+        logger.error(f"admin_complete_ride: update failed ride_id={ride_id} err={e}")
+        raise HTTPException(status_code=500, detail="Failed to update ride status")
+
+    driver_user_id: str | None = None
+    driver_id = ride.get("driver_id")
+    if driver_id:
+        try:
+            await db_supabase.set_driver_available(driver_id, True)
+        except Exception as e:
+            logger.error(f"admin_complete_ride: could not free driver {driver_id}: {e}", exc_info=True)
+
+        driver = await db_supabase.get_driver_by_id(driver_id)
+        if driver and driver.get("user_id"):
+            driver_user_id = driver["user_id"]
+            await manager.send_personal_message(
+                {"type": "ride_completed", "ride_id": ride_id},
+                f"driver_{driver_user_id}",
+            )
+
+    rider_id = ride.get("rider_id")
+    if rider_id:
+        await manager.send_personal_message(
+            {"type": "ride_completed", "ride_id": ride_id},
+            f"rider_{rider_id}",
+        )
+
+    await manager.broadcast_ride_status(
+        ride_id,
+        "completed",
+        rider_id=rider_id,
+        driver_user_id=driver_user_id,
+        source="admin",
+    )
+    try:
+        await manager.broadcast_to_admins(
+            {"type": "ride_completed", "ride_id": ride_id, "source": "admin"}
+        )
+    except Exception as e:  # pragma: no cover - best effort
+        logger.warning(f"admin_complete_ride: admin broadcast failed: {e}")
+
+    return {"success": True, "ride_id": ride_id, "status": "completed"}
+
+
+class AdminCreateRideRequest(BaseModel):
+    rider_id: str
+    driver_id: Optional[str] = None
+    pickup_address: str
+    pickup_lat: float
+    pickup_lng: float
+    dropoff_address: str
+    dropoff_lat: float
+    dropoff_lng: float
+    total_fare: Optional[float] = None
+    vehicle_type_id: Optional[str] = None
+
+
+@router.post("/rides/create")
+async def admin_create_ride(
+    body: AdminCreateRideRequest,
+    admin_user: dict = Depends(get_admin_user),
+):
+    """Admin manually creates a ride, optionally assigning a driver directly."""
+    import uuid
+    from ...geo_utils import calculate_distance
+    
+    now = datetime.now(timezone.utc)
+    distance_km = calculate_distance(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng)
+    
+    status = "driver_assigned" if body.driver_id else "searching"
+
+    ride_doc = {
+        "id": str(uuid.uuid4()),
+        "rider_id": body.rider_id,
+        "driver_id": body.driver_id,
+        "pickup_address": body.pickup_address,
+        "pickup_lat": body.pickup_lat,
+        "pickup_lng": body.pickup_lng,
+        "dropoff_address": body.dropoff_address,
+        "dropoff_lat": body.dropoff_lat,
+        "dropoff_lng": body.dropoff_lng,
+        "status": status,
+        "distance_km": distance_km,
+        "total_fare": body.total_fare or 0.0,
+        "payment_status": "pending",
+        "vehicle_type_id": body.vehicle_type_id,
+        "created_at": now.isoformat(),
+        "updated_at": now.isoformat(),
+    }
+
+    try:
+        await db_supabase.insert_one("rides", ride_doc)
+        
+        if body.driver_id:
+            await db_supabase.set_driver_available(body.driver_id, False)
+            await db_supabase.update_one("drivers", {"id": body.driver_id}, {"active_ride_id": ride_doc["id"]})
+            
+            driver = await db_supabase.get_driver_by_id(body.driver_id)
+            if driver and driver.get("user_id"):
+                await manager.send_personal_message(
+                    {"type": "ride_assigned", "ride_id": ride_doc["id"]},
+                    f"driver_{driver['user_id']}",
+                )
+
+        await manager.broadcast_ride_status(
+            ride_doc["id"],
+            status,
+            rider_id=body.rider_id,
+            source="admin",
+        )
+        return {"success": True, "ride_id": ride_doc["id"], "status": status}
+    except Exception as e:
+        logger.error(f"admin_create_ride: failed {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to create ride")
+
+
 # ---------- Stats ----------
 
 

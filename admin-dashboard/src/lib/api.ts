@@ -424,6 +424,7 @@ export const getDrivers = (opts: {
     is_online?: boolean;
     status?: string;
     service_area_id?: string;
+    search?: string;
 } = {}) => {
     const sp = new URLSearchParams();
     if (opts.limit != null) sp.set("limit", String(opts.limit));
@@ -432,6 +433,7 @@ export const getDrivers = (opts: {
     if (opts.is_online != null) sp.set("is_online", String(opts.is_online));
     if (opts.status) sp.set("status", opts.status);
     if (opts.service_area_id) sp.set("service_area_id", opts.service_area_id);
+    if (opts.search) sp.set("search", opts.search);
     const qs = sp.toString();
     return request<any[]>(`/api/admin/drivers${qs ? `?${qs}` : ""}`);
 };
@@ -1460,6 +1462,12 @@ export const adminCompleteRide = (rideId: string) =>
         { method: "POST" },
     );
 
+export const adminPlacesAutocomplete = (input: string) =>
+    request<{ predictions: any[] }>(`/api/admin/places/autocomplete?input=${encodeURIComponent(input)}`);
+
+export const adminPlacesDetails = (placeId: string) =>
+    request<{ lat: number; lng: number; formatted_address: string }>(`/api/admin/places/details?place_id=${encodeURIComponent(placeId)}`);
+
 export const adminCreateRide = (data: {
     rider_id: string;
     driver_id?: string;
@@ -1469,12 +1477,18 @@ export const adminCreateRide = (data: {
     dropoff_address: string;
     dropoff_lat: number;
     dropoff_lng: number;
-    total_fare?: number;
+    // Pass as string to preserve Decimal precision on the backend
+    // (Pydantic Decimal accepts string/number; string avoids float drift).
+    total_fare?: string | number;
+    vehicle_type_id?: string;
 }) =>
-    request<any>("/api/admin/rides/create", {
-        method: "POST",
-        body: JSON.stringify(data),
-    });
+    request<{ success: boolean; ride_id: string; status: string }>(
+        "/api/admin/rides/create",
+        {
+            method: "POST",
+            body: JSON.stringify(data),
+        },
+    );
 
 // ── Monitoring: Redis + Infrastructure ────────────────────────────────
 

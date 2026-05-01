@@ -33,6 +33,7 @@ status.txt
 status_check.txt
 status_full.txt
 .claude/worktrees/
+.claude/skills/
 .claude/settings.local.json
 
 # Graphify knowledge graph output (generated, not source)

@@ -48,7 +48,7 @@ function clearSessionCookies(res: NextResponse): void {
     httpOnly: false,
     sameSite: "strict",
     secure: isProduction,
-    path: "/api/admin/auth",
+    path: "/",
     maxAge: 0,
   });
 }

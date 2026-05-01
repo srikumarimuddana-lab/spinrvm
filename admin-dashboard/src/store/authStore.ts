@@ -8,7 +8,7 @@ import { create } from 'zustand';
 // non-HttpOnly spinr_admin_csrf cookie to bootstrap the in-memory CSRF
 // token, then calls silentRefresh() to exchange the HttpOnly RT cookie
 // for a new short-lived access token. JS never sees the RT value.
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
+const API_BASE = "";
 const REFRESH_BEFORE_EXPIRY_MS = 5 * 60 * 1000; // refresh 5 min before access token expires
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes (F-19)
 

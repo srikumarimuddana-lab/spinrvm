@@ -1,8 +1,6 @@
-// Use relative URL to go through Next.js proxy (avoids CORS and IPv6 issues)
-// For production, set NEXT_PUBLIC_API_URL to your backend URL.
-// Default is "" (empty) so /api/* requests route through next.config.ts rewrites
-// → http://127.0.0.1:8001. Never talk directly to the backend from the browser.
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
+// Always use relative URL so /api/* requests route through next.config.ts rewrites.
+// Never talk directly to the backend from the browser — that bypasses the proxy and triggers CORS.
+const API_BASE = "";
 
 // Import Zustand store for token management
 import { useAuthStore } from "@/store/authStore";

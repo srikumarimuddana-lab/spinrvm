@@ -177,7 +177,7 @@ async def admin_resolve_dispute(
 
     refund_result: Dict[str, Any] = {}
     if req.resolution in ("approved", "partial_refund") and req.refund_amount:
-        refund_amount_cents = int(float(req.refund_amount) * 100)
+        refund_amount_cents = int(req.refund_amount * Decimal("100"))
         ride = await db_supabase.get_ride(dispute.get("ride_id"))
         payment_intent_id = (ride or {}).get("stripe_charge_id") or (ride or {}).get("payment_intent_id")
 

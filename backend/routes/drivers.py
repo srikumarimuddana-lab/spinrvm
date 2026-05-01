@@ -21,8 +21,15 @@ try:
     from ..utils.crypto import hash_otp
     from ..utils.datetime_utils import parse_iso_utc
     from ..utils.driver_presence import clear_presence, mark_present, present_driver_ids
-    from ..utils.error_handling import RideStateError
+    from ..utils.error_handling import (
+        AccountDisabledException,
+        ErrorCode,
+        RideStateError,
+        SpinrException,
+    )
+    from ..utils.error_keys import ErrorKeys
     from ..utils.idempotency import idempotent_endpoint
+    from ..utils.insurance_periods import record_period_transition
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user, get_current_user
@@ -35,12 +42,32 @@ except ImportError:
     from utils.crypto import hash_otp
     from utils.datetime_utils import parse_iso_utc
     from utils.driver_presence import clear_presence, mark_present, present_driver_ids
-    from utils.error_handling import RideStateError
+    from utils.error_handling import (
+        AccountDisabledException,
+        ErrorCode,
+        RideStateError,
+        SpinrException,
+    )
+    from utils.error_keys import ErrorKeys
     from utils.idempotency import idempotent_endpoint
+    from utils.insurance_periods import record_period_transition  # type: ignore[assignment]
 
 db = db_supabase  # legacy alias
 
 logger = logging.getLogger(__name__)
+
+_TWO_PLACES = Decimal("0.01")
+
+
+def _money_str(v) -> str:
+    """Serialise a money value as an exact 2-dp Decimal string (never float)."""
+    from decimal import ROUND_HALF_UP, InvalidOperation
+
+    try:
+        return str(Decimal(str(v)).quantize(_TWO_PLACES, rounding=ROUND_HALF_UP))
+    except (TypeError, ValueError, InvalidOperation):
+        return "0.00"
+
 
 # ── Vault encryption for driver PII (P2-5) ───────────────────────────────────
 # licence_number and vehicle_vin live in plain TEXT columns, but the values
@@ -408,6 +435,8 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
             "id": str(uuid.uuid4()),
             "user_id": current_user["id"],
             "name": f"{first} {last}".strip() or current_user.get("phone", ""),
+            "first_name": first or None,
+            "last_name": last or None,
             "phone": current_user.get("phone", ""),
             "status": "pending",
             "is_verified": False,
@@ -435,6 +464,11 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
 
     updates["updated_at"] = datetime.now(timezone.utc).isoformat()
     await db_supabase.update_one("drivers", {"id": driver["id"]}, await _encrypt_driver_pii(updates))
+    # M-5: SGI insurance period audit — vehicle/document edits flip an
+    # active driver to needs_review and force them offline. If they were
+    # actually online before this update, that's a 1→0 transition.
+    if changed_vehicle and driver.get("status") == "active" and driver.get("is_online"):
+        await record_period_transition(driver["id"], 0)
     updated = await db_supabase.get_driver_by_id(driver["id"])
     return serialize_doc(await _decrypt_driver_pii(updated))
 
@@ -509,6 +543,16 @@ async def register_driver(
     full_name = (
         f"{first_name} {last_name}".strip() or current_user.get("name") or current_user.get("full_name") or "Driver"
     )
+    # Derive split first/last from whatever source produced full_name. Mirrors
+    # the migration backfill logic so a fresh row matches what the migration
+    # would produce.
+    if not first_name and not last_name:
+        _parts = full_name.split(" ", 1)
+        _first_name_split = _parts[0] if _parts else ""
+        _last_name_split = _parts[1].strip() if len(_parts) > 1 else ""
+    else:
+        _first_name_split = first_name
+        _last_name_split = last_name
 
     existing = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": user_id}, limit=1))
 
@@ -567,6 +611,8 @@ async def register_driver(
         "id": str(_uuid.uuid4()),
         "user_id": user_id,
         "name": full_name,
+        "first_name": _first_name_split or None,
+        "last_name": _last_name_split or None,
         "phone": current_user.get("phone", ""),
         "rating": 5.0,
         "total_rides": 0,
@@ -722,13 +768,14 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
         total_earnings = total_tips = total_rides = pending_payouts = 0
 
     return {
-        "total_earnings": total_earnings,
-        "available_balance": total_earnings - pending_payouts,
-        "pending_payouts": pending_payouts,
-        "total_paid_out": 0,
+        "total_earnings": _money_str(total_earnings),
+        # payable_balance = total_earnings - pending_payouts (NOT the same as wallet.balance)
+        "payable_balance": _money_str(Decimal(str(total_earnings)) - Decimal(str(pending_payouts))),
+        "pending_payouts": _money_str(pending_payouts),
+        "total_paid_out": "0.00",
         "has_bank_account": bool(driver.get("bank_account")),
         "stripe_account_onboarded": bool(driver.get("stripe_account_onboarded", False)),
-        "total_tips": total_tips,
+        "total_tips": _money_str(total_tips),
         "total_rides": total_rides,
     }
 
@@ -790,14 +837,14 @@ async def get_driver_earnings(period: str = Query("week"), current_user: dict = 
 
     return {
         "period": period,
-        "total_earnings": stats.get("total_earnings", 0),
-        "total_tips": stats.get("total_tips", 0),
+        "total_earnings": _money_str(stats.get("total_earnings", 0)),
+        "total_tips": _money_str(stats.get("total_tips", 0)),
         "total_rides": stats.get("total_rides", 0),
         "total_distance_km": stats.get("total_distance_km", 0),
         "total_duration_minutes": stats.get("total_duration_minutes", 0),
-        "average_per_ride": stats.get("total_earnings", 0) / stats.get("total_rides", 1)
+        "average_per_ride": _money_str(Decimal(str(stats.get("total_earnings", 0))) / stats.get("total_rides", 1))
         if stats.get("total_rides", 0) > 0
-        else 0,
+        else "0.00",
     }
 
 
@@ -1220,9 +1267,9 @@ async def get_driver_earnings_forecast(current_user: dict = Depends(get_current_
     projected_total = (this_week_earnings + projected_additional).quantize(Decimal("0.01"))
 
     return {
-        "this_week_earnings": float(this_week_earnings.quantize(Decimal("0.01"))),
-        "projected_weekly_total": float(projected_total),
-        "daily_avg_last_28d": float(daily_avg.quantize(Decimal("0.01"))),
+        "this_week_earnings": _money_str(this_week_earnings),
+        "projected_weekly_total": _money_str(projected_total),
+        "daily_avg_last_28d": _money_str(daily_avg),
         "days_remaining_this_week": days_remaining,
         "this_week_trips": len(this_week_rides),
     }
@@ -1407,7 +1454,7 @@ async def get_bank_account(current_user: dict = Depends(get_current_user)):
     if driver.get("stripe_account_onboarded"):
         return {
             "has_bank_account": True,
-            "bank_account": {"bank_name": "Stripe Connect", "account_number_last4": "****"},
+            "bank_account": {"bank_name": "Stripe Connect", "account_last4": "****"},
         }
 
     return {"has_bank_account": False, "bank_account": None}
@@ -1484,7 +1531,7 @@ async def save_bank_account(req: BankAccountCreate, current_user: dict = Depends
     trans = req.transit_number.zfill(5)
     account_data["routing_number"] = f"0{inst}{trans}"
 
-    account_data["account_number_last4"] = acc_num[-4:] if len(acc_num) >= 4 else acc_num
+    account_data["account_last4"] = acc_num[-4:] if len(acc_num) >= 4 else acc_num
     account_data["stripe_bank_id"] = None  # Would be populated after calling Stripe's API
     account_data["currency"] = "cad"
     account_data["country"] = "CA"
@@ -1522,7 +1569,7 @@ async def request_payout(
         raise HTTPException(status_code=404, detail="Driver profile not found")
 
     balance = await get_driver_balance(current_user)
-    if req.amount > balance.get("available_balance", 0):
+    if req.amount > Decimal(balance.get("payable_balance", "0")):
         raise HTTPException(status_code=400, detail="Insufficient funds")
 
     stripe_account_id = driver.get("stripe_account_id")
@@ -1572,7 +1619,7 @@ async def request_payout(
         "status": status,
         "stripe_payout_id": stripe_payout_id,
         "bank_name": account.get("bank_name") if account else "Stripe Connect",
-        "account_last4": account.get("account_number_last4") if account else "****",
+        "account_last4": account.get("account_last4") if account else "****",
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db_supabase.insert_one("payouts", payout)
@@ -1616,13 +1663,13 @@ async def get_t4a_summary(year: int, current_user: dict = Depends(get_current_us
         limit=10000,
     )
 
-    total_earnings = sum(r.get("driver_earnings", 0) for r in rides)
+    total_earnings = _money_str(sum(Decimal(str(r.get("driver_earnings") or 0)) for r in rides))
 
     return {
         "year": year,
         "total_earnings": total_earnings,
         "total_trips": len(rides),
-        "platform_fees": 0,
+        "platform_fees": "0.00",
         "net_earnings": total_earnings,
         "gst_registered": driver.get("gst_registered", False),
         "gst_bn": driver.get("gst_bn") or "",
@@ -1867,9 +1914,10 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
         raise HTTPException(status_code=404, detail="Driver not found")
 
     if driver.get("status") == "suspended":
-        raise HTTPException(
-            status_code=403,
-            detail="Your account is suspended. Please renew your documents to continue driving.",
+        raise AccountDisabledException(
+            message="Your account is suspended. Please renew your documents to continue driving.",
+            message_key=ErrorKeys.AUTH_ACCOUNT_SUSPENDED,
+            action_hint="Contact support",
         )
 
     ride = await db_supabase.get_ride(ride_id)
@@ -1929,7 +1977,13 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
             f"[ACCEPT] claim rejected ride_id={ride_id} "
             f"current_status={ride.get('status')} current_driver_id={ride.get('driver_id')}"
         )
-        raise HTTPException(status_code=409, detail="Ride already accepted by another driver")
+        raise SpinrException(
+            message="Ride already accepted by another driver",
+            error_code=ErrorCode.RESOURCE_CONFLICT,
+            status_code=409,
+            message_key=ErrorKeys.RIDE_TAKEN,
+            action_hint="Pick another ride",
+        )
 
     # Re-read the now-claimed ride so we can notify the rider with fresh data.
     ride = await db.find_one("rides", {"id": ride_id})
@@ -1970,6 +2024,9 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
     await db_supabase.update_ride(
         ride_id, {"driver_id": None, "status": "searching", "updated_at": datetime.now(timezone.utc)}
     )
+    # M-5: SGI insurance period audit — decline releases the driver from
+    # period 2 back to period 1.
+    await record_period_transition(driver["id"], 1)
 
     # Record the decline in audit_logs so daily stats can count it
     try:
@@ -2083,6 +2140,9 @@ async def verify_pickup_otp(ride_id: str, request: RideOTPRequest, current_user:
             "updated_at": datetime.now(timezone.utc),
         },
     )
+    # M-5: SGI insurance period audit — in_progress = period 3 (passenger
+    # aboard, full TNC commercial coverage).
+    await record_period_transition(driver["id"], 3, ride_id=ride_id)
 
     if ride.get("rider_id"):
         await manager.send_personal_message({"type": "ride_started", "ride_id": ride_id}, f"rider_{ride['rider_id']}")
@@ -2115,6 +2175,9 @@ async def start_ride(ride_id: str, current_user: dict = Depends(get_current_user
             "updated_at": datetime.now(timezone.utc),
         },
     )
+    # M-5: SGI insurance period audit — in_progress = period 3 (passenger
+    # aboard, full TNC commercial coverage).
+    await record_period_transition(driver["id"], 3, ride_id=ride_id)
 
     ride = await db_supabase.get_ride(ride_id)
     if ride and ride.get("rider_id"):
@@ -2332,10 +2395,16 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         )
     )
 
-    # Update driver stats
+    # Update driver stats. Setting is_available=True is safe here because the
+    # ride has just transitioned to `completed`, and the driver's row already
+    # has is_online=True (a driver cannot be on an active trip while offline).
+    # See update_driver_status docstring for the is_online/is_available invariant.
     await db_supabase.update_one(
         "drivers", {"id": driver["id"]}, {"$inc": {"total_rides": 1}, "$set": {"is_available": True}}
     )
+    # M-5: SGI insurance period audit — ride completed, driver returns to
+    # period 1 (still online, no ride). No ride_id on period 1.
+    await record_period_transition(driver["id"], 1)
 
     completed_ride = await db_supabase.get_ride(ride_id)
 
@@ -2417,6 +2486,12 @@ async def cancel_ride(ride_id: str, reason: str = Query(""), current_user: dict 
 
     # Make driver available again
     await db_supabase.set_driver_available(driver["id"], True)
+    # M-5: SGI insurance period audit — driver-side cancel after the
+    # driver was assigned/accepted/arrived returns them to period 1.
+    # If the ride was still in searching the driver was never in period
+    # 2; skip to avoid a phantom 1→1 transition.
+    if ride.get("status") in ("driver_assigned", "driver_accepted", "driver_arrived"):
+        await record_period_transition(driver["id"], 1)
 
     ride = await db_supabase.get_ride(ride_id)
     if ride and ride.get("rider_id"):
@@ -2652,8 +2727,8 @@ async def get_driver_leaderboard(
             period_rides = []
 
         total_rides = len(period_rides)
-        total_earnings = sum(float(r.get("driver_earnings", 0) or 0) for r in period_rides)
-        total_tips = sum(float(r.get("tip_amount", 0) or 0) for r in period_rides)
+        total_earnings = sum(Decimal(str(r.get("driver_earnings") or 0)) for r in period_rides)
+        total_tips = sum(Decimal(str(r.get("tip_amount") or 0)) for r in period_rides)
 
         user = await db.find_one("users", {"id": d.get("user_id")})
         name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else "Driver"
@@ -2663,15 +2738,15 @@ async def get_driver_leaderboard(
                 "driver_id": d_id,
                 "name": name,
                 "rides": total_rides,
-                "earnings": round(total_earnings, 2),
-                "tips": round(total_tips, 2),
+                "earnings": _money_str(total_earnings),
+                "tips": _money_str(total_tips),
                 "rating": d.get("rating", 0),
                 "is_current_user": d_id == driver["id"],
             }
         )
 
     # Sort by rides (primary), then earnings (secondary)
-    rankings.sort(key=lambda x: (x["rides"], x["earnings"]), reverse=True)
+    rankings.sort(key=lambda x: (x["rides"], Decimal(x["earnings"])), reverse=True)
 
     # Assign ranks
     for i, r in enumerate(rankings):
@@ -2710,6 +2785,25 @@ async def update_driver_status(
     is_online: bool = Body(..., embed=True),
     current_user: dict = Depends(get_current_user),
 ):
+    """Toggle the driver's online flag (driver-facing "Go online" / "Go offline").
+
+    Driver online/available flag contract
+    -------------------------------------
+    ``is_online``
+        Driver-toggled. ``True`` when the driver has tapped "Go online".
+        Independent of ride state; remains ``True`` while the driver is on
+        an active trip.
+    ``is_available``
+        System-computed. ``True`` only when (``is_online`` AND not currently
+        on an active ride AND not in offer-pending state). Used by dispatch
+        to decide who to offer the next ride to.
+
+    Invariant: ``is_available == True`` implies ``is_online == True``. The
+    inverse does NOT hold — an online driver mid-trip is ``is_online=True,
+    is_available=False``. Dispatch reads ``is_available``; admin filters
+    typically read ``is_online``. Never set ``is_available = True`` without
+    ``is_online = True``.
+    """
     driver = await db_supabase.get_driver_by_id(driver_id)
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
@@ -2719,20 +2813,34 @@ async def update_driver_status(
 
     # Ban check: prevent banned drivers from going online
     if is_online and driver.get("status") == "banned":
-        raise HTTPException(
-            status_code=403, detail="Your account has been permanently suspended due to policy violations."
+        raise AccountDisabledException(
+            message="Your account has been permanently suspended due to policy violations.",
+            message_key=ErrorKeys.AUTH_ACCOUNT_SUSPENDED,
+            action_hint="Contact support",
         )
     if is_online and driver.get("status") == "suspended":
-        raise HTTPException(status_code=403, detail="Your account is currently suspended. Please contact support.")
+        raise AccountDisabledException(
+            message="Your account is currently suspended. Please contact support.",
+            message_key=ErrorKeys.AUTH_ACCOUNT_SUSPENDED,
+            action_hint="Contact support",
+        )
     if is_online and driver.get("status") == "needs_review":
-        raise HTTPException(
-            status_code=400, detail="Your account is under review. Please wait for admin approval before going online."
+        raise SpinrException(
+            message="Your account is under review. Please wait for admin approval before going online.",
+            error_code=ErrorCode.DRIVER_DOCUMENTS_PENDING,
+            status_code=400,
+            message_key=ErrorKeys.DRIVER_DOCUMENTS_PENDING,
+            action_hint="Wait for verification",
         )
     if is_online and driver.get("status") not in ("active",):
         # Pending, rejected, or any unknown status
         if not driver.get("is_verified", False) and driver.get("status") != "active":
-            raise HTTPException(
-                status_code=400, detail="Your driver profile has not been verified yet. Please wait for admin approval."
+            raise SpinrException(
+                message="Your driver profile has not been verified yet. Please wait for admin approval.",
+                error_code=ErrorCode.DRIVER_DOCUMENTS_PENDING,
+                status_code=400,
+                message_key=ErrorKeys.DRIVER_DOCUMENTS_PENDING,
+                action_hint="Wait for verification",
             )
 
     if not is_online:
@@ -2836,9 +2944,12 @@ async def update_driver_status(
             latest = docs[0]
             exp = _parse_expiry(latest.get("expiry_date") or latest.get("expires_at"))
             if exp and exp < now:
-                raise HTTPException(
+                raise SpinrException(
+                    message=f"{req_name} has expired. Please update your documents before going online.",
+                    error_code=ErrorCode.DRIVER_DOCUMENTS_PENDING,
                     status_code=400,
-                    detail=f"{req_name} has expired. Please update your documents before going online.",
+                    message_key=ErrorKeys.DRIVER_DOCUMENTS_EXPIRED,
+                    action_hint="Renew documents in Profile",
                 )
             # This requirement was covered by a fresh doc — do not re-check
             # the legacy column for the same thing below.
@@ -2875,9 +2986,12 @@ async def update_driver_status(
                 if expiry_val.tzinfo is None:
                     expiry_val = expiry_val.replace(tzinfo=timezone.utc)
                 if expiry_val < now:
-                    raise HTTPException(
+                    raise SpinrException(
+                        message=f"{label} has expired ({field}). Please update your documents before going online.",
+                        error_code=ErrorCode.DRIVER_DOCUMENTS_PENDING,
                         status_code=400,
-                        detail=f"{label} has expired ({field}). Please update your documents before going online.",
+                        message_key=ErrorKeys.DRIVER_DOCUMENTS_EXPIRED,
+                        action_hint="Renew documents in Profile",
                     )
 
         # is_verified check removed — status field is the single source of truth now.
@@ -2927,9 +3041,12 @@ async def update_driver_status(
                 ) from e
 
             if not sub:
-                raise HTTPException(
+                raise SpinrException(
+                    message="You need an active Spinr Pass subscription to go online. Subscribe from your dashboard.",
+                    error_code=ErrorCode.PAYMENT_FAILED,
                     status_code=402,
-                    detail="You need an active Spinr Pass subscription to go online. Subscribe from your dashboard.",
+                    message_key=ErrorKeys.DRIVER_SUBSCRIPTION_REQUIRED,
+                    action_hint="Activate Spinr Pass",
                 )
 
             # Check expiry on the active subscription row. parse_iso_utc
@@ -2939,9 +3056,12 @@ async def update_driver_status(
                 exp = parse_iso_utc(sub["expires_at"])
                 if exp is not None and exp < datetime.now(timezone.utc):
                     await db_supabase.update_one("driver_subscriptions", {"id": sub["id"]}, {"status": "expired"})
-                    raise HTTPException(
+                    raise SpinrException(
+                        message="Your Spinr Pass has expired. Please renew to go online.",
+                        error_code=ErrorCode.PAYMENT_FAILED,
                         status_code=402,
-                        detail="Your Spinr Pass has expired. Please renew to go online.",
+                        message_key=ErrorKeys.DRIVER_SUBSCRIPTION_REQUIRED,
+                        action_hint="Activate Spinr Pass",
                     )
 
     logger.info(
@@ -2957,6 +3077,11 @@ async def update_driver_status(
     # payload so the flip itself still lands.
     _now_iso = datetime.now(timezone.utc).isoformat()
     _base = {"is_online": is_online, "is_available": is_online, "updated_at": _now_iso}
+    # Invariant guardrail: is_available => is_online (see handler docstring).
+    # This is a sanity check on the payload we are about to write — never
+    # gate user behaviour on the assert; if it ever trips, the bug is in the
+    # logic that built _base, not in the driver's request.
+    assert not (_base["is_available"] and not _base["is_online"]), "is_available implies is_online"
     status_flipped = bool(driver.get("is_online")) != bool(is_online)
     _payload = {**_base, "last_status_changed_at": _now_iso} if status_flipped else _base
     try:
@@ -3014,6 +3139,13 @@ async def update_driver_status(
                 "may be misconfigured — verify SUPABASE_SERVICE_ROLE_KEY."
             ),
         )
+
+    # M-5: SGI insurance period audit — only on actual flips. Idempotent
+    # toggles (driver re-asserts the same state) shouldn't open a new
+    # period row; the helper's no-op branch would absorb it but we save
+    # the round-trip by gating on status_flipped.
+    if status_flipped:
+        await record_period_transition(driver_id, 1 if is_online else 0)
 
     # Presence: Go Online is the strongest possible liveness signal — the
     # driver is actively using the app. Refresh the TTL now so dispatch can
@@ -3210,7 +3342,7 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
                 _user = await db.find_one("users", {"id": current_user["id"]})
                 _customer_id = _user.get("stripe_customer_id") if _user else None
                 if _customer_id:
-                    _amount_cents = int(float(plan_price) * 100)
+                    _amount_cents = int(Decimal(str(plan_price)) * 100)
                     _charge = stripe.PaymentIntent.create(
                         amount=_amount_cents,
                         currency="cad",
@@ -3507,6 +3639,9 @@ async def check_expiring_subscriptions():
                     except Exception as e:
                         logger.error(f"[SUB-EXPIRY] Failed to flip driver {driver['id']} offline: {e}")
                         continue
+                    # M-5: SGI insurance period audit — driver was online
+                    # (period 1) and we just forced them offline (period 0).
+                    await record_period_transition(driver["id"], 0)
 
                     try:
                         await clear_presence(driver["id"])

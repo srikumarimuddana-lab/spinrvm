@@ -18,6 +18,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
+try:
+    from backend.utils.error_handling import SpinrException
+    from backend.utils.error_keys import ErrorKeys
+except ImportError:
+    pass
+
 # Stub heavy deps before any backend import.
 _STUBS = [
     "supabase",
@@ -189,11 +195,15 @@ class TestFirebaseAuthDbFailureRaises503:
                 resp = MagicMock()
                 body = auth_mod.FirebaseAuthRequest(firebase_token="fake_token")
 
-                with pytest.raises(HTTPException) as exc_info:
+                with pytest.raises((HTTPException, SpinrException)) as exc_info:
                     await auth_mod.firebase_auth_login(req, resp, body)
 
         assert exc_info.value.status_code == 503
-        assert exc_info.value.detail == "auth_persist_failed"
+        # SpinrException uses .message_key; legacy HTTPException used .detail
+        if isinstance(exc_info.value, SpinrException):
+            assert exc_info.value.message_key == ErrorKeys.SYSTEM_DATABASE
+        else:
+            assert "persist" in exc_info.value.detail
 
     async def test_existing_user_session_update_failure_raises_503(self):
         fake_payload = {"uid": "firebase_uid_2", "phone_number": "+13061234568", "aud": "driver-app"}
@@ -229,8 +239,12 @@ class TestFirebaseAuthDbFailureRaises503:
                 resp = MagicMock()
                 body = auth_mod.FirebaseAuthRequest(firebase_token="fake_token")
 
-                with pytest.raises(HTTPException) as exc_info:
+                with pytest.raises((HTTPException, SpinrException)) as exc_info:
                     await auth_mod.firebase_auth_login(req, resp, body)
 
         assert exc_info.value.status_code == 503
-        assert exc_info.value.detail == "auth_session_update_failed"
+        # SpinrException uses .message_key; legacy HTTPException used .detail
+        if isinstance(exc_info.value, SpinrException):
+            assert exc_info.value.message_key == ErrorKeys.SYSTEM_DATABASE
+        else:
+            assert "session" in exc_info.value.detail

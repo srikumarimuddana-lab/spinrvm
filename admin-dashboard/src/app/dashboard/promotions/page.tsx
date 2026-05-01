@@ -26,6 +26,7 @@ import {
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { getPromotions, createPromotion, updatePromotion, deletePromotion, getPromoUsage, getPromoStats, getUsers } from "@/lib/api";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { useRequireModule } from "@/hooks/useRequireModule";
 
 // --- Types ---
 
@@ -101,6 +102,7 @@ function getPromoStatus(p: PromoCode): string {
 // --- Component ---
 
 export default function PromotionsPage() {
+    const { allowed } = useRequireModule("promotions");
     const [promos, setPromos] = useState<PromoCode[]>([]);
     const [usage, setUsage] = useState<PromoUsageRecord[]>([]);
     const [stats, setStats] = useState<PromoStatsData | null>(null);
@@ -407,6 +409,8 @@ export default function PromotionsPage() {
         const blob = new Blob([csv], { type: "text/csv" }); const url = URL.createObjectURL(blob);
         const a = document.createElement("a"); a.href = url; a.download = `promo-usage-${new Date().toISOString().split("T")[0]}.csv`; a.click(); URL.revokeObjectURL(url);
     };
+
+    if (!allowed) return null;
 
     return (
         <div className="space-y-6">

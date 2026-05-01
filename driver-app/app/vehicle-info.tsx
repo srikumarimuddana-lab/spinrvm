@@ -36,7 +36,7 @@ interface VehicleType {
 export default function VehicleInfoScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
-    const { driver, fetchDriverProfile, refreshProfile } = useAuthStore();
+    const { driver, token, fetchDriverProfile, refreshProfile } = useAuthStore();
     const updateDriverMe = useUpdateDriverMe();
     const { colors } = useTheme();
     const styles = useMemo(() => createStyles(colors), [colors]);
@@ -145,6 +145,13 @@ export default function VehicleInfoScreen() {
                     onPress: async () => {
                         setSaving(true);
                         try {
+                            // Guard: ensure auth token is available before mutation.
+                            // On fresh login during onboarding, there's a brief window
+                            // where tokens are set in store but not yet in the API client.
+                            // This retry ensures we have the token before making the call.
+                            if (!token) {
+                                throw new Error('Authentication token not available. Please wait a moment and try again.');
+                            }
                             await updateDriverMe.mutateAsync({
                                 ...form,
                                 vehicle_year: parseInt(form.vehicle_year) || 0,

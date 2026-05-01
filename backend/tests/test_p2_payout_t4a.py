@@ -42,7 +42,7 @@ def _bank_account() -> dict:
         "id": "bank-001",
         "driver_id": DRIVER_ID,
         "bank_name": "Test Bank",
-        "account_number_last4": "1234",
+        "account_last4": "1234",
     }
 
 
@@ -100,7 +100,7 @@ class TestRequestPayout:
     Code under test: backend/routes/drivers.py::request_payout (~line 1353).
     """
 
-    async def _request(self, amount: float = 50.00, available_balance: float = 100.00, has_bank_account: bool = True):
+    async def _request(self, amount: float = 50.00, payable_balance: float = 100.00, has_bank_account: bool = True):
         from starlette.requests import Request as StarletteRequest
 
         from backend.routes.drivers import PayoutRequest, request_payout
@@ -123,7 +123,7 @@ class TestRequestPayout:
         # get_driver_balance is called internally and makes multiple get_rows calls.
         # Mock it directly to control the returned balance cleanly.
         async def _mock_balance(user):
-            return {"available_balance": available_balance}
+            return {"payable_balance": str(payable_balance)}
 
         async def _get_rows(table, query=None, **kwargs):
             if table == "drivers":
@@ -152,7 +152,7 @@ class TestRequestPayout:
         return result, inserted
 
     async def test_payout_persisted_with_pending_status(self):
-        result, inserted = await self._request(amount=50.00, available_balance=100.00)
+        result, inserted = await self._request(amount=50.00, payable_balance=100.00)
 
         assert result["success"] is True
         assert inserted, "Payout row was not persisted"
@@ -166,7 +166,7 @@ class TestRequestPayout:
         from fastapi import HTTPException
 
         with pytest.raises(HTTPException) as exc_info:
-            await self._request(amount=200.00, available_balance=50.00)
+            await self._request(amount=200.00, payable_balance=50.00)
 
         assert exc_info.value.status_code == 400
         assert "insufficient" in exc_info.value.detail.lower()
@@ -175,7 +175,7 @@ class TestRequestPayout:
         from fastapi import HTTPException
 
         with pytest.raises(HTTPException) as exc_info:
-            await self._request(amount=50.00, available_balance=100.00, has_bank_account=False)
+            await self._request(amount=50.00, payable_balance=100.00, has_bank_account=False)
 
         assert exc_info.value.status_code == 400
         assert "bank" in exc_info.value.detail.lower()

@@ -61,4 +61,35 @@ export function translate(language: Language, key: string): string {
     return getNestedValue(translations[language], key);
 }
 
+// Convenience for non-component callsites (alert helpers, error pipelines)
+// that don't have a `useLanguageStore()` hook in scope. Reads the current
+// language from the zustand store and returns the translation, or the
+// `fallback` (or the key itself) when no entry matches.
+//
+// Imported lazily to avoid the i18n module depending on the store at
+// module-evaluation time (the store imports from this file).
+export function tKey(key: string, fallback?: string): string {
+    let language: Language = 'en';
+    try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { useLanguageStore } = require('../store/languageStore') as {
+            useLanguageStore: { getState: () => { language: Language } };
+        };
+        language = useLanguageStore.getState().language;
+    } catch {
+        // store not yet initialised — fall back to English
+    }
+
+    const keys = key.split('.');
+    let current: TranslationValue = translations[language];
+    for (const k of keys) {
+        if (current && typeof current === 'object' && k in current) {
+            current = (current as { [key: string]: TranslationValue })[k];
+        } else {
+            return fallback ?? key;
+        }
+    }
+    return typeof current === 'string' ? current : (fallback ?? key);
+}
+
 export { translations };

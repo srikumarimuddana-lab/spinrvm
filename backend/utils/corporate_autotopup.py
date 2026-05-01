@@ -58,7 +58,7 @@ async def run_autotopup_tick() -> None:
     settings = await get_app_settings()
     stripe_secret = settings.get("stripe_secret_key", "")
     if not stripe_secret:
-        logger.warning("autotopup: no stripe secret configured, skipping tick")
+        logger.error("autotopup: no stripe secret configured, skipping tick")
         return
 
     wallets = await list_wallets_needing_autotopup()
@@ -74,7 +74,7 @@ async def _process_one(wallet: dict, stripe_secret: str) -> None:
     if not company or company.get("status") != "active":
         return
     if not company.get("stripe_customer_id"):
-        logger.warning("wallet %s has no stripe_customer_id", wallet["id"])
+        logger.error("wallet %s has no stripe_customer_id", wallet["id"])
         return
 
     topup_amount = float(wallet["auto_topup_amount"])

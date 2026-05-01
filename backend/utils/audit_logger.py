@@ -38,6 +38,7 @@ async def log_admin_action(
                 "action": action,
                 "entity_type": resource,
                 "entity_id": resource_id,
+                "actor_id": admin["id"],
                 "details": {
                     "actor_id": admin["id"],
                     "actor_role": admin.get("role"),

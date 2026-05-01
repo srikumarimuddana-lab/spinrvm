@@ -14,6 +14,14 @@ description = "Build artefacts, lockfiles, and vendored code"
 paths = [
     # JS build outputs — no live secrets, only bundled env-var placeholders
     '''\.next/''',
+    # G5b uses --source admin-dashboard/.next/static so reported paths are
+    # RELATIVE (e.g. "chunks/abc.js") and never match the \.next/ pattern
+    # above.  Exclude webpack chunks and CSS assets explicitly: content-hashed
+    # filenames and minified third-party code produce entropy false positives
+    # that G5a (git-history scan) already covers.
+    '''chunks/''',
+    '''static/chunks/''',
+    '''_next/static/''',
     '''out/''',
     '''build/''',
     '''dist/''',

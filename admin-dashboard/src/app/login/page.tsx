@@ -35,7 +35,7 @@ function LoginForm() {
     const [mfaToken, setMfaToken] = useState("");
     const [totpCode, setTotpCode] = useState("");
 
-    const _storeSessionAndRedirect = (data: any) => {
+    const _storeSessionAndRedirect = async (data: any) => {
         setToken(data.token);
         if (data.csrf_token) setCsrfToken(data.csrf_token);
         if (data.access_expires_at) scheduleRefresh(data.access_expires_at);
@@ -47,6 +47,14 @@ function LoginForm() {
             last_name: data.user.last_name,
             modules: data.user.modules,
         });
+        // Await the HttpOnly admin_token cookie being written before navigating.
+        // router.push triggers middleware immediately; if the cookie isn't committed
+        // yet the middleware redirects back to /login, causing an instant logout loop.
+        await fetch('/api/auth/set-cookie', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: data.token }),
+        }).catch(() => {});
         const next = sanitizeNextPath(searchParams.get("next"));
         router.push(next);
     };
@@ -56,7 +64,7 @@ function LoginForm() {
         setLoading(true);
         try {
             const data = await mfaChallenge(mfaToken, totpCode);
-            _storeSessionAndRedirect(data);
+            await _storeSessionAndRedirect(data);
         } catch (e: any) {
             setError(e.message || "Invalid code. Please try again.");
         } finally {
@@ -76,7 +84,7 @@ function LoginForm() {
                 return;
             }
 
-            _storeSessionAndRedirect(data);
+            await _storeSessionAndRedirect(data);
         } catch (e: any) {
             if (process.env.NODE_ENV === "development") {
                 console.error('Login error:', e);

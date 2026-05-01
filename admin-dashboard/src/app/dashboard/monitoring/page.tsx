@@ -12,6 +12,7 @@ import { MonitoringToolbar } from "./toolbar";
 import { DriverPanel } from "./driver-panel";
 import { RidePanel } from "./ride-panel";
 import { AlertFeed } from "./alert-feed";
+import { useRequireModule } from "@/hooks/useRequireModule";
 import type {
   AlertEvent,
   MonitoringCounts,
@@ -25,6 +26,7 @@ import type {
 const POLL_INTERVAL_MS = 15_000;
 
 export default function MonitoringPage() {
+  const { allowed } = useRequireModule("rides");
   // ── Refs: source-of-truth maps (never trigger re-renders) ──────────
   const driversMapRef = useRef<Map<string, MonitoringDriver>>(new Map());
   const ridesMapRef = useRef<Map<string, MonitoringRide>>(new Map());
@@ -426,6 +428,8 @@ export default function MonitoringPage() {
     });
   }, [filters.serviceAreaId, searchQuery, counts]); // counts triggers recompute on poll
 
+  if (!allowed) return null;
+
   return (
     <div className="flex h-[calc(100vh-4rem)] flex-col overflow-hidden">
       {/* Page header */}
@@ -593,6 +597,21 @@ export default function MonitoringPage() {
                   } catch (err: any) {
                     window.alert(
                       `Failed to cancel ride: ${err?.message ?? "unknown error"}`,
+                    );
+                  }
+                }}
+                onCompleteRide={async (id) => {
+                  try {
+                    const { adminCompleteRide } = await import("@/lib/api");
+                    await adminCompleteRide(id);
+                    ridesMapRef.current.delete(id);
+                    mapHandlesRef.current?.removeRideMarkers(id);
+                    refreshCounts();
+                    setSelected(null);
+                    setSelectedRide(null);
+                  } catch (err: any) {
+                    window.alert(
+                      `Failed to complete ride: ${err?.message ?? "unknown error"}`,
                     );
                   }
                 }}

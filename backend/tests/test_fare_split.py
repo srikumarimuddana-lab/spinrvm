@@ -149,9 +149,9 @@ class TestCreateFareSplit:
         assert resp.status_code == 200
         data = resp.json()
         assert data["ride_id"] == "ride_123"
-        assert data["total_fare"] == 30.0
+        assert data["total_fare"] == "30.00"
         assert data["split_count"] == 2  # 1 participant + requester
-        assert data["your_share"] == 15.0
+        assert data["your_share"] == "15.00"
         assert len(data["participants"]) == 1
 
     def test_ride_not_found_returns_404(self, client):
@@ -210,7 +210,7 @@ class TestCreateFareSplit:
         assert resp.status_code == 200
         data = resp.json()
         assert data["split_count"] == 3
-        assert data["your_share"] == 10.0
+        assert data["your_share"] == "10.00"
 
 
 class TestGetFareSplit:
@@ -228,7 +228,7 @@ class TestGetFareSplit:
         assert resp.status_code == 200
         data = resp.json()
         assert data["id"] == "split_1"
-        assert data["total_fare"] == 30.0
+        assert data["total_fare"] == "30.00"
         assert len(data["participants"]) == 1
 
     def test_split_not_found_returns_404(self, client):
@@ -280,7 +280,7 @@ class TestGetFareSplitForRide:
         data = resp.json()
         assert data["has_split"] is True
         assert data["split"]["id"] == "split_1"
-        assert data["split"]["your_share"] == 15.0
+        assert data["split"]["your_share"] == "15.00"
 
 
 class TestRespondToSplit:
@@ -381,7 +381,7 @@ class TestPaySplitShare:
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "paid"
-        assert data["share_amount"] == 15.0
+        assert data["share_amount"] == "15.00"
 
     def test_insufficient_wallet_balance_returns_400(self, client):
         empty_wallet = {"id": "wallet_1", "user_id": "user_123", "balance": 1.0, "is_active": True}

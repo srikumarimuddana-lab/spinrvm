@@ -36,6 +36,7 @@ import {
 } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { getAuditLogs } from "@/lib/api";
+import { useRequireModule } from "@/hooks/useRequireModule";
 
 const ENTITY_ICONS: Record<string, any> = {
     driver: Car,
@@ -59,6 +60,7 @@ const ACTION_CONFIG: Record<string, { label: string; color: string }> = {
 const PAGE_SIZE = 50;
 
 export default function AuditLogsPage() {
+    const { allowed } = useRequireModule("settings");
     const [logs, setLogs] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState("");
@@ -128,6 +130,8 @@ export default function AuditLogsPage() {
         a.click();
         URL.revokeObjectURL(url);
     };
+
+    if (!allowed) return null;
 
     return (
         <div className="space-y-6">

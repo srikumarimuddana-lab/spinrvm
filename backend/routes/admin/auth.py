@@ -225,7 +225,7 @@ async def get_session(authorization: Optional[str] = Header(None)):
 
 @admin_auth_router.post("/login")
 @limiter.limit("3/30minutes")
-async def admin_login(request: Request, body: LoginRequest):
+async def admin_login(request: Request, response: Response, body: LoginRequest):
     """Admin login — supports super admin + staff members with module access.
 
     Rate-limited to 5 attempts per minute per IP (see `limiter` above)
@@ -267,6 +267,10 @@ async def admin_login(request: Request, body: LoginRequest):
             "admin-001", audience="admin", user_agent=user_agent, ip=client_ip
         )
         await _clear_login_failures(body.email)
+        # P3: Set HTTP-only cookies
+        from backend.utils.cookie_manager import CookieManager
+        CookieManager.set_auth_cookie(response, token, ttl_minutes=60)
+        CookieManager.set_refresh_cookie(response, refresh_raw, ttl_days=30)
         return {
             "user": {
                 "id": "admin-001",
@@ -276,8 +280,6 @@ async def admin_login(request: Request, body: LoginRequest):
                 "last_name": "Admin",
                 "modules": ALL_MODULES,
             },
-            "token": token,
-            "refresh_token": refresh_raw,
             "access_expires_at": access_expires_at.isoformat(),
             "refresh_expires_at": refresh_expires_at.isoformat(),
         }

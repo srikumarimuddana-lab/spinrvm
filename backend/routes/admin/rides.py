@@ -1,5 +1,7 @@
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -9,14 +11,20 @@ try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
     from ...features import send_push_notification
+    from ...geo_utils import calculate_distance
     from ...settings_loader import get_app_settings
     from ...socket_manager import manager
+    from ...utils.audit_logger import log_admin_action
+    from ...utils.insurance_periods import record_period_transition
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user
     from features import send_push_notification
+    from geo_utils import calculate_distance
     from settings_loader import get_app_settings
     from socket_manager import manager
+    from utils.audit_logger import log_admin_action
+    from utils.insurance_periods import record_period_transition
 
 from .drivers import _batch_fetch_drivers_and_users, _user_display_name
 
@@ -266,34 +274,54 @@ async def admin_complete_ride(
 
     Driver (if assigned) is freed so they can immediately accept new requests.
     Rider + driver both receive a ws ride_completed push so their apps reset
-    out of the active-ride flow.
+    out of the active-ride flow. payment_status is set to ``waived_admin``
+    so the rider's "needs payment" gate (rides.py get_active_ride) treats
+    the trip as terminal — no real Stripe charge happened, so we must not
+    impersonate ``paid``.
     """
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
-    if ride.get("status") in ("completed", "cancelled"):
-        raise HTTPException(status_code=400, detail="Ride already completed or cancelled")
+    if ride.get("status") not in ("driver_arrived", "in_progress"):
+        raise HTTPException(status_code=400, detail=f"Cannot complete ride from state '{ride.get('status')}'")
 
     now = datetime.now(timezone.utc)
+    status_from = ride.get("status")
 
     update_data = {
         "status": "completed",
+        "payment_status": "waived_admin",
         "updated_at": now,
         "ride_completed_at": now,
     }
-    
+
     try:
         await db_supabase.update_ride(ride_id, update_data)
     except Exception as e:
-        logger.error(f"admin_complete_ride: update failed ride_id={ride_id} err={e}")
-        raise HTTPException(status_code=500, detail="Failed to update ride status")
+        original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
+        logger.error(
+            f"admin_complete_ride: update failed ride_id={ride_id} "
+            f"admin_id={admin_user.get('id')} err={original or e}"
+        )
+        raise HTTPException(status_code=500, detail="Failed to update ride status") from e
+
+    # Audit + period transition are best-effort — they must never roll back
+    # the ride status mutation that already succeeded above.
+    await log_admin_action(
+        admin_user,
+        "force_complete_ride",
+        "rides",
+        ride_id,
+        {"status_from": status_from},
+    )
 
     driver_user_id: str | None = None
     driver_id = ride.get("driver_id")
     if driver_id:
         try:
             await db_supabase.set_driver_available(driver_id, True)
+            await record_period_transition(driver_id, 1)
         except Exception as e:
             logger.error(f"admin_complete_ride: could not free driver {driver_id}: {e}", exc_info=True)
 
@@ -329,6 +357,78 @@ async def admin_complete_ride(
     return {"success": True, "ride_id": ride_id, "status": "completed"}
 
 
+@router.get("/places/autocomplete")
+async def admin_places_autocomplete(
+    input: str = Query(..., min_length=1),
+    admin_user: dict = Depends(get_admin_user),
+):
+    """Proxy Google Maps Places Autocomplete API to avoid exposing key to browser."""
+    import httpx
+    
+    settings_row = await get_app_settings()
+    api_key = (settings_row or {}).get("google_maps_api_key") or ""
+    if not api_key:
+        raise HTTPException(status_code=503, detail="Google Maps API key not configured")
+
+    url = "https://maps.googleapis.com/maps/api/place/autocomplete/json"
+    params = {
+        "input": input,
+        "key": api_key,
+        "types": "address",
+    }
+    
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(url, params=params)
+            data = resp.json()
+            if data.get("status") not in ("OK", "ZERO_RESULTS"):
+                logger.error(f"Places API error: {data.get('status')}")
+                raise HTTPException(status_code=502, detail="Places API error")
+            return {"predictions": data.get("predictions", [])}
+    except Exception as e:
+        logger.error(f"Failed to call Places API: {e}")
+        raise HTTPException(status_code=502, detail="Failed to call Places API")
+
+
+@router.get("/places/details")
+async def admin_places_details(
+    place_id: str = Query(...),
+    admin_user: dict = Depends(get_admin_user),
+):
+    """Proxy Google Maps Place Details API to get lat/lng."""
+    import httpx
+    
+    settings_row = await get_app_settings()
+    api_key = (settings_row or {}).get("google_maps_api_key") or ""
+    if not api_key:
+        raise HTTPException(status_code=503, detail="Google Maps API key not configured")
+
+    url = "https://maps.googleapis.com/maps/api/place/details/json"
+    params = {
+        "place_id": place_id,
+        "fields": "geometry,formatted_address",
+        "key": api_key,
+    }
+    
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(url, params=params)
+            data = resp.json()
+            if data.get("status") != "OK":
+                logger.error(f"Places Details API error: {data.get('status')}")
+                raise HTTPException(status_code=502, detail="Places API error")
+            
+            loc = data.get("result", {}).get("geometry", {}).get("location", {})
+            return {
+                "lat": loc.get("lat"),
+                "lng": loc.get("lng"),
+                "formatted_address": data.get("result", {}).get("formatted_address"),
+            }
+    except Exception as e:
+        logger.error(f"Failed to call Places Details API: {e}")
+        raise HTTPException(status_code=502, detail="Failed to call Places API")
+
+
 class AdminCreateRideRequest(BaseModel):
     rider_id: str
     driver_id: Optional[str] = None
@@ -338,7 +438,7 @@ class AdminCreateRideRequest(BaseModel):
     dropoff_address: str
     dropoff_lat: float
     dropoff_lng: float
-    total_fare: Optional[float] = None
+    total_fare: Optional[Decimal] = None
     vehicle_type_id: Optional[str] = None
 
 
@@ -348,14 +448,14 @@ async def admin_create_ride(
     admin_user: dict = Depends(get_admin_user),
 ):
     """Admin manually creates a ride, optionally assigning a driver directly."""
-    import uuid
-    from ...geo_utils import calculate_distance
-    
     now = datetime.now(timezone.utc)
     distance_km = calculate_distance(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng)
-    
+
     status = "driver_assigned" if body.driver_id else "searching"
 
+    # Decimal stays Decimal — _serialize_for_api handles JSON encoding
+    # without re-introducing float arithmetic. CLAUDE.md: money never
+    # goes through float() on the way to the DB.
     ride_doc = {
         "id": str(uuid.uuid4()),
         "rider_id": body.rider_id,
@@ -368,7 +468,7 @@ async def admin_create_ride(
         "dropoff_lng": body.dropoff_lng,
         "status": status,
         "distance_km": distance_km,
-        "total_fare": body.total_fare or 0.0,
+        "total_fare": body.total_fare if body.total_fare is not None else Decimal("0"),
         "payment_status": "pending",
         "vehicle_type_id": body.vehicle_type_id,
         "created_at": now.isoformat(),
@@ -377,28 +477,72 @@ async def admin_create_ride(
 
     try:
         await db_supabase.insert_one("rides", ride_doc)
-        
-        if body.driver_id:
-            await db_supabase.set_driver_available(body.driver_id, False)
-            await db_supabase.update_one("drivers", {"id": body.driver_id}, {"active_ride_id": ride_doc["id"]})
-            
-            driver = await db_supabase.get_driver_by_id(body.driver_id)
-            if driver and driver.get("user_id"):
-                await manager.send_personal_message(
-                    {"type": "ride_assigned", "ride_id": ride_doc["id"]},
-                    f"driver_{driver['user_id']}",
-                )
+    except Exception as e:
+        original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
+        logger.error(
+            f"admin_create_ride: insert failed admin_id={admin_user.get('id')} "
+            f"err={original or e}",
+            exc_info=True,
+        )
+        raise HTTPException(status_code=500, detail="Failed to create ride") from e
 
+    # Audit is best-effort and must not roll back the ride insert above.
+    await log_admin_action(
+        admin_user,
+        "admin_create_ride",
+        "rides",
+        ride_doc["id"],
+        {"driver_id": body.driver_id, "status": status},
+    )
+
+    if body.driver_id:
+        try:
+            await db_supabase.set_driver_available(body.driver_id, False)
+            await record_period_transition(body.driver_id, 2, ride_id=ride_doc["id"])
+        except Exception as e:
+            logger.error(
+                f"admin_create_ride: driver claim failed driver_id={body.driver_id}: {e}",
+                exc_info=True,
+            )
+
+        driver = await db_supabase.get_driver_by_id(body.driver_id)
+        if driver and driver.get("user_id"):
+            rider = await db_supabase.get_user_by_id(body.rider_id)
+            rider_name = _user_display_name(rider) if rider else ""
+
+            dispatch_payload = {
+                "type": "new_ride_assignment",
+                "ride_id": ride_doc["id"],
+                "pickup_address": ride_doc["pickup_address"],
+                "dropoff_address": ride_doc["dropoff_address"],
+                "pickup_lat": ride_doc["pickup_lat"],
+                "pickup_lng": ride_doc["pickup_lng"],
+                "dropoff_lat": ride_doc["dropoff_lat"],
+                "dropoff_lng": ride_doc["dropoff_lng"],
+                # WS uses send_json — cast at the wire boundary only.
+                # DB write above kept Decimal precision via _serialize_for_api.
+                "fare": float(ride_doc["total_fare"]),
+                "distance_km": ride_doc["distance_km"],
+                "duration_minutes": int(distance_km / 30 * 60) + 5,
+                "rider_name": rider_name,
+                "rider_rating": rider.get("rating") if rider else None,
+            }
+            await manager.send_personal_message(
+                dispatch_payload,
+                f"driver_{driver['user_id']}",
+            )
+
+    try:
         await manager.broadcast_ride_status(
             ride_doc["id"],
             status,
             rider_id=body.rider_id,
             source="admin",
         )
-        return {"success": True, "ride_id": ride_doc["id"], "status": status}
-    except Exception as e:
-        logger.error(f"admin_create_ride: failed {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Failed to create ride")
+    except Exception as e:  # pragma: no cover - best effort
+        logger.warning(f"admin_create_ride: broadcast failed: {e}")
+
+    return {"success": True, "ride_id": ride_doc["id"], "status": status}
 
 
 # ---------- Stats ----------

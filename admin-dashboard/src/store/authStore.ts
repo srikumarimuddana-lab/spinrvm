@@ -16,7 +16,19 @@ let _refreshTimer: ReturnType<typeof setTimeout> | null = null;
 // Prevent initAuth from running more than once per page load.
 let _authInitialized = false;
 // Exposed only for unit tests — resets the once-per-load guard.
-export function _resetAuthInitializedForTesting() { _authInitialized = false; }
+export function _resetAuthInitializedForTesting() { _authInitialized = false; _inflightRefresh = null; }
+
+// ── Refresh mutex ────────────────────────────────────────────────
+// Multiple callers (initAuth, scheduleRefresh timer, request() 401
+// handler) can trigger silentRefresh() concurrently. Each call sends
+// the same HttpOnly RT cookie. The backend implements refresh-token
+// rotation with reuse detection: the second concurrent use of the
+// same token is treated as theft and the ENTIRE token family is
+// revoked, instantly logging the user out.
+//
+// The mutex ensures only one refresh request is in-flight at a time.
+// Concurrent callers await the same promise and share the result.
+let _inflightRefresh: Promise<void> | null = null;
 
 // Cookie helpers — delegate to the Next.js API route so the cookie is set
 // HttpOnly by the server (F-02). document.cookie cannot set HttpOnly.
@@ -185,33 +197,49 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
     // cookie server-side so JS never sees the token value). Called
     // proactively by the scheduled timer and by initAuth() on every page load.
     // On failure, calls logout() to clear state and set isLoading=false.
+    //
+    // MUTEX: concurrent calls share one in-flight request. Without this,
+    // two concurrent calls send the same RT cookie → the backend's reuse
+    // detection revokes the entire token family → instant logout.
     silentRefresh: async () => {
-        try {
-            const csrfToken = get().csrfToken;
-            const res = await fetch(`${API_BASE}/api/admin/auth/refresh`, {
-                method: "POST",
-                ...(csrfToken ? { headers: { "X-CSRF-Token": csrfToken } } : {}),
-            });
-            if (!res.ok) {
-                // 401 = no RT cookie (fresh visit, no session to restore) — just
-                // stop the loading spinner without destroying any existing state.
-                if (res.status === 401) {
-                    set({ isLoading: false });
+        // If a refresh is already in-flight, piggyback on it.
+        if (_inflightRefresh) {
+            return _inflightRefresh;
+        }
+
+        const doRefresh = async () => {
+            try {
+                const csrfToken = get().csrfToken;
+                const res = await fetch(`${API_BASE}/api/admin/auth/refresh`, {
+                    method: "POST",
+                    ...(csrfToken ? { headers: { "X-CSRF-Token": csrfToken } } : {}),
+                });
+                if (!res.ok) {
+                    // 401 = no RT cookie (fresh visit, no session to restore) — just
+                    // stop the loading spinner without destroying any existing state.
+                    if (res.status === 401) {
+                        set({ isLoading: false });
+                        return;
+                    }
+                    get().logout();
                     return;
                 }
+                const data: { token: string; access_expires_at: string; csrf_token?: string } = await res.json();
+                // Always overwrite csrfToken — if absent the session is broken; next
+                // refresh will fail CSRF and trigger a clean logout.
+                set({ token: data.token, csrfToken: data.csrf_token ?? null });
+                setAuthCookie(data.token);
+                scheduleTokenRefresh(data.access_expires_at, get().silentRefresh);
+                startIdleWatch(get().logout);
+            } catch {
                 get().logout();
-                return;
+            } finally {
+                _inflightRefresh = null;
             }
-            const data: { token: string; access_expires_at: string; csrf_token?: string } = await res.json();
-            // Always overwrite csrfToken — if absent the session is broken; next
-            // refresh will fail CSRF and trigger a clean logout.
-            set({ token: data.token, csrfToken: data.csrf_token ?? null });
-            setAuthCookie(data.token);
-            scheduleTokenRefresh(data.access_expires_at, get().silentRefresh);
-            startIdleWatch(get().logout);
-        } catch {
-            get().logout();
-        }
+        };
+
+        _inflightRefresh = doRefresh();
+        return _inflightRefresh;
     },
 
     checkAuth: async () => {

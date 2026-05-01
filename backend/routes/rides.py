@@ -1138,14 +1138,17 @@ async def get_active_ride(request: Request, current_user: dict = Depends(get_cur
     # Then check for active rides
     active_statuses = ["searching", "driver_assigned", "driver_accepted", "driver_arrived", "in_progress"]
 
-    # Check for unpaid completed ride first (must pay before new ride)
+    # Check for unpaid completed ride first (must pay before new ride).
+    # ``waived_admin`` is the terminal value written by admin force-complete
+    # (admin/rides.py admin_complete_ride) — no real charge happened, but
+    # the rider must not be trapped on the payment screen.
     unpaid_ride = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows(
             "rides",
             {
                 "rider_id": current_user["id"],
                 "status": "completed",
-                "payment_status": {"$ne": "paid"},
+                "payment_status": {"$nin": ["paid", "waived_admin"]},
             },
             limit=1,
         )

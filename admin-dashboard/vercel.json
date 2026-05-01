@@ -1,5 +1,4 @@
 {
   "regions": ["yul1"],
-  "$schema": "https://openapi.vercel.sh/vercel.json",
-  "ignoreCommand": "git diff --quiet HEAD^ HEAD -- admin-dashboard/"
+  "$schema": "https://openapi.vercel.sh/vercel.json"
 }

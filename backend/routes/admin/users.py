@@ -67,6 +67,21 @@ async def admin_get_users(
     return users
 
 
+class UserSearchRequest(BaseModel):
+    search: str
+    role: Optional[str] = "all"
+    limit: int = 5
+
+
+@router.post("/users/search")
+async def admin_search_users(
+    body: UserSearchRequest,
+    admin_user: dict = Depends(get_admin_user),
+):
+    """Typeahead search for users via POST body to keep search terms out of server logs."""
+    return await admin_get_users(role=body.role, search=body.search, limit=body.limit)
+
+
 @router.get("/users/{user_id}")
 async def admin_get_user_details(user_id: str):
     """Get detailed user information."""

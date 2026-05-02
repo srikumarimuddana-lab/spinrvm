@@ -197,9 +197,10 @@ def _admin_jwt(user_id: str = "staff-001") -> str:
     """Mint a JWT the admin handler will accept. Uses the conftest
     JWT_SECRET fixture (test-secret-key-for-ci-only-32chars!!)."""
     from backend.core.config import settings
+    from backend.dependencies import JWT_AUD_ADMIN
 
     return jwt.encode(
-        {"user_id": user_id, "role": "support"},
+        {"user_id": user_id, "role": "support", "aud": JWT_AUD_ADMIN},
         settings.JWT_SECRET,
         algorithm=settings.ALGORITHM,
     )

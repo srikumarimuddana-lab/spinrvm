@@ -91,11 +91,9 @@ async def _check_otp_lockout(phone: str) -> None:
         locked = await redis_get(_LOCK_KEY.format(phone))
         if locked:
             retry_after = int(settings.OTP_LOCKOUT_DURATION_SECONDS)
-            raise SpinrException(
-                message="Too many failed attempts — try again later",
-                error_code=ErrorCode.RATE_LIMIT_EXCEEDED,
+            raise HTTPException(
                 status_code=429,
-                message_key=ErrorKeys.AUTH_OTP_LOCKED,
+                detail="Too many failed attempts — try again later",
                 headers={
                     "Retry-After": str(retry_after),
                     "RateLimit-Limit": str(int(settings.OTP_MAX_FAILURES)),
@@ -103,15 +101,13 @@ async def _check_otp_lockout(phone: str) -> None:
                     "RateLimit-Reset": str(retry_after),
                 },
             )
-    except SpinrException:
+    except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Redis unavailable in OTP lockout check: {e}")
-        raise SpinrException(
-            message="Auth service temporarily unavailable, please try again",
-            error_code=ErrorCode.SERVICE_UNAVAILABLE,
+        raise HTTPException(
             status_code=503,
-            message_key=ErrorKeys.SYSTEM_SERVICE_UNAVAILABLE,
+            detail="Auth service temporarily unavailable, please try again",
         ) from None
 
 
@@ -829,11 +825,9 @@ async def logout_all(request: Request, response: Response, current_user: dict = 
         await db.update_one("users", {"id": user_id}, {"$set": {"token_version": new_version}})
     except Exception as e:
         logger.error(f"logout-all: could not bump token_version for {user_id}: {e}", exc_info=True)
-        raise SpinrException(
-            message="Could not invalidate sessions",
-            error_code=ErrorCode.DATABASE_ERROR,
-            status_code=503,
-            message_key=ErrorKeys.SYSTEM_DATABASE,
+        raise HTTPException(
+            status_code=500,
+            detail="Could not invalidate sessions",
         ) from e
 
     revoked = await revoke_all_for_user(user_id)

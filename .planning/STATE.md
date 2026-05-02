@@ -6,47 +6,51 @@
 
 ## Active Phase
 
-**Phase 1 — P0 Security & Safety Hardening**
+**Phase 3 — Device Testing Preparation & Execution**
 
-Status: IN PROGRESS
+Status: BLOCKED — .env files not created for backend, rider-app, driver-app
 
 ## Phase Progress
 
 | Phase | Status | Notes |
 |---|---|---|
-| Phase 1: P0 Security & Safety Hardening | 🔄 In Progress | P0-1 (HttpOnly backend) partially done; P0-3 (WAV) needs /plan |
-| Phase 2: CI Health & Dev Environment | ⏳ Pending | G5b + claude-review fixes committed this session |
-| Phase 3: Device Testing | ⏳ Pending | Blocked on Phase 1 + 2 |
+| Phase 1: P0 Security & Safety Hardening | ✅ Complete | All 6 P0s shipped (PRs #95/#97/#117/#126/#172/#240/#266) as of 2026-04-27 |
+| Phase 2: CI Health & Dev Environment | ✅ Complete | All CI gates green (PR #401 merged); docs/dev-setup.md + ENV-3 still outstanding |
+| Phase 3: Device Testing | 🚧 Blocked | Needs .env files: backend, rider-app, driver-app |
 | Phase 4: Type Safety & Code Quality | ⏳ Pending | |
 | Phase 5: Pre-Production Hardening | ⏳ Pending | |
 | Phase 6: Production Deployment | ⏳ Pending | |
 
 ## Recent Work (2026-05-02)
 
-- PR #397 merged: fixed 15 backend CI failures from P0+P3 merge, admin authStore silentRefresh test (401→403), rider walletStore topUp/payWithWallet GET mock
-- GSD planning structure initialised: PROJECT.md, REQUIREMENTS.md, ROADMAP.md, config.json
-- CI fixes committed this session: G5b Gitleaks `args:` → direct `run:` invocation; claude-review `max_turns` removed
-- `.gitleaks.toml` created with dev-testing allowlist (Stripe test keys, Expo public vars, build artefact paths)
+- PR #401 merged to main: G5b Gitleaks fix, claude-review OIDC permission, GSD planning structure, E2E cookie auth mock (CI-4), test fixes
+- Phase 2 CI fully complete: all 5 CI gates green, E2E auth fixture created (admin-dashboard/e2e/auth-fixture.ts)
+- G4c pino lockfile drift resolved (npm dedupe)
+- All 6 P0 sprint items confirmed shipped; sprint marked complete
 
 ## Blockers
 
-- P0-3 (WAV dispatch): needs `/gsd-plan-phase` before execution — 5+ files + DB migration
-- G4c npm-audit-admin: pino lockfile drift in admin-dashboard — fix needed before next PR to main
-- E2E Playwright: all 7 smoke tests fail due to unprotected auth redirect (Phase 2 work)
+- Phase 3: Three .env files need manual creation (user action required):
+  1. `backend/.env` — Supabase URL+key, JWT secret, Firebase service account JSON, ENV=development
+  2. `rider-app/.env` — EXPO_PUBLIC_BACKEND_URL=http://<LAN-IP>:8000, EXPO_PUBLIC_GOOGLE_MAPS_API_KEY
+  3. `driver-app/.env` — same as rider-app
+- Phase 2 minor: docs/dev-setup.md not yet created (ENV-2); device LAN reachability not verified (ENV-3)
 
 ## Next Actions
 
-1. Commit all planning docs + CI fixes in this session
-2. Fix G4c: `cd admin-dashboard && npm install && npm dedupe` to resolve pino lockfile drift
-3. Run `/gsd-plan-phase 1` for WAV dispatch (P0-3)
-4. E2E auth mock setup (Phase 2 item CI-4)
+1. (User) Create backend/.env, rider-app/.env, driver-app/.env from .env.example templates
+2. Once .env files exist: start backend (`pip install -r requirements.txt && python3 -m backend.server`)
+3. Launch Expo dev server for rider-app and driver-app
+4. Optionally: create docs/dev-setup.md to document the .env setup process (ENV-2)
 
 ## Key Facts for Next Session
 
 - Project root: `C:/Users/TabUsrDskOff111/Documents/Spinrvm/spinrvm`
-- Active branch: `main` (after PR #397 merge)
+- Active branch: `main` (after PR #401 merge)
 - Next migration slot: `62_*.sql`
 - GSD mode: YOLO, standard granularity, research-first
 - Dev secrets: `.env.local` gitignored; `.gitleaks.toml` allowlist active
 - P0 sprint context: `.claude/context/sprint-current.md`
+- Backend hosted on Railway (staging): spinr-backend-test.up.railway.app
+- Admin dashboard: already configured (.env.local has NEXT_PUBLIC_API_URL + BACKEND_URL)
 - Memory: access prior session work via `get_observations([IDs])` in the `$CMEM spinrvm` timeline

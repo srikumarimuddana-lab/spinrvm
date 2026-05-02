@@ -151,7 +151,10 @@ def _make_auth_response(
     admin_ttl_minutes: int = 15,
 ) -> AuthResponse:
     # P3: Set HTTP-only cookies instead of returning tokens in response
-    from ..utils.cookie_manager import CookieManager
+    try:
+        from ..utils.cookie_manager import CookieManager
+    except ImportError:
+        from utils.cookie_manager import CookieManager
 
     CookieManager.set_auth_cookie(response, token, ttl_minutes=admin_ttl_minutes)
     CookieManager.set_refresh_cookie(response, refresh_token, ttl_days=30)
@@ -805,7 +808,10 @@ async def refresh_access_token(request: Request, response: Response, body: Optio
     )
 
     # P3: Set HTTP-only cookies instead of returning tokens in response
-    from ..utils.cookie_manager import CookieManager
+    try:
+        from ..utils.cookie_manager import CookieManager
+    except ImportError:
+        from utils.cookie_manager import CookieManager
     CookieManager.set_auth_cookie(response, token, ttl_minutes=15)
     CookieManager.set_refresh_cookie(response, new_raw, ttl_days=30)
 
@@ -833,7 +839,10 @@ async def logout(
     P3: Now also clears HTTP-only cookies.
     """
     # P3: Clear HTTP-only cookies
-    from ..utils.cookie_manager import CookieManager
+    try:
+        from ..utils.cookie_manager import CookieManager
+    except ImportError:
+        from utils.cookie_manager import CookieManager
     CookieManager.clear_all_cookies(response)
 
     # Read refresh token from cookie if present
@@ -908,7 +917,10 @@ async def logout_all(request: Request, response: Response, current_user: dict = 
     logger.info(f"logout-all: user={user_id} token_version→{new_version} revoked_refresh={revoked}")
 
     # P3: Clear HTTP-only cookies
-    from ..utils.cookie_manager import CookieManager
+    try:
+        from ..utils.cookie_manager import CookieManager
+    except ImportError:
+        from utils.cookie_manager import CookieManager
     CookieManager.clear_all_cookies(response)
 
     clear_csrf_cookie(response)

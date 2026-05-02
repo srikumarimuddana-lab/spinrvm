@@ -51,6 +51,7 @@ def _make_admin_token(
             "modules": modules or ["dashboard"],
             "phone": email,
             "token_version": 0,
+            "aud": "spinr:admin",
             "iat": now,
             "exp": exp,
         },

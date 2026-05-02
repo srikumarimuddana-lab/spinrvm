@@ -33,7 +33,7 @@ class CookieManager:
             max_age=ttl_minutes * 60,
             expires=datetime.utcnow() + timedelta(minutes=ttl_minutes),
             httponly=True,
-            secure=settings.ENVIRONMENT == "production",
+            secure=settings.ENV == "production",
             samesite="Strict",
             domain=settings.COOKIE_DOMAIN if settings.COOKIE_DOMAIN else None,
             path="/"
@@ -60,7 +60,7 @@ class CookieManager:
             max_age=ttl_days * 86400,
             expires=datetime.utcnow() + timedelta(days=ttl_days),
             httponly=True,
-            secure=settings.ENVIRONMENT == "production",
+            secure=settings.ENV == "production",
             samesite="Strict",
             domain=settings.COOKIE_DOMAIN if settings.COOKIE_DOMAIN else None,
             path="/"

@@ -1,8 +1,13 @@
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
+import { setAdminAuthCookie } from './auth-fixture';
 
 // Mock all API calls for dashboard tests
 async function mockDashboardAPIs(page: any) {
+  // Set the HttpOnly-equivalent auth cookie so Next.js edge middleware
+  // sees a valid session before the first navigation.
+  await setAdminAuthCookie(page);
+
   await page.route('**/api/admin/**', async (route: any) => {
     const url = route.request().url();
     if (url.includes('/auth/session') || url.includes('/auth/me')) {
@@ -16,11 +21,6 @@ async function mockDashboardAPIs(page: any) {
     } else {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({}) });
     }
-  });
-
-  // Inject auth token into localStorage
-  await page.addInitScript(() => {
-    localStorage.setItem('spinr_admin_token', 'test-admin-token-123');
   });
 }
 

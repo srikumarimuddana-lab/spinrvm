@@ -21,6 +21,7 @@ permissions:
   contents: read
   pull-requests: write
   issues: write
+  id-token: write
 
 concurrency:
   # Coalesce rapid pushes to the same PR — only latest review matters
@@ -94,5 +95,4 @@ jobs:
             suggest code edits inline — reviewers will ask for fixes
             separately. Do NOT restate the auto-summary table or the size
             advisory.
-          # Hard budget — Spinr controls cost, not the model
-          max_turns: "8"
+          # max_turns removed — not a valid input for claude-code-action@v1

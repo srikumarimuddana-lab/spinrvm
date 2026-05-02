@@ -210,9 +210,17 @@ jobs:
         # client-bundle-leakage concern. Scanning the full .next/ directory
         # with gitleaks causes source-map false positives on placeholder
         # strings (pk_test_..., sk_test_...) from the settings form.
-        uses: gitleaks/gitleaks-action@v2
-        with:
-          args: detect --source admin-dashboard/.next/static --no-git --redact
+        # gitleaks-action@v2 does not support the `args` input.
+        # Use a direct invocation via the gitleaks binary for non-git directory scans.
+        run: |
+          GITLEAKS_VERSION="8.18.4"
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C /usr/local/bin/ gitleaks
+          gitleaks detect \
+            --source admin-dashboard/.next/static \
+            --no-git \
+            --redact \
+            --config .gitleaks.toml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

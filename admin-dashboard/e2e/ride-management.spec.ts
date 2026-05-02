@@ -9,6 +9,7 @@
  */
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
+import { setAdminAuthCookie } from './auth-fixture';
 
 const MOCK_RIDES = [
   {
@@ -49,13 +50,9 @@ const MOCK_DRIVER = {
 };
 
 async function mockAdminAPIs(page: any) {
-  await page.addInitScript(() => {
-    localStorage.setItem('spinr_admin_token', 'test-admin-jwt-token');
-    localStorage.setItem(
-      'spinr_admin_user',
-      JSON.stringify({ id: 'admin_1', email: 'admin@spinr.ca', role: 'admin' })
-    );
-  });
+  // Set the admin_token cookie so Next.js edge middleware passes the request
+  // through to the dashboard instead of redirecting to /login.
+  await setAdminAuthCookie(page);
 
   await page.route('**/api/**', async (route: any) => {
     const url = route.request().url();

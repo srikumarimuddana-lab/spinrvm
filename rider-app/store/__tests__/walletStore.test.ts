@@ -93,6 +93,7 @@ describe('walletStore', () => {
     it('updates wallet balance after top-up', async () => {
       useWalletStore.setState({ wallet: makeWallet({ balance: 50.0 }) });
       mockApi.post.mockResolvedValueOnce({ data: { balance: 70.0 } });
+      mockApi.get.mockResolvedValueOnce({ data: makeWallet({ balance: 70.0 }) });
 
       await useWalletStore.getState().topUp(20.0);
 
@@ -177,6 +178,7 @@ describe('walletStore', () => {
     it('deducts balance on success', async () => {
       useWalletStore.setState({ wallet: makeWallet({ balance: 50.0 }) });
       mockApi.post.mockResolvedValueOnce({ data: { balance: 40.5 } });
+      mockApi.get.mockResolvedValueOnce({ data: makeWallet({ balance: 40.5 }) });
 
       await useWalletStore.getState().payWithWallet('ride-99', 9.5);
 

@@ -140,6 +140,7 @@ async def _clear_otp_failures(phone: str) -> None:
 
 # ── Helpers for Auth Responses ──────────────────────────────────────────
 def _make_auth_response(
+    response: Response,
     token: str,
     refresh_token: str,
     user_obj: UserProfile,
@@ -147,10 +148,18 @@ def _make_auth_response(
     access_expires_at: datetime,
     refresh_expires_at: datetime,
     csrf_token: Optional[str] = None,
+    admin_ttl_minutes: int = 15,
 ) -> AuthResponse:
+    # P3: Set HTTP-only cookies instead of returning tokens in response
+    from ..utils.cookie_manager import CookieManager
+
+    CookieManager.set_auth_cookie(response, token, ttl_minutes=admin_ttl_minutes)
+    CookieManager.set_refresh_cookie(response, refresh_token, ttl_days=30)
+
+    # Return response WITHOUT tokens (they're in cookies now)
     return AuthResponse(
-        token=token,
-        refresh_token=refresh_token,
+        token="",  # No longer returned in JSON
+        refresh_token="",  # No longer returned in JSON
         expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         user=user_obj,
         is_new_user=is_new_user,
@@ -397,6 +406,7 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
                 response, csrf, secure=settings.ENV == "production", max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
             )
             return _make_auth_response(
+                response,
                 token,
                 refresh_raw,
                 user_obj,
@@ -404,6 +414,7 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
                 access_expires_at=access_expires_at,
                 refresh_expires_at=refresh_expires_at,
                 csrf_token=csrf,
+                admin_ttl_minutes=15,
             )
         else:
             logger.info("Creating new user")
@@ -449,6 +460,7 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
                 response, csrf, secure=settings.ENV == "production", max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
             )
             return _make_auth_response(
+                response,
                 token,
                 refresh_raw,
                 UserProfile(**new_user),
@@ -456,6 +468,7 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
                 access_expires_at=access_expires_at,
                 refresh_expires_at=refresh_expires_at,
                 csrf_token=csrf,
+                admin_ttl_minutes=15,
             )
     except (HTTPException, SpinrException):
         # Already a well-formed HTTP/Spinr error (e.g. the 503 raised when
@@ -615,6 +628,7 @@ async def firebase_auth_login(request: Request, response: Response, body: Fireba
         response, csrf, secure=settings.ENV == "production", max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
     )
     return _make_auth_response(
+        response,
         token,
         refresh_raw,
         user_obj,
@@ -622,6 +636,7 @@ async def firebase_auth_login(request: Request, response: Response, body: Fireba
         access_expires_at=access_expires_at,
         refresh_expires_at=refresh_expires_at,
         csrf_token=csrf,
+        admin_ttl_minutes=15,
     )
 
 
@@ -705,14 +720,24 @@ class LogoutRequest(BaseModel):
 
 @api_router.post("/refresh", response_model=RefreshResponse)
 @limiter.limit("20/minute")
-async def refresh_access_token(request: Request, response: Response, body: RefreshRequest):
+async def refresh_access_token(request: Request, response: Response, body: Optional[RefreshRequest] = None):
     """Exchange a refresh token for a new access token + rotated refresh token.
 
+    P3: Now reads refresh_token from HTTP-only cookie instead of request body.
     Returns 401 on any lookup failure (revoked / expired / unknown) —
     the client's reaction to all three is the same (re-login), and
     distinguishing them would leak an oracle.
     """
-    row = await lookup_refresh_token(body.refresh_token)
+    # P3: Read refresh token from cookie instead of request body
+    refresh_token_from_cookie = request.cookies.get("refresh_token")
+    if not refresh_token_from_cookie:
+        raise TokenExpiredException(
+            message="Missing refresh_token cookie",
+            message_key=ErrorKeys.AUTH_TOKEN_EXPIRED,
+            action_hint="Sign in again",
+        )
+
+    row = await lookup_refresh_token(refresh_token_from_cookie)
     if not row:
         raise TokenExpiredException(
             message="Invalid refresh token",
@@ -778,9 +803,15 @@ async def refresh_access_token(request: Request, response: Response, body: Refre
     set_csrf_cookie(
         response, csrf, secure=settings.ENV == "production", max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
     )
+
+    # P3: Set HTTP-only cookies instead of returning tokens in response
+    from ..utils.cookie_manager import CookieManager
+    CookieManager.set_auth_cookie(response, token, ttl_minutes=15)
+    CookieManager.set_refresh_cookie(response, new_raw, ttl_days=30)
+
     return RefreshResponse(
-        token=token,
-        refresh_token=new_raw,
+        token="",  # No longer returned in JSON
+        refresh_token="",  # No longer returned in JSON
         access_expires_at=access_expires_at,
         refresh_expires_at=refresh_expires_at,
         csrf_token=csrf,
@@ -790,7 +821,7 @@ async def refresh_access_token(request: Request, response: Response, body: Refre
 @api_router.post("/logout")
 @limiter.limit("3/minute")
 async def logout(
-    request: Request, response: Response, body: LogoutRequest, current_user: dict = Depends(get_current_user)
+    request: Request, response: Response, body: Optional[LogoutRequest] = None, current_user: dict = Depends(get_current_user)
 ):
     """Revoke the presented refresh token.
 
@@ -798,12 +829,25 @@ async def logout(
     revoked_at on the row so the refresh token can never be exchanged
     again. The current access token keeps working until its exp; for
     immediate kill use /auth/logout-all.
+
+    P3: Now also clears HTTP-only cookies.
     """
-    if body.refresh_token:
+    # P3: Clear HTTP-only cookies
+    from ..utils.cookie_manager import CookieManager
+    CookieManager.clear_all_cookies(response)
+
+    # Read refresh token from cookie if present
+    refresh_token_from_cookie = request.cookies.get("refresh_token")
+    if refresh_token_from_cookie:
+        await revoke_refresh_token(refresh_token_from_cookie)
+    elif body and body.refresh_token:
+        # Fallback to body for backwards compatibility
         await revoke_refresh_token(body.refresh_token)
+
     # Delete the Redis session key so the revocation propagates instantly
     # to all replicas rather than waiting for the access-token TTL.
-    await redis_delete(f"session:{current_user['id']}")
+    if current_user:
+        await redis_delete(f"session:{current_user['id']}")
     clear_csrf_cookie(response)
     return {"success": True}
 
@@ -862,5 +906,10 @@ async def logout_all(request: Request, response: Response, current_user: dict = 
         )
 
     logger.info(f"logout-all: user={user_id} token_version→{new_version} revoked_refresh={revoked}")
+
+    # P3: Clear HTTP-only cookies
+    from ..utils.cookie_manager import CookieManager
+    CookieManager.clear_all_cookies(response)
+
     clear_csrf_cookie(response)
     return {"success": True, "revoked_refresh_tokens": revoked}

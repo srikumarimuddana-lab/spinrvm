@@ -47,8 +47,8 @@ if (!firebaseConfig.apiKey || !firebaseConfig.projectId) {
       ? initializeApp(firebaseConfig)
       : existingApps.find(a => a.name === '[DEFAULT]') || existingApps[0];
     auth = getAuth(app);
-  } catch (error: any) {
-    console.warn('[Firebase] init error:', error.message);
+  } catch (error: unknown) {
+    console.warn('[Firebase] init error:', error instanceof Error ? error.message : String(error));
     auth = {} as Auth;
   }
 }

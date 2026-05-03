@@ -13,7 +13,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     icon: './assets/images/icon.png',
     scheme: SCHEME,
     userInterfaceStyle: 'automatic',
-    newArchEnabled: true,
+    newArchEnabled: false, // disabled: pre-launch stability over perf; re-enable post go-live as a planned migration
     updates: {
         url: 'https://u.expo.dev/8f1e4f60-720e-46b0-9b71-33c13d3af043',
     },

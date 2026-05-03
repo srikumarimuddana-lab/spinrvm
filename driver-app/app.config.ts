@@ -177,10 +177,6 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
             isAndroidBackgroundLocationEnabled: true,
             isIosBackgroundLocationEnabled: true,
         }],
-        ['@stripe/stripe-react-native', {
-            merchantIdentifier: 'merchant.com.spinr.driver',
-            enableGooglePay: true,
-        }],
         [
             'expo-splash-screen',
             {
@@ -205,8 +201,16 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
             ios: { appCheckProviderFactory: 'DeviceCheck' },
             android: { appCheckProviderFactory: 'playIntegrity' },
         }],
-        // LogRocket native module needs Android minSdk 25.
-        ['expo-build-properties', { android: { minSdkVersion: 25 } }],
+        // SDK 55 / RN 0.85 requires compileSdkVersion 35 + Kotlin 2.0.
+        // LogRocket native module requires minSdkVersion 25.
+        ['expo-build-properties', {
+            android: {
+                minSdkVersion: 25,
+                compileSdkVersion: 35,
+                targetSdkVersion: 35,
+                kotlinVersion: '2.0.21',
+            }
+        }],
         '@logrocket/react-native',
     ],
     experiments: {

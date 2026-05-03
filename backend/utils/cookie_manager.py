@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import Response
@@ -34,7 +34,7 @@ class CookieManager:
             key="auth_token",
             value=token,
             max_age=ttl_minutes * 60,
-            expires=datetime.utcnow() + timedelta(minutes=ttl_minutes),
+            expires=datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes),
             httponly=True,
             secure=settings.ENV == "production",
             samesite="Strict",
@@ -61,7 +61,7 @@ class CookieManager:
             key="refresh_token",
             value=token,
             max_age=ttl_days * 86400,
-            expires=datetime.utcnow() + timedelta(days=ttl_days),
+            expires=datetime.now(timezone.utc) + timedelta(days=ttl_days),
             httponly=True,
             secure=settings.ENV == "production",
             samesite="Strict",

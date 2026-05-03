@@ -4,7 +4,10 @@ from typing import Optional
 
 from fastapi import Response
 
-from backend.core.config import settings
+try:
+    from ..core.config import settings
+except ImportError:
+    from core.config import settings
 
 
 class CookieManager:

@@ -78,7 +78,6 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
             foregroundImage: './assets/images/adaptive-icon.png',
             backgroundColor: '#ee2b2b'
         },
-        edgeToEdgeEnabled: true,
         package: BUNDLE_ID,
         googleServicesFile: './google-services.json',
         config: {
@@ -106,6 +105,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         favicon: './assets/images/favicon.png'
     },
     plugins: [
+        './plugins/withGradleWrapper',
         'expo-router',
         ['@stripe/stripe-react-native', {
             merchantIdentifier: 'merchant.com.spinr.user',

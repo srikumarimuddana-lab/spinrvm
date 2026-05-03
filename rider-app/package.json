@@ -36,7 +36,7 @@
     "@supabase/supabase-js": "^2.95.3",
     "ajv": "^8.17.1",
     "axios": "^1.15.2",
-    "expo": "~54.0.34",
+    "expo": "~55.0.19",
     "expo-blur": "~55.0.14",
     "expo-build-properties": "~55.0.13",
     "expo-clipboard": "~55.0.13",

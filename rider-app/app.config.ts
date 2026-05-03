@@ -125,8 +125,17 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         '@react-native-firebase/messaging',
         '@react-native-firebase/crashlytics',
         '@react-native-firebase/app-check',
-        // LogRocket native module needs Android minSdk 25.
-        ['expo-build-properties', { android: { minSdkVersion: 25 } }],
+        // SDK 55 / RN 0.85 requires compileSdkVersion 35 + Kotlin 2.0.
+        // Stripe 0.63.0 and react-native-reanimated 4.x both floor-check these.
+        // LogRocket native module requires minSdkVersion 25.
+        ['expo-build-properties', {
+            android: {
+                minSdkVersion: 25,
+                compileSdkVersion: 35,
+                targetSdkVersion: 35,
+                kotlinVersion: '2.0.21',
+            }
+        }],
         '@logrocket/react-native',
     ],
     experiments: {

@@ -2,6 +2,55 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Agentic Stack (Portable Brain)
+
+This project uses **agentic-stack** v0.8.0. Memory, skills, and protocols live in `.agent/`.
+
+### Session start — read in this order
+1. `.agent/AGENTS.md` — brain map
+2. `.agent/memory/personal/PREFERENCES.md` — user work style
+3. `.agent/memory/working/REVIEW_QUEUE.md` — pending lessons
+4. `.agent/memory/semantic/LESSONS.md` — learned lessons
+5. `.agent/protocols/permissions.md` — hard constraints (read before any tool call)
+
+### Before every non-trivial action — recall first
+
+For tasks involving **deploy**, **ship**, **release**, **migration**, **schema change**, **supabase**, **edge function**, **timestamp/timezone/date**, **failing test**, **debug**, **investigate**, or **refactor**:
+
+```bash
+python3 .agent/tools/recall.py "<one-line description of what you're about to do>"
+```
+
+Show output in a `Consulted lessons before acting:` block. If a surfaced lesson would be violated, stop and explain why.
+
+### While working
+
+Load `.agent/skills/_index.md` and full `SKILL.md` for any skill whose triggers match the task.
+
+Update `.agent/memory/working/WORKSPACE.md` when starting, changing hypothesis, or completing a task.
+
+Brain state overview: `python3 .agent/tools/show.py`
+
+### Manual memory logging
+
+For significant events (major feature, bug, rollback, incident, architectural decision, project-specific constraint, migration, RLS change):
+
+```bash
+python3 .agent/tools/memory_reflect.py \
+    "<domain>" "<action>" "<outcome>" \
+    --importance <3-10> \
+    --note "<why — what future-you needs to know>"
+```
+
+Importance: 9-10 = production incident/migration/security; 7-8 = deploy/schema/architecture; 5-6 = refactor/bug fix; 3-4 = routine.
+
+### Rules
+- Never force push to `main`, `production`, or `staging`.
+- Never delete episodic or semantic memory entries — archive them.
+- Never modify `.agent/protocols/permissions.md` — humans only.
+- Never hand-edit `.agent/memory/semantic/LESSONS.md` — use `graduate.py`.
+- If `REVIEW_QUEUE.md` pending > 10 or oldest > 7 days, review before starting work.
+
 ## Working Style (Karpathy Guidelines)
 
 Four behavioral principles to reduce common LLM coding mistakes:

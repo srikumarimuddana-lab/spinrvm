@@ -122,6 +122,20 @@
         "hooks": [
           { "type": "command", "command": "bash .claude/hooks/post-python-write.sh" }
         ]
+      },
+      {
+        "matcher": "Bash|Edit|MultiEdit|Write|Task|TodoWrite",
+        "hooks": [
+          { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.agent/harness/hooks/claude_code_post_tool.py\"" }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.agent/memory/auto_dream.py\"" }
+        ]
       }
     ]
   },

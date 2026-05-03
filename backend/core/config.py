@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     COOKIE_SECURE: bool = True  # HTTPS only in production
     COOKIE_HTTPONLY: bool = True  # JavaScript cannot read
     COOKIE_SAMESITE: str = "Strict"  # Prevent CSRF token leaks
-    COOKIE_DOMAIN: str = ".spinrvm.ca"  # Cross-subdomain support
+    COOKIE_DOMAIN: str = ""  # Set to ".spinrvm.ca" in production env vars for cross-subdomain support
     COOKIE_PATH: str = "/"  # Available to all routes
 
     # CORS settings

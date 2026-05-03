@@ -3154,10 +3154,10 @@
     "@react-native-community/netinfo" "^12.0.1"
     react-native-worklets "^0.8.1"
 
-"@stripe/stripe-react-native@0.50.3":
-  version "0.50.3"
-  resolved "https://registry.npmjs.org/@stripe/stripe-react-native/-/stripe-react-native-0.50.3.tgz"
-  integrity sha512-nzOjqZXQKdM7y33Em2JZxCTAgf/q/J51IJQ50XtwIL0QT6Jt5WSmfKm9rGmBhoXxxG4DcXu/qxJeAHlhcPDGQg==
+"@stripe/stripe-react-native@0.63.0":
+  version "0.63.0"
+  resolved "https://registry.yarnpkg.com/@stripe/stripe-react-native/-/stripe-react-native-0.63.0.tgz#b5a04568928dd75a5b8490fb9a56557cec245160"
+  integrity sha512-5vy+b+sP3xOqtHDZ2nezOIx0MWbcrJ/hwoL74gAc2Qa+/wF/JVjzirG8zVD7AtMYFjlIldmznpSePaPEaLJLWA==
 
 "@supabase/auth-js@2.100.1":
   version "2.100.1"

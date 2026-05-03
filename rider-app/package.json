@@ -60,8 +60,8 @@
     "expo-updates": "~55.0.21",
     "expo-web-browser": "~55.0.14",
     "firebase": "^12.12.1",
-    "react": "19.1.0",
-    "react-dom": "19.1.0",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
     "react-native": "0.85.2",
     "react-native-confirmation-code-field": "^8.0.1",
     "react-native-dotenv": "^3.4.11",
@@ -83,7 +83,7 @@
     "@react-native/jest-preset": "0.85.2",
     "@testing-library/jest-native": "^5.4.3",
     "@testing-library/react-native": "^12.4.0",
-    "@types/react": "~19.1.0",
+    "@types/react": "~19.2.0",
     "babel-plugin-module-resolver": "^5.0.2",
     "cross-env": "^10.1.0",
     "eslint": "^8.57.0",
@@ -94,18 +94,34 @@
     "typescript": "~5.9.2"
   },
   "overrides": {
-    "@types/react": "~19.1.0",
+    "@types/react": "~19.2.0",
     "@tootallnate/once": "^3.0.1",
     "protobufjs": "^7.5.5",
     "@xmldom/xmldom": "^0.8.13"
   },
   "resolutions": {
-    "@types/react": "~19.1.0",
+    "@types/react": "~19.2.0",
     "@tootallnate/once": "^3.0.1",
     "protobufjs": "^7.5.5",
     "@xmldom/xmldom": "^0.8.13",
     "@react-native-community/netinfo": "11.5.2",
     "expo-modules-core": "55.0.24"
+  },
+  "expo": {
+    "install": {
+      "exclude": [
+        "react-native",
+        "react-native-reanimated",
+        "react-native-worklets",
+        "react-native-gesture-handler",
+        "react-native-webview",
+        "react-native-screens",
+        "@react-navigation/native",
+        "@react-navigation/bottom-tabs",
+        "eslint-config-expo",
+        "jest"
+      ]
+    }
   },
   "private": true,
   "packageManager": "yarn@1.22.22"

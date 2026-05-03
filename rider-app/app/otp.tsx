@@ -139,20 +139,20 @@ export default function OtpScreen() {
           code: code,
         });
         const { token, refresh_token, expires_in, user: userData } = response.data;
+        // P3 cookie auth: token is "" when HTTP-only cookies are used
         if (token) {
           await useAuthStore.getState().setTokens(token, refresh_token ?? "", expires_in ?? 900);
-          Analytics.otpVerified();
-
-          if (userData) {
-            useAuthStore.setState({
-              user: userData,
-              isInitialized: true,
-              isLoading: false,
-            });
-            Analytics.login();
-          } else {
-            await initialize();
-          }
+        }
+        Analytics.otpVerified();
+        if (userData) {
+          useAuthStore.setState({
+            user: userData,
+            isInitialized: true,
+            isLoading: false,
+          });
+          Analytics.login();
+        } else {
+          await initialize();
         }
       } else {
         await verifyOTP(verificationId!, code);

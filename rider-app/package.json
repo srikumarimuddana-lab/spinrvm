@@ -41,7 +41,7 @@
     "expo-build-properties": "~55.0.13",
     "expo-clipboard": "~55.0.13",
     "expo-constants": "~55.0.15",
-    "expo-dev-client": "~55.0.28",
+    "expo-dev-client": "~55.0.30",
     "expo-document-picker": "~55.0.13",
     "expo-font": "~55.0.6",
     "expo-haptics": "~55.0.14",
@@ -50,7 +50,7 @@
     "expo-linear-gradient": "~55.0.13",
     "expo-linking": "~55.0.14",
     "expo-location": "~55.1.8",
-    "expo-modules-core": "~55.0.23",
+    "expo-modules-core": "~55.0.24",
     "expo-router": "~55.0.13",
     "expo-secure-store": "~55.0.13",
     "expo-splash-screen": "~55.0.19",
@@ -103,7 +103,9 @@
     "@types/react": "~19.1.0",
     "@tootallnate/once": "^3.0.1",
     "protobufjs": "^7.5.5",
-    "@xmldom/xmldom": "^0.8.13"
+    "@xmldom/xmldom": "^0.8.13",
+    "@react-native-community/netinfo": "11.5.2",
+    "expo-modules-core": "55.0.24"
   },
   "private": true,
   "packageManager": "yarn@1.22.22"

@@ -2808,15 +2808,10 @@
   dependencies:
     invariant "^2.2.4"
 
-"@react-native-community/netinfo@11.5.2":
+"@react-native-community/netinfo@11.5.2", "@react-native-community/netinfo@^12.0.1":
   version "11.5.2"
   resolved "https://registry.yarnpkg.com/@react-native-community/netinfo/-/netinfo-11.5.2.tgz#daf3bc1b5cf6e9fc6725600c9e95875b5e50e694"
   integrity sha512-/g0m65BtX9HU+bPiCH2517bOHpEIUsGrWFXDzi1a5nNKn5KujQgm04WhL7/OSXWKHyrT8VVtUoJA0XKRxueBpQ==
-
-"@react-native-community/netinfo@^12.0.1":
-  version "12.0.1"
-  resolved "https://registry.yarnpkg.com/@react-native-community/netinfo/-/netinfo-12.0.1.tgz#fec75f4093c27778479d8927b4f51f133b8a13a4"
-  integrity sha512-P/3caXIvfYSJG8AWJVefukg+ZGRPs+M4Lp3pNJtgcTYoJxCjWrKQGNnCkj/Cz//zWa/avGed0i/wzm0T8vV2IQ==
 
 "@react-native-firebase/app-check@^24.0.0":
   version "24.0.0"
@@ -5398,24 +5393,24 @@ expo-constants@~55.0.15:
   dependencies:
     "@expo/env" "~2.1.1"
 
-expo-dev-client@~55.0.28:
-  version "55.0.28"
-  resolved "https://registry.yarnpkg.com/expo-dev-client/-/expo-dev-client-55.0.28.tgz#0189f72ebb6540f668e62f65d8e4a49b596570e9"
-  integrity sha512-QZK6Ylx8Jg7lhOOHCxwC10g+i34ggMBAqV497JXFqla1tuuYiEw1poNJS5pD/60ZLe8kyy5PYPB4E9ezDHA9yQ==
+expo-dev-client@~55.0.30:
+  version "55.0.30"
+  resolved "https://registry.yarnpkg.com/expo-dev-client/-/expo-dev-client-55.0.30.tgz#e338ada92e9728aba95748633829a7f93d66a0a9"
+  integrity sha512-guDTu5MsI7C5TWi4d6PwG6CsfPeEDVu9V0eljwOLUC96MAwzc0Kw9/IgqGywrom5zBk8JCXv1dAZbUO+Ik83MQ==
   dependencies:
-    expo-dev-launcher "55.0.29"
-    expo-dev-menu "55.0.24"
+    expo-dev-launcher "55.0.31"
+    expo-dev-menu "55.0.26"
     expo-dev-menu-interface "55.0.2"
     expo-manifests "~55.0.16"
     expo-updates-interface "~55.1.6"
 
-expo-dev-launcher@55.0.29:
-  version "55.0.29"
-  resolved "https://registry.yarnpkg.com/expo-dev-launcher/-/expo-dev-launcher-55.0.29.tgz#3a791e5cf5e95209fd8665ee928d5c635abc3a80"
-  integrity sha512-Rusz6VfVUAXPArkQhnxC5yY70RCfGNZv+06qCGIkm2boQ3wOiSUwJic8oIt7kW6yD2rkpm24q/7F/6r5joPfng==
+expo-dev-launcher@55.0.31:
+  version "55.0.31"
+  resolved "https://registry.yarnpkg.com/expo-dev-launcher/-/expo-dev-launcher-55.0.31.tgz#c79bc69b815a9ebc87f2ed54efa5c8ab420361c4"
+  integrity sha512-jCWpW8+hzyv7xI4fIx+bGg84PQGzohNnBXdyazrU0J0BZCseguNCaxuU9LTcNTP/PGMJxZFEUFmU/Siojtdl/w==
   dependencies:
     "@expo/schema-utils" "^55.0.3"
-    expo-dev-menu "55.0.24"
+    expo-dev-menu "55.0.26"
     expo-manifests "~55.0.16"
 
 expo-dev-menu-interface@55.0.2:
@@ -5423,10 +5418,10 @@ expo-dev-menu-interface@55.0.2:
   resolved "https://registry.yarnpkg.com/expo-dev-menu-interface/-/expo-dev-menu-interface-55.0.2.tgz#aead1b9980c904d61c59e9182e13b2b37bcb2161"
   integrity sha512-DomUNvGzY/xliwnMdbAYY780sCv19N7zIbifc0ClcoCzJZpNSCkvJ2qGIFRPyM/7DmqmlHGCKi8di7kYYLKNEg==
 
-expo-dev-menu@55.0.24:
-  version "55.0.24"
-  resolved "https://registry.yarnpkg.com/expo-dev-menu/-/expo-dev-menu-55.0.24.tgz#6af52133cd9de105d28317eb47938ffedb041e3b"
-  integrity sha512-/J93rADODlKpmaN9uywTd/RMywPDeUo/bAnrZNxlHrFUuO1VCGqYLhacITg2zebU8hucaou8pa8zVsTQaUCv6w==
+expo-dev-menu@55.0.26:
+  version "55.0.26"
+  resolved "https://registry.yarnpkg.com/expo-dev-menu/-/expo-dev-menu-55.0.26.tgz#d9a10861b57d3db30e31238d813eb7abcbcc7432"
+  integrity sha512-NXZumkYIycz77IY/o7qI9Ow+qb/qkq6aQ4eqO7tUJMCyBNVIfwfrb3Qm9ANhZlDT0yrk8FcH7zYmtoJbfwRr1Q==
   dependencies:
     expo-dev-menu-interface "55.0.2"
 
@@ -5528,17 +5523,10 @@ expo-modules-autolinking@55.0.19:
     chalk "^4.1.0"
     commander "^7.2.0"
 
-expo-modules-core@55.0.24:
+expo-modules-core@55.0.24, expo-modules-core@~55.0.24:
   version "55.0.24"
   resolved "https://registry.yarnpkg.com/expo-modules-core/-/expo-modules-core-55.0.24.tgz#096e6c54b8c7b4fe479526855d29fe4b10236177"
   integrity sha512-1FztZjelwf3xQZpD6+LFo6IKjnGF/PMVXYkv9aC3EybMl/ZbXji35cfhy9W5uR/bwQ7L+SVqvd5A00XOoIiO8Q==
-  dependencies:
-    invariant "^2.2.4"
-
-expo-modules-core@~55.0.23:
-  version "55.0.23"
-  resolved "https://registry.yarnpkg.com/expo-modules-core/-/expo-modules-core-55.0.23.tgz#047dd7e01ef7ebd1027375c70ab5f3875e818a1f"
-  integrity sha512-IGWT5N9MoV4zgWyrv686bElnKhzhE7E6pSazhaBNh3vgViAah5nnAz2o5h5YoUMR2B+ZTdHumRbGHN6gHLgwPA==
   dependencies:
     invariant "^2.2.4"
 

@@ -78,7 +78,7 @@ staticmap>=0.5.7
 Pillow>=10.4.0
 
 # Error monitoring
-sentry-sdk>=2.58.0
+sentry-sdk>=2.59.0
 
 # Testing
 pytest>=9.0.3

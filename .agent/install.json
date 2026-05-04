@@ -2,7 +2,7 @@
   "schema_version": 1,
   "agentic_stack_version": "0.13.0",
   "abs_target": "/home/user/spinrvm",
-  "installed_at": "2026-05-03T20:12:12Z",
+  "installed_at": "2026-05-04T00:02:43Z",
   "adapters": {
     "claude-code": {
       "installed_at": "2026-05-03T20:12:12Z",
@@ -24,6 +24,21 @@
       ],
       "post_install_results": [],
       "brain_root_primitive": "$CLAUDE_PROJECT_DIR"
+    },
+    "hermes": {
+      "installed_at": "2026-05-04T00:02:43Z",
+      "files_written": [
+        "AGENTS.md"
+      ],
+      "files_overwritten": [],
+      "files_alerted": [],
+      "file_results": [
+        {
+          "dst": "AGENTS.md",
+          "result": "written_new"
+        }
+      ],
+      "post_install_results": []
     }
   }
 }

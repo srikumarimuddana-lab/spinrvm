@@ -54,7 +54,9 @@ limiter = Limiter(key_func=get_remote_address)
 # attacks that rotate IPs to bypass the per-IP SlowAPI limit above). Stored
 # in Redis with TTL; falls back to in-process dict when Redis is unavailable.
 _LOGIN_MAX_FAILURES = 5
-_LOGIN_LOCKOUT_TTL_SECONDS = 24 * 60 * 60  # 24 hours (was 15 minutes)
+# 24h lockout in production; 2 minutes in dev so a mistyped password doesn't
+# lock you out of a local environment for the rest of the day.
+_LOGIN_LOCKOUT_TTL_SECONDS = 2 * 60 if settings.ENV.lower() != "production" else 24 * 60 * 60
 
 
 def _lockout_key(email: str) -> str:
@@ -223,8 +225,14 @@ async def get_session(authorization: Optional[str] = Header(None)):
         return SessionResponse(user=None, authenticated=False)
 
 
+def _admin_login_rate_limit() -> str:
+    # Strict in production (brute-force defence); permissive in dev/staging
+    # so a developer doesn't get locked out after a few mistyped passwords.
+    return "3/30minutes" if settings.ENV.lower() == "production" else "20/minute"
+
+
 @admin_auth_router.post("/login")
-@limiter.limit("3/30minutes")
+@limiter.limit(_admin_login_rate_limit)
 async def admin_login(request: Request, response: Response, body: LoginRequest):
     """Admin login — supports super admin + staff members with module access.
 

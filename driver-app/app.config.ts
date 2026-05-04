@@ -201,14 +201,14 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
             ios: { appCheckProviderFactory: 'DeviceCheck' },
             android: { appCheckProviderFactory: 'playIntegrity' },
         }],
-        // SDK 55 / RN 0.85 requires compileSdkVersion 35 + Kotlin 2.0.
+        // SDK 55 / RN 0.85.2 requires compileSdkVersion 35 + Kotlin 2.1.20 (from @react-native/gradle-plugin libs.versions.toml).
         // LogRocket native module requires minSdkVersion 25.
         ['expo-build-properties', {
             android: {
                 minSdkVersion: 25,
                 compileSdkVersion: 35,
                 targetSdkVersion: 35,
-                kotlinVersion: '2.0.21',
+                kotlinVersion: '2.1.20',
             }
         }],
         '@logrocket/react-native',

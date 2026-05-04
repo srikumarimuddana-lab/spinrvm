@@ -128,7 +128,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         '@react-native-firebase/messaging',
         '@react-native-firebase/crashlytics',
         '@react-native-firebase/app-check',
-        // SDK 55 / RN 0.85 requires compileSdkVersion 35 + Kotlin 2.0.
+        // SDK 55 / RN 0.85.2 requires compileSdkVersion 35 + Kotlin 2.1.20 (from @react-native/gradle-plugin libs.versions.toml).
         // Stripe 0.63.0 and react-native-reanimated 4.x both floor-check these.
         // LogRocket native module requires minSdkVersion 25.
         ['expo-build-properties', {
@@ -136,7 +136,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
                 minSdkVersion: 25,
                 compileSdkVersion: 35,
                 targetSdkVersion: 35,
-                kotlinVersion: '2.0.21',
+                kotlinVersion: '2.1.20',
             }
         }],
         '@logrocket/react-native',

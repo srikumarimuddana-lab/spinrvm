@@ -1,49 +1,86 @@
 {
   "version": "1.0",
-  "timestamp": "2026-05-02T23:50:00.000Z",
-  "phase": "3",
-  "phase_name": "Device Testing Preparation & Execution",
+  "timestamp": "2026-05-03T21:45:00-06:00",
+  "phase": null,
+  "phase_name": "Expo SDK 55 Android Build Fix + Local Dev Environment Setup",
   "phase_dir": null,
-  "plan": null,
-  "task": null,
-  "total_tasks": null,
+  "branch": "fix/rider-app-expo-sdk55",
+  "latest_commit": "2b630634",
   "status": "paused",
   "completed_tasks": [
-    {"id": 1, "name": "ENV-2: docs/dev-setup.md created", "status": "done", "commit": "b9bf7eed"},
-    {"id": 2, "name": "Q-2: Firebase any types replaced with typeof import(...) aliases", "status": "done", "commit": "b9bf7eed"},
-    {"id": 3, "name": "Q-5: Root Dockerfile pinned to SHA256 digest", "status": "done", "commit": "b9bf7eed"},
-    {"id": 4, "name": "Q-6: OPEN-ITEMS-TRACKER.md created", "status": "done", "commit": "b9bf7eed"},
-    {"id": 5, "name": "backend/.env created with Supabase URL, JWT secret, ADMIN_PASSWORD", "status": "done", "commit": null},
-    {"id": 6, "name": "rider-app/.env created with Google Maps key + Railway URL", "status": "done", "commit": null},
-    {"id": 7, "name": "driver-app/.env created with Google Maps key + Railway URL", "status": "done", "commit": null},
-    {"id": 8, "name": "backend/requirements-win.txt created (uvloop excluded for Windows)", "status": "done", "commit": null},
-    {"id": 9, "name": "Backend server started locally, health check confirmed healthy", "status": "done", "commit": null}
+    {"id": 1, "name": "Diagnose full build failure chain (Builds #1-#10)", "status": "done"},
+    {"id": 2, "name": "Bump Gradle wrapper 8.10.2 → 8.13 in both apps", "status": "done", "commit": "cd4211d3"},
+    {"id": 3, "name": "Fix kotlinVersion 2.0.21 → 2.1.20 in both app.config.ts", "status": "done", "commit": "2b630634"},
+    {"id": 4, "name": "Runtime failure audit across all 4 surfaces with 3-tier strategy", "status": "done"},
+    {"id": 5, "name": "Fix admin-dashboard/.env.local BACKEND_URL to http://localhost:8000", "status": "done", "note": "NOT committed — .env.local is gitignored"}
   ],
   "remaining_tasks": [
-    {"id": 10, "name": "Start rider-app Expo dev server: cd rider-app && yarn start", "status": "not_started"},
-    {"id": 11, "name": "Start driver-app Expo dev server: cd driver-app && yarn start", "status": "not_started"},
-    {"id": 12, "name": "Scan Expo QR code on physical device with Expo Go app", "status": "not_started"},
-    {"id": 13, "name": "Verify maps load on device (confirms Google Maps API key works)", "status": "not_started"},
-    {"id": 14, "name": "Phase 3 golden path device testing (DT-1 through DT-11)", "status": "not_started"},
-    {"id": 15, "name": "Create PR for feat/phase4-type-safety-docs branch", "status": "not_started"}
+    {"id": 6, "name": "Wait for EAS build on commit 2b630634 to complete", "status": "external"},
+    {"id": 7, "name": "After build passes: create PR fix/rider-app-expo-sdk55 → main (14 file diff)", "status": "not_started"},
+    {"id": 8, "name": "HUMAN: Start local backend + admin dashboard, verify login", "status": "human_action"},
+    {"id": 9, "name": "Configure Twilio in admin Settings UI (for real OTP SMS)", "status": "not_started"},
+    {"id": 10, "name": "Add FIREBASE_SERVICE_ACCOUNT_JSON to backend/.env", "status": "not_started"},
+    {"id": 11, "name": "Install EAS APK on device, test OTP login (verify OTP freeze bug fixed)", "status": "blocked_on_build"},
+    {"id": 12, "name": "Full ride lifecycle E2E test (Tier 3)", "status": "not_started"}
   ],
-  "blockers": [],
+  "blockers": [
+    {
+      "description": "EAS build on commit 2b630634 not yet confirmed complete",
+      "type": "external",
+      "workaround": "Kotlin 2.1.20 is the last known build blocker. Check EAS dashboard for build status."
+    },
+    {
+      "description": "Firebase service account JSON missing from backend/.env",
+      "type": "human_action",
+      "workaround": "Backend starts in dev mode without it. Push notifications will silently fail until added."
+    }
+  ],
   "human_actions_pending": [
-    {"action": "Run yarn start in rider-app/ and driver-app/ in separate terminals", "context": "Expo dev servers must be started manually; Railway backend is already live at spinr-backend-test.up.railway.app", "blocking": true},
-    {"action": "Scan QR code with Expo Go on physical device", "context": "Physical device testing for Phase 3 requires the user to scan the QR code shown by Expo CLI", "blocking": true}
+    {
+      "action": "Terminal 1: cd backend && python3 -m backend.server",
+      "context": "Starts local backend on :8000. Required for admin portal.",
+      "blocking": true
+    },
+    {
+      "action": "Terminal 2: cd admin-dashboard && npm run dev",
+      "context": "Starts admin dashboard on localhost:3000. .env.local already updated to localhost.",
+      "blocking": true
+    },
+    {
+      "action": "Login: http://localhost:3000 → admin@spinr.ca / SpinrDev2026!",
+      "context": "Verify admin portal works — this is the Tier 1 gate.",
+      "blocking": true
+    },
+    {
+      "action": "Download Firebase service account JSON from Firebase console, project spinrapp-6e464",
+      "context": "Project Settings → Service Accounts → Generate new private key. One-line JSON in backend/.env as FIREBASE_SERVICE_ACCOUNT_JSON.",
+      "blocking": false
+    },
+    {
+      "action": "Configure Twilio credentials via admin Settings UI after login",
+      "context": "Writes to app_settings Supabase table. Required for real SMS OTP on production builds.",
+      "blocking": false
+    }
   ],
   "decisions": [
-    {"decision": "Use Railway staging URL (spinr-backend-test.up.railway.app) instead of LAN IP", "rationale": "LAN IP only works for devices on same Wi-Fi; Railway URL works for all team members on any network", "phase": "3"},
-    {"decision": "Google Maps API key stored in Supabase app_settings table, not env vars", "rationale": "Admin dashboard Settings page or Supabase Table Editor is the source of truth for Maps key", "phase": "3"},
-    {"decision": "Created backend/requirements-win.txt without uvloop for Windows compatibility", "rationale": "uvloop is Linux/macOS-only; Windows dev machine needs the filtered requirements file", "phase": "2"}
+    {
+      "decision": "kotlinVersion 2.0.21 → 2.1.20",
+      "rationale": "Source of truth: @react-native/gradle-plugin/gradle/libs.versions.toml. RN 0.85.2 pins kotlin = 2.1.20."
+    },
+    {
+      "decision": "Admin dashboard pointed to local backend (http://localhost:8000)",
+      "rationale": "Railway production ADMIN_PASSWORD unknown. Local .env has SpinrDev2026!. Both share same Supabase DB."
+    },
+    {
+      "decision": "3-tier dev strategy: admin portal → mobile OTP → full ride flow",
+      "rationale": "Each tier depends on the previous. Isolated fixes first reduces debugging surface."
+    },
+    {
+      "decision": "Do NOT trigger EAS builds manually — let GitHub integration queue them",
+      "rationale": "Builds are paid. Let each push to the branch trigger naturally."
+    }
   ],
-  "uncommitted_files": [
-    "backend/.env",
-    "rider-app/.env",
-    "driver-app/.env",
-    "backend/requirements-win.txt",
-    ".planning/STATE.md"
-  ],
-  "next_action": "Start Expo dev servers: open two terminals, run 'cd rider-app && yarn start' in one, 'cd driver-app && yarn start' in the other. Both will print a QR code. Scan with Expo Go on a physical device.",
-  "context_notes": "Phase 3 is now fully unblocked. All three .env files exist and backend health check passed. The local backend at localhost:8000 is useful for dev but mobile apps are pointed at Railway staging (spinr-backend-test.up.railway.app) which is already running. The feat/phase4-type-safety-docs branch is 1 commit ahead of main with Q-2/Q-5/Q-6/ENV-2 work — needs a PR before merging."
+  "uncommitted_files": [],
+  "next_action": "Start local backend (python3 -m backend.server), then admin dashboard (npm run dev), verify login at http://localhost:3000 with admin@spinr.ca / SpinrDev2026!",
+  "context_notes": "Build chain was: New Arch disabled → runtimeVersion literal → Gradle 8.13 → Kotlin 2.1.20. All 4 blockers fixed. Branch has 14 files not yet on main (withGradleWrapper.js, app.config.ts, yarn.lock, CI workflow, docs runbook). Admin login was failing because .env.local pointed to Railway with unknown ADMIN_PASSWORD. Now points to local backend. PR #406 already merged SDK 55 base to main via squash — a follow-up PR is needed for the build fixes."
 }

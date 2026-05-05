@@ -134,9 +134,10 @@ function PaymentConfirmScreenContent() {
     try {
       const fare = parseFloat(selectedEstimate?.total_fare || '0');
       const res = await api.post('/promo/validate', { code, ride_fare: fare });
-      setPromoDiscount(res.data.discount_amount);
+      const promoData = res.data as { discount_amount: number };
+      setPromoDiscount(promoData.discount_amount);
       setPromoApplied(true);
-      setPromoMessage(`-$${res.data.discount_amount.toFixed(2)} discount applied!`);
+      setPromoMessage(`-$${promoData.discount_amount.toFixed(2)} discount applied!`);
     } catch (error: any) {
       const msg = error?.response?.data?.detail || 'Invalid promo code';
       setPromoMessage(msg);

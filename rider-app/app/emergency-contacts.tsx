@@ -56,7 +56,7 @@ export default function EmergencyContactsScreen() {
   const fetchContacts = useCallback(async () => {
     try {
       const res = await api.get('/users/emergency-contacts');
-      setContacts(res.data?.contacts || []);
+      setContacts((res.data as { contacts?: any[] })?.contacts || []);
     } catch {
       console.error('Failed to fetch emergency contacts');
     } finally {

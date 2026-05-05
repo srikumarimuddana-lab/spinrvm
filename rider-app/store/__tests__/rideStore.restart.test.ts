@@ -46,6 +46,7 @@ const ACTIVE_RIDE_KEY = '@spinr:active_ride';
 const makeRide = (status: string, id = 'ride-789') => ({
   id,
   rider_id: 'user-abc',
+  vehicle_type_id: 'vt-standard',
   status,
   pickup_address: '100 Queen St',
   pickup_lat: 43.65,
@@ -53,12 +54,14 @@ const makeRide = (status: string, id = 'ride-789') => ({
   dropoff_address: '200 King St',
   dropoff_lat: 43.64,
   dropoff_lng: -79.38,
-  estimated_fare: 15.0,
-  total_fare: 15.0,
   distance_km: 2.0,
   duration_minutes: 10,
+  base_fare: '5.00',
+  total_fare: '15.00',
   payment_method: 'card',
   payment_status: 'pending',
+  pickup_otp: '1234',
+  created_at: '2026-01-01T00:00:00Z',
 });
 
 beforeEach(() => {
@@ -80,7 +83,7 @@ describe('hydrateActiveRide — mid-trip restart restore (P1-7 / R14)', () => {
       JSON.stringify({ currentRide: stored, currentDriver: null }),
     );
     mockApi.get.mockResolvedValueOnce({
-      data: { active: true, ride: liveRide },
+      data: { active: true, ride: liveRide }, status: 200,
     });
 
     await useRideStore.getState().hydrateActiveRide();
@@ -97,7 +100,7 @@ describe('hydrateActiveRide — mid-trip restart restore (P1-7 / R14)', () => {
       JSON.stringify({ currentRide: stored, currentDriver: null }),
     );
     mockApi.get.mockResolvedValueOnce({
-      data: { active: true, ride: stored },
+      data: { active: true, ride: stored }, status: 200,
     });
 
     await useRideStore.getState().hydrateActiveRide();
@@ -138,7 +141,7 @@ describe('hydrateActiveRide — mid-trip restart restore (P1-7 / R14)', () => {
     );
     // Server says no active ride (completed while app was killed)
     mockApi.get.mockResolvedValueOnce({
-      data: { active: false, ride: null },
+      data: { active: false, ride: null }, status: 200,
     });
 
     await useRideStore.getState().hydrateActiveRide();
@@ -155,7 +158,7 @@ describe('hydrateActiveRide — mid-trip restart restore (P1-7 / R14)', () => {
       JSON.stringify({ currentRide: stored, currentDriver: null }),
     );
     mockApi.get.mockResolvedValueOnce({
-      data: { active: true, ride: serverRide },
+      data: { active: true, ride: serverRide }, status: 200,
     });
 
     await useRideStore.getState().hydrateActiveRide();
@@ -200,7 +203,7 @@ describe('hydrateActiveRide — mid-trip restart restore (P1-7 / R14)', () => {
       JSON.stringify({ currentRide: cached, currentDriver: null }),
     );
     mockApi.get.mockResolvedValueOnce({
-      data: { active: true, ride: liveRide },
+      data: { active: true, ride: liveRide }, status: 200,
     });
 
     await useRideStore.getState().hydrateActiveRide();

@@ -59,9 +59,8 @@ export async function initFirebaseServices() {
   // 2. App Check — verify requests come from real app
   if (appCheck) {
     try {
-      const provider = Platform.OS === 'android'
-        ? appCheck.newReactNativeFirebaseAppCheckProvider()
-        : appCheck.newReactNativeFirebaseAppCheckProvider();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const provider = (appCheck as any).newReactNativeFirebaseAppCheckProvider();
 
       await appCheck().initializeAppCheck({
         provider,
@@ -118,9 +117,10 @@ export function onForegroundMessage(handler: (message: import('@react-native-fir
  * Set the background message handler.
  * Must be called at the TOP LEVEL (outside of any component).
  */
-export function setBackgroundMessageHandler(handler: (message: import('@react-native-firebase/messaging').FirebaseMessagingTypes.RemoteMessage) => void) {
+export function setBackgroundMessageHandler(handler: (message: import('@react-native-firebase/messaging').FirebaseMessagingTypes.RemoteMessage) => Promise<void> | void) {
   if (!messaging) return;
-  messaging().setBackgroundMessageHandler(handler);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  messaging().setBackgroundMessageHandler(handler as any);
 }
 
 

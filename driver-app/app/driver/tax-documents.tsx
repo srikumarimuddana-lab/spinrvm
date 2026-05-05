@@ -93,13 +93,14 @@ function TaxDocumentsScreen() {
             // T4A: fetch the per-year summary and either open the signed URL
             // (once the PDF generator ships) or display the summary inline.
             const res = await api.get(`/drivers/t4a/${doc.tax_year}`);
-            const url = res.data?.url || res.data?.file_url;
+            const t4aDoc = res.data as { url?: string; file_url?: string; total_earnings?: string | number; year?: number; total_trips?: number; net_earnings?: string | number } | null;
+            const url = t4aDoc?.url || t4aDoc?.file_url;
             if (url) {
                 await Linking.openURL(url);
-            } else if (res.data?.total_earnings != null) {
+            } else if (t4aDoc?.total_earnings != null) {
                 showAlert(
-                    `T4A Summary — ${res.data.year}`,
-                    `Total earnings: $${Number(res.data.total_earnings).toFixed(2)}\nTotal trips: ${res.data.total_trips}\nNet earnings: $${Number(res.data.net_earnings).toFixed(2)}\n\nA downloadable PDF will be available once tax documents are finalized.`,
+                    `T4A Summary — ${t4aDoc.year}`,
+                    `Total earnings: $${Number(t4aDoc.total_earnings).toFixed(2)}\nTotal trips: ${t4aDoc.total_trips}\nNet earnings: $${Number(t4aDoc.net_earnings).toFixed(2)}\n\nA downloadable PDF will be available once tax documents are finalized.`,
                     'info',
                 );
             } else {

@@ -78,7 +78,7 @@ export default function LoginScreen() {
 
     try {
       const response = await api.post('/auth/send-otp', { phone: formattedNumber });
-      if (response.data.success) {
+      if ((response.data as { success?: boolean }).success) {
         router.push({
           pathname: '/otp',
           params: { phoneNumber: formattedNumber, mode: 'backend' },

@@ -103,6 +103,8 @@ interface Ride {
   corporate_account_id?: string | null;
   is_scheduled?: boolean;
   scheduled_time?: string;
+  ride_code?: string;
+  ride_completed_at?: string;
   created_at: string;
 }
 
@@ -228,12 +230,13 @@ export const useRideStore = create<RideState>((set, get) => ({
   fetchActiveRide: async () => {
     try {
       const response = await api.get('/rides/active');
-      if (response.data?.active && response.data.ride) {
-        const ride = response.data.ride;
+      const activeData = response.data as { active: boolean; ride: Ride & { driver?: Driver } };
+      if (activeData?.active && activeData.ride) {
+        const ride = activeData.ride;
         const driver = ride.driver || null;
         set({ currentRide: ride, currentDriver: driver });
         _persistRide(ride, driver);
-        return response.data;
+        return activeData;
       }
       // No active ride on server — clear any stale local state
       get().clearRide();
@@ -261,7 +264,7 @@ export const useRideStore = create<RideState>((set, get) => ({
         stops: stops, // Send stops to backend
       });
       console.log('Ride API Response:', response.data);
-      set({ estimates: response.data, isLoading: false });
+      set({ estimates: response.data as RideEstimate[], isLoading: false });
     } catch (error: any) {
       console.error('fetchEstimates error:', error);
       set({ isLoading: false, error: error.message });
@@ -277,7 +280,7 @@ export const useRideStore = create<RideState>((set, get) => ({
         url += `&vehicle_type=${selectedVehicle.id}`;
       }
       const response = await api.get(url);
-      set({ nearbyDrivers: response.data });
+      set({ nearbyDrivers: response.data as NearbyDriver[] });
     } catch (error) {
       console.log('Error fetching nearby drivers', error);
     }
@@ -289,7 +292,7 @@ export const useRideStore = create<RideState>((set, get) => ({
     try {
       const fare = rideFare ?? 0;
       const response = await api.get(`/promo/available?ride_fare=${fare}`);
-      const promos = response.data || [];
+      const promos = (response.data as any[]) || [];
       set({ availablePromos: promos });
       // Auto-apply best promo (first one, already sorted by biggest discount)
       if (promos.length > 0 && !get().appliedPromo) {
@@ -428,9 +431,10 @@ export const useRideStore = create<RideState>((set, get) => ({
       const response = await api.post('/rides', rideData, {
         headers: { 'Idempotency-Key': idempotencyKey },
       });
-      set({ currentRide: response.data, isLoading: false, scheduledTime: null, requiresWav: false, quietMode: false, riderNotes: '' });
-      _persistRide(response.data, null);
-      return response.data;
+      const createdRide = response.data as Ride;
+      set({ currentRide: createdRide, isLoading: false, scheduledTime: null, requiresWav: false, quietMode: false, riderNotes: '' });
+      _persistRide(createdRide, null);
+      return createdRide;
     } catch (error: any) {
       recordNonFatal(error, { store: 'rideStore', action: 'createRide' });
       set({ isLoading: false, error: error.message });
@@ -445,7 +449,7 @@ export const useRideStore = create<RideState>((set, get) => ({
         set({ isLoading: true });
       }
       const response = await api.get(`/rides/${rideId}`);
-      const ride = response.data;
+      const ride = response.data as Ride & { driver?: Driver };
       let driver = ride.driver || null;
       // R-P2-29: if a WS position update arrived within the last 10 s, the DB
       // value is stale — preserve the WS-sourced lat/lng so the map doesn't jump.
@@ -483,8 +487,9 @@ export const useRideStore = create<RideState>((set, get) => ({
 
     try {
       const response = await api.post(`/rides/${currentRide.id}/simulate-arrival`);
+      const arrivalData = response.data as { pickup_otp: string };
       set({
-        currentRide: { ...currentRide, status: RideStatus.DRIVER_ARRIVED, pickup_otp: response.data.pickup_otp },
+        currentRide: { ...currentRide, status: RideStatus.DRIVER_ARRIVED, pickup_otp: arrivalData.pickup_otp },
       });
     } catch (error: any) {
       set({ error: error.message });
@@ -511,9 +516,10 @@ export const useRideStore = create<RideState>((set, get) => ({
 
     try {
       const response = await api.post(`/rides/${currentRide.id}/complete`);
-      set({ currentRide: response.data });
+      const completedRide = response.data as Ride;
+      set({ currentRide: completedRide });
       AsyncStorage.removeItem(ACTIVE_RIDE_KEY).catch(() => {});
-      return response.data;
+      return completedRide;
     } catch (error: any) {
       recordNonFatal(error, { store: 'rideStore', action: 'completeRide' });
       set({ error: error.message });
@@ -561,7 +567,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   fetchSavedAddresses: async () => {
     try {
       const response = await api.get('/addresses');
-      set({ savedAddresses: response.data });
+      set({ savedAddresses: response.data as SavedAddress[] });
     } catch (error: any) {
       console.log('Error fetching addresses:', error.message);
     }
@@ -570,7 +576,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   addSavedAddress: async (address) => {
     try {
       const response = await api.post('/addresses', address);
-      set({ savedAddresses: [...get().savedAddresses, response.data] });
+      set({ savedAddresses: [...get().savedAddresses, response.data as SavedAddress] });
     } catch (error: any) {
       set({ error: error.message });
       throw error;
@@ -639,7 +645,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   fetchScheduledRides: async () => {
     try {
       const response = await api.get('/rides/scheduled');
-      set({ scheduledRides: response.data });
+      set({ scheduledRides: response.data as Ride[] });
     } catch (error: any) {
       console.log('Error fetching scheduled rides:', error.message);
     }
@@ -713,11 +719,12 @@ export const useRideStore = create<RideState>((set, get) => ({
       // while the app was closed the stored data would be stale.
       try {
         const live = await api.get('/rides/active');
-        if (!live.data?.active || live.data.ride?.id !== stored.id) {
+        const liveData = live.data as { active: boolean; ride: Ride & { driver?: Driver } };
+        if (!liveData?.active || liveData.ride?.id !== stored.id) {
           await AsyncStorage.removeItem(ACTIVE_RIDE_KEY);
           return; // stale — do not route
         }
-        const liveRide = live.data.ride;
+        const liveRide = liveData.ride;
         const liveDriver = liveRide.driver || currentDriver || null;
         if (!get().currentRide) {
           set({ currentRide: liveRide, currentDriver: liveDriver });

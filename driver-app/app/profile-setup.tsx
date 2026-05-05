@@ -83,10 +83,10 @@ export default function ProfileSetupScreen() {
       }
       try {
         const res = await api.get('/auth/me');
-        const fresh = res.data;
+        const fresh = res.data as { first_name?: string; last_name?: string; email?: string } | null;
         if (cancelled) return;
         if (fresh?.first_name && fresh?.last_name && fresh?.email) {
-          useAuthStore.setState({ user: fresh });
+          useAuthStore.setState({ user: fresh as any });
           router.replace('/driver' as any);
           return;
         }
@@ -106,7 +106,7 @@ export default function ProfileSetupScreen() {
       try {
         // Public endpoint — returns only active areas, no admin auth required.
         const areasRes = await api.get('/service-areas');
-        areas = areasRes.data || [];
+        areas = (areasRes.data as any[]) || [];
       } catch {
         areas = [
           { id: 'saskatoon', name: 'Saskatoon, SK', city: 'Saskatoon' },
@@ -199,10 +199,9 @@ export default function ProfileSetupScreen() {
         last_name: lastName.trim(),
         email: email.trim().toLowerCase(),
         gender,
-        role: 'driver',
         city: city || undefined,
         service_area_id: serviceAreaId || undefined,
-      });
+      } as any);
       // Auto-create the driver record so the user lands on the home screen
       // ready to go — no separate "become a driver" step required.
       try {

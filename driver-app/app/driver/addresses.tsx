@@ -81,7 +81,7 @@ export default function AddressesScreen() {
         setLoading(true);
         try {
             const res = await api.get('/addresses');
-            setAddresses(res.data || []);
+            setAddresses((res.data as SavedAddress[]) || []);
         } catch (err: any) {
             console.log('Error fetching addresses:', err);
             showAlert('Error', 'Failed to load saved addresses', 'danger');

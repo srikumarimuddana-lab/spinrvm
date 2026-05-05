@@ -32,7 +32,7 @@ export default function RideTrackingWebviewScreen() {
     try {
       setLoading(true);
       const res = await api.post(`/rides/${id}/share`);
-      const token = res.data?.share_token ?? id;
+      const token = (res.data as { share_token?: string })?.share_token ?? id;
       setResolvedUrl(`https://spinr-track.app/${token}`);
     } catch {
       setError('Could not generate tracking link. Please try again.');

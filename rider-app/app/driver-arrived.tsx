@@ -128,7 +128,7 @@ export default function DriverArrivedScreen() {
       {currentRide ? (
         <MapView
           ref={mapRef}
-          style={StyleSheet.absoluteFillObject}
+          style={StyleSheet.absoluteFill}
           provider={MAP_PROVIDER}
           initialRegion={{
             latitude: currentRide.pickup_lat,
@@ -395,7 +395,7 @@ function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: '#E8E8E8' },
     mapErrorContainer: {
-      ...StyleSheet.absoluteFillObject,
+      position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
       backgroundColor: '#D4E4D4',
       justifyContent: 'center',
       alignItems: 'center',

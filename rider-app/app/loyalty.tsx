@@ -103,8 +103,8 @@ export default function LoyaltyScreen() {
         api.get('/loyalty'),
         api.get('/loyalty/history'),
       ]);
-      setLoyalty(loyaltyRes.data);
-      setHistory(historyRes.data || []);
+      setLoyalty(loyaltyRes.data as LoyaltyData);
+      setHistory((historyRes.data as LoyaltyHistoryItem[]) || []);
     } catch {}
     finally {
       setLoading(false);

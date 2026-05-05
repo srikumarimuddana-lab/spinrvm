@@ -448,7 +448,7 @@ describe('rideStore — syncOfflineRequests', () => {
   test('replays queued create_ride requests and clears them on success', async () => {
     const queuedReq = { id: 'q-1', type: 'create_ride', data: { vehicle_type_id: 'vt-1' }, retryCount: 0 };
     AsyncStorageMock.getItem.mockResolvedValueOnce(JSON.stringify([queuedReq]));
-    mockApi.post.mockResolvedValueOnce({ data: makeRide('searching') });
+    mockApi.post.mockResolvedValueOnce({ data: makeRide('searching'), status: 200 });
 
     await act(async () => {
       await useRideStore.getState().syncOfflineRequests();

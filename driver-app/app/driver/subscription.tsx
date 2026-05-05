@@ -67,7 +67,8 @@ export default function SubscriptionScreen() {
       setLoading(true);
       try {
         const res = await api.get(`/drivers/subscription/verify-session?session_id=${sessionId}`);
-        if (res.data?.status === 'active') {
+        const verData = res.data as { status?: string } | null;
+        if (verData?.status === 'active') {
           showAlert('Payment Successful!', 'Your Spinr Pass is now active. Go online and start earning!', 'success');
         } else {
           showAlert('Processing...', 'Your payment is being confirmed. This may take a moment.', 'info');
@@ -95,18 +96,19 @@ export default function SubscriptionScreen() {
         api.get('/drivers/subscription/plans'),
         api.get('/drivers/subscription/current'),
       ]);
-      const data = plansRes.data;
+      const data = plansRes.data as { plans?: any[]; free_mode?: boolean; message?: string } | any[] | null;
       // Backend returns {plans, free_mode, message} when Spinr Pass is off
-      if (data && typeof data === 'object' && 'free_mode' in data) {
-        setPlans(data.plans || []);
-        setFreeMode(data.free_mode || false);
-        setFreeMessage(data.message || '');
+      if (data && !Array.isArray(data) && typeof data === 'object' && 'free_mode' in data) {
+        const dataObj = data as { plans?: any[]; free_mode?: boolean; message?: string };
+        setPlans(dataObj.plans || []);
+        setFreeMode(dataObj.free_mode || false);
+        setFreeMessage(dataObj.message || '');
       } else {
         // Fallback for old response format (plain array)
         setPlans(Array.isArray(data) ? data : []);
         setFreeMode(false);
       }
-      setCurrentSub(subRes.data);
+      setCurrentSub(subRes.data as any);
     } catch (e) { console.log('Sub load error:', e); }
     finally { setLoading(false); }
   };
@@ -139,12 +141,13 @@ export default function SubscriptionScreen() {
     setSubscribing(plan.id);
     try {
       const res = await api.post('/drivers/subscription/subscribe', { plan_id: plan.id });
+      const subResData = res.data as { checkout_url?: string; session_id?: string } | null;
 
-      if (res.data?.checkout_url) {
+      if (subResData?.checkout_url) {
         // Stripe Checkout path — open the payment page in the browser.
         // After payment, Stripe redirects to spinr-driver://subscription/success
         // which brings the driver back to the app.
-        await Linking.openURL(res.data.checkout_url);
+        await Linking.openURL(subResData.checkout_url);
 
         // The user is now in the browser paying. When they come back
         // (via deep-link), the app will call verify-session. For now
@@ -152,14 +155,14 @@ export default function SubscriptionScreen() {
         // G11: Retry verification 3 times over 30s instead of a single 5s
         // attempt. Stripe webhooks can take 5-15s depending on network and
         // event queue depth; a single 5s poll often missed the activation.
-        const sessionId = res.data.session_id;
+        const sessionId = subResData.session_id;
         if (sessionId) {
           const retryDelays = [5000, 10000, 15000]; // 5s, 10s, 15s (cumulative ~30s)
           for (const delay of retryDelays) {
             await new Promise(r => setTimeout(r, delay));
             try {
               const verifyRes = await api.get(`/drivers/subscription/verify-session?session_id=${sessionId}`);
-              if (verifyRes.data?.status === 'active') {
+              if ((verifyRes.data as { status?: string } | null)?.status === 'active') {
                 showAlert('Subscribed!', `You're now on the ${plan.name} plan. Go online and start earning!`, 'success');
                 loadData();
                 return;

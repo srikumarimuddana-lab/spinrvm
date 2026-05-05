@@ -66,7 +66,7 @@ export default function AccountScreen() {
         setIsRefreshing(true);
         try {
           const userRes = await api.get('/auth/me');
-          if (!cancelled && userRes.data) useAuthStore.setState({ user: userRes.data });
+          if (!cancelled && userRes.data) useAuthStore.setState({ user: userRes.data as import('@shared/store/authStore').User });
         } catch {}
         finally { if (!cancelled) setIsRefreshing(false); }
       })();

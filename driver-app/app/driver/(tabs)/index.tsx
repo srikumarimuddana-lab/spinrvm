@@ -90,7 +90,7 @@ function DriverDashboard() {
         const res = await api.get('/service-areas');
         if (cancelled) return;
         const areaId = driverData?.service_area_id;
-        const areas: Array<{ id: string; surge_multiplier?: number; surge_active?: boolean }> = res.data || [];
+        const areas: Array<{ id: string; surge_multiplier?: number; surge_active?: boolean }> = (res.data as any[]) || [];
         const myArea = areaId ? areas.find((a) => a.id === areaId) : areas[0];
         if (myArea?.surge_active && typeof myArea.surge_multiplier === 'number') {
           setSurgeMultiplier(myArea.surge_multiplier);
@@ -155,11 +155,12 @@ function DriverDashboard() {
       try {
         const res = await api.get('/drivers/demand-heatmap');
         if (cancelled) return;
-        if (!res.data.enabled) {
+        const heatData = res.data as { enabled?: boolean; points?: number[][] } | null;
+        if (!heatData?.enabled) {
           setHeatmapPoints([]);
           return;
         }
-        const pts = (res.data.points || []).map((p: number[]) => ({
+        const pts = (heatData.points || []).map((p: number[]) => ({
           latitude: p[0],
           longitude: p[1],
           weight: p[2] || 1,
@@ -472,7 +473,7 @@ function DriverDashboard() {
       )}
 
       {/* Map */}
-      <View style={StyleSheet.absoluteFillObject} pointerEvents="box-none">
+      <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
       <MapView
         key={mapKey}
         ref={mapRef}
@@ -617,7 +618,7 @@ function DriverDashboard() {
       </View>
 
       {/* Top Bar */}
-      <DriverTopBar driverData={driverData} user={user} isOnline={isOnline} connectionState={connectionState} surgeMultiplier={surgeMultiplier} />
+      <DriverTopBar driverData={driverData ?? undefined} user={user ?? undefined} isOnline={isOnline} connectionState={connectionState} surgeMultiplier={surgeMultiplier} />
 
       {/* SOS Button — visible during active ride */}
       {(rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup' || rideState === 'trip_in_progress') && activeRide?.ride?.id && (
@@ -643,7 +644,7 @@ function DriverDashboard() {
       {rideState === 'idle' && (
         <DriverIdlePanel
           isOnline={isOnline}
-          driverData={driverData}
+          driverData={driverData as any ?? undefined}
           earnings={earnings ?? undefined}
           onToggleOnline={toggleOnline}
           pulseAnim={pulseAnim}
@@ -655,7 +656,7 @@ function DriverDashboard() {
         rideState === 'trip_in_progress') && (
         <ActiveRidePanel
           rideState={rideState}
-          ride={activeRide?.ride || null}
+          ride={(activeRide?.ride as any) || null}
           rider={activeRide?.rider || null}
           driverLocation={location}
           isLoading={false}
@@ -706,7 +707,7 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.background,
     },
     map: {
-      ...StyleSheet.absoluteFillObject,
+      ...StyleSheet.absoluteFill,
     },
     wsErrorBanner: {
       position: 'absolute',

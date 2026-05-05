@@ -135,6 +135,7 @@ export interface User {
   profile_image?: string;  // Base64 data URI
   profile_image_status?: 'pending_review' | 'approved' | 'rejected' | null;
   rating?: number;
+  total_rides?: number;
   // Driver onboarding state machine (computed server-side on every /auth/me).
   // Null for riders. Clients should route on this rather than profile_complete.
   driver_onboarding_status?: DriverOnboardingStatus | null;
@@ -483,12 +484,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       set({ isLoading: true, error: null });
       const response = await api.post('/users/profile', data);
-      set({ user: response.data, isLoading: false });
+      set({ user: response.data as User, isLoading: false });
       // Re-fetch /auth/me so driver_onboarding_status gets computed
       // (the POST /users/profile response doesn't include it).
       try {
         const meRes = await api.get('/auth/me');
-        set({ user: meRes.data });
+        set({ user: meRes.data as User });
       } catch {}
     } catch (error: unknown) {
       const message = (isApiError(error) && error.response?.data?.detail) || 'Failed to create profile';
@@ -500,7 +501,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   fetchDriverProfile: async () => {
     try {
       const response = await api.get('/drivers/me');
-      set({ driver: response.data });
+      set({ driver: response.data as Driver });
     } catch (error) {
       if (__DEV__) console.log('Failed to fetch driver profile');
       set({ driver: null });
@@ -559,7 +560,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const user = get().user;
       const updatedUser = user ? { ...user, role: 'driver', is_driver: true } : user;
       set({
-        driver: response.data,
+        driver: response.data as Driver,
         user: updatedUser,
         isLoading: false,
         isDriverMode: true
@@ -671,7 +672,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       // The api client detects FormData and lets fetch set the multipart
       // boundary itself — do not pass a Content-Type header here.
       const response = await api.put('/users/profile-image', formData);
-      set({ user: response.data, isLoading: false });
+      set({ user: response.data as User, isLoading: false });
 
       // Invalidate user cache to reflect the new profile image
       await appCache.remove(CACHE_KEYS.USER_PROFILE);

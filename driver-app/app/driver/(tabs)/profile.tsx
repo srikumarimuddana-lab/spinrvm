@@ -35,7 +35,9 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export default function ProfileScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { user, driver: driverData, logout, logoutAll, fetchDriverProfile, updateProfileImage } = useAuthStore();
+  const { user, driver: _driverDataRaw, logout, logoutAll, fetchDriverProfile, updateProfileImage } = useAuthStore();
+  // Cast away the [key: string]: unknown index signature so JSX children type-check correctly
+  const driverData = _driverDataRaw as any as (typeof _driverDataRaw & Record<string, string | number | boolean | null | undefined>) | null;
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const modalStyles = useMemo(() => createModalStyles(colors), [colors]);
@@ -51,7 +53,7 @@ export default function ProfileScreen() {
 
   useEffect(() => {
     api.get('/company-info')
-      .then(res => setCompanyInfo(res?.data || {}))
+      .then(res => setCompanyInfo((res?.data as any) || {}))
       .catch(() => {});
   }, []);
 
@@ -90,7 +92,7 @@ export default function ProfileScreen() {
   // is kept in sync below for screens that still read from the store.
   const { data: driverFromQuery, refetch: refetchDriverMe } = useDriverMe();
   useEffect(() => {
-    if (driverFromQuery) useAuthStore.setState({ driver: driverFromQuery });
+    if (driverFromQuery) useAuthStore.setState({ driver: driverFromQuery as any });
   }, [driverFromQuery]);
 
   useFocusEffect(
@@ -101,7 +103,7 @@ export default function ProfileScreen() {
         setIsRefreshing(true);
         try {
           const userRes = await api.get('/auth/me');
-          if (!cancelled && userRes.data) useAuthStore.setState({ user: userRes.data });
+          if (!cancelled && userRes.data) useAuthStore.setState({ user: userRes.data as any });
 
           // Driver row refetch is delegated to TanStack Query — calling
           // refetch() lines up with the existing pull-to-refresh UX.
@@ -109,12 +111,12 @@ export default function ProfileScreen() {
 
           try {
             const reqRes = await api.get('/drivers/requirements');
-            if (!cancelled && reqRes.data) setDocRequirements(reqRes.data);
+            if (!cancelled && reqRes.data) setDocRequirements(reqRes.data as any);
           } catch (reqErr) {}
 
           try {
             const docsRes = await api.get('/drivers/documents');
-            if (!cancelled && docsRes.data) setDriverDocs(docsRes.data);
+            if (!cancelled && docsRes.data) setDriverDocs(docsRes.data as any);
           } catch (docsErr) {}
         } finally {
           if (!cancelled) setIsRefreshing(false);
@@ -182,7 +184,7 @@ export default function ProfileScreen() {
         email: editEmail.trim().toLowerCase(),
         gender: editGender,
       });
-      if (res.data) useAuthStore.setState({ user: res.data });
+      if (res.data) useAuthStore.setState({ user: res.data as any });
       setShowEditModal(false);
       showFeedback('Profile Updated', 'Your information has been saved.', 'success');
     } catch (err: any) {
@@ -443,7 +445,7 @@ export default function ProfileScreen() {
                     );
                 const docStatus = matchedDoc?.status; // 'pending' | 'approved' | 'rejected' | undefined
 
-                const expiry = expiryKey ? driverData?.[expiryKey] : null;
+                const expiry = expiryKey ? (driverData as any)?.[expiryKey] as string | null : null;
                 const isExpired = expiry ? new Date(expiry) < new Date() : false;
                 const expiresIn = expiry ? Math.ceil((new Date(expiry).getTime() - Date.now()) / (1000 * 60 * 60 * 24)) : null;
                 const isValid = expiry && !isExpired;

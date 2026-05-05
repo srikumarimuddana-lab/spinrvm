@@ -42,8 +42,9 @@ export default function ChatDriverScreen() {
     (async () => {
       try {
         const res = await api.get(`/rides/${rideId}/messages`);
-        if (res.data?.messages) {
-          setChatMessages(res.data.messages);
+        const msgData = res.data as { messages: any[] };
+        if (msgData?.messages) {
+          setChatMessages(msgData.messages);
         }
       } catch (e) {
         console.log('[Chat] Failed to load history:', e);
@@ -81,9 +82,10 @@ export default function ChatDriverScreen() {
     if (!rideId) return;
     try {
       const res = await api.get(`/rides/${rideId}/call`);
-      if (res.data?.phone) {
+      const callData = res.data as { phone?: string };
+      if (callData?.phone) {
         const { Linking } = require('react-native');
-        Linking.openURL(`tel:${res.data.phone}`);
+        Linking.openURL(`tel:${callData.phone}`);
       }
     } catch (e: any) {
       console.log('[Chat] Call failed:', e?.response?.data?.detail || e.message);
@@ -95,9 +97,10 @@ export default function ChatDriverScreen() {
     setSending(true);
     try {
       const res = await api.post(`/rides/${rideId}/messages`, { text: text.trim() });
-      if (res.data?.message) {
+      const msgRes = res.data as { message?: any };
+      if (msgRes?.message) {
         // Optimistically add to local state (deduplicated by the store).
-        addChatMessage(res.data.message);
+        addChatMessage(msgRes.message);
       }
     } catch (e) {
       console.log('[Chat] Send failed:', e);

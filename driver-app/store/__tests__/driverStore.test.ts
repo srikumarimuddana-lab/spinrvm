@@ -75,7 +75,7 @@ const makeMockRide = (overrides: Record<string, unknown> = {}) => ({
   pickup_lng: -106.6700,
   dropoff_lat: 52.2,
   dropoff_lng: -106.8,
-  fare: 12.5,
+  fare: '12.50',
   distance_km: 5.2,
   duration_minutes: 12,
   rider_name: 'Alice',
@@ -212,9 +212,9 @@ describe('driverStore — ride state machine', () => {
           pickup_lng: -106.6700,
           pickup_address: '123 Main St',
           dropoff_address: '456 Oak Ave',
-        },
-        rider: { id: 'user-1', first_name: 'Alice' },
-        vehicle_type: null,
+        } as any,
+        rider: { id: 'user-1', first_name: 'Alice' } as any,
+        vehicle_type: null as any,
       },
     });
 
@@ -239,9 +239,9 @@ describe('driverStore — ride state machine', () => {
           pickup_lng: -106.6700,
           pickup_address: '123 Main St',
           dropoff_address: '456 Oak Ave',
-        },
-        rider: { id: 'user-1', first_name: 'Alice' },
-        vehicle_type: null,
+        } as any,
+        rider: { id: 'user-1', first_name: 'Alice' } as any,
+        vehicle_type: null as any,
       },
     });
 
@@ -313,7 +313,7 @@ describe('driverStore — ride state machine', () => {
     useDriverStore.setState({
       rideState: 'trip_completed',
       completedRide: { fare: 12.5 } as any,
-      activeRide: { ride: {}, rider: {}, vehicle_type: null },
+      activeRide: { ride: {} as any, rider: {} as any, vehicle_type: null as any },
       incomingRide: makeMockRide(),
       countdownSeconds: 5,
       error: 'some error',
@@ -390,7 +390,7 @@ describe('driverStore — ride state machine', () => {
   test('cancelRide resets to idle and clears active/incoming ride', async () => {
     useDriverStore.setState({
       rideState: 'navigating_to_pickup',
-      activeRide: { ride: { id: 'ride-123' }, rider: {}, vehicle_type: null },
+      activeRide: { ride: { id: 'ride-123' } as any, rider: {} as any, vehicle_type: null as any },
     });
 
     mockApi.post.mockResolvedValueOnce({ data: {}, status: 200 } as any);

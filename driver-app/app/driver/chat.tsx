@@ -40,7 +40,7 @@ export default function ChatScreen() {
     const [sending, setSending] = useState(false);
     const flatListRef = useRef<FlatList>(null);
 
-    const riderName = activeRide?.rider?.first_name || activeRide?.rider?.name || 'Rider';
+    const riderName = (activeRide?.rider?.first_name as string | undefined) || (activeRide?.rider?.name as string | undefined) || 'Rider';
     const rideId = activeRide?.ride?.id;
     const CHAT_STORAGE_KEY = rideId ? `spinr_chat_${rideId}` : null;
 
@@ -61,12 +61,13 @@ export default function ChatScreen() {
             // 2. Fetch authoritative history from backend
             try {
                 const res = await api.get(`/rides/${rideId}/messages`);
-                if (res.data?.messages?.length) {
-                    setChatMessages(res.data.messages);
+                const chatData = res.data as { messages?: any[] } | null;
+                if (chatData?.messages?.length) {
+                    setChatMessages(chatData.messages);
                     if (CHAT_STORAGE_KEY) {
                         await AsyncStorage.setItem(
                             CHAT_STORAGE_KEY,
-                            JSON.stringify(res.data.messages),
+                            JSON.stringify(chatData.messages),
                         );
                     }
                 }
@@ -99,10 +100,11 @@ export default function ChatScreen() {
 
         try {
             const res = await api.post(`/rides/${rideId}/messages`, { text: trimmed });
-            if (res.data?.message) {
+            const msgData = res.data as { message?: any } | null;
+            if (msgData?.message) {
                 // Backend's REST handler also broadcasts via WS, so addChatMessage
                 // deduplication ensures no double-render even if we add optimistically.
-                addChatMessage(res.data.message);
+                addChatMessage(msgData.message);
             }
         } catch (e) {
             console.log('[Chat] Send failed:', e);
@@ -164,9 +166,10 @@ export default function ChatScreen() {
                             if (!rideId) return;
                             try {
                                 const res = await api.get(`/rides/${rideId}/call`);
-                                if (res.data?.phone) {
+                                const callData = res.data as { phone?: string } | null;
+                                if (callData?.phone) {
                                     const { Linking } = require('react-native');
-                                    Linking.openURL(`tel:${res.data.phone}`);
+                                    Linking.openURL(`tel:${callData.phone}`);
                                 }
                             } catch (e: any) {
                                 console.log('[Chat] Call failed:', e?.response?.data?.detail || e.message);

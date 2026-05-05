@@ -768,7 +768,7 @@ function createStyles(colors: ThemeColors) {
     flex: 1,
   },
   map: {
-    ...StyleSheet.absoluteFillObject,
+    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
   },
   mapPlaceholder: {
     flex: 1,

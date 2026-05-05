@@ -37,7 +37,7 @@ describe('driverStore', () => {
     pickup_lng: -104.6,
     dropoff_lat: 50.46,
     dropoff_lng: -104.7,
-    fare: 15.50,
+    fare: '15.50',
     distance_km: 5.2,
     duration_minutes: 12,
     rider_name: 'Jane Doe',
@@ -194,7 +194,7 @@ describe('driverStore', () => {
       useDriverStore.setState({
         rideState: 'trip_in_progress',
         incomingRide: mockIncomingRide,
-        activeRide: { ride: {}, rider: {}, vehicle_type: {} },
+        activeRide: { ride: {} as any, rider: {} as any, vehicle_type: {} as any },
         countdownSeconds: 10,
         error: 'some error',
       });

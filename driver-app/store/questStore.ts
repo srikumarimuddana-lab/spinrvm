@@ -61,7 +61,7 @@ export const useQuestStore = create<QuestState>((set, get) => ({
     try {
       set({ isLoading: true, error: null });
       const res = await api.get('/quests');
-      set({ availableQuests: res.data || [], isLoading: false });
+      set({ availableQuests: (res.data as Quest[] | null) || [], isLoading: false });
     } catch (error: any) {
       set({ error: error.message, isLoading: false });
     }
@@ -71,7 +71,7 @@ export const useQuestStore = create<QuestState>((set, get) => ({
     try {
       set({ isLoading: true, error: null });
       const res = await api.get('/quests/my-quests');
-      set({ myQuests: res.data || [], isLoading: false });
+      set({ myQuests: (res.data as MyQuestProgress[] | null) || [], isLoading: false });
     } catch (error: any) {
       set({ error: error.message, isLoading: false });
     }
@@ -97,7 +97,7 @@ export const useQuestStore = create<QuestState>((set, get) => ({
       const res = await api.post(`/quests/progress/${progressId}/claim`);
       await get().fetchMyQuests();
       set({ isLoading: false });
-      return res.data;
+      return res.data as { reward_amount: number };
     } catch (error: any) {
       set({ error: error.response?.data?.detail || error.message, isLoading: false });
       throw error;

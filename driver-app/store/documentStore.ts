@@ -142,8 +142,7 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
             // boundary when the body is FormData, otherwise the server rejects
             // with "Missing boundary in multipart".
             const response = await api.post('/drivers/documents/upload', formData, {
-                headers: { 'Content-Type': undefined },
-                transformRequest: (data) => data,
+                headers: { 'Content-Type': '' },
             });
 
             const newDoc = response.data as DriverDocument;

@@ -44,7 +44,7 @@ export default function PromotionsScreen() {
     setLoading(true);
     try {
       const res = await api.get('/promo/available?ride_fare=20');
-      setPromos(res.data || []);
+      setPromos((res.data as Promo[]) || []);
     } catch {}
     finally { setLoading(false); }
   };
@@ -58,7 +58,7 @@ export default function PromotionsScreen() {
       setAlertState({
         visible: true,
         title: 'Promo Valid!',
-        message: `${res.data.discount_type === 'percentage' ? `${res.data.discount_value}% off` : `$${res.data.discount_value} off`} — will apply on your next ride.`,
+        message: `${(res.data as Promo).discount_type === 'percentage' ? `${(res.data as Promo).discount_value}% off` : `$${(res.data as Promo).discount_value} off`} — will apply on your next ride.`,
         variant: 'success',
       });
       setCode('');

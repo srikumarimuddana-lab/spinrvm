@@ -347,7 +347,7 @@ export default function ProfileScreen() {
             </View>
             </View>
 
-            {driverData?.rejection_reason && !driverData.is_verified && (
+            {!!(driverData?.rejection_reason) && !driverData.is_verified && (
             <View style={styles.rejectionBox}>
                 <Ionicons name="alert-circle" size={24} color={'#EF4444'} />
                 <View style={{flex: 1}}>

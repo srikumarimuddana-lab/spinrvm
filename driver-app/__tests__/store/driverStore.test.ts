@@ -194,7 +194,11 @@ describe('driverStore', () => {
       useDriverStore.setState({
         rideState: 'trip_in_progress',
         incomingRide: mockIncomingRide,
-        activeRide: { ride: {}, rider: {}, vehicle_type: {} },
+        activeRide: {
+          ride: { id: 'ride-1', status: 'in_progress', pickup_address: '123 Main', dropoff_address: '456 Elm', pickup_lat: 50, pickup_lng: -104, dropoff_lat: 50.1, dropoff_lng: -104.1, total_fare: '15.00', distance_km: 5, duration_minutes: 10, rider_id: 'rider-1', created_at: '2024-01-01' },
+          rider: { id: 'rider-1' },
+          vehicle_type: { id: 'vt-1', name: 'Standard' },
+        },
         countdownSeconds: 10,
         error: 'some error',
       });

@@ -86,7 +86,7 @@ function PayoutScreen() {
 
     const loadStripeStatus = async () => {
         try {
-            const res = await api.get('/drivers/balance');
+            const res = await api.get<{ stripe_account_onboarded?: boolean }>('/drivers/balance');
             setStripeAccountStatus(
                 res.data.stripe_account_onboarded ? 'active' : 'not_onboarded'
             );
@@ -112,7 +112,7 @@ function PayoutScreen() {
     const handleStripeOnboarding = async () => {
         setStripeOnboarding(true);
         try {
-            const res = await api.post('/drivers/stripe-onboard');
+            const res = await api.post<{ url?: string; mock?: boolean }>('/drivers/stripe-onboard');
             const { url, mock } = res.data;
 
             if (mock) {
@@ -176,7 +176,7 @@ function PayoutScreen() {
             // CRA T4A is generated per tax year — default to the most recently
             // completed year so drivers don't get an in-progress year's partial total.
             const year = new Date().getFullYear() - 1;
-            const res = await api.get(`/drivers/t4a/${year}`);
+            const res = await api.get<{ url?: string; file_url?: string; total_earnings?: string; year?: number; total_trips?: number; net_earnings?: string }>(`/drivers/t4a/${year}`);
             const url = res.data?.url || res.data?.file_url;
             if (url) {
                 await Linking.openURL(url);
@@ -200,7 +200,7 @@ function PayoutScreen() {
         setDownloadingCSV(true);
         try {
             const year = new Date().getFullYear();
-            const res = await api.get(`/drivers/earnings/export?year=${year}`);
+            const res = await api.get<{ url?: string; file_url?: string; data?: string }>(`/drivers/earnings/export?year=${year}`);
             const url = res.data?.url || res.data?.file_url;
             if (url) {
                 await Linking.openURL(url);

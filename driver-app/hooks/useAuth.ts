@@ -1,9 +1,9 @@
 import { useEffect } from 'react'
-import { useAuthStore, type User } from '@shared/store/authStore'
+import { useAuthStore, type User, type Driver } from '@shared/store/authStore'
 
 interface UseAuthReturn {
   user: User | null
-  driver: ReturnType<typeof useAuthStore>['driver']
+  driver: Driver | null
   loading: boolean
   isLoggedIn: boolean
   logout: () => Promise<void>

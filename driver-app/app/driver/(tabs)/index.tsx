@@ -643,7 +643,7 @@ function DriverDashboard() {
       {rideState === 'idle' && (
         <DriverIdlePanel
           isOnline={isOnline}
-          driverData={driverData ?? undefined}
+          driverData={driverData as any ?? undefined}
           earnings={earnings ?? undefined}
           onToggleOnline={toggleOnline}
           pulseAnim={pulseAnim}

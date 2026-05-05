@@ -7,7 +7,9 @@ name: pip-compile drift check
 # To update locally:
 #   pip install pip-tools
 #   pip-compile backend/requirements.in --output-file backend/requirements.txt \
-#               --strip-extras --no-header --annotation-style line
+#               --strip-extras --no-header --annotation-style line --no-upgrade
+# --no-upgrade keeps existing pinned versions and only resolves new entries;
+# without it, every CI run could drift as PyPI packages release new patches.
 
 on:
   pull_request:
@@ -44,6 +46,7 @@ jobs:
             --strip-extras \
             --no-header \
             --annotation-style line \
+            --no-upgrade \
             --quiet
 
       - name: Check for drift

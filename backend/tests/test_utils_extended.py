@@ -268,9 +268,9 @@ class TestWsPubsub:
             conn = None  # Redis unavailable — acceptable
 
     def test_ws_pubsub_dispatch_channel_format(self):
-        from backend.utils.ws_pubsub import DISPATCH_CHANNEL
-        assert isinstance(DISPATCH_CHANNEL, str)
-        assert len(DISPATCH_CHANNEL) > 0
+        from backend.utils.ws_pubsub import CHANNEL
+        assert isinstance(CHANNEL, str)
+        assert len(CHANNEL) > 0
 
 
 # ===========================================================================
@@ -363,7 +363,7 @@ class TestRateLimiter:
         from backend.utils import rate_limiter as rl
 
         # The module should export some configuration
-        assert hasattr(rl, "RateLimiter") or hasattr(rl, "limiter") or hasattr(rl, "check_rate_limit")
+        assert hasattr(rl, "RedisRateLimiter") or hasattr(rl, "default_limiter") or hasattr(rl, "check_rate_limit")
 
     def test_check_rate_limit_allows_under_threshold(self):
         from backend.utils import rate_limiter as rl

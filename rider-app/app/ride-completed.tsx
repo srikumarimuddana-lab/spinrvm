@@ -61,7 +61,8 @@ function RideCompletedScreenContent() {
   const distance = currentRide?.distance_km || 0;
 
   useEffect(() => {
-    if (rideId) fetchRide(rideId);
+    if (!rideId) { router.replace('/(tabs)' as any); return; }
+    fetchRide(rideId);
   }, [rideId]);
 
   // Check if ride was already paid (e.g. coming back to this screen)

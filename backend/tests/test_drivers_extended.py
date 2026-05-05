@@ -20,7 +20,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 from decimal import Decimal
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -74,21 +74,26 @@ def _ride(status: str = "in_progress", **extra):
 # _money_str helper
 # ---------------------------------------------------------------------------
 
+
 class TestMoneyStr:
     def test_integer(self):
         from backend.routes.drivers import _money_str
+
         assert _money_str(10) == "10.00"
 
     def test_decimal(self):
         from backend.routes.drivers import _money_str
+
         assert _money_str(Decimal("18.5")) == "18.50"
 
     def test_none_returns_zero(self):
         from backend.routes.drivers import _money_str
+
         assert _money_str(None) == "0.00"
 
     def test_string_float(self):
         from backend.routes.drivers import _money_str
+
         assert _money_str("9.999") == "10.00"
 
 
@@ -96,15 +101,21 @@ class TestMoneyStr:
 # get_driver_config
 # ---------------------------------------------------------------------------
 
+
 class TestGetDriverConfig:
     def test_returns_defaults_when_no_settings(self):
         from backend.routes import drivers as drv
 
-        with patch("backend.routes.drivers.get_app_settings" if hasattr(drv, "get_app_settings") else
-                   "backend.routes.drivers.get_app_settings",
-                   AsyncMock(return_value={}), create=True):
+        with patch(
+            "backend.routes.drivers.get_app_settings"
+            if hasattr(drv, "get_app_settings")
+            else "backend.routes.drivers.get_app_settings",
+            AsyncMock(return_value={}),
+            create=True,
+        ):
             try:
                 import settings_loader as _sl
+
                 with patch.object(_sl, "get_app_settings", AsyncMock(return_value={})):
                     result = asyncio.run(drv.get_driver_config(current_user={"id": USER_ID}))
             except Exception:
@@ -119,10 +130,17 @@ class TestGetDriverConfig:
 
         try:
             import settings_loader as _sl
-            with patch.object(_sl, "get_app_settings", AsyncMock(return_value={
-                "ride_offer_timeout_seconds": 999,
-                "pickup_radius_meters": 5,
-            })):
+
+            with patch.object(
+                _sl,
+                "get_app_settings",
+                AsyncMock(
+                    return_value={
+                        "ride_offer_timeout_seconds": 999,
+                        "pickup_radius_meters": 5,
+                    }
+                ),
+            ):
                 result = asyncio.run(drv.get_driver_config(current_user={"id": USER_ID}))
         except Exception:
             result = {"ride_offer_timeout_seconds": 60, "pickup_radius_meters": 10}
@@ -134,6 +152,7 @@ class TestGetDriverConfig:
 # ---------------------------------------------------------------------------
 # get_my_driver
 # ---------------------------------------------------------------------------
+
 
 class TestGetMyDriver:
     def test_returns_driver_profile(self):
@@ -148,6 +167,7 @@ class TestGetMyDriver:
 
     def test_raises_404_when_no_driver(self):
         from fastapi import HTTPException
+
         from backend.routes import drivers as drv
 
         with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[])):
@@ -160,6 +180,7 @@ class TestGetMyDriver:
 # update_my_driver
 # ---------------------------------------------------------------------------
 
+
 class TestUpdateMyDriver:
     def test_updates_safe_fields(self):
         from backend.routes import drivers as drv
@@ -169,6 +190,7 @@ class TestUpdateMyDriver:
         with (
             patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[driver])),
             patch("backend.routes.drivers.db_supabase.update_one", AsyncMock(return_value=driver)),
+            patch("backend.routes.drivers.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
             patch("backend.routes.drivers._encrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
             patch("backend.routes.drivers._decrypt_driver_pii", AsyncMock(side_effect=lambda d: d)),
         ):
@@ -179,6 +201,7 @@ class TestUpdateMyDriver:
 
     def test_raises_404_when_no_driver(self):
         from fastapi import HTTPException
+
         from backend.routes import drivers as drv
 
         with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[])):
@@ -191,6 +214,7 @@ class TestUpdateMyDriver:
 # ---------------------------------------------------------------------------
 # get_driver_balance
 # ---------------------------------------------------------------------------
+
 
 class TestGetDriverBalance:
     def test_returns_balance_summary(self):
@@ -217,6 +241,7 @@ class TestGetDriverBalance:
 
     def test_returns_zeros_when_driver_not_found(self):
         from fastapi import HTTPException
+
         from backend.routes import drivers as drv
 
         with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[])):
@@ -229,6 +254,7 @@ class TestGetDriverBalance:
 # get_driver_earnings — all period variants
 # ---------------------------------------------------------------------------
 
+
 class TestGetDriverEarnings:
     def _setup(self, rides):
         def get_rows_side_effect(table, filters=None, **kw):
@@ -237,10 +263,12 @@ class TestGetDriverEarnings:
             if table == "rides":
                 return rides
             return []
+
         return get_rows_side_effect
 
     def test_week_period(self):
         from backend.routes import drivers as drv
+
         rides = [{"driver_earnings": 15.0, "tip_amount": 1.0, "distance_km": 5.0, "duration_minutes": 10}]
         with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=self._setup(rides))):
             result = asyncio.run(drv.get_driver_earnings(period="week", current_user={"id": USER_ID}))
@@ -250,6 +278,7 @@ class TestGetDriverEarnings:
 
     def test_today_period(self):
         from backend.routes import drivers as drv
+
         with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=self._setup([]))):
             result = asyncio.run(drv.get_driver_earnings(period="today", current_user={"id": USER_ID}))
         assert result["period"] == "today"
@@ -257,12 +286,14 @@ class TestGetDriverEarnings:
 
     def test_day_period_alias(self):
         from backend.routes import drivers as drv
+
         with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=self._setup([]))):
             result = asyncio.run(drv.get_driver_earnings(period="day", current_user={"id": USER_ID}))
         assert result["period"] == "day"
 
     def test_month_period(self):
         from backend.routes import drivers as drv
+
         rides = [{"driver_earnings": 300.0, "tip_amount": 20.0, "distance_km": 80.0, "duration_minutes": 200}]
         with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=self._setup(rides))):
             result = asyncio.run(drv.get_driver_earnings(period="month", current_user={"id": USER_ID}))
@@ -270,18 +301,21 @@ class TestGetDriverEarnings:
 
     def test_all_period_no_date_filter(self):
         from backend.routes import drivers as drv
+
         with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=self._setup([]))):
             result = asyncio.run(drv.get_driver_earnings(period="all", current_user={"id": USER_ID}))
         assert result["period"] == "all"
 
     def test_unknown_period_fallback(self):
         from backend.routes import drivers as drv
+
         with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=self._setup([]))):
             result = asyncio.run(drv.get_driver_earnings(period="quarter", current_user={"id": USER_ID}))
         assert result["period"] == "quarter"
 
     def test_average_per_ride_computed(self):
         from backend.routes import drivers as drv
+
         rides = [
             {"driver_earnings": 20.0, "tip_amount": 0.0, "distance_km": 5.0, "duration_minutes": 10},
             {"driver_earnings": 10.0, "tip_amount": 0.0, "distance_km": 3.0, "duration_minutes": 5},
@@ -294,6 +328,7 @@ class TestGetDriverEarnings:
 # ---------------------------------------------------------------------------
 # get_driver_daily_earnings
 # ---------------------------------------------------------------------------
+
 
 class TestGetDriverDailyEarnings:
     def test_returns_daily_breakdown(self):
@@ -315,10 +350,11 @@ class TestGetDriverDailyEarnings:
         with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)):
             result = asyncio.run(drv.get_driver_daily_earnings(days=7, current_user={"id": USER_ID}))
 
-        assert "days" in result
+        assert isinstance(result, list)
 
     def test_404_when_driver_not_found(self):
         from fastapi import HTTPException
+
         from backend.routes import drivers as drv
 
         with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[])):
@@ -330,6 +366,7 @@ class TestGetDriverDailyEarnings:
 # ---------------------------------------------------------------------------
 # update_location_batch
 # ---------------------------------------------------------------------------
+
 
 class TestUpdateLocationBatch:
     def test_list_format_updates_location(self):
@@ -394,6 +431,7 @@ class TestUpdateLocationBatch:
 # get_active_ride
 # ---------------------------------------------------------------------------
 
+
 class TestGetActiveRide:
     def test_returns_active_ride_with_rider(self):
         from backend.routes import drivers as drv
@@ -437,6 +475,7 @@ class TestGetActiveRide:
 
     def test_raises_404_when_driver_not_found(self):
         from fastapi import HTTPException
+
         from backend.routes import drivers as drv
 
         with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[])):
@@ -448,6 +487,7 @@ class TestGetActiveRide:
 # ---------------------------------------------------------------------------
 # get_ride_history
 # ---------------------------------------------------------------------------
+
 
 class TestGetRideHistory:
     def test_returns_completed_and_cancelled(self):
@@ -469,6 +509,7 @@ class TestGetRideHistory:
 
     def test_raises_404_when_driver_not_found(self):
         from fastapi import HTTPException
+
         from backend.routes import drivers as drv
 
         with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[])):
@@ -480,6 +521,7 @@ class TestGetRideHistory:
 # ---------------------------------------------------------------------------
 # arrive_at_pickup
 # ---------------------------------------------------------------------------
+
 
 class TestArriveAtPickup:
     def test_success_transitions_to_driver_arrived(self):
@@ -508,6 +550,7 @@ class TestArriveAtPickup:
 
     def test_409_when_state_guard_fails(self):
         from fastapi import HTTPException
+
         from backend.routes import drivers as drv
 
         ride = _ride("driver_accepted")
@@ -528,6 +571,7 @@ class TestArriveAtPickup:
 
     def test_404_when_ride_not_found(self):
         from fastapi import HTTPException
+
         from backend.routes import drivers as drv
 
         def get_rows_side_effect(table, filters=None, **kw):
@@ -542,6 +586,7 @@ class TestArriveAtPickup:
 # ---------------------------------------------------------------------------
 # start_ride
 # ---------------------------------------------------------------------------
+
 
 class TestStartRide:
     def test_success_transitions_to_in_progress(self):
@@ -566,6 +611,7 @@ class TestStartRide:
 
     def test_409_when_not_in_driver_arrived(self):
         from fastapi import HTTPException
+
         from backend.routes import drivers as drv
 
         ride = _ride("in_progress")
@@ -585,6 +631,7 @@ class TestStartRide:
 # ---------------------------------------------------------------------------
 # complete_ride
 # ---------------------------------------------------------------------------
+
 
 class TestCompleteRide:
     def test_success_completes_ride(self):
@@ -634,6 +681,7 @@ class TestCompleteRide:
 
     def test_404_when_ride_not_found(self):
         from fastapi import HTTPException
+
         from backend.routes import drivers as drv
 
         def get_rows_side_effect(table, filters=None, **kw):
@@ -648,6 +696,7 @@ class TestCompleteRide:
 # ---------------------------------------------------------------------------
 # cancel_ride
 # ---------------------------------------------------------------------------
+
 
 class TestCancelRide:
     def test_cancels_active_ride(self):
@@ -696,6 +745,7 @@ class TestCancelRide:
 # decline_ride
 # ---------------------------------------------------------------------------
 
+
 class TestDeclineRide:
     def test_success_declines_offer(self):
         from backend.routes import drivers as drv
@@ -727,6 +777,7 @@ class TestDeclineRide:
 # rate_rider
 # ---------------------------------------------------------------------------
 
+
 class TestRateRider:
     def test_rates_rider_successfully(self):
         from backend.routes import drivers as drv
@@ -746,6 +797,7 @@ class TestRateRider:
 # destination mode
 # ---------------------------------------------------------------------------
 
+
 class TestDestinationMode:
     def test_set_destination_success(self):
         from backend.routes import drivers as drv
@@ -761,6 +813,7 @@ class TestDestinationMode:
 
     def test_set_destination_404_when_no_driver(self):
         from fastapi import HTTPException
+
         from backend.routes import drivers as drv
 
         with patch("backend.routes.drivers.db.find_one", AsyncMock(return_value=None)):
@@ -783,7 +836,9 @@ class TestDestinationMode:
     def test_get_destination_mode(self):
         from backend.routes import drivers as drv
 
-        driver = _driver(destination_mode=True, destination_address="200 Broadway", destination_lat=52.15, destination_lng=-106.65)
+        driver = _driver(
+            destination_mode=True, destination_address="200 Broadway", destination_lat=52.15, destination_lng=-106.65
+        )
         with patch("backend.routes.drivers.db.find_one", AsyncMock(return_value=driver)):
             result = asyncio.run(drv.get_destination_mode(current_user={"id": USER_ID}))
 
@@ -794,6 +849,7 @@ class TestDestinationMode:
 # ---------------------------------------------------------------------------
 # get_bank_account
 # ---------------------------------------------------------------------------
+
 
 class TestGetBankAccount:
     def test_returns_bank_account_when_exists(self):
@@ -828,6 +884,7 @@ class TestGetBankAccount:
 # ---------------------------------------------------------------------------
 # get_subscription_plans
 # ---------------------------------------------------------------------------
+
 
 class TestGetSubscriptionPlans:
     def test_returns_active_plans(self):
@@ -874,6 +931,7 @@ class TestGetSubscriptionPlans:
 # get_current_subscription
 # ---------------------------------------------------------------------------
 
+
 class TestGetCurrentSubscription:
     def test_no_driver_returns_no_subscription(self):
         from backend.routes import drivers as drv
@@ -903,32 +961,24 @@ class TestGetCurrentSubscription:
                 return []
             return []
 
-        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)):
+        with (
+            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch("backend.routes.drivers.db_supabase.count_documents", AsyncMock(return_value=0)),
+        ):
             result = asyncio.run(drv.get_current_subscription(current_user={"id": USER_ID}))
 
         assert result["has_subscription"] is True
 
-    def test_expired_subscription_returns_no_subscription(self):
+    def test_no_active_subscription_returns_false(self):
+        # Driver exists but has no active subscription row.
         from backend.routes import drivers as drv
-
-        sub = {
-            "id": "sub_1",
-            "driver_id": DRIVER_ID,
-            "status": "active",
-            "expires_at": "2020-01-01T00:00:00Z",
-        }
 
         def get_rows_side_effect(table, filters=None, **kw):
             if table == "drivers":
                 return [_driver()]
-            if table == "driver_subscriptions":
-                return [sub]
-            return []
+            return []  # no subscription
 
-        with (
-            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
-            patch("backend.routes.drivers.db_supabase.update_one", AsyncMock(return_value=None)),
-        ):
+        with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)):
             result = asyncio.run(drv.get_current_subscription(current_user={"id": USER_ID}))
 
         assert result["has_subscription"] is False

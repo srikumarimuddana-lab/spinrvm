@@ -21,6 +21,7 @@ import DriverActionBar from "./_components/driver-action-bar";
 import DriverNotes from "./_components/driver-notes";
 import DriverTimeline from "./_components/driver-timeline";
 import { useRequireModule } from "@/hooks/useRequireModule";
+import { useToast } from "@/components/ui/use-toast";
 
 const STATUS_TABS = [
     { value: "all", label: "All", icon: Users },
@@ -36,6 +37,7 @@ const PAGE_SIZE = 50;
 
 export default function DriversPage() {
     const { allowed } = useRequireModule("drivers");
+    const { toast } = useToast();
     const [data, setData] = useState<any>(null);
     const [drivers, setDrivers] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
@@ -160,11 +162,30 @@ export default function DriversPage() {
         return () => document.removeEventListener("keydown", onKey);
     }, [previewUrl]);
 
-    const reloadDriverDocs = async () => { if (!selected?.id) return; try { const d = await getDriverDocuments(selected.id); setDriverDocs(Array.isArray(d) ? d : []); } catch {} };
+    const reloadDriverDocs = async () => {
+        if (!selected?.id) return;
+        try {
+            const d = await getDriverDocuments(selected.id);
+            setDriverDocs(Array.isArray(d) ? d : []);
+        } catch (e: any) {
+            toast({ title: "Could not reload documents", description: e?.message || "Unknown error", variant: "destructive" });
+        }
+    };
 
     const handleReviewDoc = async (docId: string, status: "approved" | "rejected", reason?: string, expiry?: string) => {
         setDocBusy(docId);
-        try { await reviewDocument(docId, status, reason, expiry ? new Date(expiry).toISOString() : undefined); await reloadDriverDocs(); loadData(); loadDrivers(); } catch (e: any) { alert("Could not update document: " + (e?.message || "unknown error")); } finally { setDocBusy(null); }
+        const prevDocs = [...driverDocs];
+        try {
+            await reviewDocument(docId, status, reason, expiry ? new Date(expiry).toISOString() : undefined);
+            await reloadDriverDocs();
+            loadData();
+            loadDrivers();
+        } catch (e: any) {
+            setDriverDocs(prevDocs);
+            toast({ title: "Document review failed", description: e?.message || "Unknown error", variant: "destructive" });
+        } finally {
+            setDocBusy(null);
+        }
     };
 
     const openReviewDialog = (docId: string, action: "approved" | "rejected") => {

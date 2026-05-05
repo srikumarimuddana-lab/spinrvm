@@ -458,6 +458,16 @@ export default function MonitoringPage() {
         wsStatus={wsStatus}
       />
 
+      {/* Stale-data warning banner — visible whenever live feed is interrupted */}
+      {wsStatus !== "connected" && (
+        <div className="flex items-center gap-2 bg-yellow-50 border-b border-yellow-200 px-4 py-2 text-sm text-yellow-800 dark:bg-yellow-900/20 dark:border-yellow-800 dark:text-yellow-300">
+          <span className="font-medium">Live data paused</span>
+          <span className="text-yellow-700 dark:text-yellow-400">
+            — map and ride list may be stale ({wsStatus === "connecting" ? "reconnecting…" : "connection lost"})
+          </span>
+        </div>
+      )}
+
       {/* Main 3-column layout */}
       <div className="flex flex-1 overflow-hidden">
         {/* ── Left: Ride list ─────────────────────────────────────── */}

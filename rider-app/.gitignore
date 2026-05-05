@@ -3,3 +3,9 @@ play-service-account.json
 
 # Jest coverage output
 coverage/
+
+# Generated native projects — do NOT commit; EAS runs expo prebuild in the cloud.
+# A locally-present android/ or ios/ directory causes EAS to detect "bare workflow"
+# and reject managed-workflow configs (e.g. runtimeVersion policy).
+android/
+ios/

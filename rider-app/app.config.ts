@@ -13,13 +13,16 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     icon: './assets/images/icon.png',
     scheme: SCHEME,
     userInterfaceStyle: 'automatic',
-    newArchEnabled: true,
+    newArchEnabled: false, // disabled: pre-launch stability over perf; re-enable post go-live as a planned migration
     updates: {
         url: 'https://u.expo.dev/8f1e4f60-720e-46b0-9b71-33c13d3af043',
     },
-    runtimeVersion: {
-        policy: 'appVersion',
-    },
+    // Bare workflow (after `expo prebuild`) does not support runtime version
+    // policies like { policy: 'appVersion' } — EAS Update requires a literal
+    // string. Bump this manually when you ship native changes that break
+    // JS-bundle compatibility. Keeping it in sync with `version` above is a
+    // reasonable default.
+    runtimeVersion: '1.0.0',
     splash: {
         backgroundColor: '#ee2b2b',
         resizeMode: 'contain',
@@ -28,6 +31,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     },
     ios: {
         supportsTablet: true,
+        minimumOsVersion: '16.0', // SDK 55 minimum; was 13.0 on SDK 54
         bundleIdentifier: BUNDLE_ID,
         googleServicesFile: './GoogleService-Info.plist',
         config: {
@@ -77,7 +81,6 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
             foregroundImage: './assets/images/adaptive-icon.png',
             backgroundColor: '#ee2b2b'
         },
-        edgeToEdgeEnabled: true,
         package: BUNDLE_ID,
         googleServicesFile: './google-services.json',
         config: {
@@ -105,6 +108,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         favicon: './assets/images/favicon.png'
     },
     plugins: [
+        './plugins/withGradleWrapper',
         'expo-router',
         ['@stripe/stripe-react-native', {
             merchantIdentifier: 'merchant.com.spinr.user',
@@ -124,8 +128,17 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         '@react-native-firebase/messaging',
         '@react-native-firebase/crashlytics',
         '@react-native-firebase/app-check',
-        // LogRocket native module needs Android minSdk 25.
-        ['expo-build-properties', { android: { minSdkVersion: 25 } }],
+        // SDK 55 / RN 0.85.2 requires compileSdkVersion 35 + Kotlin 2.1.20 (from @react-native/gradle-plugin libs.versions.toml).
+        // Stripe 0.63.0 and react-native-reanimated 4.x both floor-check these.
+        // LogRocket native module requires minSdkVersion 25.
+        ['expo-build-properties', {
+            android: {
+                minSdkVersion: 25,
+                compileSdkVersion: 35,
+                targetSdkVersion: 35,
+                kotlinVersion: '2.1.20',
+            }
+        }],
         '@logrocket/react-native',
     ],
     experiments: {

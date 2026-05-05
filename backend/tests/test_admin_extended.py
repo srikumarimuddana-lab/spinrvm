@@ -7,9 +7,8 @@ routes/admin/drivers.py — currently 20.2%  (target 55%)
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
-from typing import Any, Dict
-from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import datetime
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -125,7 +124,10 @@ class TestAdminGetActiveRides:
 
         with (
             patch("backend.routes.admin.rides.db.get_rows", AsyncMock(return_value=rides)),
-            patch("backend.routes.admin.rides._batch_fetch_drivers_and_users", AsyncMock(return_value=(drivers_map, users_map))),
+            patch(
+                "backend.routes.admin.rides._batch_fetch_drivers_and_users",
+                AsyncMock(return_value=(drivers_map, users_map)),
+            ),
         ):
             result = asyncio.run(admin_rides.admin_get_active_rides())
 
@@ -157,8 +159,16 @@ class TestAdminGetStats:
         ):
             result = asyncio.run(admin_rides.admin_get_stats())
 
-        required = ["total_rides", "completed_rides", "cancelled_rides", "active_rides",
-                    "total_drivers", "online_drivers", "total_users", "rides_today"]
+        required = [
+            "total_rides",
+            "completed_rides",
+            "cancelled_rides",
+            "active_rides",
+            "total_drivers",
+            "online_drivers",
+            "total_users",
+            "rides_today",
+        ]
         for field in required:
             assert field in result, f"Missing field: {field}"
 
@@ -210,6 +220,7 @@ class TestAdminGetRideDetails:
 
     def test_ride_not_found_raises_404(self):
         from fastapi import HTTPException
+
         from backend.routes.admin import rides as admin_rides
 
         with patch("backend.routes.admin.rides.db_supabase.get_ride", AsyncMock(return_value=None)):
@@ -233,14 +244,13 @@ class TestAdminCompleteRide:
             patch("backend.routes.admin.rides.manager.send_personal_message", AsyncMock()),
             patch("backend.routes.admin.rides.send_push_notification", AsyncMock()),
         ):
-            result = asyncio.run(
-                admin_rides.admin_complete_ride(ride_id=RIDE_ID, admin_user=ADMIN_USER)
-            )
+            result = asyncio.run(admin_rides.admin_complete_ride(ride_id=RIDE_ID, admin_user=ADMIN_USER))
 
         assert result["success"] is True
 
     def test_rejects_non_active_ride(self):
         from fastapi import HTTPException
+
         from backend.routes.admin import rides as admin_rides
         from backend.utils.error_handling import SpinrException
 
@@ -248,9 +258,7 @@ class TestAdminCompleteRide:
 
         with patch("backend.routes.admin.rides.db_supabase.get_ride", AsyncMock(return_value=ride)):
             with pytest.raises((HTTPException, SpinrException)) as exc:
-                asyncio.run(
-                    admin_rides.admin_complete_ride(ride_id=RIDE_ID, admin_user=ADMIN_USER)
-                )
+                asyncio.run(admin_rides.admin_complete_ride(ride_id=RIDE_ID, admin_user=ADMIN_USER))
         assert exc.value.status_code == 400
 
 
@@ -387,7 +395,7 @@ class TestAdminUpdateDriver:
         driver = _driver()
 
         with (
-            patch("backend.routes.admin.drivers.db_supabase.get_rows", AsyncMock(return_value=[driver])),
+            patch("backend.routes.admin.drivers.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
             patch("backend.routes.admin.drivers.db_supabase.update_one", AsyncMock(return_value=driver)),
             patch("backend.routes.admin.drivers._log_driver_activity", AsyncMock()),
         ):
@@ -403,9 +411,10 @@ class TestAdminUpdateDriver:
 
     def test_404_when_driver_not_found(self):
         from fastapi import HTTPException
+
         from backend.routes.admin import drivers as admin_drivers
 
-        with patch("backend.routes.admin.drivers.db_supabase.get_rows", AsyncMock(return_value=[])):
+        with patch("backend.routes.admin.drivers.db_supabase.get_driver_by_id", AsyncMock(return_value=None)):
             with pytest.raises(HTTPException) as exc:
                 asyncio.run(
                     admin_drivers.admin_update_driver(
@@ -425,15 +434,13 @@ class TestAdminVerifyDriver:
         driver = _driver(is_verified=False)
 
         with (
-            patch("backend.routes.admin.drivers.db_supabase.get_rows", AsyncMock(return_value=[driver])),
+            patch("backend.routes.admin.drivers.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
             patch("backend.routes.admin.drivers.db_supabase.update_one", AsyncMock(return_value=driver)),
             patch("backend.routes.admin.drivers._log_driver_activity", AsyncMock()),
             patch("backend.routes.admin.drivers.send_push_notification", AsyncMock()),
         ):
-            req = DriverVerifyRequest(action="approve")
-            result = asyncio.run(
-                admin_drivers.admin_verify_driver(driver_id=DRIVER_ID, req=req, admin=ADMIN_USER)
-            )
+            req = DriverVerifyRequest(verified=True)
+            result = asyncio.run(admin_drivers.admin_verify_driver(driver_id=DRIVER_ID, req=req, admin=ADMIN_USER))
 
         assert result is not None
 
@@ -444,15 +451,13 @@ class TestAdminVerifyDriver:
         driver = _driver(is_verified=False)
 
         with (
-            patch("backend.routes.admin.drivers.db_supabase.get_rows", AsyncMock(return_value=[driver])),
+            patch("backend.routes.admin.drivers.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
             patch("backend.routes.admin.drivers.db_supabase.update_one", AsyncMock(return_value=driver)),
             patch("backend.routes.admin.drivers._log_driver_activity", AsyncMock()),
             patch("backend.routes.admin.drivers.send_push_notification", AsyncMock()),
         ):
-            req = DriverVerifyRequest(action="reject", reason="Documents incomplete")
-            result = asyncio.run(
-                admin_drivers.admin_verify_driver(driver_id=DRIVER_ID, req=req, admin=ADMIN_USER)
-            )
+            req = DriverVerifyRequest(verified=False)
+            result = asyncio.run(admin_drivers.admin_verify_driver(driver_id=DRIVER_ID, req=req, admin=ADMIN_USER))
 
         assert result is not None
 
@@ -465,16 +470,14 @@ class TestAdminDriverAction:
         driver = _driver(status="active")
 
         with (
-            patch("backend.routes.admin.drivers.db_supabase.get_rows", AsyncMock(return_value=[driver])),
+            patch("backend.routes.admin.drivers.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
             patch("backend.routes.admin.drivers.db_supabase.update_one", AsyncMock(return_value=driver)),
             patch("backend.routes.admin.drivers._log_driver_activity", AsyncMock()),
             patch("backend.routes.admin.drivers.manager.send_personal_message", AsyncMock()),
             patch("backend.routes.admin.drivers.send_push_notification", AsyncMock()),
         ):
             req = DriverActionRequest(action="suspend", reason="Violation")
-            result = asyncio.run(
-                admin_drivers.admin_driver_action(driver_id=DRIVER_ID, req=req, admin=ADMIN_USER)
-            )
+            result = asyncio.run(admin_drivers.admin_driver_action(driver_id=DRIVER_ID, req=req, admin=ADMIN_USER))
 
         assert result is not None
 
@@ -485,16 +488,14 @@ class TestAdminDriverAction:
         driver = _driver(status="suspended")
 
         with (
-            patch("backend.routes.admin.drivers.db_supabase.get_rows", AsyncMock(return_value=[driver])),
+            patch("backend.routes.admin.drivers.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
             patch("backend.routes.admin.drivers.db_supabase.update_one", AsyncMock(return_value=driver)),
             patch("backend.routes.admin.drivers._log_driver_activity", AsyncMock()),
             patch("backend.routes.admin.drivers.manager.send_personal_message", AsyncMock()),
             patch("backend.routes.admin.drivers.send_push_notification", AsyncMock()),
         ):
-            req = DriverActionRequest(action="activate")
-            result = asyncio.run(
-                admin_drivers.admin_driver_action(driver_id=DRIVER_ID, req=req, admin=ADMIN_USER)
-            )
+            req = DriverActionRequest(action="reactivate")
+            result = asyncio.run(admin_drivers.admin_driver_action(driver_id=DRIVER_ID, req=req, admin=ADMIN_USER))
 
         assert result is not None
 
@@ -590,8 +591,6 @@ class TestBatchFetchDriversAndUsers:
             return []
 
         with patch("backend.routes.admin.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side)):
-            drivers_map, users_map = asyncio.run(
-                _batch_fetch_drivers_and_users([RIDER_ID], [DRIVER_ID])
-            )
+            drivers_map, users_map = asyncio.run(_batch_fetch_drivers_and_users([RIDER_ID], [DRIVER_ID]))
 
         assert DRIVER_ID in drivers_map

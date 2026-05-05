@@ -2057,6 +2057,9 @@ async def rate_driver(ride_id: str, rating_data: RideRatingRequest, current_user
     if not ride or ride.get("rider_id") != current_user["id"]:
         raise HTTPException(status_code=404, detail="Ride not found or unauthorized")
 
+    if ride.get("status") != "completed":
+        raise HTTPException(status_code=400, detail="Ride must be completed before rating")
+
     # Save rating using existing columns (rider_rating = rating rider gave the driver)
     await db_supabase.update_ride(
         ride_id,
@@ -2081,15 +2084,17 @@ async def rate_driver(ride_id: str, rating_data: RideRatingRequest, current_user
     driver = await db_supabase.get_driver_by_id(driver_id)
     if driver:
         old_count = int(driver.get("total_ratings") or 0)
-        old_avg = float(driver.get("rating") or 0)
+        old_avg = Decimal(str(driver.get("rating") or 0))
         new_count = old_count + 1
-        new_avg = round((old_avg * old_count + float(rating_data.rating)) / new_count, 2)
+        new_avg = ((old_avg * old_count + Decimal(str(rating_data.rating))) / new_count).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
         await db_supabase.update_one(
             "drivers",
             {"id": driver_id},
             {
-                "rating": new_avg,
-                "average_rating": new_avg,
+                "rating": float(new_avg),
+                "average_rating": float(new_avg),
                 "total_ratings": new_count,
             },
         )

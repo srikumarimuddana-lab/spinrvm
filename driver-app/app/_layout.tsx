@@ -14,6 +14,7 @@ SplashScreen.preventAutoHideAsync().catch(() => {});
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { useAuthStore } from '@shared/store/authStore';
 import { useLocationStore } from '@shared/store/locationStore';
+import { useDriverStore } from '../store/driverStore';
 import SpinrConfig from '@shared/config/spinr.config';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { OfflineBanner } from '@shared/components/OfflineBanner';
@@ -142,6 +143,16 @@ export default function RootLayout() {
   const [isOffline, setIsOffline] = useState(false);
   // Guard so we only register the FCM token once per auth session.
   const fcmRegisteredRef = useRef(false);
+  const prevAuthTokenRef = useRef(authToken);
+
+  // Clear driver ride state on logout so a re-login doesn't see the
+  // previous session's in-progress offer / active ride.
+  useEffect(() => {
+    if (prevAuthTokenRef.current && !authToken) {
+      useDriverStore.getState().resetRideState();
+    }
+    prevAuthTokenRef.current = authToken;
+  }, [authToken]);
 
   // ── LogRocket session recording ──
   // Guard against Expo Go — @logrocket/react-native ships a native module

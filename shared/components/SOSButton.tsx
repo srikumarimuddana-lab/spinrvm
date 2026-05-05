@@ -116,7 +116,9 @@ export function SOSButton({ rideId, onTrigger, size = 'small' }: SOSButtonProps)
     } catch {}
 
     // Attempt backend call with one retry before declaring failure.
-    let backendOk = !rideId; // no rideId = demo / offline mode, treat as ok
+    // Never treat missing rideId as success — that would show "Alert Sent"
+    // without any backend notification going out.
+    let backendOk = false;
     if (rideId) {
       for (let attempt = 0; attempt < SOS_MAX_ATTEMPTS && !backendOk; attempt++) {
         if (attempt > 0) {
@@ -131,7 +133,17 @@ export function SOSButton({ rideId, onTrigger, size = 'small' }: SOSButtonProps)
 
     setSending(false);
 
-    if (backendOk) {
+    if (!rideId) {
+      // No active ride context — direct user to call 911 immediately.
+      Alert.alert(
+        'No Active Ride',
+        'Emergency alert requires an active ride. Call 911 directly for immediate help.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Call 911', style: 'destructive', onPress: () => Linking.openURL('tel:911') },
+        ],
+      );
+    } else if (backendOk) {
       setTriggered(true);
       showSuccessAlert();
     } else {

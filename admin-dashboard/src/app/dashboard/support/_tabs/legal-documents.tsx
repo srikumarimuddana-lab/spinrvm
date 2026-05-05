@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { RefreshCw, Save, Check } from "lucide-react";
 import { formatDate } from "@/lib/utils";
+import { useToast } from "@/components/ui/use-toast";
 
 type Audience = "rider" | "driver";
 type DocType = "tos" | "privacy";
@@ -35,6 +36,7 @@ const A_CFG: Record<Audience, { l: string; c: string }> = {
 };
 
 export default function LegalDocumentsTab() {
+    const { toast } = useToast();
     const [rows, setRows] = useState<Record<string, Row>>({});
     const [drafts, setDrafts] = useState<Record<string, string>>({});
     const [loading, setLoading] = useState(true);
@@ -88,7 +90,7 @@ export default function LegalDocumentsTab() {
             setTimeout(() => setSavedKey((cur) => (cur === k ? null : cur)), 1800);
             load();
         } catch (e: any) {
-            alert(e?.message || "Failed to save");
+            toast({ title: "Failed to save document", description: e?.message, variant: "destructive" });
         } finally {
             setSavingKey(null);
         }

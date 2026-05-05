@@ -125,14 +125,14 @@ async def retry_failed_payments():
             intent = stripe.PaymentIntent.retrieve(payment_intent_id, api_key=stripe_secret)
 
             if intent.status == "succeeded":
-                # Already succeeded (webhook may have missed it)
+                # Already succeeded (webhook may have missed it) — mark paid but do NOT
+                # increment retry_count to avoid false "payment finally failed" alerts.
                 await db.update_one(
                     "rides",
                     {"id": ride_id},
                     {
                         "$set": {
                             "payment_status": "paid",
-                            "payment_retry_count": retry_count + 1,
                             "updated_at": datetime.now(timezone.utc).isoformat(),
                         }
                     },
@@ -140,8 +140,13 @@ async def retry_failed_payments():
                 logger.info(f"Payment retry: ride {ride_id} already paid (intent succeeded)")
 
             elif intent.status in ("requires_payment_method", "requires_confirmation"):
-                # Try to confirm again
-                stripe.PaymentIntent.confirm(payment_intent_id, api_key=stripe_secret)
+                # Idempotency key prevents duplicate charges when two replicas both pick
+                # up the same failed ride in the same retry loop tick.
+                stripe.PaymentIntent.confirm(
+                    payment_intent_id,
+                    api_key=stripe_secret,
+                    idempotency_key=f"retry-confirm-{ride_id}-{retry_count}",
+                )
                 attempt = retry_count + 1
                 await db.update_one(
                     "rides",

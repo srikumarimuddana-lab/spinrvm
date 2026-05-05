@@ -60,7 +60,6 @@ async def get_or_create_stripe_customer(user_id: str, stripe_secret: str):
     stripe_customer_id = user.get("stripe_customer_id")
 
     if not stripe_customer_id:
-        # Create a new Stripe customer
         customer = stripe.Customer.create(
             email=user.get("email"),
             name=f"{user.get('first_name', '')} {user.get('last_name', '')}".strip(),
@@ -69,6 +68,10 @@ async def get_or_create_stripe_customer(user_id: str, stripe_secret: str):
         )
         stripe_customer_id = customer.id
         await db_supabase.update_one("users", {"id": user_id}, {"stripe_customer_id": stripe_customer_id})
+        # Re-read to use the authoritative value in case a concurrent replica wrote first.
+        # (The loser's Stripe customer is unused but harmless; deduplication can run offline.)
+        fresh = await db_supabase.get_user_by_id(user_id)
+        stripe_customer_id = (fresh or {}).get("stripe_customer_id", stripe_customer_id)
 
     return stripe_customer_id
 
@@ -111,7 +114,7 @@ async def create_payment_intent(
                     action_hint="Refresh the fare estimate",
                 )
 
-        amount = int(body.amount * 100)  # Convert dollars → cents
+        amount = int(Decimal(str(body.amount)).quantize(Decimal("0.01")) * 100)
 
         # Get or create customer for saved payments
         stripe_customer_id = await get_or_create_stripe_customer(current_user["id"], stripe_secret)
@@ -534,7 +537,7 @@ async def create_payment_sheet(
 
     try:
         customer_id = await get_or_create_stripe_customer(current_user["id"], stripe_secret)
-        amount_cents = int(body.amount * 100)
+        amount_cents = int(Decimal(str(body.amount)).quantize(Decimal("0.01")) * 100)
 
         # EphemeralKey lets the PaymentSheet modal manage the customer's
         # saved cards. Must match the Stripe API version the SDK expects.

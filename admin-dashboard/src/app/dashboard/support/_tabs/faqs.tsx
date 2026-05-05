@@ -14,6 +14,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Search, Plus, Pencil, Trash2, RefreshCw } from "lucide-react";
 import { formatDate } from "@/lib/utils";
+import { useToast } from "@/components/ui/use-toast";
+import {
+    AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+    AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 const A_CFG: Record<string, { l: string; c: string }> = {
     rider: { l: "Rider", c: "bg-sky-500/15 text-sky-600" },
@@ -25,6 +30,8 @@ type FaqForm = { question: string; answer: string; category: string; audience: s
 const EMPTY: FaqForm = { question: "", answer: "", category: "general", audience: "both", is_active: true };
 
 export default function FaqsTab() {
+    const { toast } = useToast();
+    const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
     const [items, setItems] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState("");
@@ -66,18 +73,23 @@ export default function FaqsTab() {
     };
 
     const handleSave = async () => {
-        if (!form.question.trim() || !form.answer.trim()) { alert("Question and answer are required."); return; }
+        if (!form.question.trim() || !form.answer.trim()) { toast({ title: "Missing fields", description: "Question and answer are required.", variant: "destructive" }); return; }
         setSaving(true);
         try {
             if (editing) await updateFaq(editing.id, form);
             else await createFaq(form);
             setDialogOpen(false); setEditing(null); setForm(EMPTY); load();
-        } catch (e: any) { alert(e.message); } finally { setSaving(false); }
+        } catch (e: any) { toast({ title: "Failed to save FAQ", description: e.message, variant: "destructive" }); } finally { setSaving(false); }
     };
 
-    const handleDelete = async (id: string) => {
-        if (!confirm("Delete this FAQ?")) return;
-        try { await deleteFaq(id); load(); } catch (e: any) { alert(e.message); }
+    const handleDelete = (id: string) => {
+        setDeleteTarget(id);
+    };
+
+    const confirmDelete = async () => {
+        if (!deleteTarget) return;
+        try { await deleteFaq(deleteTarget); load(); } catch (e: any) { toast({ title: "Failed to delete FAQ", description: e.message, variant: "destructive" }); }
+        finally { setDeleteTarget(null); }
     };
 
     return (
@@ -129,6 +141,19 @@ export default function FaqsTab() {
                     </div>
                 </DialogContent>
             </Dialog>
+
+            <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Delete FAQ?</AlertDialogTitle>
+                        <AlertDialogDescription>This cannot be undone.</AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction onClick={confirmDelete} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </div>
     );
 }

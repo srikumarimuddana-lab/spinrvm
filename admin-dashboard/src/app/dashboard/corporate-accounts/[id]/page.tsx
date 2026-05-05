@@ -40,6 +40,7 @@ import {
     Wallet,
     XCircle,
 } from "lucide-react";
+import { useToast } from "@/components/ui/use-toast";
 
 const STATUS_PILL_CLASSES: Record<CompanyStatus, string> = {
     pending_verification: "bg-yellow-100 text-yellow-800 hover:bg-yellow-100",
@@ -100,6 +101,7 @@ function formatDate(iso?: string | null) {
 export default function CompanyDetailPage() {
     const params = useParams<{ id: string }>();
     const id = params?.id;
+    const { toast } = useToast();
 
     const [company, setCompany] = useState<CorporateAccount | null>(null);
     const [loading, setLoading] = useState(true);
@@ -155,7 +157,7 @@ export default function CompanyDetailPage() {
             await walletAdjust(id, { amount, notes: notes.trim() });
             await loadWallet();
         } catch (e: any) {
-            alert(e?.message ?? "Adjustment failed");
+            toast({ title: "Adjustment failed", description: e?.message, variant: "destructive" });
         } finally {
             setWalletBusy(false);
         }
@@ -170,7 +172,7 @@ export default function CompanyDetailPage() {
             });
             await loadWallet();
         } catch (e: any) {
-            alert(e?.message ?? "Failed to toggle auto top-up");
+            toast({ title: "Failed to toggle auto top-up", description: e?.message, variant: "destructive" });
         } finally {
             setWalletBusy(false);
         }
@@ -194,7 +196,7 @@ export default function CompanyDetailPage() {
             setPendingTransition(null);
             setReason("");
         } catch (e: any) {
-            alert(e?.message ?? "Status change failed");
+            toast({ title: "Status change failed", description: e?.message, variant: "destructive" });
         } finally {
             setTransitioning(false);
         }

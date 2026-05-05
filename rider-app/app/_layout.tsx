@@ -386,6 +386,16 @@ export default function RootLayout() {
     })();
   }, [isAuthInitialized]);
 
+  // Clear ride session data when the user logs out so a subsequent login
+  // doesn't show the previous session's ride, driver, or chat state.
+  const prevAuthTokenRef = useRef(authToken);
+  useEffect(() => {
+    if (prevAuthTokenRef.current && !authToken) {
+      useRideStore.getState().clearRide();
+    }
+    prevAuthTokenRef.current = authToken;
+  }, [authToken]);
+
   // ── Network connectivity monitoring for offline sync ──
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener(state => {

@@ -68,7 +68,7 @@ export default function AnalyticsPage() {
         getCancellationBreakdown(dateRange).catch(() => null),
         getDriverAcceptanceRates(dateRange).catch(() => null),
       ]);
-      if (ov === null && cancel === null && drivers === null) {
+      if (ov === null || cancel === null || drivers === null) {
         setFetchError(true);
       }
       setOverview(ov);

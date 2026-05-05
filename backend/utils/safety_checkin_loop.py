@@ -142,7 +142,16 @@ async def _tick() -> None:
             continue  # still within the response window
 
         # Escalate: insert an open safety incident for the ops team.
-        await _escalate(ride, now)
+        try:
+            await _escalate(ride, now)
+        except Exception:
+            # _escalate already logged the error. The _escalated_key is NOT set,
+            # so the next tick will retry. Log ride_id here for ops correlation.
+            logger.error(
+                f"[SAFETY_CHECKIN] Escalation failed for ride {ride_id}; "
+                "will retry on next tick. Check DB/Redis connectivity.",
+                exc_info=False,
+            )
 
 
 async def _escalate(ride: dict, now: datetime) -> None:
@@ -166,11 +175,15 @@ async def _escalate(ride: dict, now: datetime) -> None:
             "created_at": now.isoformat(),
         }
         await _supabase_db.insert_one("safety_incidents", incident)
-        # Mark escalated so we don't create duplicate incidents.
+        # Mark escalated only after a successful insert so a DB failure does
+        # not silently suppress future escalation attempts.
         await redis_set(_escalated_key(ride_id), "1", ttl=4 * 3600)
         logger.warning(f"[SAFETY_CHECKIN] No response from rider {rider_id} on ride {ride_id}; safety incident opened.")
     except Exception:
         logger.error(
-            f"[SAFETY_CHECKIN] Failed to escalate ride {ride_id}",
+            f"[SAFETY_CHECKIN] Failed to escalate ride {ride_id} — will retry next tick",
             exc_info=True,
         )
+        # Re-raise so the caller (_tick) knows escalation failed and can log
+        # context. The _escalated_key is NOT set, so the next tick will retry.
+        raise

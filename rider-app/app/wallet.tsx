@@ -156,7 +156,13 @@ export default function WalletScreen() {
       <View style={styles.balanceCard}>
         <Text style={styles.balanceLabel}>Available Balance</Text>
         {storeError ? (
-          <Text style={[styles.balanceAmount, { fontSize: 20 }]}>Balance unavailable</Text>
+          <TouchableOpacity onPress={() => {
+            clearError();
+            Promise.all([fetchWallet(), fetchTransactions(30)]);
+          }}>
+            <Text style={[styles.balanceAmount, { fontSize: 18 }]}>Balance unavailable</Text>
+            <Text style={{ color: '#FFF', opacity: 0.8, textAlign: 'center', marginTop: 4 }}>Tap to retry</Text>
+          </TouchableOpacity>
         ) : (
           <Text style={styles.balanceAmount}>
             ${parseFloat(wallet?.balance ?? '0').toFixed(2)}

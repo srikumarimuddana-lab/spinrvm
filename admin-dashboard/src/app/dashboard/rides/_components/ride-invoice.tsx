@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { sendRideInvoice, getRideInvoice, getRideRouteMapDataUrl } from "@/lib/api";
 import { Send, Download } from "lucide-react";
+import { useToast } from "@/components/ui/use-toast";
 import { computePhaseDistances } from "./ride-ui-helpers";
 
 interface Props {
@@ -18,6 +19,7 @@ const fmtMoney = (n: any): string =>
     typeof n === "number" && Number.isFinite(n) ? `$${n.toFixed(2)}` : "—";
 
 export default function RideInvoice({ rideId, status }: Props) {
+    const { toast } = useToast();
     const [sending, setSending] = useState(false);
     const [downloading, setDownloading] = useState(false);
 
@@ -27,9 +29,9 @@ export default function RideInvoice({ rideId, status }: Props) {
         setSending(true);
         try {
             await sendRideInvoice(rideId);
-            alert("Invoice/receipt sent to rider's email");
+            toast({ title: "Invoice sent", description: "Receipt sent to rider's email." });
         } catch {
-            alert("Failed to send invoice");
+            toast({ title: "Failed to send invoice", variant: "destructive" });
         } finally {
             setSending(false);
         }
@@ -353,7 +355,7 @@ export default function RideInvoice({ rideId, status }: Props) {
             doc.save(`spinr-invoice-${data.ride_id?.slice(0, 8) ?? "ride"}.pdf`);
         } catch (e) {
             console.error("Invoice download failed:", e);
-            alert("Failed to download invoice");
+            toast({ title: "Failed to download invoice", variant: "destructive" });
         } finally {
             setDownloading(false);
         }

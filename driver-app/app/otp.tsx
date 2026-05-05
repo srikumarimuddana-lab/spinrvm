@@ -73,6 +73,12 @@ export default function OtpScreen() {
     variant: 'info' | 'warning' | 'danger' | 'success';
   }>({ visible: false, title: '', message: '', variant: 'info' });
 
+  useEffect(() => {
+    if (!phoneNumber) {
+      router.back();
+    }
+  }, []);
+
   // Animate dots as user types
   useEffect(() => {
     dotAnims.forEach((anim, i) => {
@@ -147,6 +153,7 @@ export default function OtpScreen() {
           phone: phoneNumber,
           code: code,
         });
+        if (!response.data) throw new Error('Empty response from auth server');
         const { token, refresh_token, expires_in, user: userData } = response.data;
         if (token) {
           await useAuthStore.getState().setTokens(token, refresh_token ?? '', expires_in ?? 900);

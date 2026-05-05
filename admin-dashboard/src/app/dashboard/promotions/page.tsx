@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useMemo, useCallback } from "react";
+import { useToast } from "@/components/ui/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,6 +14,10 @@ import {
 import {
     Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
+import {
+    AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+    AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
     Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -103,6 +108,8 @@ function getPromoStatus(p: PromoCode): string {
 
 export default function PromotionsPage() {
     const { allowed } = useRequireModule("promotions");
+    const { toast } = useToast();
+    const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
     const [promos, setPromos] = useState<PromoCode[]>([]);
     const [usage, setUsage] = useState<PromoUsageRecord[]>([]);
     const [stats, setStats] = useState<PromoStatsData | null>(null);
@@ -341,7 +348,10 @@ export default function PromotionsPage() {
     };
 
     const handleSave = async () => {
-        if (!form.code.trim() || !form.discount_value) { alert("Please fill in code and discount value."); return; }
+        if (!form.code.trim() || !form.discount_value) {
+            toast({ title: "Missing required fields", description: "Please fill in code and discount value.", variant: "destructive" });
+            return;
+        }
         setSaving(true);
         try {
             const isPrivateTab = promoTab === "private" || (editingPromo?.promo_type === "private");
@@ -365,7 +375,7 @@ export default function PromotionsPage() {
             resetForm();
             await fetchAll();
         } catch (error: any) {
-            alert(`Failed to save: ${error.message}`);
+            toast({ title: "Failed to save", description: error.message, variant: "destructive" });
         } finally {
             setSaving(false);
         }
@@ -373,13 +383,18 @@ export default function PromotionsPage() {
 
     const toggleActive = async (p: PromoCode) => {
         try { await updatePromotion(p.id, { is_active: !p.is_active }); await fetchAll(); }
-        catch (e: any) { alert(`Failed: ${e.message}`); }
+        catch (e: any) { toast({ title: "Failed to toggle promo", description: e.message, variant: "destructive" }); }
     };
 
     const handleDelete = async (id: string) => {
-        if (!confirm("Delete this promo code?")) return;
-        try { await deletePromotion(id); await fetchAll(); }
-        catch (e: any) { alert(`Failed: ${e.message}`); }
+        setDeleteTarget(id);
+    };
+
+    const confirmDelete = async () => {
+        if (!deleteTarget) return;
+        try { await deletePromotion(deleteTarget); await fetchAll(); }
+        catch (e: any) { toast({ title: "Failed to delete promo", description: e.message, variant: "destructive" }); }
+        finally { setDeleteTarget(null); }
     };
 
     const toggleUserSelection = (opt: UserOption) => {
@@ -707,6 +722,19 @@ export default function PromotionsPage() {
                     </div>
                 </DialogContent>
             </Dialog>
+
+            <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Delete promo code?</AlertDialogTitle>
+                        <AlertDialogDescription>This action cannot be undone.</AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction onClick={confirmDelete} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </div>
     );
 }

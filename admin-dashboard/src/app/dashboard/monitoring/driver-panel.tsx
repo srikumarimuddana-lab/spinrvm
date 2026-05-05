@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { MonitoringDriver } from "./types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useToast } from "@/components/ui/use-toast";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ExternalLink, Flag, Phone, Star } from "lucide-react";
@@ -17,6 +18,7 @@ interface DriverPanelProps {
 }
 
 export function DriverPanel({ driver, onRideClick }: DriverPanelProps) {
+    const { toast } = useToast();
     const [rides, setRides] = useState<any[]>([]);
     const [docs, setDocs] = useState<any[]>([]);
     const [tabLoading, setTabLoading] = useState(false);
@@ -154,7 +156,7 @@ export function DriverPanel({ driver, onRideClick }: DriverPanelProps) {
                             size="sm"
                             variant="outline"
                             className="flex-1 gap-1.5 text-xs text-destructive hover:text-destructive"
-                            onClick={() => window.alert(`Flag driver ${driver.name}? Use the full driver profile to submit a formal flag.`)}
+                            onClick={() => toast({ title: "Use driver profile to flag", description: `Open the full profile for ${driver.name} to submit a formal flag.` })}
                         >
                             <Flag className="h-3.5 w-3.5" /> Flag
                         </Button>

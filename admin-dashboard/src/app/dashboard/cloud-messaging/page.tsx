@@ -1,6 +1,11 @@
 "use client";
 
 import { useEffect, useState, useMemo, useCallback } from "react";
+import { useToast } from "@/components/ui/use-toast";
+import {
+    AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+    AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -111,6 +116,8 @@ export default function CloudMessagingPage() {
     const [selectedMessage, setSelectedMessage] = useState<CloudMessage | null>(null);
     const [sending, setSending] = useState(false);
     const [activeTab, setActiveTab] = useState<"compose" | "scheduled" | "history">("compose");
+    const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+    const { toast } = useToast();
 
     // Multi-select user/driver
     const [userOptions, setUserOptions] = useState<UserOption[]>([]);
@@ -222,15 +229,15 @@ export default function CloudMessagingPage() {
     useEffect(() => { setHistoryPage(1); }, [search, statusFilter, audienceFilter, dateFrom, dateTo]);
 
     const handleSend = async () => {
-        if (!form.title.trim() || !form.description.trim()) { alert("Please fill in title and description."); return; }
+        if (!form.title.trim() || !form.description.trim()) { toast({ title: "Missing fields", description: "Please fill in title and description.", variant: "destructive" }); return; }
         const isParticular = form.audience === "particular_customer" || form.audience === "particular_driver";
-        if (isParticular && form.particular_ids.length === 0) { alert("Please select at least one user/driver."); return; }
-        if (form.is_scheduled && !form.scheduled_at) { alert("Please select a date and time."); return; }
+        if (isParticular && form.particular_ids.length === 0) { toast({ title: "No recipients selected", description: "Please select at least one user/driver.", variant: "destructive" }); return; }
+        if (form.is_scheduled && !form.scheduled_at) { toast({ title: "Missing schedule time", description: "Please select a date and time.", variant: "destructive" }); return; }
         const channels: string[] = [];
         if (form.send_push) channels.push("push");
         if (form.send_email) channels.push("email");
         if (form.send_sms) channels.push("sms");
-        if (channels.length === 0) { alert("Please select at least one delivery channel."); return; }
+        if (channels.length === 0) { toast({ title: "No delivery channel", description: "Please select at least one delivery channel.", variant: "destructive" }); return; }
 
         setSending(true);
         try {
@@ -249,7 +256,7 @@ export default function CloudMessagingPage() {
             await fetchData();
             resetForm();
         } catch (error: any) {
-            alert(`Failed to send: ${error.message || "Unknown error"}`);
+            toast({ title: "Failed to send", description: error.message || "Unknown error", variant: "destructive" });
         } finally {
             setSending(false);
         }
@@ -262,10 +269,18 @@ export default function CloudMessagingPage() {
         setUserOptions([]);
     };
 
-    const handleDelete = async (id: string) => {
-        if (!confirm("Cancel this message?")) return;
-        try { await deleteCloudMessage(id); } catch { /* continue */ }
-        setMessages((prev) => prev.filter((m) => m.id !== id));
+    const handleDelete = (id: string) => {
+        setDeleteTarget(id);
+    };
+
+    const confirmDelete = async () => {
+        if (!deleteTarget) return;
+        try { await deleteCloudMessage(deleteTarget); }
+        catch (e: any) { toast({ title: "Failed to cancel message", description: e?.message, variant: "destructive" }); }
+        finally {
+            setMessages((prev) => prev.filter((m) => m.id !== deleteTarget));
+            setDeleteTarget(null);
+        }
     };
 
     const handleExport = () => {
@@ -668,6 +683,19 @@ export default function CloudMessagingPage() {
                     )}
                 </DialogContent>
             </Dialog>
+
+            <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Cancel this message?</AlertDialogTitle>
+                        <AlertDialogDescription>This cannot be undone.</AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Keep</AlertDialogCancel>
+                        <AlertDialogAction onClick={confirmDelete} className="bg-red-600 hover:bg-red-700">Cancel Message</AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </div>
     );
 }

@@ -1298,6 +1298,9 @@ export const overrideDriverStatus = (driverId: string, status: string, reason?: 
         body: JSON.stringify({ status, reason }),
     });
 
+export const exportDrivers = () =>
+    request<{ drivers: any[]; count: number }>("/api/admin/export/drivers");
+
 export const getDriverNotes = (driverId: string) =>
     request<any[]>(`/api/admin/drivers/${driverId}/notes`);
 

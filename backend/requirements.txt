@@ -26,6 +26,7 @@ email-validator==2.3.0    # via -r requirements.in
 fastapi==0.136.1          # via -r requirements.in
 firebase-admin==7.4.0     # via -r requirements.in
 flake8==7.3.0             # via -r requirements.in
+fpdf2==2.8.7              # via -r requirements.in
 frozenlist==1.8.0         # via aiohttp, aiosignal
 fsspec==2026.3.0          # via pyiceberg
 google-ai-generativelanguage==0.6.15  # via google-generativeai

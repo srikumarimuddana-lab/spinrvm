@@ -81,6 +81,10 @@ boto3>=1.42.89
 staticmap>=0.5.7
 Pillow>=10.4.0
 
+# CRA T4A PDF generation (pure-Python, no system deps).
+# Used by backend/utils/t4a_pdf.py for on-demand driver tax slip download.
+fpdf2>=2.8.0
+
 # Error monitoring
 sentry-sdk>=2.59.0
 

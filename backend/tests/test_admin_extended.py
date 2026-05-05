@@ -508,8 +508,8 @@ class TestAdminGetDriverNotes:
         with patch("backend.routes.admin.drivers.db_supabase.get_rows", AsyncMock(return_value=notes)):
             result = asyncio.run(admin_drivers.admin_get_driver_notes(driver_id=DRIVER_ID))
 
-        assert "notes" in result
-        assert len(result["notes"]) == 1
+        assert isinstance(result, list)
+        assert len(result) == 1
 
 
 class TestAdminAddDriverNote:

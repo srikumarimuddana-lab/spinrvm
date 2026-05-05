@@ -68,6 +68,12 @@ export default function OtpScreen() {
   }>({ visible: false, title: '', message: '', variant: 'info' });
 
   useEffect(() => {
+    if (!phoneNumber) {
+      router.back();
+    }
+  }, []);
+
+  useEffect(() => {
     dotAnims.forEach((anim, i) => {
       Animated.spring(anim, {
         toValue: i < code.length ? 1 : 0,
@@ -138,6 +144,7 @@ export default function OtpScreen() {
           phone: phoneNumber,
           code: code,
         });
+        if (!response.data) throw new Error('Empty response from auth server');
         const { token, refresh_token, expires_in, user: userData } = response.data;
         // P3 cookie auth: token is "" when HTTP-only cookies are used
         if (token) {

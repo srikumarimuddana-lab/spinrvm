@@ -73,7 +73,7 @@ describe('rideStore WAV flag', () => {
   it('createRide includes requires_wav: true in POST body when flag is set', async () => {
     setBaseState();
     useRideStore.setState({ requiresWav: true } as any);
-    mockApi.post.mockResolvedValueOnce({ data: { id: 'ride-1', status: 'searching' } });
+    mockApi.post.mockResolvedValueOnce({ data: { id: 'ride-1', status: 'searching' }, status: 200 });
 
     await useRideStore.getState().createRide('card');
 
@@ -84,7 +84,7 @@ describe('rideStore WAV flag', () => {
   it('createRide includes requires_wav: false when flag is unset', async () => {
     setBaseState();
     useRideStore.setState({ requiresWav: false } as any);
-    mockApi.post.mockResolvedValueOnce({ data: { id: 'ride-2', status: 'searching' } });
+    mockApi.post.mockResolvedValueOnce({ data: { id: 'ride-2', status: 'searching' }, status: 200 });
 
     await useRideStore.getState().createRide('card');
 
@@ -95,7 +95,7 @@ describe('rideStore WAV flag', () => {
   it('requiresWav resets to false after successful createRide', async () => {
     setBaseState();
     useRideStore.setState({ requiresWav: true } as any);
-    mockApi.post.mockResolvedValueOnce({ data: { id: 'ride-3', status: 'searching' } });
+    mockApi.post.mockResolvedValueOnce({ data: { id: 'ride-3', status: 'searching' }, status: 200 });
 
     await useRideStore.getState().createRide('card');
 

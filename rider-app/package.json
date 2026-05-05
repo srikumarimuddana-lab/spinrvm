@@ -83,6 +83,7 @@
     "@react-native/jest-preset": "0.85.2",
     "@testing-library/jest-native": "^5.4.3",
     "@testing-library/react-native": "^12.4.0",
+    "@types/jest": "^30.0.0",
     "@types/react": "~19.2.0",
     "babel-plugin-module-resolver": "^5.0.2",
     "cross-env": "^10.1.0",

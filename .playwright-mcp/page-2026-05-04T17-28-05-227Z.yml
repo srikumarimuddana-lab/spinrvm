@@ -1,0 +1,23 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e3]:
+    - generic [ref=e4]:
+      - generic [ref=e6]: S
+      - generic [ref=e7]: Spinr Admin
+      - paragraph [ref=e8]: Sign in to manage your rideshare platform
+    - generic [ref=e9]:
+      - generic [ref=e10]:
+        - generic [ref=e11]: Email
+        - textbox "Email" [ref=e12]:
+          - /placeholder: admin@example.com
+      - generic [ref=e13]:
+        - generic [ref=e14]: Password
+        - generic [ref=e15]:
+          - textbox "Password" [ref=e16]:
+            - /placeholder: Enter your password
+          - button "Show password" [ref=e17]:
+            - img [ref=e18]
+      - button "Sign In" [disabled]
+  - region "Notifications (F8)":
+    - list
+  - button "Open Next.js Dev Tools" [ref=e26] [cursor=pointer]:
+    - img [ref=e27]

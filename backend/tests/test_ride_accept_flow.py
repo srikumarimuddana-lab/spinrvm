@@ -166,16 +166,13 @@ class TestAcceptRideFlipsStatus:
 
         pre_ride = _ride_row("driver_assigned", driver_id=DRIVER_ID)
 
-        # Guard says 0 rows matched → ride taken by a concurrent request
-        guard_fail = type("_Guard", (), {"modified_count": 0})()
-
         with (
             patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=pre_ride)),
             patch(
                 "backend.routes.drivers.db_supabase.get_rows",
                 AsyncMock(return_value=[_driver_row()]),
             ),
-            patch("backend.routes.drivers.db.update_one", AsyncMock(return_value=guard_fail)),
+            patch("backend.routes.drivers.db.update_one", AsyncMock(return_value=None)),
             patch("backend.routes.drivers.db.find_one", AsyncMock(return_value=pre_ride)),
             patch("backend.routes.drivers.manager.send_personal_message", AsyncMock()),
             patch("backend.routes.drivers.manager.broadcast_ride_status", AsyncMock()),

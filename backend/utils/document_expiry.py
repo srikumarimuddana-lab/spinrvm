@@ -48,11 +48,21 @@ async def check_expiring_documents():
     now = datetime.now(timezone.utc)
     warning_cutoff = now + timedelta(days=EXPIRY_WARNING_DAYS)
 
-    try:
-        all_drivers = await db.get_rows("drivers", {}, limit=1000)
-    except Exception as e:
-        logger.error(f"Doc expiry: failed to fetch drivers: {e}")
-        return
+    _PAGE_SIZE = 100
+    all_drivers: list = []
+    offset = 0
+    while True:
+        try:
+            page = await db.get_rows("drivers", {}, limit=_PAGE_SIZE, offset=offset)
+        except Exception as e:
+            logger.error(f"Doc expiry: failed to fetch drivers (offset={offset}): {e}")
+            return
+        if not page:
+            break
+        all_drivers.extend(page)
+        if len(page) < _PAGE_SIZE:
+            break
+        offset += _PAGE_SIZE
 
     notified = 0
     for driver in all_drivers:

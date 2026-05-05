@@ -22,7 +22,12 @@ db = db_supabase  # legacy alias
 logger = logging.getLogger(__name__)
 api_router = APIRouter(tags=["Fares"])
 
-# PERF-001: Fare cache TTL in seconds (default 5 min)
+# PERF-001: Fare cache TTL in seconds (default 5 min).
+# WARNING: cached fares embed the surge multiplier at cache-fill time.
+# If surge changes within the TTL window the rider sees a stale estimate;
+# payments.py re-validates the fare at settlement and will reject a mismatch.
+# Set FARE_CACHE_TTL_SECONDS=60 in production to tighten the window during
+# surge events without fully disabling the cache.
 _FARE_CACHE_TTL = int(os.environ.get("FARE_CACHE_TTL_SECONDS", "300"))
 
 # ── Decimal helpers (CQ-009) ──────────────────────────────────────────

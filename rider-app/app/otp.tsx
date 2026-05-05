@@ -71,6 +71,7 @@ export default function OtpScreen() {
     if (!phoneNumber) {
       router.back();
     }
+    return () => { resendInFlight.current = false; };
   }, []);
 
   useEffect(() => {

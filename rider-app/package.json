@@ -106,7 +106,8 @@
     "protobufjs": "^7.5.5",
     "@xmldom/xmldom": "^0.8.13",
     "@react-native-community/netinfo": "11.5.2",
-    "expo-modules-core": "55.0.25"
+    "expo-modules-core": "55.0.25",
+    "postcss": ">=8.5.10"
   },
   "expo": {
     "install": {

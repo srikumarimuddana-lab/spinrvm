@@ -9,6 +9,7 @@ This module provides configurable rate limiting with support for:
 """
 
 import hashlib
+import os
 import time
 from functools import wraps
 from typing import Callable, Dict
@@ -33,7 +34,7 @@ except ImportError:  # pragma: no cover — package-relative fallback for tests
 # "memory://" (process-local; dev only). In production the empty default
 # is blocked by _validate_production_config() so we never silently fall
 # back to memory across a multi-machine deploy.
-_rate_limit_storage_uri = settings.RATE_LIMIT_REDIS_URL or "memory://"
+_rate_limit_storage_uri = os.environ.get("RATE_LIMIT_REDIS_URL") or settings.RATE_LIMIT_REDIS_URL or "memory://"
 
 if _rate_limit_storage_uri == "memory://":
     logger.warning(

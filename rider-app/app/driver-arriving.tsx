@@ -125,6 +125,7 @@ function DriverArrivingScreenContent() {
   }, [rideId, currentRide?.status, wsConnected]);
 
   useEffect(() => {
+    if (!rideId) return;
     if (currentRide?.status === RideStatus.DRIVER_ARRIVED) {
       router.replace({ pathname: '/driver-arrived', params: { rideId } });
     } else if (currentRide?.status === RideStatus.IN_PROGRESS) {

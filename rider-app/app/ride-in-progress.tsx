@@ -120,7 +120,7 @@ function RideInProgressScreenContent() {
   }, [eta]);
 
   useEffect(() => {
-    if (currentRide?.status === RideStatus.COMPLETED) {
+    if (currentRide?.status === RideStatus.COMPLETED && rideId) {
       router.replace({ pathname: '/ride-completed', params: { rideId } });
     }
   }, [currentRide?.status]);

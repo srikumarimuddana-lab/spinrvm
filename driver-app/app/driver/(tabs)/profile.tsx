@@ -22,7 +22,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
-import { useAuthStore, type User } from '@shared/store/authStore';
+import { useAuthStore, type User, type Driver } from '@shared/store/authStore';
 import api from '@shared/api/client';
 import { useDriverMe } from '@shared/hooks/queries';
 import SpinrConfig from '@shared/config/spinr.config';
@@ -90,7 +90,7 @@ export default function ProfileScreen() {
   // is kept in sync below for screens that still read from the store.
   const { data: driverFromQuery, refetch: refetchDriverMe } = useDriverMe();
   useEffect(() => {
-    if (driverFromQuery) useAuthStore.setState({ driver: driverFromQuery });
+    if (driverFromQuery) useAuthStore.setState({ driver: driverFromQuery as Driver });
   }, [driverFromQuery]);
 
   useFocusEffect(

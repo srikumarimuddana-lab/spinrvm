@@ -48,7 +48,8 @@ function PayoutScreen() {
     // gst_number is part of the driver row served by useDriverMe — keep
     // a local form state for the input field but seed it from the cached
     // server value (also re-seeds from the background refetch).
-    const { data: driverMe } = useDriverMe();
+    const { data: driverMeRaw } = useDriverMe();
+    const driverMe = driverMeRaw as { gst_number?: string } | undefined;
     const updateDriverMe = useUpdateDriverMe();
     const [gstNumber, setGstNumber] = useState('');
     const [showGstForm, setShowGstForm] = useState(false);

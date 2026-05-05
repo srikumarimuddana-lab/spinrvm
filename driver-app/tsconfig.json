@@ -83,6 +83,12 @@
       ],
       "@react-native-firebase/app-check": [
         "./node_modules/@react-native-firebase/app-check"
+      ],
+      "@tanstack/react-query": [
+        "./node_modules/@tanstack/react-query"
+      ],
+      "@tanstack/query-async-storage-persister": [
+        "./node_modules/@tanstack/query-async-storage-persister"
       ]
     }
   },
@@ -93,5 +99,11 @@
     "expo-env.d.ts",
     "../shared/**/*.ts",
     "../shared/**/*.tsx"
+  ],
+  "exclude": [
+    "node_modules",
+    "../shared/api/queryClient.ts",
+    "../shared/hooks/queries/driverQueries.ts",
+    "../shared/hooks/queries/notificationQueries.ts"
   ]
 }

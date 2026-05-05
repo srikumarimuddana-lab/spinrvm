@@ -73,10 +73,11 @@ class TestMoneyHelpers:
 
         assert _d("18.5") == Decimal("18.5")
 
-    def test_d_handles_none(self):
+    def test_d_handles_zero(self):
         from backend.routes.rides import _d
 
-        assert _d(None) == Decimal("0")
+        assert _d(0) == Decimal("0")
+        assert _d("0.00") == Decimal("0")
 
     def test_round_to_two_places(self):
         from backend.routes.rides import _d, _round
@@ -129,22 +130,13 @@ class TestAddTip:
         assert result["success"] is True
         assert result["tip_amount"] == 5.00
 
-    def test_zero_tip_raises_400(self):
-        from fastapi import HTTPException
+    def test_zero_tip_fails_pydantic_validation(self):
+        from pydantic import ValidationError
 
-        from backend.routes import rides as rides_mod
         from backend.routes.rides import TipRequest
 
-        with pytest.raises(HTTPException) as exc:
-            asyncio.run(
-                rides_mod.add_tip(
-                    ride_id=RIDE_ID,
-                    req=TipRequest(amount=Decimal("0")),
-                    request=self._mock_request(),
-                    current_user={"id": RIDER_ID},
-                )
-            )
-        assert exc.value.status_code == 400
+        with pytest.raises(ValidationError):
+            TipRequest(amount=Decimal("0"))
 
     def test_duplicate_tip_raises_400(self):
         from fastapi import HTTPException

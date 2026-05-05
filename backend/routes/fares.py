@@ -12,6 +12,7 @@ try:
     from ..core.config import settings
     from ..geo_utils import get_service_area_polygon, point_in_polygon
     from ..utils.redis_client import redis_delete_pattern, redis_get, redis_set
+    from ..utils.surge_engine import SURGE_CAP
 except ImportError:
     import db_supabase
     from core.config import settings
@@ -170,7 +171,9 @@ async def build_fares_for_area(matched_area, vehicle_types):
     # toggle is off. Matches surge_engine.py's convention (only
     # writes multiplier when active) and the admin UI toggle under
     # Service Areas → General.
-    surge = matched_area.get("surge_multiplier", 1.0) if matched_area.get("surge_active", False) else 1.0
+    surge = (
+        min(matched_area.get("surge_multiplier", 1.0), SURGE_CAP) if matched_area.get("surge_active", False) else 1.0
+    )
 
     # Name → pricing row from vehicle_pricing JSONB (source of truth).
     # Field names: vehicle_type (NAME), base_fare, per_km, per_min,

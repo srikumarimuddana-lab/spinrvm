@@ -9,7 +9,7 @@
  */
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
-import { setAdminAuthCookie } from './auth-fixture';
+import { setAdminAuthCookie, TEST_ADMIN_JWT } from './auth-fixture';
 
 const MOCK_RIDES = [
   {
@@ -61,9 +61,13 @@ async function mockAdminAPIs(page: any) {
     const json = (status: number, body: unknown) =>
       route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 
-    // Auth
+    // Auth refresh — silentRefresh POSTs here; must return a token so isLoading resolves
+    if (url.includes('/auth/refresh')) {
+      return json(200, { token: TEST_ADMIN_JWT, access_expires_at: '2100-01-01T00:00:00Z', csrf_token: 'test-csrf' });
+    }
+    // Auth session — checkAuth expects { authenticated: true, user }
     if (url.includes('/auth/session') || url.includes('/auth/me') || url.includes('/admin/me')) {
-      return json(200, { user: { id: 'admin_1', email: 'admin@spinr.ca', role: 'admin' } });
+      return json(200, { authenticated: true, user: { id: 'admin_1', email: 'admin@spinr.ca', role: 'admin' } });
     }
 
     // Rides list

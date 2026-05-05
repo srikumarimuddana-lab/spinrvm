@@ -44,14 +44,10 @@ async def test_no_double_accept(client, ride_id, driver_1_headers, driver_2_head
     ride = {"id": ride_id, "status": "searching", "driver_id": None, "rider_id": "rider_001"}
     accepted_ride = {**ride, "status": "driver_accepted", "driver_id": "driver_001"}
 
-    guard_ok = MagicMock()
-    guard_ok.modified_count = 1
-    guard_fail = None  # production code checks `if guard is None` for race-loss
-
     with (
         patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[driver])),
         patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=ride)),
-        patch("backend.routes.drivers.db.update_one", AsyncMock(side_effect=[guard_ok, guard_fail])),
+        patch("backend.routes.drivers.db.update_one", AsyncMock(side_effect=[accepted_ride, None])),
         patch("backend.routes.drivers.db.find_one", AsyncMock(return_value=accepted_ride)),
         patch("backend.routes.drivers.manager.send_personal_message", AsyncMock()),
         patch("backend.routes.drivers.send_push_notification", AsyncMock()),

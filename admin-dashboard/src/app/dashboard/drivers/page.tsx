@@ -279,6 +279,7 @@ export default function DriversPage() {
                 { key: "is_online", label: "Online" }, { key: "total_rides", label: "Rides" },
                 { key: "created_at", label: "Joined" },
             ]);
+            toast({ title: "Export complete", description: `${res.count ?? res.drivers?.length ?? 0} drivers exported.` });
         } catch (e: any) {
             toast({ title: "Export failed", description: e?.message, variant: "destructive" });
         }

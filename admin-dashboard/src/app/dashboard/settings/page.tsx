@@ -81,7 +81,8 @@ export default function SettingsPage() {
             setSettings(updated);
             setSaved(true);
             setTimeout(() => setSaved(false), 2000);
-        } catch {
+        } catch (e: any) {
+            toast({ title: "Failed to save settings", description: e?.message || "Unknown error", variant: "destructive" });
         } finally {
             setSaving(false);
         }

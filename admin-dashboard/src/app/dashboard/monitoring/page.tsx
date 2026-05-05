@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Radio, X } from "lucide-react";
 import { useAuthStore } from "@/store/authStore";
+import { useToast } from "@/components/ui/use-toast";
 
 import { adminCancelRide, getFareConfigs, getMonitoringDrivers, getMonitoringRides, getServiceAreas, getVehicleTypes } from "@/lib/api";
 import { useMonitoringSocket } from "@/hooks/use-monitoring-socket";
@@ -27,6 +28,7 @@ const POLL_INTERVAL_MS = 15_000;
 
 export default function MonitoringPage() {
   const { allowed } = useRequireModule("rides");
+  const { toast } = useToast();
   // ── Refs: source-of-truth maps (never trigger re-renders) ──────────
   const driversMapRef = useRef<Map<string, MonitoringDriver>>(new Map());
   const ridesMapRef = useRef<Map<string, MonitoringRide>>(new Map());
@@ -605,9 +607,7 @@ export default function MonitoringPage() {
                     setSelected(null);
                     setSelectedRide(null);
                   } catch (err: any) {
-                    window.alert(
-                      `Failed to cancel ride: ${err?.message ?? "unknown error"}`,
-                    );
+                    toast({ title: "Failed to cancel ride", description: err?.message ?? "Unknown error", variant: "destructive" });
                   }
                 }}
                 onCompleteRide={async (id) => {

@@ -71,7 +71,8 @@ export default function SettingsScreen() {
     // WAV capability — driver declares whether their vehicle is wheelchair-accessible.
     // SK Transportation Act requires WAV requests to be fulfilled when a WAV
     // driver is online in the service area.
-    const { data: driverMe } = useDriverMe();
+    const { data: driverMeRaw } = useDriverMe();
+    const driverMe = driverMeRaw as { is_wav?: boolean | null } | undefined;
     const updateDriverMe = useUpdateDriverMe();
     const [isWav, setIsWav] = useState(false);
     useEffect(() => {

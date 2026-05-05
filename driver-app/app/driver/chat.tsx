@@ -40,7 +40,7 @@ export default function ChatScreen() {
     const [sending, setSending] = useState(false);
     const flatListRef = useRef<FlatList>(null);
 
-    const riderName = activeRide?.rider?.first_name || activeRide?.rider?.name || 'Rider';
+    const riderName = activeRide?.rider?.first_name || (activeRide?.rider?.name as string | undefined) || 'Rider';
     const rideId = activeRide?.ride?.id;
     const CHAT_STORAGE_KEY = rideId ? `spinr_chat_${rideId}` : null;
 
@@ -60,7 +60,7 @@ export default function ChatScreen() {
 
             // 2. Fetch authoritative history from backend
             try {
-                const res = await api.get(`/rides/${rideId}/messages`);
+                const res = await api.get<{ messages: ChatMessage[] }>(`/rides/${rideId}/messages`);
                 if (res.data?.messages?.length) {
                     setChatMessages(res.data.messages);
                     if (CHAT_STORAGE_KEY) {
@@ -98,7 +98,7 @@ export default function ChatScreen() {
         setShowQuickReplies(false);
 
         try {
-            const res = await api.post(`/rides/${rideId}/messages`, { text: trimmed });
+            const res = await api.post<{ message: ChatMessage }>(`/rides/${rideId}/messages`, { text: trimmed });
             if (res.data?.message) {
                 // Backend's REST handler also broadcasts via WS, so addChatMessage
                 // deduplication ensures no double-render even if we add optimistically.
@@ -163,7 +163,7 @@ export default function ChatScreen() {
                         onPress={async () => {
                             if (!rideId) return;
                             try {
-                                const res = await api.get(`/rides/${rideId}/call`);
+                                const res = await api.get<{ phone?: string }>(`/rides/${rideId}/call`);
                                 if (res.data?.phone) {
                                     const { Linking } = require('react-native');
                                     Linking.openURL(`tel:${res.data.phone}`);

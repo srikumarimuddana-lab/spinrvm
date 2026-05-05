@@ -448,7 +448,7 @@ function MaybeStripeProvider({
   if (!publishableKey) return <>{children}</>;
   return (
     <StripeProvider publishableKey={publishableKey} merchantIdentifier="merchant.com.spinr.user">
-      {children}
+      {children as React.ReactElement}
     </StripeProvider>
   );
 }

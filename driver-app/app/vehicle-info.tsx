@@ -84,7 +84,7 @@ export default function VehicleInfoScreen() {
 
     const fetchVehicleTypes = async () => {
         try {
-            const response = await api.get('/vehicle-types');
+            const response = await api.get<VehicleType[]>('/vehicle-types');
             setVehicleTypes(response.data);
             if (driver?.vehicle_type_id) {
                 const found = response.data.find((t: any) => t.id === driver.vehicle_type_id);

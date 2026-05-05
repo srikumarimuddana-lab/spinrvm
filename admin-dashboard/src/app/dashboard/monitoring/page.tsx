@@ -574,8 +574,9 @@ export default function MonitoringPage() {
               <button
                 onClick={() => { setSelected(null); setSelectedDriver(null); }}
                 className="absolute right-2 top-2 z-10 rounded-full p-1 hover:bg-muted"
+                aria-label="Close driver panel"
               >
-                <X className="h-3.5 w-3.5" />
+                <X className="h-3.5 w-3.5" aria-hidden="true" />
               </button>
               <DriverPanel
                 driver={selectedDriver}
@@ -587,8 +588,9 @@ export default function MonitoringPage() {
               <button
                 onClick={() => { setSelected(null); setSelectedRide(null); }}
                 className="absolute right-2 top-2 z-10 rounded-full p-1 hover:bg-muted"
+                aria-label="Close ride panel"
               >
-                <X className="h-3.5 w-3.5" />
+                <X className="h-3.5 w-3.5" aria-hidden="true" />
               </button>
               <RidePanel
                 ride={selectedRide}

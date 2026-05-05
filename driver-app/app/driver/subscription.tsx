@@ -66,7 +66,7 @@ export default function SubscriptionScreen() {
 
       setLoading(true);
       try {
-        const res = await api.get(`/drivers/subscription/verify-session?session_id=${sessionId}`);
+        const res = await api.get<{ status?: string }>(`/drivers/subscription/verify-session?session_id=${sessionId}`);
         if (res.data?.status === 'active') {
           showAlert('Payment Successful!', 'Your Spinr Pass is now active. Go online and start earning!', 'success');
         } else {
@@ -92,15 +92,16 @@ export default function SubscriptionScreen() {
     setLoading(true);
     try {
       const [plansRes, subRes] = await Promise.all([
-        api.get('/drivers/subscription/plans'),
-        api.get('/drivers/subscription/current'),
+        api.get<{ plans?: Plan[]; free_mode?: boolean; message?: string } | Plan[]>('/drivers/subscription/plans'),
+        api.get<any>('/drivers/subscription/current'),
       ]);
       const data = plansRes.data;
       // Backend returns {plans, free_mode, message} when Spinr Pass is off
       if (data && typeof data === 'object' && 'free_mode' in data) {
-        setPlans(data.plans || []);
-        setFreeMode(data.free_mode || false);
-        setFreeMessage(data.message || '');
+        const d = data as { plans?: Plan[]; free_mode?: boolean; message?: string };
+        setPlans(d.plans || []);
+        setFreeMode(d.free_mode || false);
+        setFreeMessage(d.message || '');
       } else {
         // Fallback for old response format (plain array)
         setPlans(Array.isArray(data) ? data : []);
@@ -138,7 +139,7 @@ export default function SubscriptionScreen() {
   const doSubscribe = async (plan: Plan) => {
     setSubscribing(plan.id);
     try {
-      const res = await api.post('/drivers/subscription/subscribe', { plan_id: plan.id });
+      const res = await api.post<{ checkout_url?: string; session_id?: string }>('/drivers/subscription/subscribe', { plan_id: plan.id });
 
       if (res.data?.checkout_url) {
         // Stripe Checkout path — open the payment page in the browser.
@@ -158,7 +159,7 @@ export default function SubscriptionScreen() {
           for (const delay of retryDelays) {
             await new Promise(r => setTimeout(r, delay));
             try {
-              const verifyRes = await api.get(`/drivers/subscription/verify-session?session_id=${sessionId}`);
+              const verifyRes = await api.get<{ status?: string }>(`/drivers/subscription/verify-session?session_id=${sessionId}`);
               if (verifyRes.data?.status === 'active') {
                 showAlert('Subscribed!', `You're now on the ${plan.name} plan. Go online and start earning!`, 'success');
                 loadData();

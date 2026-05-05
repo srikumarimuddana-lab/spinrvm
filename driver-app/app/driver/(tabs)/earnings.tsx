@@ -76,7 +76,7 @@ function EarningsScreen() {
 
   useEffect(() => {
     api
-      .get('/drivers/earnings/forecast')
+      .get<{ this_week_earnings: number; projected_weekly_total: number; days_remaining_this_week: number; this_week_trips: number }>('/drivers/earnings/forecast')
       .then((r) => setForecast(r.data))
       .catch(() => {}); // forecast is informational — ignore errors silently
   }, []);

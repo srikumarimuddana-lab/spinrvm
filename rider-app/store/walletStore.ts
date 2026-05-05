@@ -77,7 +77,7 @@ export const useWalletStore = create<WalletState>((set, get) => ({
   fetchWallet: async () => {
     try {
       set({ walletLoading: true, error: null });
-      const res = await api.get('/wallet');
+      const res = await api.get<WalletInfo>('/wallet');
       set({ wallet: res.data, walletLoading: false });
     } catch (error: any) {
       set({ error: error.message, walletLoading: false });
@@ -112,7 +112,7 @@ export const useWalletStore = create<WalletState>((set, get) => ({
   fetchTransactions: async (limit = 20) => {
     try {
       set({ transactionsLoading: true, error: null });
-      const res = await api.get(`/wallet/transactions?limit=${limit}`);
+      const res = await api.get<{ transactions?: WalletTransaction[] }>(`/wallet/transactions?limit=${limit}`);
       set({ transactions: res.data.transactions || [], transactionsLoading: false });
     } catch (error: any) {
       set({ error: error.message, transactionsLoading: false });
@@ -135,7 +135,7 @@ export const useWalletStore = create<WalletState>((set, get) => ({
   createFareSplit: async (rideId: string, phones: string[]) => {
     try {
       set({ isLoading: true, error: null });
-      const res = await api.post('/fare-split', { ride_id: rideId, participant_phones: phones });
+      const res = await api.post<FareSplit>('/fare-split', { ride_id: rideId, participant_phones: phones });
       set({ currentSplit: res.data, isLoading: false });
       return res.data;
     } catch (error: any) {
@@ -146,9 +146,9 @@ export const useWalletStore = create<WalletState>((set, get) => ({
 
   fetchFareSplitForRide: async (rideId: string) => {
     try {
-      const res = await api.get(`/fare-split/ride/${rideId}`);
+      const res = await api.get<{ has_split?: boolean; split?: FareSplit }>(`/fare-split/ride/${rideId}`);
       if (res.data.has_split) {
-        set({ currentSplit: res.data.split });
+        set({ currentSplit: res.data.split ?? null });
       } else {
         set({ currentSplit: null });
       }

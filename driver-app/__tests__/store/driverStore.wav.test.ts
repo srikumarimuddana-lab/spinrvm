@@ -28,7 +28,7 @@ describe('WAV driver-me PUT payload', () => {
   beforeEach(() => jest.clearAllMocks());
 
   it('PUT /drivers/me with is_wav: true when driver enables WAV', async () => {
-    mockApi.put.mockResolvedValueOnce({ data: { id: 'drv-1', is_wav: true } });
+    mockApi.put.mockResolvedValueOnce({ data: { id: 'drv-1', is_wav: true }, status: 200 });
     await api.put('/drivers/me', { is_wav: true });
     expect(mockApi.put).toHaveBeenCalledWith('/drivers/me', { is_wav: true });
     const body = mockApi.put.mock.calls[0][1] as any;
@@ -36,14 +36,14 @@ describe('WAV driver-me PUT payload', () => {
   });
 
   it('PUT /drivers/me with is_wav: false when driver disables WAV', async () => {
-    mockApi.put.mockResolvedValueOnce({ data: { id: 'drv-1', is_wav: false } });
+    mockApi.put.mockResolvedValueOnce({ data: { id: 'drv-1', is_wav: false }, status: 200 });
     await api.put('/drivers/me', { is_wav: false });
     const body = mockApi.put.mock.calls[0][1] as any;
     expect(body.is_wav).toBe(false);
   });
 
   it('is_wav is a boolean not a truthy string', async () => {
-    mockApi.put.mockResolvedValueOnce({ data: {} });
+    mockApi.put.mockResolvedValueOnce({ data: {}, status: 200 });
     await api.put('/drivers/me', { is_wav: true });
     const body = mockApi.put.mock.calls[0][1] as any;
     expect(typeof body.is_wav).toBe('boolean');

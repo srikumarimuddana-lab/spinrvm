@@ -100,11 +100,11 @@ export default function LoyaltyScreen() {
     if (!silent) setLoading(true);
     try {
       const [loyaltyRes, historyRes] = await Promise.all([
-        api.get('/loyalty'),
-        api.get('/loyalty/history'),
+        api.get<LoyaltyData>('/loyalty'),
+        api.get<LoyaltyHistoryItem[]>('/loyalty/history'),
       ]);
       setLoyalty(loyaltyRes.data);
-      setHistory(historyRes.data || []);
+      setHistory((historyRes.data as LoyaltyHistoryItem[]) || []);
     } catch {}
     finally {
       setLoading(false);

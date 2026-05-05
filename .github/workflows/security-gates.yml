@@ -30,7 +30,7 @@ jobs:
   bandit:
     name: G1 · Bandit (Python SAST)
     runs-on: ubuntu-latest
-    continue-on-error: true
+    continue-on-error: false
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -52,7 +52,7 @@ jobs:
   eslint-security:
     name: G2 · ESLint security plugin
     runs-on: ubuntu-latest
-    continue-on-error: true
+    continue-on-error: false
     strategy:
       matrix:
         module: [rider-app, driver-app, admin-dashboard]
@@ -67,7 +67,7 @@ jobs:
           # security-gates is not a hot-path workflow.
       - name: Install deps
         working-directory: ${{ matrix.module }}
-        continue-on-error: true
+        continue-on-error: false
         run: |
           if [ -f yarn.lock ]; then yarn install --frozen-lockfile
           elif [ -f package-lock.json ]; then npm ci
@@ -87,7 +87,7 @@ jobs:
   semgrep:
     name: G3 · Semgrep (Spinr rules + public)
     runs-on: ubuntu-latest
-    continue-on-error: true
+    continue-on-error: false
     container:
       image: semgrep/semgrep:latest
     steps:
@@ -112,7 +112,7 @@ jobs:
   pip-audit:
     name: G4a · pip-audit (Python deps)
     runs-on: ubuntu-latest
-    continue-on-error: true
+    continue-on-error: false
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -235,11 +235,10 @@ jobs:
         run: |
           echo "## Security Gates Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "All gates are **non-blocking** during the baselining window" >> $GITHUB_STEP_SUMMARY
-          echo "(first 2 weeks after rollout). Review findings in individual" >> $GITHUB_STEP_SUMMARY
-          echo "job outputs; file P2 items for HIGH/CRITICAL results in" >> $GITHUB_STEP_SUMMARY
-          echo "\`OPEN-ITEMS-TRACKER.md\`." >> $GITHUB_STEP_SUMMARY
+          echo "Gates G1–G4 (bandit, eslint-security, semgrep, pip-audit) are" >> $GITHUB_STEP_SUMMARY
+          echo "**blocking** (OI-003–OI-006 resolved, pre-production enforcement)." >> $GITHUB_STEP_SUMMARY
+          echo "Review findings in individual job outputs; file P1 items for" >> $GITHUB_STEP_SUMMARY
+          echo "any new HIGH/CRITICAL results in \`OPEN-ITEMS-TRACKER.md\`." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "After baseline is clean, set \`continue-on-error: false\` on" >> $GITHUB_STEP_SUMMARY
-          echo "each job and add a branch-protection rule requiring this" >> $GITHUB_STEP_SUMMARY
-          echo "workflow on PRs." >> $GITHUB_STEP_SUMMARY
+          echo "Branch-protection rule requiring this workflow on PRs must be" >> $GITHUB_STEP_SUMMARY
+          echo "configured in GitHub repo settings to enforce these gates." >> $GITHUB_STEP_SUMMARY

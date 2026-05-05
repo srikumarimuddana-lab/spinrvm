@@ -29,6 +29,8 @@ module.exports = {
     },
   },
   moduleNameMapper: {
+    // Redirect `require('react')` to the runtime package, not @types/react (which has no exports).
+    '^react$': '<rootDir>/node_modules/react',
     // Expo SDK 54 winter (WinterCG) runtime executes require('./ImportMetaRegistry')
     // lazily via installGlobal — that require fails inside Jest's sandbox.
     // Mock the index so jest-expo's setup.js gets a no-op instead of the real runtime.

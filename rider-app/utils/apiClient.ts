@@ -1,5 +1,5 @@
 import axios, { AxiosError } from 'axios'
-import store from '../store'
+import { useAuthStore } from '@shared/store/authStore'
 
 const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://localhost:8000'
 
@@ -40,7 +40,7 @@ apiClient.interceptors.response.use(
         return apiClient.request(originalRequest)
       } catch (refreshError) {
         // Refresh failed: token invalid, force logout
-        store.dispatch({ type: 'LOGOUT' })
+        useAuthStore.getState().logout()
         // Redirect to login
         return Promise.reject(refreshError)
       }

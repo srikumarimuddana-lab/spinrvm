@@ -21,34 +21,34 @@ import api from '@shared/api/client';
 
 const mockApi = api as jest.Mocked<typeof api>;
 
-const makeWallet = (overrides = {}) => ({
+const makeWallet = (overrides: Record<string, unknown> = {}) => ({
   id: 'wallet-1',
-  balance: 50.0,
+  balance: '50.00',
   currency: 'cad',
   is_active: true,
   ...overrides,
 });
 
-const makeTx = (overrides = {}) => ({
+const makeTx = (overrides: Record<string, unknown> = {}) => ({
   id: 'tx-1',
   type: 'top_up',
-  amount: 20.0,
-  balance_after: 70.0,
+  amount: '20.00',
+  balance_after: '70.00',
   description: 'Wallet top-up',
   reference_id: null,
   created_at: '2026-04-13T10:00:00Z',
   ...overrides,
 });
 
-const makeSplit = (overrides = {}) => ({
+const makeSplit = (overrides: Record<string, unknown> = {}) => ({
   id: 'split-1',
   ride_id: 'ride-99',
-  total_fare: 30.0,
+  total_fare: '30.00',
   split_count: 2,
-  your_share: 15.0,
+  your_share: '15.00',
   status: 'pending',
   participants: [
-    { id: 'p-1', phone: '+13065551234', share_amount: 15.0, status: 'pending' },
+    { id: 'p-1', phone: '+13065551234', share_amount: '15.00', status: 'pending' },
   ],
   ...overrides,
 });
@@ -69,7 +69,7 @@ describe('walletStore', () => {
   describe('fetchWallet', () => {
     it('stores wallet on success', async () => {
       const wallet = makeWallet();
-      mockApi.get.mockResolvedValueOnce({ data: wallet });
+      mockApi.get.mockResolvedValueOnce({ data: wallet, status: 200 });
 
       await useWalletStore.getState().fetchWallet();
 
@@ -91,14 +91,14 @@ describe('walletStore', () => {
   // ---------------------------------------------------------------------------
   describe('topUp', () => {
     it('updates wallet balance after top-up', async () => {
-      useWalletStore.setState({ wallet: makeWallet({ balance: 50.0 }) });
-      mockApi.post.mockResolvedValueOnce({ data: { balance: 70.0 } });
-      mockApi.get.mockResolvedValueOnce({ data: makeWallet({ balance: 70.0 }) });
+      useWalletStore.setState({ wallet: makeWallet({ balance: '50.00' }) });
+      mockApi.post.mockResolvedValueOnce({ data: { balance: 70.0 }, status: 200 });
+      mockApi.get.mockResolvedValueOnce({ data: makeWallet({ balance: '70.00' }), status: 200 });
 
       await useWalletStore.getState().topUp(20.0);
 
       expect(mockApi.post).toHaveBeenCalledWith('/wallet/top-up', { amount: 20.0 });
-      expect(useWalletStore.getState().wallet?.balance).toBe(70.0);
+      expect(useWalletStore.getState().wallet?.balance).toBe('70.00');
     });
 
     it('throws and sets error when top-up fails', async () => {
@@ -115,7 +115,7 @@ describe('walletStore', () => {
   describe('fetchTransactions', () => {
     it('stores transactions list', async () => {
       const txs = [makeTx(), makeTx({ id: 'tx-2', type: 'ride_payment', amount: -9.5 })];
-      mockApi.get.mockResolvedValueOnce({ data: { transactions: txs } });
+      mockApi.get.mockResolvedValueOnce({ data: { transactions: txs }, status: 200 });
 
       await useWalletStore.getState().fetchTransactions();
 
@@ -124,7 +124,7 @@ describe('walletStore', () => {
     });
 
     it('respects custom limit parameter', async () => {
-      mockApi.get.mockResolvedValueOnce({ data: [] });
+      mockApi.get.mockResolvedValueOnce({ data: [], status: 200 });
 
       await useWalletStore.getState().fetchTransactions(50);
 
@@ -136,7 +136,7 @@ describe('walletStore', () => {
   describe('createFareSplit', () => {
     it('stores the created split', async () => {
       const split = makeSplit();
-      mockApi.post.mockResolvedValueOnce({ data: split });
+      mockApi.post.mockResolvedValueOnce({ data: split, status: 200 });
 
       const result = await useWalletStore.getState().createFareSplit('ride-99', ['+13065551234']);
 
@@ -153,7 +153,7 @@ describe('walletStore', () => {
   describe('cancelFareSplit', () => {
     it('clears currentSplit after cancellation', async () => {
       useWalletStore.setState({ currentSplit: makeSplit() });
-      mockApi.post.mockResolvedValueOnce({});
+      mockApi.post.mockResolvedValueOnce({ data: null, status: 200 });
 
       await useWalletStore.getState().cancelFareSplit('split-1');
 
@@ -176,19 +176,19 @@ describe('walletStore', () => {
   // ---------------------------------------------------------------------------
   describe('payWithWallet', () => {
     it('deducts balance on success', async () => {
-      useWalletStore.setState({ wallet: makeWallet({ balance: 50.0 }) });
-      mockApi.post.mockResolvedValueOnce({ data: { balance: 40.5 } });
-      mockApi.get.mockResolvedValueOnce({ data: makeWallet({ balance: 40.5 }) });
+      useWalletStore.setState({ wallet: makeWallet({ balance: '50.00' }) });
+      mockApi.post.mockResolvedValueOnce({ data: { balance: 40.5 }, status: 200 });
+      mockApi.get.mockResolvedValueOnce({ data: makeWallet({ balance: '40.50' }), status: 200 });
 
       await useWalletStore.getState().payWithWallet('ride-99', 9.5);
 
       expect(mockApi.post).toHaveBeenCalledWith('/wallet/pay', { ride_id: 'ride-99', amount: 9.5 });
-      expect(useWalletStore.getState().wallet?.balance).toBe(40.5);
+      expect(useWalletStore.getState().wallet?.balance).toBe('40.50');
       expect(useWalletStore.getState().isLoading).toBe(false);
     });
 
     it('sets error and rethrows when balance is insufficient', async () => {
-      useWalletStore.setState({ wallet: makeWallet({ balance: 5.0 }) });
+      useWalletStore.setState({ wallet: makeWallet({ balance: '5.00' }) });
 
       const err: any = new Error('Request failed with status code 400');
       err.response = { data: { detail: 'Insufficient balance' } };
@@ -201,7 +201,7 @@ describe('walletStore', () => {
       expect(useWalletStore.getState().error).toBe('Insufficient balance');
       expect(useWalletStore.getState().isLoading).toBe(false);
       // Balance should be unchanged — payment was rejected
-      expect(useWalletStore.getState().wallet?.balance).toBe(5.0);
+      expect(useWalletStore.getState().wallet?.balance).toBe('5.00');
     });
   });
 

@@ -15,7 +15,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { useAuthStore } from '@shared/store/authStore';
+import { useAuthStore, type User } from '@shared/store/authStore';
 import api, { setInMemoryToken } from '@shared/api/client';
 import CustomAlert from '@shared/components/CustomAlert';
 import { useLanguageStore } from '../store/languageStore';
@@ -149,7 +149,7 @@ export default function OtpScreen() {
 
     try {
       if (isBackendMode) {
-        const response = await api.post('/auth/verify-otp', {
+        const response = await api.post<{ token?: string; refresh_token?: string; expires_in?: number; user?: User }>('/auth/verify-otp', {
           phone: phoneNumber,
           code: code,
         });

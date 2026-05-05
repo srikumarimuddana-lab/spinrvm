@@ -43,7 +43,8 @@
       "dompurify": "^3.4.1"
     },
     "postcss": ">=8.5.10",
-    "axios": ">=1.16.0"
+    "axios": ">=1.16.0",
+    "eslint": "^9"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.9.0",
@@ -59,7 +60,7 @@
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^6.0.1",
     "@vitest/ui": "^4.1.5",
-    "eslint": "^10",
+    "eslint": "^9",
     "eslint-config-next": "16.2.4",
     "eslint-plugin-jsx-a11y": "^6.8.0",
     "jsdom": "^29.1.1",

@@ -111,7 +111,7 @@ function DriverArrivingScreenContent() {
   }, [currentRide?.pickup_lat, currentRide?.pickup_lng, currentDriver?.lat, currentDriver?.lng]);
 
   useEffect(() => {
-    if (!rideId) return;
+    if (!rideId) { router.replace('/(tabs)' as any); return; }
     fetchRide(rideId);
     // Suspend fallback poll when WebSocket is healthy — saves battery/bandwidth.
     // Keep a fast 3 s poll during driver assignment negotiation in case a
@@ -125,6 +125,7 @@ function DriverArrivingScreenContent() {
   }, [rideId, currentRide?.status, wsConnected]);
 
   useEffect(() => {
+    if (!rideId) return;
     if (currentRide?.status === RideStatus.DRIVER_ARRIVED) {
       router.replace({ pathname: '/driver-arrived', params: { rideId } });
     } else if (currentRide?.status === RideStatus.IN_PROGRESS) {

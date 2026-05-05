@@ -20,6 +20,10 @@ import { Switch } from "@/components/ui/switch";
 import { Save, Check, ShieldCheck, ShieldOff } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import { useRequireModule } from "@/hooks/useRequireModule";
+import {
+    AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+    AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 export default function SettingsPage() {
     const { allowed } = useRequireModule("settings");
@@ -28,6 +32,7 @@ export default function SettingsPage() {
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [saved, setSaved] = useState(false);
+    const [confirmSave, setConfirmSave] = useState(false);
 
     const [mfaEnabled, setMfaEnabled] = useState(false);
     const [mfaLoading, setMfaLoading] = useState(true);
@@ -76,7 +81,8 @@ export default function SettingsPage() {
             setSettings(updated);
             setSaved(true);
             setTimeout(() => setSaved(false), 2000);
-        } catch {
+        } catch (e: any) {
+            toast({ title: "Failed to save settings", description: e?.message || "Unknown error", variant: "destructive" });
         } finally {
             setSaving(false);
         }
@@ -105,7 +111,7 @@ export default function SettingsPage() {
                         Configure platform-wide settings.
                     </p>
                 </div>
-                <Button onClick={handleSave} disabled={saving}>
+                <Button onClick={() => setConfirmSave(true)} disabled={saving}>
                     {saved ? (
                         <>
                             <Check className="mr-2 h-4 w-4" /> Saved!
@@ -470,6 +476,24 @@ export default function SettingsPage() {
                 onOpenChange={setShowEnrollDialog}
                 onEnrolled={() => setMfaEnabled(true)}
             />
+
+            <AlertDialog open={confirmSave} onOpenChange={setConfirmSave}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Save live credentials?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                            This will overwrite Stripe, Twilio, and other live credentials immediately.
+                            Make sure your values are correct before proceeding.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction onClick={() => { setConfirmSave(false); handleSave(); }}>
+                            Save Changes
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </div>
     );
 }

@@ -104,7 +104,7 @@ function RideInProgressScreenContent() {
   }, [currentRide, currentDriver?.lat, currentDriver?.lng]);
 
   useEffect(() => {
-    if (!rideId) return;
+    if (!rideId) { router.replace('/(tabs)' as any); return; }
     fetchRide(rideId);
     // Suspend fallback poll while WebSocket is delivering updates in real-time.
     if (wsConnected) return;
@@ -120,7 +120,7 @@ function RideInProgressScreenContent() {
   }, [eta]);
 
   useEffect(() => {
-    if (currentRide?.status === RideStatus.COMPLETED) {
+    if (currentRide?.status === RideStatus.COMPLETED && rideId) {
       router.replace({ pathname: '/ride-completed', params: { rideId } });
     }
   }, [currentRide?.status]);

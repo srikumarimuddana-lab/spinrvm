@@ -1,4 +1,5 @@
 import asyncio
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -641,6 +642,31 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                 # any client-supplied value.
                 points = data.get("points", [])
                 driver_id = current_driver_id if client_type == "driver" else None
+
+                # Per-connection sliding-window rate limit on total points to
+                # prevent a single connection from flooding driver_location_history
+                # (500-point batches sent every second = 30 000 inserts/min).
+                _BATCH_WINDOW_SECS = 10
+                _BATCH_POINTS_LIMIT = 1000  # max points per 10-second window
+                _now_ts = time.monotonic()
+                if not hasattr(websocket.state, "batch_window_start"):
+                    websocket.state.batch_window_start = _now_ts
+                    websocket.state.batch_points_count = 0
+                if _now_ts - websocket.state.batch_window_start > _BATCH_WINDOW_SECS:
+                    websocket.state.batch_window_start = _now_ts
+                    websocket.state.batch_points_count = 0
+                websocket.state.batch_points_count += len(points)
+                if websocket.state.batch_points_count > _BATCH_POINTS_LIMIT:
+                    await websocket.send_json(
+                        {
+                            "type": "rate_limited",
+                            "scope": "location_batch",
+                            "limit": _BATCH_POINTS_LIMIT,
+                            "window_seconds": _BATCH_WINDOW_SECS,
+                        }
+                    )
+                    continue
+
                 if driver_id and points:
                     docs = []
                     for pt in points[:500]:  # cap at 500 points per batch

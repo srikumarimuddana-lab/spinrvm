@@ -690,6 +690,8 @@ export const useRideStore = create<RideState>((set, get) => ({
     // while the next poll (reduced to 15 s via the WS fallback) fills
     // in any remaining details the WS message doesn't carry.
     const updated = { ...currentRide, status, ...(extra || {}) };
+    // Keep currentDriver so the ride-completed receipt screen can still show
+    // driver name/vehicle until the user taps Done. clearRide() will null it.
     set({ currentRide: updated });
     _persistRide(updated, currentDriver);
   },

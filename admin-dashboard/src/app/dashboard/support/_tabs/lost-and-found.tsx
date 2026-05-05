@@ -15,6 +15,11 @@ import { Pagination } from "@/components/ui/pagination";
 import { Search, CheckCircle, Plus, Pencil, Trash2, RefreshCw } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { useServiceAreas, ServiceAreaFilter, ServiceAreaSelect } from "../_components/service-area-select";
+import { useToast } from "@/components/ui/use-toast";
+import {
+    AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+    AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 const PAGE_SIZE = 50;
 
@@ -26,6 +31,8 @@ const S_CFG: Record<string, { l: string; c: string }> = {
 };
 
 export default function LostAndFoundTab() {
+    const { toast } = useToast();
+    const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
     const { areas } = useServiceAreas();
     const [items, setItems] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
@@ -69,21 +76,21 @@ export default function LostAndFoundTab() {
     const areaName = (id: string) => areas.find((a) => a.id === id)?.name || "";
 
     const handleCreate = async () => {
-        if (!form.ride_id.trim() || !form.item_description.trim()) { alert("Enter ride ID and item description."); return; }
+        if (!form.ride_id.trim() || !form.item_description.trim()) { toast({ title: "Missing fields", description: "Enter ride ID and item description.", variant: "destructive" }); return; }
         setSaving(true);
         try { await reportLostItem(form.ride_id, { item_description: form.item_description, service_area_id: form.service_area_id || null }); setDialogOpen(false); setForm({ ride_id: "", item_description: "", service_area_id: "" }); load(); }
-        catch (e: any) { alert(e.message); } finally { setSaving(false); }
+        catch (e: any) { toast({ title: "Failed to report item", description: e.message, variant: "destructive" }); } finally { setSaving(false); }
     };
 
     const handleUpdate = async () => {
         if (!editing) return;
         setSaving(true);
         try { await updateLostItem(editing.id, editForm); setEditDialog(false); setEditing(null); load(); }
-        catch (e: any) { alert(e.message); } finally { setSaving(false); }
+        catch (e: any) { toast({ title: "Failed to update item", description: e.message, variant: "destructive" }); } finally { setSaving(false); }
     };
 
     const handleResolve = async (id: string, status: string) => {
-        try { await resolveLostItem(id, { status }); load(); } catch (e: any) { alert(e.message); }
+        try { await resolveLostItem(id, { status }); load(); } catch (e: any) { toast({ title: "Failed to update status", description: e.message, variant: "destructive" }); }
     };
 
     return (
@@ -114,7 +121,7 @@ export default function LostAndFoundTab() {
                             <TableCell className="text-right"><div className="flex justify-end gap-0.5">
                                 {item.status !== "resolved" && <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleResolve(item.id, "resolved")} title="Resolve"><CheckCircle className="h-3.5 w-3.5 text-emerald-500" /></Button>}
                                 <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setEditing(item); setEditForm({ item_description: item.item_description || "", admin_notes: item.admin_notes || "", status: item.status || "reported" }); setEditDialog(true); }}><Pencil className="h-3.5 w-3.5" /></Button>
-                                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => { if (confirm("Delete?")) deleteLostItem(item.id).then(load); }}><Trash2 className="h-3.5 w-3.5" /></Button>
+                                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => setDeleteTarget(item.id)}><Trash2 className="h-3.5 w-3.5" /></Button>
                             </div></TableCell>
                         </TableRow>
                     ))}</TableBody></Table>}
@@ -145,6 +152,19 @@ export default function LostAndFoundTab() {
                     </div>
                 </DialogContent>
             </Dialog>
+
+            <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Delete lost item?</AlertDialogTitle>
+                        <AlertDialogDescription>This cannot be undone.</AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction onClick={() => { if (deleteTarget) deleteLostItem(deleteTarget).then(load).finally(() => setDeleteTarget(null)); }} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </div>
     );
 }

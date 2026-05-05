@@ -38,7 +38,7 @@ export default function ChatDriverScreen() {
 
   // Load chat history from the backend on mount.
   useEffect(() => {
-    if (!rideId) return;
+    if (!rideId) { router.replace('/(tabs)' as any); return; }
     (async () => {
       try {
         const res = await api.get(`/rides/${rideId}/messages`);

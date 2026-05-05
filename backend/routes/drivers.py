@@ -1972,7 +1972,10 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
         },
     )
 
-    if hasattr(guard, "modified_count") and guard.modified_count == 0:
+    # update_one returns None when no rows matched the filter (race lost).
+    # The old `hasattr(guard, "modified_count")` check was never true for
+    # Supabase responses, so the double-accept guard was silently disabled.
+    if guard is None:
         diag_logger.info(
             f"[ACCEPT] claim rejected ride_id={ride_id} "
             f"current_status={ride.get('status')} current_driver_id={ride.get('driver_id')}"
@@ -2020,13 +2023,27 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    # If assigned, unassign. If searching, just ignore/record decline.
-    await db_supabase.update_ride(
-        ride_id, {"driver_id": None, "status": "searching", "updated_at": datetime.now(timezone.utc)}
+    # Conditional reset: only unassign if this driver is still the assigned one.
+    # An unconditional update_ride() would overwrite a concurrent accept_ride() that
+    # already moved the ride to driver_accepted with a different driver.
+    declined = await db_supabase.update_one(
+        "rides",
+        {"id": ride_id, "driver_id": driver["id"], "status": {"$in": ["searching", "driver_assigned"]}},
+        {
+            "$set": {
+                "driver_id": None,
+                "status": "searching",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        },
     )
-    # M-5: SGI insurance period audit — decline releases the driver from
-    # period 2 back to period 1.
-    await record_period_transition(driver["id"], 1)
+    if declined is None:
+        # Race lost — another driver already accepted; our decline is a no-op.
+        logger.info(f"[DECLINE] ride {ride_id} already claimed by another driver; decline ignored")
+    else:
+        # M-5: SGI insurance period audit — decline releases the driver from
+        # period 2 back to period 1 only when the decline actually took effect.
+        await record_period_transition(driver["id"], 1)
 
     # Record the decline in audit_logs so daily stats can count it
     try:
@@ -2092,22 +2109,29 @@ async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_curren
                 f"Please move within 200m of the pickup location to mark arrival.",
             )
 
-    await db_supabase.update_ride(
-        ride_id,
+    guard = await db.update_one(
+        "rides",
+        {"id": ride_id, "driver_id": driver["id"], "status": "driver_accepted"},
         {
-            "status": "driver_arrived",
-            "driver_arrived_at": datetime.now(timezone.utc),
-            "updated_at": datetime.now(timezone.utc),
+            "$set": {
+                "status": "driver_arrived",
+                "driver_arrived_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
+            }
         },
     )
+    if guard is None:
+        raise HTTPException(status_code=409, detail="Ride is not in driver_accepted state")
 
     if ride.get("rider_id"):
         await manager.send_personal_message({"type": "driver_arrived", "ride_id": ride_id}, f"rider_{ride['rider_id']}")
-        await send_push_notification(
-            ride["rider_id"],
-            "Driver Arrived! 📍",
-            "Your driver has arrived at the pickup location.",
-            data={"type": "driver_arrived", "ride_id": str(ride_id)},
+        asyncio.create_task(
+            send_push_notification(
+                ride["rider_id"],
+                "Driver Arrived! 📍",
+                "Your driver has arrived at the pickup location.",
+                data={"type": "driver_arrived", "ride_id": str(ride_id)},
+            )
         )
     await manager.broadcast_ride_status(ride_id, "driver_arrived", rider_id=ride.get("rider_id"))
 
@@ -2131,26 +2155,33 @@ async def verify_pickup_otp(ride_id: str, request: RideOTPRequest, current_user:
     if not hmac.compare_digest(ride.get("pickup_otp", ""), hash_otp(request.otp)):
         raise HTTPException(status_code=400, detail="Invalid OTP")
 
-    # OTP correct, start ride
-    await db_supabase.update_ride(
-        ride_id,
+    # OTP correct — atomic transition guards against duplicate taps/retries
+    guard = await db.update_one(
+        "rides",
+        {"id": ride_id, "driver_id": driver["id"], "status": "driver_arrived"},
         {
-            "status": "in_progress",
-            "ride_started_at": datetime.now(timezone.utc),
-            "updated_at": datetime.now(timezone.utc),
+            "$set": {
+                "status": "in_progress",
+                "ride_started_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
+            }
         },
     )
+    if guard is None:
+        raise HTTPException(status_code=409, detail="Ride is not in driver_arrived state")
     # M-5: SGI insurance period audit — in_progress = period 3 (passenger
-    # aboard, full TNC commercial coverage).
+    # aboard, full TNC commercial coverage). Only record when transition took effect.
     await record_period_transition(driver["id"], 3, ride_id=ride_id)
 
     if ride.get("rider_id"):
         await manager.send_personal_message({"type": "ride_started", "ride_id": ride_id}, f"rider_{ride['rider_id']}")
-        await send_push_notification(
-            ride["rider_id"],
-            "Ride Started! ▶️",
-            "Your ride has started. Have a safe trip!",
-            data={"type": "ride_started", "ride_id": str(ride_id)},
+        asyncio.create_task(
+            send_push_notification(
+                ride["rider_id"],
+                "Ride Started! ▶️",
+                "Your ride has started. Have a safe trip!",
+                data={"type": "ride_started", "ride_id": str(ride_id)},
+            )
         )
     await manager.broadcast_ride_status(ride_id, "in_progress", rider_id=ride.get("rider_id"))
 
@@ -2160,35 +2191,46 @@ async def verify_pickup_otp(ride_id: str, request: RideOTPRequest, current_user:
 @api_router.post("/rides/{ride_id}/start")
 async def start_ride(ride_id: str, current_user: dict = Depends(get_current_user)):
     """Start ride without OTP (if configured) or fallback."""
-    # Logic similar to verify_otp but without check
     driver = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
     )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    await db_supabase.update_ride(
-        ride_id,
+    ride = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("rides", {"id": ride_id, "driver_id": driver["id"]}, limit=1)
+    )
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+
+    guard = await db.update_one(
+        "rides",
+        {"id": ride_id, "driver_id": driver["id"], "status": "driver_arrived"},
         {
-            "status": "in_progress",
-            "ride_started_at": datetime.now(timezone.utc),
-            "updated_at": datetime.now(timezone.utc),
+            "$set": {
+                "status": "in_progress",
+                "ride_started_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
+            }
         },
     )
+    if guard is None:
+        raise HTTPException(status_code=409, detail="Ride is not in driver_arrived state")
     # M-5: SGI insurance period audit — in_progress = period 3 (passenger
-    # aboard, full TNC commercial coverage).
+    # aboard, full TNC commercial coverage). Only record when transition took effect.
     await record_period_transition(driver["id"], 3, ride_id=ride_id)
 
-    ride = await db_supabase.get_ride(ride_id)
-    if ride and ride.get("rider_id"):
+    if ride.get("rider_id"):
         await manager.send_personal_message({"type": "ride_started", "ride_id": ride_id}, f"rider_{ride['rider_id']}")
-        await send_push_notification(
-            ride["rider_id"],
-            "Ride Started! ▶️",
-            "Your ride has started. Have a safe trip!",
-            data={"type": "ride_started", "ride_id": str(ride_id)},
+        asyncio.create_task(
+            send_push_notification(
+                ride["rider_id"],
+                "Ride Started! ▶️",
+                "Your ride has started. Have a safe trip!",
+                data={"type": "ride_started", "ride_id": str(ride_id)},
+            )
         )
-    await manager.broadcast_ride_status(ride_id, "in_progress", rider_id=(ride or {}).get("rider_id"))
+    await manager.broadcast_ride_status(ride_id, "in_progress", rider_id=ride.get("rider_id"))
     return {"success": True}
 
 

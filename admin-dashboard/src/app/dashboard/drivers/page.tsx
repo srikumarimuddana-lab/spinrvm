@@ -211,7 +211,7 @@ export default function DriversPage() {
         for (const [k, v] of Object.entries(editForm)) { if (v !== (selected[k] || "")) changes[k] = v; }
         if (Object.keys(changes).length === 0) { setEditing(false); return; }
         setSaving(true);
-        try { await updateDriver(selected.id, changes); const updated = { ...selected, ...changes }; setSelected(updated); setDrivers(prev => prev.map(d => d.id === selected.id ? { ...d, ...changes } : d)); setEditing(false); } catch (e: any) { alert("Failed to save: " + (e?.message || "unknown error")); } finally { setSaving(false); }
+        try { await updateDriver(selected.id, changes); const updated = { ...selected, ...changes }; setSelected(updated); setDrivers(prev => prev.map(d => d.id === selected.id ? { ...d, ...changes } : d)); setEditing(false); } catch (e: any) { toast({ title: "Failed to save driver", description: e?.message || "Unknown error", variant: "destructive" }); } finally { setSaving(false); }
     };
 
     const ef = (field: string) => editForm[field] ?? "";

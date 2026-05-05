@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
-import { setAdminAuthCookie } from './auth-fixture';
+import { setAdminAuthCookie, TEST_ADMIN_JWT } from './auth-fixture';
 
 // Mock all API calls for dashboard tests
 async function mockDashboardAPIs(page: any) {
@@ -10,8 +10,12 @@ async function mockDashboardAPIs(page: any) {
 
   await page.route('**/api/admin/**', async (route: any) => {
     const url = route.request().url();
-    if (url.includes('/auth/session') || url.includes('/auth/me')) {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ user: { id: '1', email: 'admin@spinr.ca', role: 'admin' } }) });
+    // silentRefresh POSTs here — must return a token so isLoading resolves
+    if (url.includes('/auth/refresh')) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ token: TEST_ADMIN_JWT, access_expires_at: '2100-01-01T00:00:00Z', csrf_token: 'test-csrf' }) });
+    } else if (url.includes('/auth/session') || url.includes('/auth/me')) {
+      // checkAuth expects { authenticated: true, user }
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ authenticated: true, user: { id: '1', email: 'admin@spinr.ca', role: 'admin' } }) });
     } else if (url.includes('/drivers')) {
       await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ drivers: [], total: 0 }) });
     } else if (url.includes('/rides')) {

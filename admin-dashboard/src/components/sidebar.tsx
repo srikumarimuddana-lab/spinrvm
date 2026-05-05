@@ -142,7 +142,7 @@ export function Sidebar() {
                 {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
             </Button>
 
-            {mobileOpen && <div className="fixed inset-0 z-40 bg-black/50 md:hidden" onClick={() => setMobileOpen(false)} />}
+            {mobileOpen && <div className="fixed inset-0 z-40 bg-black/50 md:hidden" role="button" tabIndex={0} aria-label="Close navigation menu" onClick={() => setMobileOpen(false)} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setMobileOpen(false); } }} />}
 
             <aside className={cn(
                 "fixed inset-y-0 left-0 z-40 flex flex-col border-r border-sidebar-border bg-sidebar transition-all duration-200 md:translate-x-0",

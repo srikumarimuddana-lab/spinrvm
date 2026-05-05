@@ -83,7 +83,7 @@ async def admin_get_wallet(
         },
         "wallet": {
             "id": wallet["id"],
-            "balance": float(wallet.get("balance", 0)),
+            "balance": str(_q(wallet.get("balance", 0))),
             "currency": wallet.get("currency", "CAD"),
             "is_active": wallet.get("is_active", True),
         },
@@ -121,7 +121,7 @@ async def admin_credit_wallet(
         )
         if existing_txns:
             t = existing_txns[0]
-            return {"balance": float(t["balance_after"]), "transaction_id": t["id"]}
+            return {"balance": str(_q(t["balance_after"])), "transaction_id": t["id"]}
 
     user = await db_supabase.get_user_by_id(req.user_id)
     if not user:
@@ -138,14 +138,14 @@ async def admin_credit_wallet(
     await db.update_one(
         "wallets",
         {"id": wallet["id"]},
-        {"$set": {"balance": float(new_balance), "updated_at": datetime.now(timezone.utc).isoformat()}},
+        {"$set": {"balance": _q(new_balance), "updated_at": datetime.now(timezone.utc).isoformat()}},
     )
     txn = await _record_transaction(
         wallet_id=wallet["id"],
         user_id=req.user_id,
         txn_type="admin_credit",
-        amount=float(credit),
-        balance_after=float(new_balance),
+        amount=str(credit),
+        balance_after=str(new_balance),
         reference_id=req.idempotency_key,
         description=f"Admin credit: {req.reason}",
         metadata={"admin_id": admin["id"], "reason": req.reason},
@@ -161,9 +161,9 @@ async def admin_credit_wallet(
             "resource": "user",
             "resource_id": req.user_id,
             "details": {
-                "amount": float(credit),
-                "old_balance": float(old_balance),
-                "new_balance": float(new_balance),
+                "amount": str(credit),
+                "old_balance": str(old_balance),
+                "new_balance": str(new_balance),
                 "reason": req.reason,
                 "transaction_id": txn["id"],
             },
@@ -172,7 +172,7 @@ async def admin_credit_wallet(
     )
 
     return {
-        "balance": float(new_balance),
+        "balance": str(new_balance),
         "transaction_id": txn["id"],
     }
 
@@ -194,7 +194,7 @@ async def admin_debit_wallet(
         )
         if existing_txns:
             t = existing_txns[0]
-            return {"balance": float(t["balance_after"]), "transaction_id": t["id"]}
+            return {"balance": str(_q(t["balance_after"])), "transaction_id": t["id"]}
 
     user = await db_supabase.get_user_by_id(req.user_id)
     if not user:
@@ -213,14 +213,14 @@ async def admin_debit_wallet(
     await db.update_one(
         "wallets",
         {"id": wallet["id"]},
-        {"$set": {"balance": float(new_balance), "updated_at": datetime.now(timezone.utc).isoformat()}},
+        {"$set": {"balance": _q(new_balance), "updated_at": datetime.now(timezone.utc).isoformat()}},
     )
     txn = await _record_transaction(
         wallet_id=wallet["id"],
         user_id=req.user_id,
         txn_type="admin_debit",
-        amount=-float(debit),
-        balance_after=float(new_balance),
+        amount=str(-debit),
+        balance_after=str(new_balance),
         reference_id=req.idempotency_key,
         description=f"Admin debit: {req.reason}",
         metadata={"admin_id": admin["id"], "reason": req.reason},
@@ -236,9 +236,9 @@ async def admin_debit_wallet(
             "resource": "user",
             "resource_id": req.user_id,
             "details": {
-                "amount": float(debit),
-                "old_balance": float(old_balance),
-                "new_balance": float(new_balance),
+                "amount": str(debit),
+                "old_balance": str(old_balance),
+                "new_balance": str(new_balance),
                 "reason": req.reason,
                 "transaction_id": txn["id"],
             },
@@ -247,6 +247,6 @@ async def admin_debit_wallet(
     )
 
     return {
-        "balance": float(new_balance),
+        "balance": str(new_balance),
         "transaction_id": txn["id"],
     }

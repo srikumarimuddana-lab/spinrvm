@@ -2441,9 +2441,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     # ride has just transitioned to `completed`, and the driver's row already
     # has is_online=True (a driver cannot be on an active trip while offline).
     # See update_driver_status docstring for the is_online/is_available invariant.
-    await db_supabase.update_one(
-        "drivers", {"id": driver["id"]}, {"$inc": {"total_rides": 1}, "$set": {"is_available": True}}
-    )
+    await db_supabase.set_driver_available(driver["id"], available=True, total_rides_inc=1)
     # M-5: SGI insurance period audit — ride completed, driver returns to
     # period 1 (still online, no ride). No ride_id on period 1.
     await record_period_transition(driver["id"], 1)

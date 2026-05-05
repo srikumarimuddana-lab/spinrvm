@@ -690,8 +690,9 @@ export const useRideStore = create<RideState>((set, get) => ({
     // while the next poll (reduced to 15 s via the WS fallback) fills
     // in any remaining details the WS message doesn't carry.
     const updated = { ...currentRide, status, ...(extra || {}) };
-    set({ currentRide: updated });
-    _persistRide(updated, currentDriver);
+    const isTerminal = TERMINAL_STATUSES.has(status);
+    set({ currentRide: updated, ...(isTerminal ? { currentDriver: null } : {}) });
+    _persistRide(updated, isTerminal ? null : currentDriver);
   },
 
   // ── Offline hydration ────────────────────────────────────────────

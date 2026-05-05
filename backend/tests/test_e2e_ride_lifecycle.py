@@ -188,8 +188,7 @@ class TestRideLifecycleConcurrency:
 
         guard_ok = MagicMock()
         guard_ok.modified_count = 1
-        guard_fail = MagicMock()
-        guard_fail.modified_count = 0
+        guard_fail = None  # production code checks `if guard is None` for race-loss
 
         with (
             patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[driver])),

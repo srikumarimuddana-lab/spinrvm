@@ -46,8 +46,7 @@ async def test_no_double_accept(client, ride_id, driver_1_headers, driver_2_head
 
     guard_ok = MagicMock()
     guard_ok.modified_count = 1
-    guard_fail = MagicMock()
-    guard_fail.modified_count = 0
+    guard_fail = None  # production code checks `if guard is None` for race-loss
 
     with (
         patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[driver])),

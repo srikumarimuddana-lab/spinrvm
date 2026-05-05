@@ -157,7 +157,7 @@ class TestAcceptRideFlipsStatus:
         assert send_push_mock.await_count >= 1
 
     def test_double_accept_rejected_by_guard(self):
-        """When the atomic guard returns modified_count=0 (ride already taken),
+        """When the atomic guard returns None (no rows matched, ride already taken),
         accept_ride must raise 409 — never return {success: True}."""
         from fastapi import HTTPException
 
@@ -166,8 +166,8 @@ class TestAcceptRideFlipsStatus:
 
         pre_ride = _ride_row("driver_assigned", driver_id=DRIVER_ID)
 
-        # Guard says 0 rows matched → ride taken by a concurrent request
-        guard_fail = type("_Guard", (), {"modified_count": 0})()
+        # Guard returns None → no rows matched, ride taken by a concurrent request
+        guard_fail = None
 
         with (
             patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=pre_ride)),

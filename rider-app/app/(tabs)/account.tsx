@@ -15,7 +15,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
-import { useAuthStore } from '@shared/store/authStore';
+import { useAuthStore, type User } from '@shared/store/authStore';
 import api from '@shared/api/client';
 import CustomAlert from '@shared/components/CustomAlert';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -65,7 +65,7 @@ export default function AccountScreen() {
       (async () => {
         setIsRefreshing(true);
         try {
-          const userRes = await api.get('/auth/me');
+          const userRes = await api.get<User>('/auth/me');
           if (!cancelled && userRes.data) useAuthStore.setState({ user: userRes.data });
         } catch {}
         finally { if (!cancelled) setIsRefreshing(false); }

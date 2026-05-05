@@ -138,13 +138,10 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
                 formData.append('side', side);
             }
 
-            // Do NOT set Content-Type manually — axios must auto-append the
-            // boundary when the body is FormData, otherwise the server rejects
-            // with "Missing boundary in multipart".
-            const response = await api.post('/drivers/documents/upload', formData, {
-                headers: { 'Content-Type': undefined },
-                transformRequest: (data) => data,
-            });
+            // Do NOT set Content-Type manually — the fetch client must auto-append
+            // the boundary when the body is FormData; pass no config so the
+            // default Content-Type header is omitted for FormData bodies.
+            const response = await api.post('/drivers/documents/upload', formData);
 
             const newDoc = response.data as DriverDocument;
 

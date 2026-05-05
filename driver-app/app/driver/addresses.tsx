@@ -80,7 +80,7 @@ export default function AddressesScreen() {
     const fetchAddresses = async () => {
         setLoading(true);
         try {
-            const res = await api.get('/addresses');
+            const res = await api.get<SavedAddress[]>('/addresses');
             setAddresses(res.data || []);
         } catch (err: any) {
             console.log('Error fetching addresses:', err);

@@ -42,6 +42,7 @@
     "jspdf": {
       "dompurify": "^3.4.1"
     },
+    "axios": "^1.15.2",
     "postcss": ">=8.5.10"
   },
   "devDependencies": {

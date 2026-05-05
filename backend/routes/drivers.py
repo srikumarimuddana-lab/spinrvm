@@ -1972,7 +1972,10 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
         },
     )
 
-    if hasattr(guard, "modified_count") and guard.modified_count == 0:
+    # update_one returns None when no rows matched the filter (race lost).
+    # The old `hasattr(guard, "modified_count")` check was never true for
+    # Supabase responses, so the double-accept guard was silently disabled.
+    if guard is None:
         diag_logger.info(
             f"[ACCEPT] claim rejected ride_id={ride_id} "
             f"current_status={ride.get('status')} current_driver_id={ride.get('driver_id')}"
@@ -2020,13 +2023,27 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    # If assigned, unassign. If searching, just ignore/record decline.
-    await db_supabase.update_ride(
-        ride_id, {"driver_id": None, "status": "searching", "updated_at": datetime.now(timezone.utc)}
+    # Conditional reset: only unassign if this driver is still the assigned one.
+    # An unconditional update_ride() would overwrite a concurrent accept_ride() that
+    # already moved the ride to driver_accepted with a different driver.
+    declined = await db_supabase.update_one(
+        "rides",
+        {"id": ride_id, "driver_id": driver["id"], "status": {"$in": ["searching", "driver_assigned"]}},
+        {
+            "$set": {
+                "driver_id": None,
+                "status": "searching",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        },
     )
-    # M-5: SGI insurance period audit — decline releases the driver from
-    # period 2 back to period 1.
-    await record_period_transition(driver["id"], 1)
+    if declined is None:
+        # Race lost — another driver already accepted; our decline is a no-op.
+        logger.info(f"[DECLINE] ride {ride_id} already claimed by another driver; decline ignored")
+    else:
+        # M-5: SGI insurance period audit — decline releases the driver from
+        # period 2 back to period 1 only when the decline actually took effect.
+        await record_period_transition(driver["id"], 1)
 
     # Record the decline in audit_logs so daily stats can count it
     try:

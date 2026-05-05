@@ -106,6 +106,7 @@ export default function HeatMapPage() {
     const fetchHeatMapData = useCallback(() => {
         if (startDate && endDate && startDate > endDate) {
             setDateError("Start date must be before end date.");
+            setLoading(false);
             return;
         }
         setDateError("");

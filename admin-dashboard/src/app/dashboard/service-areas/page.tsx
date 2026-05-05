@@ -1084,6 +1084,7 @@ function AreaFeesEditor({ areaId, area, fees, loading, onReload, onFieldUpdate }
     };
 
     return (
+        <>
         <div className="space-y-6">
             {/* SECTION 1: Area Fees */}
             <div>
@@ -1222,6 +1223,7 @@ function AreaFeesEditor({ areaId, area, fees, loading, onReload, onFieldUpdate }
                 </AlertDialogFooter>
             </AlertDialogContent>
         </AlertDialog>
+        </>
     );
 }
 

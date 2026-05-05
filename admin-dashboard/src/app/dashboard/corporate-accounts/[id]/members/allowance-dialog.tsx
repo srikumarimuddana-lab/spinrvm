@@ -177,7 +177,10 @@ export default function AllowanceDialog({ companyId, member, onClose, onSaved }:
 
                 <DialogFooter>
                     <Button variant="outline" onClick={onClose}>Cancel</Button>
-                    <Button onClick={save} disabled={saving}>
+                    <Button
+                        onClick={save}
+                        disabled={saving || (type === "fixed_recurring" && (!periodStart || !periodEnd)) || (type !== "unlimited" && !amount)}
+                    >
                         {saving ? "Saving…" : "Save"}
                     </Button>
                 </DialogFooter>

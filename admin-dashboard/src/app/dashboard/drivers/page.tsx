@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, getServiceAreas, getVehicleTypes, getFareConfigs } from "@/lib/api";
+import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers } from "@/lib/api";
 import { Pagination } from "@/components/ui/pagination";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatCurrency } from "@/lib/utils";
@@ -268,7 +268,21 @@ export default function DriversPage() {
     };
     const fmtDate = (d: string) => { if (!d) return "\u2014"; try { return new Date(d).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" }); } catch { return d; } };
 
-    const handleExport = () => { exportToCsv("drivers", sorted, [{ key: "id", label: "ID" }, { key: "first_name", label: "First Name" }, { key: "last_name", label: "Last Name" }, { key: "email", label: "Email" }, { key: "phone", label: "Phone" }, { key: "service_area_id", label: "Service Area ID" }, { key: "is_verified", label: "Verified" }, { key: "is_online", label: "Online" }, { key: "rating", label: "Rating" }, { key: "total_rides", label: "Rides" }, { key: "total_earnings", label: "Earnings" }, { key: "vehicle_make", label: "Vehicle Make" }, { key: "vehicle_model", label: "Vehicle Model" }, { key: "license_plate", label: "License Plate" }, { key: "created_at", label: "Joined" }]); };
+    const handleExport = async () => {
+        try {
+            const res = await exportDrivers();
+            exportToCsv("drivers", res.drivers, [
+                { key: "id", label: "ID" }, { key: "name", label: "Name" },
+                { key: "email", label: "Email" }, { key: "phone", label: "Phone" },
+                { key: "vehicle_make", label: "Vehicle Make" }, { key: "vehicle_model", label: "Vehicle Model" },
+                { key: "license_plate", label: "License Plate" }, { key: "is_verified", label: "Verified" },
+                { key: "is_online", label: "Online" }, { key: "total_rides", label: "Rides" },
+                { key: "created_at", label: "Joined" },
+            ]);
+        } catch (e: any) {
+            toast({ title: "Export failed", description: e?.message, variant: "destructive" });
+        }
+    };
 
     const selectedAreaName = serviceAreaId ? serviceAreas.find(a => a.id === serviceAreaId)?.name || "Selected Area" : "All Areas";
     const activeDocs = driverDocs.filter(d => d.status !== "superseded");

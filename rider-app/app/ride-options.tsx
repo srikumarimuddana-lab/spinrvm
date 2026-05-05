@@ -181,7 +181,10 @@ function RideOptionsScreenContent() {
   };
 
   const handleSelect = (index: number) => {
-    if (!estimates[index].available) return;
+    if (!estimates[index]?.available) {
+      setAlertState({ visible: true, title: 'Unavailable', message: 'This vehicle type is not available right now. Please choose another.', variant: 'warning' });
+      return;
+    }
     setSelectedIndex(index);
     selectVehicle(estimates[index].vehicle_type);
     // Re-fetch nearby drivers filtered by this vehicle type

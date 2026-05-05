@@ -78,7 +78,7 @@ function RideCompletedScreenContent() {
   }, []);
 
   const buildReceiptText = () => {
-    const tipAmount = selectedTip || (customTip ? parseFloat(customTip) || 0 : 0);
+    const tipAmount = selectedTip !== null ? selectedTip : (customTip ? parseFloat(customTip) || 0 : 0);
     const total = fare + tipAmount;
     const rideDate = currentRide?.ride_completed_at
       ? new Date(currentRide.ride_completed_at).toLocaleString('en-CA', {

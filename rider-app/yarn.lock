@@ -5464,7 +5464,7 @@ expo-file-system@~55.0.19:
   resolved "https://registry.yarnpkg.com/expo-file-system/-/expo-file-system-55.0.19.tgz#7a714ad1b3bbcc41bdc0c0942dbd131f15a6c472"
   integrity sha512-c4smCbMqELLI3YQrGpw21MwZIREXM2e53vQD/+KWQcae1q+hgw8J2TroEqcQ/jVOtFpZYVvyVfgu4HDKNEKmNw==
 
-expo-font@~55.0.6, expo-font@~55.0.7:
+expo-font@~55.0.7:
   version "55.0.7"
   resolved "https://registry.yarnpkg.com/expo-font/-/expo-font-55.0.7.tgz#f89a5d9a71618d88abd4aa0d76f74070f803ff79"
   integrity sha512-oH39Xb+3i6Y69b7YRP+P+5WLx7621t+ep/RAgLwJJYpTjs7CnSohUG+873rEtqsTAuQGi63ms7x9ZeHj1E9LYw==
@@ -5486,14 +5486,14 @@ expo-image-loader@~55.0.0:
   resolved "https://registry.yarnpkg.com/expo-image-loader/-/expo-image-loader-55.0.0.tgz#56ae6631a0f43191432296a1f7f1e9737e653cfe"
   integrity sha512-NOjp56wDrfuA5aiNAybBIjqIn1IxKeGJ8CECWZncQ/GzjZfyTYAHTCyeApYkdKkMBLHINzI4BbTGSlbCa0fXXQ==
 
-expo-image-picker@~55.0.19:
+expo-image-picker@~55.0.20:
   version "55.0.20"
   resolved "https://registry.yarnpkg.com/expo-image-picker/-/expo-image-picker-55.0.20.tgz#42660178a00371df03f5633856dbaad36fec96ee"
   integrity sha512-lfWt/0rPWdKz8AdDEGmGHZIJSNlVc720Dlx5bfou10FU16ZV5wAbTU63nm2jkXd8hbXke4a/2Ha1dzxCVA+LQQ==
   dependencies:
     expo-image-loader "~55.0.0"
 
-expo-image@^55.0.10, expo-image@~55.0.9:
+expo-image@^55.0.10, expo-image@~55.0.10:
   version "55.0.10"
   resolved "https://registry.yarnpkg.com/expo-image/-/expo-image-55.0.10.tgz#88f0c584c53e9f43ae40359937f4ce091f32c66a"
   integrity sha512-We+vq/Z8jy8zmGxcOP8vrhiWkkwyXFdSks8cSlPi0bpu6D0Ei6l9Nj2xHWCD+yoENh92aCEe1+QRujAwXbogGA==
@@ -5515,7 +5515,7 @@ expo-linear-gradient@~55.0.13:
   resolved "https://registry.yarnpkg.com/expo-linear-gradient/-/expo-linear-gradient-55.0.13.tgz#1a61751c1623dec6dd885bf7fe152b4c5f35fbb5"
   integrity sha512-Qz2T4jpkA15RIk29DBqI1TwW+8O9AN8MyC4TJPbh/5UnihH0yNNz3waplUO8Szh5OZ3czTGvtPQU4ysF3RDxwQ==
 
-expo-linking@~55.0.14:
+expo-linking@~55.0.15:
   version "55.0.15"
   resolved "https://registry.yarnpkg.com/expo-linking/-/expo-linking-55.0.15.tgz#5b947210172b9f76cb0323d189c37da5691dfc99"
   integrity sha512-/RQh2vkNqV8Bim9Owm/evVqn2fqTvCDYHkpYPoSKbLAdydSGdHC2xZNw7Odl4wu1i1/3L4Xz//LKd3NsPWYWBQ==
@@ -5523,7 +5523,7 @@ expo-linking@~55.0.14:
     expo-constants "~55.0.16"
     invariant "^2.2.4"
 
-expo-location@~55.1.8:
+expo-location@~55.1.9:
   version "55.1.9"
   resolved "https://registry.yarnpkg.com/expo-location/-/expo-location-55.1.9.tgz#fa7d8179f7b46e7ed7a079384383e51ec9ab5f3a"
   integrity sha512-PIH9/qeyhtGh190FyIJNZYHXZOoi42SbVHY9IoTMBmqWLHf1BJyGhPpFlaLBSCjxObqfVZmrWsN5dtjueSwYQA==
@@ -5565,7 +5565,7 @@ expo-notifications@~55.0.22:
     expo-application "~55.0.14"
     expo-constants "~55.0.15"
 
-expo-router@~55.0.13:
+expo-router@~55.0.14:
   version "55.0.14"
   resolved "https://registry.yarnpkg.com/expo-router/-/expo-router-55.0.14.tgz#7e4995c2241efb308a923e54555e8ed7840ac167"
   integrity sha512-rOn/wosp2hAPM+O2o41hnarbP5Zqv9UkHWa31KoSoiOme1tpmZd2yc93XtRAtzP0P5E5xzqq7a2rbEAarpP5XA==
@@ -5607,14 +5607,14 @@ expo-server@^55.0.9:
   resolved "https://registry.yarnpkg.com/expo-server/-/expo-server-55.0.9.tgz#ae2b6d8b1f242d4f842d7bc304234a941578f97d"
   integrity sha512-N5Ipn1NwqaJzEm+G97o0Jbe4g/th3R/16N1DabnYryXKCiZwDkK13/w3VfGkQN9LOOaBP+JIRxGf4M8lQKPzyA==
 
-expo-splash-screen@~55.0.19:
+expo-splash-screen@~55.0.20:
   version "55.0.20"
   resolved "https://registry.yarnpkg.com/expo-splash-screen/-/expo-splash-screen-55.0.20.tgz#e7b369132d4fd17df6a6234d7548f69791216ad3"
   integrity sha512-WI5T0dutiZhxsqlF+jhEP4JRpQNILLlP8IpmKehsnV53Cncv6AQrKE7y1sOWwDyC2m2GBufZ/Vwam1RMt2EfmA==
   dependencies:
     "@expo/prebuild-config" "^55.0.17"
 
-expo-status-bar@~55.0.5:
+expo-status-bar@~55.0.6:
   version "55.0.6"
   resolved "https://registry.yarnpkg.com/expo-status-bar/-/expo-status-bar-55.0.6.tgz#ae54f85e9aff081480f87e902c29ffc26343aa3f"
   integrity sha512-ijOUptfdiqYt7rObZ6jrPQ8sE5YN/8MxKCIJx0b7TY4nGkSJxhPIxeoW4GXcXCA8mTQ9PiOHH/ThLZgRVZvUlQ==
@@ -5626,7 +5626,7 @@ expo-structured-headers@~55.0.2:
   resolved "https://registry.yarnpkg.com/expo-structured-headers/-/expo-structured-headers-55.0.2.tgz#02705fae72add7bb91859d4c91ef38b07eefa676"
   integrity sha512-KITovrWigTOtsII5hRQ9/3ydaNcxCux5g6O+eTPLyjnye9dpkDKl5GmCLVPVKIL/d7253OtbGtWMD4m0gha5pw==
 
-expo-symbols@^55.0.8, expo-symbols@~55.0.7:
+expo-symbols@^55.0.8, expo-symbols@~55.0.8:
   version "55.0.8"
   resolved "https://registry.yarnpkg.com/expo-symbols/-/expo-symbols-55.0.8.tgz#4ed29c4aaa80eecb02c6109322f508bebe077ebd"
   integrity sha512-Dg6BTu+fCWukdlh+3XYIr6NbqJWmK4aAQ6i6BInKnWU0ALuzVUJcMDq8Lk9bHok2hOh3OhzJqlCqEoBXPInIVQ==
@@ -5634,7 +5634,7 @@ expo-symbols@^55.0.8, expo-symbols@~55.0.7:
     "@expo-google-fonts/material-symbols" "^0.4.1"
     sf-symbols-typescript "^2.0.0"
 
-expo-system-ui@~55.0.16:
+expo-system-ui@~55.0.17:
   version "55.0.17"
   resolved "https://registry.yarnpkg.com/expo-system-ui/-/expo-system-ui-55.0.17.tgz#033635388d4bde79ec9a5ec1422722aead27a2a2"
   integrity sha512-sCrQbp1VyMe63c7y7/luz88P9Ro3/jeUBXby2uYk0wHtkawUzBK9V69J3HTC4rI5eXiJMJPF2oCKO71c/7wtTg==
@@ -5667,7 +5667,7 @@ expo-updates@~55.0.21:
     ignore "^5.3.1"
     resolve-from "^5.0.0"
 
-expo-web-browser@~55.0.14:
+expo-web-browser@~55.0.15:
   version "55.0.15"
   resolved "https://registry.yarnpkg.com/expo-web-browser/-/expo-web-browser-55.0.15.tgz#384f18d538d3cc6d68324b8acbbc7e48e91b586c"
   integrity sha512-6hwZQob3EF+RWwZ+IvWLZjj2wI1frqx21+m/uzBqdUEHUhp2cVJi7kmxDolDmrve+ZldryZi1qfN78ALdvjHSA==
@@ -6997,7 +6997,7 @@ jest-environment-node@^29.7.0:
     jest-mock "^29.7.0"
     jest-util "^29.7.0"
 
-jest-expo@~55.0.16:
+jest-expo@~55.0.17:
   version "55.0.17"
   resolved "https://registry.yarnpkg.com/jest-expo/-/jest-expo-55.0.17.tgz#b2baf07039e76f24e897f746ad765651ca0243ad"
   integrity sha512-LEJJyPBYtr7FzL5DUvnPsWF4ial6h23XQ37ikmqu/HFR4KidFkQ03ht2jsUWUSqmN/KdKeWSesEmbe5AUNZn3A==
@@ -9066,7 +9066,7 @@ react-native-reanimated@4.3.0:
     react-native-is-edge-to-edge "^1.3.1"
     semver "^7.7.3"
 
-react-native-safe-area-context@~5.6.0:
+react-native-safe-area-context@~5.6.2:
   version "5.6.2"
   resolved "https://registry.yarnpkg.com/react-native-safe-area-context/-/react-native-safe-area-context-5.6.2.tgz#283e006f5b434fb247fcb4be0971ad7473d5c560"
   integrity sha512-4XGqMNj5qjUTYywJqpdWZ9IG8jgkS3h06sfVjfw5yZQZfWnRFXczi0GnYyFyCc2EBps/qFmoCH8fez//WumdVg==

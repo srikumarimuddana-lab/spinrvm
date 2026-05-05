@@ -14,7 +14,7 @@ Covers branches not exercised by existing test_rides.py / test_e2e_ride_lifecycl
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -66,21 +66,26 @@ def _driver(**extra):
 # Decimal helpers
 # ---------------------------------------------------------------------------
 
+
 class TestMoneyHelpers:
     def test_d_converts_string(self):
         from backend.routes.rides import _d
+
         assert _d("18.5") == Decimal("18.5")
 
     def test_d_handles_none(self):
         from backend.routes.rides import _d
+
         assert _d(None) == Decimal("0")
 
     def test_round_to_two_places(self):
-        from backend.routes.rides import _round, _d
+        from backend.routes.rides import _d, _round
+
         assert _round(_d("18.555")) == Decimal("18.56")
 
     def test_f_returns_float(self):
-        from backend.routes.rides import _f, _d
+        from backend.routes.rides import _d, _f
+
         assert isinstance(_f(_d("18.50")), float)
         assert _f(_d("18.50")) == 18.50
 
@@ -89,9 +94,11 @@ class TestMoneyHelpers:
 # add_tip
 # ---------------------------------------------------------------------------
 
+
 class TestAddTip:
     def _mock_request(self):
         from starlette.requests import Request as SR
+
         return SR({"type": "http", "method": "POST", "path": "/", "headers": [], "query_string": b"", "root_path": ""})
 
     def test_adds_tip_to_completed_ride(self):
@@ -124,6 +131,7 @@ class TestAddTip:
 
     def test_zero_tip_raises_400(self):
         from fastapi import HTTPException
+
         from backend.routes import rides as rides_mod
         from backend.routes.rides import TipRequest
 
@@ -140,6 +148,7 @@ class TestAddTip:
 
     def test_duplicate_tip_raises_400(self):
         from fastapi import HTTPException
+
         from backend.routes import rides as rides_mod
         from backend.routes.rides import TipRequest
 
@@ -159,6 +168,7 @@ class TestAddTip:
 
     def test_non_completed_ride_raises_400(self):
         from fastapi import HTTPException
+
         from backend.routes import rides as rides_mod
         from backend.routes.rides import TipRequest
 
@@ -178,6 +188,7 @@ class TestAddTip:
 
     def test_wrong_rider_raises_403(self):
         from fastapi import HTTPException
+
         from backend.routes import rides as rides_mod
         from backend.routes.rides import TipRequest
 
@@ -199,6 +210,7 @@ class TestAddTip:
 # ---------------------------------------------------------------------------
 # rate_driver
 # ---------------------------------------------------------------------------
+
 
 class TestRateDriver:
     def test_rates_driver_and_updates_rolling_average(self):
@@ -251,6 +263,7 @@ class TestRateDriver:
 
     def test_not_completed_raises_400(self):
         from fastapi import HTTPException
+
         from backend.routes import rides as rides_mod
         from backend.schemas import RideRatingRequest
 
@@ -269,6 +282,7 @@ class TestRateDriver:
 
     def test_wrong_rider_raises_404(self):
         from fastapi import HTTPException
+
         from backend.routes import rides as rides_mod
         from backend.schemas import RideRatingRequest
 
@@ -290,6 +304,7 @@ class TestRateDriver:
 # get_ride_receipt
 # ---------------------------------------------------------------------------
 
+
 class TestGetRideReceipt:
     def test_returns_receipt_for_completed_ride(self):
         from backend.routes import rides as rides_mod
@@ -310,9 +325,7 @@ class TestGetRideReceipt:
             patch("backend.routes.rides.db_supabase.get_user_by_id", AsyncMock(return_value=driver_profile)),
             patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
         ):
-            result = asyncio.run(
-                rides_mod.get_ride_receipt(ride_id=RIDE_ID, current_user={"id": RIDER_ID})
-            )
+            result = asyncio.run(rides_mod.get_ride_receipt(ride_id=RIDE_ID, current_user={"id": RIDER_ID}))
 
         assert result["success"] is True
         assert result["receipt"]["ride_id"] == RIDE_ID
@@ -320,45 +333,43 @@ class TestGetRideReceipt:
 
     def test_not_completed_raises_400(self):
         from fastapi import HTTPException
+
         from backend.routes import rides as rides_mod
 
         ride = _ride("in_progress")
 
         with patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)):
             with pytest.raises(HTTPException) as exc:
-                asyncio.run(
-                    rides_mod.get_ride_receipt(ride_id=RIDE_ID, current_user={"id": RIDER_ID})
-                )
+                asyncio.run(rides_mod.get_ride_receipt(ride_id=RIDE_ID, current_user={"id": RIDER_ID}))
         assert exc.value.status_code == 400
 
     def test_wrong_rider_raises_403(self):
         from fastapi import HTTPException
+
         from backend.routes import rides as rides_mod
 
         ride = _ride("completed")
 
         with patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)):
             with pytest.raises(HTTPException) as exc:
-                asyncio.run(
-                    rides_mod.get_ride_receipt(ride_id=RIDE_ID, current_user={"id": "other_rider"})
-                )
+                asyncio.run(rides_mod.get_ride_receipt(ride_id=RIDE_ID, current_user={"id": "other_rider"}))
         assert exc.value.status_code == 403
 
     def test_ride_not_found_raises_404(self):
         from fastapi import HTTPException
+
         from backend.routes import rides as rides_mod
 
         with patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=None)):
             with pytest.raises(HTTPException) as exc:
-                asyncio.run(
-                    rides_mod.get_ride_receipt(ride_id=RIDE_ID, current_user={"id": RIDER_ID})
-                )
+                asyncio.run(rides_mod.get_ride_receipt(ride_id=RIDE_ID, current_user={"id": RIDER_ID}))
         assert exc.value.status_code == 404
 
 
 # ---------------------------------------------------------------------------
 # get_share_trip_link
 # ---------------------------------------------------------------------------
+
 
 class TestGetShareTripLink:
     def test_generates_share_token(self):
@@ -370,9 +381,7 @@ class TestGetShareTripLink:
             patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
             patch("backend.routes.rides.db_supabase.update_ride", AsyncMock(return_value=ride)),
         ):
-            result = asyncio.run(
-                rides_mod.get_share_trip_link(ride_id=RIDE_ID, current_user={"id": RIDER_ID})
-            )
+            result = asyncio.run(rides_mod.get_share_trip_link(ride_id=RIDE_ID, current_user={"id": RIDER_ID}))
 
         assert result["success"] is True
         assert "share_token" in result
@@ -384,42 +393,39 @@ class TestGetShareTripLink:
         ride = _ride("in_progress", shared_trip_token="existing_token_abc")
 
         with patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)):
-            result = asyncio.run(
-                rides_mod.get_share_trip_link(ride_id=RIDE_ID, current_user={"id": RIDER_ID})
-            )
+            result = asyncio.run(rides_mod.get_share_trip_link(ride_id=RIDE_ID, current_user={"id": RIDER_ID}))
 
         assert result["share_token"] == "existing_token_abc"
 
     def test_completed_ride_raises_400(self):
         from fastapi import HTTPException
+
         from backend.routes import rides as rides_mod
 
         ride = _ride("completed")
 
         with patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)):
             with pytest.raises(HTTPException) as exc:
-                asyncio.run(
-                    rides_mod.get_share_trip_link(ride_id=RIDE_ID, current_user={"id": RIDER_ID})
-                )
+                asyncio.run(rides_mod.get_share_trip_link(ride_id=RIDE_ID, current_user={"id": RIDER_ID}))
         assert exc.value.status_code == 400
 
     def test_wrong_rider_raises_403(self):
         from fastapi import HTTPException
+
         from backend.routes import rides as rides_mod
 
         ride = _ride("in_progress")
 
         with patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)):
             with pytest.raises(HTTPException) as exc:
-                asyncio.run(
-                    rides_mod.get_share_trip_link(ride_id=RIDE_ID, current_user={"id": "other_rider"})
-                )
+                asyncio.run(rides_mod.get_share_trip_link(ride_id=RIDE_ID, current_user={"id": "other_rider"}))
         assert exc.value.status_code == 403
 
 
 # ---------------------------------------------------------------------------
 # get_chat_status
 # ---------------------------------------------------------------------------
+
 
 class TestGetChatStatus:
     def test_active_ride_chat_available(self):
@@ -428,9 +434,7 @@ class TestGetChatStatus:
         ride = _ride("in_progress")
 
         with patch("backend.routes.rides.db.find_one", AsyncMock(return_value=ride)):
-            result = asyncio.run(
-                rides_mod.get_chat_status(ride_id=RIDE_ID, current_user={"id": RIDER_ID})
-            )
+            result = asyncio.run(rides_mod.get_chat_status(ride_id=RIDE_ID, current_user={"id": RIDER_ID}))
 
         assert result["available"] is True
         assert result["post_trip"] is False
@@ -441,9 +445,7 @@ class TestGetChatStatus:
         ride = _ride("cancelled")
 
         with patch("backend.routes.rides.db.find_one", AsyncMock(return_value=ride)):
-            result = asyncio.run(
-                rides_mod.get_chat_status(ride_id=RIDE_ID, current_user={"id": RIDER_ID})
-            )
+            result = asyncio.run(rides_mod.get_chat_status(ride_id=RIDE_ID, current_user={"id": RIDER_ID}))
 
         assert result["available"] is False
 
@@ -454,9 +456,7 @@ class TestGetChatStatus:
         ride = _ride("completed", ride_completed_at=recent_ts)
 
         with patch("backend.routes.rides.db.find_one", AsyncMock(return_value=ride)):
-            result = asyncio.run(
-                rides_mod.get_chat_status(ride_id=RIDE_ID, current_user={"id": RIDER_ID})
-            )
+            result = asyncio.run(rides_mod.get_chat_status(ride_id=RIDE_ID, current_user={"id": RIDER_ID}))
 
         assert result["available"] is True
         assert result["post_trip"] is True
@@ -469,14 +469,13 @@ class TestGetChatStatus:
         ride = _ride("completed", ride_completed_at=old_ts)
 
         with patch("backend.routes.rides.db.find_one", AsyncMock(return_value=ride)):
-            result = asyncio.run(
-                rides_mod.get_chat_status(ride_id=RIDE_ID, current_user={"id": RIDER_ID})
-            )
+            result = asyncio.run(rides_mod.get_chat_status(ride_id=RIDE_ID, current_user={"id": RIDER_ID}))
 
         assert result["available"] is False
 
     def test_ride_not_found_raises_404(self):
         from fastapi import HTTPException
+
         from backend.routes import rides as rides_mod
 
         with patch("backend.routes.rides.db.find_one", AsyncMock(return_value=None)):
@@ -488,6 +487,7 @@ class TestGetChatStatus:
 # ---------------------------------------------------------------------------
 # get_ride_messages
 # ---------------------------------------------------------------------------
+
 
 class TestGetRideMessages:
     def test_rider_can_get_messages(self):
@@ -507,14 +507,13 @@ class TestGetRideMessages:
             patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
             patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
         ):
-            result = asyncio.run(
-                rides_mod.get_ride_messages(ride_id=RIDE_ID, current_user={"id": RIDER_ID})
-            )
+            result = asyncio.run(rides_mod.get_ride_messages(ride_id=RIDE_ID, current_user={"id": RIDER_ID}))
 
         assert "messages" in result
 
     def test_unauthorized_user_raises_403(self):
         from fastapi import HTTPException
+
         from backend.routes import rides as rides_mod
 
         ride = _ride("in_progress")
@@ -527,9 +526,7 @@ class TestGetRideMessages:
             patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
         ):
             with pytest.raises(HTTPException) as exc:
-                asyncio.run(
-                    rides_mod.get_ride_messages(ride_id=RIDE_ID, current_user={"id": "outsider"})
-                )
+                asyncio.run(rides_mod.get_ride_messages(ride_id=RIDE_ID, current_user={"id": "outsider"}))
         assert exc.value.status_code == 403
 
 
@@ -537,24 +534,24 @@ class TestGetRideMessages:
 # get_scheduled_rides
 # ---------------------------------------------------------------------------
 
+
 class TestGetScheduledRides:
     def test_returns_scheduled_rides(self):
         from backend.routes import rides as rides_mod
 
         scheduled = [_ride("scheduled")]
 
-        with patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=scheduled)):
-            result = asyncio.run(
-                rides_mod.get_scheduled_rides(current_user={"id": RIDER_ID})
-            )
+        with patch("backend.routes.rides.db_supabase.get_rides_for_user", MagicMock(return_value=scheduled)):
+            result = asyncio.run(rides_mod.get_scheduled_rides(current_user={"id": RIDER_ID}))
 
-        assert "rides" in result
-        assert len(result["rides"]) == 1
+        assert isinstance(result, list)
+        assert len(result) == 1
 
 
 # ---------------------------------------------------------------------------
 # cancel_scheduled_ride
 # ---------------------------------------------------------------------------
+
 
 class TestCancelScheduledRide:
     def test_cancels_scheduled_ride(self):
@@ -564,22 +561,19 @@ class TestCancelScheduledRide:
         cancelled = _ride("cancelled")
 
         with (
-            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[ride])),
             patch("backend.routes.rides.db_supabase.update_ride", AsyncMock(return_value=cancelled)),
         ):
-            result = asyncio.run(
-                rides_mod.cancel_scheduled_ride(ride_id=RIDE_ID, current_user={"id": RIDER_ID})
-            )
+            result = asyncio.run(rides_mod.cancel_scheduled_ride(ride_id=RIDE_ID, current_user={"id": RIDER_ID}))
 
         assert result is not None
 
     def test_not_found_raises_404(self):
         from fastapi import HTTPException
+
         from backend.routes import rides as rides_mod
 
-        with patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=None)):
+        with patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])):
             with pytest.raises(HTTPException) as exc:
-                asyncio.run(
-                    rides_mod.cancel_scheduled_ride(ride_id=RIDE_ID, current_user={"id": RIDER_ID})
-                )
+                asyncio.run(rides_mod.cancel_scheduled_ride(ride_id=RIDE_ID, current_user={"id": RIDER_ID}))
         assert exc.value.status_code == 404

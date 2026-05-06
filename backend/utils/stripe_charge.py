@@ -48,7 +48,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from decimal import ROUND_HALF_UP, Decimal
+from typing import Any, Dict, Optional, Union
 
 try:
     from ..settings_loader import get_app_settings
@@ -90,7 +91,7 @@ async def charge_ride(
     *,
     ride: Dict[str, Any],
     rider_id: str,
-    total_amount: float,
+    total_amount: Union[Decimal, float],
     payment_method_id: Optional[str] = None,
     stripe_customer_id: Optional[str] = None,
     payment_intent_id: Optional[str] = None,
@@ -230,7 +231,7 @@ async def charge_ride(
         return ChargeOutcome(
             status="succeeded",
             payment_intent_id=pi_id,
-            charged_amount=float(total_amount),
+            charged_amount=float(_amount),
         )
 
     if status == "requires_action" or status == "requires_source_action":

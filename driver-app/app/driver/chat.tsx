@@ -56,7 +56,7 @@ export default function ChatScreen() {
                     const saved = await AsyncStorage.getItem(CHAT_STORAGE_KEY);
                     if (saved) setChatMessages(JSON.parse(saved));
                 }
-            } catch {}
+            } catch (err) { console.error('[chat]', err); }
 
             // 2. Fetch authoritative history from backend
             try {

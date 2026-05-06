@@ -114,7 +114,7 @@ export default function DriverArrivedScreen() {
       `📍 Dropoff: ${currentRide?.dropoff_address || ''}`,
       `🔑 OTP: ${pickupOtp}`,
     ].join('\n');
-    try { await Share.share({ message: info }); } catch {}
+    try { await Share.share({ message: info }); } catch (err) { console.error('[driver-arrived]', err); }
   };
 
   const handleCopyOtp = async () => {

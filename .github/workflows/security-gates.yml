@@ -283,7 +283,7 @@ jobs:
         working-directory: backend
         run: |
           pip-licenses --format=markdown \
-            --allow-only="MIT License;Apache Software License;BSD License;ISC License (ISCL);Python Software Foundation License;MIT;Apache-2.0;BSD-2-Clause;BSD-3-Clause;ISC;PSF;LGPL;Mozilla Public License 2.0 (MPL 2.0)"
+            --allow-only="MIT License;MIT-CMU;Apache Software License;BSD License;ISC License (ISCL);Python Software Foundation License;MIT;Apache-2.0;BSD-2-Clause;BSD-3-Clause;ISC;PSF;LGPL;Mozilla Public License 2.0 (MPL 2.0)"
 
   # Summary job — required check for branch protection once gates are enforced
   summary:

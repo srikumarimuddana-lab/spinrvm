@@ -66,5 +66,9 @@
     "**/*.ts",
     "**/*.tsx",
     "../shared/types/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "../shared/types/peer-deps.d.ts"
   ]
 }

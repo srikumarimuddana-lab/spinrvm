@@ -118,7 +118,7 @@ export function onForegroundMessage(handler: (message: import('@react-native-fir
  * Set the background message handler.
  * Must be called at the TOP LEVEL (outside of any component).
  */
-export function setBackgroundMessageHandler(handler: (message: import('@react-native-firebase/messaging').FirebaseMessagingTypes.RemoteMessage) => Promise<void> | void) {
+export function setBackgroundMessageHandler(handler: (message: import('@react-native-firebase/messaging').FirebaseMessagingTypes.RemoteMessage) => Promise<unknown> | void) {
   if (!messaging) return;
   messaging().setBackgroundMessageHandler((msg) => handler(msg) ?? Promise.resolve());
 }

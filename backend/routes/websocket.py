@@ -273,8 +273,20 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
     current_driver_id: str | None = None
 
     try:
-        # Require the first message to be an auth message containing a token
-        auth_msg = await websocket.receive_json()
+        # Require the first message to be an auth message containing a token.
+        # Enforce a 30-second deadline so clients that connect but never send
+        # anything cannot hold the connection open indefinitely (resource
+        # exhaustion risk under load). Close code 1008 = Policy Violation per
+        # RFC 6455 — correct for an auth protocol timeout.
+        try:
+            auth_msg = await asyncio.wait_for(websocket.receive_json(), timeout=30.0)
+        except asyncio.TimeoutError:
+            logger.warning("[WS] Auth timeout — no message received within 30s, closing connection")
+            await websocket.close(code=1008)  # 1008 = Policy Violation
+            return
+        except Exception:
+            await websocket.close(code=1011)
+            return
         if not auth_msg or auth_msg.get("type") != "auth" or not auth_msg.get("token"):
             await websocket.send_json({"type": "error", "message": "authentication_required"})
             await websocket.close()

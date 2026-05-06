@@ -15,7 +15,8 @@ try:
     )
     from ..utils.error_keys import ErrorKeys
     from ..utils.idempotency import idempotent_endpoint
-    from ..utils.rate_limiter import api_rate_limit, payment_action_limit
+    from ..utils.money import dollars_to_cents
+    from ..utils.rate_limiter import payment_action_limit
 except ImportError:
     import db_supabase
     from dependencies import get_current_user
@@ -27,6 +28,7 @@ except ImportError:
     )
     from utils.error_keys import ErrorKeys
     from utils.idempotency import idempotent_endpoint
+    from utils.money import dollars_to_cents
     from utils.rate_limiter import payment_action_limit
 import logging
 
@@ -119,7 +121,10 @@ async def create_payment_intent(
                     action_hint="Refresh the fare estimate",
                 )
 
-        amount = int(Decimal(str(body.amount)).quantize(Decimal("0.01")) * 100)
+        # Decimal-safe dollars→cents (HALF_UP). ``int(body.amount * 100)``
+        # would undercharge by 1¢ on values like $0.29, $1.13, $17.81 due
+        # to binary-float drift. See backend/utils/money.py.
+        amount = dollars_to_cents(body.amount)
 
         # Get or create customer for saved payments
         stripe_customer_id = await get_or_create_stripe_customer(current_user["id"], stripe_secret)
@@ -466,12 +471,6 @@ async def add_card(request: Request = None, current_user: dict = Depends(get_cur
             "setup_intent_id": si.id,
             "setup_intent_status": si.status,
         }
-    except stripe.error.CardError as e:
-        raise PaymentMethodInvalidException(
-            message=e.user_message or "Card declined",
-            message_key=ErrorKeys.PAYMENT_METHOD_INVALID,
-            action_hint="Add a different card",
-        ) from e
     except stripe.error.CardError as e:
         raise PaymentMethodInvalidException(
             message=e.user_message or "Card declined",

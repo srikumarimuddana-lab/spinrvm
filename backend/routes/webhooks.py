@@ -5,6 +5,7 @@ try:
     from ..db_supabase import claim_stripe_event, mark_stripe_event_processed
     from ..features import send_push_notification
     from ..settings_loader import get_app_settings
+    from ..utils.money import cents_to_dollars
 except ImportError:
     import db_supabase
     from db_supabase import claim_stripe_event, mark_stripe_event_processed
@@ -101,7 +102,11 @@ async def stripe_webhook(request: Request):
                 from services.corporate_wallet_service import apply_topup  # type: ignore
 
             amount_cents = data_object.get("amount_received") or data_object.get("amount", 0)
-            amount_cad = amount_cents / 100
+            # Decimal-safe cents→dollars (2-dp HALF_UP). Float division
+            # ``cents / 100`` drifts for arbitrary cent values; quantize
+            # first, then hand the float to apply_topup (Postgres NUMERIC
+            # rounds to column scale).
+            amount_cad = float(cents_to_dollars(amount_cents))
             await apply_topup(
                 wallet_id=meta["wallet_id"],
                 amount=amount_cad,

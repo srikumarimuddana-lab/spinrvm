@@ -190,6 +190,18 @@ promo_validate_limit = default_limiter.limit("10/minute")
 # Location updates - allow frequent updates for drivers
 location_update_limit = default_limiter.limit("60/minute")
 
+# Payment actions (tip, process-payment) — sensitive financial ops, tight limit
+payment_action_limit = default_limiter.limit("5/minute")
+
+# Ride rating — once per completed ride, extra friction prevents spam
+ride_rating_limit = default_limiter.limit("5/hour")
+
+# In-ride messaging — generous but bounded to prevent SMS relay abuse
+ride_message_limit = default_limiter.limit("30/minute")
+
+# Ride state transitions (start, complete, emergency) — ride lifecycle ops
+ride_action_limit = default_limiter.limit("20/minute")
+
 # Document uploads - restrictive to prevent abuse
 document_upload_limit = default_limiter.limit("5/minute")
 

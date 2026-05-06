@@ -32,7 +32,16 @@ try:
     )
     from ..utils.error_keys import ErrorKeys
     from ..utils.idempotency import idempotent_endpoint
-    from ..utils.rate_limiter import cancel_ride_limit, ride_read_limit, ride_request_limit
+    from ..utils.rate_limiter import (
+        api_rate_limit,
+        cancel_ride_limit,
+        payment_action_limit,
+        ride_action_limit,
+        ride_message_limit,
+        ride_rating_limit,
+        ride_read_limit,
+        ride_request_limit,
+    )
     from ..validators import validate_ride_location
 except ImportError:
     import db_supabase
@@ -56,7 +65,11 @@ except ImportError:
     )
     from utils.error_keys import ErrorKeys
     from utils.idempotency import idempotent_endpoint
-    from utils.rate_limiter import cancel_ride_limit, ride_read_limit, ride_request_limit
+    from utils.rate_limiter import (
+        cancel_ride_limit,
+        ride_read_limit,
+        ride_request_limit,
+    )
     from validators import validate_ride_location
 
 
@@ -573,12 +586,13 @@ class RideEstimateRequest(BaseModel):
 
 
 @api_router.post("/estimate")
-async def estimate_ride(request: RideEstimateRequest, current_user: dict = Depends(get_current_user)):
-    validate_ride_location(request.pickup_lat, request.pickup_lng, request.dropoff_lat, request.dropoff_lng)
-    distance_km = calculate_distance(request.pickup_lat, request.pickup_lng, request.dropoff_lat, request.dropoff_lng)
+@api_rate_limit
+async def estimate_ride(request: Request, body: RideEstimateRequest, current_user: dict = Depends(get_current_user)):
+    validate_ride_location(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng)
+    distance_km = calculate_distance(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng)
     duration_minutes = int(distance_km / 30 * 60) + 5
 
-    fares = await get_fares_for_location(request.pickup_lat, request.pickup_lng)
+    fares = await get_fares_for_location(body.pickup_lat, body.pickup_lng)
 
     # Fetch all nearby online+available drivers once
     all_drivers = await db_supabase.get_rows(
@@ -603,7 +617,7 @@ async def estimate_ride(request: RideEstimateRequest, current_user: dict = Depen
         d_lat = d.get("lat")
         d_lng = d.get("lng")
         if d_lat and d_lng:
-            dist = calculate_distance(request.pickup_lat, request.pickup_lng, d_lat, d_lng)
+            dist = calculate_distance(body.pickup_lat, body.pickup_lng, d_lat, d_lng)
             if dist <= 10.0:  # 10km radius
                 vt_id = d.get("vehicle_type_id")
                 drivers_by_type[vt_id].append(
@@ -615,11 +629,11 @@ async def estimate_ride(request: RideEstimateRequest, current_user: dict = Depen
 
     # Check airport surcharge (pickup, dropoff, or any stop in airport sub-region)
     airport_result = await calculate_airport_fee(
-        request.pickup_lat,
-        request.pickup_lng,
-        request.dropoff_lat,
-        request.dropoff_lng,
-        stops=request.stops,
+        body.pickup_lat,
+        body.pickup_lng,
+        body.dropoff_lat,
+        body.dropoff_lng,
+        stops=body.stops,
     )
     airport_fee = airport_result.get("airport_fee", 0.0)
 
@@ -652,10 +666,10 @@ async def estimate_ride(request: RideEstimateRequest, current_user: dict = Depen
         estimate_token = sign_estimate_token(
             rider_id=current_user["id"],
             vehicle_type_id=vt_id,
-            pickup_lat=request.pickup_lat,
-            pickup_lng=request.pickup_lng,
-            dropoff_lat=request.dropoff_lat,
-            dropoff_lng=request.dropoff_lng,
+            pickup_lat=body.pickup_lat,
+            pickup_lng=body.pickup_lng,
+            dropoff_lat=body.dropoff_lat,
+            dropoff_lng=body.dropoff_lng,
             surge_multiplier=_f(surge),
             total_fare=_f(total_fare),
         )
@@ -1389,6 +1403,7 @@ async def get_ride(request: Request, ride_id: str, current_user: dict = Depends(
 
 
 @api_router.post("/{ride_id}/tip")
+@payment_action_limit
 @idempotent_endpoint(scope="ride_tip")
 async def add_tip(
     ride_id: str,
@@ -1505,7 +1520,10 @@ class ProcessPaymentRequest(BaseModel):
 
 
 @api_router.post("/{ride_id}/process-payment")
-async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user: dict = Depends(get_current_user)):
+@payment_action_limit
+async def process_payment(
+    ride_id: str, req: ProcessPaymentRequest, request: Request, current_user: dict = Depends(get_current_user)
+):
     """Process payment for completed ride. Charges rider's card for fare + tip."""
     tip_amount = req.tip_amount  # already Decimal, validated by ProcessPaymentRequest
 
@@ -1921,8 +1939,9 @@ class ShareTripWithContactRequest(BaseModel):
 
 
 @api_router.post("/{ride_id}/share")
+@api_rate_limit
 async def share_trip_with_contact(
-    ride_id: str, body: ShareTripWithContactRequest, current_user: dict = Depends(get_current_user)
+    ride_id: str, request: Request, body: ShareTripWithContactRequest, current_user: dict = Depends(get_current_user)
 ):
     """Share trip with a specific contact and send them a notification."""
     ride = await db.find_one("rides", {"id": ride_id})
@@ -2051,7 +2070,10 @@ async def track_shared_ride(share_token: str):
 
 
 @api_router.post("/{ride_id}/rate")
-async def rate_driver(ride_id: str, rating_data: RideRatingRequest, current_user: dict = Depends(get_current_user)):
+@ride_rating_limit
+async def rate_driver(
+    ride_id: str, rating_data: RideRatingRequest, request: Request, current_user: dict = Depends(get_current_user)
+):
     """Rider rates the driver"""
     ride = await db_supabase.get_ride(ride_id)
     if not ride or ride.get("rider_id") != current_user["id"]:
@@ -2291,7 +2313,10 @@ class AddStopMidTripRequest(BaseModel):
 
 
 @api_router.post("/{ride_id}/stops")
-async def add_stop_mid_trip(ride_id: str, req: AddStopMidTripRequest, current_user: dict = Depends(get_current_user)):
+@ride_action_limit
+async def add_stop_mid_trip(
+    ride_id: str, req: AddStopMidTripRequest, request: Request, current_user: dict = Depends(get_current_user)
+):
     """Add a stop to an active ride mid-trip."""
     ride = await db.find_one("rides", {"id": ride_id})
     if not ride:
@@ -2334,7 +2359,8 @@ async def add_stop_mid_trip(ride_id: str, req: AddStopMidTripRequest, current_us
 
 
 @api_router.delete("/{ride_id}/stops/{stop_index}")
-async def remove_stop_mid_trip(ride_id: str, stop_index: int, current_user: dict = Depends(get_current_user)):
+@ride_action_limit
+async def remove_stop_mid_trip(ride_id: str, stop_index: int, request: Request, current_user: dict = Depends(get_current_user)):
     """Remove a stop from an active ride by index."""
     ride = await db.find_one("rides", {"id": ride_id})
     if not ride:
@@ -2381,7 +2407,8 @@ class EmergencyRequest(BaseModel):
 
 
 @api_router.post("/{ride_id}/emergency")
-async def trigger_emergency(ride_id: str, request: EmergencyRequest, current_user: dict = Depends(get_current_user)):
+@ride_action_limit
+async def trigger_emergency(ride_id: str, body: EmergencyRequest, request: Request, current_user: dict = Depends(get_current_user)):
     """Trigger an emergency alert for a live ride"""
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
@@ -2402,10 +2429,10 @@ async def trigger_emergency(ride_id: str, request: EmergencyRequest, current_use
         "ride_id": ride_id,
         "reported_by_user_id": current_user["id"],
         "role": "rider" if is_rider else "driver",
-        "message": request.message,
+        "message": body.message,
         "status": "open",
-        "latitude": request.latitude,
-        "longitude": request.longitude,
+        "latitude": body.latitude,
+        "longitude": body.longitude,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -2430,7 +2457,7 @@ async def trigger_emergency(ride_id: str, request: EmergencyRequest, current_use
         user = await db_supabase.get_user_by_id(current_user["id"])
         user_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else "A Spinr user"
 
-        location_text = " Location shared with emergency services." if request.latitude and request.longitude else ""
+        location_text = " Location shared with emergency services." if body.latitude and body.longitude else ""
         sms_body = (
             f"URGENT: {user_name} triggered an emergency alert during a Spinr ride."
             f"{location_text} Call them or emergency services immediately."
@@ -2591,7 +2618,8 @@ class SendMessageRequest(BaseModel):
 
 
 @api_router.post("/{ride_id}/messages")
-async def send_ride_message(ride_id: str, body: SendMessageRequest, current_user: dict = Depends(get_current_user)):
+@ride_message_limit
+async def send_ride_message(ride_id: str, body: SendMessageRequest, request: Request, current_user: dict = Depends(get_current_user)):
     """Send a chat message for an active or recently completed ride.
 
     Persists the message in `ride_messages` and forwards it to the
@@ -2659,7 +2687,8 @@ async def get_scheduled_rides(current_user: dict = Depends(get_current_user)):
 
 
 @api_router.delete("/scheduled/{ride_id}")
-async def cancel_scheduled_ride(ride_id: str, current_user: dict = Depends(get_current_user)):
+@cancel_ride_limit
+async def cancel_scheduled_ride(ride_id: str, request: Request, current_user: dict = Depends(get_current_user)):
     """Cancel a scheduled ride."""
     ride = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows(
@@ -2698,7 +2727,8 @@ async def cancel_scheduled_ride(ride_id: str, current_user: dict = Depends(get_c
 
 
 @api_router.post("/{ride_id}/simulate-arrival")
-async def simulate_driver_arrival(ride_id: str, current_user: dict = Depends(get_current_user)):
+@api_rate_limit
+async def simulate_driver_arrival(ride_id: str, request: Request, current_user: dict = Depends(get_current_user)):
     """Dev/test only: Simulate driver arriving at pickup, returns OTP."""
     if _settings.ENV.lower() == "production":
         raise HTTPException(status_code=403, detail="Not available in production")
@@ -2721,7 +2751,8 @@ async def simulate_driver_arrival(ride_id: str, current_user: dict = Depends(get
 
 
 @api_router.post("/{ride_id}/start")
-async def rider_start_ride(ride_id: str, current_user: dict = Depends(get_current_user)):
+@ride_action_limit
+async def rider_start_ride(ride_id: str, request: Request, current_user: dict = Depends(get_current_user)):
     """Start a ride. Restricted to the assigned driver only (R-P1-17)."""
     # R-P1-17: Only the assigned driver may mark a ride as started.
     if not current_user.get("is_driver"):
@@ -2750,7 +2781,8 @@ async def rider_start_ride(ride_id: str, current_user: dict = Depends(get_curren
 
 
 @api_router.post("/{ride_id}/complete")
-async def rider_complete_ride(ride_id: str, current_user: dict = Depends(get_current_user)):
+@ride_action_limit
+async def rider_complete_ride(ride_id: str, request: Request, current_user: dict = Depends(get_current_user)):
     """Rider-side: Get completed ride data (ride is completed by driver; this fetches the result)."""
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
@@ -2834,8 +2866,10 @@ async def get_ride_receipt(ride_id: str, current_user: dict = Depends(get_curren
 
 
 @api_router.post("/{ride_id}/safety-checkin")
+@ride_action_limit
 async def safety_checkin_response(
     ride_id: str,
+    request: Request,
     current_user: dict = Depends(get_current_user),
 ):
     """Rider taps 'I'm okay' on the safety check-in push notification.

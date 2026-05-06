@@ -138,21 +138,20 @@ test.describe('admin dashboard: ride management', () => {
   test('rides page loads and renders ride list', async ({ page }) => {
     await mockAdminAPIs(page);
     await page.goto('/dashboard/rides');
-    await page.waitForLoadState('networkidle');
-    await expect(page).toHaveURL(/dashboard\/rides/);
+    // h1/h2 only render after auth resolves (isLoading→false, isAuthenticated→true)
     await expect(page.locator('h1, h2, [data-testid="rides-heading"]').first()).toBeVisible({
-      timeout: 15000,
+      timeout: 20000,
     });
+    await expect(page).toHaveURL(/dashboard\/rides/);
   });
 
   test('drivers page loads and renders driver list', async ({ page }) => {
     await mockAdminAPIs(page);
     await page.goto('/dashboard/drivers');
-    await page.waitForLoadState('networkidle');
-    await expect(page).toHaveURL(/dashboard\/drivers/);
     await expect(page.locator('h1, h2, [data-testid="drivers-heading"]').first()).toBeVisible({
-      timeout: 15000,
+      timeout: 20000,
     });
+    await expect(page).toHaveURL(/dashboard\/drivers/);
   });
 
   test('settings page loads without crashing', async ({ page }) => {
@@ -161,9 +160,9 @@ test.describe('admin dashboard: ride management', () => {
 
     await mockAdminAPIs(page);
     await page.goto('/dashboard/settings');
-    await page.waitForLoadState('networkidle');
+    // <main> is rendered by the dashboard layout only when isAuthenticated=true
+    await expect(page.locator('main')).toBeVisible({ timeout: 20000 });
     await expect(page).toHaveURL(/dashboard\/settings/);
-    await expect(page.locator('body')).toBeVisible();
 
     expect(errors.filter((e) => !/chunk|hydrat/i.test(e))).toHaveLength(0);
   });
@@ -180,8 +179,7 @@ test.describe('admin dashboard: ride management', () => {
     });
 
     await page.goto('/dashboard/rides');
-    await page.waitForLoadState('networkidle');
-    await expect(page.locator('body')).toBeVisible();
+    await expect(page.locator('main')).toBeVisible({ timeout: 20000 });
   });
 
   test('driver approval flow endpoint is reachable', async ({ page }) => {
@@ -196,8 +194,7 @@ test.describe('admin dashboard: ride management', () => {
     });
 
     await page.goto('/dashboard/drivers');
-    await page.waitForLoadState('networkidle');
-    await expect(page.locator('body')).toBeVisible();
+    await expect(page.locator('main')).toBeVisible({ timeout: 20000 });
   });
 
   test('driver suspension endpoint is reachable', async ({ page }) => {
@@ -212,8 +209,7 @@ test.describe('admin dashboard: ride management', () => {
     });
 
     await page.goto('/dashboard/drivers');
-    await page.waitForLoadState('networkidle');
-    await expect(page.locator('body')).toBeVisible();
+    await expect(page.locator('main')).toBeVisible({ timeout: 20000 });
   });
 
   test('dashboard pages meet WCAG 2.1 AA accessibility (axe-core)', async ({ page }) => {
@@ -222,7 +218,8 @@ test.describe('admin dashboard: ride management', () => {
     const pagesToCheck = ['/dashboard/rides', '/dashboard/drivers'];
     for (const path of pagesToCheck) {
       await page.goto(path);
-      await page.waitForLoadState('networkidle');
+      // Wait for dashboard layout to render (only visible when authenticated)
+      await page.locator('h1, h2, main').first().waitFor({ state: 'visible', timeout: 20000 });
 
       const results = await new AxeBuilder({ page })
         .withTags(['wcag2a', 'wcag2aa'])

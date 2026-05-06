@@ -43,34 +43,32 @@ test.describe('Dashboard navigation', () => {
   test('drivers page loads', async ({ page }) => {
     await mockDashboardAPIs(page);
     await page.goto('/dashboard/drivers');
-    // Wait for hydration + auth initialization to settle (silentRefresh + checkAuth)
-    await page.waitForLoadState('networkidle');
+    // h1/h2 only render after auth resolves (isLoading→false, isAuthenticated→true);
+    // more reliable than networkidle which resets on any background request.
+    await expect(page.locator('h1, h2').first()).toBeVisible({ timeout: 20000 });
     await expect(page).toHaveURL(/dashboard\/drivers/);
-    await expect(page.locator('h1, h2').first()).toBeVisible({ timeout: 15000 });
   });
 
   test('rides page loads', async ({ page }) => {
     await mockDashboardAPIs(page);
     await page.goto('/dashboard/rides');
-    await page.waitForLoadState('networkidle');
+    await expect(page.locator('h1, h2').first()).toBeVisible({ timeout: 20000 });
     await expect(page).toHaveURL(/dashboard\/rides/);
-    await expect(page.locator('h1, h2').first()).toBeVisible({ timeout: 15000 });
   });
 
   test('settings page loads', async ({ page }) => {
     await mockDashboardAPIs(page);
     await page.goto('/dashboard/settings');
-    await page.waitForLoadState('networkidle');
+    // <main> is rendered by the dashboard layout only when isAuthenticated=true
+    await expect(page.locator('main')).toBeVisible({ timeout: 20000 });
     await expect(page).toHaveURL(/dashboard\/settings/);
-    await expect(page.locator('body')).toBeVisible();
   });
 
   test('promotions page loads', async ({ page }) => {
     await mockDashboardAPIs(page);
     await page.goto('/dashboard/promotions');
-    await page.waitForLoadState('networkidle');
+    await expect(page.locator('main')).toBeVisible({ timeout: 20000 });
     await expect(page).toHaveURL(/dashboard\/promotions/);
-    await expect(page.locator('body')).toBeVisible();
   });
 
   test('dashboard pages have no critical accessibility violations (axe-core)', async ({ page }) => {
@@ -78,7 +76,8 @@ test.describe('Dashboard navigation', () => {
     const pagesToCheck = ['/login', '/dashboard/drivers'];
     for (const path of pagesToCheck) {
       await page.goto(path);
-      await page.waitForLoadState('networkidle');
+      // #email on /login; h1/h2/main on dashboard pages — all require auth or page to be ready
+      await page.locator('h1, h2, main, #email').first().waitFor({ state: 'visible', timeout: 20000 });
       const results = await new AxeBuilder({ page })
         .withTags(['wcag2a', 'wcag2aa'])
         .analyze();

@@ -15,6 +15,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+type IoniconName = React.ComponentProps<typeof Ionicons>['name'];
 import api from '@shared/api/client';
 import CustomAlert from '@shared/components/CustomAlert';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -305,7 +306,7 @@ export default function SupportScreen({ role, initialTab = 'faq' }: Props) {
             { key: 'faq', label: 'FAQ', icon: 'help-circle-outline' },
             { key: 'chat', label: 'AI Chat', icon: 'sparkles-outline' },
             { key: 'contact', label: 'Contact', icon: 'mail-outline' },
-          ] as { key: Tab; label: string; icon: string }[]
+          ] as { key: Tab; label: string; icon: IoniconName }[]
         ).map((tab) => (
           <TouchableOpacity
             key={tab.key}
@@ -313,7 +314,7 @@ export default function SupportScreen({ role, initialTab = 'faq' }: Props) {
             onPress={() => setActiveTab(tab.key)}
           >
             <Ionicons
-              name={tab.icon as any}
+              name={tab.icon}
               size={16}
               color={activeTab === tab.key ? colors.primary : colors.textDim}
             />
@@ -544,7 +545,7 @@ export default function SupportScreen({ role, initialTab = 'faq' }: Props) {
               <Text style={styles.companyTitle}>
                 {companyInfo.name || 'SPINR TECHNOLOGIES INC.'}
               </Text>
-              {[
+              {([
                 {
                   icon: 'location-outline',
                   text: companyInfo.address || 'Saskatoon, SK, Canada',
@@ -555,9 +556,9 @@ export default function SupportScreen({ role, initialTab = 'faq' }: Props) {
                   text: companyInfo.phone || SUPPORT_PHONE_DISPLAY,
                 },
                 { icon: 'globe-outline', text: companyInfo.website || 'www.spinr.ca' },
-              ].map((row) => (
-                <View key={row.icon} style={styles.companyRow}>
-                  <Ionicons name={row.icon as any} size={16} color={colors.textDim} />
+              ] as { icon: IoniconName; text: string }[]).map((row) => (
+                <View key={String(row.icon)} style={styles.companyRow}>
+                  <Ionicons name={row.icon} size={16} color={colors.textDim} />
                   <Text style={styles.companyText}>{row.text}</Text>
                 </View>
               ))}

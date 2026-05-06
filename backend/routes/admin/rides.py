@@ -303,8 +303,7 @@ async def admin_complete_ride(
     except Exception as e:
         original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
         logger.error(
-            f"admin_complete_ride: update failed ride_id={ride_id} "
-            f"admin_id={admin_user.get('id')} err={original or e}"
+            f"admin_complete_ride: update failed ride_id={ride_id} admin_id={admin_user.get('id')} err={original or e}"
         )
         raise HTTPException(status_code=500, detail="Failed to update ride status") from e
 
@@ -350,9 +349,7 @@ async def admin_complete_ride(
         source="admin",
     )
     try:
-        await manager.broadcast_to_admins(
-            {"type": "ride_completed", "ride_id": ride_id, "source": "admin"}
-        )
+        await manager.broadcast_to_admins({"type": "ride_completed", "ride_id": ride_id, "source": "admin"})
     except Exception as e:  # pragma: no cover - best effort
         logger.warning(f"admin_complete_ride: admin broadcast failed: {e}")
 
@@ -503,8 +500,7 @@ async def admin_create_ride(
     except Exception as e:
         original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
         logger.error(
-            f"admin_create_ride: insert failed admin_id={admin_user.get('id')} "
-            f"err={original or e}",
+            f"admin_create_ride: insert failed admin_id={admin_user.get('id')} err={original or e}",
             exc_info=True,
         )
         raise HTTPException(status_code=500, detail="Failed to create ride") from e
@@ -623,9 +619,9 @@ async def admin_get_stats():
     # Earnings + tip totals are aggregated over completed rides in the
     # current month; upstream's stats API never wired these up so we compute
     # them here rather than returning stale zeroes.
-    total_driver_earnings = sum(float(r.get("driver_earnings") or 0) for r in completed_month)
-    total_admin_earnings = sum(float(r.get("admin_earnings") or 0) for r in completed_month)
-    total_tips = sum(float(r.get("tip_amount") or 0) for r in completed_month)
+    total_driver_earnings = float(sum(Decimal(str(r.get("driver_earnings") or 0)) for r in completed_month))
+    total_admin_earnings = float(sum(Decimal(str(r.get("admin_earnings") or 0)) for r in completed_month))
+    total_tips = float(sum(Decimal(str(r.get("tip_amount") or 0)) for r in completed_month))
     return {
         # Fields the dashboard page expects
         "total_rides": total_rides,
@@ -674,7 +670,7 @@ async def admin_get_ride_stats():
         "rides", {"status": "completed", "ride_completed_at": {"$gte": today_start.isoformat()}}, limit=10000
     )
     total_revenue = sum(float(r.get("total_fare") or 0) for r in completed_today)
-    total_tips = sum(float(r.get("tip_amount") or 0) for r in completed_today)
+    total_tips = float(sum(Decimal(str(r.get("tip_amount") or 0)) for r in completed_today))
     completed_count = len(completed_today)
 
     # Monthly completed rides for revenue
@@ -966,8 +962,8 @@ async def admin_get_earnings(period: str = Query("month")):
 
     # Calculate totals
     total_revenue = sum(float(r.get("total_fare") or 0) for r in completed_rides)
-    driver_earnings = sum(float(r.get("driver_earnings") or 0) for r in completed_rides)
-    platform_fees = sum(float(r.get("admin_earnings") or 0) for r in completed_rides)
+    driver_earnings = float(sum(Decimal(str(r.get("driver_earnings") or 0)) for r in completed_rides))
+    platform_fees = float(sum(Decimal(str(r.get("admin_earnings") or 0)) for r in completed_rides))
 
     return {
         "period": period,
@@ -1130,7 +1126,8 @@ async def admin_get_payout(payout_id: str, _: dict = Depends(get_admin_user)):
         try:
             driver = await db.find_one("drivers", {"id": payout["driver_id"]}) or {}
         except Exception:
-            pass
+            logger.warning("payout driver lookup failed for %s", payout.get("driver_id"), exc_info=True)
+            driver = {}
     payout["driver_name"] = driver.get("full_name") or driver.get("name") or payout.get("driver_name")
     payout["driver_email"] = driver.get("email")
     payout["driver_phone"] = driver.get("phone")

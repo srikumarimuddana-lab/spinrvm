@@ -6,6 +6,7 @@ Provides aggregated operational intelligence for the admin dashboard.
 import logging
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -277,7 +278,9 @@ async def get_analytics_overview(
     cancellation_rate = round(cancelled / total * 100, 1) if total > 0 else 0
 
     total_revenue = sum(float(r.get("total_fare") or 0) for r in period_rides if r.get("status") == "completed")
-    total_tips = sum(float(r.get("tip_amount") or 0) for r in period_rides if r.get("status") == "completed")
+    total_tips = float(
+        sum(Decimal(str(r.get("tip_amount") or 0)) for r in period_rides if r.get("status") == "completed")
+    )
     avg_fare = round(total_revenue / completed, 2) if completed > 0 else 0
 
     # Daily ride counts for chart

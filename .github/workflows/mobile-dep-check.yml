@@ -42,11 +42,14 @@ jobs:
 
       - name: Expo dependency version audit
         working-directory: rider-app
-        # Advisory: expo install --check fetches native module versions from Expo's
-        # API; the call fails with a JSON parse error in restricted CI environments.
-        # continue-on-error prevents network flakiness from blocking PRs; the
-        # TypeScript check below remains the blocking gate.
+        # Fails if any installed package version drifts from the SDK-expected version.
+        # expo.install.exclude in package.json protects intentionally-pinned packages.
+        # continue-on-error: expo install --check requires Expo API access (EXPO_TOKEN);
+        # without it the CLI returns non-JSON and exits 1. We degrade gracefully so the
+        # TypeScript check below always runs regardless.
         continue-on-error: true
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: npx expo install --check
 
       - name: TypeScript check
@@ -77,8 +80,9 @@ jobs:
 
       - name: Expo dependency version audit
         working-directory: driver-app
-        # Advisory: same network-flakiness guard as rider-app above.
         continue-on-error: true
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: npx expo install --check
 
       - name: TypeScript check

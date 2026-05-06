@@ -76,8 +76,9 @@ export default function SettingsScreen() {
     const updateDriverMe = useUpdateDriverMe();
     const [isWav, setIsWav] = useState(false);
     useEffect(() => {
-        if (driverMe?.is_wav != null) setIsWav(Boolean(driverMe.is_wav));
-    }, [driverMe?.is_wav]);
+        const driverMeData = driverMe as { is_wav?: boolean | null } | null;
+        if (driverMeData?.is_wav != null) setIsWav(Boolean(driverMeData.is_wav));
+    }, [(driverMe as any)?.is_wav]);
     useEffect(() => {
         // Server can return null when the row hasn't been created yet;
         // keep the defaults set above in that case.

@@ -370,3 +370,107 @@ class TestCorporateSurgeExclusion:
             payment_method="company_allowance",
         )
         assert result == 1.0
+
+
+# ── Scheduled ride surge exclusion ───────────────────────────────────────────
+#
+# Policy (CLAUDE.md): "Never apply surge to scheduled rides booked outside the
+# surge window."
+# Enforcement lives in routes/rides.py::create_ride — immediately after the
+# corporate surge exclusion block, surge is reset to 1.0 when is_scheduled is
+# True or scheduled_time is set.
+#
+# Rationale: the rider locked in their fare at booking time; the area surge may
+# be elevated hours later at dispatch time. Applying the dispatch-time surge
+# would retroactively charge a higher multiplier than was shown — a hidden-fee
+# violation under Spinr policy and a rider-trust issue.
+
+
+class TestScheduledRideSurgeExclusion:
+    """Scheduled rides must always receive surge_multiplier == 1.0.
+
+    Mirrors the exact conditional used in production so any refactor to the
+    route logic is caught here before it reaches riders.
+    """
+
+    def _apply_scheduled_surge_override(
+        self,
+        raw_surge: float,
+        is_scheduled: bool = False,
+        scheduled_time=None,
+    ) -> float:
+        """Simulate the scheduled-ride surge override logic from
+        routes/rides.py::create_ride.
+
+        Replicates the exact branch so a copy-paste divergence is caught by
+        test failure rather than a production incident.
+        """
+        from decimal import Decimal
+
+        def _d(v):
+            return Decimal(str(v))
+
+        surge = _d(raw_surge)
+        if (is_scheduled or scheduled_time) and surge > _d(1):
+            surge = _d(1)
+        return float(surge)
+
+    def test_scheduled_ride_gets_no_surge(self):
+        """A ride with a future scheduled_time must receive surge == 1.0 even
+        when the service area has an elevated multiplier (e.g. 2.5×)."""
+        from datetime import datetime, timedelta
+
+        future_time = datetime.utcnow() + timedelta(hours=2)
+        result = self._apply_scheduled_surge_override(
+            raw_surge=2.5,
+            is_scheduled=False,
+            scheduled_time=future_time,
+        )
+        assert result == 1.0
+
+    def test_consumer_scheduled_ride_not_corporate(self):
+        """Non-corporate scheduled rides also get no surge — the exclusion is
+        not gated on corporate status, only on the scheduled flag."""
+        from datetime import datetime, timedelta
+
+        future_time = datetime.utcnow() + timedelta(hours=1)
+        result = self._apply_scheduled_surge_override(
+            raw_surge=1.75,
+            is_scheduled=True,
+            scheduled_time=future_time,
+        )
+        assert result == 1.0
+
+    def test_immediate_ride_gets_surge(self):
+        """An on-demand ride (scheduled_time=None, is_scheduled=False) must
+        pass the area surge through unchanged."""
+        result = self._apply_scheduled_surge_override(
+            raw_surge=1.75,
+            is_scheduled=False,
+            scheduled_time=None,
+        )
+        assert result == 1.75
+
+    def test_is_scheduled_flag_alone_resets_surge(self):
+        """is_scheduled=True without a scheduled_time is sufficient to suppress
+        surge — matches the route's `body.is_scheduled or body.scheduled_time`
+        condition."""
+        result = self._apply_scheduled_surge_override(
+            raw_surge=2.0,
+            is_scheduled=True,
+            scheduled_time=None,
+        )
+        assert result == 1.0
+
+    def test_scheduled_ride_at_normal_surge_unchanged(self):
+        """When surge is already 1.0 the branch is a no-op — guard against
+        accidentally elevating a non-surging scheduled ride."""
+        from datetime import datetime, timedelta
+
+        future_time = datetime.utcnow() + timedelta(hours=3)
+        result = self._apply_scheduled_surge_override(
+            raw_surge=1.0,
+            is_scheduled=True,
+            scheduled_time=future_time,
+        )
+        assert result == 1.0

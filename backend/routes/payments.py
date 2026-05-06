@@ -196,6 +196,9 @@ async def confirm_payment(
         try:
             intent = stripe.PaymentIntent.retrieve(payment_intent_id, api_key=stripe_secret)
 
+            if intent.metadata.get("user_id") != str(current_user["id"]):
+                raise HTTPException(status_code=403, detail="Not authorized to confirm this payment")
+
             if ride_id:
                 await db_supabase.update_ride(
                     ride_id, {"payment_status": intent.status, "payment_intent_id": payment_intent_id}

@@ -25,6 +25,7 @@ import logging
 import os
 import random
 import socket
+import uuid
 from datetime import datetime, timezone
 
 try:
@@ -188,7 +189,7 @@ async def retry_failed_payments():
                 stripe.PaymentIntent.confirm(
                     payment_intent_id,
                     api_key=stripe_secret,
-                    idempotency_key=f"retry-confirm-{ride_id}-{retry_count}",
+                    idempotency_key=f"retry-confirm-{ride_id}-{uuid.uuid4()}",
                 )
                 attempt = retry_count + 1
                 claimed = await db.update_one(

@@ -4,12 +4,198 @@ import sys
 # Add the current directory to Python path to allow absolute imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# =============================================================================
+# DUPLICATE ROUTE MOUNT MAP
+# =============================================================================
+# Several routers are intentionally (or accidentally) mounted at more than one
+# URL prefix. This doubles the attack surface and causes rate-limit counters
+# (keyed by path in SlowAPI) to be tracked separately per prefix, effectively
+# doubling a caller's quota when alternating between the two paths.
+#
+# Removal of root/legacy mounts requires a coordinated mobile-app release so
+# that clients are updated to use the canonical /api/v1/ prefix before the
+# legacy path is removed. DO NOT remove any root mounts without that release.
+#
+# Legend:
+#   [INTENTIONAL]  — explicitly designed; a known trade-off with a documented
+#                    reason. Root mount stays until mobile release.
+#   [DUPLICATE]    — same router reachable at two URL prefixes; the root/legacy
+#                    mount is deprecated and will be removed after mobile update.
+#   [INFRA]        — infra-only path (health probe, metrics scraper, websocket);
+#                    not a business-logic duplicate.
+#
+# Router                   | Canonical path          | Deprecated legacy path       | Status
+# -------------------------|-------------------------|------------------------------|-------------------
+# rides_router             | /api/v1/rides/...       | (none)                       | single mount
+# documents_router         | /api/v1/drivers/...     | (none)                       | single mount
+# admin_documents_router   | /api/v1/documents/...   | (none)                       | single mount
+# drivers_router           | /api/v1/drivers/...     | (none)                       | single mount
+# admin_router             | /api/v1/admin/...       | /api/admin/...               | [DUPLICATE]
+# corporate_accounts_router| /api/v1/admin/corp../.. | /api/admin/corp../...        | [DUPLICATE]
+# users_router             | /api/v1/users/...       | (none)                       | single mount
+# addresses_router         | /api/v1/addresses/...   | (none)                       | single mount
+# payments_router          | /api/v1/payments/...    | (none)                       | single mount
+# notifications_router     | /api/v1/notifications/..| (none)                       | single mount
+# fares_router             | /api/v1/fares/...       | (none)                       | single mount
+# promotions_router        | /api/v1/promotions/...  | (none)                       | single mount
+# disputes_router          | /api/v1/disputes/...    | (none)                       | single mount
+# favorites_router         | /api/v1/favorites/...   | (none)                       | single mount
+# loyalty_router           | /api/v1/loyalty/...     | (none)                       | single mount
+# wallet_router            | /api/v1/wallet/...      | (none)                       | single mount
+# fare_split_router        | /api/v1/fare-split/...  | (none)                       | single mount
+# quests_router            | /api/v1/quests/...      | (none)                       | single mount
+# webhooks_router          | /api/v1/webhooks/...    | (none)                       | single mount
+# upload_router            | /api/v1/upload          | (none)                       | single mount
+# support_router           | /api/v1/support/...     | (none)                       | single mount
+# admin_support_router     | /api/v1/support/...     | (none)                       | single mount
+# support_chat_router      | /api/v1/support/...     | (none)                       | single mount
+# pricing_router           | /api/v1/pricing/...     | (none)                       | single mount
+# faqs_router              | /api/v1/faqs/...        | (none)                       | single mount
+# legal_documents_router   | /api/v1/legal/...       | (none)                       | single mount
+# safety_router            | /api/v1/safety/...      | (none)                       | single mount
+# service_areas_router     | /api/v1/service-areas/..| (none)                       | single mount
+# auth_router              | /api/v1/auth/...        | /api/auth/...                | [DUPLICATE]
+# settings_router          | /api/v1/settings/...    | /settings/... /company-info  | [INTENTIONAL]*
+# websocket_router         | /ws/...                 | (none)                       | [INFRA]
+# admin_auth_router        | /api/admin/auth/...     | (none)                       | single mount
+# corporate_wallet_router  | /api/admin/corp-acct/.. | (none)                       | single mount
+# corporate_company_router | /company/{id}/...       | (none)                       | [INTENTIONAL]**
+# corporate_rider_router   | /rider/work-profile/... | (none)                       | [INTENTIONAL]**
+# files_router             | /api/v1/documents/...   | /api/documents/...           | [DUPLICATE]***
+# monitoring_router        | /api/admin/monitoring/..| (none)                       | single mount
+#
+# * settings_router: mobile apps call /settings/legal directly without a prefix.
+#   Rate-limit doubling is explicitly accepted (public read-only endpoint).
+#   Root mount stays until a coordinated mobile release.
+#
+# ** corporate_company_router / corporate_rider_router: rider app calls
+#    /company/{id}/policy, /company/{id}/allowances, /rider/work-profile/*
+#    without an /api prefix (verified in workProfileStore.ts). Root mount
+#    stays until a coordinated mobile release migrates those calls.
+#
+# *** files_router: /api/documents/{id} is used by the admin dashboard;
+#    /api/v1/documents/{id} resolves legacy driver_documents rows whose
+#    document_url was written by the old base64-in-DB upload path. Both
+#    mounts are intentional; the /api mount is the older legacy one and
+#    should be removed when the admin dashboard is updated to use /api/v1.
+#
+# Deprecation strategy: a middleware (see DeprecatedRootPathMiddleware below)
+# adds the response header  X-Spinr-Deprecated: true  and emits a WARNING log
+# for any request hitting a known deprecated root/legacy path. Monitor the
+# `[DEPRECATED_ROUTE]` log lines in Railway to measure traffic before removing.
+# =============================================================================
+
+import logging as _logging
+
 from fastapi import APIRouter, FastAPI
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request as _Request
+from starlette.responses import Response as _Response
 
 from core.config import settings
 from core.lifespan import lifespan
 from core.middleware import init_middleware
 from core.security import init_firebase
+
+_depr_logger = _logging.getLogger("spinr.deprecated_routes")
+
+# Paths (or path prefixes) that are served at a legacy mount AND also exist
+# under /api/v1/. Any request whose URL path starts with one of these strings
+# (and does NOT start with /api/v1/ or /api/) triggers a deprecation warning.
+# Update this set when legacy mounts are removed.
+_DEPRECATED_ROOT_PREFIXES: frozenset[str] = frozenset(
+    {
+        # auth_router: canonical is /api/v1/auth/..., legacy root is /api/auth/...
+        # (tracked separately; /api/ prefix handled below as _DEPRECATED_API_PREFIXES)
+        # settings_router: canonical is /api/v1/settings/..., legacy root is /settings/...
+        "/settings",
+        "/company-info",
+    }
+)
+
+# Paths served at /api/... that are also reachable at /api/v1/...
+# Rate-limit counters split across these two prefixes double the effective
+# quota for callers who alternate between them.
+_DEPRECATED_API_PREFIXES: frozenset[str] = frozenset(
+    {
+        # auth_router: canonical /api/v1/auth/..., legacy /api/auth/...
+        "/api/auth",
+        # admin_router: canonical /api/v1/admin/..., legacy /api/admin/...
+        # (admin_auth_router and monitoring_router are /api/-only, NOT duplicates)
+        # Note: we can't flag all /api/admin/ without also hitting the /api/-only
+        # admin routes, so we exclude those sub-paths explicitly in the middleware.
+        # files_router: canonical /api/v1/documents/..., legacy /api/documents/...
+        "/api/documents",
+        # corporate_accounts_router:
+        #   canonical /api/v1/admin/corporate-accounts/...
+        #   legacy    /api/admin/corporate-accounts/...
+        "/api/admin/corporate-accounts",
+    }
+)
+
+# Admin-only paths that exist ONLY at /api/admin/... and have no /api/v1/ twin.
+# These must be excluded so we don't mistakenly flag them as deprecated.
+_API_ADMIN_ONLY_PATHS: frozenset[str] = frozenset(
+    {
+        "/api/admin/auth",
+        "/api/admin/monitoring",
+        "/api/admin/corporate-accounts/wallet",  # corporate_wallet_router
+    }
+)
+
+
+class DeprecatedRootPathMiddleware(BaseHTTPMiddleware):
+    """Add X-Spinr-Deprecated: true header and emit a WARNING log for any
+    request that hits a known legacy/root-mount path that is also reachable
+    at the canonical /api/v1/ prefix.
+
+    This middleware is purely observational — it does NOT redirect or block
+    any traffic. Monitor the [DEPRECATED_ROUTE] log lines to measure usage
+    of the old paths before removing the duplicate mounts.
+    """
+
+    async def dispatch(self, request: _Request, call_next) -> _Response:  # type: ignore[override]
+        path = request.url.path
+
+        deprecated = False
+
+        # Check deprecated root paths (e.g. /settings/...)
+        for prefix in _DEPRECATED_ROOT_PREFIXES:
+            if path == prefix or path.startswith(prefix + "/"):
+                deprecated = True
+                break
+
+        # Check deprecated /api/ paths that are also at /api/v1/
+        if not deprecated:
+            for prefix in _DEPRECATED_API_PREFIXES:
+                if path == prefix or path.startswith(prefix + "/"):
+                    # Make sure this is not an /api/-only path (no /api/v1/ twin)
+                    is_api_only = any(path == excl or path.startswith(excl + "/") for excl in _API_ADMIN_ONLY_PATHS)
+                    if not is_api_only:
+                        deprecated = True
+                        break
+
+        response: _Response = await call_next(request)
+
+        if deprecated:
+            # Derive the canonical /api/v1/ equivalent for the log message.
+            if path.startswith("/api/"):
+                # /api/foo/... → /api/v1/foo/...
+                canonical = "/api/v1/" + path[len("/api/") :]
+            else:
+                # /settings/... → /api/v1/settings/...
+                canonical = "/api/v1" + path
+
+            _depr_logger.warning(
+                "[DEPRECATED_ROUTE] %s — use %s instead",
+                path,
+                canonical,
+            )
+            response.headers["X-Spinr-Deprecated"] = "true"
+
+        return response
+
+
 from documents import admin_documents_router, documents_router, files_router, upload_router
 from features import admin_support_router, pricing_router, support_router
 from routes.addresses import api_router as addresses_router
@@ -111,6 +297,11 @@ async def metrics() -> _MetricsResponse:
 # Initialize middleware
 init_middleware(app)
 
+# Register the deprecation-header middleware AFTER the main middleware stack so
+# it runs on the way out (response phase) and can append the response header.
+# It is lightweight — O(prefixes) string comparison per request.
+app.add_middleware(DeprecatedRootPathMiddleware)
+
 # Register exception handlers so unhandled errors return JSON (with CORS
 # headers) instead of falling through to Starlette's ServerErrorMiddleware,
 # which emits plain-text 500s that look like CORS failures in the browser.
@@ -153,37 +344,49 @@ v1_api_router.include_router(service_areas_router)
 # Include API routers
 app.include_router(v1_api_router, prefix="/api/v1")
 app.include_router(auth_router, prefix="/api/v1")
+# DUPLICATE MOUNT — auth_router is also served at /api/v1/auth/...; remove this
+# /api/auth/... mount after mobile apps are updated to use /api/v1/ prefix.
 app.include_router(auth_router, prefix="/api")
 
 # WebSocket routes — mounted at root so the path /ws/{client_type}/{client_id} is served directly
 app.include_router(websocket_router)
 
-# Public settings endpoints (GET /settings, GET /settings/legal). Mounted at
-# root so mobile apps can call them without an auth token, and also at /api/v1
-# for parity. The legal screen fetch uses backendUrl/settings/legal directly.
-# Rate-limit note: double-mounting means slowapi tracks each prefix separately.
-# The settings endpoint is public+read-only so the doubled effective rate is
-# acceptable; add a shared key_func if this ever needs tighter control.
+# DUPLICATE MOUNT (INTENTIONAL) — settings_router is also served at
+# /api/v1/settings/... and /api/v1/company-info. The root mount (/settings/...,
+# /company-info) is kept because the rider app calls /settings/legal directly
+# without an /api prefix. Remove root mount after mobile apps are updated to use
+# /api/v1/ prefix. Rate-limit doubling is explicitly accepted for this
+# public+read-only endpoint (see duplicate mount map at top of file).
 app.include_router(settings_router)
 app.include_router(settings_router, prefix="/api/v1")
 
 # Mount admin routes under /api so the admin dashboard can reach them at /api/admin/...
+# DUPLICATE MOUNT — admin_router (prefix /admin) is also served via v1_api_router at
+# /api/v1/admin/...; remove this /api/admin/... mount after the admin dashboard is
+# updated to use /api/v1/ prefix.
 app.include_router(admin_router, prefix="/api")
-app.include_router(admin_auth_router, prefix="/api")
+app.include_router(admin_auth_router, prefix="/api")  # /api/admin/auth/... — /api only, NOT a duplicate
+# DUPLICATE MOUNT — corporate_accounts_router (prefix /admin/corporate-accounts) is also
+# served via v1_api_router at /api/v1/admin/corporate-accounts/...; remove this
+# /api/admin/corporate-accounts/... mount after the admin dashboard uses /api/v1/ prefix.
 app.include_router(corporate_accounts_router, prefix="/api")
-app.include_router(corporate_wallet_router, prefix="/api")
+app.include_router(
+    corporate_wallet_router, prefix="/api"
+)  # /api/admin/corporate-accounts/... — /api only, NOT a duplicate
 # Corporate member/allowance/domain endpoints served at root (`/company/{id}/...`)
 # because the rider app calls /company/{id}/policy and /company/{id}/allowances
 # without an /api prefix (verified in workProfileStore.ts). Do not remove until
 # a coordinated mobile release migrates those calls to /api/company/{id}/...
 app.include_router(corporate_company_router)
 app.include_router(corporate_rider_router)
-# files_router serves document files at /api/documents/{id} (used by admin dashboard).
-# Also mounted under /api/v1 so legacy driver_documents rows whose document_url was
-# written as /api/v1/documents/{id} by the old base64-in-DB upload path keep resolving.
+# DUPLICATE MOUNT — files_router (prefix /documents) is served at both
+# /api/documents/{id} (used by admin dashboard) and /api/v1/documents/{id}
+# (resolves legacy driver_documents rows written by the old base64-in-DB upload
+# path). Both mounts are intentional; /api/documents/... is the older mount and
+# should be removed after the admin dashboard is updated to use /api/v1/ prefix.
 app.include_router(files_router, prefix="/api")
 app.include_router(files_router, prefix="/api/v1")
-app.include_router(monitoring_router, prefix="/api")
+app.include_router(monitoring_router, prefix="/api")  # /api/admin/monitoring/... — /api only, NOT a duplicate
 
 # Configure structured logging with Loguru
 import sys  # noqa: E402

@@ -18,12 +18,49 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_ipaddr, get_remote_address
+from slowapi.util import get_remote_address
 
 try:
     from core.config import settings
 except ImportError:  # pragma: no cover — package-relative fallback for tests
     from ..core.config import settings  # type: ignore[no-redef]
+
+
+# ============================================================================
+# Trusted-proxy IP extraction
+# ============================================================================
+
+
+def get_real_ip(request: Request) -> str:
+    """Return the real client IP, stripping trusted proxy hops.
+
+    Railway (and most reverse-proxy setups) appends the client IP to the
+    ``X-Forwarded-For`` header before forwarding the request.  The header
+    may contain a comma-separated chain such as::
+
+        X-Forwarded-For: <client>, <proxy1>, <railway-edge>
+
+    ``TRUSTED_PROXY_COUNT`` (default 1) tells us how many rightmost entries
+    were added by trusted infrastructure.  We strip those hops and return the
+    next entry to the left, which is the outermost untrusted IP — i.e., the
+    real client.
+
+    If the header is absent, or the index arithmetic goes out of range (e.g.
+    a misconfigured ``TRUSTED_PROXY_COUNT``), we fall back to
+    ``request.client.host``.  The function never returns an empty string;
+    ``"unknown"`` is the final sentinel.
+    """
+    xff = request.headers.get("X-Forwarded-For", "")
+    if xff:
+        ips = [ip.strip() for ip in xff.split(",") if ip.strip()]
+        trusted = settings.TRUSTED_PROXY_COUNT
+        idx = len(ips) - trusted - 1
+        if 0 <= idx < len(ips):
+            return ips[idx]
+
+    host = (request.client.host if request.client else None) or "unknown"
+    return host or "unknown"
+
 
 # ============================================================================
 # Rate Limiter Configuration
@@ -59,10 +96,11 @@ else:
         )
         _rate_limit_storage_uri = "memory://"
 
-# Default limiter — reads the real client IP from X-Forwarded-For when the
-# app sits behind a load balancer or CDN (Cloudflare, Fly.io, Railway). (P2-7)
+# Default limiter — uses get_real_ip to strip trusted Railway/proxy hops from
+# X-Forwarded-For before keying the rate-limit bucket, preventing IP spoofing
+# bypass.  (P2-7)
 default_limiter = Limiter(
-    key_func=get_ipaddr,
+    key_func=get_real_ip,
     default_limits=["100/minute", "1000/hour"],
     storage_uri=_rate_limit_storage_uri,
 )
@@ -97,7 +135,7 @@ def get_client_identifier(request: Request) -> str:
         pass
 
     # Fallback to real IP (respects X-Forwarded-For behind proxies)
-    return f"ip:{get_ipaddr(request)}"
+    return f"ip:{get_real_ip(request)}"
 
 
 def get_phone_based_key(request: Request) -> str:
@@ -110,7 +148,7 @@ def get_phone_based_key(request: Request) -> str:
         return f"phone:{phone_hash}"
 
     # Fallback to real IP (respects X-Forwarded-For behind proxies)
-    return f"ip:{get_ipaddr(request)}"
+    return f"ip:{get_real_ip(request)}"
 
 
 # ============================================================================

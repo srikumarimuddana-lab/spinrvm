@@ -14,6 +14,7 @@ jobs:
   # Backend Tests
   backend-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     services:
       postgres:
@@ -83,7 +84,7 @@ jobs:
           SECRET_KEY: test-secret-key-for-ci
           ENV: test
         run: |
-          pytest --cov=. --cov-report=xml --cov-report=term-missing -v
+          pytest --cov=. --cov-report=xml --cov-report=term-missing --timeout=30 -v
 
       - name: Upload coverage to Codecov
         if: always()
@@ -104,6 +105,7 @@ jobs:
   frontend-test:
     runs-on: ubuntu-latest
     if: false
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v6
@@ -131,7 +133,7 @@ jobs:
 
       - name: Run frontend tests
         working-directory: frontend
-        run: yarn test --ci --coverage --reporters=default
+        run: yarn test --ci --coverage --forceExit --reporters=default
 
       - name: Upload coverage
         if: always()
@@ -144,6 +146,7 @@ jobs:
   # Driver App Tests
   driver-app-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v6
@@ -179,7 +182,7 @@ jobs:
 
       - name: Run driver app tests
         working-directory: driver-app
-        run: yarn test --ci --coverage --reporters=default
+        run: yarn test --ci --coverage --forceExit --reporters=default
 
 
       - name: Upload coverage
@@ -195,6 +198,7 @@ jobs:
   # This job covers the canonical rider-app/ going forward.
   rider-app-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v6
@@ -230,7 +234,7 @@ jobs:
 
       - name: Run rider app tests
         working-directory: rider-app
-        run: yarn test --ci --coverage --reporters=default
+        run: yarn test --ci --coverage --forceExit --reporters=default
 
       - name: Upload coverage
         if: always()
@@ -243,6 +247,7 @@ jobs:
   # Admin Dashboard Tests
   admin-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v6
@@ -283,6 +288,7 @@ jobs:
   e2e-test:
     name: E2E tests (Playwright)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: [backend-test]
     if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
     continue-on-error: ${{ github.event_name == 'pull_request' }}
@@ -433,6 +439,7 @@ jobs:
   # Mobile Build (EAS)
   mobile-build:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: [rider-app-test, driver-app-test]
     if: github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[build]')
 
@@ -501,6 +508,7 @@ jobs:
   # Docker image security scan — blocks on CRITICAL or HIGH CVEs
   docker-image-scan:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: [backend-test]
 
     steps:

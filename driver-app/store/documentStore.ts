@@ -2,6 +2,12 @@ import { create } from 'zustand';
 import api from '@shared/api/client';
 import { appCache, CACHE_KEYS, CACHE_CONFIG } from '@shared/cache';
 
+function isAxiosError(e: unknown): e is { response?: { data?: { detail?: string } }; message?: string } {
+    return typeof e === 'object' && e !== null && ('response' in e || 'message' in e);
+}
+
+export type RNFileDescriptor = Blob | { uri?: string; name?: string; type?: string };
+
 export interface DocumentRequirement {
     id: string;
     name: string;
@@ -35,7 +41,7 @@ interface DocumentState {
     uploadDocument: (
         driverId: string,
         requirementId: string,
-        file: any,
+        file: RNFileDescriptor,
         side?: string
     ) => Promise<DriverDocument>;
     deleteDocument: (documentId: string) => Promise<void>;
@@ -75,10 +81,10 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
             );
 
             set({ requirements, isLoading: false });
-        } catch (error: any) {
+        } catch (error: unknown) {
             console.log('Failed to fetch document requirements:', error);
             set({
-                error: error.response?.data?.detail || 'Failed to fetch requirements',
+                error: isAxiosError(error) ? (error.response?.data?.detail || 'Failed to fetch requirements') : 'Failed to fetch requirements',
                 isLoading: false
             });
         }
@@ -112,10 +118,10 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
             );
 
             set({ documents, isLoading: false });
-        } catch (error: any) {
+        } catch (error: unknown) {
             console.log('Failed to fetch driver documents:', error);
             set({
-                error: error.response?.data?.detail || 'Failed to fetch documents',
+                error: isAxiosError(error) ? (error.response?.data?.detail || 'Failed to fetch documents') : 'Failed to fetch documents',
                 isLoading: false
             });
         }
@@ -124,14 +130,14 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
     uploadDocument: async (
         driverId: string,
         requirementId: string,
-        file: any,
+        file: RNFileDescriptor,
         side?: string
     ) => {
         set({ isLoading: true, error: null });
 
         try {
             const formData = new FormData();
-            formData.append('file', file);
+            formData.append('file', file as Blob);
             formData.append('driver_id', driverId);
             formData.append('requirement_id', requirementId);
             if (side) {
@@ -154,10 +160,10 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
             await appCache.remove(cacheKey);
 
             return newDoc;
-        } catch (error: any) {
+        } catch (error: unknown) {
             console.log('Failed to upload document:', error);
             set({
-                error: error.response?.data?.detail || 'Failed to upload document',
+                error: isAxiosError(error) ? (error.response?.data?.detail || 'Failed to upload document') : 'Failed to upload document',
                 isLoading: false
             });
             throw error;
@@ -178,10 +184,10 @@ export const useDocumentStore = create<DocumentState>((set, get) => ({
             });
 
             // Note: Cache will expire naturally
-        } catch (error: any) {
+        } catch (error: unknown) {
             console.log('Failed to delete document:', error);
             set({
-                error: error.response?.data?.detail || 'Failed to delete document',
+                error: isAxiosError(error) ? (error.response?.data?.detail || 'Failed to delete document') : 'Failed to delete document',
                 isLoading: false
             });
         }

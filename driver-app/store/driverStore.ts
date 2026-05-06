@@ -4,12 +4,16 @@ import SpinrConfig from '@shared/config/spinr.config';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { recordNonFatal } from '../utils/crashlytics';
 
+function isAxiosError(e: unknown): e is { response?: { status?: number; data?: { detail?: string } }; message?: string } {
+  return typeof e === 'object' && e !== null;
+}
+
 const DRIVER_RIDE_KEY = '@spinr:driver_active_ride';
 const DRIVER_TERMINAL_STATES = new Set<string>(['idle', 'trip_completed']);
 
 // Write activeRide + rideState to AsyncStorage so the driver can resume
 // after an app restart mid-trip. Clears the key when the ride is over.
-const _persistDriverState = (rideState: string, activeRide: any) => {
+const _persistDriverState = (rideState: string, activeRide: ActiveRide | null) => {
   if (!activeRide || DRIVER_TERMINAL_STATES.has(rideState)) {
     AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
   } else {
@@ -100,6 +104,36 @@ export interface ActiveRide {
     ride: RideInfo;
     rider: RiderInfo;
     vehicle_type: VehicleTypeInfo;
+}
+
+export interface CompletedRideData {
+    id?: string;
+    base_fare?: number;
+    distance_fare?: number;
+    time_fare?: number;
+    booking_fee?: number;
+    tip_amount?: number;
+    total_fare?: number;
+    driver_earnings?: number;
+    distance_km?: number;
+    duration_minutes?: number;
+    pickup_address?: string;
+    dropoff_address?: string;
+    ride_completed_at?: string;
+}
+
+export interface RideHistoryItem {
+    id?: string;
+    status?: string;
+    created_at?: string;
+    ride_completed_at?: string;
+    cancelled_at?: string;
+    pickup_address?: string;
+    dropoff_address?: string;
+    total_fare?: string;
+    distance_km?: number;
+    duration_minutes?: number;
+    [key: string]: unknown;
 }
 
 export interface EarningsSummary {
@@ -228,7 +262,7 @@ interface DriverState {
     rideState: RideState;
     incomingRide: IncomingRide | null;
     activeRide: ActiveRide | null;
-    completedRide: any | null;
+    completedRide: CompletedRideData | null;
     countdownSeconds: number;
 
     // Server-driven operational config (populated by applyDriverConfig on mount).
@@ -256,7 +290,7 @@ interface DriverState {
     selectedYear: number | null;
 
     // Ride history
-    rideHistory: any[];
+    rideHistory: RideHistoryItem[];
     historyTotal: number;
 
     // In-ride chat (real-time via WS, seeded from REST on screen mount)
@@ -391,9 +425,9 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             // Fetch the full active ride data
             await get().fetchActiveRide();
             _persistDriverState('navigating_to_pickup', get().activeRide);
-        } catch (err: any) {
-            const status = err?.response?.status;
-            const detail: string = err?.response?.data?.detail || '';
+        } catch (err: unknown) {
+            const status = isAxiosError(err) ? err.response?.status : undefined;
+            const detail: string = isAxiosError(err) ? (err.response?.data?.detail || '') : '';
 
             // Race-condition handling: another driver beat us to the ride, or
             // the rider cancelled between dispatch and accept. Backend returns
@@ -460,9 +494,10 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             await get().fetchActiveRide();
             _persistDriverState('arrived_at_pickup', get().activeRide);
             return { success: true };
-        } catch (err: any) {
-            set({ error: err.response?.data?.detail || 'Failed to mark arrival' });
-            return { success: false, error: err.response?.data?.detail || 'Failed to mark arrival' };
+        } catch (err: unknown) {
+            const detail = isAxiosError(err) ? (err.response?.data?.detail || 'Failed to mark arrival') : 'Failed to mark arrival';
+            set({ error: detail });
+            return { success: false, error: detail };
         } finally {
             set({ isLoading: false });
         }
@@ -476,8 +511,8 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             await get().fetchActiveRide();
             _persistDriverState('trip_in_progress', get().activeRide);
             return true;
-        } catch (err: any) {
-            set({ error: err.response?.data?.detail || 'Invalid OTP' });
+        } catch (err: unknown) {
+            set({ error: isAxiosError(err) ? (err.response?.data?.detail || 'Invalid OTP') : 'Invalid OTP' });
             return false;
         } finally {
             set({ isLoading: false });
@@ -491,8 +526,8 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             set({ rideState: 'trip_in_progress' });
             await get().fetchActiveRide();
             _persistDriverState('trip_in_progress', get().activeRide);
-        } catch (err: any) {
-            set({ error: err.response?.data?.detail || 'Failed to start ride' });
+        } catch (err: unknown) {
+            set({ error: isAxiosError(err) ? (err.response?.data?.detail || 'Failed to start ride') : 'Failed to start ride' });
         } finally {
             set({ isLoading: false });
         }
@@ -501,12 +536,12 @@ export const useDriverStore = create<DriverState>((set, get) => ({
     completeRide: async (rideId: string) => {
         set({ isLoading: true, error: null });
         try {
-            const res = await api.post(`/drivers/rides/${rideId}/complete`);
+            const res = await api.post<CompletedRideData>(`/drivers/rides/${rideId}/complete`);
             set({ rideState: 'trip_completed', completedRide: res.data, activeRide: null });
             AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
-        } catch (err: any) {
+        } catch (err: unknown) {
             recordNonFatal(err, { store: 'driverStore', action: 'completeRide' });
-            set({ error: err.response?.data?.detail || 'Failed to complete ride' });
+            set({ error: isAxiosError(err) ? (err.response?.data?.detail || 'Failed to complete ride') : 'Failed to complete ride' });
         } finally {
             set({ isLoading: false });
         }
@@ -518,9 +553,9 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             await api.post(`/drivers/rides/${rideId}/cancel?reason=${encodeURIComponent(reason || '')}`);
             set({ rideState: 'idle', activeRide: null, incomingRide: null });
             AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
-        } catch (err: any) {
+        } catch (err: unknown) {
             recordNonFatal(err, { store: 'driverStore', action: 'cancelRide' });
-            set({ error: err.response?.data?.detail || 'Failed to cancel ride' });
+            set({ error: isAxiosError(err) ? (err.response?.data?.detail || 'Failed to cancel ride') : 'Failed to cancel ride' });
         } finally {
             set({ isLoading: false });
         }
@@ -601,7 +636,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
 
     fetchRideHistory: async (limit = 20, offset = 0) => {
         try {
-            const res = await api.get<{ rides: any[]; total: number }>(`/drivers/rides/history?limit=${limit}&offset=${offset}`);
+            const res = await api.get<{ rides: RideHistoryItem[]; total: number }>(`/drivers/rides/history?limit=${limit}&offset=${offset}`);
             set({ rideHistory: res.data.rides || [], historyTotal: res.data.total || 0 });
         } catch (err) {
             console.log('Fetch history error:', err);
@@ -718,8 +753,8 @@ export const useDriverStore = create<DriverState>((set, get) => ({
     rateRider: async (rideId: string, rating: number, comment?: string) => {
         try {
             await api.post(`/drivers/rides/${rideId}/rate-rider`, { rating, comment: comment || '' });
-        } catch (err: any) {
-            set({ error: err.response?.data?.detail || 'Failed to rate rider' });
+        } catch (err: unknown) {
+            set({ error: isAxiosError(err) ? (err.response?.data?.detail || 'Failed to rate rider') : 'Failed to rate rider' });
         }
     },
 
@@ -743,8 +778,8 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             await api.post('/drivers/bank-account', account);
             await get().fetchBankAccount();
             return true;
-        } catch (err: any) {
-            set({ error: err.response?.data?.detail || 'Failed to save bank account' });
+        } catch (err: unknown) {
+            set({ error: isAxiosError(err) ? (err.response?.data?.detail || 'Failed to save bank account') : 'Failed to save bank account' });
             return false;
         } finally {
             set({ isLoading: false });
@@ -757,8 +792,8 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             await api.delete('/drivers/bank-account');
             set({ hasBankAccount: false, bankAccount: null });
             return true;
-        } catch (err: any) {
-            set({ error: err.response?.data?.detail || 'Failed to delete bank account' });
+        } catch (err: unknown) {
+            set({ error: isAxiosError(err) ? (err.response?.data?.detail || 'Failed to delete bank account') : 'Failed to delete bank account' });
             return false;
         } finally {
             set({ isLoading: false });
@@ -781,8 +816,8 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             await get().fetchDriverBalance();
             await get().fetchPayoutHistory();
             return { success: true };
-        } catch (err: any) {
-            const error = err.response?.data?.detail || 'Failed to request payout';
+        } catch (err: unknown) {
+            const error = isAxiosError(err) ? (err.response?.data?.detail || 'Failed to request payout') : 'Failed to request payout';
             set({ error });
             return { success: false, error };
         } finally {

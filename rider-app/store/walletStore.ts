@@ -2,6 +2,10 @@ import { create } from 'zustand';
 import api from '@shared/api/client';
 import { recordNonFatal } from '../utils/crashlytics';
 
+function isAxiosError(e: unknown): e is { response?: { data?: { detail?: string } }; message?: string } {
+  return typeof e === 'object' && e !== null;
+}
+
 export interface WalletInfo {
   id: string;
   balance: string; // MoneyString: always "0.00" format, never IEEE-754 float
@@ -79,8 +83,8 @@ export const useWalletStore = create<WalletState>((set, get) => ({
       set({ walletLoading: true, error: null });
       const res = await api.get<WalletInfo>('/wallet');
       set({ wallet: res.data, walletLoading: false });
-    } catch (error: any) {
-      set({ error: error.message, walletLoading: false });
+    } catch (error: unknown) {
+      set({ error: isAxiosError(error) ? (error.message ?? null) : null, walletLoading: false });
     }
   },
 
@@ -90,8 +94,8 @@ export const useWalletStore = create<WalletState>((set, get) => ({
       await api.post('/wallet/top-up', { amount });
       await get().fetchWallet();
       set({ isLoading: false });
-    } catch (error: any) {
-      set({ error: error.response?.data?.detail || error.message, isLoading: false });
+    } catch (error: unknown) {
+      set({ error: isAxiosError(error) ? (error.response?.data?.detail || error.message || null) : null, isLoading: false });
       throw error;
     }
   },
@@ -102,9 +106,9 @@ export const useWalletStore = create<WalletState>((set, get) => ({
       await api.post('/wallet/pay', { ride_id: rideId, amount });
       await get().fetchWallet();
       set({ isLoading: false });
-    } catch (error: any) {
+    } catch (error: unknown) {
       recordNonFatal(error, { store: 'walletStore', action: 'payWithWallet' });
-      set({ error: error.response?.data?.detail || error.message, isLoading: false });
+      set({ error: isAxiosError(error) ? (error.response?.data?.detail || error.message || null) : null, isLoading: false });
       throw error;
     }
   },
@@ -114,8 +118,8 @@ export const useWalletStore = create<WalletState>((set, get) => ({
       set({ transactionsLoading: true, error: null });
       const res = await api.get<{ transactions?: WalletTransaction[] }>(`/wallet/transactions?limit=${limit}`);
       set({ transactions: res.data.transactions || [], transactionsLoading: false });
-    } catch (error: any) {
-      set({ error: error.message, transactionsLoading: false });
+    } catch (error: unknown) {
+      set({ error: isAxiosError(error) ? (error.message ?? null) : null, transactionsLoading: false });
     }
   },
 
@@ -125,8 +129,8 @@ export const useWalletStore = create<WalletState>((set, get) => ({
       await api.post('/wallet/transfer', { recipient_phone: phone, amount });
       await get().fetchWallet();
       set({ isLoading: false });
-    } catch (error: any) {
-      set({ error: error.response?.data?.detail || error.message, isLoading: false });
+    } catch (error: unknown) {
+      set({ error: isAxiosError(error) ? (error.response?.data?.detail || error.message || null) : null, isLoading: false });
       throw error;
     }
   },
@@ -138,8 +142,8 @@ export const useWalletStore = create<WalletState>((set, get) => ({
       const res = await api.post<FareSplit>('/fare-split', { ride_id: rideId, participant_phones: phones });
       set({ currentSplit: res.data, isLoading: false });
       return res.data;
-    } catch (error: any) {
-      set({ error: error.response?.data?.detail || error.message, isLoading: false });
+    } catch (error: unknown) {
+      set({ error: isAxiosError(error) ? (error.response?.data?.detail || error.message || null) : null, isLoading: false });
       throw error;
     }
   },
@@ -162,8 +166,8 @@ export const useWalletStore = create<WalletState>((set, get) => ({
       set({ isLoading: true, error: null });
       await api.post(`/fare-split/participant/${participantId}/respond`, { action });
       set({ isLoading: false });
-    } catch (error: any) {
-      set({ error: error.response?.data?.detail || error.message, isLoading: false });
+    } catch (error: unknown) {
+      set({ error: isAxiosError(error) ? (error.response?.data?.detail || error.message || null) : null, isLoading: false });
       throw error;
     }
   },
@@ -173,8 +177,8 @@ export const useWalletStore = create<WalletState>((set, get) => ({
       set({ isLoading: true, error: null });
       await api.post(`/fare-split/participant/${participantId}/pay`, { payment_method: method });
       set({ isLoading: false });
-    } catch (error: any) {
-      set({ error: error.response?.data?.detail || error.message, isLoading: false });
+    } catch (error: unknown) {
+      set({ error: isAxiosError(error) ? (error.response?.data?.detail || error.message || null) : null, isLoading: false });
       throw error;
     }
   },
@@ -184,8 +188,8 @@ export const useWalletStore = create<WalletState>((set, get) => ({
       set({ isLoading: true, error: null });
       await api.post(`/fare-split/${splitId}/cancel`);
       set({ currentSplit: null, isLoading: false });
-    } catch (error: any) {
-      set({ error: error.response?.data?.detail || error.message, isLoading: false });
+    } catch (error: unknown) {
+      set({ error: isAxiosError(error) ? (error.response?.data?.detail || error.message || null) : null, isLoading: false });
       throw error;
     }
   },
@@ -195,8 +199,8 @@ export const useWalletStore = create<WalletState>((set, get) => ({
       set({ isLoading: true, error: null });
       await api.post(`/rides/${rideId}/tip`, { amount });
       set({ isLoading: false });
-    } catch (error: any) {
-      set({ error: error.response?.data?.detail || error.message, isLoading: false });
+    } catch (error: unknown) {
+      set({ error: isAxiosError(error) ? (error.response?.data?.detail || error.message || null) : null, isLoading: false });
       throw error;
     }
   },

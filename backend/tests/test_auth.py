@@ -330,8 +330,12 @@ class TestAuthEndpoints:
             return_value=MagicMock(data=[{"id": "otp_123"}])
         )
 
-        # Use a valid E.164 phone with at least 12 chars (e.g. +12345678901 = 12 chars)
-        response = test_client.post("/api/auth/send-otp", json={"phone": "+12345678901"})
+        # Dev-OTP fallback is gated on ENV=development; pytest.ini sets
+        # ENV=test which (correctly) refuses the bypass. Patch ENV so the
+        # success path is reachable without configuring Twilio.
+        with patch("backend.routes.auth.settings.ENV", "development"):
+            # Use a valid E.164 phone with at least 12 chars (e.g. +12345678901 = 12 chars)
+            response = test_client.post("/api/auth/send-otp", json={"phone": "+12345678901"})
 
         assert response.status_code == 200
 

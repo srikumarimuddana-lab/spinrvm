@@ -7,6 +7,17 @@ Runs every 10 minutes (wired from lifespan startup). Each tick:
      default payment method with confirm=True.
   4. The webhook handler (Task 5) credits the wallet when the charge
      clears — no work here beyond kicking off the intent.
+
+Replay-safety contract (CLAUDE.md, Background loops):
+  This loop runs on every replica simultaneously. The Stripe
+  PaymentIntent.create call is the side-effect we must not duplicate.
+  We pass an ``idempotency_key`` derived from
+  ``(wallet_id, today_date, today_sum_cents, topup_amount_cents)`` —
+  two replicas observing the same today_sum (i.e. no top-up has
+  cleared between their reads) generate the same key, so Stripe
+  dedupes and only one charge fires. Once the first top-up is credited
+  back via webhook, today_sum advances and the next tick uses a
+  different key, allowing the legitimate next top-up.
 """
 
 from __future__ import annotations
@@ -96,6 +107,21 @@ async def _process_one(wallet: dict, stripe_secret: str) -> None:
         logger.warning("wallet %s has no default payment method", wallet["id"])
         return
 
+    # Replay-safe idempotency key — two replicas seeing the same
+    # (wallet, today_sum, topup_amount) on the same calendar day produce
+    # the same key, so Stripe collapses the duplicate call. Once the
+    # first top-up clears via webhook, today_sum advances and the next
+    # tick uses a different key. Hash to keep the key under Stripe's
+    # 255-char limit and to avoid leaking ids in transit.
+    import hashlib
+    from datetime import date
+
+    seed = (
+        f"autotopup:{wallet['id']}:{date.today().isoformat()}:"
+        f"{int(round(today_sum * 100))}:{int(round(topup_amount * 100))}"
+    )
+    idempotency_key = hashlib.sha256(seed.encode()).hexdigest()
+
     stripe.PaymentIntent.create(
         amount=int(topup_amount * 100),
         currency="cad",
@@ -110,6 +136,7 @@ async def _process_one(wallet: dict, stripe_secret: str) -> None:
             "initiated_by": "autotopup",
         },
         api_key=stripe_secret,
+        idempotency_key=idempotency_key,
     )
     logger.info("autotopup: kicked intent for wallet %s (%s CAD)", wallet["id"], topup_amount)
 

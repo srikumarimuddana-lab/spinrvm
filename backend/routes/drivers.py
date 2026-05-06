@@ -2443,7 +2443,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     # Post-ride receipt notification stub
     rider = await db_supabase.get_user_by_id(ride.get("rider_id"))
     if rider and rider.get("email"):
-        logger.info(f"Sending email receipt for ride {ride_id} to user {rider['id']}")
+        logger.info(f"Sending email receipt for ride {ride_id} (rider_id={rider.get('id')})")
 
     # Fire-and-forget: render the route PNG from phase_polylines and
     # upload to Cloudinary so the admin drawer + email receipt can

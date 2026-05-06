@@ -48,13 +48,14 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from decimal import Decimal
 from typing import Any, Dict, Optional
 
 try:
     from ..settings_loader import get_app_settings
+    from .money import dollars_to_cents
 except ImportError:
     from settings_loader import get_app_settings
+    from utils.money import dollars_to_cents
 
 try:
     import stripe
@@ -151,7 +152,7 @@ async def charge_ride(
         )
 
     ride_id = ride.get("id") or ""
-    amount_cents = int(Decimal(str(total_amount)).quantize(Decimal("0.01")) * 100)
+    amount_cents = dollars_to_cents(total_amount)
 
     # Idempotency: the same ride can only be charged once within 24h
     # regardless of how many retries the client makes. If an existing

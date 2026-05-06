@@ -71,11 +71,17 @@ def filter_and_rank_drivers(
     pickup_lng = ride["pickup_lng"]
     needs_rating = algorithm in ("rating_based", "combined")
 
+    wav_required = bool(ride.get("requires_wav"))
+
     result: List[Tuple[Dict[str, Any], float]] = []
     for d in candidate_drivers:
         if not _is_dispatchable_driver(d):
             continue
         if needs_rating and float(d.get("rating") or 5.0) < min_rating:
+            continue
+        # Saskatchewan Transportation Act s.22: when the rider requests a WAV,
+        # only match drivers whose vehicle has an approved wheelchair lift/ramp.
+        if wav_required and not d.get("is_wav"):
             continue
         dist_km = calculate_distance(pickup_lat, pickup_lng, d["lat"], d["lng"])
         if dist_km <= search_radius_km:

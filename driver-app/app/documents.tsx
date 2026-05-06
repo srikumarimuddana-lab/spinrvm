@@ -78,8 +78,8 @@ export default function DocumentsScreen() {
                 api.get<Requirement[]>('/drivers/requirements'),
                 api.get<DriverDocument[]>('/drivers/documents')
             ]);
-            setRequirements(reqRes.data);
-            setDocuments(docRes.data);
+            setRequirements(reqRes.data as Requirement[]);
+            setDocuments(docRes.data as DriverDocument[]);
         } catch (err: any) {
             console.error("Documents load error:", err);
             if (err.response) {

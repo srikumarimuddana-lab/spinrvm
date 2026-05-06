@@ -146,7 +146,7 @@ export default function OtpScreen() {
           code: code,
         });
         if (!response.data) throw new Error('Empty response from auth server');
-        const { token, refresh_token, expires_in, user: userData } = response.data;
+        const { token, refresh_token, expires_in, user: userData } = response.data as { token: string; refresh_token?: string; expires_in?: number; user?: any };
         // P3 cookie auth: token is "" when HTTP-only cookies are used
         if (token) {
           await useAuthStore.getState().setTokens(token, refresh_token ?? "", expires_in ?? 900);

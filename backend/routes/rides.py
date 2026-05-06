@@ -845,6 +845,20 @@ async def create_ride(request: Request, body: CreateRideRequest, current_user: d
                 f"estimate_token rejected ({e}); falling back to current surge "
                 f"{float(current_surge)} for rider={current_user['id']}"
             )
+    # Corporate surge exclusion (policy): rides billed to a corporate account
+    # are never subject to surge pricing regardless of the active area multiplier
+    # or the estimate_token value. This must be applied after surge resolution so
+    # it overrides both the token path and the live-area path.
+    _is_corporate_ride = bool(
+        body.corporate_account_id or body.payment_method == "company_allowance" or body.work_profile
+    )
+    if _is_corporate_ride and surge > _d(1):
+        logger.info(
+            f"Corporate ride: surge reset from {float(surge)} to 1.0 "
+            f"for rider={current_user['id']} corporate_account_id={body.corporate_account_id}"
+        )
+        surge = _d(1)
+
     distance_fare = _round(_d(fare_info["per_km_rate"]) * _d(distance_km) * surge)
     time_fare = _round(_d(fare_info["per_minute_rate"]) * _d(duration_minutes) * surge)
     booking_fee = _d(fare_info.get("booking_fee", 2.0))

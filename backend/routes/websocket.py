@@ -272,8 +272,20 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
     current_driver_id: str | None = None
 
     try:
-        # Require the first message to be an auth message containing a token
-        auth_msg = await websocket.receive_json()
+        # Require the first message to be an auth message containing a token.
+        # Enforce a 30-second deadline so clients that connect but never send
+        # anything cannot hold the connection open indefinitely (resource
+        # exhaustion risk under load). Close code 1008 = Policy Violation per
+        # RFC 6455 — correct for an auth protocol timeout.
+        try:
+            auth_msg = await asyncio.wait_for(websocket.receive_json(), timeout=30.0)
+        except asyncio.TimeoutError:
+            logger.warning("[WS] Auth timeout — no message received within 30s, closing connection")
+            await websocket.close(code=1008)  # 1008 = Policy Violation
+            return
+        except Exception:
+            await websocket.close(code=1011)
+            return
         if not auth_msg or auth_msg.get("type") != "auth" or not auth_msg.get("token"):
             await websocket.send_json({"type": "error", "message": "authentication_required"})
             await websocket.close()
@@ -583,7 +595,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                         try:
                             _app_cfg = await get_app_settings()
                             _maps_key_cache = (_app_cfg or {}).get("google_maps_api_key") or ""
-                        except Exception:
+                        except Exception:  # noqa: S110
                             pass  # keep stale key; Maps call will fall back to haversine
                         _maps_key_fetched_at = now_mono
 
@@ -623,7 +635,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                                     )
                                     if eta_sec is not None:
                                         rider_msg["eta_seconds"] = eta_sec
-                                except Exception:
+                                except Exception:  # noqa: S110
                                     pass  # ETA is informational — never block the fan-out
 
                         await manager.send_personal_message(

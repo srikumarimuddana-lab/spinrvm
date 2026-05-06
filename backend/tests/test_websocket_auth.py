@@ -4,10 +4,11 @@ and per-user inbound rate limiting.
 
 Implementation notes (read backend/routes/websocket.py before modifying):
 
-- The endpoint calls `await websocket.receive_json()` for the first message.
-  There is NO server-side timeout wrapping that call — if no message arrives
-  the socket simply waits.  The "auth timeout" is therefore NOT a server timer
-  but the server-side *rejection* when the wrong message type arrives first.
+- The endpoint wraps the first `await websocket.receive_json()` in
+  `asyncio.wait_for(..., timeout=30.0)`.  A client that connects but never
+  sends anything is closed with code 1008 (RFC 6455 Policy Violation) after
+  30 seconds.  The "auth timeout" in the test name refers to both this server
+  timer AND the immediate rejection when the wrong message type arrives first.
 
 - The rate-limiter (socket_manager.ConnectionManager.note_user_message) drops
   the *message* and sends a `rate_limited` frame; it does NOT close the socket.
@@ -19,8 +20,11 @@ Implementation notes (read backend/routes/websocket.py before modifying):
 Test strategy:
   1. test_ws_auth_closes_connection_after_timeout:
        Send a non-auth message type first; the endpoint sends an error and
-       closes — exercises the same code path that would fire if auth had
-       never arrived and the wrong message was received instead.
+       closes — exercises the immediate-rejection path.
+
+  1b. test_ws_auth_timeout_no_message:
+       Patch asyncio.wait_for to raise TimeoutError; assert close code 1008.
+       Exercises the 30-second server timer path without waiting real time.
 
   2. test_ws_valid_auth_accepted:
        Send a correct auth message; assert auth_success is returned.
@@ -134,10 +138,9 @@ def test_ws_auth_closes_connection_after_timeout(app_with_ws):
     failed to send an auth message before the server decided to reject it —
     the outcome is identical: connection closed with an auth error.
 
-    We exercise the actual rejection code path rather than inserting a
-    synthetic sleep, because the implementation has no server-side timer for
-    the first message; the rejection fires immediately on receipt of a
-    non-auth payload.
+    We exercise the actual rejection code path rather than patching the timer,
+    because both paths (timer expiry and wrong-message-type) result in the same
+    closed connection — this test pins the immediate-rejection variant.
     """
     client = TestClient(app_with_ws)
 
@@ -165,6 +168,46 @@ def test_ws_no_token_in_auth_message_closes_connection(app_with_ws):
             assert msg["type"] == "error"
             assert msg["message"] == "authentication_required"
             ws.receive_json()
+
+
+# ── Test 1b: server-side 30s timer path ──────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_ws_auth_timeout_no_message(app_with_ws):
+    """When asyncio.wait_for raises TimeoutError the endpoint closes with 1008.
+
+    Patches asyncio.wait_for to raise immediately so the test completes in
+    microseconds rather than waiting 30 real seconds.  Asserts:
+      - websocket.close() is called
+      - close code is 1008 (RFC 6455 Policy Violation)
+
+    This is client-misbehavior territory (not a server fault), hence
+    logger.warning rather than logger.error.
+    """
+    import asyncio as _asyncio
+
+    close_calls: list[dict] = []
+
+    mock_ws = MagicMock()
+    mock_ws.accept = AsyncMock()
+    mock_ws.send_json = AsyncMock()
+
+    async def _close(code=1000, reason=""):
+        close_calls.append({"code": code, "reason": reason})
+
+    mock_ws.close = _close
+
+    with patch(
+        "backend.routes.websocket.asyncio.wait_for",
+        side_effect=_asyncio.TimeoutError,
+    ):
+        from backend.routes.websocket import websocket_endpoint
+
+        await websocket_endpoint(mock_ws, client_type="rider", client_id="test_rider")
+
+    assert close_calls, "websocket.close() was never called after timeout"
+    assert close_calls[0]["code"] == 1008, f"Expected close code 1008 (Policy Violation), got {close_calls[0]['code']}"
 
 
 # ── Test 2: valid auth accepted ───────────────────────────────────────────────

@@ -2383,9 +2383,50 @@ async def get_call_info(ride_id: str, current_user: dict = Depends(get_current_u
     twilio_proxy_sid = settings.get("twilio_proxy_service_sid", "")
 
     if twilio_proxy_sid:
-        # Twilio Proxy path (PIPEDA-compliant): create a session and return proxy number.
-        # TODO: implement Twilio Proxy session creation here.
-        raise HTTPException(status_code=501, detail="Twilio Proxy not yet implemented")
+        # Twilio Proxy path (PIPEDA-compliant): create an anonymous session so neither
+        # party ever sees the other's real phone number.
+        try:
+            twilio_account_sid = settings.get("twilio_account_sid", "")
+            twilio_auth_token = settings.get("twilio_auth_token", "")
+            if not twilio_account_sid or not twilio_auth_token:
+                logger.error(
+                    "[CALL] twilio_proxy_service_sid is set but twilio_account_sid / "
+                    "twilio_auth_token are missing in app_settings — falling through"
+                )
+                raise ValueError("Missing Twilio credentials")
+
+            from twilio.rest import Client as TwilioClient  # noqa: PLC0415
+
+            def _create_proxy_session() -> str:
+                """Synchronous Twilio SDK call — runs in a thread-pool executor."""
+                client = TwilioClient(twilio_account_sid, twilio_auth_token)
+                # unique_name is idempotent: same ride always maps to the same session.
+                session = client.proxy.v1.services(twilio_proxy_sid).sessions.create(
+                    unique_name=f"spinr_call_{ride_id}",
+                    ttl=14400,  # 4 hours — covers the longest conceivable ride + post-trip window
+                )
+                # Add the caller as a participant so Twilio assigns them a proxy number.
+                participant = session.participants.create(
+                    friendly_name=name,
+                    identifier=phone,  # real phone — never logged or returned
+                )
+                return participant.proxy_identifier  # the masked proxy number
+
+            loop = asyncio.get_running_loop()
+            proxy_number = await loop.run_in_executor(None, _create_proxy_session)
+
+            return {
+                "proxy_number": proxy_number,
+                "masked": masked,
+                "name": name,
+                "proxy": True,
+            }
+        except Exception as _twilio_exc:
+            logger.error(
+                "[CALL] Twilio Proxy session creation failed — falling through to ENV check",
+                exc_info=True,
+            )
+            # Fall through to the ENV-guard below; dev still works, prod fails closed.
 
     try:
         from core.config import settings as _cfg

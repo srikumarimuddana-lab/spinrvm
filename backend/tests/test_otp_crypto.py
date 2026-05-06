@@ -18,7 +18,10 @@ from unittest.mock import patch
 
 import pytest
 
-from backend.utils.crypto import hash_otp, verify_otp_hash
+try:
+    from backend.utils.crypto import hash_otp, verify_otp_hash
+except ImportError:
+    from utils.crypto import hash_otp, verify_otp_hash  # type: ignore
 
 
 class TestHashOtpDeterministic:

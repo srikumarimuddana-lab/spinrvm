@@ -34,7 +34,10 @@ from fastapi import HTTPException
 # Underlying coroutine for the @idempotent_endpoint-wrapped route. The
 # decorator stores the original on ``__wrapped__`` so tests can call it
 # without setting up the Redis-backed idempotency store.
-from backend.routes.payments import PaymentIntentRequest, create_payment_intent
+try:
+    from backend.routes.payments import PaymentIntentRequest, create_payment_intent
+except ImportError:
+    from routes.payments import PaymentIntentRequest, create_payment_intent  # type: ignore
 
 _USER = {"id": "usr-pmt-001", "stripe_customer_id": "cus_test"}
 _RIDE = {"id": "ride-pmt-001", "total_fare": "12.50", "rider_id": _USER["id"]}

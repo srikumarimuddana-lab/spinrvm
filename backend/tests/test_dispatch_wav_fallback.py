@@ -29,7 +29,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from backend.services.dispatch_service import DispatchService
+try:
+    from backend.services.dispatch_service import DispatchService
+except ImportError:
+    from services.dispatch_service import DispatchService  # type: ignore
 
 
 def _make_ride(*, requires_wav: bool, vehicle_type_id: str = "vt-standard") -> dict:

@@ -104,7 +104,7 @@ export default function HomeScreen() {
           'Location Access',
           'Spinr uses your location to show nearby drivers, calculate your pickup point, and provide accurate ETAs. ' +
           'Your location is only used while the app is in use and is never sold or shared with advertisers.',
-          [{ text: 'Continue', style: 'default', onPress: resolve }],
+          [{ text: 'Continue', style: 'default', onPress: () => resolve() }],
           { cancelable: false },
         );
       });

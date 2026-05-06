@@ -33,9 +33,9 @@ class TestSerializeForApi:
         assert result["expiry"] == d.isoformat()
 
     def test_serializes_decimal_to_string(self):
-        """Decimal serializes to string (not float) to preserve precision
-        for Postgres NUMERIC columns — float conversion of Decimal('18.50')
-        loses the trailing zero (and worse, drifts on values like 0.29)."""
+        # Audit-17 P0-1: money crosses the wire as a decimal string, never
+        # as IEEE-754 float. _serialize_for_api preserves Decimal precision
+        # by emitting the str() form.
         from backend.db_supabase import _serialize_for_api
 
         result = _serialize_for_api({"fare": Decimal("18.50")})

@@ -49,6 +49,12 @@ class CreateFareSplitRequest(BaseModel):
             raise ValueError(f"Phone must be in +1XXXXXXXXXX format: {v}")
         return v
 
+    @validator("participant_phones")
+    def no_duplicate_phones(cls, v: List[str]) -> List[str]:
+        if len(v) != len(set(v)):
+            raise ValueError("Duplicate phone numbers are not allowed")
+        return v
+
 
 class RespondToSplitRequest(BaseModel):
     action: str = Field(..., pattern="^(accept|decline)$")
@@ -71,6 +77,11 @@ async def create_fare_split(req: CreateFareSplitRequest, current_user: dict = De
     if ride.get("rider_id") != current_user["id"]:
         raise HTTPException(status_code=403, detail="Only the ride requester can split the fare")
 
+    # Initiating rider cannot add themselves as a participant
+    requester_phone = current_user.get("phone")
+    if requester_phone and requester_phone in req.participant_phones:
+        raise HTTPException(status_code=400, detail="Initiating rider cannot add themselves as a participant")
+
     # Check no existing active split for this ride
     existing = await db.find_one("fare_splits", {"ride_id": req.ride_id, "status": {"$ne": "cancelled"}})
     if existing:
@@ -87,7 +98,7 @@ async def create_fare_split(req: CreateFareSplitRequest, current_user: dict = De
         "id": split_id,
         "ride_id": req.ride_id,
         "requester_id": current_user["id"],
-        "total_fare": float(total_fare),
+        "total_fare": str(total_fare),
         "split_count": split_count,
         "status": "pending",
         "created_at": now_iso,
@@ -113,7 +124,7 @@ async def create_fare_split(req: CreateFareSplitRequest, current_user: dict = De
             "fare_split_id": split_id,
             "user_id": phone_to_user_id.get(phone),
             "phone": phone,
-            "share_amount": float(share_amount),
+            "share_amount": str(share_amount),
             "status": "pending",
             "created_at": now_iso,
         }
@@ -156,7 +167,7 @@ async def get_fare_split(split_id: str, current_user: dict = Depends(get_current
     if split["requester_id"] != user_id and not is_participant:
         raise HTTPException(status_code=403, detail="Not authorized to view this fare split")
 
-    share_amount = float(_d(Decimal(str(split["total_fare"])) / split["split_count"]))
+    share_amount = _d(Decimal(str(split["total_fare"])) / split["split_count"])
 
     return {
         "id": split["id"],
@@ -164,7 +175,7 @@ async def get_fare_split(split_id: str, current_user: dict = Depends(get_current
         "requester_id": split["requester_id"],
         "total_fare": split["total_fare"],
         "split_count": split["split_count"],
-        "your_share": share_amount,
+        "your_share": str(share_amount),
         "status": split["status"],
         "participants": [
             {
@@ -255,7 +266,7 @@ async def respond_to_split(
                 limit=10,
             )
             active_count = sum(1 for p in all_participants if p["status"] not in ("declined",)) + 1  # +1 requester
-            new_share = float(_d(Decimal(str(split["total_fare"])) / active_count))
+            new_share = _d(Decimal(str(split["total_fare"])) / active_count)
 
             # Update share amounts for remaining participants
             for p in all_participants:
@@ -263,7 +274,7 @@ async def respond_to_split(
                     await db.update_one(
                         "fare_split_participants",
                         {"id": p["id"]},
-                        {"share_amount": new_share},
+                        {"share_amount": str(new_share)},
                     )
 
             await db.update_one(

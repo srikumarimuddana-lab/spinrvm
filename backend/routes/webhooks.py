@@ -211,7 +211,7 @@ async def stripe_webhook(request: Request):
                         if driver_rows:
                             driver_user_id = driver_rows[0].get("user_id")
             except Exception as lookup_err:
-                logger.warning(f"Driver payment-failed lookup error: {lookup_err}")
+                logger.error(f"Driver payment-failed lookup error: {lookup_err}", exc_info=True)
                 driver_user_id = None
             if driver_user_id:
                 try:

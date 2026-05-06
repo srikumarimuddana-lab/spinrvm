@@ -24,6 +24,7 @@ try:
     from ..settings_loader import get_app_settings
     from ..sms_service import send_sms
     from ..socket_manager import manager
+    from ..utils.audit_logger import log_user_action
     from ..utils.crypto import hash_otp
     from ..utils.error_handling import (
         ErrorCode,
@@ -32,7 +33,6 @@ try:
     )
     from ..utils.error_keys import ErrorKeys
     from ..utils.idempotency import idempotent_endpoint
-    from ..utils.audit_logger import log_user_action
     from ..utils.rate_limiter import (
         api_rate_limit,
         cancel_ride_limit,
@@ -58,6 +58,7 @@ except ImportError:
     from settings_loader import get_app_settings
     from sms_service import send_sms
     from socket_manager import manager
+    from utils.audit_logger import log_user_action
     from utils.crypto import hash_otp
     from utils.error_handling import (
         ErrorCode,
@@ -66,9 +67,13 @@ except ImportError:
     )
     from utils.error_keys import ErrorKeys
     from utils.idempotency import idempotent_endpoint
-    from utils.audit_logger import log_user_action
     from utils.rate_limiter import (
+        api_rate_limit,
         cancel_ride_limit,
+        payment_action_limit,
+        ride_action_limit,
+        ride_message_limit,
+        ride_rating_limit,
         ride_read_limit,
         ride_request_limit,
     )
@@ -473,7 +478,9 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
                 )
                 logger.info(f"[DISPATCH] push new_ride_assignment sent to user_id={selected_driver['user_id']}")
             except Exception as e:
-                logger.error(f"[DISPATCH] push notification failed for user_id={selected_driver['user_id']}: {e}", exc_info=True)
+                logger.error(
+                    f"[DISPATCH] push notification failed for user_id={selected_driver['user_id']}: {e}", exc_info=True
+                )
         else:
             logger.error(
                 f"[DISPATCH] selected_driver has no user_id — cannot notify. "
@@ -2399,7 +2406,9 @@ async def add_stop_mid_trip(
 
 @api_router.delete("/{ride_id}/stops/{stop_index}")
 @ride_action_limit
-async def remove_stop_mid_trip(ride_id: str, stop_index: int, request: Request, current_user: dict = Depends(get_current_user)):
+async def remove_stop_mid_trip(
+    ride_id: str, stop_index: int, request: Request, current_user: dict = Depends(get_current_user)
+):
     """Remove a stop from an active ride by index."""
     ride = await db.find_one("rides", {"id": ride_id})
     if not ride:
@@ -2447,7 +2456,9 @@ class EmergencyRequest(BaseModel):
 
 @api_router.post("/{ride_id}/emergency")
 @ride_action_limit
-async def trigger_emergency(ride_id: str, body: EmergencyRequest, request: Request, current_user: dict = Depends(get_current_user)):
+async def trigger_emergency(
+    ride_id: str, body: EmergencyRequest, request: Request, current_user: dict = Depends(get_current_user)
+):
     """Trigger an emergency alert for a live ride"""
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
@@ -2658,7 +2669,9 @@ class SendMessageRequest(BaseModel):
 
 @api_router.post("/{ride_id}/messages")
 @ride_message_limit
-async def send_ride_message(ride_id: str, body: SendMessageRequest, request: Request, current_user: dict = Depends(get_current_user)):
+async def send_ride_message(
+    ride_id: str, body: SendMessageRequest, request: Request, current_user: dict = Depends(get_current_user)
+):
     """Send a chat message for an active or recently completed ride.
 
     Persists the message in `ride_messages` and forwards it to the

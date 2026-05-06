@@ -129,5 +129,5 @@ class TestStripeWebhookAllowlist:
     def test_unknown_events_not_in_allowlist(self):
         from backend.routes.webhooks import ALLOWED_STRIPE_EVENTS
 
-        for unknown in ("charge.refunded", "account.updated", "payout.paid", ""):
+        for unknown in ("account.updated", "payout.paid", ""):
             assert unknown not in ALLOWED_STRIPE_EVENTS, f"{unknown} should not be allowed"

@@ -127,7 +127,7 @@ function RideCompletedScreenContent() {
   const handleShareInvoice = async () => {
     try {
       await Share.share({ message: buildReceiptText(), title: 'Spinr Ride Receipt' });
-    } catch {}
+    } catch (err) { console.error('[ride-completed]', err); }
   };
 
   // Payment is processed when rider taps "Done" — includes tip amount

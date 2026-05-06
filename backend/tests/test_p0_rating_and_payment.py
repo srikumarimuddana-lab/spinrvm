@@ -126,7 +126,7 @@ class TestFirstRatingUpdatesDriverAverage:
             rating_req.comment = ""
             rating_req.tip_amount = 0
 
-            result = await rides_mod.rate_driver("ride_001", rating_req, {"id": "user_rider_1"})
+            result = await rides_mod.rate_driver("ride_001", rating_req, current_user={"id": "user_rider_1"})
 
         assert result == {"success": True}
 
@@ -174,7 +174,7 @@ class TestFirstRatingUpdatesDriverAverage:
             rating_req.comment = ""
             rating_req.tip_amount = 0
 
-            await rides_mod.rate_driver("ride_001", rating_req, {"id": "user_rider_1"})
+            await rides_mod.rate_driver("ride_001", rating_req, current_user={"id": "user_rider_1"})
 
         driver_updates = [c for c in update_one_calls if c[0] == "drivers"]
         assert len(driver_updates) == 1
@@ -205,7 +205,7 @@ class TestRiderPaymentAfterDriverCompletes:
             req = rides_mod.ProcessPaymentRequest(tip_amount=Decimal("0"))
 
             with pytest.raises(HTTPException) as exc_info:
-                await rides_mod.process_payment("ride_001", req, {"id": "user_rider_1"})
+                await rides_mod.process_payment("ride_001", req, current_user={"id": "user_rider_1"})
 
         assert exc_info.value.status_code == 409
         assert "in_progress" in exc_info.value.detail
@@ -234,7 +234,7 @@ class TestRiderPaymentAfterDriverCompletes:
 
             # Must not raise a 409 — any other exception is unrelated to our fix.
             try:
-                result = await rides_mod.process_payment("ride_001", req, {"id": "user_rider_1"})
+                result = await rides_mod.process_payment("ride_001", req, current_user={"id": "user_rider_1"})
                 # If we get here the guard short-circuited cleanly.
                 assert result.get("already_paid") is True
             except HTTPException as exc:

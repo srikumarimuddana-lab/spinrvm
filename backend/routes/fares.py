@@ -18,6 +18,7 @@ except ImportError:
     from core.config import settings
     from geo_utils import get_service_area_polygon, point_in_polygon
     from utils.redis_client import redis_delete_pattern, redis_get, redis_set
+    from utils.surge_engine import SURGE_CAP
 
 db = db_supabase  # legacy alias
 logger = logging.getLogger(__name__)

@@ -71,7 +71,7 @@ export default function NotificationsScreen() {
       const res = await api.get<{ notifications?: AppNotification[]; unread_count?: number }>('/notifications?limit=50&offset=0');
       setNotifications(res.data.notifications || []);
       setUnreadCount(res.data.unread_count ?? 0);
-    } catch {}
+    } catch (err) { console.error('[notifications]', err); }
     finally {
       setLoading(false);
       setRefreshing(false);

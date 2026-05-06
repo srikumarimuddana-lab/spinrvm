@@ -11,6 +11,11 @@ from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+
+try:
+    from ..utils.audit_logger import log_user_action as _audit_log_user
+except ImportError:
+    from utils.audit_logger import log_user_action as _audit_log_user
 from pydantic import BaseModel, Field
 
 try:
@@ -151,6 +156,16 @@ async def top_up_wallet(
         description=f"Wallet top-up ${req.amount:.2f}",
     )
 
+    import asyncio
+    asyncio.create_task(
+        _audit_log_user(
+            current_user,
+            "wallet_top_up",
+            "wallets",
+            wallet["id"],
+            {"amount": _money_str(req.amount), "transaction_id": txn["id"]},
+        )
+    )
     return {
         "balance": _money_str(new_balance),
         "transaction_id": txn["id"],
@@ -207,6 +222,16 @@ async def wallet_pay(req: WalletPayRequest, current_user: dict = Depends(get_cur
         description=f"Ride payment ${req.amount:.2f}",
     )
 
+    import asyncio
+    asyncio.create_task(
+        _audit_log_user(
+            current_user,
+            "wallet_payment",
+            "wallets",
+            wallet["id"],
+            {"amount": _money_str(req.amount), "ride_id": req.ride_id, "transaction_id": txn["id"]},
+        )
+    )
     return {
         "balance": _money_str(new_balance),
         "transaction_id": txn["id"],

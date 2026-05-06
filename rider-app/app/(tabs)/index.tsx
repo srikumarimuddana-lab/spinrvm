@@ -68,7 +68,7 @@ export default function HomeScreen() {
     try {
       const AsyncStorage = require('@react-native-async-storage/async-storage').default;
       await AsyncStorage.setItem('spinr_last_location', JSON.stringify({ lat, lng }));
-    } catch {}
+    } catch (err) { console.error('[index]', err); }
   };
 
   const loadLastLocation = async () => {
@@ -76,7 +76,7 @@ export default function HomeScreen() {
       const AsyncStorage = require('@react-native-async-storage/async-storage').default;
       const saved = await AsyncStorage.getItem('spinr_last_location');
       if (saved) return JSON.parse(saved);
-    } catch {}
+    } catch (err) { console.error('[index]', err); }
     return null;
   };
 
@@ -132,7 +132,7 @@ export default function HomeScreen() {
           setUserLocation({ latitude: lastKnown.coords.latitude, longitude: lastKnown.coords.longitude });
           saveLastLocation(lastKnown.coords.latitude, lastKnown.coords.longitude);
         }
-      } catch {}
+      } catch (err) { console.error('[index]', err); }
     }
 
     Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })

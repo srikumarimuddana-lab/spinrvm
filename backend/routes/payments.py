@@ -8,22 +8,26 @@ try:
     from .. import db_supabase
     from ..dependencies import get_current_user
     from ..settings_loader import get_app_settings
+    from ..utils.audit_logger import log_user_action as _audit_log_user
     from ..utils.error_handling import (
         PaymentException,
         PaymentMethodInvalidException,
     )
     from ..utils.error_keys import ErrorKeys
     from ..utils.idempotency import idempotent_endpoint
+    from ..utils.rate_limiter import api_rate_limit, payment_action_limit
 except ImportError:
     import db_supabase
     from dependencies import get_current_user
     from settings_loader import get_app_settings
+    from utils.audit_logger import log_user_action as _audit_log_user
     from utils.error_handling import (
         PaymentException,
         PaymentMethodInvalidException,
     )
     from utils.error_keys import ErrorKeys
     from utils.idempotency import idempotent_endpoint
+    from utils.rate_limiter import payment_action_limit
 import logging
 
 import stripe
@@ -77,10 +81,11 @@ async def get_or_create_stripe_customer(user_id: str, stripe_secret: str):
 
 
 @api_router.post("/create-intent")
+@payment_action_limit
 @idempotent_endpoint(scope="payment_intent")
 async def create_payment_intent(
     body: PaymentIntentRequest,
-    request: Request,
+    request: Request = None,
     current_user: dict = Depends(get_current_user),
 ):
     """Create a Stripe payment intent.
@@ -153,16 +158,25 @@ async def create_payment_intent(
         )
 
         return {"client_secret": intent.client_secret, "payment_intent_id": intent.id, "mock": False}
+    except stripe.error.CardError as e:
+        logger.error(f"Stripe CardError on create-intent: {e}", exc_info=True)
+        raise HTTPException(status_code=402, detail=e.user_message or "Card declined") from e
+    except stripe.error.StripeError as e:
+        logger.error(f"Stripe API error on create-intent: {e}", exc_info=True)
+        raise HTTPException(status_code=502, detail="Payment service unavailable. Please try again.") from e
     except Exception as e:
-        logger.error(f"Stripe error: {e}", exc_info=True)
+        logger.error(f"Unexpected error on create-intent: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
 
 
 @api_router.post("/confirm")
-async def confirm_payment(request: Dict[str, Any], current_user: dict = Depends(get_current_user)):
+@payment_action_limit
+async def confirm_payment(
+    body: Dict[str, Any], request: Request = None, current_user: dict = Depends(get_current_user)
+):
     """Confirm payment was successful"""
-    payment_intent_id = request.get("payment_intent_id")
-    ride_id = request.get("ride_id")
+    payment_intent_id = body.get("payment_intent_id")
+    ride_id = body.get("ride_id")
 
     if payment_intent_id and payment_intent_id.startswith("pi_mock_"):
         # Mock payment
@@ -191,7 +205,8 @@ async def confirm_payment(request: Dict[str, Any], current_user: dict = Depends(
 
 
 @api_router.post("/setup-intent")
-async def create_setup_intent(current_user: dict = Depends(get_current_user)):
+@payment_action_limit
+async def create_setup_intent(request: Request = None, current_user: dict = Depends(get_current_user)):
     """Create a SetupIntent to save a new payment method"""
     settings = await get_app_settings()
     stripe_secret = settings.get("stripe_secret_key", "")
@@ -337,7 +352,8 @@ _RAW_CARD_FIELDS = {
 
 
 @api_router.post("/cards")
-async def add_card(request: Request, current_user: dict = Depends(get_current_user)):
+@payment_action_limit
+async def add_card(request: Request = None, current_user: dict = Depends(get_current_user)):
     """Add a saved card. Requires client-side tokenization.
 
     Contract:
@@ -366,7 +382,7 @@ async def add_card(request: Request, current_user: dict = Depends(get_current_us
     if forbidden:
         # Log that a raw-card POST was attempted but DO NOT log the keys'
         # values. The client needs tokenization; tell them where to look.
-        logger.warning(
+        logger.error(
             f"Rejected raw-card POST to /payments/cards from user={current_user.get('id')}: {sorted(forbidden)} present"
         )
         raise HTTPException(
@@ -389,7 +405,7 @@ async def add_card(request: Request, current_user: dict = Depends(get_current_us
         # should reach clients via FastAPI's RequestValidationError
         # path normally; this except block is the fallback for the
         # ad-hoc dict-driven payload here.
-        logger.warning("AddCardRequest validation failed", exc_info=exc)
+        logger.error("AddCardRequest validation failed", exc_info=exc)
         raise HTTPException(
             status_code=400,
             detail="Invalid request payload.",
@@ -456,13 +472,23 @@ async def add_card(request: Request, current_user: dict = Depends(get_current_us
             message_key=ErrorKeys.PAYMENT_METHOD_INVALID,
             action_hint="Add a different card",
         ) from e
+    except stripe.error.CardError as e:
+        raise PaymentMethodInvalidException(
+            message=e.user_message or "Card declined",
+            message_key=ErrorKeys.PAYMENT_METHOD_INVALID,
+            action_hint="Add a different card",
+        ) from e
+    except stripe.error.StripeError as e:
+        logger.error(f"Stripe API error on add-card: {e}", exc_info=True)
+        raise HTTPException(status_code=502, detail="Payment service unavailable. Please try again.") from e
     except Exception as e:
-        logger.error(f"Add card error: {e}", exc_info=True)
+        logger.error(f"Unexpected error on add-card: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
 
 
 @api_router.post("/cards/{card_id}/default")
-async def set_default_card(card_id: str, current_user: dict = Depends(get_current_user)):
+@payment_action_limit
+async def set_default_card(card_id: str, request: Request = None, current_user: dict = Depends(get_current_user)):
     """Set card as default. Updates both our DB and Stripe customer."""
     await db_supabase.update_one("users", {"id": current_user["id"]}, {"default_payment_method": card_id})
 
@@ -477,11 +503,23 @@ async def set_default_card(card_id: str, current_user: dict = Depends(get_curren
         except Exception as e:
             logger.error(f"Stripe set default failed for card {card_id}: {e}", exc_info=True)
 
+    import asyncio
+
+    asyncio.create_task(
+        _audit_log_user(
+            current_user,
+            "default_payment_method_set",
+            "users",
+            current_user["id"],
+            {"card_id": card_id},
+        )
+    )
     return {"success": True}
 
 
 @api_router.delete("/cards/{card_id}")
-async def delete_card(card_id: str, current_user: dict = Depends(get_current_user)):
+@payment_action_limit
+async def delete_card(card_id: str, request: Request = None, current_user: dict = Depends(get_current_user)):
     """Detach card from Stripe and clear default if needed."""
     settings = await get_app_settings()
     stripe_secret = settings.get("stripe_secret_key", "")
@@ -499,8 +537,10 @@ async def delete_card(card_id: str, current_user: dict = Depends(get_current_use
 
 
 @api_router.post("/payment-sheet")
+@payment_action_limit
 async def create_payment_sheet(
     body: PaymentSheetRequest,
+    request: Request = None,
     current_user: dict = Depends(get_current_user),
 ):
     """Return the three secrets needed to initialise Stripe PaymentSheet.

@@ -246,89 +246,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     if (__DEV__) console.log("Auth initializing...");
     set({ isLoading: true });
 
-    // Strategy:
-    //   1. ALWAYS check for a stored backend JWT first.
-    //   2. Only fall through to Firebase if there's no stored token.
-    //   This prevents Firebase onAuthStateChanged (which fires with null
-    //   when no Firebase phone-auth session exists) from deleting a
-    //   perfectly valid backend JWT.
+    // Strategy: access tokens are memory-only (never persisted).
+    // On cold start, go straight to the refresh token path.
+    // The refresh token flow re-hydrates the session without forcing
+    // the user back to the OTP screen.
 
-    const storedToken = await storage.getItem('auth_token');
-    if (__DEV__) console.log('[Auth] Stored token:', storedToken ? 'EXISTS' : 'NULL');
-
-    if (storedToken) {
-      // ── Stored backend JWT path ──
-      try {
-        const response = await api.get('/auth/me', {
-          headers: { Authorization: `Bearer ${storedToken}` }
-        });
-        const userData = response.data as User;
-
-        if (__DEV__) console.log('[Auth] /auth/me →', {
-          phone: userData?.phone,
-          first_name: userData?.first_name,
-          last_name: userData?.last_name,
-          email: userData?.email,
-          profile_complete: userData?.profile_complete,
-          is_driver: userData?.is_driver,
-          driver_onboarding_status: userData?.driver_onboarding_status,
-          driver_onboarding_next_screen: userData?.driver_onboarding_next_screen,
-        });
-
-        await appCache.set(CACHE_KEYS.USER_PROFILE, userData, CACHE_CONFIG.USER_PROFILE_TTL);
-
-        let driverData: Driver | null = null;
-        // See refreshProfile for why we also gate on driver_onboarding_status:
-        // it's the reliable "driver row exists" signal when is_driver/role
-        // flags are stale on legacy user rows.
-        const looksLikeDriver =
-          !!userData.is_driver ||
-          userData.role === 'driver' ||
-          !!userData.driver_onboarding_status;
-        if (looksLikeDriver) {
-          try {
-            const driverRes = await api.get('/drivers/me', {
-              headers: { Authorization: `Bearer ${storedToken}` }
-            });
-            driverData = driverRes.data as Driver;
-            await appCache.set(CACHE_KEYS.DRIVER_PROFILE, driverData, CACHE_CONFIG.USER_PROFILE_TTL);
-          } catch (e: unknown) {
-            if (isApiError(e) && e.response?.status === 404) {
-              // No driver row — auto-create one from the user's profile.
-              // The backend fills all required fields from the authenticated user.
-              if (__DEV__) console.log('[Auth] No driver row on init — auto-registering');
-              try {
-                const regRes = await api.post('/drivers/register', {}, {
-                  headers: { Authorization: `Bearer ${storedToken}` }
-                });
-                driverData = regRes.data as Driver;
-                await appCache.set(CACHE_KEYS.DRIVER_PROFILE, driverData, CACHE_CONFIG.USER_PROFILE_TTL);
-              } catch (regErr) {
-                if (__DEV__) console.log('[Auth] Auto-register failed on init:', regErr);
-              }
-            } else {
-              if (__DEV__) console.log('Failed to fetch driver data on init');
-            }
-          }
-        }
-
-        setInMemoryToken(storedToken);
-        set({
-          user: userData,
-          driver: driverData,
-          token: storedToken,
-          isInitialized: true,
-          isLoading: false
-        });
-        return; // Done — valid session restored
-      } catch (error: unknown) {
-        if (__DEV__) console.log('[Auth] Stored token invalid or expired:', isApiError(error) ? error.message : String(error));
-        await storage.deleteItem('auth_token');
-        // Fall through to no-session state below
-      }
-    }
-
-    // ── No valid stored access token — try silent refresh ──
+    // ── No stored access token — try silent refresh ──
     // setTokens() keeps the access token in memory only but persists the
     // refresh token. On cold start (memory wiped), this is the normal path
     // to restore a session without forcing the user back to the OTP screen.
@@ -435,7 +358,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
                 }
               }
               set({ user: userData, driver: driverData, token, isInitialized: true, isLoading: false });
-              await storage.setItem('auth_token', token);
             } catch (err) {
               if (__DEV__) console.log('[Auth] Firebase user but backend fetch failed');
               set({ isLoading: false, isInitialized: true, error: 'Failed to sync user' });

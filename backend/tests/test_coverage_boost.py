@@ -18,7 +18,6 @@ import asyncio
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
-
 # ===========================================================================
 # utils/maps_eta.py
 # ===========================================================================
@@ -772,3 +771,153 @@ class TestGetPhoneBasedKey:
         r1 = get_phone_based_key(_make_req("+14165551111"))
         r2 = get_phone_based_key(_make_req("+14165552222"))
         assert r1 != r2
+
+
+# ===========================================================================
+# utils/rate_limiter.py — rate_limit_auth decorator + init_rate_limiting
+# ===========================================================================
+
+
+class TestRateLimitAuthDecorator:
+    """Exercise the rate_limit_auth decorator inner functions."""
+
+    def test_success_path_passes_through(self):
+        from backend.utils.rate_limiter import rate_limit_auth
+
+        @rate_limit_auth(requests=5, period=60)
+        async def my_endpoint(*args, **kwargs):
+            return {"ok": True}
+
+        result = asyncio.run(my_endpoint())
+        assert result == {"ok": True}
+
+    def test_rate_limit_exceeded_raises_429(self):
+        from slowapi.errors import RateLimitExceeded
+
+        from backend.utils.rate_limiter import rate_limit_auth
+
+        @rate_limit_auth(requests=3, period=30)
+        async def limited_endpoint(*args, **kwargs):
+            raise RateLimitExceeded(MagicMock())
+
+        from fastapi import HTTPException
+
+        try:
+            asyncio.run(limited_endpoint())
+            assert False, "should have raised HTTPException"
+        except HTTPException as e:
+            assert e.status_code == 429
+
+    def test_other_exceptions_propagate(self):
+        from backend.utils.rate_limiter import rate_limit_auth
+
+        @rate_limit_auth(requests=5, period=60)
+        async def broken_endpoint(*args, **kwargs):
+            raise ValueError("not a rate limit")
+
+        try:
+            asyncio.run(broken_endpoint())
+            assert False
+        except ValueError as e:
+            assert str(e) == "not a rate limit"
+
+
+class TestInitRateLimiting:
+    def test_init_attaches_limiter_and_handler(self):
+        from backend.utils.rate_limiter import default_limiter, init_rate_limiting
+
+        app = MagicMock()
+        init_rate_limiting(app)
+
+        assert app.state.limiter is default_limiter
+        app.add_exception_handler.assert_called_once()
+
+
+# ===========================================================================
+# utils/redis_client.py — Redis-path coverage via mocked _get_redis
+# ===========================================================================
+
+
+class TestRedisClientRedisPaths:
+    """Cover the Redis-connected branches of redis_client.py helpers.
+
+    We mock _get_redis to return an async mock Redis client so the
+    'if r is not None' branches execute without a real Redis server.
+    """
+
+    def _make_redis_mock(self):
+        r = AsyncMock()
+        r.get = AsyncMock(return_value="val")
+        r.set = AsyncMock(return_value=True)
+        r.setex = AsyncMock(return_value=True)
+        r.delete = AsyncMock(return_value=1)
+        r.expire = AsyncMock(return_value=True)
+        r.incr = AsyncMock(return_value=1)
+        r.scan_iter = MagicMock(return_value=_async_iter([]))
+        return r
+
+    def test_redis_get_redis_path(self):
+        import backend.utils.redis_client as rc
+
+        mock_r = self._make_redis_mock()
+        with patch.object(rc, "_get_redis", AsyncMock(return_value=mock_r)):
+            result = asyncio.run(rc.redis_get("some_key"))
+        assert result == "val"
+
+    def test_redis_set_redis_path_with_ttl(self):
+        import backend.utils.redis_client as rc
+
+        mock_r = self._make_redis_mock()
+        with patch.object(rc, "_get_redis", AsyncMock(return_value=mock_r)):
+            asyncio.run(rc.redis_set("k", "v", ttl=60))
+        mock_r.setex.assert_called_once_with("k", 60, "v")
+
+    def test_redis_set_redis_path_no_ttl(self):
+        import backend.utils.redis_client as rc
+
+        mock_r = self._make_redis_mock()
+        with patch.object(rc, "_get_redis", AsyncMock(return_value=mock_r)):
+            asyncio.run(rc.redis_set("k", "v"))
+        mock_r.set.assert_called_once_with("k", "v")
+
+    def test_redis_incr_redis_path(self):
+        import backend.utils.redis_client as rc
+
+        mock_r = self._make_redis_mock()
+        with patch.object(rc, "_get_redis", AsyncMock(return_value=mock_r)):
+            result = asyncio.run(rc.redis_incr("counter"))
+        assert result == 1
+
+    def test_redis_expire_redis_path(self):
+        import backend.utils.redis_client as rc
+
+        mock_r = self._make_redis_mock()
+        with patch.object(rc, "_get_redis", AsyncMock(return_value=mock_r)):
+            asyncio.run(rc.redis_expire("k", 30))
+        mock_r.expire.assert_called_once_with("k", 30)
+
+    def test_redis_delete_redis_path(self):
+        import backend.utils.redis_client as rc
+
+        mock_r = self._make_redis_mock()
+        with patch.object(rc, "_get_redis", AsyncMock(return_value=mock_r)):
+            asyncio.run(rc.redis_delete("k"))
+        mock_r.delete.assert_called_once_with("k")
+
+    def test_redis_delete_pattern_empty(self):
+        import backend.utils.redis_client as rc
+
+        mock_r = self._make_redis_mock()
+        with patch.object(rc, "_get_redis", AsyncMock(return_value=mock_r)):
+            result = asyncio.run(rc.redis_delete_pattern("cache:*"))
+        assert result == 0
+
+
+def _async_iter(items):
+    """Async generator for mock scan_iter."""
+
+    async def _gen():
+        for item in items:
+            yield item
+
+    return _gen()

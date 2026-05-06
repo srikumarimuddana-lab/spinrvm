@@ -426,16 +426,20 @@ def init_middleware(app):
     # CORS Middleware
     origins = [origin.strip() for origin in settings.ALLOWED_ORIGINS.split(",") if origin.strip()]
 
-    # Always allow the admin and default apps explicitly regardless of env variables
+    # Always allow production origins. Localhost is only added in non-production
+    # to avoid enabling cross-origin access from developer machines in prod.
     always_allowed = [
         "https://spinr-admin.vercel.app",
         "https://spinr.app",
         "https://www.spinr.app",
         "https://spinr-track.app",
         "https://www.spinr-track.app",
-        "http://localhost:3000",
-        "http://localhost:3001",
     ]
+    if not is_production:
+        always_allowed += [
+            "http://localhost:3000",
+            "http://localhost:3001",
+        ]
     origins.extend(always_allowed)
     # Remove empty strings and duplicates (preserve order for determinism)
     origins = list(dict.fromkeys(o for o in origins if o))

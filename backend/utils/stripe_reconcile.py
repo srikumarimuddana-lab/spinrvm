@@ -181,6 +181,9 @@ async def _run_reconciliation_tick() -> None:
                 pi_id,
                 pi["status"],
             )
+            # Skip amount check — amount_received is meaningless for non-succeeded PIs
+            # and would generate a spurious second discrepancy for the same ride.
+            continue
 
         # Amount check — Stripe amount_received is in cents; DB fare is CAD dollars
         if ride.get("fare") is not None:

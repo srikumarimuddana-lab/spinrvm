@@ -232,7 +232,7 @@ export default function RideStatusScreen() {
       <View style={styles.otpCard}>
         <Text style={styles.otpLabel}>Share this PIN with your driver</Text>
         <View style={styles.otpBox}>
-          {currentRide?.pickup_otp.split('').map((digit, index) => (
+          {(currentRide?.pickup_otp ?? '').split('').map((digit, index) => (
             <View key={index} style={styles.otpDigit}>
               <Text style={styles.otpDigitText}>{digit}</Text>
             </View>

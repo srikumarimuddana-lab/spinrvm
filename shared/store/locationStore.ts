@@ -56,37 +56,48 @@ export const useLocationStore = create<LocationState>()(
       setError: (error: string) => set({ error }),
       initialize: async () => {
         try {
-          // Request location permissions
-          let status = 'granted';
-          if (navigator.permissions && navigator.permissions.query) {
-            const permissionStatus = await navigator.permissions.query({ name: 'geolocation' });
-            status = permissionStatus.state;
-          }
-          
-          if (status !== 'granted') {
-            throw new Error('Location permission denied');
-          }
+          let latitude: number;
+          let longitude: number;
+          let timestamp: number;
 
-          // Get initial location
-          const position = await new Promise<GeolocationPosition>((resolve, reject) => {
-            navigator.geolocation.getCurrentPosition(
-              resolve,
-              reject,
-              { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
-            );
-          });
+          if (Platform.OS === 'web') {
+            // Web path: use standard browser geolocation APIs
+            let status = 'granted';
+            if (typeof navigator !== 'undefined' && navigator.permissions?.query) {
+              const permissionStatus = await navigator.permissions.query({ name: 'geolocation' });
+              status = permissionStatus.state;
+            }
+            if (status === 'denied') {
+              throw new Error('Location permission denied');
+            }
+            const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+              navigator.geolocation.getCurrentPosition(resolve, reject, {
+                enableHighAccuracy: true,
+                timeout: 5000,
+                maximumAge: 0,
+              });
+            });
+            latitude = position.coords.latitude;
+            longitude = position.coords.longitude;
+            timestamp = position.timestamp;
+          } else {
+            // Native path: use expo-location (navigator.geolocation is not available on native)
+            const Location = await import('expo-location');
+            const { status } = await Location.requestForegroundPermissionsAsync();
+            if (status !== 'granted') {
+              throw new Error('Location permission denied');
+            }
+            const loc = await Location.getCurrentPositionAsync({
+              accuracy: Location.Accuracy.Balanced,
+            });
+            latitude = loc.coords.latitude;
+            longitude = loc.coords.longitude;
+            timestamp = loc.timestamp;
+          }
 
           set({
-            currentLocation: {
-              latitude: position.coords.latitude,
-              longitude: position.coords.longitude,
-              timestamp: position.timestamp,
-            },
-            lastKnownLocation: {
-              latitude: position.coords.latitude,
-              longitude: position.coords.longitude,
-              timestamp: position.timestamp,
-            },
+            currentLocation: { latitude, longitude, timestamp },
+            lastKnownLocation: { latitude, longitude, timestamp },
             isInitialized: true,
             error: null,
           });

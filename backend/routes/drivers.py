@@ -2331,10 +2331,15 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         )
     )
 
-    # Update driver stats
-    await db_supabase.update_one(
-        "drivers", {"id": driver["id"]}, {"$inc": {"total_rides": 1}, "$set": {"is_available": True}}
-    )
+    # Update driver stats.
+    # total_rides is a display-only counter (earnings stats, rider-facing
+    # profile card) — not used for tier unlocks or payment calculations,
+    # so a TOCTOU off-by-one under concurrent completions is acceptable.
+    # set_driver_available performs the read-increment-write inside run_sync
+    # (single thread-pool call) and also invalidates the driver cache.
+    # Previously this used {"$inc": {"total_rides": 1}, "$set": {...}} which
+    # update_one silently dropped — $inc was never handled by the wrapper.
+    await db_supabase.set_driver_available(driver["id"], available=True, total_rides_inc=1)
 
     completed_ride = await db_supabase.get_ride(ride_id)
 

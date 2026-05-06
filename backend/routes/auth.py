@@ -22,6 +22,7 @@ try:
     from ..schemas import AuthResponse, OTPRecord, SendOTPRequest, UserProfile, VerifyOTPRequest
     from ..settings_loader import get_app_settings
     from ..sms_service import send_otp_sms
+    from ..utils.audit_logger import log_user_action as _audit_log_user
     from ..utils.crypto import hash_otp
     from ..utils.error_handling import (
         ErrorCode,
@@ -29,7 +30,6 @@ try:
         TokenExpiredException,
     )
     from ..utils.error_keys import ErrorKeys
-    from ..utils.audit_logger import log_user_action as _audit_log_user
     from ..utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set
     from ..utils.refresh_tokens import (
         issue_refresh_token,
@@ -51,6 +51,7 @@ except ImportError:
     from schemas import AuthResponse, OTPRecord, SendOTPRequest, UserProfile, VerifyOTPRequest
     from settings_loader import get_app_settings
     from sms_service import send_otp_sms
+    from utils.audit_logger import log_user_action as _audit_log_user
     from utils.crypto import hash_otp
     from utils.error_handling import (
         ErrorCode,
@@ -58,7 +59,6 @@ except ImportError:
         TokenExpiredException,
     )
     from utils.error_keys import ErrorKeys
-    from utils.audit_logger import log_user_action as _audit_log_user
     from utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set
     from utils.refresh_tokens import (
         issue_refresh_token,
@@ -129,6 +129,7 @@ async def _record_otp_failure(phone: str) -> None:
             logger.warning(f"OTP_LOCKOUT_TRIGGERED phone=...{phone[-4:]} after {count} failures")
             try:
                 import asyncio
+
                 asyncio.create_task(
                     _audit_log_user(
                         {"id": f"phone:{phone[-4:]}", "role": "anonymous"},
@@ -211,10 +212,15 @@ async def send_otp(request: Request, body: SendOTPRequest):
         and app_settings.get("twilio_from_number")
     )
 
-    is_dev = settings.ENV.lower() in ("development", "test")
+    # Dev bypass is gated on "development" only — never "test" or "staging".
+    # An externally-reachable test/staging instance with a known OTP code is
+    # an account-takeover vector against any phone number. Mirrors
+    # `_is_dev_otp_bypass` so /send-otp and /verify-otp agree on the gate.
+    is_dev = settings.ENV.lower() == "development"
 
     if not twilio_configured and not is_dev:
-        # In production, refuse to silently fall back to a known OTP.
+        # In production / test / staging, refuse to silently fall back to a
+        # known OTP. Force the operator to configure Twilio.
         raise SpinrException(
             message="SMS service not configured",
             error_code=ErrorCode.SERVICE_UNAVAILABLE,
@@ -236,10 +242,9 @@ async def send_otp(request: Request, body: SendOTPRequest):
         await db_supabase.delete_many("otp_records", {"phone": phone})
         await db_supabase.insert_otp_record(otp_record.dict())
     except Exception as e:
-        # B-P1-5: warn-and-continue here meant the SMS was sent but the
-        # OTP record was never written — verify-otp would 400 every code
-        # the user typed because the row to compare against didn't exist.
-        # Surface as 503 so the client retries the send-otp call.
+        # Returning 200 here would lie to the client: a missing OTP row means
+        # every subsequent /verify-otp will fail. Surface the DB error so the
+        # client retries instead of getting stuck.
         logger.error(f"Could not store OTP in DB: {e}", exc_info=True)
         raise SpinrException(
             message="Could not store OTP, please try again",
@@ -265,7 +270,7 @@ async def send_otp(request: Request, body: SendOTPRequest):
             message_key=ErrorKeys.SYSTEM_SERVICE_UNAVAILABLE,
         )
 
-    response = {"success": True, "message": f"OTP sent to {phone}"}
+    response = {"success": True, "message": f"OTP sent to ***{phone[-4:]}"}
     # Dev OTP is logged to server console via sms_service.py — never return it
     # in the API response to avoid accidental exposure in client-side logs.
 
@@ -360,7 +365,7 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
         # Find or create user
         existing_user = None
         try:
-            logger.info(f"Searching for user with phone: ...{phone[-4:]}")
+            logger.info(f"Searching for user with phone: ***{phone[-4:]}")
             existing_user = await db_supabase.get_user_by_phone(phone)
             logger.info(f"User search result found: {bool(existing_user)}")
         except Exception as e:
@@ -369,7 +374,7 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
             # only gives the generic "Database operation failed" message.
             original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
             logger.error(
-                f"get_user_by_phone failed for ...{phone[-4:]}: type={type(e).__name__} msg={e} original={original}",
+                f"get_user_by_phone failed for ***{phone[-4:]}: type={type(e).__name__} msg={e} original={original}",
                 exc_info=True,
             )
             # Refuse to silently fall through to user creation — a DB read
@@ -452,12 +457,9 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
             try:
                 await db_supabase.create_user(new_user)
             except Exception as e:
-                # B-P1-5: warn-and-continue produced a partial-state bug —
-                # we'd hand back an access token whose user_id has no DB row,
-                # then every authenticated call would 401 because
-                # `get_current_user` couldn't find the user. Force a 503 so
-                # the client retries verify-otp instead of pretending login
-                # succeeded.
+                # Issuing a JWT for a row that doesn't exist would break
+                # every subsequent authenticated call. Refuse to mint a
+                # token until persistence is confirmed.
                 logger.error(f"Could not persist new user to DB: {e}", exc_info=True)
                 raise SpinrException(
                     message="Could not create user account, please try again",
@@ -593,11 +595,9 @@ async def firebase_auth_login(request: Request, response: Response, body: Fireba
         try:
             await db_supabase.create_user(new_user)
         except Exception as e:
-            # B-P1-5 / CLAUDE.md: never warn-and-continue on auth-DB failure.
-            # If we can't persist the user, the access token we are about to
-            # mint would point at no row — every subsequent request would
-            # 401 against `get_current_user` and the client would loop. 503
-            # so the rider client retries the Firebase exchange instead.
+            # Never hand back a token for an unpersisted row — the access
+            # token we're about to mint would point at no row, and every
+            # subsequent request would 401 against `get_current_user`.
             logger.error(
                 f"firebase_auth: could not persist user {uid}: {e}",
                 exc_info=True,
@@ -613,11 +613,10 @@ async def firebase_auth_login(request: Request, response: Response, body: Fireba
         try:
             await db_supabase.update_one("users", {"id": uid}, {"current_session_id": session_id})
         except Exception as e:
-            # B-P1-5: same partial-state class. Without a persisted
-            # current_session_id, single-device login can't enforce
-            # ERR_SESSION_EXPIRED on the prior device, and the new token
-            # we're about to mint references a session_id that isn't
-            # recorded server-side.
+            # Without a persisted current_session_id, single-device login
+            # can't enforce ERR_SESSION_EXPIRED on the prior device, and
+            # the new token we're about to mint references a session_id
+            # that isn't recorded server-side.
             logger.error(
                 f"firebase_auth: could not update session_id for {uid}: {e}",
                 exc_info=True,
@@ -787,7 +786,16 @@ async def refresh_access_token(request: Request, response: Response, body: Optio
     try:
         user = await db.find_one("users", {"id": user_id})
     except Exception as e:
+        # Distinguish "DB unavailable" (503, retry with back-off) from
+        # "user not found" (401, prompt re-login). Returning 401 on a DB
+        # outage causes clients to wipe their session pointlessly.
         logger.error(f"refresh: user lookup failed for {user_id}: {e}", exc_info=True)
+        raise SpinrException(
+            message="Service temporarily unavailable, please try again",
+            error_code=ErrorCode.DATABASE_ERROR,
+            status_code=503,
+            message_key=ErrorKeys.SYSTEM_DATABASE,
+        ) from e
     if not user:
         raise TokenExpiredException(
             message="Invalid refresh token",
@@ -879,6 +887,7 @@ async def logout(
         await redis_delete(f"session:{current_user['id']}")
         try:
             import asyncio
+
             asyncio.create_task(
                 _audit_log_user(
                     current_user,

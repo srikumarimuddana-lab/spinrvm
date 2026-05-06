@@ -1,10 +1,31 @@
 """
 Receipt generator for Spinr rides.
 Generates HTML receipt and sends via email (SendGrid when configured, logs otherwise).
+
+Line items
+----------
+
+Per CLAUDE.md ("rider receipts must show GST (5%) and PST (6% where
+applicable) as separate line items") and "every charge on the receipt
+maps to a disclosed line item: base fare, distance, time, booking fee,
+surge, tax, tip", we render:
+
+    base_fare, distance_fare, time_fare, booking_fee
+    [+ each area fee from area_fees_breakdown]   ← airport, night, …
+    subtotal
+    [+ each tax from tax_breakdown]              ← GST, PST, HST
+    [+ tip]
+    total
+
+Surge is folded into ``distance_fare`` / ``time_fare`` at fare-calc time
+so we surface it as a small "Surge X.X× applied" notice rather than a
+recomputed line item — re-deriving the uplift would round-trip through
+floats and risk a 1¢ mismatch on the rendered total.
 """
 
 import logging
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
+from typing import Any, Dict
 
 try:
     from .datetime_utils import parse_iso_utc
@@ -13,11 +34,139 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+_TWO_PLACES = Decimal("0.01")
+
+
+def _d(v: Any) -> Decimal:
+    """Coerce a number-like value to Decimal via str() to avoid float drift."""
+    if v in (None, ""):
+        return Decimal("0")
+    return Decimal(str(v))
+
+
+def _q(v: Decimal) -> Decimal:
+    return v.quantize(_TWO_PLACES, rounding=ROUND_HALF_UP)
+
+
+def _fmt(v: Decimal) -> str:
+    """Format a Decimal as ``X.XX`` for display."""
+    return f"{_q(v):.2f}"
+
+
+def _line(label: str, amount_html: str, *, label_color: str = "#666", amount_color: str = "#1a1a1a") -> str:
+    """One <tr> for the fare breakdown table — keeps the markup uniform."""
+    return (
+        f'<tr><td style="color:{label_color};padding:4px 0;">{label}</td>'
+        f'<td style="text-align:right;color:{amount_color};">{amount_html}</td></tr>'
+    )
+
+
+def _build_fare_rows(ride: Dict[str, Any], tip: Decimal) -> tuple[str, Decimal]:
+    """Render the fare breakdown rows + return the grand total used in the header.
+
+    Reads ``tax_breakdown`` and ``area_fees_breakdown`` (migration 46) so
+    the per-tax and per-fee amounts shown reconcile to ``grand_total``.
+    Falls back to ``base_fare + distance + time + booking + tax + tip``
+    for legacy rides written before migration 46.
+    """
+    base_fare = _d(ride.get("base_fare", 0))
+    distance_fare = _d(ride.get("distance_fare", 0))
+    time_fare = _d(ride.get("time_fare", 0))
+    booking_fee = _d(ride.get("booking_fee", 0))
+    distance_km = _d(ride.get("distance_km", 0))
+    duration_min = ride.get("duration_minutes", 0) or 0
+    surge = _d(ride.get("surge_multiplier", 1.0) or 1.0)
+
+    rows: list[str] = []
+    rows.append(_line("Base fare", f"${_fmt(base_fare)}"))
+    rows.append(_line(f"Distance ({distance_km:.1f} km)", f"${_fmt(distance_fare)}"))
+    rows.append(_line(f"Time ({duration_min} min)", f"${_fmt(time_fare)}"))
+    if booking_fee > 0:
+        rows.append(_line("Booking fee", f"${_fmt(booking_fee)}"))
+
+    # Itemised area fees (airport, night, custom). Falls back silently when
+    # the column is missing on a legacy row — the underlying value is still
+    # captured under the per-component fares above for those rides.
+    area_fees = ride.get("area_fees_breakdown") or []
+    for fee in area_fees:
+        if not isinstance(fee, dict):
+            continue
+        amount = _d(fee.get("calculated_value", fee.get("amount", 0)))
+        if amount == 0:
+            continue
+        name = fee.get("name") or fee.get("type") or "Area fee"
+        rows.append(_line(str(name), f"${_fmt(amount)}"))
+
+    # Subtotal divider — fees end here, taxes begin below.
+    rows.append('<tr><td colspan="2" style="border-top:1px dashed #eee;padding:0;"></td></tr>')
+
+    # Tax breakdown — REGULATORY REQUIREMENT (CLAUDE.md): GST and PST
+    # must appear as separate line items where applicable. Read the
+    # persisted breakdown so what we show is exactly what was charged.
+    tax_breakdown = ride.get("tax_breakdown") or {}
+    tax_total = Decimal("0")
+    if isinstance(tax_breakdown, dict) and tax_breakdown:
+        for label, payload in tax_breakdown.items():
+            if not isinstance(payload, dict):
+                continue
+            rate = _d(payload.get("rate", 0))
+            amount = _d(payload.get("amount", 0))
+            tax_total += amount
+            rate_str = f" ({rate:.0f}%)" if rate > 0 else ""
+            rows.append(_line(f"{label}{rate_str}", f"${_fmt(amount)}"))
+    else:
+        # Legacy fallback — show a single combined tax line if present.
+        tax_amount = _d(ride.get("tax_amount", 0))
+        if tax_amount > 0:
+            rows.append(_line("Tax", f"${_fmt(tax_amount)}"))
+            tax_total = tax_amount
+
+    if tip > 0:
+        rows.append(_line("Tip", f"${_fmt(tip)}", label_color="#10b981", amount_color="#10b981"))
+
+    # Surge notice — surge is folded into distance/time fares, so we
+    # surface it as a disclosure note instead of as a separate amount.
+    if surge > Decimal("1.0"):
+        rows.append(
+            '<tr><td colspan="2" style="padding:6px 0 0;font-size:11px;color:#b45309;">'
+            f"Surge pricing {surge:.2f}× was in effect at booking time."
+            "</td></tr>"
+        )
+
+    # Grand total — prefer the persisted column (set at completion);
+    # otherwise reconstruct from the parts we just listed so the rendered
+    # number always equals the sum of visible rows.
+    grand_total = ride.get("grand_total")
+    if grand_total in (None, "", 0):
+        area_fees_total = _d(ride.get("area_fees_total", 0))
+        # area_fees_total may be 0 on legacy rows; if we listed individual
+        # fees above, sum those instead.
+        if area_fees_total == 0:
+            area_fees_total = sum(
+                (_d(f.get("calculated_value", 0)) for f in area_fees if isinstance(f, dict)),
+                Decimal("0"),
+            )
+        grand_total_d = _q(base_fare + distance_fare + time_fare + booking_fee + area_fees_total + tax_total + tip)
+    else:
+        # Persisted grand_total includes fees + tax but NOT tip — tip is
+        # added at rating time after settlement.
+        grand_total_d = _q(_d(grand_total) + tip)
+
+    rows.append('<tr><td colspan="2" style="border-top:1px solid #eee;padding:0;"></td></tr>')
+    rows.append(
+        '<tr><td style="color:#1a1a1a;padding:8px 0;font-weight:700;font-size:16px;">Total</td>'
+        f'<td style="text-align:right;color:#ee2b2b;font-weight:800;font-size:18px;">${_fmt(grand_total_d)}</td></tr>'
+    )
+
+    return "".join(rows), grand_total_d
+
 
 def generate_receipt_html(ride: dict, rider: dict, driver: dict = None, tip: Decimal = Decimal(0)) -> str:
     """Generate HTML receipt for a completed ride."""
-    fare = Decimal(str(ride.get("total_fare") or 0))
-    total = fare + tip
+    tip_d = _d(tip)
+    fare_rows, total_d = _build_fare_rows(ride, tip_d)
+    total_str = _fmt(total_d)
+
     rider_name = f"{rider.get('first_name', '')} {rider.get('last_name', '')}".strip() or "Rider"
     driver_name = "Unknown"
     if driver:
@@ -71,7 +220,7 @@ def generate_receipt_html(ride: dict, rider: dict, driver: dict = None, tip: Dec
 
         <!-- Amount -->
         <tr><td style="padding:20px 24px;text-align:center;">
-        <p style="color:#ee2b2b;font-size:42px;font-weight:800;margin:0;">${total:.2f} CAD</p>
+        <p style="color:#ee2b2b;font-size:42px;font-weight:800;margin:0;">${total_str} CAD</p>
           <p style="color:#999;font-size:12px;margin:4px 0 0;">{ride_date}</p>
           <p style="color:#999;font-size:11px;margin:6px 0 0;letter-spacing:0.5px;">Ride <strong style="color:#1a1a1a;font-weight:700;">{ride_ref}</strong></p>
         </td></tr>
@@ -100,13 +249,7 @@ def generate_receipt_html(ride: dict, rider: dict, driver: dict = None, tip: Dec
         <!-- Fare Breakdown -->
         <tr><td style="padding:0 24px 16px;">
         <table width="100%" style="font-size:14px;">
-            <tr><td style="color:#666;padding:4px 0;">Base fare</td><td style="text-align:right;color:#1a1a1a;">${ride.get("base_fare", 0) or 0:.2f}</td></tr>
-            <tr><td style="color:#666;padding:4px 0;">Distance ({ride.get("distance_km", 0):.1f} km)</td><td style="text-align:right;color:#1a1a1a;">${ride.get("distance_fare", 0) or 0:.2f}</td></tr>
-            <tr><td style="color:#666;padding:4px 0;">Time ({ride.get("duration_minutes", 0)} min)</td><td style="text-align:right;color:#1a1a1a;">${ride.get("time_fare", 0) or 0:.2f}</td></tr>
-            <tr><td style="color:#666;padding:4px 0;">Booking fee</td><td style="text-align:right;color:#1a1a1a;">${ride.get("booking_fee", 0) or 0:.2f}</td></tr>
-            {'<tr><td style="color:#10b981;padding:4px 0;">Tip</td><td style="text-align:right;color:#10b981;">$' + f"{tip:.2f}" + "</td></tr>" if tip > 0 else ""}
-            <tr><td colspan="2" style="border-top:1px solid #eee;padding:0;"></td></tr>
-            <tr><td style="color:#1a1a1a;padding:8px 0;font-weight:700;font-size:16px;">Total</td><td style="text-align:right;color:#ee2b2b;font-weight:800;font-size:18px;">${total:.2f}</td></tr>
+            {fare_rows}
             </table>
         </td></tr>
 
@@ -134,7 +277,25 @@ def generate_receipt_html(ride: dict, rider: dict, driver: dict = None, tip: Dec
     """
 
 
-async def send_receipt_email(ride: dict, rider: dict, driver: dict = None, tip: Decimal = Decimal(0)):
+def _receipt_total(ride: dict, tip: float = 0) -> Decimal:
+    """Compute the rider-visible total without rendering HTML.
+
+    Used by send_receipt_email for the subject line and log fallback so
+    the figure on the email subject matches the body. Prefers the
+    persisted ``grand_total`` (set at completion) over re-summing parts.
+    """
+    tip_d = _d(tip)
+    grand_total = ride.get("grand_total")
+    if grand_total not in (None, "", 0):
+        return _q(_d(grand_total) + tip_d)
+
+    fare = _d(ride.get("total_fare", 0))
+    fees = _d(ride.get("area_fees_total", 0))
+    tax = _d(ride.get("tax_amount", 0))
+    return _q(fare + fees + tax + tip_d)
+
+
+async def send_receipt_email(ride: dict, rider: dict, driver: dict = None, tip: float = 0):
     """Send receipt email. Uses SendGrid when configured, logs otherwise."""
     email = rider.get("email", "")
     if not email:
@@ -142,7 +303,7 @@ async def send_receipt_email(ride: dict, rider: dict, driver: dict = None, tip: 
         return False
 
     html = generate_receipt_html(ride, rider, driver, tip)
-    total = Decimal(str(ride.get("total_fare") or 0)) + tip
+    total = _receipt_total(ride, tip)
 
     # Try SendGrid
     try:
@@ -164,7 +325,7 @@ async def send_receipt_email(ride: dict, rider: dict, driver: dict = None, tip: 
                     "content": [{"type": "text/html", "value": html}],
                 },
             )
-            logger.info(f"[EMAIL] SendGrid receipt sent to {email} (status: {response.status_code})")
+            logger.info(f"[EMAIL] SendGrid receipt sent for ride {ride.get('id')} (status: {response.status_code})")
             return response.status_code in (200, 201, 202)
     except ImportError:
         pass
@@ -172,5 +333,5 @@ async def send_receipt_email(ride: dict, rider: dict, driver: dict = None, tip: 
         logger.warning(f"[EMAIL] SendGrid failed: {e}")
 
     # Fallback: log only
-    logger.info(f"[EMAIL] Receipt for ride {ride.get('id')} → {email} | Total: ${total:.2f} (SendGrid not configured)")
+    logger.info(f"[EMAIL] Receipt for ride {ride.get('id')} | Total: ${total:.2f} (SendGrid not configured)")
     return False

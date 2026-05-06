@@ -2369,6 +2369,18 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     except Exception as _exc:  # pragma: no cover - best effort
         logger.warning(f"complete_ride: admin broadcast failed: {_exc}")
 
+    # Saskatchewan TNC insurance: period 3 ends, driver returns to period 1
+    # (app on, available — TNC contingent liability).
+    try:
+        from utils.insurance_periods import open_period as _open_ip
+    except ImportError:
+        try:
+            from ..utils.insurance_periods import open_period as _open_ip  # type: ignore
+        except ImportError:
+            _open_ip = None  # type: ignore
+    if _open_ip is not None:
+        await _open_ip(driver["id"], period=1)
+
     return serialize_doc(completed_ride)
 
 
@@ -3024,6 +3036,20 @@ async def update_driver_status(
         await mark_present(driver_id)
     else:
         await clear_presence(driver_id)
+
+    # Saskatchewan Transportation Act: log TNC insurance period transition.
+    # Period 1 = app on, available (TNC contingent liability).
+    # Period 0 = app off / offline (personal auto only).
+    # Non-fatal — a logging failure must not block the go-online flip.
+    try:
+        from utils.insurance_periods import open_period as _open_period
+    except ImportError:
+        try:
+            from ..utils.insurance_periods import open_period as _open_period  # type: ignore
+        except ImportError:
+            _open_period = None  # type: ignore
+    if _open_period is not None:
+        await _open_period(driver_id, period=1 if is_online else 0)
 
     return {"success": True, "is_online": is_online}
 

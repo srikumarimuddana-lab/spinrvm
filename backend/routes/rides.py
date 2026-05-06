@@ -256,6 +256,8 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
         {
             "is_online": True,
             "is_available": True,
+            "status": "active",
+            "is_verified": True,
             "vehicle_type_id": ride["vehicle_type_id"],
         },
         limit=500,
@@ -263,7 +265,7 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
 
     logger.info(
         f"[DISPATCH] candidate pool (pre-filter): {len(all_drivers)} drivers "
-        f"matching vehicle_type_id + online + available"
+        f"matching vehicle_type_id + online + available + active + verified"
     )
 
     # Pure filter+rank: drops orphan/no-location/low-rated drivers and
@@ -350,6 +352,17 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
             f"[DISPATCH] ride {ride_id} assigned to driver_id={selected_driver['id']} "
             f"user_id={selected_driver.get('user_id')} name={selected_driver.get('name')}"
         )
+
+        # Saskatchewan TNC insurance period 2 starts on driver_assigned.
+        try:
+            from utils.insurance_periods import open_period as _open_ip
+        except ImportError:
+            try:
+                from ..utils.insurance_periods import open_period as _open_ip  # type: ignore
+            except ImportError:
+                _open_ip = None  # type: ignore
+        if _open_ip is not None:
+            await _open_ip(selected_driver["id"], period=2, ride_id=ride_id)
 
         # No rider-facing WS event here — the rider app waits for
         # ``driver_accepted`` (emitted when the driver actually taps
@@ -2360,15 +2373,42 @@ async def get_call_info(ride_id: str, current_user: dict = Depends(get_current_u
     if not phone:
         raise HTTPException(status_code=404, detail="Phone number not available")
 
-    # In production: create Twilio Proxy session here and return proxy number
-    # For now, return the real number with a masked display
-    masked = f"({'*' * (len(phone) - 4)}{phone[-4:]})" if len(phone) > 4 else phone
+    masked = f"+{'*' * (len(phone) - 5)}{phone[-4:]}" if len(phone) > 4 else phone
+
+    # PIPEDA: raw phone must not be returned unless Twilio Proxy is unavailable
+    # AND we're in a non-production environment. In production, Twilio Proxy
+    # provides a masked proxy number — configure twilio_proxy_service_sid in
+    # app_settings to enable it.
+    settings = await get_app_settings()
+    twilio_proxy_sid = settings.get("twilio_proxy_service_sid", "")
+
+    if twilio_proxy_sid:
+        # Twilio Proxy path (PIPEDA-compliant): create a session and return proxy number.
+        # TODO: implement Twilio Proxy session creation here.
+        raise HTTPException(status_code=501, detail="Twilio Proxy not yet implemented")
+
+    try:
+        from core.config import settings as _cfg
+    except ImportError:
+        from ..core.config import settings as _cfg  # type: ignore
+
+    if _cfg.ENV.lower() == "production":
+        # Production without Twilio Proxy: refuse rather than expose raw PII.
+        logger.error(
+            "[CALL] twilio_proxy_service_sid not configured in production — "
+            "refusing to return raw phone number (PIPEDA). "
+            "Configure twilio_proxy_service_sid in app_settings to enable in-app calling."
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="In-app calling is not available. Please use the phone app to call directly.",
+        )
 
     return {
         "phone": phone,
         "masked": masked,
         "name": name,
-        "proxy": False,  # Set to True when Twilio Proxy is configured
+        "proxy": False,
     }
 
 
@@ -2556,6 +2596,18 @@ async def rider_start_ride(ride_id: str, current_user: dict = Depends(get_curren
             "updated_at": datetime.now(timezone.utc),
         },
     )
+
+    # Saskatchewan TNC insurance period 3 (passenger aboard).
+    try:
+        from utils.insurance_periods import open_period as _open_ip
+    except ImportError:
+        try:
+            from ..utils.insurance_periods import open_period as _open_ip  # type: ignore
+        except ImportError:
+            _open_ip = None  # type: ignore
+    if _open_ip is not None:
+        await _open_ip(driver_row["id"], period=3, ride_id=ride_id)
+
     return {"success": True}
 
 

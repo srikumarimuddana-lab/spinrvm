@@ -1,6 +1,8 @@
 import asyncio
 import hmac
 import logging
+import os
+import socket
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Union
@@ -3566,7 +3568,29 @@ async def check_expiring_subscriptions():
     except ImportError:
         from settings_loader import get_app_settings  # type: ignore
 
+    try:
+        from ..utils.redis_client import redis_set_nx as _redis_set_nx  # type: ignore
+    except ImportError:
+        try:
+            from utils.redis_client import redis_set_nx as _redis_set_nx  # type: ignore
+        except ImportError:
+            _redis_set_nx = None  # type: ignore
+
     while True:
+        # Single-replica enforcement: only the pod that wins the lock runs
+        # the expiry check per 6-hour window. Prevents N offline-kick push
+        # notifications being sent to the same driver on multi-replica deploys.
+        if _redis_set_nx is not None:
+            lock_acquired = await _redis_set_nx(
+                "spinr:subscription:expiry:lock",
+                f"{socket.gethostname()}:{os.getpid()}",
+                6 * 3600 + 300,  # 6h + 5 min grace
+            )
+        else:
+            lock_acquired = True  # no Redis in dev → run on all replicas
+        if not lock_acquired:
+            await asyncio.sleep(6 * 3600)
+            continue
         try:
             now = datetime.now(timezone.utc)
             window = now + timedelta(hours=24)

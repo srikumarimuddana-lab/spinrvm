@@ -630,9 +630,10 @@ async def calculate_all_fees(
     Returns {'fees': [...], 'fees_total': float, 'tax_amount': float, 'tax_breakdown': {...}, 'grand_total': float}
     """
     from datetime import datetime as dt
+    from datetime import timezone as _tz
 
     if ride_time_hour is None:
-        ride_time_hour = dt.utcnow().hour
+        ride_time_hour = dt.now(_tz.utc).hour
 
     # Find which service area the pickup is in (unless caller already resolved it)
     all_areas = _all_areas

@@ -1,0 +1,65 @@
+name: pip-compile drift check
+
+# Verify that requirements.txt is in sync with requirements.in.
+# If it drifts (someone edited requirements.in without re-running pip-compile),
+# this job fails and prints the diff so the author knows what to regenerate.
+#
+# To update locally:
+#   pip install pip-tools
+#   pip-compile backend/requirements.in --output-file backend/requirements.txt \
+#               --strip-extras --no-header --annotation-style line --no-upgrade
+# --no-upgrade keeps existing pinned versions and only resolves new entries;
+# without it, every CI run could drift as PyPI packages release new patches.
+
+on:
+  pull_request:
+    paths:
+      - 'backend/requirements.in'
+      - 'backend/requirements.txt'
+      - '.github/workflows/pip-compile-check.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'backend/requirements.in'
+      - 'backend/requirements.txt'
+
+jobs:
+  check:
+    name: requirements.txt up to date
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install pip-tools
+        run: pip install pip-tools
+
+      - name: Regenerate requirements.txt
+        working-directory: backend
+        run: |
+          cp requirements.txt requirements.txt.generated
+          pip-compile requirements.in \
+            --output-file requirements.txt.generated \
+            --strip-extras \
+            --no-header \
+            --annotation-style line \
+            --no-upgrade \
+            --quiet
+
+      - name: Check for drift
+        working-directory: backend
+        run: |
+          if ! diff -u requirements.txt requirements.txt.generated; then
+            echo ""
+            echo "::error::requirements.txt is out of sync with requirements.in."
+            echo "Run the following locally and commit the result:"
+            echo "  pip-compile backend/requirements.in \\"
+            echo "    --output-file backend/requirements.txt \\"
+            echo "    --strip-extras --no-header --annotation-style line"
+            exit 1
+          fi
+          echo "requirements.txt is up to date."

@@ -280,7 +280,7 @@ TASK 3 — ENCRYPTION & SECRETS MANAGEMENT
 [3-1] CRITICAL | Real Supabase Service-Role Key Committed in .env.example
 File: backend/.env.example:3
 Finding: .env.example contains a real, functional Supabase service-role JWT (project ref:
-dbbadhihiwztmnqnbdke). This key bypasses ALL Row-Level Security policies. Anyone who reads
+[redacted-project]). This key bypasses ALL Row-Level Security policies. Anyone who reads
 this file (GitHub public view, contributors, CI logs) can perform unrestricted DB operations —
 read all user records, PII, payment data, delete rows — without any auth.
 Fix: (1) ROTATE the key NOW in Supabase Dashboard → Settings → API → Roll service_role key.
@@ -301,7 +301,7 @@ Fix: Add to the @model_validator in config.py:
 
 [3-3] HIGH | Real Supabase Project URL in .env.example
 File: backend/.env.example:2
-Finding: The real project URL (https://dbbadhihiwztmnqnbdke.supabase.co) combined with the
+Finding: The real project URL (https://[redacted-project].supabase.co) combined with the
 service-role key (finding [3-1]) gives full database access to anyone who reads the file.
 Fix: Replace with placeholder: SUPABASE_URL=https://your-project-ref.supabase.co
 Rotate the key (see [3-1]).

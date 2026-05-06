@@ -91,8 +91,8 @@ def test_retry_idempotency_key_is_deterministic_from_ride_and_count():
         asyncio.run(retry_failed_payments())
 
     assert len(captured_keys) == 2
-    # Key shape: ride_retry_<ride_id>_<retry_count>
-    assert captured_keys[0] == "ride_retry_ride_1_2"
+    # Key shape: retry-confirm-<ride_id>-<retry_count>
+    assert captured_keys[0] == "retry-confirm-ride_1-2"
     assert captured_keys[0] == captured_keys[1], (
         "Two replicas at the same retry_count must produce identical idempotency keys"
     )

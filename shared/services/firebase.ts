@@ -14,9 +14,16 @@ import { NativeModules, Platform } from 'react-native';
 // module isn't linked.
 const hasFirebaseNative = !!NativeModules.RNFBAppModule;
 
-let messaging: any = null;
-let crashlytics: any = null;
-let appCheck: any = null;
+// Type-only imports — runtime loads via require() guarded by hasFirebaseNative.
+// `typeof import(...)` gives us the correct factory-function type without
+// pulling the packages into shared/'s runtime bundle.
+type MessagingFactory = typeof import('@react-native-firebase/messaging').default;
+type CrashlyticsFactory = typeof import('@react-native-firebase/crashlytics').default;
+type AppCheckFactory = typeof import('@react-native-firebase/app-check').default;
+
+let messaging: MessagingFactory | null = null;
+let crashlytics: CrashlyticsFactory | null = null;
+let appCheck: AppCheckFactory | null = null;
 
 if (hasFirebaseNative) {
   try {
@@ -53,8 +60,8 @@ export async function initFirebaseServices() {
   if (appCheck) {
     try {
       const provider = Platform.OS === 'android'
-        ? appCheck.newReactNativeFirebaseAppCheckProvider()
-        : appCheck.newReactNativeFirebaseAppCheckProvider();
+        ? appCheck().newReactNativeFirebaseAppCheckProvider()
+        : appCheck().newReactNativeFirebaseAppCheckProvider();
 
       await appCheck().initializeAppCheck({
         provider,
@@ -101,7 +108,7 @@ export async function requestPushPermissionAndGetToken(): Promise<string | null>
 /**
  * Register a handler for incoming push notifications (foreground).
  */
-export function onForegroundMessage(handler: (message: any) => void) {
+export function onForegroundMessage(handler: (message: import('@react-native-firebase/messaging').FirebaseMessagingTypes.RemoteMessage) => void) {
   if (!messaging) return () => {};
   return messaging().onMessage(handler);
 }
@@ -111,9 +118,9 @@ export function onForegroundMessage(handler: (message: any) => void) {
  * Set the background message handler.
  * Must be called at the TOP LEVEL (outside of any component).
  */
-export function setBackgroundMessageHandler(handler: (message: any) => void) {
+export function setBackgroundMessageHandler(handler: (message: import('@react-native-firebase/messaging').FirebaseMessagingTypes.RemoteMessage) => Promise<unknown> | void) {
   if (!messaging) return;
-  messaging().setBackgroundMessageHandler(handler);
+  messaging().setBackgroundMessageHandler((msg) => handler(msg) ?? Promise.resolve());
 }
 
 

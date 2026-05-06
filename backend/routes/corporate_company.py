@@ -7,9 +7,10 @@ Reads available to any active member use require_company_member.
 
 from __future__ import annotations
 
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 try:
     from ..db_supabase import (  # type: ignore
@@ -88,6 +89,26 @@ except ImportError:
 router = APIRouter(prefix="/company/{company_id}", tags=["Corporate Company"])
 
 
+def _validate_geofence(geofence: Optional[dict]) -> None:
+    """Raise 422 if geofence is not a valid minimal GeoJSON FeatureCollection."""
+    if geofence is None:
+        return
+    if not isinstance(geofence, dict) or geofence.get("type") != "FeatureCollection":
+        raise HTTPException(status_code=422, detail="geofence must be a GeoJSON FeatureCollection")
+    features = geofence.get("features")
+    if not isinstance(features, list):
+        raise HTTPException(status_code=422, detail="geofence.features must be a list")
+    for feat in features:
+        if not isinstance(feat, dict):
+            raise HTTPException(status_code=422, detail="each geofence feature must be an object")
+        geom = feat.get("geometry")
+        if not isinstance(geom, dict) or not geom.get("type") or "coordinates" not in geom:
+            raise HTTPException(
+                status_code=422,
+                detail="each geofence feature must have a geometry with type and coordinates",
+            )
+
+
 # ---------- Members ----------
 @router.get("/members")
 async def list_members(
@@ -149,8 +170,14 @@ async def remove_member(
 
 # ---------- Allowances ----------
 @router.get("/allowances")
-async def list_allowances(company_id: str, guard=Depends(require_company_admin)):
-    return await list_company_allowances(company_id)
+async def list_allowances(
+    company_id: str,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+    guard=Depends(require_company_admin),
+):
+    rows = await list_company_allowances(company_id)
+    return rows[skip : skip + limit]
 
 
 @router.get("/members/{member_id}/allowance")
@@ -181,6 +208,9 @@ async def set_allowance(
     for k in ("period_start", "period_end"):
         if patch.get(k) is not None:
             patch[k] = patch[k].isoformat()
+    for money_key in ("amount", "auto_approve_topup_amount"):
+        if patch.get(money_key) is not None:
+            patch[money_key] = str(Decimal(str(patch[money_key])).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
     return await upsert_member_allowance(member_id=member_id, patch=patch)
 
 
@@ -199,6 +229,9 @@ async def patch_allowance(
         patch["status"] = patch["status"].value
     if not patch:
         return await get_member_allowance(member_id) or {}
+    for money_key in ("amount", "auto_approve_topup_amount"):
+        if money_key in patch and patch[money_key] is not None:
+            patch[money_key] = str(Decimal(str(patch[money_key])).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
     return await upsert_member_allowance(member_id=member_id, patch=patch)
 
 
@@ -263,14 +296,17 @@ async def decide_allowance_request(
         wallet = await get_corporate_wallet_by_company(company_id)
         if not allowance or not wallet:
             raise HTTPException(status_code=409, detail="missing allowance or wallet")
+        amount_raw = request.get("amount")
+        if amount_raw is None:
+            raise HTTPException(status_code=422, detail="allowance request amount is required")
         await apply_grant(
             wallet_id=wallet["id"],
             allowance_id=allowance["id"],
             member_id=request["member_id"],
-            amount=float(request["amount"]),
+            amount=Decimal(str(amount_raw)),
             actor_user_id=guard["user"]["id"],
             notes=f"approved request {request_id}",
-            floor=float(wallet.get("soft_negative_floor", -50)),
+            floor=Decimal(str(wallet.get("soft_negative_floor", "-50"))),
         )
     return await update_allowance_request(
         request_id=request_id,
@@ -314,6 +350,8 @@ async def replace_policy(
         else patch["allowed_payment_source"]
     )
 
+    _validate_geofence(patch.get("allowed_geofence"))
+
     # Serialise TimeWindow objects to plain dicts for JSON storage.
     if patch.get("allowed_time_windows") is not None:
         patch["allowed_time_windows"] = [
@@ -341,6 +379,9 @@ async def patch_policy(
     if "allowed_payment_source" in patch and hasattr(patch["allowed_payment_source"], "value"):
         patch["allowed_payment_source"] = patch["allowed_payment_source"].value
 
+    if "allowed_geofence" in patch:
+        _validate_geofence(patch["allowed_geofence"])
+
     if "allowed_time_windows" in patch and patch["allowed_time_windows"] is not None:
         patch["allowed_time_windows"] = [
             w.model_dump() if hasattr(w, "model_dump") else w for w in patch["allowed_time_windows"]
@@ -367,32 +408,49 @@ def _month_bounds(month: str) -> tuple[str, str]:
     return anchor.isoformat(), end.isoformat()
 
 
+_ZERO = Decimal("0.00")
+_TWO = Decimal("0.01")
+
+
+def _d(v) -> Decimal:
+    return Decimal(str(v or 0)).quantize(_TWO, rounding=ROUND_HALF_UP)
+
+
 def _aggregate_rows(rows: list[dict]) -> dict:
-    allowance_total = 0.0
-    master_total = 0.0
+    allowance_total = _ZERO
+    master_total = _ZERO
     by_member: dict[str, dict] = {}
     for r in rows:
-        ad = float(r.get("allowance_debit_amount") or 0)
-        md = float(r.get("master_fallback_amount") or 0)
+        ad = _d(r.get("allowance_debit_amount"))
+        md = _d(r.get("master_fallback_amount"))
         allowance_total += ad
         master_total += md
         mid = r.get("member_id") or "unknown"
         slot = by_member.setdefault(
             mid,
-            {"member_id": mid, "ride_count": 0, "allowance_total": 0.0, "master_total": 0.0, "total": 0.0},
+            {"member_id": mid, "ride_count": 0, "allowance_total": _ZERO, "master_total": _ZERO, "total": _ZERO},
         )
         slot["ride_count"] += 1
         slot["allowance_total"] += ad
         slot["master_total"] += md
         slot["total"] += ad + md
     total = allowance_total + master_total
+    by_member_out = [
+        {
+            **v,
+            "allowance_total": float(v["allowance_total"].quantize(_TWO, rounding=ROUND_HALF_UP)),
+            "master_total": float(v["master_total"].quantize(_TWO, rounding=ROUND_HALF_UP)),
+            "total": float(v["total"].quantize(_TWO, rounding=ROUND_HALF_UP)),
+        }
+        for v in sorted(by_member.values(), key=lambda m: m["total"], reverse=True)
+    ]
     return {
         "ride_count": len(rows),
-        "allowance_total": round(allowance_total, 2),
-        "master_total": round(master_total, 2),
-        "total": round(total, 2),
-        "avg_fare": round(total / len(rows), 2) if rows else 0.0,
-        "by_member": sorted(by_member.values(), key=lambda m: m["total"], reverse=True),
+        "allowance_total": float(allowance_total.quantize(_TWO, rounding=ROUND_HALF_UP)),
+        "master_total": float(master_total.quantize(_TWO, rounding=ROUND_HALF_UP)),
+        "total": float(total.quantize(_TWO, rounding=ROUND_HALF_UP)),
+        "avg_fare": float((total / len(rows)).quantize(_TWO, rounding=ROUND_HALF_UP)) if rows else 0.0,
+        "by_member": by_member_out,
     }
 
 
@@ -408,22 +466,35 @@ async def billing_summary(
     average fare, and per-member breakdown sorted by total desc.
     """
     from datetime import datetime as _dt
+    from datetime import timezone as _tz
 
     if month is None:
-        month = _dt.utcnow().strftime("%Y-%m")
+        month = _dt.now(_tz.utc).strftime("%Y-%m")
     from_iso, to_iso = _month_bounds(month)
-    rows = await list_company_ride_payment_sources(
-        company_id=company_id,
-        from_iso=from_iso,
-        to_iso=to_iso,
-        limit=1000,
-    )
+
+    # Page through all rows so the summary is never silently truncated.
+    all_rows: list[dict] = []
+    page_size = 1000
+    offset = 0
+    while True:
+        page = await list_company_ride_payment_sources(
+            company_id=company_id,
+            from_iso=from_iso,
+            to_iso=to_iso,
+            limit=page_size,
+            offset=offset,
+        )
+        all_rows.extend(page)
+        if len(page) < page_size:
+            break
+        offset += page_size
+
     wallet = await get_corporate_wallet_by_company(company_id) or {}
     return {
         "month": month,
-        "wallet_balance": float(wallet.get("balance") or 0),
+        "wallet_balance": float(Decimal(str(wallet.get("balance") or "0")).quantize(_TWO, rounding=ROUND_HALF_UP)),
         "wallet_currency": wallet.get("currency") or "CAD",
-        **_aggregate_rows(rows),
+        **_aggregate_rows(all_rows),
     }
 
 
@@ -431,25 +502,50 @@ async def billing_summary(
 async def billing_statement(
     company_id: str,
     month: str,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(200, ge=1, le=500),
     guard=Depends(require_company_admin),
 ):
-    """Full monthly statement: per-ride line items + summary totals.
+    """Monthly statement line items + summary totals, paginated.
 
     `month` is YYYY-MM; returns 422 if the string is malformed.
+    Line items are paginated via skip/limit. The summary covers the full
+    month (all pages) regardless of the current page window.
     """
     from_iso, to_iso = _month_bounds(month)
-    rows = await list_company_ride_payment_sources(
+
+    # Paginated line items for the current page
+    line_items = await list_company_ride_payment_sources(
         company_id=company_id,
         from_iso=from_iso,
         to_iso=to_iso,
-        limit=5000,
+        limit=limit,
+        offset=skip,
     )
+
+    # Full-month aggregation (page through all rows so totals are accurate)
+    all_rows: list[dict] = []
+    page_size = 1000
+    offset = 0
+    while True:
+        page = await list_company_ride_payment_sources(
+            company_id=company_id,
+            from_iso=from_iso,
+            to_iso=to_iso,
+            limit=page_size,
+            offset=offset,
+        )
+        all_rows.extend(page)
+        if len(page) < page_size:
+            break
+        offset += page_size
+
     return {
         "month": month,
         "from": from_iso,
         "to": to_iso,
-        "line_items": rows,
-        "summary": _aggregate_rows(rows),
+        "line_items": line_items,
+        "summary": _aggregate_rows(all_rows),
     }
 
 
@@ -471,7 +567,7 @@ async def billing_transactions(
     )
     return {
         "wallet_id": wallet["id"],
-        "balance": float(wallet.get("balance") or 0),
+        "balance": float(Decimal(str(wallet.get("balance") or "0")).quantize(_TWO, rounding=ROUND_HALF_UP)),
         "currency": wallet.get("currency") or "CAD",
         "transactions": txns,
     }

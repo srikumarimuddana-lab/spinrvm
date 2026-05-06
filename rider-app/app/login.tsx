@@ -77,7 +77,7 @@ export default function LoginScreen() {
     const formattedNumber = `+1${phoneNumber.replace(/\D/g, '')}`;
 
     try {
-      const response = await api.post('/auth/send-otp', { phone: formattedNumber });
+      const response = await api.post<{ success?: boolean }>('/auth/send-otp', { phone: formattedNumber });
       if (response.data.success) {
         router.push({
           pathname: '/otp',
@@ -314,7 +314,7 @@ function createStyles(colors: ThemeColors) {
     buttonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
     buttonTextInactive: { color: colors.textDim },
     footer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
-    footerText: { fontSize: 12, color: colors.textDim },
+    footerText: { fontSize: 12, color: colors.textDim, flex: 1 },
     terms: { paddingHorizontal: 24, alignItems: 'center' },
     termsText: { fontSize: 12, color: '#B0B0B0', textAlign: 'center', lineHeight: 18 },
     termsLink: { color: colors.primary, fontWeight: '600' },

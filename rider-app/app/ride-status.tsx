@@ -25,6 +25,48 @@ export default function RideStatusScreen() {
 
   const [pulseAnim] = useState(new Animated.Value(1));
   const [dotAnim] = useState(new Animated.Value(0));
+
+  // M-4: Offer acceptance countdown — derived from server-provided
+  // offer_expires_at (ISO) or offer_timeout_seconds, with 15 s fallback.
+  const [offerSecondsLeft, setOfferSecondsLeft] = useState<number>(15);
+  const [offerTotalSeconds, setOfferTotalSeconds] = useState<number>(15);
+
+  useEffect(() => {
+    if (currentRide?.status !== 'driver_assigned') return;
+
+    const ride = currentRide as any;
+    const offerExpiresAt: string | null | undefined = ride.offer_expires_at;
+    const offerTimeoutSeconds: number = ride.offer_timeout_seconds ?? 15;
+
+    const computeTotal = (): number => {
+      if (offerExpiresAt) {
+        const expiresMs = new Date(offerExpiresAt).getTime();
+        const createdMs = expiresMs - offerTimeoutSeconds * 1000;
+        return Math.max(1, Math.round((expiresMs - createdMs) / 1000));
+      }
+      return offerTimeoutSeconds;
+    };
+
+    const computeLeft = (): number => {
+      if (offerExpiresAt) {
+        return Math.max(0, Math.round((new Date(offerExpiresAt).getTime() - Date.now()) / 1000));
+      }
+      return offerTimeoutSeconds;
+    };
+
+    const total = computeTotal();
+    setOfferTotalSeconds(total);
+    setOfferSecondsLeft(computeLeft());
+
+    const interval = setInterval(() => {
+      const left = computeLeft();
+      setOfferSecondsLeft(left);
+      if (left <= 0) clearInterval(interval);
+    }, 500);
+
+    return () => clearInterval(interval);
+  }, [currentRide?.status, (currentRide as any)?.offer_expires_at, (currentRide as any)?.offer_timeout_seconds]);
+
   const [alertState, setAlertState] = useState<{
     visible: boolean;
     title: string;
@@ -214,6 +256,27 @@ export default function RideStatusScreen() {
         </View>
       </View>
 
+      {/* M-4: Offer acceptance countdown — only shown while driver_assigned */}
+      {currentRide?.status === 'driver_assigned' && (
+        <View style={{ marginTop: 16, marginBottom: 4 }}>
+          <View style={styles.offerProgressTrack}>
+            <View
+              style={[
+                styles.offerProgressFill,
+                {
+                  width: `${Math.max(0, Math.min(100, (offerSecondsLeft / offerTotalSeconds) * 100))}%`,
+                },
+              ]}
+            />
+          </View>
+          <Text style={styles.offerProgressLabel}>
+            {offerSecondsLeft > 0
+              ? `Driver has ${offerSecondsLeft}s to accept`
+              : 'Finding another driver…'}
+          </Text>
+        </View>
+      )}
+
       {/* UX-001: Free cancellation countdown */}
       <View style={{ marginTop: 12 }}>
         <FreeCancelTimer
@@ -321,7 +384,7 @@ export default function RideStatusScreen() {
                 <Text style={styles.devLabel}>DEV: {currentRide.status}</Text>
                 {currentRide.status === 'searching' && (
                   <TouchableOpacity style={styles.devBtn} onPress={async () => {
-                    try { await simulateDriverArrival(); } catch {}
+                    try { await simulateDriverArrival(); } catch (err) { console.error('[ride-status]', err); }
                     if (rideId) fetchRide(rideId);
                   }}>
                     <Text style={styles.devBtnText}>Assign Driver</Text>
@@ -329,7 +392,7 @@ export default function RideStatusScreen() {
                 )}
                 {(currentRide.status === 'driver_assigned' || currentRide.status === 'driver_accepted') && (
                   <TouchableOpacity style={styles.devBtn} onPress={async () => {
-                    try { await api.post(`/drivers/rides/${currentRide.id}/arrive`); } catch {}
+                    try { await api.post(`/drivers/rides/${currentRide.id}/arrive`); } catch (err) { console.error('[ride-status]', err); }
                     if (rideId) fetchRide(rideId);
                   }}>
                     <Text style={styles.devBtnText}>Arrive at Pickup</Text>
@@ -544,6 +607,24 @@ function createStyles(colors: ThemeColors) {
       fontSize: 14,
       fontFamily: 'PlusJakartaSans_400Regular',
       color: colors.textDim,
+    },
+    offerProgressTrack: {
+      height: 4,
+      backgroundColor: colors.border,
+      borderRadius: 2,
+      overflow: 'hidden',
+    },
+    offerProgressFill: {
+      height: 4,
+      backgroundColor: colors.primary,
+      borderRadius: 2,
+    },
+    offerProgressLabel: {
+      fontSize: 12,
+      fontFamily: 'PlusJakartaSans_400Regular',
+      color: colors.textDim,
+      marginTop: 6,
+      textAlign: 'center',
     },
     simulateButton: {
       backgroundColor: colors.border,

@@ -15,7 +15,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 try:
     from ..db import db
@@ -34,18 +34,26 @@ def _d(v) -> Decimal:
     return Decimal(str(v)).quantize(_TWO, rounding=ROUND_HALF_UP)
 
 
+def _money_str(v) -> str:
+    return str(_d(v))
+
+
 # ── Request Schemas ──────────────────────────────────────────────────
 
 
 class CreateFareSplitRequest(BaseModel):
     ride_id: str
-    participant_phones: List[str] = Field(..., min_length=1, max_length=5)
+    participant_phones: List[str] = Field(
+        ..., min_length=1, max_length=5
+    )  # Product limit: max 5 participants by design
 
-    @validator("participant_phones", each_item=True)
-    def validate_phone(cls, v: str) -> str:
-        if not re.match(r"^\+1\d{10}$", v):
-            raise ValueError(f"Phone must be in +1XXXXXXXXXX format: {v}")
-        return v
+    @field_validator("participant_phones", mode="before")
+    @classmethod
+    def validate_phone(cls, value: List[str]) -> List[str]:
+        for v in value:
+            if not re.match(r"^\+1\d{10}$", v):
+                raise ValueError(f"Phone must be in +1XXXXXXXXXX format: {v}")
+        return value
 
 
 class RespondToSplitRequest(BaseModel):
@@ -74,9 +82,9 @@ async def create_fare_split(req: CreateFareSplitRequest, current_user: dict = De
     if existing:
         raise HTTPException(status_code=400, detail="Fare split already exists for this ride")
 
-    total_fare = float(ride.get("grand_total") or ride.get("total_fare", 0))
+    total_fare = _d(ride.get("grand_total") or ride.get("total_fare", 0))
     split_count = len(req.participant_phones) + 1  # +1 for requester
-    share_amount = float(_d(total_fare / split_count))
+    share_amount = _money_str(total_fare / split_count)
 
     # Create the fare split record
     split_id = str(uuid.uuid4())
@@ -84,7 +92,7 @@ async def create_fare_split(req: CreateFareSplitRequest, current_user: dict = De
         "id": split_id,
         "ride_id": req.ride_id,
         "requester_id": current_user["id"],
-        "total_fare": total_fare,
+        "total_fare": _money_str(total_fare),
         "split_count": split_count,
         "status": "pending",
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -112,13 +120,12 @@ async def create_fare_split(req: CreateFareSplitRequest, current_user: dict = De
     return {
         "id": split_id,
         "ride_id": req.ride_id,
-        "total_fare": total_fare,
+        "total_fare": _money_str(total_fare),
         "split_count": split_count,
         "your_share": share_amount,
         "participants": [
             {
                 "id": p["id"],
-                "phone": p["phone"],
                 "share_amount": p["share_amount"],
                 "status": p["status"],
             }
@@ -146,22 +153,21 @@ async def get_fare_split(split_id: str, current_user: dict = Depends(get_current
     if split["requester_id"] != user_id and not is_participant:
         raise HTTPException(status_code=403, detail="Not authorized to view this fare split")
 
-    share_amount = float(_d(split["total_fare"] / split["split_count"]))
+    share_amount = _money_str(_d(split["total_fare"]) / split["split_count"])
 
     return {
         "id": split["id"],
         "ride_id": split["ride_id"],
         "requester_id": split["requester_id"],
-        "total_fare": split["total_fare"],
+        "total_fare": _money_str(split["total_fare"]),
         "split_count": split["split_count"],
         "your_share": share_amount,
         "status": split["status"],
         "participants": [
             {
                 "id": p["id"],
-                "phone": p.get("phone"),
                 "user_id": p.get("user_id"),
-                "share_amount": p["share_amount"],
+                "share_amount": _money_str(p["share_amount"]),
                 "status": p["status"],
                 "paid_at": p.get("paid_at"),
             }
@@ -184,21 +190,26 @@ async def get_fare_split_for_ride(ride_id: str, current_user: dict = Depends(get
         limit=10,
     )
 
-    share_amount = float(_d(split["total_fare"] / split["split_count"]))
+    user_id = current_user["id"]
+    is_owner = split.get("requester_id") == user_id
+    is_participant = any(p.get("user_id") == user_id for p in participants)
+    if not (is_owner or is_participant):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    share_amount = _money_str(_d(split["total_fare"]) / split["split_count"])
 
     return {
         "has_split": True,
         "split": {
             "id": split["id"],
-            "total_fare": split["total_fare"],
+            "total_fare": _money_str(split["total_fare"]),
             "split_count": split["split_count"],
             "your_share": share_amount,
             "status": split["status"],
             "participants": [
                 {
                     "id": p["id"],
-                    "phone": p.get("phone"),
-                    "share_amount": p["share_amount"],
+                    "share_amount": _money_str(p["share_amount"]),
                     "status": p["status"],
                 }
                 for p in participants
@@ -241,7 +252,7 @@ async def respond_to_split(
                 limit=10,
             )
             active_count = sum(1 for p in all_participants if p["status"] not in ("declined",)) + 1  # +1 requester
-            new_share = float(_d(split["total_fare"] / active_count))
+            new_share = _money_str(_d(split["total_fare"]) / active_count)
 
             # Update share amounts for remaining participants
             for p in all_participants:
@@ -281,41 +292,40 @@ async def pay_split_share(
     if participant["status"] != "accepted":
         raise HTTPException(status_code=400, detail="Must accept the split first")
 
-    share_amount = float(participant["share_amount"])
+    share_amount = _d(participant["share_amount"])
 
     if req.payment_method == "wallet":
-        # Import wallet helper
         from .wallet import _record_transaction, get_or_create_wallet
 
         wallet = await get_or_create_wallet(current_user["id"])
-        balance = _d(wallet.get("balance", 0))
-        debit = _d(share_amount)
+        try:
+            new_balance = await db.fare_split_pay_share(
+                wallet_id=wallet["id"],
+                participant_id=participant_id,
+                amount=share_amount,
+            )
+        except ValueError as exc:
+            if "insufficient_funds" in str(exc):
+                raise HTTPException(status_code=400, detail="Insufficient wallet balance") from exc
+            raise
 
-        if balance < debit:
-            raise HTTPException(status_code=400, detail="Insufficient wallet balance")
-
-        new_balance = balance - debit
-        await db.update_one(
-            "wallets",
-            {"id": wallet["id"]},
-            {"$set": {"balance": float(new_balance), "updated_at": datetime.now(timezone.utc).isoformat()}},
-        )
         await _record_transaction(
             wallet_id=wallet["id"],
             user_id=current_user["id"],
             txn_type="fare_split_sent",
-            amount=-share_amount,
-            balance_after=float(new_balance),
+            amount="-" + _money_str(share_amount),
+            balance_after=_money_str(new_balance),
             reference_id=participant["fare_split_id"],
             description=f"Fare split payment ${share_amount:.2f}",
         )
-
-    # Mark participant as paid
-    await db.update_one(
-        "fare_split_participants",
-        {"id": participant_id},
-        {"$set": {"status": "paid", "paid_at": datetime.now(timezone.utc).isoformat()}},
-    )
+        # Participant already marked 'paid' atomically by fare_split_pay_share RPC
+    else:
+        # Card path: mark participant as paid
+        await db.update_one(
+            "fare_split_participants",
+            {"id": participant_id},
+            {"$set": {"status": "paid", "paid_at": datetime.now(timezone.utc).isoformat()}},
+        )
 
     # Check if all participants have paid → mark split as completed
     split = await db.find_one("fare_splits", {"id": participant["fare_split_id"]})
@@ -333,7 +343,7 @@ async def pay_split_share(
                 {"$set": {"status": "completed", "updated_at": datetime.now(timezone.utc).isoformat()}},
             )
 
-    return {"status": "paid", "share_amount": share_amount}
+    return {"status": "paid", "share_amount": _money_str(share_amount)}
 
 
 @api_router.post("/{split_id}/cancel")
@@ -354,5 +364,36 @@ async def cancel_fare_split(split_id: str, current_user: dict = Depends(get_curr
         {"id": split_id},
         {"$set": {"status": "cancelled", "updated_at": datetime.now(timezone.utc).isoformat()}},
     )
+
+    # Refund any participants who had already paid
+    participants = await db.get_rows(
+        "fare_split_participants",
+        {"fare_split_id": split_id},
+        limit=10,
+    )
+    paid_participants = [p for p in participants if p.get("status") == "paid"]
+    if paid_participants:
+        from .wallet import _record_transaction, get_or_create_wallet
+
+        for p in paid_participants:
+            if not p.get("user_id"):
+                continue
+            try:
+                wallet = await get_or_create_wallet(p["user_id"])
+                refund = _d(p["share_amount"])
+                await db.wallet_increment_balance(wallet["id"], refund)
+                updated_wallet = await db.find_one("wallets", {"id": wallet["id"]})
+                balance_after = _money_str(updated_wallet.get("balance", 0)) if updated_wallet else "0.00"
+                await _record_transaction(
+                    wallet_id=wallet["id"],
+                    user_id=p["user_id"],
+                    txn_type="fare_split_refund",
+                    amount=_money_str(refund),
+                    balance_after=balance_after,
+                    reference_id=split_id,
+                    description=f"Fare split cancellation refund ${refund:.2f}",
+                )
+            except Exception as refund_err:
+                logger.error(f"[FARE_SPLIT] Refund failed for participant {p['id']} on split {split_id}: {refund_err}")
 
     return {"status": "cancelled"}

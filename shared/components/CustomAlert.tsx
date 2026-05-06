@@ -92,7 +92,11 @@ export default function CustomAlert({
 
   const scaleAnim = useRef(new Animated.Value(0.85)).current;
   const opacityAnim = useRef(new Animated.Value(0)).current;
+  const inputRef = useRef<TextInput>(null);
 
+  // Focus the input after the open animation completes — firing earlier
+  // (e.g. autoFocus, or a fixed delay) races against Modal native-window
+  // readiness on Android and the keyboard request is silently dropped.
   useEffect(() => {
     if (visible) {
       Animated.parallel([
@@ -107,12 +111,14 @@ export default function CustomAlert({
           duration: 200,
           useNativeDriver: true,
         }),
-      ]).start();
+      ]).start(() => {
+        if (showInput) inputRef.current?.focus();
+      });
     } else {
       scaleAnim.setValue(0.85);
       opacityAnim.setValue(0);
     }
-  }, [visible]);
+  }, [visible, showInput]);
 
   const config = VARIANT_CONFIG[variant];
   const iconName = (icon || config.icon) as keyof typeof Ionicons.glyphMap;
@@ -128,7 +134,7 @@ export default function CustomAlert({
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        behavior="padding"
         style={styles.overlay}
       >
         <TouchableOpacity
@@ -159,13 +165,13 @@ export default function CustomAlert({
           {/* Input field */}
           {showInput && (
             <TextInput
+              ref={inputRef}
               style={styles.input}
               placeholder={inputPlaceholder}
               placeholderTextColor={colors.textDim}
               value={inputValue}
               onChangeText={onInputChange}
               autoCapitalize="characters"
-              autoFocus
             />
           )}
 

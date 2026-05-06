@@ -143,7 +143,7 @@ describe('rideStore — ride lifecycle', () => {
   test('createRide throws when pickup/dropoff/vehicle are missing', async () => {
     // No pickup, dropoff, or vehicle set
     await expect(
-      act(async () => useRideStore.getState().createRide('card'))
+      act(async () => { await useRideStore.getState().createRide('card'); })
     ).rejects.toThrow('Missing ride details');
   });
 
@@ -298,7 +298,7 @@ describe('rideStore — double-booking prevention', () => {
 
     // The store guard throws before the API is ever called, so no mock is needed.
     await expect(
-      act(async () => useRideStore.getState().createRide('card'))
+      act(async () => { await useRideStore.getState().createRide('card'); })
     ).rejects.toThrow('A ride is already active');
   });
 });
@@ -373,7 +373,7 @@ describe('rideStore — createRide double-booking guard', () => {
     mockApi.post.mockRejectedValueOnce(conflictErr);
 
     await expect(
-      act(async () => useRideStore.getState().createRide('card'))
+      act(async () => { await useRideStore.getState().createRide('card'); })
     ).rejects.toThrow();
 
     expect(useRideStore.getState().isLoading).toBe(false);
@@ -448,7 +448,7 @@ describe('rideStore — syncOfflineRequests', () => {
   test('replays queued create_ride requests and clears them on success', async () => {
     const queuedReq = { id: 'q-1', type: 'create_ride', data: { vehicle_type_id: 'vt-1' }, retryCount: 0 };
     AsyncStorageMock.getItem.mockResolvedValueOnce(JSON.stringify([queuedReq]));
-    mockApi.post.mockResolvedValueOnce({ data: makeRide('searching') });
+    mockApi.post.mockResolvedValueOnce({ data: makeRide('searching'), status: 200 });
 
     await act(async () => {
       await useRideStore.getState().syncOfflineRequests();
@@ -476,16 +476,19 @@ describe('rideStore — syncOfflineRequests', () => {
 });
 
 describe('rideStore — triggerEmergency network failure', () => {
-  test('does not throw when API call fails (keeps 911 UI flow unblocked)', async () => {
-    mockApi.post.mockRejectedValueOnce(new Error('Network error'));
+  test('throws on API failure so SOSButton retry loop can detect it (R-P0-1)', async () => {
+    // triggerEmergency retries up to MAX_ATTEMPTS (3) times before throwing.
+    // Mock all 3 attempts to fail so the function exhausts retries and rethrows.
+    mockApi.post
+      .mockRejectedValueOnce(new Error('Network error'))
+      .mockRejectedValueOnce(new Error('Network error'))
+      .mockRejectedValueOnce(new Error('Network error'));
 
     await expect(
-      act(async () =>
-        useRideStore.getState().triggerEmergency('ride-456', 43.65, -79.38)
-      )
-    ).resolves.toBeUndefined();
+      useRideStore.getState().triggerEmergency('ride-456', 43.65, -79.38)
+    ).rejects.toThrow('Network error');
 
-    // Store error should NOT be set — triggerEmergency swallows network failures
+    // triggerEmergency does NOT set store.error — failure UX is SOSButton's responsibility
     expect(useRideStore.getState().error).toBeNull();
-  });
+  }, 10000); // 3-attempt retry has 1s+2s back-off delays
 });

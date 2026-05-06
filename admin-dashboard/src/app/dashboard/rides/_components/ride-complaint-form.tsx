@@ -3,8 +3,8 @@
 import { useState } from "react";
 import { createRideComplaint } from "@/lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { FileWarning } from "lucide-react";
+import { useToast } from "@/components/ui/use-toast";
 
 const CATEGORIES = [
     { value: "safety", label: "Safety" },
@@ -22,6 +22,7 @@ interface Props {
 }
 
 export default function RideComplaintForm({ open, onClose, rideId, onCreated }: Props) {
+    const { toast } = useToast();
     const [againstType, setAgainstType] = useState<"rider" | "driver">("driver");
     const [category, setCategory] = useState("");
     const [description, setDescription] = useState("");
@@ -32,13 +33,13 @@ export default function RideComplaintForm({ open, onClose, rideId, onCreated }: 
         setLoading(true);
         try {
             await createRideComplaint(rideId, { against_type: againstType, category, description });
-            alert("Complaint created");
+            toast({ title: "Complaint created" });
             onCreated();
             onClose();
             setCategory("");
             setDescription("");
         } catch (e: any) {
-            alert(e.message || "Failed to create complaint");
+            toast({ title: "Failed to create complaint", description: e.message, variant: "destructive" });
         } finally {
             setLoading(false);
         }

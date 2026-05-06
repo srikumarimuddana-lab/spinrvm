@@ -16,6 +16,8 @@ if ride.status in ('driver_arrived', 'trip_in_progress'):
     raise RideStateError("Cannot cancel after driver has arrived")
 ```
 
+> **DV-13 (2026-04-23) product decision:** A $5 cancellation fee is charged for `driver_arrived` state (rides.py:1892–1957) rather than a hard block. Hard block is enforced for `in_progress` only. The `$5` amount is sourced from `app_settings` (not hard-coded). This is intentional per product review — the remediation description above should be read as "fee applied" not "hard block."
+
 **Effort:** 1 hour
 
 ---
@@ -49,7 +51,9 @@ if ride.status not in COMPLETE_FROM_STATES:
 
 **What's wrong:** On Android, pressing the hardware back button while accepting or on a ride dismisses the screen and returns the driver to the home screen. This leaves the app in a broken state (driver thinks they have a job, app shows idle).
 
-**File to fix:** `driver-app/components/panels/RideOfferPanel.tsx`, `ActiveRidePanel.tsx`, `TripCompletedPanel.tsx` — add:
+**File to fix:** `driver-app/components/panels/RideOfferPanel.tsx`, `driver-app/components/dashboard/ActiveRidePanel.tsx`, `driver-app/components/dashboard/TripCompletedPanel.tsx` — add:
+
+> **DV-11 (2026-04-23):** `ActiveRidePanel` and `TripCompletedPanel` have moved from `components/panels/` to `components/dashboard/`. If a path is not found, use `find driver-app -name '<filename>'` to locate it.
 ```tsx
 import { BackHandler } from 'react-native';
 useEffect(() => {
@@ -144,19 +148,21 @@ style={{ minWidth: 64, minHeight: 64 }}
 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
 ```
 
+> **DV-14 (2026-04-23) SUPERSEDED:** The app uses the native system keypad for OTP entry at HEAD. Custom-keypad button sizing is no longer applicable. This item is retained for audit trail purposes.
+
 **Effort:** 1 hour
 
 ---
 
 ## Checklist
 
-- [ ] P1-1 Block rider cancellation after driver arrived / trip in progress
-- [ ] P1-2 Block driver cancellation once trip is in progress
-- [ ] P1-3 Add state guard to complete_ride (only from trip_in_progress)
-- [ ] P1-4 Register BackHandler in RideOfferPanel, ActiveRidePanel, TripCompletedPanel
-- [ ] P1-5 Request background location after driver goes online
-- [ ] P1-6 Check Content-Length before reading file into memory
-- [ ] P1-7 Expand PCI card field list with camelCase variants
-- [ ] P1-8 Set OTP send=3/min, verify=5/min
-- [ ] P1-9 Use hmac.compare_digest for OTP comparison
-- [ ] P1-10 Increase OTP keypad button size on small screens
+- [x] P1-1 Block rider cancellation after driver arrived / trip in progress — PASS: rides.py:1883 blocks `in_progress`; charges cancellation fee for `driver_arrived` (admin + driver fee, lines 1892–1957)
+- [x] P1-2 Block driver cancellation once trip is in progress — PASS: drivers.py:2274 raises RideStateError if `trip_in_progress`
+- [x] P1-3 Add state guard to complete_ride (only from trip_in_progress) — PASS: drivers.py:2028 enforces `COMPLETE_FROM_STATES = ("in_progress",)`
+- [x] P1-4 Register BackHandler in RideOfferPanel, ActiveRidePanel, TripCompletedPanel — PASS: all three panels have `BackHandler.addEventListener('hardwareBackPress', () => true)` with cleanup
+- [x] P1-5 Request background location after driver goes online — PASS: useDriverDashboard.ts:732 calls `Location.requestBackgroundPermissionsAsync()` after online toggle
+- [x] P1-6 Check Content-Length before reading file into memory — PASS: documents.py:842–844 reads Content-Length header and rejects before read if over MAX_FILE_SIZE
+- [x] P1-7 Expand PCI card field list with camelCase variants — PASS: payments.py:286–290 `_RAW_CARD_FIELDS` includes `cardNumber`, `pan`, `cvc` and other variants
+- [x] P1-8 Set OTP send=3/min, verify=5/min — PASS: auth.py:138 `@limiter.limit("3/minute")` on send_otp; auth.py:203 `@limiter.limit("5/minute")` on verify_otp
+- [x] P1-9 Use hmac.compare_digest for OTP comparison — PASS: crypto.py provides `verify_otp_hash()` with `hmac.compare_digest()`; auth.py:219 uses it
+- [x] P1-10 Increase OTP keypad button size on small screens — PASS: ActiveRidePanel.tsx:605–606 `minWidth: 64, minHeight: 64` (exceeds 44pt minimum)

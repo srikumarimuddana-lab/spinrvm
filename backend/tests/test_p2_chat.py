@@ -24,7 +24,7 @@ Run:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -43,7 +43,7 @@ def _ride(status: str, **extra) -> dict:
         "status": status,
         "pickup_address": "123 Main",
         "dropoff_address": "456 Broadway",
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
         **extra,
     }
 
@@ -85,8 +85,12 @@ class TestSendRideMessage:
 
         driver_row = _driver_row()
 
-        # find_one returns: ride (1st call), driver lookup for WS target
-        find_calls = [ride, driver_row if ride.get("driver_id") else None]
+        # send_ride_message makes up to three db.find_one calls:
+        #   1. get ride by id
+        #   2. get driver by user_id (for is_driver auth check) — returns None for riders
+        #   3. get driver by driver_id (for WS forwarding target) — only when sender is rider
+        # Provide all three slots to avoid StopAsyncIteration.
+        find_calls = [ride, None, driver_row if ride.get("driver_id") else None]
 
         with (
             patch("backend.routes.rides.db.find_one", AsyncMock(side_effect=find_calls)),
@@ -200,7 +204,7 @@ class TestSendRideMessage:
         assert "cancelled" in exc_info.value.detail.lower()
 
     async def test_post_trip_chat_allowed_within_24h(self):
-        completed_at = (datetime.utcnow() - timedelta(hours=12)).isoformat()
+        completed_at = (datetime.now(timezone.utc) - timedelta(hours=12)).isoformat()
         ride = _ride("completed", ride_completed_at=completed_at)
         result, _, inserted = await self._send(ride, RIDER_ID, text="Thanks!")
 
@@ -212,7 +216,7 @@ class TestSendRideMessage:
 
         from backend.routes import rides as rides_mod
 
-        completed_at = (datetime.utcnow() - timedelta(hours=25)).isoformat()
+        completed_at = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
         ride = _ride("completed", ride_completed_at=completed_at)
 
         class _Body:
@@ -252,7 +256,7 @@ class TestGetRideMessages:
                 "ride_id": RIDE_ID,
                 "text": "Hi",
                 "sender": "rider",
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             },
         ]
 

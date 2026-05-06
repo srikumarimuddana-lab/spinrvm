@@ -1,0 +1,32 @@
+# .gitleaks.toml — Spinr secret-scanning allowlist
+# Purpose: suppress false positives during device testing without disabling the scanner.
+# Review before pre-production hardening phase — tighten or remove entries that no longer apply.
+
+title = "Spinr Gitleaks Config"
+
+[allowlist]
+description = "Dev testing false-positive suppressions"
+
+# Never scan gitignored local env files or build artefacts
+paths = [
+  '''.env\.local''',
+  '''.env\.\w+\.local''',
+  '''\.next/''',
+  '''node_modules/''',
+  '''\.expo/''',
+  '''dist/''',
+  '''build/''',
+  '''coverage/''',
+]
+
+# Placeholder / test-fixture key patterns used in settings forms and test files
+regexes = [
+  # Stripe publishable test keys used in admin settings form fixtures (safe — intentionally client-exposed)
+  '''pk_test_[A-Za-z0-9]{10,}''',
+  # Stripe secret test keys in test fixtures ONLY — real sk_live_ are never allowed
+  '''sk_test_[A-Za-z0-9]{10,}''',
+  # Generic placeholder values in comments or example configs
+  '''(YOUR_|REPLACE_ME|example_|placeholder_|test_key_|dummy_)[A-Za-z0-9_-]{4,}''',
+  # Expo public env vars (safe — intentionally client-exposed by design)
+  '''EXPO_PUBLIC_[A-Z_]+=.+''',
+]

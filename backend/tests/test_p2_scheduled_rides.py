@@ -6,16 +6,16 @@ Implemented endpoints:
   DELETE /rides/scheduled/{id}   — cancel a scheduled ride
 
 DST note: scheduled_time is stored as-received ISO string (UTC expected).
-The server currently does NOT validate that a requested local time falls
-inside a DST gap (e.g. 02:30 America/Toronto on spring-forward night).
-E14 is documented as xfail(strict=False) — living TODO.
+CreateRideRequest.validate_scheduled_time rejects local times that fall
+inside a DST gap (e.g. 02:30 America/Toronto on spring-forward night) when
+scheduled_timezone is provided (zoneinfo round-trip guard).
 
 These tests pin:
   - get_scheduled_rides returns rides list (including the cursor-list path)
   - cancel_scheduled_ride updates status to "cancelled"; only-owner guard;
     non-scheduled ride → 404; already-cancelled → 400
   - DST boundary: UTC-stored scheduled_time round-trips correctly (E14 happy path)
-  - DST gap: booking a non-existent local time is NOT currently rejected (xfail)
+  - DST gap: booking a non-existent local time is rejected with a ValidationError
 
 Run:
     pytest backend/tests/test_p2_scheduled_rides.py -v
@@ -23,7 +23,7 @@ Run:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -38,7 +38,7 @@ def _scheduled_ride(status: str = "searching", **extra) -> dict:
         "rider_id": RIDER_ID,
         "status": status,
         "is_scheduled": True,
-        "scheduled_time": (datetime.utcnow() + timedelta(hours=2)).isoformat(),
+        "scheduled_time": (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
         "pickup_address": "123 Main",
         "dropoff_address": "456 Broadway",
         **extra,
@@ -135,9 +135,10 @@ class TestCancelScheduledRide:
         from fastapi import HTTPException
 
         from backend.routes import rides as rides_mod
+        from backend.utils.error_handling import SpinrException
 
         with patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])):
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises((HTTPException, SpinrException)) as exc_info:
                 await rides_mod.cancel_scheduled_ride(
                     ride_id=RIDE_ID,
                     current_user={"id": "different-rider"},
@@ -149,28 +150,32 @@ class TestCancelScheduledRide:
         from fastapi import HTTPException
 
         from backend.routes import rides as rides_mod
+        from backend.utils.error_handling import SpinrException
 
         ride = _scheduled_ride(status="cancelled")
 
         with patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[ride])):
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises((HTTPException, SpinrException)) as exc_info:
                 await rides_mod.cancel_scheduled_ride(
                     ride_id=RIDE_ID,
                     current_user={"id": RIDER_ID},
                 )
 
         assert exc_info.value.status_code == 400
-        assert "cancel" in exc_info.value.detail.lower()
+        # SpinrException uses .message; HTTPException uses .detail
+        text = getattr(exc_info.value, "detail", None) or getattr(exc_info.value, "message", "")
+        assert "cancel" in str(text).lower()
 
     async def test_completed_ride_cannot_be_cancelled(self):
         from fastapi import HTTPException
 
         from backend.routes import rides as rides_mod
+        from backend.utils.error_handling import SpinrException
 
         ride = _scheduled_ride(status="completed")
 
         with patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[ride])):
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises((HTTPException, SpinrException)) as exc_info:
                 await rides_mod.cancel_scheduled_ride(
                     ride_id=RIDE_ID,
                     current_user={"id": RIDER_ID},

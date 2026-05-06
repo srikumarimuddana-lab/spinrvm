@@ -25,7 +25,7 @@ const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 export default function DriverArrivedScreen() {
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
-  const { currentRide, currentDriver, fetchRide, cancelRide, clearRide } = useRideStore();
+  const { currentRide, currentDriver, fetchRide, cancelRide, clearRide, triggerEmergency } = useRideStore();
   const { wsConnected } = useRiderSocket();
   const mapRef = React.useRef<MapView>(null);
   const bottomSheetRef = React.useRef<BottomSheet>(null);
@@ -42,7 +42,7 @@ export default function DriverArrivedScreen() {
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
-  const fare = currentRide?.total_fare || 0;
+  const fare = parseFloat(currentRide?.total_fare || '0');
   // Use server-provided cancellation fee; fall back to $3 default (matches app_settings).
   // The old Math.min(5, fare * 0.2) formula did not match the server-side value.
   const cancellationFee = (currentRide as any)?.cancellation_fee ?? 3.0;
@@ -114,7 +114,7 @@ export default function DriverArrivedScreen() {
       `📍 Dropoff: ${currentRide?.dropoff_address || ''}`,
       `🔑 OTP: ${pickupOtp}`,
     ].join('\n');
-    try { await Share.share({ message: info }); } catch {}
+    try { await Share.share({ message: info }); } catch (err) { console.error('[driver-arrived]', err); }
   };
 
   const handleCopyOtp = async () => {
@@ -128,7 +128,7 @@ export default function DriverArrivedScreen() {
       {currentRide ? (
         <MapView
           ref={mapRef}
-          style={StyleSheet.absoluteFillObject}
+          style={StyleSheet.absoluteFill}
           provider={MAP_PROVIDER}
           initialRegion={{
             latitude: currentRide.pickup_lat,
@@ -228,9 +228,7 @@ export default function DriverArrivedScreen() {
             <View style={styles.pulseGreen} />
             <Text style={styles.arrivedChipText} allowFontScaling={false}>Driver has arrived</Text>
           </View>
-          <SOSButton rideId={rideId as string} onTrigger={async (id, lat, lng) => {
-            try { await api.post(`/rides/${id}/emergency`, { latitude: lat, longitude: lng }); } catch {}
-          }} />
+          <SOSButton rideId={rideId as string} onTrigger={triggerEmergency} />
         </View>
       </SafeAreaView>
 
@@ -397,7 +395,7 @@ function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: '#E8E8E8' },
     mapErrorContainer: {
-      ...StyleSheet.absoluteFillObject,
+      ...StyleSheet.absoluteFill,
       backgroundColor: '#D4E4D4',
       justifyContent: 'center',
       alignItems: 'center',

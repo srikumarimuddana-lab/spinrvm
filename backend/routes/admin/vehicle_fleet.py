@@ -17,6 +17,70 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+
+# ---------- Pydantic models ----------
+
+
+class VehicleTypeCreateRequest(BaseModel):
+    name: str
+    description: str = ""
+    icon: str = ""
+    base_fare: Optional[float] = None
+    price_per_km: Optional[float] = None
+    price_per_minute: Optional[float] = None
+    is_active: bool = True
+
+
+class VehicleTypeUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    icon: Optional[str] = None
+    base_fare: Optional[float] = None
+    price_per_km: Optional[float] = None
+    price_per_minute: Optional[float] = None
+    is_active: Optional[bool] = None
+
+
+class FareConfigCreateRequest(BaseModel):
+    name: str = ""
+    service_area_id: str = ""
+    vehicle_type_id: str = ""
+    base_fare: float = 0
+    per_km_rate: Optional[float] = None
+    price_per_km: Optional[float] = None  # alias accepted from frontend
+    per_minute_rate: Optional[float] = None
+    price_per_minute: Optional[float] = None  # alias accepted from frontend
+    minimum_fare: float = 0
+    booking_fee: float = 2.0
+    is_active: bool = True
+
+
+class FareConfigUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    base_fare: Optional[float] = None
+    per_km_rate: Optional[float] = None
+    price_per_km: Optional[float] = None  # alias accepted from frontend
+    per_minute_rate: Optional[float] = None
+    price_per_minute: Optional[float] = None  # alias accepted from frontend
+    area_geojson: Optional[Any] = None
+    is_active: Optional[bool] = None
+
+
+class LostAndFoundRequest(BaseModel):
+    item_description: str
+
+
+class LostAndFoundUpdateRequest(BaseModel):
+    item_description: Optional[str] = None
+    status: Optional[str] = None
+    admin_notes: Optional[str] = None
+
+
+class LostAndFoundResolveRequest(BaseModel):
+    status: str  # resolved or unresolved
+    admin_notes: Optional[str] = None
+
+
 # ---------- Vehicle types (table: vehicle_types) ----------
 
 
@@ -28,16 +92,16 @@ async def admin_get_vehicle_types():
 
 
 @router.post("/vehicle-types")
-async def admin_create_vehicle_type(vtype: Dict[str, Any]):
+async def admin_create_vehicle_type(vtype: VehicleTypeCreateRequest):
     """Create vehicle type."""
     doc = {
-        "name": vtype.get("name"),
-        "description": vtype.get("description", ""),
-        "icon": vtype.get("icon", ""),
-        "base_fare": vtype.get("base_fare"),
-        "price_per_km": vtype.get("price_per_km"),
-        "price_per_minute": vtype.get("price_per_minute"),
-        "is_active": vtype.get("is_active", True),
+        "name": vtype.name,
+        "description": vtype.description,
+        "icon": vtype.icon,
+        "base_fare": vtype.base_fare,
+        "price_per_km": vtype.price_per_km,
+        "price_per_minute": vtype.price_per_minute,
+        "is_active": vtype.is_active,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     row = await db_supabase.insert_one("vehicle_types", doc)
@@ -47,23 +111,23 @@ async def admin_create_vehicle_type(vtype: Dict[str, Any]):
 
 
 @router.put("/vehicle-types/{type_id}")
-async def admin_update_vehicle_type(type_id: str, vtype: Dict[str, Any]):
+async def admin_update_vehicle_type(type_id: str, vtype: VehicleTypeUpdateRequest):
     """Update vehicle type."""
-    update_payload = {}
-    if vtype.get("name") is not None:
-        update_payload["name"] = vtype.get("name")
-    if vtype.get("description") is not None:
-        update_payload["description"] = vtype.get("description")
-    if vtype.get("icon") is not None:
-        update_payload["icon"] = vtype.get("icon")
-    if vtype.get("base_fare") is not None:
-        update_payload["base_fare"] = vtype.get("base_fare")
-    if vtype.get("price_per_km") is not None:
-        update_payload["price_per_km"] = vtype.get("price_per_km")
-    if vtype.get("price_per_minute") is not None:
-        update_payload["price_per_minute"] = vtype.get("price_per_minute")
-    if vtype.get("is_active") is not None:
-        update_payload["is_active"] = vtype.get("is_active")
+    update_payload: Dict[str, Any] = {}
+    if vtype.name is not None:
+        update_payload["name"] = vtype.name
+    if vtype.description is not None:
+        update_payload["description"] = vtype.description
+    if vtype.icon is not None:
+        update_payload["icon"] = vtype.icon
+    if vtype.base_fare is not None:
+        update_payload["base_fare"] = vtype.base_fare
+    if vtype.price_per_km is not None:
+        update_payload["price_per_km"] = vtype.price_per_km
+    if vtype.price_per_minute is not None:
+        update_payload["price_per_minute"] = vtype.price_per_minute
+    if vtype.is_active is not None:
+        update_payload["is_active"] = vtype.is_active
 
     if update_payload:
         await db_supabase.update_one("vehicle_types", {"id": type_id}, update_payload)
@@ -149,18 +213,20 @@ async def admin_get_fare_configs():
 
 
 @router.post("/fare-configs")
-async def admin_create_fare_config(config: Dict[str, Any]):
+async def admin_create_fare_config(config: FareConfigCreateRequest):
     """Create fare configuration."""
     doc = {
-        "name": config.get("name", ""),
-        "service_area_id": config.get("service_area_id", ""),
-        "vehicle_type_id": config.get("vehicle_type_id", ""),
-        "base_fare": config.get("base_fare", 0),
-        "per_km_rate": config.get("price_per_km", config.get("per_km_rate", 0)),
-        "per_minute_rate": config.get("price_per_minute", config.get("per_minute_rate", 0)),
-        "minimum_fare": config.get("minimum_fare", 0),
-        "booking_fee": config.get("booking_fee", 2.0),
-        "is_active": config.get("is_active", True),
+        "name": config.name,
+        "service_area_id": config.service_area_id,
+        "vehicle_type_id": config.vehicle_type_id,
+        "base_fare": config.base_fare,
+        "per_km_rate": config.per_km_rate if config.per_km_rate is not None else config.price_per_km or 0,
+        "per_minute_rate": config.per_minute_rate
+        if config.per_minute_rate is not None
+        else config.price_per_minute or 0,
+        "minimum_fare": config.minimum_fare,
+        "booking_fee": config.booking_fee,
+        "is_active": config.is_active,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     row = await db_supabase.insert_one("fare_configs", doc)
@@ -170,17 +236,24 @@ async def admin_create_fare_config(config: Dict[str, Any]):
 
 
 @router.put("/fare-configs/{config_id}")
-async def admin_update_fare_config(config_id: str, config: Dict[str, Any]):
+async def admin_update_fare_config(config_id: str, config: FareConfigUpdateRequest):
     """Update fare configuration."""
-    updates = {
-        "name": config.get("name"),
-        "base_fare": config.get("base_fare"),
-        "per_km_rate": config.get("price_per_km", config.get("per_km_rate")),
-        "per_minute_rate": config.get("price_per_minute", config.get("per_minute_rate")),
-        "area_geojson": config.get("area_geojson"),
-        "is_active": config.get("is_active"),
-    }
-    updates = {k: v for k, v in updates.items() if v is not None}
+    updates: Dict[str, Any] = {}
+    if config.name is not None:
+        updates["name"] = config.name
+    if config.base_fare is not None:
+        updates["base_fare"] = config.base_fare
+    per_km = config.per_km_rate if config.per_km_rate is not None else config.price_per_km
+    if per_km is not None:
+        updates["per_km_rate"] = per_km
+    per_min = config.per_minute_rate if config.per_minute_rate is not None else config.price_per_minute
+    if per_min is not None:
+        updates["per_minute_rate"] = per_min
+    if config.area_geojson is not None:
+        updates["area_geojson"] = config.area_geojson
+    if config.is_active is not None:
+        updates["is_active"] = config.is_active
+
     if updates:
         await db_supabase.update_one("fare_configs", {"id": config_id}, updates)
         # PERF-001: Invalidate fare cache
@@ -198,15 +271,6 @@ async def admin_delete_fare_config(config_id: str):
 
 
 # ---------- Lost and Found ----------
-
-
-class LostAndFoundRequest(BaseModel):
-    item_description: str
-
-
-class LostAndFoundResolveRequest(BaseModel):
-    status: str  # resolved or unresolved
-    admin_notes: Optional[str] = None
 
 
 @router.post("/rides/{ride_id}/lost-and-found")
@@ -266,7 +330,7 @@ async def admin_report_lost_item(ride_id: str, req: LostAndFoundRequest):
 @router.put("/lost-and-found/{item_id}/resolve")
 async def admin_resolve_lost_item(item_id: str, req: LostAndFoundResolveRequest):
     """Resolve or mark a lost and found item as unresolved."""
-    update_data = {
+    update_data: Dict[str, Any] = {
         "status": req.status,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -301,9 +365,15 @@ async def admin_list_lost_and_found(
 
 
 @router.put("/lost-and-found/{item_id}")
-async def admin_update_lost_item(item_id: str, req: dict):
+async def admin_update_lost_item(item_id: str, req: LostAndFoundUpdateRequest):
     """Update a lost and found item."""
-    update = {k: v for k, v in req.items() if k in ("item_description", "status", "admin_notes")}
+    update: Dict[str, Any] = {}
+    if req.item_description is not None:
+        update["item_description"] = req.item_description
+    if req.status is not None:
+        update["status"] = req.status
+    if req.admin_notes is not None:
+        update["admin_notes"] = req.admin_notes
     update["updated_at"] = datetime.now(timezone.utc).isoformat()
     result = await db_supabase.update_lost_and_found(item_id, update)
     if not result:

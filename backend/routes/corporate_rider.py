@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -65,7 +66,7 @@ class JoinDomainBody(BaseModel):
     email: str
 
 
-def _compute_remaining(allowance: dict) -> Optional[float]:
+def _compute_remaining(allowance: dict) -> Optional[Decimal]:
     """v1 convention: remaining = amount - max(used, 0).
 
     `used` goes negative after grants post (grants decrement used) and
@@ -77,7 +78,7 @@ def _compute_remaining(allowance: dict) -> Optional[float]:
     used = allowance.get("used") or 0
     if amt is None:
         return None
-    return float(amt) - max(float(used), 0.0)
+    return Decimal(str(amt)) - max(Decimal(str(used)), Decimal(0))
 
 
 async def _ensure_member(current_user: dict, company_id: str) -> dict:
@@ -130,10 +131,24 @@ async def do_join_domain(
     body: JoinDomainBody,
     current_user: dict = Depends(get_current_user),
 ):
+    # Validate that the rider's JWT email domain is authorized for this company.
+    # body.email is not trusted for this check — we use the JWT-sourced identity.
+    user_email = (current_user.get("phone_or_email") or current_user.get("email") or "").lower()
+    domain = user_email.split("@")[-1] if "@" in user_email else ""
+    if not domain:
+        raise HTTPException(status_code=400, detail="Account has no email address; cannot join via domain")
+    allowed = await get_rows(
+        "corporate_allowed_domains",
+        {"company_id": body.company_id, "domain": domain},
+        limit=1,
+    )
+    if not allowed:
+        raise HTTPException(status_code=403, detail="Your email domain is not authorized for this company")
+
     member = await join_via_domain(
         company_id=body.company_id,
         user_id=current_user["id"],
-        email=body.email,
+        email=user_email,
     )
     company = await get_corporate_account_by_id(body.company_id) or {}
     return {"company": company, "member": member}
@@ -212,7 +227,7 @@ async def submit_request(
     used_auto = allowance.get("auto_approved_this_period") or 0
     if (
         auto_cap is not None
-        and body.amount <= float(auto_cap)
+        and Decimal(str(body.amount)) <= Decimal(str(auto_cap))
         and auto_monthly is not None
         and used_auto < int(auto_monthly)
     ):
@@ -231,7 +246,7 @@ async def submit_request(
                 amount=body.amount,
                 actor_user_id=current_user["id"],
                 notes=f"auto_approved request {row.get('id', '')}",
-                floor=float(wallet.get("soft_negative_floor", -50)),
+                floor=Decimal(str(wallet.get("soft_negative_floor", -50))),
             )
         return row
     return await insert_allowance_request(
@@ -248,5 +263,4 @@ async def my_requests(
     current_user: dict = Depends(get_current_user),
 ):
     membership = await _ensure_member(current_user, company_id)
-    rows = await list_company_allowance_requests(company_id, statuses=None)
-    return [r for r in rows if r.get("member_id") == membership["id"]]
+    return await list_company_allowance_requests(company_id, statuses=None, member_id=membership["id"])

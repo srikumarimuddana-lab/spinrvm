@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, getServiceAreas, getVehicleTypes, getFareConfigs } from "@/lib/api";
+import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers } from "@/lib/api";
 import { Pagination } from "@/components/ui/pagination";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatCurrency } from "@/lib/utils";
@@ -13,13 +13,15 @@ import { Sheet, SheetContent, SheetTitle, SheetDescription } from "@/components/
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Search, Users, Wifi, WifiOff, ShieldCheck, ShieldAlert, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, ArrowUpDown, ArrowUp, ArrowDown, Ban, Pause } from "lucide-react";
+import { Search, Users, Wifi, ShieldCheck, ShieldAlert, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, ArrowUpDown, ArrowUp, ArrowDown, Ban, Pause } from "lucide-react";
 import DriverStatsCards from "./_components/driver-stats-cards";
 import DriverCharts from "./_components/driver-charts";
 import AreaStatsTable from "./_components/area-stats-table";
 import DriverActionBar from "./_components/driver-action-bar";
 import DriverNotes from "./_components/driver-notes";
 import DriverTimeline from "./_components/driver-timeline";
+import { useRequireModule } from "@/hooks/useRequireModule";
+import { useToast } from "@/components/ui/use-toast";
 
 const STATUS_TABS = [
     { value: "all", label: "All", icon: Users },
@@ -34,6 +36,8 @@ const STATUS_TABS = [
 const PAGE_SIZE = 50;
 
 export default function DriversPage() {
+    const { allowed } = useRequireModule("drivers");
+    const { toast } = useToast();
     const [data, setData] = useState<any>(null);
     const [drivers, setDrivers] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
@@ -46,7 +50,6 @@ export default function DriversPage() {
     const [sortKey, setSortKey] = useState<string>("created_at");
     const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
     const [selected, setSelected] = useState<any>(null);
-    const [verifying, setVerifying] = useState(false);
     const [driverDocs, setDriverDocs] = useState<any[]>([]);
     const [docsLoading, setDocsLoading] = useState(false);
     const [docBusy, setDocBusy] = useState<string | null>(null);
@@ -152,12 +155,37 @@ export default function DriversPage() {
     }, []);
     useEffect(() => { if (!selected?.id) { setDriverDocs([]); return; } setDocsLoading(true); getDriverDocuments(selected.id).then((d) => setDriverDocs(Array.isArray(d) ? d : [])).catch(() => setDriverDocs([])).finally(() => setDocsLoading(false)); }, [selected?.id]);
     useEffect(() => { setEditing(false); setEditForm({}); }, [selected?.id]);
+    useEffect(() => {
+        if (!previewUrl) return;
+        const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setPreviewUrl(null); };
+        document.addEventListener("keydown", onKey);
+        return () => document.removeEventListener("keydown", onKey);
+    }, [previewUrl]);
 
-    const reloadDriverDocs = async () => { if (!selected?.id) return; try { const d = await getDriverDocuments(selected.id); setDriverDocs(Array.isArray(d) ? d : []); } catch {} };
+    const reloadDriverDocs = async () => {
+        if (!selected?.id) return;
+        try {
+            const d = await getDriverDocuments(selected.id);
+            setDriverDocs(Array.isArray(d) ? d : []);
+        } catch (e: any) {
+            toast({ title: "Could not reload documents", description: e?.message || "Unknown error", variant: "destructive" });
+        }
+    };
 
     const handleReviewDoc = async (docId: string, status: "approved" | "rejected", reason?: string, expiry?: string) => {
         setDocBusy(docId);
-        try { await reviewDocument(docId, status, reason, expiry ? new Date(expiry).toISOString() : undefined); await reloadDriverDocs(); loadData(); loadDrivers(); } catch (e: any) { alert("Could not update document: " + (e?.message || "unknown error")); } finally { setDocBusy(null); }
+        const prevDocs = [...driverDocs];
+        try {
+            await reviewDocument(docId, status, reason, expiry ? new Date(expiry).toISOString() : undefined);
+            await reloadDriverDocs();
+            loadData();
+            loadDrivers();
+        } catch (e: any) {
+            setDriverDocs(prevDocs);
+            toast({ title: "Document review failed", description: e?.message || "Unknown error", variant: "destructive" });
+        } finally {
+            setDocBusy(null);
+        }
     };
 
     const openReviewDialog = (docId: string, action: "approved" | "rejected") => {
@@ -175,12 +203,6 @@ export default function DriversPage() {
     };
     const confirmReview = async () => { if (!reviewingDoc) return; await handleReviewDoc(reviewingDoc.id, reviewingDoc.action, reviewReason || undefined, reviewExpiry || undefined); setReviewingDoc(null); };
 
-    const handleVerify = async (driverId: string, verified: boolean) => {
-        setVerifying(true);
-        try { const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? ""; const token = (await import("@/store/authStore")).useAuthStore.getState().token; await fetch(`${API_BASE}/api/admin/drivers/${driverId}/verify`, { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` }, body: JSON.stringify({ verified }) }); loadData(); loadDrivers(); if (selected?.id === driverId) setSelected({ ...selected, is_verified: verified }); } catch {}
-        setVerifying(false);
-    };
-
     const startEditing = () => { if (!selected) return; setEditForm({ first_name: selected.first_name || "", last_name: selected.last_name || "", email: selected.email || "", phone: selected.phone || "", city: selected.city || "", service_area_id: selected.service_area_id || "", vehicle_type_id: selected.vehicle_type_id || "", vehicle_make: selected.vehicle_make || "", vehicle_model: selected.vehicle_model || "", vehicle_color: selected.vehicle_color || "", vehicle_year: selected.vehicle_year || "", license_plate: selected.license_plate || "", vehicle_vin: selected.vehicle_vin || "" }); setEditing(true); };
 
     const saveEdits = async () => {
@@ -189,7 +211,7 @@ export default function DriversPage() {
         for (const [k, v] of Object.entries(editForm)) { if (v !== (selected[k] || "")) changes[k] = v; }
         if (Object.keys(changes).length === 0) { setEditing(false); return; }
         setSaving(true);
-        try { await updateDriver(selected.id, changes); const updated = { ...selected, ...changes }; setSelected(updated); setDrivers(prev => prev.map(d => d.id === selected.id ? { ...d, ...changes } : d)); setEditing(false); } catch (e: any) { alert("Failed to save: " + (e?.message || "unknown error")); } finally { setSaving(false); }
+        try { await updateDriver(selected.id, changes); const updated = { ...selected, ...changes }; setSelected(updated); setDrivers(prev => prev.map(d => d.id === selected.id ? { ...d, ...changes } : d)); setEditing(false); } catch (e: any) { toast({ title: "Failed to save driver", description: e?.message || "Unknown error", variant: "destructive" }); } finally { setSaving(false); }
     };
 
     const ef = (field: string) => editForm[field] ?? "";
@@ -246,7 +268,22 @@ export default function DriversPage() {
     };
     const fmtDate = (d: string) => { if (!d) return "\u2014"; try { return new Date(d).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" }); } catch { return d; } };
 
-    const handleExport = () => { exportToCsv("drivers", sorted, [{ key: "id", label: "ID" }, { key: "first_name", label: "First Name" }, { key: "last_name", label: "Last Name" }, { key: "email", label: "Email" }, { key: "phone", label: "Phone" }, { key: "service_area_id", label: "Service Area ID" }, { key: "is_verified", label: "Verified" }, { key: "is_online", label: "Online" }, { key: "rating", label: "Rating" }, { key: "total_rides", label: "Rides" }, { key: "total_earnings", label: "Earnings" }, { key: "vehicle_make", label: "Vehicle Make" }, { key: "vehicle_model", label: "Vehicle Model" }, { key: "license_plate", label: "License Plate" }, { key: "created_at", label: "Joined" }]); };
+    const handleExport = async () => {
+        try {
+            const res = await exportDrivers();
+            exportToCsv("drivers", res.drivers, [
+                { key: "id", label: "ID" }, { key: "name", label: "Name" },
+                { key: "email", label: "Email" }, { key: "phone", label: "Phone" },
+                { key: "vehicle_make", label: "Vehicle Make" }, { key: "vehicle_model", label: "Vehicle Model" },
+                { key: "license_plate", label: "License Plate" }, { key: "is_verified", label: "Verified" },
+                { key: "is_online", label: "Online" }, { key: "total_rides", label: "Rides" },
+                { key: "created_at", label: "Joined" },
+            ]);
+            toast({ title: "Export complete", description: `${res.count ?? res.drivers?.length ?? 0} drivers exported.` });
+        } catch (e: any) {
+            toast({ title: "Export failed", description: e?.message, variant: "destructive" });
+        }
+    };
 
     const selectedAreaName = serviceAreaId ? serviceAreas.find(a => a.id === serviceAreaId)?.name || "Selected Area" : "All Areas";
     const activeDocs = driverDocs.filter(d => d.status !== "superseded");
@@ -283,6 +320,8 @@ export default function DriversPage() {
         return legacyField ? selected?.[legacyField] : undefined;
     }
 
+    if (!allowed) return null;
+
     return (
         <div className="space-y-5">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
@@ -294,14 +333,14 @@ export default function DriversPage() {
                     <div className="flex items-center gap-1.5">
                         <MapPin className="h-4 w-4 text-muted-foreground" />
                         <Select value={serviceAreaId || "all"} onValueChange={(v) => setServiceAreaId(v === "all" ? "" : v)}>
-                            <SelectTrigger className="h-9 text-xs w-[180px]"><SelectValue placeholder="All Service Areas" /></SelectTrigger>
+                            <SelectTrigger className="h-9 text-xs w-[180px]" aria-label="Filter by service area"><SelectValue placeholder="All Service Areas" /></SelectTrigger>
                             <SelectContent><SelectItem value="all">All Service Areas</SelectItem>{serviceAreas.map(a => <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>)}</SelectContent>
                         </Select>
                     </div>
                     <div className="flex items-center gap-1.5">
                         <Car className="h-4 w-4 text-muted-foreground" />
                         <Select value={vehicleTypeFilter || "all"} onValueChange={(v) => setVehicleTypeFilter(v === "all" ? "" : v)}>
-                            <SelectTrigger className="h-9 text-xs w-[160px]"><SelectValue placeholder="All Vehicle Types" /></SelectTrigger>
+                            <SelectTrigger className="h-9 text-xs w-[160px]" aria-label="Filter by vehicle type"><SelectValue placeholder="All Vehicle Types" /></SelectTrigger>
                             <SelectContent>
                                 <SelectItem value="all">All Vehicle Types</SelectItem>
                                 {vehicleTypes.map(v => <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>)}
@@ -310,9 +349,9 @@ export default function DriversPage() {
                     </div>
                     <div className="flex items-center gap-1.5">
                         <CalendarRange className="h-4 w-4 text-muted-foreground" />
-                        <Input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="h-9 w-[140px] text-xs" />
+                        <Input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="h-9 w-[140px] text-xs" aria-label="Filter from date" />
                         <span className="text-xs text-muted-foreground">to</span>
-                        <Input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="h-9 w-[140px] text-xs" />
+                        <Input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="h-9 w-[140px] text-xs" aria-label="Filter to date" />
                     </div>
                     {(serviceAreaId || vehicleTypeFilter || startDate || endDate) && <Button variant="ghost" size="sm" onClick={() => { setServiceAreaId(""); setVehicleTypeFilter(""); setStartDate(""); setEndDate(""); }}><X className="h-3.5 w-3.5" /> Clear</Button>}
                     <Button variant="outline" size="sm" onClick={handleExport} disabled={filtered.length === 0}><Download className="h-4 w-4" /> Export</Button>
@@ -330,7 +369,7 @@ export default function DriversPage() {
                             </button>
                         ))}
                     </div>
-                    <div className="relative w-full sm:w-72"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Search by name, email, plate..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9 h-9 text-sm" /></div>
+                    <div className="relative w-full sm:w-72"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Search by name, email, plate..." aria-label="Search drivers" value={search} onChange={e => setSearch(e.target.value)} className="pl-9 h-9 text-sm" /></div>
                 </div>
 
                 <div className="bg-card border rounded-2xl overflow-hidden shadow-sm">
@@ -338,16 +377,16 @@ export default function DriversPage() {
                         <TableHeader>
                             <TableRow className="bg-muted/50 hover:bg-muted/50 border-b-0">
                                 <TableHead className="h-11 pl-5 w-20"><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Actions</span></TableHead>
-                                <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("name")}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Driver<SortIcon col="name" /></span></TableHead>
-                                <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("status")}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Status<SortIcon col="status" /></span></TableHead>
-                                <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("is_online")}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Online<SortIcon col="is_online" /></span></TableHead>
-                                <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("vehicle_type")}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Vehicle Type<SortIcon col="vehicle_type" /></span></TableHead>
-                                <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("vehicle_make")}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Vehicle<SortIcon col="vehicle_make" /></span></TableHead>
-                                <TableHead className="h-11 cursor-pointer select-none text-center" onClick={() => handleSort("rating")}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Rating<SortIcon col="rating" /></span></TableHead>
-                                <TableHead className="h-11 cursor-pointer select-none text-center" onClick={() => handleSort("total_rides")}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Rides<SortIcon col="total_rides" /></span></TableHead>
-                                <TableHead className="h-11 cursor-pointer select-none text-right" onClick={() => handleSort("total_earnings")}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Earnings<SortIcon col="total_earnings" /></span></TableHead>
-                                <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("region")}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Region<SortIcon col="region" /></span></TableHead>
-                                <TableHead className="h-11 cursor-pointer select-none pr-5" onClick={() => handleSort("created_at")}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Joined<SortIcon col="created_at" /></span></TableHead>
+                                <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("name")} tabIndex={0} role="columnheader" aria-sort={sortKey === "name" ? (sortDir === "asc" ? "ascending" : "descending") : "none"} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleSort("name"); } }}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Driver<SortIcon col="name" /></span></TableHead>
+                                <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("status")} tabIndex={0} role="columnheader" aria-sort={sortKey === "status" ? (sortDir === "asc" ? "ascending" : "descending") : "none"} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleSort("status"); } }}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Status<SortIcon col="status" /></span></TableHead>
+                                <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("is_online")} tabIndex={0} role="columnheader" aria-sort={sortKey === "is_online" ? (sortDir === "asc" ? "ascending" : "descending") : "none"} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleSort("is_online"); } }}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Online<SortIcon col="is_online" /></span></TableHead>
+                                <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("vehicle_type")} tabIndex={0} role="columnheader" aria-sort={sortKey === "vehicle_type" ? (sortDir === "asc" ? "ascending" : "descending") : "none"} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleSort("vehicle_type"); } }}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Vehicle Type<SortIcon col="vehicle_type" /></span></TableHead>
+                                <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("vehicle_make")} tabIndex={0} role="columnheader" aria-sort={sortKey === "vehicle_make" ? (sortDir === "asc" ? "ascending" : "descending") : "none"} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleSort("vehicle_make"); } }}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Vehicle<SortIcon col="vehicle_make" /></span></TableHead>
+                                <TableHead className="h-11 cursor-pointer select-none text-center" onClick={() => handleSort("rating")} tabIndex={0} role="columnheader" aria-sort={sortKey === "rating" ? (sortDir === "asc" ? "ascending" : "descending") : "none"} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleSort("rating"); } }}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Rating<SortIcon col="rating" /></span></TableHead>
+                                <TableHead className="h-11 cursor-pointer select-none text-center" onClick={() => handleSort("total_rides")} tabIndex={0} role="columnheader" aria-sort={sortKey === "total_rides" ? (sortDir === "asc" ? "ascending" : "descending") : "none"} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleSort("total_rides"); } }}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Rides<SortIcon col="total_rides" /></span></TableHead>
+                                <TableHead className="h-11 cursor-pointer select-none text-right" onClick={() => handleSort("total_earnings")} tabIndex={0} role="columnheader" aria-sort={sortKey === "total_earnings" ? (sortDir === "asc" ? "ascending" : "descending") : "none"} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleSort("total_earnings"); } }}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Earnings<SortIcon col="total_earnings" /></span></TableHead>
+                                <TableHead className="h-11 cursor-pointer select-none" onClick={() => handleSort("region")} tabIndex={0} role="columnheader" aria-sort={sortKey === "region" ? (sortDir === "asc" ? "ascending" : "descending") : "none"} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleSort("region"); } }}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Region<SortIcon col="region" /></span></TableHead>
+                                <TableHead className="h-11 cursor-pointer select-none pr-5" onClick={() => handleSort("created_at")} tabIndex={0} role="columnheader" aria-sort={sortKey === "created_at" ? (sortDir === "asc" ? "ascending" : "descending") : "none"} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleSort("created_at"); } }}><span className="text-[11px] font-semibold text-foreground/80 uppercase tracking-wider">Joined<SortIcon col="created_at" /></span></TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -372,7 +411,7 @@ export default function DriversPage() {
                             ) : sorted.map(driver => {
                                 const areaName = serviceAreas.find(a => a.id === driver.service_area_id)?.name;
                                 return (
-                                    <TableRow key={driver.id} className={`group cursor-pointer transition-colors hover:bg-muted/40 ${selected?.id === driver.id ? "bg-primary/5 hover:bg-primary/5" : ""}`} onClick={() => setSelected(driver)}>
+                                    <TableRow key={driver.id} className={`group cursor-pointer transition-colors hover:bg-muted/40 ${selected?.id === driver.id ? "bg-primary/5 hover:bg-primary/5" : ""}`} onClick={() => setSelected(driver)} tabIndex={0} aria-label={`${driver.first_name} ${driver.last_name}, ${driver.status}, ${driver.is_online ? "online" : "offline"}`} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setSelected(driver); } }}>
                                         <TableCell className="pl-4 align-middle">
                                             <Button size="sm" variant="secondary" className="h-7 text-[10px] font-medium px-2" onClick={(e) => { e.stopPropagation(); setSelected(driver); }}><Eye className="h-3 w-3 mr-1" />View</Button>
                                         </TableCell>
@@ -501,7 +540,7 @@ export default function DriversPage() {
                                             <Button variant="ghost" size="sm" onClick={() => setEditing(false)} disabled={saving}>Cancel</Button>
                                             <Button size="sm" onClick={saveEdits} disabled={saving} className="bg-emerald-600 hover:bg-emerald-700 text-white">{saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />} Save</Button>
                                         </>)}
-                                        <Button variant="ghost" size="icon-sm" onClick={() => { setSelected(null); setEditing(false); }}><X className="h-4 w-4" /></Button>
+                                        <Button variant="ghost" size="icon-sm" aria-label="Close" onClick={() => { setSelected(null); setEditing(false); }}><X className="h-4 w-4" /></Button>
                                     </div>
                                 </div>
                                 <div className="grid grid-cols-4 gap-3 mt-5">
@@ -786,7 +825,7 @@ export default function DriversPage() {
             </Sheet>
 
             {previewUrl && (
-                <div className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center p-8 cursor-pointer" onClick={() => setPreviewUrl(null)}>
+                <div className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center p-8 cursor-pointer" onClick={() => setPreviewUrl(null)} role="dialog" aria-modal="true" aria-label="Document preview">
                     <div className="relative max-w-5xl max-h-[90vh] w-full h-full flex items-center justify-center">
                         <img src={previewUrl} alt="Document preview" className="max-w-full max-h-full object-contain rounded-lg shadow-2xl" onClick={e => e.stopPropagation()} />
                         <button onClick={() => setPreviewUrl(null)} className="absolute top-2 right-2 bg-black/60 hover:bg-black/80 text-white rounded-full p-2 transition"><X className="h-5 w-5" /></button>
@@ -816,7 +855,7 @@ export default function DriversPage() {
                                 </label>
                                 <Input type="date" value={reviewExpiry} onChange={e => setReviewExpiry(e.target.value)} className="w-full" />
                                 {reviewingDoc?.requiresExpiry && !reviewExpiry && (
-                                    <p className="text-xs text-red-500 mt-1 flex items-center gap-1"><AlertTriangle className="h-3 w-3" /> Expiry date is required for this document type. This will update the driver's profile.</p>
+                                    <p className="text-xs text-red-500 mt-1 flex items-center gap-1"><AlertTriangle className="h-3 w-3" /> Expiry date is required for this document type. This will update the driver&apos;s profile.</p>
                                 )}
                                 {!reviewingDoc?.requiresExpiry && <p className="text-xs text-muted-foreground mt-1">Leave empty if no expiry.</p>}
                             </div>

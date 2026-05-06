@@ -521,7 +521,7 @@ CREATE TABLE IF NOT EXISTS bank_accounts (
     institution_number    TEXT NOT NULL, -- 3 digits
     transit_number        TEXT NOT NULL, -- 5 digits
     routing_number        TEXT NOT NULL, -- Stripe requires: 0 + institution + transit (9 digits) for Canada
-    account_number_last4  TEXT NOT NULL,
+    account_last4         TEXT NOT NULL,
     account_holder_name   TEXT NOT NULL,
     account_type          TEXT NOT NULL DEFAULT 'chequing',
     currency              TEXT NOT NULL DEFAULT 'cad',

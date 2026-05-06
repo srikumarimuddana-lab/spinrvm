@@ -1,20 +1,120 @@
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 
 try:
     from ... import db_supabase
+    from ...dependencies import get_admin_user
     from ...routes.fares import invalidate_fare_cache
+    from ...utils.audit_logger import log_admin_action
+    from ...utils.surge_engine import SURGE_CAP
 except ImportError:
     import db_supabase
+    from dependencies import get_admin_user  # noqa: F401
     from routes.fares import invalidate_fare_cache
+    from utils.audit_logger import log_admin_action  # noqa: F401
+    from utils.surge_engine import SURGE_CAP
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+_SURGE_MAX = 10.0  # absolute ceiling for manual admin override
+
+
+# ---------- Pydantic models ----------
+
+
+class ServiceAreaCreateRequest(BaseModel):
+    name: str
+    city: str = ""
+    geojson: Optional[Any] = None
+    polygon: Optional[Any] = None
+    is_active: bool = True
+    parent_service_area_id: Optional[str] = None
+    is_airport: bool = False
+    airport_fee: float = Field(default=0, ge=0, le=100)
+    surge_enabled: Optional[bool] = None
+    surge_active: Optional[bool] = None
+    surge_multiplier: float = Field(default=1.0, ge=1.0, le=2.5)
+    gst_enabled: bool = True
+    gst_rate: float = Field(default=5.0, ge=0, le=100)
+    pst_enabled: bool = False
+    pst_rate: float = Field(default=0.0, ge=0, le=100)
+    hst_enabled: bool = False
+    hst_rate: float = Field(default=0.0, ge=0, le=100)
+    spinr_pass_enabled: bool = True
+    subscription_plan_ids: List[str] = []
+    driver_matching_algorithm: str = "nearest"
+    search_radius_km: float = Field(default=10.0, ge=1, le=100)
+    min_driver_rating: float = Field(default=4.0, ge=1.0, le=5.0)
+    show_demand_heatmap: bool = False
+
+
+class ServiceAreaUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    city: Optional[str] = None
+    geojson: Optional[Any] = None
+    polygon: Optional[Any] = None
+    is_active: Optional[bool] = None
+    parent_service_area_id: Optional[str] = None
+    is_airport: Optional[bool] = None
+    airport_fee: Optional[float] = Field(default=None, ge=0, le=100)
+    surge_enabled: Optional[bool] = None
+    surge_active: Optional[bool] = None
+    surge_multiplier: Optional[float] = Field(default=None, ge=1.0, le=2.5)
+    gst_enabled: Optional[bool] = None
+    gst_rate: Optional[float] = Field(default=None, ge=0, le=100)
+    pst_enabled: Optional[bool] = None
+    pst_rate: Optional[float] = Field(default=None, ge=0, le=100)
+    hst_enabled: Optional[bool] = None
+    hst_rate: Optional[float] = Field(default=None, ge=0, le=100)
+    required_documents: Optional[Any] = None
+    spinr_pass_enabled: Optional[bool] = None
+    subscription_plan_ids: Optional[List[str]] = None
+    driver_matching_algorithm: Optional[str] = None
+    search_radius_km: Optional[float] = Field(default=None, ge=1, le=100)
+    min_driver_rating: Optional[float] = Field(default=None, ge=1.0, le=5.0)
+    show_demand_heatmap: Optional[bool] = None
+
+
+class SurgePricingRequest(BaseModel):
+    multiplier: float = Field(default=1.0, ge=1.0, le=2.5)
+    is_active: bool = False
+
+
+class AreaFeeCreateRequest(BaseModel):
+    fee_name: str = ""
+    fee_type: str = "custom"
+    calc_mode: str = "flat"
+    amount: float = Field(default=0, ge=0, le=100)
+    description: str = ""
+    conditions: Dict[str, Any] = {}
+    is_active: bool = True
+
+
+class AreaFeeUpdateRequest(BaseModel):
+    fee_name: Optional[str] = None
+    fee_type: Optional[str] = None
+    calc_mode: Optional[str] = None
+    amount: Optional[float] = Field(default=None, ge=0, le=100)
+    description: Optional[str] = None
+    conditions: Optional[Dict[str, Any]] = None
+    is_active: Optional[bool] = None
+
+
+class AreaTaxRequest(BaseModel):
+    gst_enabled: Optional[bool] = None
+    gst_rate: Optional[float] = None
+    pst_enabled: Optional[bool] = None
+    pst_rate: Optional[float] = None
+    hst_enabled: Optional[bool] = None
+    hst_rate: Optional[float] = None
+
 
 # ---------- Service areas (table: service_areas) ----------
 
@@ -39,55 +139,79 @@ async def admin_get_service_areas():
 
 
 @router.post("/service-areas")
-async def admin_create_service_area(area: Dict[str, Any]):
+async def admin_create_service_area(area: ServiceAreaCreateRequest, admin: dict = Depends(get_admin_user)):
     """Create service area with full configuration."""
+    polygon = area.geojson if area.geojson is not None else area.polygon or []
+    surge_active = area.surge_active if area.surge_active is not None else (area.surge_enabled or False)
     doc = {
         "id": str(uuid.uuid4()),
-        "name": area.get("name"),
-        "city": area.get("city", ""),
-        "polygon": area.get("geojson", area.get("polygon", [])),
-        "is_active": area.get("is_active", True),
-        # Sub-region support (e.g. airport zone inside a parent area)
-        "parent_service_area_id": area.get("parent_service_area_id"),
-        "is_airport": area.get("is_airport", False),
-        "airport_fee": area.get("airport_fee", 0),
-        "surge_active": area.get("surge_enabled", area.get("surge_active", False)),
-        "surge_multiplier": area.get("surge_multiplier", 1.0),
-        "gst_enabled": area.get("gst_enabled", True),
-        "gst_rate": area.get("gst_rate", 5.0),
-        "pst_enabled": area.get("pst_enabled", False),
-        "pst_rate": area.get("pst_rate", 0.0),
-        "hst_enabled": area.get("hst_enabled", False),
-        "hst_rate": area.get("hst_rate", 0.0),
-        # Spinr Pass kill switch
-        "spinr_pass_enabled": area.get("spinr_pass_enabled", True),
-        "subscription_plan_ids": area.get("subscription_plan_ids", []),
-        # Driver matching settings (per-area)
-        "driver_matching_algorithm": area.get("driver_matching_algorithm", "nearest"),
-        "search_radius_km": area.get("search_radius_km", 10.0),
-        "min_driver_rating": area.get("min_driver_rating", 4.0),
-        # Demand heatmap — when true, drivers in this area see ride demand overlay
-        "show_demand_heatmap": area.get("show_demand_heatmap", False),
+        "name": area.name,
+        "city": area.city,
+        "polygon": polygon,
+        "is_active": area.is_active,
+        "parent_service_area_id": area.parent_service_area_id,
+        "is_airport": area.is_airport,
+        "airport_fee": area.airport_fee,
+        "surge_active": surge_active,
+        "surge_multiplier": area.surge_multiplier,
+        "gst_enabled": area.gst_enabled,
+        "gst_rate": area.gst_rate,
+        "pst_enabled": area.pst_enabled,
+        "pst_rate": area.pst_rate,
+        "hst_enabled": area.hst_enabled,
+        "hst_rate": area.hst_rate,
+        "spinr_pass_enabled": area.spinr_pass_enabled,
+        "subscription_plan_ids": area.subscription_plan_ids,
+        "driver_matching_algorithm": area.driver_matching_algorithm,
+        "search_radius_km": area.search_radius_km,
+        "min_driver_rating": area.min_driver_rating,
+        "show_demand_heatmap": area.show_demand_heatmap,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db_supabase.insert_one("service_areas", doc)
     # PERF-001: Invalidate fare cache
     await invalidate_fare_cache()
+    await log_admin_action(admin, "service_area_created", "service_areas", doc["id"], {"name": area.name})
     return {"area_id": doc["id"]}
 
 
 @router.put("/service-areas/{area_id}")
-async def admin_update_service_area(area_id: str, area: Dict[str, Any]):
+async def admin_update_service_area(
+    area_id: str, area: ServiceAreaUpdateRequest, admin: dict = Depends(get_admin_user)
+):
     """Update service area — accepts any field."""
-    allowed = [
+    # Resolve aliases
+    polygon = area.geojson if area.geojson is not None else area.polygon
+    surge_active = area.surge_active if area.surge_active is not None else area.surge_enabled
+
+    # Validate surge_multiplier at the API boundary (F-26).
+    # fare_service.py always applies SURGE_CAP (2.5×) at calculation time, so
+    # values above SURGE_CAP stored here only take effect as manual overrides
+    # that require documented justification per CLAUDE.md.
+    if area.surge_multiplier is not None:
+        sm = float(area.surge_multiplier)
+        if sm < 1.0 or sm > _SURGE_MAX:
+            raise HTTPException(
+                status_code=400,
+                detail=f"surge_multiplier must be between 1.0 and {_SURGE_MAX}",
+            )
+        if sm > SURGE_CAP:
+            logger.warning(
+                "surge_multiplier %.2f exceeds auto-mode cap (%.1f) for area %s — "
+                "manual override; fare_service enforces cap for auto-mode areas",
+                sm,
+                SURGE_CAP,
+                area_id,
+            )
+
+    update_payload: Dict[str, Any] = {}
+    for field in [
         "name",
         "city",
-        "polygon",  # previously geojson mapped to polygon below
         "is_active",
         "parent_service_area_id",
         "is_airport",
         "airport_fee",
-        "surge_active",
         "surge_multiplier",
         "gst_enabled",
         "gst_rate",
@@ -102,17 +226,14 @@ async def admin_update_service_area(area_id: str, area: Dict[str, Any]):
         "search_radius_km",
         "min_driver_rating",
         "show_demand_heatmap",
-    ]
-
-    # Map geojson from frontend to polygon in DB schema if present
-    if "geojson" in area:
-        area["polygon"] = area["geojson"]
-
-    # Map surge_enabled to surge_active
-    if "surge_enabled" in area:
-        area["surge_active"] = area["surge_enabled"]
-
-    update_payload = {k: v for k, v in area.items() if k in allowed and v is not None}
+    ]:
+        val = getattr(area, field)
+        if val is not None:
+            update_payload[field] = val
+    if polygon is not None:
+        update_payload["polygon"] = polygon
+    if surge_active is not None:
+        update_payload["surge_active"] = surge_active
 
     if update_payload:
         # NOTE: service_areas table does not have an updated_at column in Supabase schema.
@@ -120,15 +241,19 @@ async def admin_update_service_area(area_id: str, area: Dict[str, Any]):
         await db_supabase.update_one("service_areas", {"id": area_id}, update_payload)
         # PERF-001: Invalidate fare cache
         await invalidate_fare_cache()
+        await log_admin_action(
+            admin, "service_area_updated", "service_areas", area_id, {"updated_fields": list(update_payload.keys())}
+        )
     return {"message": "Service area updated"}
 
 
 @router.delete("/service-areas/{area_id}")
-async def admin_delete_service_area(area_id: str):
+async def admin_delete_service_area(area_id: str, admin: dict = Depends(get_admin_user)):
     """Delete service area."""
     await db_supabase.delete_many("service_areas", {"id": area_id})
     # PERF-001: Invalidate fare cache
     await invalidate_fare_cache()
+    await log_admin_action(admin, "service_area_deleted", "service_areas", area_id)
     return {"message": "Service area deleted"}
 
 
@@ -136,17 +261,17 @@ async def admin_delete_service_area(area_id: str):
 
 
 @router.put("/service-areas/{area_id}/surge")
-async def admin_update_surge_pricing(area_id: str, surge: Dict[str, Any]):
+async def admin_update_surge_pricing(area_id: str, surge: SurgePricingRequest, admin: dict = Depends(get_admin_user)):
     """Update surge pricing for a service area."""
     surge_doc = {
         "id": str(uuid.uuid4()),
         "service_area_id": area_id,
-        "multiplier": surge.get("multiplier", 1.0),
+        "multiplier": surge.multiplier,
         "demand_count": 0,
         "supply_count": 0,
         "ratio": 0,
         "source": "manual",
-        "is_active": surge.get("is_active", False),
+        "is_active": surge.is_active,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -161,6 +286,13 @@ async def admin_update_surge_pricing(area_id: str, surge: Dict[str, Any]):
 
     # PERF-001: Invalidate fare cache
     await invalidate_fare_cache()
+    await log_admin_action(
+        admin,
+        "surge_pricing_updated",
+        "service_areas",
+        area_id,
+        {"multiplier": surge.multiplier, "is_active": surge.is_active},
+    )
 
     return {"message": "Surge pricing updated"}
 
@@ -189,18 +321,18 @@ async def admin_get_area_fees(area_id: str):
 
 
 @router.post("/areas/{area_id}/fees")
-async def admin_create_area_fee(area_id: str, fee: Dict[str, Any]):
+async def admin_create_area_fee(area_id: str, fee: AreaFeeCreateRequest):
     """Create a new fee for a service area."""
     doc = {
         "id": str(uuid.uuid4()),
         "service_area_id": area_id,
-        "fee_name": fee.get("fee_name", ""),
-        "fee_type": fee.get("fee_type", "custom"),
-        "calc_mode": fee.get("calc_mode", "flat"),
-        "amount": float(fee.get("amount", 0)),
-        "description": fee.get("description", ""),
-        "conditions": fee.get("conditions", {}),
-        "is_active": fee.get("is_active", True),
+        "fee_name": fee.fee_name,
+        "fee_type": fee.fee_type,
+        "calc_mode": fee.calc_mode,
+        "amount": fee.amount,
+        "description": fee.description,
+        "conditions": fee.conditions,
+        "is_active": fee.is_active,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -209,12 +341,23 @@ async def admin_create_area_fee(area_id: str, fee: Dict[str, Any]):
 
 
 @router.put("/areas/{area_id}/fees/{fee_id}")
-async def admin_update_area_fee(area_id: str, fee_id: str, fee: Dict[str, Any]):
+async def admin_update_area_fee(area_id: str, fee_id: str, fee: AreaFeeUpdateRequest):
     """Update an area fee."""
-    allowed = ["fee_name", "fee_type", "calc_mode", "amount", "description", "conditions", "is_active"]
-    updates = {k: fee[k] for k in allowed if k in fee}
-    if "amount" in updates:
-        updates["amount"] = float(updates["amount"])
+    updates: Dict[str, Any] = {}
+    if fee.fee_name is not None:
+        updates["fee_name"] = fee.fee_name
+    if fee.fee_type is not None:
+        updates["fee_type"] = fee.fee_type
+    if fee.calc_mode is not None:
+        updates["calc_mode"] = fee.calc_mode
+    if fee.amount is not None:
+        updates["amount"] = fee.amount
+    if fee.description is not None:
+        updates["description"] = fee.description
+    if fee.conditions is not None:
+        updates["conditions"] = fee.conditions
+    if fee.is_active is not None:
+        updates["is_active"] = fee.is_active
     if updates:
         updates["updated_at"] = datetime.now(timezone.utc).isoformat()
         await db_supabase.update_one("area_fees", {"id": fee_id}, updates)
@@ -254,14 +397,14 @@ async def admin_get_area_tax(area_id: str):
 
 
 @router.put("/areas/{area_id}/tax")
-async def admin_update_area_tax(area_id: str, tax: Dict[str, Any]):
+async def admin_update_area_tax(area_id: str, tax: AreaTaxRequest):
     """Update tax configuration for a service area."""
-    allowed = ["gst_enabled", "gst_rate", "pst_enabled", "pst_rate", "hst_enabled", "hst_rate"]
-    updates = {k: tax[k] for k in allowed if k in tax}
+    updates = tax.model_dump(exclude_none=True)
     if updates:
         await db_supabase.update_one("service_areas", {"id": area_id}, updates)
     area = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1))
-    return {k: area.get(k) for k in allowed}
+    _TAX_FIELDS = ["gst_enabled", "gst_rate", "pst_enabled", "pst_rate", "hst_enabled", "hst_rate"]
+    return {k: area.get(k) for k in _TAX_FIELDS}
 
 
 @router.get("/areas/{area_id}/vehicle-pricing")

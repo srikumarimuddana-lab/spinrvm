@@ -44,15 +44,10 @@ async def test_no_double_accept(client, ride_id, driver_1_headers, driver_2_head
     ride = {"id": ride_id, "status": "searching", "driver_id": None, "rider_id": "rider_001"}
     accepted_ride = {**ride, "status": "driver_accepted", "driver_id": "driver_001"}
 
-    guard_ok = MagicMock()
-    guard_ok.modified_count = 1
-    guard_fail = MagicMock()
-    guard_fail.modified_count = 0
-
     with (
         patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[driver])),
         patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=ride)),
-        patch("backend.routes.drivers.db.update_one", AsyncMock(side_effect=[guard_ok, guard_fail])),
+        patch("backend.routes.drivers.db.update_one", AsyncMock(side_effect=[accepted_ride, None])),
         patch("backend.routes.drivers.db.find_one", AsyncMock(return_value=accepted_ride)),
         patch("backend.routes.drivers.manager.send_personal_message", AsyncMock()),
         patch("backend.routes.drivers.send_push_notification", AsyncMock()),
@@ -194,9 +189,11 @@ async def test_full_ride_lifecycle():
         assert ride["status"] == "in_progress"
 
         # Step 4: Complete ride – in_progress → completed
+        # P0-5: complete_ride deliberately does NOT write payment_status — payment
+        # settlement is handled asynchronously by the payment retry loop.  Only
+        # check the ride status transition here.
         await drv_mod.complete_ride(ride_id=ride_id, current_user={"id": user_driver_id})
         assert ride["status"] == "completed"
-        assert ride.get("payment_status") == "completed"
 
 
 class TestRideCreation:

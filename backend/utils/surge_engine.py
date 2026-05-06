@@ -7,6 +7,7 @@ service_areas.surge_multiplier for areas where surge_source == 'auto'.
 """
 
 import asyncio
+import random
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
@@ -14,9 +15,19 @@ from typing import Any, Dict, List
 from loguru import logger
 
 try:
+    from utils.loop_monitor import record_heartbeat as _record_heartbeat
+except ImportError:
+
+    def _record_heartbeat(name: str) -> None:  # type: ignore[misc]
+        pass
+
+
+try:
     from db import db
     from geo_utils import get_service_area_polygon, point_in_polygon
     from utils.driver_presence import present_driver_ids
+    from utils.metrics import inc as _metric_inc
+    from utils.metrics import set_gauge as _metric_gauge
 except ImportError:
     from ..db import db
     from ..geo_utils import get_service_area_polygon, point_in_polygon
@@ -67,7 +78,7 @@ async def _count_demand_in_area(area_id: str) -> int:
         active_statuses = {"searching", "driver_assigned", "driver_en_route"}
         return sum(1 for r in rides if r.get("status") in active_statuses)
     except Exception as e:
-        logger.warning(f"Surge: failed to count demand for area {area_id}: {e}")
+        logger.error(f"Surge: failed to count demand for area {area_id}: {e}", exc_info=True)
         return 0
 
 
@@ -102,7 +113,7 @@ async def _count_supply_in_area(area: Dict[str, Any]) -> int:
                     count += 1
         return count
     except Exception as e:
-        logger.warning(f"Surge: failed to count supply for area {area.get('id')}: {e}")
+        logger.error(f"Surge: failed to count supply for area {area.get('id')}: {e}", exc_info=True)
         return 0
 
 
@@ -195,7 +206,7 @@ async def recalculate_all_surges() -> List[Dict[str, Any]]:
 
             results.append(metrics)
         except Exception as e:
-            logger.warning(f"Surge: failed to update area {area.get('id')}: {e}")
+            logger.error(f"Surge: failed to update area {area.get('id')}: {e}", exc_info=True)
 
     return results
 
@@ -249,4 +260,9 @@ async def surge_recalculation_loop():
                 logger.debug(f"Surge recalc complete: {len(results)} areas, {active} surging")
         except Exception as e:
             logger.error(f"Surge recalculation loop error: {e}")
-        await asyncio.sleep(RECALC_INTERVAL_SECONDS)
+        _record_heartbeat("surge_engine (2min)")
+        # B-P3-2: ±10% per-tick jitter so replicas don't all flip surge
+        # state on the same wall-clock tick (rider apps would receive a
+        # synchronised price-change notification storm).
+        delta = RECALC_INTERVAL_SECONDS * 0.1
+        await asyncio.sleep(RECALC_INTERVAL_SECONDS + random.uniform(-delta, delta))

@@ -85,7 +85,7 @@ async def read_cached_response(cache_key: str) -> Optional[dict]:
     try:
         return _json.loads(raw)
     except Exception:
-        logger.warning(f"[IDEM] Corrupt cached response for {cache_key}")
+        logger.error(f"[IDEM] Corrupt cached response for {cache_key}")
         return None
 
 
@@ -197,7 +197,8 @@ def idempotent_endpoint(scope: str, ttl_seconds: int = _DEFAULT_TTL_SECONDS):
                         status_code=409,
                         detail="A request with this Idempotency-Key is already in flight. Retry after a short delay.",
                     )
-                await redis_set(lock_key, "1", ttl=30)
+                # 5× Stripe p99 latency (~30 s) — keeps lock alive for slow upstream calls so retries can't double-charge.
+                await redis_set(lock_key, "1", ttl=150)
             except HTTPException:
                 raise
             except Exception as exc:

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useContext } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, FlatList, TextInput,
   Platform, ActivityIndicator, KeyboardAvoidingView,
@@ -7,6 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { CardField, CardFieldInput, useStripe } from '@stripe/stripe-react-native';
+import { StripeKeyContext } from './_layout';
 import api from '@shared/api/client';
 import CustomAlert from '@shared/components/CustomAlert';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -25,6 +26,7 @@ export default function ManageCardsScreen() {
   const router = useRouter();
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
+  const stripeKey = useContext(StripeKeyContext);
   const { createPaymentMethod } = useStripe();
 
   const [cards, setCards] = useState<Card[]>([]);
@@ -53,8 +55,8 @@ export default function ManageCardsScreen() {
   const fetchCards = async () => {
     setLoading(true);
     try {
-      const res = await api.get('/payments/cards');
-      setCards(res.data || []);
+      const res = await api.get<Card[]>('/payments/cards');
+      setCards((res.data as Card[]) || []);
     } catch {
       // No cards yet — show empty state
       setCards([]);
@@ -218,27 +220,30 @@ export default function ManageCardsScreen() {
                 <View style={styles.addForm}>
                   <Text style={styles.addFormTitle}>Add New Card</Text>
 
-                  {/* CardField renders a single Stripe-managed native
-                      view that handles PAN + expiry + CVC inline.
-                      Values never enter JS — we only receive a
-                      "complete" flag via onCardChange. */}
                   <Text style={styles.inputLabel}>Card Details</Text>
-                  <CardField
-                    postalCodeEnabled={false}
-                    placeholders={{ number: '4242 4242 4242 4242' }}
-                    cardStyle={{
-                      backgroundColor: '#FFFFFF',
-                      textColor: '#1A1A1A',
-                      placeholderColor: '#BBBBBB',
-                      borderColor: '#ECECEC',
-                      borderRadius: 12,
-                      borderWidth: 1,
-                    }}
-                    style={styles.cardField}
-                    onCardChange={(d: CardFieldInput.Details) => {
-                      setCardDetailsComplete(Boolean(d.complete));
-                    }}
-                  />
+                  {stripeKey ? (
+                    <CardField
+                      postalCodeEnabled={false}
+                      placeholders={{ number: '4242 4242 4242 4242' }}
+                      cardStyle={{
+                        backgroundColor: '#FFFFFF',
+                        textColor: '#1A1A1A',
+                        placeholderColor: '#BBBBBB',
+                        borderColor: '#ECECEC',
+                        borderRadius: 12,
+                        borderWidth: 1,
+                      }}
+                      style={styles.cardField}
+                      onCardChange={(d: CardFieldInput.Details) => {
+                        setCardDetailsComplete(Boolean(d.complete));
+                      }}
+                    />
+                  ) : (
+                    <View style={[styles.cardField, styles.cardFieldLoading]}>
+                      <ActivityIndicator size="small" color="#999" />
+                      <Text style={styles.cardFieldLoadingText}>Payment module loading…</Text>
+                    </View>
+                  )}
 
                   <Text style={styles.inputLabel}>Cardholder Name</Text>
                   <TextInput
@@ -355,11 +360,14 @@ function createStyles(colors: ThemeColors) {
     inputRow: { flexDirection: 'row', gap: 12 },
     brandHint: { fontSize: 12, color: colors.primary, fontWeight: '600', marginTop: 4 },
     cardField: {
-      // CardField height must be explicit on both platforms; Stripe's
-      // default (44) crops the Android stroke.
       height: 52,
       marginBottom: 4,
     },
+    cardFieldLoading: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+      backgroundColor: colors.surface, borderRadius: 12, borderWidth: 1, borderColor: colors.border,
+    },
+    cardFieldLoadingText: { fontSize: 13, color: colors.textDim },
     formButtons: { flexDirection: 'row', gap: 12, marginTop: 20 },
     cancelFormBtn: {
       flex: 1, alignItems: 'center', paddingVertical: 14, borderRadius: 12,

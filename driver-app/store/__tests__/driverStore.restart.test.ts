@@ -11,13 +11,14 @@
  * Key: @spinr:driver_active_ride, DRIVER_TERMINAL_STATES, _persistDriverState
  */
 
-const mockAsyncStorage = {
-  setItem: jest.fn(() => Promise.resolve()),
-  getItem: jest.fn(() => Promise.resolve(null)),
-  removeItem: jest.fn(() => Promise.resolve()),
-};
-
-jest.mock('@react-native-async-storage/async-storage', () => mockAsyncStorage);
+jest.mock('@react-native-async-storage/async-storage', () => ({
+  __esModule: true,
+  default: {
+    setItem: jest.fn(() => Promise.resolve()),
+    getItem: jest.fn(() => Promise.resolve(null)),
+    removeItem: jest.fn(() => Promise.resolve()),
+  },
+}));
 
 jest.mock('@shared/config/spinr.config', () => ({
   __esModule: true,
@@ -39,24 +40,30 @@ jest.mock('expo-router', () => ({
   router: { push: jest.fn(), replace: jest.fn() },
 }));
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useDriverStore } from '../driverStore';
 
 const DRIVER_RIDE_KEY = '@spinr:driver_active_ride';
 
 const makeActiveRide = (overrides: Record<string, unknown> = {}) => ({
-  id: 'ride-drv-001',
-  rider_id: 'rider-abc',
-  pickup_address: '100 Queen St',
-  pickup_lat: 43.65,
-  pickup_lng: -79.38,
-  dropoff_address: '200 King St',
-  dropoff_lat: 43.64,
-  dropoff_lng: -79.38,
-  estimated_fare: 15.0,
-  total_fare: 15.0,
-  distance_km: 2.0,
-  duration_minutes: 10,
-  ...overrides,
+  ride: {
+    id: (overrides.id as string) || 'ride-drv-001',
+    status: 'in_progress',
+    rider_id: 'rider-abc',
+    pickup_address: '100 Queen St',
+    pickup_lat: 43.65,
+    pickup_lng: -79.38,
+    dropoff_address: '200 King St',
+    dropoff_lat: 43.64,
+    dropoff_lng: -79.38,
+    total_fare: '15.00',
+    distance_km: 2.0,
+    duration_minutes: 10,
+    created_at: '2024-01-01',
+    ...overrides,
+  },
+  rider: { id: 'rider-abc' },
+  vehicle_type: { id: 'vt-1', name: 'Standard' },
 });
 
 const resetStore = () =>
@@ -82,7 +89,7 @@ beforeEach(() => {
 describe('hydrateDriverRideState — mid-trip restart restore (P1-7 / D12)', () => {
   it('restores navigating_to_pickup state after cold start', async () => {
     const activeRide = makeActiveRide();
-    mockAsyncStorage.getItem.mockResolvedValueOnce(
+    (AsyncStorage.getItem as jest.Mock).mockResolvedValueOnce(
       JSON.stringify({ rideState: 'navigating_to_pickup', activeRide }),
     );
 
@@ -90,36 +97,36 @@ describe('hydrateDriverRideState — mid-trip restart restore (P1-7 / D12)', () 
 
     const state = useDriverStore.getState();
     expect(state.rideState).toBe('navigating_to_pickup');
-    expect(state.activeRide?.id).toBe('ride-drv-001');
+    expect(state.activeRide?.ride?.id).toBe('ride-drv-001');
   });
 
   it('restores arrived_at_pickup state after cold start', async () => {
     const activeRide = makeActiveRide();
-    mockAsyncStorage.getItem.mockResolvedValueOnce(
+    (AsyncStorage.getItem as jest.Mock).mockResolvedValueOnce(
       JSON.stringify({ rideState: 'arrived_at_pickup', activeRide }),
     );
 
     await useDriverStore.getState().hydrateDriverRideState();
 
     expect(useDriverStore.getState().rideState).toBe('arrived_at_pickup');
-    expect(useDriverStore.getState().activeRide?.id).toBe('ride-drv-001');
+    expect(useDriverStore.getState().activeRide?.ride?.id).toBe('ride-drv-001');
   });
 
   it('restores trip_in_progress state after cold start', async () => {
     const activeRide = makeActiveRide();
-    mockAsyncStorage.getItem.mockResolvedValueOnce(
+    (AsyncStorage.getItem as jest.Mock).mockResolvedValueOnce(
       JSON.stringify({ rideState: 'trip_in_progress', activeRide }),
     );
 
     await useDriverStore.getState().hydrateDriverRideState();
 
     expect(useDriverStore.getState().rideState).toBe('trip_in_progress');
-    expect(useDriverStore.getState().activeRide?.id).toBe('ride-drv-001');
+    expect(useDriverStore.getState().activeRide?.ride?.id).toBe('ride-drv-001');
   });
 
   it('does not restore the idle terminal state', async () => {
     const activeRide = makeActiveRide();
-    mockAsyncStorage.getItem.mockResolvedValueOnce(
+    (AsyncStorage.getItem as jest.Mock).mockResolvedValueOnce(
       JSON.stringify({ rideState: 'idle', activeRide }),
     );
 
@@ -127,12 +134,12 @@ describe('hydrateDriverRideState — mid-trip restart restore (P1-7 / D12)', () 
 
     expect(useDriverStore.getState().rideState).toBe('idle');
     expect(useDriverStore.getState().activeRide).toBeNull();
-    expect(mockAsyncStorage.removeItem).toHaveBeenCalledWith(DRIVER_RIDE_KEY);
+    expect(AsyncStorage.removeItem).toHaveBeenCalledWith(DRIVER_RIDE_KEY);
   });
 
   it('does not restore the trip_completed terminal state', async () => {
     const activeRide = makeActiveRide();
-    mockAsyncStorage.getItem.mockResolvedValueOnce(
+    (AsyncStorage.getItem as jest.Mock).mockResolvedValueOnce(
       JSON.stringify({ rideState: 'trip_completed', activeRide }),
     );
 
@@ -140,11 +147,11 @@ describe('hydrateDriverRideState — mid-trip restart restore (P1-7 / D12)', () 
 
     expect(useDriverStore.getState().rideState).toBe('idle');
     expect(useDriverStore.getState().activeRide).toBeNull();
-    expect(mockAsyncStorage.removeItem).toHaveBeenCalledWith(DRIVER_RIDE_KEY);
+    expect(AsyncStorage.removeItem).toHaveBeenCalledWith(DRIVER_RIDE_KEY);
   });
 
   it('is a noop when AsyncStorage is empty', async () => {
-    mockAsyncStorage.getItem.mockResolvedValueOnce(null);
+    (AsyncStorage.getItem as jest.Mock).mockResolvedValueOnce(null);
 
     await useDriverStore.getState().hydrateDriverRideState();
 
@@ -153,7 +160,7 @@ describe('hydrateDriverRideState — mid-trip restart restore (P1-7 / D12)', () 
   });
 
   it('does not restore when activeRide is missing from storage', async () => {
-    mockAsyncStorage.getItem.mockResolvedValueOnce(
+    (AsyncStorage.getItem as jest.Mock).mockResolvedValueOnce(
       JSON.stringify({ rideState: 'trip_in_progress', activeRide: null }),
     );
 
@@ -161,7 +168,7 @@ describe('hydrateDriverRideState — mid-trip restart restore (P1-7 / D12)', () 
 
     // null activeRide is treated the same as terminal — no restore
     expect(useDriverStore.getState().activeRide).toBeNull();
-    expect(mockAsyncStorage.removeItem).toHaveBeenCalledWith(DRIVER_RIDE_KEY);
+    expect(AsyncStorage.removeItem).toHaveBeenCalledWith(DRIVER_RIDE_KEY);
   });
 
   it('does not override an already-populated in-memory store', async () => {
@@ -170,23 +177,23 @@ describe('hydrateDriverRideState — mid-trip restart restore (P1-7 / D12)', () 
     useDriverStore.setState({ activeRide: liveRide, rideState: 'trip_in_progress' });
 
     const cachedRide = makeActiveRide({ id: 'ride-OLD' });
-    mockAsyncStorage.getItem.mockResolvedValueOnce(
+    (AsyncStorage.getItem as jest.Mock).mockResolvedValueOnce(
       JSON.stringify({ rideState: 'navigating_to_pickup', activeRide: cachedRide }),
     );
 
     await useDriverStore.getState().hydrateDriverRideState();
 
     // In-memory live state must not be overwritten by stale cache
-    expect(useDriverStore.getState().activeRide?.id).toBe('ride-LIVE');
+    expect(useDriverStore.getState().activeRide?.ride?.id).toBe('ride-LIVE');
     expect(useDriverStore.getState().rideState).toBe('trip_in_progress');
   });
 
   it('clears storage on corrupted JSON and leaves store unchanged', async () => {
-    mockAsyncStorage.getItem.mockResolvedValueOnce('INVALID_JSON{{{{');
+    (AsyncStorage.getItem as jest.Mock).mockResolvedValueOnce('INVALID_JSON{{{{');
 
     await useDriverStore.getState().hydrateDriverRideState();
 
     expect(useDriverStore.getState().activeRide).toBeNull();
-    expect(mockAsyncStorage.removeItem).toHaveBeenCalledWith(DRIVER_RIDE_KEY);
+    expect(AsyncStorage.removeItem).toHaveBeenCalledWith(DRIVER_RIDE_KEY);
   });
 });

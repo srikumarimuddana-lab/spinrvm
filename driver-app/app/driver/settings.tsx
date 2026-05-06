@@ -22,6 +22,8 @@ import api from '@shared/api/client';
 import {
     useNotificationPreferences,
     useUpdateNotificationPreferences,
+    useDriverMe,
+    useUpdateDriverMe,
 } from '@shared/hooks/queries';
 import CustomAlert from '@shared/components/CustomAlert';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -65,6 +67,18 @@ export default function SettingsScreen() {
     // instantly with no spinner; the background refetch keeps them honest.
     const { data: prefsResponse } = useNotificationPreferences();
     const updatePreferences = useUpdateNotificationPreferences();
+
+    // WAV capability — driver declares whether their vehicle is wheelchair-accessible.
+    // SK Transportation Act requires WAV requests to be fulfilled when a WAV
+    // driver is online in the service area.
+    const { data: driverMeRaw } = useDriverMe();
+    const driverMe = driverMeRaw as { is_wav?: boolean | null } | undefined;
+    const updateDriverMe = useUpdateDriverMe();
+    const [isWav, setIsWav] = useState(false);
+    useEffect(() => {
+        const driverMeData = driverMe as { is_wav?: boolean | null } | null;
+        if (driverMeData?.is_wav != null) setIsWav(Boolean(driverMeData.is_wav));
+    }, [(driverMe as any)?.is_wav]);
     useEffect(() => {
         // Server can return null when the row hasn't been created yet;
         // keep the defaults set above in that case.
@@ -78,15 +92,23 @@ export default function SettingsScreen() {
         if (prefs.vibration != null) setVibration(Boolean(prefs.vibration));
     }, [prefsResponse]);
 
-    const savePreference = (key: string, value: boolean) => {
-        // Fire-and-forget mutation; cache invalidation happens in the
-        // hook's onSuccess so the next screen open reflects the new value.
-        updatePreferences.mutate({ [key]: value });
+    const savePreference = (key: string, value: boolean, revert: () => void) => {
+        updatePreferences.mutate({ [key]: value }, {
+            onError: () => {
+                revert();
+                setFeedbackAlert({
+                    visible: true,
+                    title: 'Preference not saved',
+                    message: 'Could not reach the server. Your setting has been reverted — please try again.',
+                    variant: 'danger',
+                });
+            },
+        });
     };
 
     const handleToggle = (key: string, setter: (v: boolean) => void) => (value: boolean) => {
         setter(value);
-        savePreference(key, value);
+        savePreference(key, value, () => setter(!value));
     };
     const [navApp, setNavApp] = useState<'default' | 'google' | 'waze'>('default');
 
@@ -254,6 +276,38 @@ export default function SettingsScreen() {
                             </React.Fragment>
                         ))}
                     </View>
+                </View>
+
+                {/* Vehicle Accessibility */}
+                <View style={styles.section}>
+                    <Text style={styles.sectionTitle}>Vehicle Accessibility</Text>
+                    <View style={styles.card}>
+                        {renderToggle(
+                            'Wheelchair-Accessible Vehicle (WAV)',
+                            'Enables you to receive ride requests from riders who need an accessible vehicle (SK Transportation Act)',
+                            isWav,
+                            (value) => {
+                                setIsWav(value);
+                                updateDriverMe.mutate({ is_wav: value }, {
+                                    onError: () => {
+                                        setIsWav(!value);
+                                        setFeedbackAlert({
+                                            visible: true,
+                                            title: 'Could not save',
+                                            message: 'WAV setting could not be updated. Please try again.',
+                                            variant: 'danger',
+                                        });
+                                    },
+                                });
+                            },
+                            'accessibility',
+                            '#0EA5E9',
+                        )}
+                    </View>
+                    <Text style={styles.wavHint}>
+                        When enabled, you will appear in searches for wheelchair-accessible rides.
+                        Ensure your vehicle meets WAV requirements before enabling.
+                    </Text>
                 </View>
 
                 {/* Account */}
@@ -577,6 +631,13 @@ function createStyles(colors: ThemeColors) {
             borderColor: 'rgba(255,71,87,0.2)',
         },
         deleteText: { color: colors.error, fontSize: 14, fontWeight: '600' },
+        wavHint: {
+            color: colors.textDim,
+            fontSize: 11,
+            marginTop: 8,
+            lineHeight: 16,
+            paddingHorizontal: 4,
+        },
         version: {
             color: colors.textDim,
             textAlign: 'center',

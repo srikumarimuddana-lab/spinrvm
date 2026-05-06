@@ -1,3 +1,5 @@
+import os
+
 from fastapi import APIRouter
 
 try:
@@ -41,6 +43,20 @@ history) and uses it only to operate the service. We do not sell
 personal data. For questions contact support.
 
 Last updated: not yet finalized."""
+
+
+@api_router.get("/settings/debug-env")
+async def debug_env():
+    """TEMPORARY — remove after Railway injection is confirmed working."""
+    def _mask(val: str) -> str:
+        return val[:20] + "..." if val else "NOT_SET"
+
+    return {
+        "REDIS_URL": _mask(os.environ.get("REDIS_URL", "")),
+        "RATE_LIMIT_REDIS_URL": _mask(os.environ.get("RATE_LIMIT_REDIS_URL", "")),
+        "WS_REDIS_URL": _mask(os.environ.get("WS_REDIS_URL", "")),
+        "ENV": os.environ.get("ENV", "NOT_SET"),
+    }
 
 
 @api_router.get("/settings")

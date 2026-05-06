@@ -1,22 +1,32 @@
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel
 
 try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
     from ...features import send_push_notification
+    from ...geo_utils import calculate_distance
     from ...settings_loader import get_app_settings
     from ...socket_manager import manager
+    from ...utils.audit_logger import log_admin_action
+    from ...utils.insurance_periods import record_period_transition
+    from ...utils.rate_limiter import default_limiter as limiter
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user
     from features import send_push_notification
+    from geo_utils import calculate_distance
     from settings_loader import get_app_settings
     from socket_manager import manager
+    from utils.audit_logger import log_admin_action
+    from utils.insurance_periods import record_period_transition
+    from utils.rate_limiter import default_limiter as limiter
 
 from .drivers import _batch_fetch_drivers_and_users, _user_display_name
 
@@ -198,22 +208,24 @@ async def admin_cancel_ride(
             detail="Cancel did not persist — see backend logs.",
         )
 
+    driver_user_id: str | None = None
     driver_id = ride.get("driver_id")
     if driver_id:
         try:
             await db_supabase.set_driver_available(driver_id, True)
         except Exception as e:
-            logger.warning(f"admin_cancel_ride: could not free driver {driver_id}: {e}")
+            logger.error(f"admin_cancel_ride: could not free driver {driver_id}: {e}", exc_info=True)
 
         driver = await db_supabase.get_driver_by_id(driver_id)
         if driver and driver.get("user_id"):
+            driver_user_id = driver["user_id"]
             await manager.send_personal_message(
                 {"type": "ride_cancelled", "ride_id": ride_id, "reason": reason},
-                f"driver_{driver['user_id']}",
+                f"driver_{driver_user_id}",
             )
             try:
                 await send_push_notification(
-                    driver["user_id"],
+                    driver_user_id,
                     "Ride Cancelled",
                     reason,
                     {"type": "ride_cancelled", "ride_id": ride_id},
@@ -237,7 +249,14 @@ async def admin_cancel_ride(
         except Exception as e:
             logger.warning(f"admin_cancel_ride: rider push failed: {e}")
 
-    await manager.broadcast_ride_status(ride_id, "cancelled", rider_id=rider_id, reason=reason, source="admin")
+    await manager.broadcast_ride_status(
+        ride_id,
+        "cancelled",
+        rider_id=rider_id,
+        driver_user_id=driver_user_id,
+        reason=reason,
+        source="admin",
+    )
     try:
         await manager.broadcast_to_admins(
             {"type": "ride_cancelled", "ride_id": ride_id, "reason": reason, "source": "admin"}
@@ -248,45 +267,361 @@ async def admin_cancel_ride(
     return {"success": True, "ride_id": ride_id, "status": "cancelled"}
 
 
+@router.post("/rides/{ride_id}/complete")
+async def admin_complete_ride(
+    ride_id: str,
+    admin_user: dict = Depends(get_admin_user),
+):
+    """Admin force-completes an in-flight ride from the live monitoring page.
+
+    Driver (if assigned) is freed so they can immediately accept new requests.
+    Rider + driver both receive a ws ride_completed push so their apps reset
+    out of the active-ride flow. payment_status is set to ``waived_admin``
+    so the rider's "needs payment" gate (rides.py get_active_ride) treats
+    the trip as terminal — no real Stripe charge happened, so we must not
+    impersonate ``paid``.
+    """
+    ride = await db_supabase.get_ride(ride_id)
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+
+    if ride.get("status") not in ("driver_arrived", "in_progress"):
+        raise HTTPException(status_code=400, detail=f"Cannot complete ride from state '{ride.get('status')}'")
+
+    now = datetime.now(timezone.utc)
+    status_from = ride.get("status")
+
+    update_data = {
+        "status": "completed",
+        "payment_status": "waived_admin",
+        "updated_at": now,
+        "ride_completed_at": now,
+    }
+
+    try:
+        await db_supabase.update_ride(ride_id, update_data)
+    except Exception as e:
+        original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
+        logger.error(
+            f"admin_complete_ride: update failed ride_id={ride_id} admin_id={admin_user.get('id')} err={original or e}"
+        )
+        raise HTTPException(status_code=500, detail="Failed to update ride status") from e
+
+    # Audit + period transition are best-effort — they must never roll back
+    # the ride status mutation that already succeeded above.
+    await log_admin_action(
+        admin_user,
+        "force_complete_ride",
+        "rides",
+        ride_id,
+        {"status_from": status_from},
+    )
+
+    driver_user_id: str | None = None
+    driver_id = ride.get("driver_id")
+    if driver_id:
+        try:
+            await db_supabase.set_driver_available(driver_id, True)
+            await record_period_transition(driver_id, 1)
+        except Exception as e:
+            logger.error(f"admin_complete_ride: could not free driver {driver_id}: {e}", exc_info=True)
+
+        driver = await db_supabase.get_driver_by_id(driver_id)
+        if driver and driver.get("user_id"):
+            driver_user_id = driver["user_id"]
+            await manager.send_personal_message(
+                {"type": "ride_completed", "ride_id": ride_id},
+                f"driver_{driver_user_id}",
+            )
+
+    rider_id = ride.get("rider_id")
+    if rider_id:
+        await manager.send_personal_message(
+            {"type": "ride_completed", "ride_id": ride_id},
+            f"rider_{rider_id}",
+        )
+
+    await manager.broadcast_ride_status(
+        ride_id,
+        "completed",
+        rider_id=rider_id,
+        driver_user_id=driver_user_id,
+        source="admin",
+    )
+    try:
+        await manager.broadcast_to_admins({"type": "ride_completed", "ride_id": ride_id, "source": "admin"})
+    except Exception as e:  # pragma: no cover - best effort
+        logger.warning(f"admin_complete_ride: admin broadcast failed: {e}")
+
+    return {"success": True, "ride_id": ride_id, "status": "completed"}
+
+
+@router.get("/places/autocomplete")
+@limiter.limit("60/minute")
+async def admin_places_autocomplete(
+    request: Request,
+    input: str = Query(..., min_length=1),
+    session_token: Optional[str] = None,
+    admin_user: dict = Depends(get_admin_user),
+):
+    """Proxy Google Maps Places Autocomplete API to avoid exposing key to browser.
+
+    Pass session_token to bundle N autocomplete + 1 details call into one billing session
+    ($0.017 flat vs per-call). Generate one UUID per user typing session on the client.
+    """
+    import httpx
+
+    settings_row = await get_app_settings()
+    api_key = (settings_row or {}).get("google_maps_api_key") or ""
+    if not api_key:
+        raise HTTPException(status_code=503, detail="Google Maps API key not configured")
+
+    url = "https://maps.googleapis.com/maps/api/place/autocomplete/json"
+    params: dict = {
+        "input": input,
+        "key": api_key,
+        "types": "address",
+    }
+    if session_token:
+        params["sessiontoken"] = session_token
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(url, params=params)
+            data = resp.json()
+            if data.get("status") not in ("OK", "ZERO_RESULTS"):
+                logger.error(f"Places autocomplete API error: {data.get('status')}")
+                raise HTTPException(status_code=502, detail="Places API error")
+            return {"predictions": data.get("predictions", [])}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to call Places autocomplete API: {e}")
+        raise HTTPException(status_code=502, detail="Failed to call Places API") from e
+
+
+@router.get("/places/details")
+@limiter.limit("60/minute")
+async def admin_places_details(
+    request: Request,
+    place_id: str = Query(...),
+    session_token: Optional[str] = None,
+    admin_user: dict = Depends(get_admin_user),
+):
+    """Proxy Google Maps Place Details API to get lat/lng.
+
+    Pass the same session_token used for autocomplete to close the billing session.
+    """
+    import httpx
+
+    settings_row = await get_app_settings()
+    api_key = (settings_row or {}).get("google_maps_api_key") or ""
+    if not api_key:
+        raise HTTPException(status_code=503, detail="Google Maps API key not configured")
+
+    url = "https://maps.googleapis.com/maps/api/place/details/json"
+    params: dict = {
+        "place_id": place_id,
+        "fields": "geometry,formatted_address",
+        "key": api_key,
+    }
+    if session_token:
+        params["sessiontoken"] = session_token
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(url, params=params)
+            data = resp.json()
+            if data.get("status") != "OK":
+                logger.error(f"Places details API error: {data.get('status')}")
+                raise HTTPException(status_code=502, detail="Places API error")
+
+            loc = data.get("result", {}).get("geometry", {}).get("location", {})
+            return {
+                "lat": loc.get("lat"),
+                "lng": loc.get("lng"),
+                "formatted_address": data.get("result", {}).get("formatted_address"),
+            }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to call Places details API: {e}")
+        raise HTTPException(status_code=502, detail="Failed to call Places API") from e
+
+
+class AdminCreateRideRequest(BaseModel):
+    rider_id: str
+    driver_id: Optional[str] = None
+    pickup_address: str
+    pickup_lat: float
+    pickup_lng: float
+    dropoff_address: str
+    dropoff_lat: float
+    dropoff_lng: float
+    total_fare: Optional[Decimal] = None
+    vehicle_type_id: Optional[str] = None
+
+
+@router.post("/rides/create")
+async def admin_create_ride(
+    body: AdminCreateRideRequest,
+    admin_user: dict = Depends(get_admin_user),
+):
+    """Admin manually creates a ride, optionally assigning a driver directly."""
+    now = datetime.now(timezone.utc)
+    distance_km = calculate_distance(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng)
+
+    status = "driver_assigned" if body.driver_id else "searching"
+
+    # Decimal stays Decimal — _serialize_for_api handles JSON encoding
+    # without re-introducing float arithmetic. CLAUDE.md: money never
+    # goes through float() on the way to the DB.
+    ride_doc = {
+        "id": str(uuid.uuid4()),
+        "rider_id": body.rider_id,
+        "driver_id": body.driver_id,
+        "pickup_address": body.pickup_address,
+        "pickup_lat": body.pickup_lat,
+        "pickup_lng": body.pickup_lng,
+        "dropoff_address": body.dropoff_address,
+        "dropoff_lat": body.dropoff_lat,
+        "dropoff_lng": body.dropoff_lng,
+        "status": status,
+        "distance_km": distance_km,
+        "total_fare": body.total_fare if body.total_fare is not None else Decimal("0"),
+        "payment_status": "pending",
+        "vehicle_type_id": body.vehicle_type_id,
+        "created_at": now.isoformat(),
+        "updated_at": now.isoformat(),
+    }
+
+    try:
+        await db_supabase.insert_one("rides", ride_doc)
+    except Exception as e:
+        original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
+        logger.error(
+            f"admin_create_ride: insert failed admin_id={admin_user.get('id')} err={original or e}",
+            exc_info=True,
+        )
+        raise HTTPException(status_code=500, detail="Failed to create ride") from e
+
+    # Audit is best-effort and must not roll back the ride insert above.
+    await log_admin_action(
+        admin_user,
+        "admin_create_ride",
+        "rides",
+        ride_doc["id"],
+        {"driver_id": body.driver_id, "status": status},
+    )
+
+    if body.driver_id:
+        try:
+            await db_supabase.set_driver_available(body.driver_id, False)
+            await record_period_transition(body.driver_id, 2, ride_id=ride_doc["id"])
+        except Exception as e:
+            logger.error(
+                f"admin_create_ride: driver claim failed driver_id={body.driver_id}: {e}",
+                exc_info=True,
+            )
+
+        driver = await db_supabase.get_driver_by_id(body.driver_id)
+        if driver and driver.get("user_id"):
+            rider = await db_supabase.get_user_by_id(body.rider_id)
+            rider_name = _user_display_name(rider) if rider else ""
+
+            dispatch_payload = {
+                "type": "new_ride_assignment",
+                "ride_id": ride_doc["id"],
+                "pickup_address": ride_doc["pickup_address"],
+                "dropoff_address": ride_doc["dropoff_address"],
+                "pickup_lat": ride_doc["pickup_lat"],
+                "pickup_lng": ride_doc["pickup_lng"],
+                "dropoff_lat": ride_doc["dropoff_lat"],
+                "dropoff_lng": ride_doc["dropoff_lng"],
+                # WS uses send_json — cast at the wire boundary only.
+                # DB write above kept Decimal precision via _serialize_for_api.
+                "fare": float(ride_doc["total_fare"]),
+                "distance_km": ride_doc["distance_km"],
+                "duration_minutes": int(distance_km / 30 * 60) + 5,
+                "rider_name": rider_name,
+                "rider_rating": rider.get("rating") if rider else None,
+            }
+            await manager.send_personal_message(
+                dispatch_payload,
+                f"driver_{driver['user_id']}",
+            )
+
+    try:
+        await manager.broadcast_ride_status(
+            ride_doc["id"],
+            status,
+            rider_id=body.rider_id,
+            source="admin",
+        )
+    except Exception as e:  # pragma: no cover - best effort
+        logger.warning(f"admin_create_ride: broadcast failed: {e}")
+
+    return {"success": True, "ride_id": ride_doc["id"], "status": status}
+
+
 # ---------- Stats ----------
 
 
 @router.get("/stats")
 async def admin_get_stats():
     """Get admin dashboard statistics."""
-    total_drivers = await db_supabase.count_documents("drivers", {})
-    active_drivers = await db_supabase.count_documents("drivers", {"is_online": True})
-    online_drivers = active_drivers
-    total_rides = await db_supabase.count_documents("rides", {})
-    completed_rides = await db_supabase.count_documents("rides", {"status": "completed"})
-    cancelled_rides = await db_supabase.count_documents("rides", {"status": "cancelled"})
-    active_rides = await db_supabase.count_documents(
-        "rides",
-        {"status": {"$in": ["requested", "driver_assigned", "driver_arrived", "in_progress"]}},
+    import asyncio  # noqa: PLC0415
+
+    now_utc = datetime.now(timezone.utc)
+    today_start = now_utc.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    month_start = now_utc.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+
+    # Parallelise all independent DB calls (F-49: previously 11 sequential round-trips).
+    (
+        total_drivers,
+        online_drivers,
+        total_rides,
+        completed_rides,
+        cancelled_rides,
+        active_rides,
+        total_users,
+        rides_today,
+        pending_applications,
+        completed_today,
+        completed_month,
+    ) = await asyncio.gather(
+        db_supabase.count_documents("drivers", {}),
+        db_supabase.count_documents("drivers", {"is_online": True}),
+        db_supabase.count_documents("rides", {}),
+        db_supabase.count_documents("rides", {"status": "completed"}),
+        db_supabase.count_documents("rides", {"status": "cancelled"}),
+        db_supabase.count_documents(
+            "rides",
+            {"status": {"$in": ["requested", "driver_assigned", "driver_arrived", "in_progress"]}},
+        ),
+        db_supabase.count_documents("users", {}),
+        db_supabase.count_documents("rides", {"created_at": {"$gte": today_start}}),
+        db_supabase.count_documents("drivers", {"is_verified": False}),
+        db_supabase.get_rows(
+            "rides",
+            {"status": "completed", "ride_completed_at": {"$gte": today_start}},
+            limit=5000,
+        ),
+        db_supabase.get_rows(
+            "rides",
+            {"status": "completed", "ride_completed_at": {"$gte": month_start}},
+            limit=5000,
+        ),
     )
-    total_users = await db_supabase.count_documents("users", {})
-    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-    rides_today = await db_supabase.count_documents("rides", {"created_at": {"$gte": today_start}})
-    completed_today = await db_supabase.get_rows(
-        "rides",
-        {"status": "completed", "ride_completed_at": {"$gte": today_start}},
-        limit=10000,
-    )
-    revenue_today = sum(float(r.get("total_fare") or 0) for r in (completed_today or []))
-    month_start = (datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)).isoformat()
-    completed_month = await db_supabase.get_rows(
-        "rides",
-        {"status": "completed", "ride_completed_at": {"$gte": month_start}},
-        limit=10000,
-    )
-    revenue_month = sum(float(r.get("total_fare") or 0) for r in completed_month)
+
+    revenue_today = float(sum(Decimal(str(r.get("total_fare") or 0)) for r in (completed_today or [])))
+    revenue_month = float(sum(Decimal(str(r.get("total_fare") or 0)) for r in completed_month))
     # Earnings + tip totals are aggregated over completed rides in the
     # current month; upstream's stats API never wired these up so we compute
     # them here rather than returning stale zeroes.
-    total_driver_earnings = sum(float(r.get("driver_earnings") or 0) for r in completed_month)
-    total_admin_earnings = sum(float(r.get("admin_earnings") or 0) for r in completed_month)
-    total_tips = sum(float(r.get("tip_amount") or 0) for r in completed_month)
-    pending_applications = await db_supabase.count_documents("drivers", {"is_verified": False})
+    total_driver_earnings = float(sum(Decimal(str(r.get("driver_earnings") or 0)) for r in completed_month))
+    total_admin_earnings = float(sum(Decimal(str(r.get("admin_earnings") or 0)) for r in completed_month))
+    total_tips = float(sum(Decimal(str(r.get("tip_amount") or 0)) for r in completed_month))
     return {
         # Fields the dashboard page expects
         "total_rides": total_rides,
@@ -334,15 +669,15 @@ async def admin_get_ride_stats():
     completed_today = await db_supabase.get_rows(
         "rides", {"status": "completed", "ride_completed_at": {"$gte": today_start.isoformat()}}, limit=10000
     )
-    total_revenue = sum(float(r.get("total_fare") or 0) for r in completed_today)
-    total_tips = sum(float(r.get("tip_amount") or 0) for r in completed_today)
+    total_revenue = float(sum(Decimal(str(r.get("total_fare") or 0)) for r in completed_today))
+    total_tips = float(sum(Decimal(str(r.get("tip_amount") or 0)) for r in completed_today))
     completed_count = len(completed_today)
 
     # Monthly completed rides for revenue
     completed_month = await db_supabase.get_rows(
         "rides", {"status": "completed", "ride_completed_at": {"$gte": month_start.isoformat()}}, limit=10000
     )
-    month_revenue = sum(float(r.get("total_fare") or 0) for r in completed_month)
+    month_revenue = float(sum(Decimal(str(r.get("total_fare") or 0)) for r in completed_month))
 
     # Daily chart data for last 14 days
     daily_chart = []
@@ -431,19 +766,10 @@ async def admin_get_ride_invoice(ride_id: str):
         "driver_phone": ride.get("driver_phone", ""),
         "driver_vehicle": ride.get("driver_vehicle", ""),
         "driver_license_plate": ride.get("driver_license_plate", ""),
-        "pickup_lat": ride.get("pickup_lat"),
-        "pickup_lng": ride.get("pickup_lng"),
-        "dropoff_lat": ride.get("dropoff_lat"),
-        "dropoff_lng": ride.get("dropoff_lng"),
         "actual_distance_km": ride.get("actual_distance_km"),
-        # Privacy: only expose trail phases relevant to the paid ride.
-        # Filters out `online_idle` and any other pre-trip wandering so the
-        # invoice cannot leak the driver's unrelated movements.
-        "location_trail": [
-            p
-            for p in (ride.get("location_trail") or [])
-            if p.get("tracking_phase") in ("navigating_to_pickup", "trip_in_progress")
-        ],
+        # GPS coordinates are omitted (F-42/PIPEDA data minimisation).
+        # The route map image is served separately via /rides/{id}/route-map.png,
+        # which keeps raw coordinates server-side and returns only a PNG.
     }
 
 
@@ -525,6 +851,10 @@ async def admin_get_ride_route_map(
         raise HTTPException(status_code=502, detail="Failed to fetch route map") from e
 
 
+_HEATMAP_MAX_ROWS = 5_000
+_HEATMAP_COLUMNS = "pickup_lat,pickup_lng,dropoff_lat,dropoff_lng,corporate_account_id"
+
+
 @router.get("/rides/heatmap-data")
 async def admin_get_heatmap_data(
     filter: str = Query("all"),
@@ -559,7 +889,17 @@ async def admin_get_heatmap_data(
     if service_area_id:
         query_filters["service_area_id"] = service_area_id
 
-    rides = await db_supabase.get_rows("rides", query_filters, order="created_at", desc=True, limit=10000)
+    # Fetch only the 5 coordinate/billing columns — ride rows carry large JSONB
+    # fields (route_polyline, phase_polylines) that are irrelevant here and
+    # would cause OOM when multiplied across thousands of rows.
+    rides = await db_supabase.get_rows(
+        "rides",
+        query_filters,
+        order="created_at",
+        desc=True,
+        limit=_HEATMAP_MAX_ROWS,
+        columns=_HEATMAP_COLUMNS,
+    )
 
     pickup_points = []
     dropoff_points = []
@@ -621,9 +961,9 @@ async def admin_get_earnings(period: str = Query("month")):
     )
 
     # Calculate totals
-    total_revenue = sum(float(r.get("total_fare") or 0) for r in completed_rides)
-    driver_earnings = sum(float(r.get("driver_earnings") or 0) for r in completed_rides)
-    platform_fees = sum(float(r.get("admin_earnings") or 0) for r in completed_rides)
+    total_revenue = float(sum(Decimal(str(r.get("total_fare") or 0)) for r in completed_rides))
+    driver_earnings = float(sum(Decimal(str(r.get("driver_earnings") or 0)) for r in completed_rides))
+    platform_fees = float(sum(Decimal(str(r.get("admin_earnings") or 0)) for r in completed_rides))
 
     return {
         "period": period,
@@ -637,13 +977,26 @@ async def admin_get_earnings(period: str = Query("month")):
 # ---------- Exports ----------
 
 
+_EXPORT_MAX_ROWS = 10_000
+
+
 @router.get("/export/rides")
 async def admin_export_rides(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    limit: int = Query(1000, ge=1, le=_EXPORT_MAX_ROWS),
+    admin: dict = Depends(get_admin_user),
 ):
-    """Export rides data (schema: total_fare)."""
-    rides = await db_supabase.get_rows("rides", order="created_at", desc=True, limit=1000)
+    """Export rides data (schema: total_fare). Writes an audit log entry (F-41)."""
+    import uuid  # noqa: PLC0415
+
+    date_filter: Dict[str, Any] = {}
+    if start_date:
+        date_filter.setdefault("created_at", {})["$gte"] = start_date
+    if end_date:
+        date_filter.setdefault("created_at", {})["$lte"] = end_date + "T23:59:59Z"
+
+    rides = await db_supabase.get_rows("rides", date_filter, order="created_at", desc=True, limit=limit)
     rider_ids = list({r.get("rider_id") for r in rides if r.get("rider_id")})
     driver_ids = list({r.get("driver_id") for r in rides if r.get("driver_id")})
     drivers_map, users_map = await _batch_fetch_drivers_and_users(rider_ids, driver_ids)
@@ -666,13 +1019,31 @@ async def admin_export_rides(
                 else (driver.get("name") if driver else None),
             }
         )
+    await db_supabase.insert_one(
+        "audit_logs",
+        {
+            "id": str(uuid.uuid4()),
+            "actor_id": admin["id"],
+            "actor_role": admin.get("role"),
+            "action": "export_rides",
+            "resource": "rides",
+            "resource_id": None,
+            "details": {"row_count": len(out), "start_date": start_date, "end_date": end_date},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
     return {"rides": out, "count": len(out)}
 
 
 @router.get("/export/drivers")
-async def admin_export_drivers():
-    """Export drivers data."""
-    drivers = await db_supabase.get_rows("drivers", order="created_at", desc=True, limit=1000)
+async def admin_export_drivers(
+    limit: int = Query(1000, ge=1, le=_EXPORT_MAX_ROWS),
+    admin: dict = Depends(get_admin_user),
+):
+    """Export drivers data. Writes an audit log entry (F-41)."""
+    import uuid  # noqa: PLC0415
+
+    drivers = await db_supabase.get_rows("drivers", order="created_at", desc=True, limit=limit)
     user_ids = list({d.get("user_id") for d in drivers if d.get("user_id")})
     users_list = (
         await db_supabase.get_rows("users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)) if user_ids else []
@@ -696,6 +1067,19 @@ async def admin_export_drivers():
                 "created_at": d.get("created_at"),
             }
         )
+    await db_supabase.insert_one(
+        "audit_logs",
+        {
+            "id": str(uuid.uuid4()),
+            "actor_id": admin["id"],
+            "actor_role": admin.get("role"),
+            "action": "export_drivers",
+            "resource": "drivers",
+            "resource_id": None,
+            "details": {"row_count": len(out)},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
     return {"drivers": out, "count": len(out)}
 
 
@@ -731,6 +1115,59 @@ async def admin_get_payouts(
     return enriched
 
 
+@router.get("/payouts/{payout_id}")
+async def admin_get_payout(payout_id: str, _: dict = Depends(get_admin_user)):
+    """Return a single payout record by ID."""
+    payout = await db.find_one("payouts", {"id": payout_id})
+    if not payout:
+        raise HTTPException(status_code=404, detail="Payout not found")
+    driver: dict = {}
+    if payout.get("driver_id"):
+        try:
+            driver = await db.find_one("drivers", {"id": payout["driver_id"]}) or {}
+        except Exception:
+            logger.warning("payout driver lookup failed for %s", payout.get("driver_id"), exc_info=True)
+            driver = {}
+    payout["driver_name"] = driver.get("full_name") or driver.get("name") or payout.get("driver_name")
+    payout["driver_email"] = driver.get("email")
+    payout["driver_phone"] = driver.get("phone")
+    return payout
+
+
+@router.post("/payouts/{payout_id}/retry")
+async def admin_retry_payout(payout_id: str, admin: dict = Depends(get_admin_user)):
+    """Retry a failed payout.
+
+    Re-queues the payout for processing by setting its status back to
+    'pending'. The payment-retry background loop picks it up within its
+    next tick. Gated to finance and super_admin roles.
+    """
+    allowed_roles = {"finance", "super_admin"}
+    if admin.get("role") not in allowed_roles:
+        raise HTTPException(status_code=403, detail="role_required:finance")
+
+    payout = await db.find_one("payouts", {"id": payout_id})
+    if not payout:
+        raise HTTPException(status_code=404, detail="Payout not found")
+    if payout.get("status") not in ("failed", "cancelled"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot retry a payout in status '{payout.get('status')}' — only failed or cancelled payouts can be retried",
+        )
+
+    await db.update_one(
+        "payouts",
+        {"id": payout_id},
+        {
+            "status": "pending",
+            "retry_requested_by": admin.get("id"),
+            "retry_requested_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    logger.info(f"Payout {payout_id} queued for retry by admin {admin.get('id')}")
+    return {"success": True, "payout_id": payout_id, "status": "pending"}
+
+
 @router.get("/payouts/stats")
 async def admin_get_payout_stats():
     """Get payout stats: total paid, pending, failed."""
@@ -739,9 +1176,9 @@ async def admin_get_payout_stats():
     except Exception:
         all_payouts = []
 
-    total_paid = sum(float(p.get("amount", 0)) for p in all_payouts if p.get("status") == "completed")
-    total_pending = sum(float(p.get("amount", 0)) for p in all_payouts if p.get("status") == "pending")
-    total_failed = sum(float(p.get("amount", 0)) for p in all_payouts if p.get("status") == "failed")
+    total_paid = float(sum(Decimal(str(p.get("amount", 0))) for p in all_payouts if p.get("status") == "completed"))
+    total_pending = float(sum(Decimal(str(p.get("amount", 0))) for p in all_payouts if p.get("status") == "pending"))
+    total_failed = float(sum(Decimal(str(p.get("amount", 0))) for p in all_payouts if p.get("status") == "failed"))
 
     return {
         "total_paid": round(total_paid, 2),

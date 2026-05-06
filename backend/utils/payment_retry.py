@@ -22,20 +22,38 @@ Replay-safety contract (CLAUDE.md, Background loops):
 
 import asyncio
 import logging
+import os
+import random
+import socket
 from datetime import datetime, timezone
+
+try:
+    from utils.loop_monitor import record_heartbeat as _record_heartbeat
+except ImportError:
+
+    def _record_heartbeat(name: str) -> None:  # type: ignore[misc]
+        pass
+
 
 try:
     from ..db import db
     from ..features import send_push_notification
     from ..settings_loader import get_app_settings
     from .datetime_utils import parse_iso_utc
+    from .redis_client import redis_set_nx
 except ImportError:
     from db import db
     from features import send_push_notification
     from settings_loader import get_app_settings
     from utils.datetime_utils import parse_iso_utc
+    from utils.redis_client import redis_set_nx
 
 logger = logging.getLogger(__name__)
+
+
+def _pod_id() -> str:
+    return f"{socket.gethostname()}:{os.getpid()}"
+
 
 MAX_RETRIES = 3
 RETRY_INTERVAL_SECONDS = 300  # 5 minutes
@@ -138,11 +156,6 @@ async def retry_failed_payments():
         if not payment_intent_id or not stripe_secret:
             continue
 
-        # Idempotency key — same (ride, retry_count) on two replicas
-        # produces the same key, so Stripe returns the same response on
-        # the duplicate call instead of charging twice.
-        idem_key = f"ride_retry_{ride_id}_{retry_count}"
-
         try:
             import stripe
 
@@ -150,31 +163,32 @@ async def retry_failed_payments():
             intent = stripe.PaymentIntent.retrieve(payment_intent_id, api_key=stripe_secret)
 
             if intent.status == "succeeded":
-                # Already succeeded (webhook may have missed it). Bump
-                # the count atomically — the loser of the race sees
-                # update_one return None and skips the rider push.
-                claimed = await db.update_one(
+                # Already succeeded (webhook may have missed it) — mark paid but do
+                # NOT increment retry_count, otherwise the `retry_count + 1 >= MAX`
+                # check at the bottom of this loop would fire a false "payment
+                # failed" push to the rider. Setting status='paid' is idempotent
+                # so two replicas writing the same value is harmless.
+                await db.update_one(
                     "rides",
-                    {"id": ride_id, "payment_retry_count": retry_count},
+                    {"id": ride_id},
                     {
                         "$set": {
                             "payment_status": "paid",
-                            "payment_retry_count": retry_count + 1,
                             "updated_at": datetime.now(timezone.utc).isoformat(),
                         }
                     },
                 )
-                if claimed is None:
-                    continue
                 logger.info(f"Payment retry: ride {ride_id} already paid (intent succeeded)")
+                continue
 
             elif intent.status in ("requires_payment_method", "requires_confirmation"):
-                # Try to confirm again. idempotency_key dedupes the call
-                # if another replica already fired it.
+                # Idempotency key dedupes the confirm call when two replicas
+                # both pick up the same ride at the same retry_count, so
+                # Stripe returns the cached response instead of charging twice.
                 stripe.PaymentIntent.confirm(
                     payment_intent_id,
                     api_key=stripe_secret,
-                    idempotency_key=idem_key,
+                    idempotency_key=f"retry-confirm-{ride_id}-{retry_count}",
                 )
                 attempt = retry_count + 1
                 claimed = await db.update_one(
@@ -223,7 +237,10 @@ async def retry_failed_payments():
                     continue
 
         except Exception as e:
-            logger.warning(f"Payment retry failed for ride {ride_id}: {e}")
+            # CLAUDE.md: never warn-and-continue on payment errors.
+            logger.error(f"Payment retry failed for ride {ride_id}: {e}", exc_info=True)
+            # Atomic claim on the count bump — only the replica that won
+            # the race fires the rider failure push below.
             claimed = await db.update_one(
                 "rides",
                 {"id": ride_id, "payment_retry_count": retry_count},
@@ -257,12 +274,26 @@ async def payment_retry_loop():
     """Background loop that retries failed payments every RETRY_INTERVAL_SECONDS."""
     logger.info(f"Payment retry service started (interval={RETRY_INTERVAL_SECONDS}s)")
     while True:
+        # Single-replica enforcement: only the pod that claims the lock runs
+        # the retry; others sleep the full interval. Prevents N simultaneous
+        # Stripe retries on multi-replica deploys. TTL is 1.5× interval so
+        # the lock expires cleanly before the next tick's election.
+        lock_ttl = int(RETRY_INTERVAL_SECONDS * 1.5)
+        if not await redis_set_nx("spinr:payment:retry:lock", _pod_id(), lock_ttl):
+            _record_heartbeat("payment_retry (5min)")
+            await asyncio.sleep(RETRY_INTERVAL_SECONDS)
+            continue
         try:
             await retry_failed_payments()
         except Exception as e:
-            logger.error(f"Payment retry loop error: {e}")
+            logger.error(f"Payment retry loop error: {e}", exc_info=True)
         try:
             await retry_stuck_payouts()
         except Exception as e:
-            logger.error(f"Payout retry loop error: {e}")
-        await asyncio.sleep(RETRY_INTERVAL_SECONDS)
+            logger.error(f"Payout retry loop error: {e}", exc_info=True)
+        _record_heartbeat("payment_retry (5min)")
+        # B-P3-2: per-tick ±10% jitter so replicas don't tick in lockstep
+        # and create a thundering herd against Stripe + Supabase. Tested
+        # cap is RETRY_INTERVAL_SECONDS * 0.1 ≈ 30s on 5min interval.
+        delta = RETRY_INTERVAL_SECONDS * 0.1
+        await asyncio.sleep(RETRY_INTERVAL_SECONDS + random.uniform(-delta, delta))

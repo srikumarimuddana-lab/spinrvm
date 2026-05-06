@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Stack } from 'expo-router';
+import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { View, ActivityIndicator, StyleSheet, Text, Platform } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -14,6 +14,7 @@ SplashScreen.preventAutoHideAsync().catch(() => {});
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { useAuthStore } from '@shared/store/authStore';
 import { useLocationStore } from '@shared/store/locationStore';
+import { useDriverStore } from '../store/driverStore';
 import SpinrConfig from '@shared/config/spinr.config';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { OfflineBanner } from '@shared/components/OfflineBanner';
@@ -75,12 +76,59 @@ if (Notifications) {
 // 2. Background FCM handler. Must be registered at module top level,
 //    outside of any React component, so the JS runtime wakes when a
 //    message arrives while the app is backgrounded or killed.
-//    The OS notification itself is rendered by the Android channel
-//    configured below (or APNs on iOS); this handler just keeps the
-//    runtime alive long enough to let RN Firebase do its thing.
+//    Persists the full ride-offer payload to AsyncStorage so the driver
+//    home screen can hydrate the offer panel instantly on cold start
+//    (useDriverDashboard.ts reads PENDING_OFFER_KEY on mount).
+const PENDING_OFFER_KEY = 'spinr_pending_ride_offer';
 setBackgroundMessageHandler(async (remoteMessage: any) => {
-  console.log('[Push] Background FCM:', remoteMessage?.data?.type || remoteMessage?.notification?.title);
+  const data = remoteMessage?.data || {};
+  if (data?.type === 'new_ride_assignment' && data?.ride_id) {
+    try {
+      const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+      await AsyncStorage.setItem(
+        PENDING_OFFER_KEY,
+        JSON.stringify({
+          ride_id: data.ride_id,
+          pickup_address: data.pickup_address || '',
+          dropoff_address: data.dropoff_address || '',
+          pickup_lat: parseFloat(data.pickup_lat || '0'),
+          pickup_lng: parseFloat(data.pickup_lng || '0'),
+          dropoff_lat: parseFloat(data.dropoff_lat || '0'),
+          dropoff_lng: parseFloat(data.dropoff_lng || '0'),
+          fare: parseFloat(data.fare || '0'),
+          distance_km: data.distance_km ? parseFloat(data.distance_km) : undefined,
+          duration_minutes: data.duration_minutes ? parseFloat(data.duration_minutes) : undefined,
+          rider_name: data.rider_name || undefined,
+          rider_rating: data.rider_rating ? parseFloat(data.rider_rating) : undefined,
+        }),
+      );
+    } catch (e) {
+      console.warn('[Push] Failed to persist background ride offer:', e);
+    }
+  }
 });
+
+// DV-9: Route push-notification taps to the correct in-app screen.
+// new_ride_assignment → driver home (offer panel hydrates from AsyncStorage);
+// everything else → notifications inbox as the safe fallback so the driver
+// can read the notification content rather than landing on a random screen.
+function usePushNotificationRouter() {
+  const router = useRouter();
+  useEffect(() => {
+    if (!Notifications) return;
+    const sub = Notifications.addNotificationResponseReceivedListener(
+      (response: any) => {
+        const data = response?.notification?.request?.content?.data ?? {};
+        if (data?.type === 'new_ride_assignment') {
+          router.push('/driver/');
+        } else {
+          router.push('/driver/notifications');
+        }
+      },
+    );
+    return () => sub?.remove?.();
+  }, [router]);
+}
 
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
@@ -95,6 +143,16 @@ export default function RootLayout() {
   const [isOffline, setIsOffline] = useState(false);
   // Guard so we only register the FCM token once per auth session.
   const fcmRegisteredRef = useRef(false);
+  const prevAuthTokenRef = useRef(authToken);
+
+  // Clear driver ride state on logout so a re-login doesn't see the
+  // previous session's in-progress offer / active ride.
+  useEffect(() => {
+    if (prevAuthTokenRef.current && !authToken) {
+      useDriverStore.getState().resetRideState();
+    }
+    prevAuthTokenRef.current = authToken;
+  }, [authToken]);
 
   // ── LogRocket session recording ──
   // Guard against Expo Go — @logrocket/react-native ships a native module
@@ -273,6 +331,7 @@ function DriverRootLayoutInner({
   setIsOffline: (v: boolean) => void;
 }) {
   const { isDark } = useTheme();
+  usePushNotificationRouter();
   return (
     <ErrorBoundary>
       <OfflineBanner visible={isOffline} onVisibilityChange={setIsOffline} />

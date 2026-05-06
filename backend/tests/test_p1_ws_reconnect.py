@@ -23,10 +23,23 @@ Run:
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from starlette.requests import Request as StarletteRequest
+
+# Minimal starlette Request used by direct function calls in TestActiveRideHttpRecovery
+# (SlowAPI requires an actual starlette.requests.Request, not a MagicMock).
+_HTTP_SCOPE: dict = {
+    "type": "http",
+    "method": "GET",
+    "path": "/rides/active",
+    "headers": [],
+    "query_string": b"",
+    "root_path": "",
+}
+_MOCK_REQUEST = StarletteRequest(_HTTP_SCOPE)
 
 RIDER_ID = "rider_p1_6"
 DRIVER_USER_ID = "driver_user_p1_6"
@@ -53,7 +66,7 @@ def _ride(status: str, driver_id: str | None = DRIVER_ID, **extra) -> dict:
         "duration_minutes": 8,
         "payment_method": "card",
         "payment_status": "pending",
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
     row.update(extra)
     return row
@@ -187,7 +200,7 @@ class TestActiveRideHttpRecovery:
                 AsyncMock(return_value=driver_user),
             ),
         ):
-            result = await rides_mod.get_active_ride(current_user={"id": RIDER_ID})
+            result = await rides_mod.get_active_ride(request=_MOCK_REQUEST, current_user={"id": RIDER_ID})
 
         assert result["active"] is True
         assert result["ride"]["id"] == RIDE_ID
@@ -211,7 +224,7 @@ class TestActiveRideHttpRecovery:
                 AsyncMock(return_value=None),
             ),
         ):
-            result = await rides_mod.get_active_ride(current_user={"id": RIDER_ID})
+            result = await rides_mod.get_active_ride(request=_MOCK_REQUEST, current_user={"id": RIDER_ID})
 
         assert result["active"] is True
         assert result["ride"]["status"] == "driver_accepted"
@@ -225,7 +238,7 @@ class TestActiveRideHttpRecovery:
             "backend.routes.rides.db_supabase.get_rows",
             AsyncMock(return_value=[]),
         ):
-            result = await rides_mod.get_active_ride(current_user={"id": RIDER_ID})
+            result = await rides_mod.get_active_ride(request=_MOCK_REQUEST, current_user={"id": RIDER_ID})
 
         assert result["active"] is False
         assert result["ride"] is None
@@ -243,7 +256,7 @@ class TestActiveRideHttpRecovery:
                 AsyncMock(side_effect=[[], [ride]]),
             ),
         ):
-            result = await rides_mod.get_active_ride(current_user={"id": RIDER_ID})
+            result = await rides_mod.get_active_ride(request=_MOCK_REQUEST, current_user={"id": RIDER_ID})
 
         assert result["active"] is True
         assert result["ride"]["status"] == "searching"

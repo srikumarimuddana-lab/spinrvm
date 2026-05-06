@@ -8,10 +8,11 @@ import {
   ScrollView,
   ActivityIndicator,
   Image,
-  Dimensions,
+  useWindowDimensions,
   Platform,
   Switch,
   Modal,
+  TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -25,14 +26,16 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { CarMarker } from '@shared/components/CarMarker';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import SkeletonBox from '../components/SkeletonBox';
 
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const MAP_HEIGHT = 280;
 
 function RideOptionsScreenContent() {
+  const { width: SCREEN_WIDTH, height } = useWindowDimensions();
+  // Reactive map height: 35% of current screen height, clamped for usability
+  const MAP_HEIGHT = Math.min(Math.max(Math.round(height * 0.35), 180), 380);
   const { colors, isDark } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const styles = useMemo(() => createStyles(colors, MAP_HEIGHT), [colors, MAP_HEIGHT]);
   const router = useRouter();
   const {
     pickup,
@@ -48,6 +51,12 @@ function RideOptionsScreenContent() {
     error: storeError,
     scheduledTime,
     setScheduledTime,
+    requiresWav,
+    setRequiresWav,
+    quietMode,
+    setQuietMode,
+    riderNotes,
+    setRiderNotes,
     availablePromos,
     appliedPromo,
     fetchAvailablePromos,
@@ -95,8 +104,8 @@ function RideOptionsScreenContent() {
   useEffect(() => {
     if (pickup && dropoff) {
       console.log('Platform:', Platform.OS, '| Fetching estimates & nearby drivers for:', pickup.address, 'to', dropoff.address);
-      handleFetchEstimates();
-      fetchNearbyDrivers();
+      // R-P2-51: run both fetches in parallel — they are independent requests.
+      void Promise.all([handleFetchEstimates(), fetchNearbyDrivers()]);
 
       // Auto-refresh drivers every 10 seconds
       const interval = setInterval(() => {
@@ -117,7 +126,7 @@ function RideOptionsScreenContent() {
   // Fetch promos when estimates are ready
   useEffect(() => {
     if (estimates.length > 0) {
-      const selectedFare = estimates[selectedIndex]?.total_fare || estimates[0]?.total_fare || 0;
+      const selectedFare = parseFloat(estimates[selectedIndex]?.total_fare || estimates[0]?.total_fare || '0');
       fetchAvailablePromos(selectedFare);
     }
   }, [estimates]);
@@ -172,13 +181,16 @@ function RideOptionsScreenContent() {
   };
 
   const handleSelect = (index: number) => {
-    if (!estimates[index].available) return;
+    if (!estimates[index]?.available) {
+      setAlertState({ visible: true, title: 'Unavailable', message: 'This vehicle type is not available right now. Please choose another.', variant: 'warning' });
+      return;
+    }
     setSelectedIndex(index);
     selectVehicle(estimates[index].vehicle_type);
     // Re-fetch nearby drivers filtered by this vehicle type
     setTimeout(() => fetchNearbyDrivers(), 100);
     // Re-calculate promo discount for new fare
-    fetchAvailablePromos(estimates[index].total_fare);
+    fetchAvailablePromos(parseFloat(estimates[index].total_fare || '0'));
   };
 
   const handleConfirm = () => {
@@ -189,7 +201,7 @@ function RideOptionsScreenContent() {
     }
     if (workModeEnabled && activeCompanyId && selectedEstimate) {
       const when = isScheduling && scheduledTime ? scheduledTime : undefined;
-      const check = checkRide(selectedEstimate.total_fare, when);
+      const check = checkRide(parseFloat(selectedEstimate.total_fare || '0'), when);
       if (!check.ok) {
         setAlertState({
           visible: true,
@@ -283,7 +295,13 @@ function RideOptionsScreenContent() {
     <SafeAreaView style={styles.container} edges={['top']}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={() => router.back()}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
           <Ionicons name="arrow-back" size={24} color="#1A1A1A" />
         </TouchableOpacity>
         {dropoff && (
@@ -461,7 +479,7 @@ function RideOptionsScreenContent() {
       <View style={styles.sectionHeader}>
         <Text style={styles.sectionTitle}>Choose a ride</Text>
         <View style={styles.commissionBadge}>
-          <Text style={styles.commissionText}>% 0% Commission</Text>
+          <Text style={styles.commissionText}>0% Commission</Text>
         </View>
       </View>
 
@@ -483,9 +501,17 @@ function RideOptionsScreenContent() {
           </TouchableOpacity>
         </View>
       ) : isLoading ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={colors.primary} />
-          <Text style={styles.loadingText}>Finding best rides...</Text>
+        <View style={styles.optionsList}>
+          {[0, 1, 2].map((i) => (
+            <View key={i} style={{ flexDirection: 'row', alignItems: 'center', padding: 16, marginBottom: 8, backgroundColor: colors.surface, borderRadius: 12 }}>
+              <SkeletonBox width={72} height={48} borderRadius={8} style={{ marginRight: 14 }} />
+              <View style={{ flex: 1, gap: 8 }}>
+                <SkeletonBox width="50%" height={16} />
+                <SkeletonBox width="35%" height={12} />
+              </View>
+              <SkeletonBox width={52} height={22} borderRadius={6} />
+            </View>
+          ))}
         </View>
       ) : (
         <ScrollView style={styles.optionsList} showsVerticalScrollIndicator={false}>
@@ -527,7 +553,7 @@ function RideOptionsScreenContent() {
                     {(estimate.surge_multiplier ?? 1) > 1.0 && (
                       <View style={styles.surgeBadge}>
                         <Ionicons name="trending-up" size={10} color="#fff" />
-                        <Text style={styles.surgeBadgeText}>{estimate.surge_multiplier}x</Text>
+                        <Text style={styles.surgeBadgeText} allowFontScaling={false}>{estimate.surge_multiplier}x</Text>
                       </View>
                     )}
                     <View style={styles.capacityBadge}>
@@ -537,7 +563,7 @@ function RideOptionsScreenContent() {
                   </View>
 
                   {isAvailable ? (
-                    <Text style={styles.optionETA}>
+                    <Text style={styles.optionETA} allowFontScaling={false}>
                       {estimate.eta_minutes ? `${estimate.eta_minutes} min away` : 'Nearby'}
                       {estimate.driver_count > 0 && ` · ${estimate.driver_count} driver${estimate.driver_count > 1 ? 's' : ''}`}
                     </Text>
@@ -553,13 +579,13 @@ function RideOptionsScreenContent() {
                 <View style={[styles.optionPriceContainer, !isAvailable && { opacity: 0.4 }]}>
                   {appliedPromo && appliedPromo.discount_amount > 0 && isSelected ? (
                     <View style={{ alignItems: 'flex-end' }}>
-                      <Text style={styles.optionPriceStruck}>${estimate.total_fare.toFixed(2)}</Text>
-                      <Text style={styles.optionPriceDiscounted}>
-                        ${Math.max(0, estimate.total_fare - appliedPromo.discount_amount).toFixed(2)}
+                      <Text style={styles.optionPriceStruck} allowFontScaling={false}>${parseFloat(estimate.total_fare || '0').toFixed(2)}</Text>
+                      <Text style={styles.optionPriceDiscounted} allowFontScaling={false}>
+                        ${Math.max(0, parseFloat(estimate.total_fare || '0') - appliedPromo.discount_amount).toFixed(2)}
                       </Text>
                     </View>
                   ) : (
-                    <Text style={styles.optionPrice}>${estimate.total_fare.toFixed(2)}</Text>
+                    <Text style={styles.optionPrice} allowFontScaling={false}>${parseFloat(estimate.total_fare || '0').toFixed(2)}</Text>
                   )}
                   {isSelected && isAvailable && (
                     <View style={styles.selectedCheck}>
@@ -597,7 +623,7 @@ function RideOptionsScreenContent() {
               onPress={() => setShowDatePicker(true)}
             >
               <Ionicons name="calendar-outline" size={18} color={colors.primary} />
-              <Text style={styles.scheduledTimeText}>
+              <Text style={styles.scheduledTimeText} allowFontScaling={false}>
                 {scheduledTime.toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' })}{' '}
                 at {scheduledTime.toLocaleTimeString('en-CA', { hour: '2-digit', minute: '2-digit' })}
               </Text>
@@ -675,6 +701,68 @@ function RideOptionsScreenContent() {
             )
           )}
 
+          {/* WAV toggle */}
+          <View style={styles.scheduleRow} accessibilityRole="none">
+            <View style={styles.scheduleInfo}>
+              <Ionicons name="accessibility" size={20} color="#1A1A1A" />
+              <View>
+                <Text style={styles.scheduleLabel}>Wheelchair-accessible vehicle</Text>
+                <Text style={styles.wavSubLabel}>Only match me with WAV drivers</Text>
+              </View>
+            </View>
+            <Switch
+              value={requiresWav}
+              onValueChange={setRequiresWav}
+              trackColor={{ false: '#D1D5DB', true: colors.primary + '60' }}
+              thumbColor={requiresWav ? colors.primary : '#F3F4F6'}
+              accessibilityLabel="Request wheelchair-accessible vehicle"
+              accessibilityRole="switch"
+            />
+          </View>
+          {requiresWav && (
+            <View style={styles.wavBanner}>
+              <Ionicons name="information-circle-outline" size={14} color="#1D4ED8" />
+              <Text style={styles.wavBannerText}>
+                WAV rides may have longer wait times depending on driver availability.
+              </Text>
+            </View>
+          )}
+
+          {/* Quiet mode toggle */}
+          <View style={styles.scheduleRow} accessibilityRole="none">
+            <View style={styles.scheduleInfo}>
+              <Ionicons name="volume-mute" size={20} color="#1A1A1A" />
+              <View>
+                <Text style={styles.scheduleLabel}>Quiet ride</Text>
+                <Text style={styles.wavSubLabel}>Prefer minimal conversation</Text>
+              </View>
+            </View>
+            <Switch
+              value={quietMode}
+              onValueChange={setQuietMode}
+              trackColor={{ false: '#D1D5DB', true: colors.primary + '60' }}
+              thumbColor={quietMode ? colors.primary : '#F3F4F6'}
+              accessibilityLabel="Request quiet ride"
+              accessibilityRole="switch"
+            />
+          </View>
+
+          {/* Notes to driver */}
+          <View style={styles.notesRow}>
+            <Ionicons name="chatbubble-outline" size={18} color="#6B7280" style={{ marginTop: 2 }} />
+            <TextInput
+              style={styles.notesInput}
+              placeholder="Note for driver (optional)"
+              placeholderTextColor="#9CA3AF"
+              value={riderNotes}
+              onChangeText={setRiderNotes}
+              maxLength={200}
+              multiline={false}
+              returnKeyType="done"
+              accessibilityLabel="Note for your driver"
+            />
+          </View>
+
           {/* Payment method row */}
           <TouchableOpacity style={styles.paymentRow}>
             <Ionicons name="card" size={20} color="#1A1A1A" />
@@ -750,7 +838,7 @@ function RideOptionsScreenContent() {
                   <View style={{ flex: 1 }}>
                     <Text style={styles.promoRowCode}>{promo.code}</Text>
                     <Text style={styles.promoRowDesc}>{promo.description || discountLabel}</Text>
-                    <Text style={styles.promoRowSaving}>{discountLabel}</Text>
+                    <Text style={styles.promoRowSaving} allowFontScaling={false}>{discountLabel}</Text>
                   </View>
                   {isSelected && <Ionicons name="checkmark-circle" size={22} color={colors.primary} />}
                 </TouchableOpacity>
@@ -791,7 +879,7 @@ export default function RideOptionsScreen() {
   );
 }
 
-function createStyles(colors: ThemeColors) {
+function createStyles(colors: ThemeColors, mapHeight: number = 280) {
   return StyleSheet.create({
   container: {
     flex: 1,
@@ -828,7 +916,7 @@ function createStyles(colors: ThemeColors) {
   mapContainer: {
     marginHorizontal: 0,
     backgroundColor: colors.border,
-    height: MAP_HEIGHT,
+    height: mapHeight,
   },
   map: {
     width: '100%',
@@ -1154,6 +1242,31 @@ function createStyles(colors: ThemeColors) {
     fontFamily: 'PlusJakartaSans_500Medium',
     color: colors.text,
   },
+  wavSubLabel: {
+    fontSize: 11,
+    fontFamily: 'PlusJakartaSans_400Regular',
+    color: colors.textDim,
+    marginTop: 1,
+  },
+  wavBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+    backgroundColor: '#EFF6FF',
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  wavBannerText: {
+    flex: 1,
+    fontSize: 12,
+    fontFamily: 'PlusJakartaSans_400Regular',
+    color: '#1D4ED8',
+    lineHeight: 17,
+  },
   scheduledTimeRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1316,6 +1429,22 @@ function createStyles(colors: ThemeColors) {
     fontSize: 17,
     fontFamily: 'PlusJakartaSans_700Bold',
     color: colors.primary,
+  },
+  notesRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    backgroundColor: colors.surfaceLight,
+    borderRadius: 12,
+    marginTop: 8,
+  },
+  notesInput: {
+    flex: 1,
+    fontSize: 14,
+    fontFamily: 'PlusJakartaSans_400Regular',
+    color: colors.text,
   },
   });
 }

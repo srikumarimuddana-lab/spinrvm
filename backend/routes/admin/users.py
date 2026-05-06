@@ -1,18 +1,27 @@
 import logging
 import re
+import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
 try:
     from ... import db_supabase
+    from ...dependencies import get_admin_user
 except ImportError:
     import db_supabase
+    from dependencies import get_admin_user
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+class UserStatusRequest(BaseModel):
+    status: Literal["active", "suspended", "banned"]
+
 
 # ---------- Users (riders) ----------
 
@@ -58,6 +67,21 @@ async def admin_get_users(
     return users
 
 
+class UserSearchRequest(BaseModel):
+    search: str
+    role: Optional[str] = "all"
+    limit: int = 5
+
+
+@router.post("/users/search")
+async def admin_search_users(
+    body: UserSearchRequest,
+    admin_user: dict = Depends(get_admin_user),
+):
+    """Typeahead search for users via POST body to keep search terms out of server logs."""
+    return await admin_get_users(role=body.role, search=body.search, limit=body.limit)
+
+
 @router.get("/users/{user_id}")
 async def admin_get_user_details(user_id: str):
     """Get detailed user information."""
@@ -76,15 +100,108 @@ async def admin_get_user_details(user_id: str):
 
 
 @router.put("/users/{user_id}/status")
-async def admin_update_user_status(user_id: str, status_data: Dict[str, Any]):
+async def admin_update_user_status(user_id: str, status_data: UserStatusRequest, admin: dict = Depends(get_admin_user)):
     """Update user status (e.g., suspend, activate)."""
-    valid_status = ["active", "suspended", "banned"]
-    new_status = status_data.get("status")
+    new_status = status_data.status
 
-    if new_status not in valid_status:
-        raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {valid_status}")
+    user = await db_supabase.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    old_status = user.get("status")
 
     await db_supabase.update_one(
         "users", {"id": user_id}, {"status": new_status, "updated_at": datetime.now(timezone.utc).isoformat()}
     )
+
+    await db_supabase.insert_one(
+        "audit_logs",
+        {
+            "id": str(uuid.uuid4()),
+            "actor_id": admin["id"],
+            "actor_role": admin.get("role"),
+            "action": "status_change",
+            "resource": "user",
+            "resource_id": user_id,
+            "details": {"old_status": old_status, "new_status": new_status},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+
     return {"message": f"User status updated to {new_status}"}
+
+
+# ---------- DSAR (Data Subject Access Requests) ----------
+
+
+@router.get("/dsars")
+async def admin_list_dsars(
+    status: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    admin: dict = Depends(get_admin_user),
+):
+    """DV-17: List PIPEDA data-export requests with SLA deadline tracking.
+
+    PIPEDA s.9 requires a response within 30 days. Requests approaching or
+    past their `response_due_at` should be prioritised.
+    """
+    filters: Dict[str, Any] = {}
+    if status in ("pending", "in_progress", "completed", "rejected"):
+        filters["status"] = status
+
+    requests = await db_supabase.get_rows(
+        "data_export_requests",
+        filters,
+        order="response_due_at",
+        desc=False,
+        limit=limit,
+        offset=offset,
+    )
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for req in requests:
+        due = req.get("response_due_at")
+        if due and req.get("status") == "pending":
+            req["overdue"] = due < now_iso
+
+    return {"dsars": requests, "total": len(requests)}
+
+
+@router.patch("/dsars/{request_id}/status")
+async def admin_update_dsar_status(
+    request_id: str,
+    status: str,
+    admin: dict = Depends(get_admin_user),
+):
+    """Update DSAR status (in_progress, completed, rejected)."""
+    if status not in ("in_progress", "completed", "rejected"):
+        raise HTTPException(status_code=400, detail="status must be one of in_progress, completed, rejected")
+
+    req = await db_supabase.get_one("data_export_requests", {"id": request_id})
+    if not req:
+        raise HTTPException(status_code=404, detail="DSAR request not found")
+
+    update: Dict[str, Any] = {
+        "status": status,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if status == "completed":
+        update["completed_at"] = datetime.now(timezone.utc).isoformat()
+
+    await db_supabase.update_one("data_export_requests", {"id": request_id}, update)
+
+    await db_supabase.insert_one(
+        "audit_logs",
+        {
+            "id": str(uuid.uuid4()),
+            "actor_id": admin["id"],
+            "actor_role": admin.get("role"),
+            "action": f"dsar_{status}",
+            "resource": "data_export_request",
+            "resource_id": request_id,
+            "details": {"user_id": req.get("user_id"), "new_status": status},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+
+    return {"message": f"DSAR {request_id} marked {status}"}

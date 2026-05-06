@@ -13,6 +13,21 @@ except ImportError:
     import db_supabase
 
 
+async def log_user_action(
+    user: Dict[str, Any],
+    action: str,
+    resource: str,
+    resource_id: str,
+    details: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Write an audit log row for a rider/driver-initiated action.
+
+    Identical schema to log_admin_action; actor_role defaults to the
+    user's role claim so the audit trail distinguishes rider vs driver.
+    """
+    await log_admin_action(user, action, resource, resource_id, details)
+
+
 async def log_admin_action(
     admin: Dict[str, Any],
     action: str,
@@ -38,6 +53,7 @@ async def log_admin_action(
                 "action": action,
                 "entity_type": resource,
                 "entity_id": resource_id,
+                "actor_id": admin["id"],
                 "details": {
                     "actor_id": admin["id"],
                     "actor_role": admin.get("role"),

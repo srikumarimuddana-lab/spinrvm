@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, getServiceAreas, getVehicleTypes, getFareConfigs } from "@/lib/api";
+import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers } from "@/lib/api";
 import { Pagination } from "@/components/ui/pagination";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatCurrency } from "@/lib/utils";
@@ -20,6 +20,8 @@ import AreaStatsTable from "./_components/area-stats-table";
 import DriverActionBar from "./_components/driver-action-bar";
 import DriverNotes from "./_components/driver-notes";
 import DriverTimeline from "./_components/driver-timeline";
+import { useRequireModule } from "@/hooks/useRequireModule";
+import { useToast } from "@/components/ui/use-toast";
 
 const STATUS_TABS = [
     { value: "all", label: "All", icon: Users },
@@ -34,6 +36,8 @@ const STATUS_TABS = [
 const PAGE_SIZE = 50;
 
 export default function DriversPage() {
+    const { allowed } = useRequireModule("drivers");
+    const { toast } = useToast();
     const [data, setData] = useState<any>(null);
     const [drivers, setDrivers] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
@@ -158,11 +162,30 @@ export default function DriversPage() {
         return () => document.removeEventListener("keydown", onKey);
     }, [previewUrl]);
 
-    const reloadDriverDocs = async () => { if (!selected?.id) return; try { const d = await getDriverDocuments(selected.id); setDriverDocs(Array.isArray(d) ? d : []); } catch {} };
+    const reloadDriverDocs = async () => {
+        if (!selected?.id) return;
+        try {
+            const d = await getDriverDocuments(selected.id);
+            setDriverDocs(Array.isArray(d) ? d : []);
+        } catch (e: any) {
+            toast({ title: "Could not reload documents", description: e?.message || "Unknown error", variant: "destructive" });
+        }
+    };
 
     const handleReviewDoc = async (docId: string, status: "approved" | "rejected", reason?: string, expiry?: string) => {
         setDocBusy(docId);
-        try { await reviewDocument(docId, status, reason, expiry ? new Date(expiry).toISOString() : undefined); await reloadDriverDocs(); loadData(); loadDrivers(); } catch (e: any) { alert("Could not update document: " + (e?.message || "unknown error")); } finally { setDocBusy(null); }
+        const prevDocs = [...driverDocs];
+        try {
+            await reviewDocument(docId, status, reason, expiry ? new Date(expiry).toISOString() : undefined);
+            await reloadDriverDocs();
+            loadData();
+            loadDrivers();
+        } catch (e: any) {
+            setDriverDocs(prevDocs);
+            toast({ title: "Document review failed", description: e?.message || "Unknown error", variant: "destructive" });
+        } finally {
+            setDocBusy(null);
+        }
     };
 
     const openReviewDialog = (docId: string, action: "approved" | "rejected") => {
@@ -188,7 +211,7 @@ export default function DriversPage() {
         for (const [k, v] of Object.entries(editForm)) { if (v !== (selected[k] || "")) changes[k] = v; }
         if (Object.keys(changes).length === 0) { setEditing(false); return; }
         setSaving(true);
-        try { await updateDriver(selected.id, changes); const updated = { ...selected, ...changes }; setSelected(updated); setDrivers(prev => prev.map(d => d.id === selected.id ? { ...d, ...changes } : d)); setEditing(false); } catch (e: any) { alert("Failed to save: " + (e?.message || "unknown error")); } finally { setSaving(false); }
+        try { await updateDriver(selected.id, changes); const updated = { ...selected, ...changes }; setSelected(updated); setDrivers(prev => prev.map(d => d.id === selected.id ? { ...d, ...changes } : d)); setEditing(false); } catch (e: any) { toast({ title: "Failed to save driver", description: e?.message || "Unknown error", variant: "destructive" }); } finally { setSaving(false); }
     };
 
     const ef = (field: string) => editForm[field] ?? "";
@@ -245,7 +268,22 @@ export default function DriversPage() {
     };
     const fmtDate = (d: string) => { if (!d) return "\u2014"; try { return new Date(d).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" }); } catch { return d; } };
 
-    const handleExport = () => { exportToCsv("drivers", sorted, [{ key: "id", label: "ID" }, { key: "first_name", label: "First Name" }, { key: "last_name", label: "Last Name" }, { key: "email", label: "Email" }, { key: "phone", label: "Phone" }, { key: "service_area_id", label: "Service Area ID" }, { key: "is_verified", label: "Verified" }, { key: "is_online", label: "Online" }, { key: "rating", label: "Rating" }, { key: "total_rides", label: "Rides" }, { key: "total_earnings", label: "Earnings" }, { key: "vehicle_make", label: "Vehicle Make" }, { key: "vehicle_model", label: "Vehicle Model" }, { key: "license_plate", label: "License Plate" }, { key: "created_at", label: "Joined" }]); };
+    const handleExport = async () => {
+        try {
+            const res = await exportDrivers();
+            exportToCsv("drivers", res.drivers, [
+                { key: "id", label: "ID" }, { key: "name", label: "Name" },
+                { key: "email", label: "Email" }, { key: "phone", label: "Phone" },
+                { key: "vehicle_make", label: "Vehicle Make" }, { key: "vehicle_model", label: "Vehicle Model" },
+                { key: "license_plate", label: "License Plate" }, { key: "is_verified", label: "Verified" },
+                { key: "is_online", label: "Online" }, { key: "total_rides", label: "Rides" },
+                { key: "created_at", label: "Joined" },
+            ]);
+            toast({ title: "Export complete", description: `${res.count ?? res.drivers?.length ?? 0} drivers exported.` });
+        } catch (e: any) {
+            toast({ title: "Export failed", description: e?.message, variant: "destructive" });
+        }
+    };
 
     const selectedAreaName = serviceAreaId ? serviceAreas.find(a => a.id === serviceAreaId)?.name || "Selected Area" : "All Areas";
     const activeDocs = driverDocs.filter(d => d.status !== "superseded");
@@ -281,6 +319,8 @@ export default function DriversPage() {
         const legacyField = _docKeyToExpiryField(rdKey);
         return legacyField ? selected?.[legacyField] : undefined;
     }
+
+    if (!allowed) return null;
 
     return (
         <div className="space-y-5">
@@ -500,7 +540,7 @@ export default function DriversPage() {
                                             <Button variant="ghost" size="sm" onClick={() => setEditing(false)} disabled={saving}>Cancel</Button>
                                             <Button size="sm" onClick={saveEdits} disabled={saving} className="bg-emerald-600 hover:bg-emerald-700 text-white">{saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />} Save</Button>
                                         </>)}
-                                        <Button variant="ghost" size="icon-sm" onClick={() => { setSelected(null); setEditing(false); }}><X className="h-4 w-4" /></Button>
+                                        <Button variant="ghost" size="icon-sm" aria-label="Close" onClick={() => { setSelected(null); setEditing(false); }}><X className="h-4 w-4" /></Button>
                                     </div>
                                 </div>
                                 <div className="grid grid-cols-4 gap-3 mt-5">

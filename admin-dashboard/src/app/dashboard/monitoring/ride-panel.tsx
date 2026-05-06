@@ -161,6 +161,7 @@ export function RidePanel({ ride, onDriverClick, onCancelRide }: RidePanelProps)
                                 variant="ghost"
                                 className="h-6 w-6"
                                 onClick={() => window.open(`tel:${ride.rider_phone}`)}
+                                aria-label="Call rider"
                             >
                                 <Phone className="h-3 w-3" />
                             </Button>
@@ -197,6 +198,7 @@ export function RidePanel({ ride, onDriverClick, onCancelRide }: RidePanelProps)
                                         e.stopPropagation();
                                         window.open(`tel:${ride.driver_phone}`);
                                     }}
+                                    aria-label="Call driver"
                                 >
                                     <Phone className="h-3 w-3" />
                                 </Button>

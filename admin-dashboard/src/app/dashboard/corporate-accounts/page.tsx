@@ -51,6 +51,8 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { Building2, Plus, Pencil, Trash2, Search, Mail, Phone, RefreshCw, ShieldCheck } from "lucide-react";
+import { useRequireModule } from "@/hooks/useRequireModule";
+import { useToast } from "@/components/ui/use-toast";
 
 const STATUS_PILL_CLASSES: Record<CompanyStatus, string> = {
     pending_verification: "bg-yellow-100 text-yellow-800 hover:bg-yellow-100",
@@ -70,6 +72,8 @@ function StatusPill({ status }: { status: CompanyStatus }) {
 const PAGE_SIZE = 50;
 
 export default function CorporateAccountsPage() {
+    const { allowed } = useRequireModule("corporate_accounts");
+    const { toast } = useToast();
     const [accounts, setAccounts] = useState<CorporateAccount[]>([]);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState("");
@@ -121,6 +125,7 @@ export default function CorporateAccountsPage() {
         } catch (error) {
             if (reqId !== reqIdRef.current) return;
             console.error("Failed to fetch corporate accounts:", error);
+            toast({ title: "Failed to load accounts", variant: "destructive" });
             setAccounts([]);
             setHasNextPage(false);
         } finally {
@@ -172,7 +177,7 @@ export default function CorporateAccountsPage() {
             fetchAccounts();
         } catch (error) {
             console.error("Failed to save account:", error);
-            alert("Failed to save account. Please try again.");
+            toast({ title: "Failed to save account", description: "Please try again.", variant: "destructive" });
         } finally {
             setFormLoading(false);
         }
@@ -187,11 +192,13 @@ export default function CorporateAccountsPage() {
             fetchAccounts();
         } catch (error) {
             console.error("Failed to delete account:", error);
-            alert("Failed to delete account.");
+            toast({ title: "Failed to delete account", variant: "destructive" });
         } finally {
             setFormLoading(false);
         }
     };
+
+    if (!allowed) return null;
 
     return (
         <div className="space-y-6">

@@ -19,9 +19,24 @@ for _m in _STUBS:
     if _m not in sys.modules:
         sys.modules[_m] = MagicMock()
 
-# Provide the Settings object that CSRFMiddleware reads from core.config.settings
-_settings_mock = sys.modules["core.config"]
-_settings_mock.settings = MagicMock(ENV="development")
+# Save original settings so the autouse fixture can restore it after all
+# module tests finish.  We must NOT mutate core.config.settings at module
+# import time because pytest collects (imports) every test module before
+# running any tests — a module-level mutation would contaminate other test
+# modules (e.g. test_admin_logout_revocation) that run before this file's
+# tests execute and therefore before the restore fixture fires.
+_core_config_mod = sys.modules["core.config"]
+_original_settings = getattr(_core_config_mod, "settings", None)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _restore_core_config_settings():
+    # Apply the settings mock inside the fixture (not at import time) so it
+    # is set just before this module's first test and restored after the last.
+    _core_config_mod.settings = MagicMock(ENV="development")
+    yield
+    if _original_settings is not None:
+        _core_config_mod.settings = _original_settings
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

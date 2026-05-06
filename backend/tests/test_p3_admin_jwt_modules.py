@@ -38,7 +38,7 @@ def _mint(
     ttl_hours: float = 12,
 ) -> str:
     """Mint a real (signed) admin JWT using the same code path as production."""
-    from routes.admin.auth import _mint_admin_access_token
+    from backend.routes.admin.auth import _mint_admin_access_token
 
     token, _ = _mint_admin_access_token(
         user_id=user_id,
@@ -52,9 +52,9 @@ def _mint(
 
 
 def _decode(token: str) -> dict:
-    from core.config import settings
+    from backend.core.config import settings
 
-    return jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.ALGORITHM])
+    return jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.ALGORITHM], options={"verify_aud": False})
 
 
 # ── JWT claim structure ───────────────────────────────────────────────
@@ -74,7 +74,7 @@ class TestMintAdminAccessToken:
 
     def test_token_expires_after_ttl(self):
         """The exp claim must be roughly ADMIN_ACCESS_TOKEN_TTL_HOURS in the future."""
-        from core.config import settings
+        from backend.core.config import settings
 
         token = _mint()
         payload = _decode(token)
@@ -176,9 +176,9 @@ class TestGetCurrentUserAdminJWT:
 
         from fastapi.security import HTTPAuthorizationCredentials
 
-        import db_supabase as dbs
-        from core.config import settings
-        from dependencies import get_current_user
+        import backend.db_supabase as dbs
+        from backend.core.config import settings
+        from backend.dependencies import get_current_user
 
         now = datetime.now(timezone.utc)
         rider_token = jwt.encode(
@@ -314,7 +314,7 @@ class TestAdminSessionEndpoint:
 
     def test_session_rejects_expired_token(self, client):
         """An expired admin JWT must not authenticate."""
-        from core.config import settings
+        from backend.core.config import settings
 
         now = datetime.now(timezone.utc)
         expired_token = jwt.encode(
@@ -371,3 +371,102 @@ class TestAdminSessionEndpoint:
         assert resp.status_code == 200
         data = resp.json()
         assert data["authenticated"] is False
+
+
+# ── audience claim enforcement (regression for the InvalidAudienceError ───
+#    privilege-escalation gap where /session decoded any token signed
+#    with JWT_SECRET, including rider/driver tokens) ────────────────────
+
+
+class TestAdminSessionAudienceEnforcement:
+    """`/api/admin/auth/session` must only accept tokens whose ``aud``
+    claim is ``spinr:admin``. Tokens minted for the rider app, or admin-
+    shaped tokens with no ``aud`` at all, must be rejected — otherwise
+    a same-secret rider token would mint a successful admin session."""
+
+    @pytest.fixture
+    def client(self):
+        from fastapi.testclient import TestClient
+
+        from backend.server import app
+
+        with TestClient(app) as c:
+            yield c
+
+    def test_rider_audience_token_rejected(self, client):
+        """A token with ``aud=spinr:rider`` must NOT authenticate as admin,
+        even when its claims happen to look admin-shaped."""
+        from backend.core.config import settings
+        from backend.dependencies import JWT_AUD_MOBILE
+
+        now = datetime.now(timezone.utc)
+        rider_aud_token = jwt.encode(
+            {
+                "user_id": "attacker",
+                "email": "attacker@example.com",
+                "role": "super_admin",  # forged role — must be ignored
+                "modules": ["dashboard", "users", "drivers"],
+                "phone": "",
+                "aud": JWT_AUD_MOBILE,  # ← rider audience
+                "token_version": 0,
+                "iat": now,
+                "exp": now + timedelta(minutes=15),
+            },
+            settings.JWT_SECRET,
+            algorithm=settings.ALGORITHM,
+        )
+
+        resp = client.get(
+            "/api/admin/auth/session",
+            headers={"Authorization": f"Bearer {rider_aud_token}"},
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["authenticated"] is False
+        assert data["user"] is None
+
+    def test_no_audience_token_rejected(self, client):
+        """A token with no ``aud`` claim at all must NOT authenticate.
+        Strict ``audience=`` decoding rejects it via MissingRequiredClaimError."""
+        from backend.core.config import settings
+
+        now = datetime.now(timezone.utc)
+        no_aud_token = jwt.encode(
+            {
+                "user_id": "no_aud_user",
+                "email": "no_aud@spinr.ca",
+                "role": "admin",
+                "modules": ["dashboard"],
+                "phone": "",
+                "token_version": 0,
+                "iat": now,
+                "exp": now + timedelta(hours=1),
+            },
+            settings.JWT_SECRET,
+            algorithm=settings.ALGORITHM,
+        )
+
+        resp = client.get(
+            "/api/admin/auth/session",
+            headers={"Authorization": f"Bearer {no_aud_token}"},
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["authenticated"] is False
+
+    def test_admin_audience_token_accepted(self, client):
+        """The positive path: a properly minted admin token (which carries
+        ``aud=spinr:admin``) authenticates successfully."""
+        token = _mint(role="admin", modules=["dashboard"], user_id="admin_aud_ok")
+
+        resp = client.get(
+            "/api/admin/auth/session",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["authenticated"] is True
+        assert data["user"]["id"] == "admin_aud_ok"

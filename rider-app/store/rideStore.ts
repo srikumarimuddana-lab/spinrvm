@@ -7,11 +7,15 @@ import { RideStatus } from '../constants/rideStatus';
 import { recordNonFatal } from '../utils/crashlytics';
 
 const ACTIVE_RIDE_KEY = '@spinr:active_ride';
-const TERMINAL_STATUSES = new Set([RideStatus.COMPLETED, RideStatus.CANCELLED, RideStatus.FAILED]);
+const TERMINAL_STATUSES: Set<string> = new Set([RideStatus.COMPLETED, RideStatus.CANCELLED, RideStatus.FAILED]);
+
+function isErrorLike(e: unknown): e is { message: string } {
+  return typeof e === 'object' && e !== null && 'message' in e;
+}
 
 // Write currentRide + currentDriver to AsyncStorage. Clears key when ride is
 // terminal so stale data never survives across sessions.
-const _persistRide = (currentRide: any, currentDriver: any) => {
+const _persistRide = (currentRide: Ride | null, currentDriver: Driver | null) => {
   if (!currentRide || TERMINAL_STATUSES.has(currentRide.status)) {
     AsyncStorage.removeItem(ACTIVE_RIDE_KEY).catch(() => {});
   } else {
@@ -38,12 +42,12 @@ interface RideEstimate {
   vehicle_type: VehicleType;
   distance_km: number;
   duration_minutes: number;
-  base_fare: number;
-  distance_fare: number;
-  time_fare: number;
-  booking_fee: number;
-  surge_multiplier?: number;
-  total_fare: number;
+  base_fare: string; // MoneyString: "3.50"
+  distance_fare: string; // MoneyString
+  time_fare: string; // MoneyString
+  booking_fee: string; // MoneyString
+  surge_multiplier?: number; // ratio, not money — stays number
+  total_fare: string; // MoneyString
   available: boolean;
   eta_minutes: number;
   driver_count: number;
@@ -75,6 +79,8 @@ interface Driver {
   total_rides: number;
   lat: number;
   lng: number;
+  speed?: number | null;
+  heading?: number | null;
 }
 
 interface Ride {
@@ -90,18 +96,21 @@ interface Ride {
   dropoff_lng: number;
   distance_km: number;
   duration_minutes: number;
-  base_fare: number;
-  total_fare: number;
+  base_fare: string; // MoneyString
+  total_fare: string; // MoneyString
   payment_method: string;
   payment_status?: string;
   card_last4?: string;
   status: string;
   pickup_otp: string;
-  tip_amount?: number;
+  tip_amount?: string; // MoneyString
   corporate_account_id?: string | null;
   is_scheduled?: boolean;
   scheduled_time?: string;
   created_at: string;
+  ride_code?: string;
+  ride_completed_at?: string;
+  share_token?: string;
 }
 
 interface SavedAddress {
@@ -114,6 +123,21 @@ interface SavedAddress {
   icon: string;
 }
 
+interface Promo {
+  id: string;
+  code: string;
+  discount_type: string;
+  discount_value: number;
+  [key: string]: unknown;
+}
+
+interface ChatMessage {
+  id: string;
+  text: string;
+  sender: string;
+  [key: string]: unknown;
+}
+
 interface RideState {
   pickup: Location | null;
   dropoff: Location | null;
@@ -123,6 +147,7 @@ interface RideState {
   selectedVehicle: VehicleType | null;
   currentRide: Ride | null;
   currentDriver: Driver | null;
+  driverEtaSeconds: number | null; // road-network ETA from last WS location_update
   _lastWsDriverPositionAt: number; // epoch ms of last WS-driven position update
   savedAddresses: SavedAddress[];
   recentSearches: Location[];
@@ -130,8 +155,11 @@ interface RideState {
   scheduledRides: Ride[];
   requiresWav: boolean;
   userLocation: { latitude: number; longitude: number } | null;
-  availablePromos: any[];
-  appliedPromo: any | null;
+  availablePromos: Promo[];
+  appliedPromo: Promo | null;
+  requiresWav: boolean;
+  quietMode: boolean;
+  riderNotes: string;
   isLoading: boolean;
   error: string | null;
 
@@ -141,7 +169,7 @@ interface RideState {
   addStop: (location: Location) => void;
   removeStop: (index: number) => void;
   updateStop: (index: number, location: Location) => void;
-  fetchActiveRide: () => Promise<{ active: boolean; ride: any } | null>;
+  fetchActiveRide: () => Promise<{ active: boolean; ride: Ride } | null>;
   fetchEstimates: () => Promise<void>;
   fetchNearbyDrivers: () => Promise<void>;
   selectVehicle: (vehicle: VehicleType) => void;
@@ -165,20 +193,22 @@ interface RideState {
   clearRecentSearches: () => void;
   setScheduledTime: (time: Date | null) => void;
   setRequiresWav: (value: boolean) => void;
+  setQuietMode: (v: boolean) => void;
+  setRiderNotes: (v: string) => void;
   fetchScheduledRides: () => Promise<void>;
   cancelScheduledRide: (rideId: string) => Promise<void>;
   setUserLocation: (loc: { latitude: number; longitude: number } | null) => void;
   fetchAvailablePromos: (rideFare?: number) => Promise<void>;
-  applyPromo: (promo: any | null) => void;
+  applyPromo: (promo: Promo | null) => void;
 
   // WebSocket-driven updates (see rider-app/hooks/useRiderSocket.ts).
-  updateDriverLocation: (lat: number, lng: number, speed?: number | null, heading?: number | null) => void;
-  applyRideStatusFromWS: (rideId: string, status: string, extra?: Record<string, any>) => void;
+  updateDriverLocation: (lat: number, lng: number, speed?: number | null, heading?: number | null, etaSeconds?: number | null) => void;
+  applyRideStatusFromWS: (rideId: string, status: string, extra?: Record<string, unknown>) => void;
 
   // Chat
-  chatMessages: any[];
-  addChatMessage: (msg: any) => void;
-  setChatMessages: (msgs: any[]) => void;
+  chatMessages: ChatMessage[];
+  addChatMessage: (msg: ChatMessage) => void;
+  setChatMessages: (msgs: ChatMessage[]) => void;
 }
 
 export const useRideStore = create<RideState>((set, get) => ({
@@ -190,12 +220,16 @@ export const useRideStore = create<RideState>((set, get) => ({
   selectedVehicle: null,
   currentRide: null,
   currentDriver: null,
+  driverEtaSeconds: null,
   _lastWsDriverPositionAt: 0,
   chatMessages: [],
   savedAddresses: [],
   recentSearches: [],
   availablePromos: [],
   appliedPromo: null,
+  requiresWav: false,
+  quietMode: false,
+  riderNotes: '',
   scheduledTime: null,
   scheduledRides: [],
   requiresWav: false,
@@ -217,19 +251,20 @@ export const useRideStore = create<RideState>((set, get) => ({
 
   fetchActiveRide: async () => {
     try {
-      const response = await api.get('/rides/active');
+      const response = await api.get<{ active?: boolean; ride?: Ride & { driver?: Driver | null } }>('/rides/active');
       if (response.data?.active && response.data.ride) {
         const ride = response.data.ride;
-        const driver = ride.driver || null;
-        set({ currentRide: ride, currentDriver: driver });
-        _persistRide(ride, driver);
-        return response.data;
+        const driver = ride.driver ?? null;
+        const rideWithoutDriver: Ride = (({ driver: _d, ...rest }) => rest)(ride);
+        set({ currentRide: rideWithoutDriver, currentDriver: driver });
+        _persistRide(rideWithoutDriver, driver);
+        return { active: true, ride: rideWithoutDriver };
       }
       // No active ride on server — clear any stale local state
       get().clearRide();
       return null;
-    } catch (err: any) {
-      if (err?.response?.status === 404) {
+    } catch (err: unknown) {
+      if (isErrorLike(err) && (err as { response?: { status?: number } }).response?.status === 404) {
         get().clearRide();
       }
       return null;
@@ -243,7 +278,7 @@ export const useRideStore = create<RideState>((set, get) => ({
 
     try {
       set({ isLoading: true, error: null });
-      const response = await api.post('/rides/estimate', {
+      const response = await api.post<RideEstimate[]>('/rides/estimate', {
         pickup_lat: pickup.lat,
         pickup_lng: pickup.lng,
         dropoff_lat: dropoff.lat,
@@ -251,10 +286,10 @@ export const useRideStore = create<RideState>((set, get) => ({
         stops: stops, // Send stops to backend
       });
       console.log('Ride API Response:', response.data);
-      set({ estimates: response.data, isLoading: false });
-    } catch (error: any) {
+      set({ estimates: response.data as RideEstimate[], isLoading: false });
+    } catch (error: unknown) {
       console.error('fetchEstimates error:', error);
-      set({ isLoading: false, error: error.message });
+      set({ isLoading: false, error: isErrorLike(error) ? error.message : 'Failed to fetch estimates' });
     }
   },
 
@@ -266,8 +301,8 @@ export const useRideStore = create<RideState>((set, get) => ({
       if (selectedVehicle?.id) {
         url += `&vehicle_type=${selectedVehicle.id}`;
       }
-      const response = await api.get(url);
-      set({ nearbyDrivers: response.data });
+      const response = await api.get<NearbyDriver[]>(url);
+      set({ nearbyDrivers: response.data as NearbyDriver[] });
     } catch (error) {
       console.log('Error fetching nearby drivers', error);
     }
@@ -278,7 +313,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   fetchAvailablePromos: async (rideFare?: number) => {
     try {
       const fare = rideFare ?? 0;
-      const response = await api.get(`/promo/available?ride_fare=${fare}`);
+      const response = await api.get<Promo[]>(`/promo/available?ride_fare=${fare}`);
       const promos = response.data || [];
       set({ availablePromos: promos });
       // Auto-apply best promo (first one, already sorted by biggest discount)
@@ -301,14 +336,26 @@ export const useRideStore = create<RideState>((set, get) => ({
       const queueStr = await AsyncStorage.getItem('offline_queue');
       if (!queueStr) return;
 
-      const queue: Array<{
+      // Corrupted AsyncStorage (partial write, app upgrade migration miss,
+      // device disk full mid-write) used to crash the entire sync flow.
+      // Treat a bad payload as an empty queue and discard it.
+      type OfflineRequest = {
         id: string;
         type: 'create_ride' | 'cancel_ride' | 'rate_ride' | 'tip' | 'emergency';
         rideId?: string;
-        data?: any;
+        data?: Record<string, unknown>;
         retryCount?: number;
         timestamp?: number;
-      }> = JSON.parse(queueStr);
+      };
+      let queue: OfflineRequest[];
+      try {
+        const parsed = JSON.parse(queueStr);
+        queue = Array.isArray(parsed) ? (parsed as OfflineRequest[]) : [];
+      } catch (parseErr) {
+        if (__DEV__) console.warn('[offline_queue] discarding corrupted queue:', parseErr);
+        await AsyncStorage.removeItem('offline_queue');
+        return;
+      }
       if (queue.length === 0) return;
 
       const successfulSyncs: string[] = [];
@@ -361,7 +408,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   },
 
   createRide: async (paymentMethod, corporateAccountId, paymentMethodId) => {
-    const { pickup, dropoff, selectedVehicle, stops, scheduledTime, estimates, requiresWav } = get();
+    const { pickup, dropoff, selectedVehicle, stops, scheduledTime, estimates, requiresWav, quietMode, riderNotes } = get();
     if (!pickup || !dropoff || !selectedVehicle) {
       throw new Error('Missing ride details');
     }
@@ -377,7 +424,7 @@ export const useRideStore = create<RideState>((set, get) => ({
       const selectedEstimate = estimates.find(
         (e) => e.vehicle_type?.id === selectedVehicle.id
       );
-      const rideData: any = {
+      const rideData: Record<string, unknown> = {
         vehicle_type_id: selectedVehicle.id,
         pickup_address: pickup.address,
         pickup_lat: pickup.lat,
@@ -391,6 +438,8 @@ export const useRideStore = create<RideState>((set, get) => ({
         corporate_account_id: corporateAccountId || null,
         estimate_token: selectedEstimate?.estimate_token,
         requires_wav: requiresWav,
+        quiet_mode: quietMode,
+        rider_notes: riderNotes || null,
         created_at: new Date().toISOString(),
       };
 
@@ -401,15 +450,15 @@ export const useRideStore = create<RideState>((set, get) => ({
 
       const userId = useAuthStore.getState().user?.id ?? 'anon';
       const idempotencyKey = `ride-${userId}-${Date.now()}`;
-      const response = await api.post('/rides', rideData, {
+      const response = await api.post<Ride>('/rides', rideData, {
         headers: { 'Idempotency-Key': idempotencyKey },
       });
-      set({ currentRide: response.data, isLoading: false, scheduledTime: null });
+      set({ currentRide: response.data, isLoading: false, scheduledTime: null, requiresWav: false, quietMode: false, riderNotes: '' });
       _persistRide(response.data, null);
       return response.data;
-    } catch (error: any) {
+    } catch (error: unknown) {
       recordNonFatal(error, { store: 'rideStore', action: 'createRide' });
-      set({ isLoading: false, error: error.message });
+      set({ isLoading: false, error: isErrorLike(error) ? error.message : 'Failed to create ride' });
       throw error;
     }
   },
@@ -420,9 +469,9 @@ export const useRideStore = create<RideState>((set, get) => ({
       if (!get().currentRide) {
         set({ isLoading: true });
       }
-      const response = await api.get(`/rides/${rideId}`);
+      const response = await api.get<Ride & { driver?: Driver | null }>(`/rides/${rideId}`);
       const ride = response.data;
-      let driver = ride.driver || null;
+      let driver = ride.driver ?? null;
       // R-P2-29: if a WS position update arrived within the last 10 s, the DB
       // value is stale — preserve the WS-sourced lat/lng so the map doesn't jump.
       const { _lastWsDriverPositionAt, currentDriver } = get();
@@ -431,8 +480,8 @@ export const useRideStore = create<RideState>((set, get) => ({
       }
       set({ currentRide: ride, currentDriver: driver, isLoading: false });
       _persistRide(ride, driver);
-    } catch (error: any) {
-      console.log('fetchRide error:', error.message);
+    } catch (error: unknown) {
+      console.log('fetchRide error:', isErrorLike(error) ? error.message : error);
       // Don't clear currentRide on poll errors — keep showing last known state
       set({ isLoading: false });
     }
@@ -447,9 +496,9 @@ export const useRideStore = create<RideState>((set, get) => ({
       await api.post(`/rides/${currentRide.id}/cancel`);
       set({ currentRide: null, currentDriver: null, isLoading: false });
       AsyncStorage.removeItem(ACTIVE_RIDE_KEY).catch(() => {});
-    } catch (error: any) {
+    } catch (error: unknown) {
       recordNonFatal(error, { store: 'rideStore', action: 'cancelRide' });
-      set({ isLoading: false, error: error.message });
+      set({ isLoading: false, error: isErrorLike(error) ? error.message : 'Failed to cancel ride' });
     }
   },
 
@@ -458,12 +507,12 @@ export const useRideStore = create<RideState>((set, get) => ({
     if (!currentRide) return;
 
     try {
-      const response = await api.post(`/rides/${currentRide.id}/simulate-arrival`);
+      const response = await api.post<{ pickup_otp?: string }>(`/rides/${currentRide.id}/simulate-arrival`);
       set({
-        currentRide: { ...currentRide, status: RideStatus.DRIVER_ARRIVED, pickup_otp: response.data.pickup_otp },
+        currentRide: { ...currentRide, status: RideStatus.DRIVER_ARRIVED, pickup_otp: response.data.pickup_otp ?? currentRide.pickup_otp },
       });
-    } catch (error: any) {
-      set({ error: error.message });
+    } catch (error: unknown) {
+      set({ error: isErrorLike(error) ? error.message : 'Failed to simulate arrival' });
     }
   },
 
@@ -476,8 +525,8 @@ export const useRideStore = create<RideState>((set, get) => ({
       set({
         currentRide: { ...currentRide, status: RideStatus.IN_PROGRESS },
       });
-    } catch (error: any) {
-      set({ error: error.message });
+    } catch (error: unknown) {
+      set({ error: isErrorLike(error) ? error.message : 'Failed to start ride' });
     }
   },
 
@@ -486,13 +535,13 @@ export const useRideStore = create<RideState>((set, get) => ({
     if (!currentRide) return;
 
     try {
-      const response = await api.post(`/rides/${currentRide.id}/complete`);
+      const response = await api.post<Ride>(`/rides/${currentRide.id}/complete`);
       set({ currentRide: response.data });
       AsyncStorage.removeItem(ACTIVE_RIDE_KEY).catch(() => {});
       return response.data;
-    } catch (error: any) {
+    } catch (error: unknown) {
       recordNonFatal(error, { store: 'rideStore', action: 'completeRide' });
-      set({ error: error.message });
+      set({ error: isErrorLike(error) ? error.message : 'Failed to complete ride' });
     }
   },
 
@@ -503,9 +552,9 @@ export const useRideStore = create<RideState>((set, get) => ({
         comment,
         tip_amount: tipAmount || 0,
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       recordNonFatal(error, { store: 'rideStore', action: 'rateRide' });
-      set({ error: error.message });
+      set({ error: isErrorLike(error) ? error.message : 'Failed to rate ride' });
       throw error;
     }
   },
@@ -517,12 +566,12 @@ export const useRideStore = create<RideState>((set, get) => ({
       longitude,
     };
     const MAX_ATTEMPTS = 3;
-    let lastError: any;
+    let lastError: unknown;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       try {
         await api.post(`/rides/${rideId}/emergency`, payload);
         return; // success
-      } catch (error: any) {
+      } catch (error: unknown) {
         lastError = error;
         if (attempt < MAX_ATTEMPTS) {
           await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
@@ -536,19 +585,20 @@ export const useRideStore = create<RideState>((set, get) => ({
 
   fetchSavedAddresses: async () => {
     try {
-      const response = await api.get('/addresses');
-      set({ savedAddresses: response.data });
-    } catch (error: any) {
-      console.log('Error fetching addresses:', error.message);
+      const response = await api.get<SavedAddress[]>('/addresses');
+      set({ savedAddresses: response.data as SavedAddress[] });
+    } catch (error: unknown) {
+      console.log('Error fetching addresses:', isErrorLike(error) ? error.message : error);
     }
   },
 
   addSavedAddress: async (address) => {
     try {
-      const response = await api.post('/addresses', address);
-      set({ savedAddresses: [...get().savedAddresses, response.data] });
-    } catch (error: any) {
-      set({ error: error.message });
+      const response = await api.post<SavedAddress>('/addresses', address);
+      set({ savedAddresses: [...get().savedAddresses, response.data as SavedAddress] });
+    } catch (error: unknown) {
+      set({ error: isErrorLike(error) ? error.message : 'Failed to add address' });
+      throw error;
     }
   },
 
@@ -556,15 +606,15 @@ export const useRideStore = create<RideState>((set, get) => ({
     try {
       await api.delete(`/addresses/${id}`);
       set({ savedAddresses: get().savedAddresses.filter((a) => a.id !== id) });
-    } catch (error: any) {
-      set({ error: error.message });
+    } catch (error: unknown) {
+      set({ error: isErrorLike(error) ? error.message : 'Failed to delete address' });
     }
   },
 
   addChatMessage: (msg) => {
     const { chatMessages } = get();
     // Deduplicate by id (WS + poll can deliver the same message).
-    if (chatMessages.some((m: any) => m.id === msg.id)) return;
+    if (chatMessages.some((m) => m.id === msg.id)) return;
     set({ chatMessages: [...chatMessages, msg] });
   },
 
@@ -608,13 +658,15 @@ export const useRideStore = create<RideState>((set, get) => ({
 
   setScheduledTime: (time) => set({ scheduledTime: time }),
   setRequiresWav: (value) => set({ requiresWav: value }),
+  setQuietMode: (v) => set({ quietMode: v }),
+  setRiderNotes: (v) => set({ riderNotes: v }),
 
   fetchScheduledRides: async () => {
     try {
-      const response = await api.get('/rides/scheduled');
-      set({ scheduledRides: response.data });
-    } catch (error: any) {
-      console.log('Error fetching scheduled rides:', error.message);
+      const response = await api.get<Ride[]>('/rides/scheduled');
+      set({ scheduledRides: response.data as Ride[] });
+    } catch (error: unknown) {
+      console.log('Error fetching scheduled rides:', isErrorLike(error) ? error.message : error);
     }
   },
 
@@ -624,14 +676,14 @@ export const useRideStore = create<RideState>((set, get) => ({
       set((state) => ({
         scheduledRides: state.scheduledRides.filter((r) => r.id !== rideId),
       }));
-    } catch (error: any) {
-      set({ error: error.message });
+    } catch (error: unknown) {
+      set({ error: isErrorLike(error) ? error.message : 'Failed to cancel scheduled ride' });
     }
   },
 
   // ── WebSocket-driven updates ────────────────────────────────────
 
-  updateDriverLocation: (lat, lng, speed, heading) => {
+  updateDriverLocation: (lat, lng, speed, heading, etaSeconds) => {
     const driver = get().currentDriver;
     if (!driver) return;
     // Only update the coordinate fields — leave everything else (name,
@@ -644,7 +696,13 @@ export const useRideStore = create<RideState>((set, get) => ({
       ...(heading !== null && heading !== undefined ? { heading } : {}),
     };
     // R-P2-29: record timestamp so fetchRide doesn't overwrite this WS position.
-    set({ currentDriver: updated, _lastWsDriverPositionAt: Date.now() });
+    // Also store the road-network ETA so the driver-arriving screen can show
+    // a live countdown instead of a static default.
+    set({
+      currentDriver: updated,
+      _lastWsDriverPositionAt: Date.now(),
+      ...(etaSeconds !== null && etaSeconds !== undefined ? { driverEtaSeconds: etaSeconds } : {}),
+    });
     _persistRide(get().currentRide, updated);
   },
 
@@ -657,6 +715,8 @@ export const useRideStore = create<RideState>((set, get) => ({
     // while the next poll (reduced to 15 s via the WS fallback) fills
     // in any remaining details the WS message doesn't carry.
     const updated = { ...currentRide, status, ...(extra || {}) };
+    // Keep currentDriver so the ride-completed receipt screen can still show
+    // driver name/vehicle until the user taps Done. clearRide() will null it.
     set({ currentRide: updated });
     _persistRide(updated, currentDriver);
   },
@@ -677,13 +737,13 @@ export const useRideStore = create<RideState>((set, get) => ({
       // Validate against backend — if the ride completed or was cancelled
       // while the app was closed the stored data would be stale.
       try {
-        const live = await api.get('/rides/active');
+        const live = await api.get<{ active?: boolean; ride?: Ride & { driver?: Driver | null } }>('/rides/active');
         if (!live.data?.active || live.data.ride?.id !== stored.id) {
           await AsyncStorage.removeItem(ACTIVE_RIDE_KEY);
           return; // stale — do not route
         }
         const liveRide = live.data.ride;
-        const liveDriver = liveRide.driver || currentDriver || null;
+        const liveDriver = liveRide?.driver ?? currentDriver ?? null;
         if (!get().currentRide) {
           set({ currentRide: liveRide, currentDriver: liveDriver });
         }

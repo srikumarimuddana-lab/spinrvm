@@ -28,13 +28,8 @@ describe('rideStore — WebSocket-driven updates', () => {
   describe('updateDriverLocation', () => {
     it('should update currentDriver lat/lng', () => {
       useRideStore.setState({
-        currentDriver: {
-          id: 'driver_1',
-          name: 'Jane',
-          rating: 4.9,
-          lat: 50.0,
-          lng: -104.0,
-        },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        currentDriver: { id: 'driver_1', name: 'Jane', rating: 4.9, lat: 50.0, lng: -104.0 } as any,
       });
 
       useRideStore.getState().updateDriverLocation(51.5, -105.5, 30, 180);
@@ -56,7 +51,8 @@ describe('rideStore — WebSocket-driven updates', () => {
 
     it('should handle null speed and heading', () => {
       useRideStore.setState({
-        currentDriver: { id: 'driver_1', lat: 50, lng: -104 },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        currentDriver: { id: 'driver_1', lat: 50, lng: -104 } as any,
       });
 
       useRideStore.getState().updateDriverLocation(51, -105, null, null);

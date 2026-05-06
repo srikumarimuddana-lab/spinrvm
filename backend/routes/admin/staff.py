@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel
 
 try:
@@ -16,7 +16,8 @@ try:
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user
-    from utils.password import hash_password
+    from utils.password import hash_password, verify_password
+    from utils.password_policy import validate_admin_password
     from utils.rate_limiter import admin_staff_delete_limit
     from utils.refresh_tokens import revoke_all_for_user
 
@@ -99,13 +100,29 @@ class StaffUpdateRequest(BaseModel):
 
 
 @router.get("/staff")
-async def list_staff(admin: dict = Depends(get_admin_user)):
-    """List all staff members."""
-    staff = await db_supabase.get_rows("admin_staff", limit=100)
+async def list_staff(
+    response: Response,
+    admin: dict = Depends(get_admin_user),
+    limit: int = Query(500, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+):
+    """List staff members with offset/limit pagination.
+
+    Returns a flat array (backwards compatible). Total row count and the
+    applied limit are exposed via the ``X-Total-Count`` and ``X-Limit``
+    response headers so the dashboard can opt into paging without a
+    response-shape change. Default limit is 500 to preserve the legacy
+    "return everything" behaviour for the current admin dashboard, which
+    does not yet paginate this endpoint.
+    """
+    staff = await db_supabase.get_rows("admin_staff", limit=limit, offset=offset)
+    total = await db_supabase.count_documents("admin_staff")
     # Remove passwords from response
     for s in staff:
         s.pop("password_hash", None)
         s.pop("password", None)
+    response.headers["X-Total-Count"] = str(total)
+    response.headers["X-Limit"] = str(limit)
     return staff
 
 

@@ -1,4 +1,5 @@
 import asyncio
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -10,15 +11,46 @@ try:
     from .. import db_supabase
     from ..core.config import settings
     from ..dependencies import verify_jwt_token
+    from ..settings_loader import get_app_settings
     from ..socket_manager import manager
     from ..utils.driver_presence import clear_presence, mark_present
+    from ..utils.maps_eta import get_ride_eta_seconds
 except ImportError:
     import db_supabase
+    from core.config import settings
     from dependencies import verify_jwt_token
     from socket_manager import manager
     from utils.driver_presence import clear_presence, mark_present
 
 db = db_supabase  # legacy alias
+
+# ETA helpers — separate try/except so they survive the dual-import pattern
+# without the formatter stripping them from the main block's except branch.
+try:
+    from ..settings_loader import get_app_settings
+    from ..utils.maps_eta import get_ride_eta_seconds
+except ImportError:
+    try:
+        from settings_loader import get_app_settings  # type: ignore[no-redef]
+        from utils.maps_eta import get_ride_eta_seconds  # type: ignore[no-redef]
+    except ImportError:
+        # Stubs used when backend is imported outside its package (e.g. tests).
+        async def get_app_settings():  # type: ignore[misc]
+            return {}
+
+        async def get_ride_eta_seconds(*_a, **_kw):  # type: ignore[misc]
+            return None
+
+
+# ── Maps API key in-process cache ─────────────────────────────────────────
+# get_app_settings() hits Supabase on every call. We cache the key for 60 s
+# so the hot GPS-ping loop (60 pings/min/driver) stays DB-free.
+_maps_key_cache: str = ""
+_maps_key_fetched_at: float = 0.0
+_MAPS_KEY_CACHE_TTL = 60.0  # seconds
+
+# Ride statuses where the driver is en-route to pickup — ETA to pickup point.
+_ETA_PICKUP_STATUSES = {"driver_assigned", "driver_accepted", "driver_arrived"}
 
 # Note: WebSocket routes are usually attached directly to the app, but APIRouter supports them too.
 # However, the original server.py had it on @app.websocket.
@@ -545,6 +577,17 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
 
                     await db_supabase.insert_one("driver_location_history", breadcrumb)
 
+                    # Refresh the Maps API key from DB at most every 60 s.
+                    now_mono = asyncio.get_event_loop().time()
+                    global _maps_key_cache, _maps_key_fetched_at
+                    if now_mono - _maps_key_fetched_at > _MAPS_KEY_CACHE_TTL:
+                        try:
+                            _app_cfg = await get_app_settings()
+                            _maps_key_cache = (_app_cfg or {}).get("google_maps_api_key") or ""
+                        except Exception:
+                            pass  # keep stale key; Maps call will fall back to haversine
+                        _maps_key_fetched_at = now_mono
+
                     location_update = {
                         "type": "driver_location_update",
                         "driver_id": driver_id,
@@ -556,11 +599,36 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
 
                     # Forward to riders of in-flight rides only (exclude
                     # driver_accepted: rider hasn't been told yet).
+                    # Each ride gets a location_update optionally enriched with
+                    # eta_seconds when the driver is still en-route to pickup.
                     for ride in active_rides:
                         if ride.get("status") == "driver_accepted":
                             continue
+
+                        ride_status = ride.get("status", "")
+                        rider_msg = location_update.copy()
+
+                        if ride_status in _ETA_PICKUP_STATUSES:
+                            pickup_lat = ride.get("pickup_lat")
+                            pickup_lng = ride.get("pickup_lng")
+                            if pickup_lat is not None and pickup_lng is not None:
+                                try:
+                                    eta_sec = await get_ride_eta_seconds(
+                                        driver_lat=lat,
+                                        driver_lng=lng,
+                                        dest_lat=pickup_lat,
+                                        dest_lng=pickup_lng,
+                                        maps_api_key=_maps_key_cache,
+                                        driver_id=driver_id,
+                                        ride_id=ride["id"],
+                                    )
+                                    if eta_sec is not None:
+                                        rider_msg["eta_seconds"] = eta_sec
+                                except Exception:
+                                    pass  # ETA is informational — never block the fan-out
+
                         await manager.send_personal_message(
-                            location_update,
+                            rider_msg,
                             f"rider_{ride['rider_id']}",
                         )
 
@@ -574,6 +642,31 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                 # any client-supplied value.
                 points = data.get("points", [])
                 driver_id = current_driver_id if client_type == "driver" else None
+
+                # Per-connection sliding-window rate limit on total points to
+                # prevent a single connection from flooding driver_location_history
+                # (500-point batches sent every second = 30 000 inserts/min).
+                _BATCH_WINDOW_SECS = 10
+                _BATCH_POINTS_LIMIT = 1000  # max points per 10-second window
+                _now_ts = time.monotonic()
+                if not hasattr(websocket.state, "batch_window_start"):
+                    websocket.state.batch_window_start = _now_ts
+                    websocket.state.batch_points_count = 0
+                if _now_ts - websocket.state.batch_window_start > _BATCH_WINDOW_SECS:
+                    websocket.state.batch_window_start = _now_ts
+                    websocket.state.batch_points_count = 0
+                websocket.state.batch_points_count += len(points)
+                if websocket.state.batch_points_count > _BATCH_POINTS_LIMIT:
+                    await websocket.send_json(
+                        {
+                            "type": "rate_limited",
+                            "scope": "location_batch",
+                            "limit": _BATCH_POINTS_LIMIT,
+                            "window_seconds": _BATCH_WINDOW_SECS,
+                        }
+                    )
+                    continue
+
                 if driver_id and points:
                     docs = []
                     for pt in points[:500]:  # cap at 500 points per batch

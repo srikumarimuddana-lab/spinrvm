@@ -19,6 +19,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Pagination } from "@/components/ui/pagination";
 import { MessageSquare, CheckCircle, Plus, Trash2, Pencil, Send, Search, RefreshCw, HelpCircle } from "lucide-react";
 import { useServiceAreas, ServiceAreaFilter, ServiceAreaSelect } from "../_components/service-area-select";
+import { useToast } from "@/components/ui/use-toast";
+import {
+    AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+    AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 const PAGE_SIZE = 50;
 
@@ -43,6 +48,8 @@ export default function TicketsTab() {
 }
 
 function TicketsList() {
+    const { toast } = useToast();
+    const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
     const { areas } = useServiceAreas();
     const [tickets, setTickets] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
@@ -89,13 +96,13 @@ function TicketsList() {
     const reset = () => { setForm({ subject: "", category: "general", priority: "medium", message: "", user_name: "", user_email: "", service_area_id: "" }); setEditing(null); };
 
     const handleSave = async () => {
-        if (!form.subject.trim()) { alert("Enter a subject."); return; }
+        if (!form.subject.trim()) { toast({ title: "Missing subject", variant: "destructive" }); return; }
         setSaving(true);
         try {
             if (editing) await updateTicket(editing.id, { subject: form.subject, category: form.category, priority: form.priority, service_area_id: form.service_area_id || null });
             else await createTicket({ ...form, service_area_id: form.service_area_id || null });
             setDialogOpen(false); reset(); load();
-        } catch (e: any) { alert(e.message); } finally { setSaving(false); }
+        } catch (e: any) { toast({ title: "Failed to save ticket", description: e.message, variant: "destructive" }); } finally { setSaving(false); }
     };
 
     const areaName = (id: string) => areas.find((a) => a.id === id)?.name || "";
@@ -129,7 +136,7 @@ function TicketsList() {
                                 <TableCell className="text-[10px] text-muted-foreground">{formatDate(t.created_at)}</TableCell>
                                 <TableCell className="text-right"><div className="flex justify-end gap-0.5">
                                     <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); setEditing(t); setForm({ subject: t.subject || "", category: t.category || "general", priority: t.priority || "medium", message: t.message || "", user_name: t.user_name || "", user_email: t.user_email || "", service_area_id: t.service_area_id || "" }); setDialogOpen(true); }}><Pencil className="h-3.5 w-3.5" /></Button>
-                                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={(e) => { e.stopPropagation(); if (confirm("Delete?")) { deleteTicket(t.id).then(load); if (selected?.id === t.id) setSelected(null); } }}><Trash2 className="h-3.5 w-3.5" /></Button>
+                                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={(e) => { e.stopPropagation(); setDeleteTarget(t.id); }}><Trash2 className="h-3.5 w-3.5" /></Button>
                                 </div></TableCell>
                             </TableRow>
                         ))}</TableBody></Table>}
@@ -190,11 +197,25 @@ function TicketsList() {
                     </div>
                 </DialogContent>
             </Dialog>
+
+            <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Delete ticket?</AlertDialogTitle>
+                        <AlertDialogDescription>This cannot be undone.</AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction onClick={() => { if (deleteTarget) { deleteTicket(deleteTarget).then(load); if (selected?.id === deleteTarget) setSelected(null); setDeleteTarget(null); } }} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </div>
     );
 }
 
 function FaqsList() {
+    const [faqDeleteTarget, setFaqDeleteTarget] = useState<string | null>(null);
     const [faqs, setFaqs] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [dialogOpen, setDialogOpen] = useState(false);
@@ -217,7 +238,7 @@ function FaqsList() {
                         <TableRow key={f.id}><TableCell className="font-medium max-w-[280px] truncate text-sm">{f.question}</TableCell><TableCell className="text-xs text-muted-foreground">{f.category || "General"}</TableCell>
                             <TableCell className="text-right"><div className="flex justify-end gap-0.5">
                                 <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setEditing(f); setForm({ question: f.question || "", answer: f.answer || "", category: f.category || "" }); setDialogOpen(true); }}><Pencil className="h-3.5 w-3.5" /></Button>
-                                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => { if (confirm("Delete?")) deleteFaq(f.id).then(load); }}><Trash2 className="h-3.5 w-3.5" /></Button>
+                                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => setFaqDeleteTarget(f.id)}><Trash2 className="h-3.5 w-3.5" /></Button>
                             </div></TableCell>
                         </TableRow>
                     ))}</TableBody></Table>}
@@ -232,6 +253,19 @@ function FaqsList() {
                     </div>
                 </DialogContent>
             </Dialog>
+
+            <AlertDialog open={!!faqDeleteTarget} onOpenChange={(open) => { if (!open) setFaqDeleteTarget(null); }}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Delete FAQ?</AlertDialogTitle>
+                        <AlertDialogDescription>This cannot be undone.</AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction onClick={() => { if (faqDeleteTarget) deleteFaq(faqDeleteTarget).then(load).finally(() => setFaqDeleteTarget(null)); }} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </div>
     );
 }

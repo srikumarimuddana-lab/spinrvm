@@ -21,7 +21,7 @@ Run:
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -51,7 +51,7 @@ def _ride(status: str, rider_id: str = RIDER_ID, driver_id: str | None = DRIVER_
         "duration_minutes": 8,
         "payment_method": "card",
         "payment_status": "pending",
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
     row.update(extra)
     return row
@@ -391,7 +391,7 @@ class TestDriverEarningsIsolation:
             "id": RIDE_ID,
             "driver_id": DRIVER_ID,
             "driver_earnings": 15.0,
-            "completed_at": datetime.utcnow().isoformat(),
+            "completed_at": datetime.now(timezone.utc).isoformat(),
             "status": "completed",
         }
 
@@ -421,4 +421,4 @@ class TestDriverEarningsIsolation:
         assert rides_q.get("driver_id") == DRIVER_ID, (
             f"Rides for earnings must be scoped to driver_id={DRIVER_ID}; got query={rides_q}"
         )
-        assert result["total_earnings"] == 15.0
+        assert result["total_earnings"] == "15.00"

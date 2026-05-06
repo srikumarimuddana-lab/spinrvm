@@ -210,7 +210,7 @@ async def set_allowance(
             patch[k] = patch[k].isoformat()
     for money_key in ("amount", "auto_approve_topup_amount"):
         if patch.get(money_key) is not None:
-            patch[money_key] = float(Decimal(str(patch[money_key])).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+            patch[money_key] = str(Decimal(str(patch[money_key])).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
     return await upsert_member_allowance(member_id=member_id, patch=patch)
 
 
@@ -231,7 +231,7 @@ async def patch_allowance(
         return await get_member_allowance(member_id) or {}
     for money_key in ("amount", "auto_approve_topup_amount"):
         if money_key in patch and patch[money_key] is not None:
-            patch[money_key] = float(Decimal(str(patch[money_key])).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+            patch[money_key] = str(Decimal(str(patch[money_key])).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
     return await upsert_member_allowance(member_id=member_id, patch=patch)
 
 
@@ -466,9 +466,10 @@ async def billing_summary(
     average fare, and per-member breakdown sorted by total desc.
     """
     from datetime import datetime as _dt
+    from datetime import timezone as _tz
 
     if month is None:
-        month = _dt.utcnow().strftime("%Y-%m")
+        month = _dt.now(_tz.utc).strftime("%Y-%m")
     from_iso, to_iso = _month_bounds(month)
 
     # Page through all rows so the summary is never silently truncated.

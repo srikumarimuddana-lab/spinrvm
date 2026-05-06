@@ -37,9 +37,12 @@ function DriverArrivingScreenContent() {
   const styles = useMemo(() => createStyles(colors), [colors]);
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
-  const { currentRide, currentDriver, fetchRide, simulateDriverArrival, triggerEmergency, isLoading, error } = useRideStore();
+  const { currentRide, currentDriver, fetchRide, simulateDriverArrival, triggerEmergency, isLoading, error, driverEtaSeconds } = useRideStore();
   const { wsConnected } = useRiderSocket();
-  const [eta, setEta] = useState(4);
+  // mapEtaMinutes: fallback ETA (minutes) from MapViewDirections when no WS value
+  const [mapEtaMinutes, setMapEtaMinutes] = useState<number | null>(null);
+  // countdownSeconds: live server ETA ticking down 1 s/s; reset on each WS push
+  const [countdownSeconds, setCountdownSeconds] = useState<number | null>(null);
   const [mapError, setMapError] = useState<string | null>(null);
   const [driverRouteCoords, setDriverRouteCoords] = useState<any[]>([]);
   const [rideRouteCoords, setRideRouteCoords] = useState<any[]>([]);
@@ -54,6 +57,34 @@ function DriverArrivingScreenContent() {
   const bottomSheetRef = React.useRef<BottomSheet>(null);
 
   const snapPoints = React.useMemo(() => ['30%', '50%', '85%'], []);
+
+  // Reset countdown whenever the server sends a fresh ETA via WS.
+  useEffect(() => {
+    if (driverEtaSeconds !== null) {
+      setCountdownSeconds(driverEtaSeconds);
+    }
+  }, [driverEtaSeconds]);
+
+  // Tick countdown down 1 s/s. Each render after a decrement schedules the
+  // next timeout; cleanup cancels any pending tick on unmount or reset.
+  useEffect(() => {
+    if (countdownSeconds === null || countdownSeconds <= 0) return;
+    const timer = setTimeout(() => {
+      setCountdownSeconds(s => (s !== null && s > 0 ? s - 1 : s));
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [countdownSeconds]);
+
+  // Human-readable ETA: WS countdown takes precedence over map-directions fallback.
+  const etaLabel = useMemo(() => {
+    if (countdownSeconds !== null) {
+      if (countdownSeconds <= 30) return 'Arriving shortly';
+      if (countdownSeconds < 120) return `${countdownSeconds}s`;
+      return `${Math.ceil(countdownSeconds / 60)} min`;
+    }
+    if (mapEtaMinutes !== null) return `${mapEtaMinutes} min`;
+    return 'Connecting…';
+  }, [countdownSeconds, mapEtaMinutes]);
 
   useEffect(() => {
     if (currentRide && mapRef.current) {
@@ -80,7 +111,7 @@ function DriverArrivingScreenContent() {
   }, [currentRide?.pickup_lat, currentRide?.pickup_lng, currentDriver?.lat, currentDriver?.lng]);
 
   useEffect(() => {
-    if (!rideId) return;
+    if (!rideId) { router.replace('/(tabs)' as any); return; }
     fetchRide(rideId);
     // Suspend fallback poll when WebSocket is healthy — saves battery/bandwidth.
     // Keep a fast 3 s poll during driver assignment negotiation in case a
@@ -94,6 +125,7 @@ function DriverArrivingScreenContent() {
   }, [rideId, currentRide?.status, wsConnected]);
 
   useEffect(() => {
+    if (!rideId) return;
     if (currentRide?.status === RideStatus.DRIVER_ARRIVED) {
       router.replace({ pathname: '/driver-arrived', params: { rideId } });
     } else if (currentRide?.status === RideStatus.IN_PROGRESS) {
@@ -110,7 +142,7 @@ function DriverArrivingScreenContent() {
 
   const handleBack = () => {
     const status = currentRide?.status;
-    const fare = currentRide?.total_fare || 0;
+    const fare = parseFloat(currentRide?.total_fare || '0');
 
     if (status === RideStatus.IN_PROGRESS) {
       // Ride started — full fare
@@ -241,7 +273,7 @@ function DriverArrivingScreenContent() {
 📍 PICKUP: ${currentRide?.pickup_address || 'University of Saskatchewan'}
 📍 DESTINATION: ${currentRide?.dropoff_address || '123 Main St, Saskatoon'}
 
-⏱️ ETA: ${eta} minutes
+⏱️ ETA: ${etaLabel}
 
 Track my live location: https://spinr-track.app/${rideId || 'demo'}
 
@@ -280,7 +312,7 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
             <Text style={styles.etaText} allowFontScaling={false}>
               {currentRide?.status === RideStatus.DRIVER_ASSIGNED
                 ? 'Confirming driver…'
-                : `Arriving in ${eta} min`}
+                : `Arriving in ${etaLabel}`}
             </Text>
           </View>
 
@@ -324,7 +356,7 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
                 strokeWidth={0}
                 strokeColor="transparent"
                 onReady={(result: any) => {
-                  setEta(Math.ceil(result.duration));
+                  setMapEtaMinutes(Math.ceil(result.duration));
                   setDriverRouteCoords(result.coordinates);
                 }}
               />
@@ -545,6 +577,15 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
                   driverAcceptedAt={(currentRide as any)?.driver_accepted_at}
                   freeCancelWindowSeconds={freeCancelWindowSeconds}
                   cancellationFee={cancellationFee}
+                  onExpire={() =>
+                    setAlertState({
+                      visible: true,
+                      title: 'Free cancel window closed',
+                      message: `A $${cancellationFee.toFixed(2)} cancellation fee now applies if you cancel.`,
+                      variant: 'warning',
+                      buttons: [{ text: 'OK' }],
+                    })
+                  }
                 />
               </View>
             )}
@@ -736,7 +777,7 @@ function createStyles(colors: ThemeColors) {
     flex: 1,
   },
   map: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
   },
   mapPlaceholder: {
     flex: 1,

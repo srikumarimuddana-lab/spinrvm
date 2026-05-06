@@ -1,6 +1,7 @@
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -89,7 +90,7 @@ async def _log_driver_activity(
             },
         )
     except Exception as e:
-        logger.warning(f"Failed to log driver activity: {e}")
+        logger.error(f"Failed to log driver activity: {e}", exc_info=True)
 
 
 # ---------- Pydantic models ----------
@@ -122,8 +123,10 @@ class DriverNoteCreate(BaseModel):
 async def admin_get_drivers(
     limit: int = 50,
     offset: int = 0,
+    search: Optional[str] = None,
     is_verified: Optional[bool] = None,
     is_online: Optional[bool] = None,
+    is_available: Optional[bool] = None,
     status: Optional[str] = None,
     service_area_id: Optional[str] = None,
 ):
@@ -134,15 +137,43 @@ async def admin_get_drivers(
     We still collapse by phone/user_id here so that if a legacy snapshot
     ever restores old state, the admin UI won't show duplicate rows.
     """
+    import re
+
     filters = {}
     if is_verified is not None:
         filters["is_verified"] = is_verified
     if is_online is not None:
         filters["is_online"] = is_online
+    if is_available is not None:
+        filters["is_available"] = is_available
     if status:
         filters["status"] = status
     if service_area_id:
         filters["service_area_id"] = service_area_id
+
+    # Find matching user IDs first if search is provided
+    if search:
+        term = search.strip()
+        if term:
+            user_filters = {
+                "$or": [
+                    {"phone": {"$regex": re.escape(term), "$options": "i"}},
+                    {"email": {"$regex": re.escape(term), "$options": "i"}},
+                    {"first_name": {"$regex": re.escape(term), "$options": "i"}},
+                    {"last_name": {"$regex": re.escape(term), "$options": "i"}},
+                ]
+            }
+            matching_users = await db_supabase.get_rows("users", user_filters, limit=100)
+            matching_uids = [u["id"] for u in matching_users if u.get("id")]
+
+            # Match driver rows by phone/plate directly OR by user_id from user search above.
+            # `name` is not a column on drivers — it's derived from the joined users row.
+            filters["$or"] = [
+                {"phone": {"$regex": re.escape(term), "$options": "i"}},
+                {"license_plate": {"$regex": re.escape(term), "$options": "i"}},
+            ]
+            if matching_uids:
+                filters["$or"].append({"user_id": {"$in": matching_uids}})
 
     drivers = await db_supabase.get_rows("drivers", filters, order="created_at", desc=True, limit=limit, offset=offset)
 
@@ -180,6 +211,27 @@ async def admin_get_drivers(
             }
         )
     return out
+
+
+class DriverSearchRequest(BaseModel):
+    search: str
+    limit: int = 5
+    is_online: Optional[bool] = None
+    is_available: Optional[bool] = None
+
+
+@router.post("/drivers/search")
+async def admin_search_drivers(
+    body: DriverSearchRequest,
+    admin_user: dict = Depends(get_admin_user),
+):
+    """Typeahead search for drivers via POST body to keep search terms out of server logs."""
+    return await admin_get_drivers(
+        limit=body.limit,
+        search=body.search,
+        is_online=body.is_online,
+        is_available=body.is_available,
+    )
 
 
 @router.get("/drivers/stats")
@@ -276,7 +328,7 @@ async def admin_get_driver_stats(
     suspended_count = sum(1 for d in enriched_drivers if d.get("status") == "suspended")
     banned_count = sum(1 for d in enriched_drivers if d.get("status") == "banned")
     total_rides_sum = sum(int(d.get("total_rides") or 0) for d in enriched_drivers)
-    total_earnings_sum = sum(float(d.get("total_earnings") or 0) for d in enriched_drivers)
+    total_earnings_sum = float(sum(Decimal(str(d.get("total_earnings") or 0)) for d in enriched_drivers))
     avg_rating = 0.0
     rated = [d for d in enriched_drivers if d.get("rating") and float(d.get("rating", 0)) > 0]
     if rated:
@@ -305,7 +357,9 @@ async def admin_get_driver_stats(
         else:
             area_stats[aid]["unverified"] += 1
         area_stats[aid]["total_rides"] += int(d.get("total_rides") or 0)
-        area_stats[aid]["total_earnings"] += float(d.get("total_earnings") or 0)
+        area_stats[aid]["total_earnings"] = float(
+            Decimal(str(area_stats[aid]["total_earnings"])) + Decimal(str(d.get("total_earnings") or 0))
+        )
 
     # ── Daily charts (within date range) ──
     num_days = (range_end - range_start).days + 1
@@ -340,7 +394,9 @@ async def admin_get_driver_stats(
             day_key = dt.strftime("%Y-%m-%d")
             daily_rides[day_key] += 1
             if r.get("status") == "completed":
-                daily_earnings[day_key] += float(r.get("driver_earnings") or 0)
+                daily_earnings[day_key] = float(
+                    Decimal(str(daily_earnings[day_key])) + Decimal(str(r.get("driver_earnings") or 0))
+                )
 
     # Build chart arrays
     joins_chart = []

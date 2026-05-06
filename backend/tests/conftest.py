@@ -13,31 +13,78 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-# TASK 9-11: explicitly load anyio plugin so @pytest.mark.anyio is available
-# alongside the asyncio_mode=auto setting in pytest.ini.
-pytest_plugins = ["anyio"]
-
-# Add backend dir and project root to path.
-# backend/ on sys.path enables bare imports (e.g. `from routes.drivers import …`).
-# project root on sys.path enables package imports (e.g. `from backend.routes import …`)
-# which are required for mock.patch targets such as "backend.db_supabase.supabase".
+# Add backend dir and project root to path FIRST so subsequent backend imports work.
 _backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _project_root = os.path.dirname(_backend_dir)
 sys.path.insert(0, _backend_dir)
 if _project_root not in sys.path:
     sys.path.insert(1, _project_root)
 
-# pytest.ini has an `env = …` block but that's pytest-env syntax and we don't
-# install pytest-env. CI sets these via the job-level env: block; to make
-# `pytest` work locally without any ceremony, default the same values here if
-# the ambient env hasn't already provided them. Must run before any backend
-# module is imported so core/config.py's Settings model sees them.
-os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
-os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test_key")
-os.environ.setdefault("JWT_SECRET", "test-secret-key-for-ci-only-32chars!!")
-os.environ.setdefault("ADMIN_PASSWORD", "TestAdminPass123!")
-os.environ.setdefault("ADMIN_EMAIL", "admin@spinr.ca")
-os.environ.setdefault("ENV", "test")
+# Set env vars before importing any backend module so core/config.py sees them.
+# Use `or` fallback instead of setdefault: GitHub Actions sets missing secrets to ""
+# (empty string), which setdefault treats as already-set and leaves unchanged.
+os.environ["SUPABASE_URL"] = os.environ.get("SUPABASE_URL") or "https://test.supabase.co"
+os.environ["SUPABASE_SERVICE_ROLE_KEY"] = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or "test_key"
+os.environ["JWT_SECRET"] = os.environ.get("JWT_SECRET") or "test-secret-key-for-ci-only-32chars!!"
+os.environ["ADMIN_PASSWORD"] = os.environ.get("ADMIN_PASSWORD") or "TestAdminPass123!"
+os.environ["ADMIN_EMAIL"] = os.environ.get("ADMIN_EMAIL") or "admin@spinr.ca"
+os.environ["ENV"] = os.environ.get("ENV") or "test"
+
+# Pre-import backend.server with REAL slowapi so all route module-level decorators
+# bind real types. rate_limiter.py does `from slowapi import Limiter` at module
+# level — if that runs inside the slowapi mock context below, MagicMock children
+# flow into FastAPI's route registration and cause FastAPIError at test setup.
+# Since Python caches modules in sys.modules, fixtures that later do
+# `from backend.server import app` get the already-built app with correct bindings.
+# Force-stub slowapi AFTER route modules are cached. The real package IS
+# installed in CI (it's in requirements.txt for the rate-limiter), so the
+# `if _m not in sys.modules` guard in some test files leaves the real module
+# in place.  The real Limiter class has no .return_value attribute, which
+# breaks tests that do  sys.modules["slowapi"].Limiter.return_value.limit = fn.
+# Replacing it here (conftest runs before collection) makes the stub visible
+# to every test file regardless of collection order.
+from slowapi.errors import RateLimitExceeded as _real_RateLimitExceeded  # noqa: E402
+
+import backend.server as _backend_server_preload  # noqa: F401, E402
+
+for _slowapi_mod in ("slowapi", "slowapi.extension", "slowapi.errors", "slowapi.util"):
+    sys.modules[_slowapi_mod] = MagicMock()
+
+# Restore RateLimitExceeded as a real Exception subclass so that
+# app.add_exception_handler(RateLimitExceeded, ...) passes issubclass() when
+# Starlette builds its ExceptionMiddleware during TestClient startup.
+sys.modules["slowapi.errors"].RateLimitExceeded = _real_RateLimitExceeded
+
+# server.py inserts backend/ into sys.path and uses bare imports, so route/util
+# modules land in sys.modules under bare keys ("routes.admin.auth") rather than
+# qualified keys ("backend.routes.admin.auth"). Test files that do qualified
+# imports during collection would otherwise trigger a second import of those
+# files — this time with slowapi already mocked — turning @limiter.limit
+# decorators into MagicMocks. Mirroring the keys here prevents that re-import.
+for _bare_key in list(sys.modules.keys()):
+    if _bare_key.split(".")[0] in {
+        "routes",
+        "utils",
+        "core",
+        "documents",
+        "features",
+        "dependencies",
+        "socket_manager",
+        "db_supabase",
+        "schemas",
+        "validators",
+        "sms_service",
+        "settings_loader",
+        "logging_utils",
+        "geo_utils",
+    }:
+        _qualified_key = "backend." + _bare_key
+        if _qualified_key not in sys.modules:
+            sys.modules[_qualified_key] = sys.modules[_bare_key]
+
+# TASK 9-11: explicitly load anyio plugin so @pytest.mark.anyio is available
+# alongside the asyncio_mode=auto setting in pytest.ini.
+pytest_plugins = ["anyio"]
 
 
 @pytest.fixture(scope="session")
@@ -301,6 +348,10 @@ def patch_external_dependencies(
         ("backend.core.security", "core.security", "firebase_admin", mock_firebase_admin),
         ("backend.sms_service", "sms_service", "send_sms", mock_sms_service.send),
         ("backend.sms_service", "sms_service", "send_otp_sms", mock_sms_service.send_otp),
+        # auth.py does `from sms_service import send_otp_sms` — a direct name binding
+        # that is NOT covered by patching the sms_service module attribute above.
+        # Must also patch the name in auth.py's own namespace.
+        ("backend.routes.auth", "routes.auth", "send_otp_sms", mock_sms_service.send_otp),
     ]
 
     patches = []
@@ -347,6 +398,50 @@ def reset_db_circuit_breaker() -> None:
                 breaker._failure_times = []
                 breaker._opened_at = None
                 breaker._probe_in_flight = False
+        except (ImportError, ModuleNotFoundError):
+            continue
+
+
+def _reset_limiter_storage(limiter_obj) -> None:
+    """Reset MemoryStorage on a SlowAPI Limiter instance (if present)."""
+    inner = getattr(limiter_obj, "_limiter", None)
+    storage = getattr(inner, "storage", None) if inner is not None else None
+    if storage is not None and callable(getattr(storage, "reset", None)):
+        storage.reset()
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limiters() -> None:
+    """Reset in-process rate-limiter storage before each test.
+
+    The real SlowAPI Limiter is created at module import time (before conftest
+    mocks slowapi) and uses MemoryStorage whose hit counts persist across tests
+    in the same process.  After the limit threshold is reached (e.g. 3 hits to
+    /api/admin/auth/login in 30 min), all subsequent tests that hit the same
+    endpoint receive 429 instead of the expected 4xx/5xx — masking the real
+    auth logic under test.
+    """
+    import importlib
+
+    # Disable and reset the shared default_limiter used by all pre-configured limits
+    # (payment_action_limit, ride_action_limit, ride_request_limit, etc.).
+    # Setting enabled=False makes SlowAPI skip the starlette.Request lookup entirely,
+    # which prevents IndexError / "request must be Request" errors when tests call
+    # route handlers directly without an HTTP request object.
+    for rl_mod_path in ("backend.utils.rate_limiter", "utils.rate_limiter"):
+        try:
+            rl_mod = importlib.import_module(rl_mod_path)
+            limiter = getattr(rl_mod, "default_limiter", None)
+            if limiter is not None:
+                limiter.enabled = False
+            _reset_limiter_storage(limiter)
+        except (ImportError, ModuleNotFoundError):
+            continue
+
+    for mod_path in ("backend.routes.admin.auth", "routes.admin.auth"):
+        try:
+            mod = importlib.import_module(mod_path)
+            _reset_limiter_storage(getattr(mod, "limiter", None))
         except (ImportError, ModuleNotFoundError):
             continue
 

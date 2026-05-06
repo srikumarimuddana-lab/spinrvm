@@ -181,3 +181,43 @@ async def test_rate_driver_first_rating_sets_score():
     payload = update_one_mock.call_args.args[2]
     assert payload["rating"] == 5.0
     assert payload["total_ratings"] == 1
+
+
+@_skip_no_deps
+@pytest.mark.anyio
+async def test_rate_driver_tip_with_null_ride_fields():
+    """tip_amount and driver_earnings are NULL in DB (key present, value None).
+    ride.get("tip_amount", 0) returns None, not 0 — arithmetic must not crash."""
+    from backend.schemas import RideRatingRequest
+
+    base_ride = {
+        "id": "ride-tip",
+        "rider_id": "rider-3",
+        "driver_id": "driver-tip",
+        "status": "completed",
+        "tip_amount": None,
+        "driver_earnings": None,
+    }
+    driver = {"id": "driver-tip", "user_id": "user-tip", "name": "Tip Driver", "rating": 4.0, "total_ratings": 1}
+    update_ride_mock = AsyncMock(return_value=base_ride)
+    update_one_mock = AsyncMock(return_value={})
+
+    with (
+        patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=base_ride)),
+        patch("backend.routes.rides.db_supabase.update_ride", update_ride_mock),
+        patch("backend.routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+        patch("backend.routes.rides.db_supabase.update_one", update_one_mock),
+        patch("backend.routes.rides.send_push_notification", AsyncMock()),
+    ):
+        result = await _rides_module.rate_driver(
+            "ride-tip",
+            RideRatingRequest(rating=5, tip_amount=Decimal("2.00")),
+            current_user={"id": "rider-3"},
+        )
+
+    assert result == {"success": True}
+    # update_ride called twice: once for the rating, once for the tip
+    assert update_ride_mock.call_count == 2
+    tip_payload = update_ride_mock.call_args_list[1].args[1]
+    assert tip_payload["tip_amount"] == Decimal("2.00")
+    assert tip_payload["driver_earnings"] == Decimal("2.00")

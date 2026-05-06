@@ -23,7 +23,7 @@ Run:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -38,7 +38,7 @@ def _scheduled_ride(status: str = "searching", **extra) -> dict:
         "rider_id": RIDER_ID,
         "status": status,
         "is_scheduled": True,
-        "scheduled_time": (datetime.utcnow() + timedelta(hours=2)).isoformat(),
+        "scheduled_time": (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
         "pickup_address": "123 Main",
         "dropoff_address": "456 Broadway",
         **extra,
@@ -135,9 +135,10 @@ class TestCancelScheduledRide:
         from fastapi import HTTPException
 
         from backend.routes import rides as rides_mod
+        from backend.utils.error_handling import SpinrException
 
         with patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])):
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises((HTTPException, SpinrException)) as exc_info:
                 await rides_mod.cancel_scheduled_ride(
                     ride_id=RIDE_ID,
                     current_user={"id": "different-rider"},
@@ -149,28 +150,32 @@ class TestCancelScheduledRide:
         from fastapi import HTTPException
 
         from backend.routes import rides as rides_mod
+        from backend.utils.error_handling import SpinrException
 
         ride = _scheduled_ride(status="cancelled")
 
         with patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[ride])):
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises((HTTPException, SpinrException)) as exc_info:
                 await rides_mod.cancel_scheduled_ride(
                     ride_id=RIDE_ID,
                     current_user={"id": RIDER_ID},
                 )
 
         assert exc_info.value.status_code == 400
-        assert "cancel" in exc_info.value.detail.lower()
+        # SpinrException uses .message; HTTPException uses .detail
+        text = getattr(exc_info.value, "detail", None) or getattr(exc_info.value, "message", "")
+        assert "cancel" in str(text).lower()
 
     async def test_completed_ride_cannot_be_cancelled(self):
         from fastapi import HTTPException
 
         from backend.routes import rides as rides_mod
+        from backend.utils.error_handling import SpinrException
 
         ride = _scheduled_ride(status="completed")
 
         with patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[ride])):
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises((HTTPException, SpinrException)) as exc_info:
                 await rides_mod.cancel_scheduled_ride(
                     ride_id=RIDE_ID,
                     current_user={"id": RIDER_ID},

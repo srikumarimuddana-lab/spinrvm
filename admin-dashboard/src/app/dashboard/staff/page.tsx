@@ -3,7 +3,13 @@
 import { useEffect, useState } from "react";
 import { getStaff, createStaff, updateStaff, deleteStaff } from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
+import { useRequireModule } from "@/hooks/useRequireModule";
 import { Users, Plus, Shield, Eye, EyeOff, Trash2, Edit, Check, X } from "lucide-react";
+import { useToast } from "@/components/ui/use-toast";
+import {
+    AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+    AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 const ALL_MODULES = [
   { key: "dashboard", label: "Dashboard" },
@@ -54,7 +60,10 @@ interface Staff {
 }
 
 export default function StaffPage() {
+  const { allowed } = useRequireModule("staff");
   const { user } = useAuthStore();
+  const { toast } = useToast();
+  const [deleteTarget, setDeleteTarget] = useState<Staff | null>(null);
   const [staff, setStaff] = useState<Staff[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -116,7 +125,7 @@ export default function StaffPage() {
       resetForm();
       loadStaff();
     } catch (e: any) {
-      alert(e?.message || "Failed to save staff member");
+      toast({ title: "Failed to save staff member", description: e?.message, variant: "destructive" });
     }
   };
 
@@ -138,10 +147,20 @@ export default function StaffPage() {
     loadStaff();
   };
 
-  const handleDelete = async (s: Staff) => {
-    if (!confirm(`Delete ${s.first_name} ${s.last_name}? This cannot be undone.`)) return;
-    await deleteStaff(s.id);
-    loadStaff();
+  const handleDelete = (s: Staff) => {
+    setDeleteTarget(s);
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    try {
+      await deleteStaff(deleteTarget.id);
+      loadStaff();
+    } catch (e: any) {
+      toast({ title: "Failed to delete staff member", description: e?.message, variant: "destructive" });
+    } finally {
+      setDeleteTarget(null);
+    }
   };
 
   const resetForm = () => {
@@ -150,8 +169,8 @@ export default function StaffPage() {
     setForm({ email: "", password: "", first_name: "", last_name: "", role: "custom", modules: ["dashboard"] });
   };
 
-  // Only super_admin can access this page
-  if (user?.role !== "super_admin" && user?.role !== "admin") {
+  // useRequireModule("staff") handles redirect; return null to avoid content flash.
+  if (!allowed) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
         <div className="text-center">
@@ -367,6 +386,19 @@ export default function StaffPage() {
           ))}
         </div>
       )}
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {deleteTarget?.first_name} {deleteTarget?.last_name}?</AlertDialogTitle>
+            <AlertDialogDescription>This cannot be undone.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDelete} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

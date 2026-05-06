@@ -18,17 +18,19 @@ Run:
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from starlette.requests import Request as StarletteRequest
 
 
-def _make_request(user_agent: str = "") -> StarletteRequest:
+def _make_request(user_agent: str = "", refresh_token: str = "") -> StarletteRequest:
     """Return a real Starlette Request so SlowAPI's rate-limit decorator accepts it."""
     headers = []
     if user_agent:
         headers.append((b"user-agent", user_agent.encode()))
+    if refresh_token:
+        headers.append((b"cookie", f"refresh_token={refresh_token}".encode()))
     return StarletteRequest(
         {
             "type": "http",
@@ -49,7 +51,7 @@ def _refresh_row(audience: str = "rider", **extra) -> dict:
         "id": OLD_REFRESH_ROW_ID,
         "user_id": USER_ID,
         "audience": audience,
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
         **extra,
     }
 
@@ -78,32 +80,38 @@ class TestRefreshAccessToken:
     """
 
     async def test_valid_rider_refresh_token_returns_new_tokens(self):
+        # Import via package attribute so auth_mod matches the live module object
+        # regardless of any sys.modules divergence caused by earlier test modules.
         from backend.routes import auth as auth_mod
 
         new_raw_token = "new-refresh-raw-xyz"
         refresh_expires = datetime.now(timezone.utc) + timedelta(days=30)
 
         with (
-            patch("backend.routes.auth.lookup_refresh_token", AsyncMock(return_value=_refresh_row())),
-            patch("backend.routes.auth.db.find_one", AsyncMock(return_value=_user_row())),
-            patch(
-                "backend.routes.auth.issue_refresh_token",
+            patch.object(auth_mod, "lookup_refresh_token", AsyncMock(return_value=_refresh_row())),
+            patch.object(auth_mod.db, "find_one", AsyncMock(return_value=_user_row())),
+            patch.object(
+                auth_mod,
+                "issue_refresh_token",
                 AsyncMock(return_value=(new_raw_token, "hashed", refresh_expires)),
             ),
-            patch("backend.routes.auth.create_jwt_token", return_value="new-access-token-abc"),
-            patch("backend.routes.auth.get_remote_address", return_value="127.0.0.1"),
+            patch.object(auth_mod, "create_jwt_token", return_value="new-access-token-abc"),
+            patch.object(auth_mod, "get_remote_address", return_value="127.0.0.1"),
         ):
 
             class _Body:
                 refresh_token = "old-refresh-raw"
 
             result = await auth_mod.refresh_access_token(
-                request=_make_request(user_agent="TestApp/1.0"),
+                request=_make_request(user_agent="TestApp/1.0", refresh_token="old-refresh-raw"),
+                response=MagicMock(),
                 body=_Body(),
             )
 
-        assert result.token == "new-access-token-abc"
-        assert result.refresh_token == new_raw_token
+        # P3: tokens are set as HTTP-only cookies, not returned in body
+        assert result.token == ""
+        assert result.refresh_token == ""
+        assert result.access_expires_at is not None
 
     async def test_invalid_refresh_token_returns_401(self):
         """Revoked / unknown refresh tokens must return 401 without distinguishing
@@ -111,17 +119,18 @@ class TestRefreshAccessToken:
         from fastapi import HTTPException
 
         from backend.routes import auth as auth_mod
+        from backend.utils.error_handling import SpinrException
 
         with (
-            patch("backend.routes.auth.lookup_refresh_token", AsyncMock(return_value=None)),
-            patch("backend.routes.auth.get_remote_address", return_value="127.0.0.1"),
+            patch.object(auth_mod, "lookup_refresh_token", AsyncMock(return_value=None)),
+            patch.object(auth_mod, "get_remote_address", return_value="127.0.0.1"),
         ):
 
             class _Body:
                 refresh_token = "bad-or-revoked-token"
 
-            with pytest.raises(HTTPException) as exc_info:
-                await auth_mod.refresh_access_token(request=_make_request(), body=_Body())
+            with pytest.raises((HTTPException, SpinrException)) as exc_info:
+                await auth_mod.refresh_access_token(request=_make_request(), response=MagicMock(), body=_Body())
 
         assert exc_info.value.status_code == 401
 
@@ -131,20 +140,22 @@ class TestRefreshAccessToken:
         from fastapi import HTTPException
 
         from backend.routes import auth as auth_mod
+        from backend.utils.error_handling import SpinrException
 
         with (
-            patch(
-                "backend.routes.auth.lookup_refresh_token",
+            patch.object(
+                auth_mod,
+                "lookup_refresh_token",
                 AsyncMock(return_value=_refresh_row(audience="admin")),
             ),
-            patch("backend.routes.auth.get_remote_address", return_value="127.0.0.1"),
+            patch.object(auth_mod, "get_remote_address", return_value="127.0.0.1"),
         ):
 
             class _Body:
                 refresh_token = "admin-refresh-token"
 
-            with pytest.raises(HTTPException) as exc_info:
-                await auth_mod.refresh_access_token(request=_make_request(), body=_Body())
+            with pytest.raises((HTTPException, SpinrException)) as exc_info:
+                await auth_mod.refresh_access_token(request=_make_request(), response=MagicMock(), body=_Body())
 
         assert exc_info.value.status_code == 401
 
@@ -153,18 +164,19 @@ class TestRefreshAccessToken:
         from fastapi import HTTPException
 
         from backend.routes import auth as auth_mod
+        from backend.utils.error_handling import SpinrException
 
         with (
-            patch("backend.routes.auth.lookup_refresh_token", AsyncMock(return_value=_refresh_row())),
-            patch("backend.routes.auth.db.find_one", AsyncMock(return_value=None)),
-            patch("backend.routes.auth.get_remote_address", return_value="127.0.0.1"),
+            patch.object(auth_mod, "lookup_refresh_token", AsyncMock(return_value=_refresh_row())),
+            patch.object(auth_mod.db, "find_one", AsyncMock(return_value=None)),
+            patch.object(auth_mod, "get_remote_address", return_value="127.0.0.1"),
         ):
 
             class _Body:
                 refresh_token = "valid-token-deleted-user"
 
-            with pytest.raises(HTTPException) as exc_info:
-                await auth_mod.refresh_access_token(request=_make_request(), body=_Body())
+            with pytest.raises((HTTPException, SpinrException)) as exc_info:
+                await auth_mod.refresh_access_token(request=_make_request(), response=MagicMock(), body=_Body())
 
         assert exc_info.value.status_code == 401
 
@@ -180,17 +192,19 @@ class TestRefreshAccessToken:
             return ("new-raw", "hashed", datetime.now(timezone.utc) + timedelta(days=30))
 
         with (
-            patch("backend.routes.auth.lookup_refresh_token", AsyncMock(return_value=_refresh_row())),
-            patch("backend.routes.auth.db.find_one", AsyncMock(return_value=_user_row())),
-            patch("backend.routes.auth.issue_refresh_token", AsyncMock(side_effect=_capture_issue)),
-            patch("backend.routes.auth.create_jwt_token", return_value="access-tok"),
-            patch("backend.routes.auth.get_remote_address", return_value="127.0.0.1"),
+            patch.object(auth_mod, "lookup_refresh_token", AsyncMock(return_value=_refresh_row())),
+            patch.object(auth_mod.db, "find_one", AsyncMock(return_value=_user_row())),
+            patch.object(auth_mod, "issue_refresh_token", AsyncMock(side_effect=_capture_issue)),
+            patch.object(auth_mod, "create_jwt_token", return_value="access-tok"),
+            patch.object(auth_mod, "get_remote_address", return_value="127.0.0.1"),
         ):
 
             class _Body:
                 refresh_token = "old-raw"
 
-            await auth_mod.refresh_access_token(request=_make_request(user_agent="UA"), body=_Body())
+            await auth_mod.refresh_access_token(
+                request=_make_request(user_agent="UA", refresh_token="old-raw"), response=MagicMock(), body=_Body()
+            )
 
         assert issue_calls, "issue_refresh_token was not called"
         assert issue_calls[0]["replaces"] == OLD_REFRESH_ROW_ID, (

@@ -44,11 +44,10 @@ export default function WalletScreen() {
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   const {
-    wallet, transactions, isLoading,
+    wallet, transactions, walletLoading, transactionsLoading, error: storeError,
     fetchWallet, topUp, fetchTransactions, transfer, clearError,
   } = useWalletStore();
 
-  const [walletError, setWalletError] = useState<string | null>(null);
   const [showTopUp, setShowTopUp] = useState(false);
   const [showTransfer, setShowTransfer] = useState(false);
   const [customAmount, setCustomAmount] = useState('');
@@ -62,10 +61,8 @@ export default function WalletScreen() {
   }>({ visible: false, title: '', message: '', variant: 'info' });
 
   useEffect(() => {
-    setWalletError(null);
-    Promise.all([fetchWallet(), fetchTransactions(30)]).catch(() => {
-      setWalletError('Balance unavailable');
-    });
+    clearError();
+    Promise.all([fetchWallet(), fetchTransactions(30)]);
   }, []);
 
   const handleTopUp = async (amount: number) => {
@@ -81,7 +78,7 @@ export default function WalletScreen() {
       setAlertState({ visible: true, title: 'Success', message: `$${amount.toFixed(2)} added to your wallet`, variant: 'success' });
       fetchTransactions(30);
     } catch (err: any) {
-      setAlertState({ visible: true, title: 'Top-up Failed', message: err.message || 'Please try again', variant: 'danger' });
+      setAlertState({ visible: true, title: 'Top-up Failed', message: err.response?.data?.detail || err.message || 'Please try again', variant: 'danger' });
     } finally {
       setTopUpLoading(false);
     }
@@ -98,8 +95,8 @@ export default function WalletScreen() {
       setAlertState({ visible: true, title: 'Invalid Amount', message: 'Amount must be between $0.01 and $500.', variant: 'warning' });
       return;
     }
-    if ((wallet?.balance ?? 0) < amount) {
-      setAlertState({ visible: true, title: 'Insufficient Funds', message: `Your balance ($${(wallet?.balance ?? 0).toFixed(2)}) is less than $${amount.toFixed(2)}.`, variant: 'danger' });
+    if (parseFloat(wallet?.balance ?? '0') < amount) {
+      setAlertState({ visible: true, title: 'Insufficient Funds', message: `Your balance ($${parseFloat(wallet?.balance ?? '0').toFixed(2)}) is less than $${amount.toFixed(2)}.`, variant: 'danger' });
       return;
     }
     setTransferLoading(true);
@@ -112,7 +109,7 @@ export default function WalletScreen() {
       fetchWallet();
       fetchTransactions(30);
     } catch (err: any) {
-      setAlertState({ visible: true, title: 'Transfer Failed', message: err.message || 'Please try again.', variant: 'danger' });
+      setAlertState({ visible: true, title: 'Transfer Failed', message: err.response?.data?.detail || err.message || 'Please try again.', variant: 'danger' });
     } finally {
       setTransferLoading(false);
     }
@@ -126,7 +123,8 @@ export default function WalletScreen() {
   const renderTransaction = ({ item }: { item: WalletTransaction }) => {
     const icon = TXN_ICONS[item.type] || 'swap-horizontal';
     const color = TXN_COLORS[item.type] || colors.textDim;
-    const isCredit = item.amount > 0;
+    const amountNum = parseFloat(item.amount);
+    const isCredit = amountNum > 0;
 
     return (
       <View style={styles.txnRow}>
@@ -138,7 +136,7 @@ export default function WalletScreen() {
           <Text style={styles.txnDate}>{formatDate(item.created_at)}</Text>
         </View>
         <Text style={[styles.txnAmount, { color: isCredit ? '#10B981' : '#EF4444' }]}>
-          {isCredit ? '+' : ''}{item.amount < 0 ? '-' : ''}${Math.abs(item.amount).toFixed(2)}
+          {isCredit ? '+' : ''}{amountNum < 0 ? '-' : ''}${Math.abs(amountNum).toFixed(2)}
         </Text>
       </View>
     );
@@ -157,11 +155,17 @@ export default function WalletScreen() {
       {/* Balance Card */}
       <View style={styles.balanceCard}>
         <Text style={styles.balanceLabel}>Available Balance</Text>
-        {walletError ? (
-          <Text style={[styles.balanceAmount, { fontSize: 20 }]}>Balance unavailable</Text>
+        {storeError ? (
+          <TouchableOpacity onPress={() => {
+            clearError();
+            Promise.all([fetchWallet(), fetchTransactions(30)]);
+          }}>
+            <Text style={[styles.balanceAmount, { fontSize: 18 }]}>Balance unavailable</Text>
+            <Text style={{ color: '#FFF', opacity: 0.8, textAlign: 'center', marginTop: 4 }}>Tap to retry</Text>
+          </TouchableOpacity>
         ) : (
           <Text style={styles.balanceAmount}>
-            ${(wallet?.balance ?? 0).toFixed(2)}
+            ${parseFloat(wallet?.balance ?? '0').toFixed(2)}
           </Text>
         )}
         <Text style={styles.balanceCurrency}>{wallet?.currency || 'CAD'}</Text>
@@ -235,7 +239,7 @@ export default function WalletScreen() {
         <Text style={styles.txnTitle}>Recent Activity</Text>
       </View>
 
-      {isLoading && transactions.length === 0 ? (
+      {(walletLoading || transactionsLoading) && transactions.length === 0 ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={colors.primary} />
         </View>
@@ -258,7 +262,7 @@ export default function WalletScreen() {
       {/* Transfer Modal */}
       <Modal visible={showTransfer} animationType="slide" transparent onRequestClose={() => setShowTransfer(false)}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowTransfer(false)}>
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+          <KeyboardAvoidingView behavior="padding" keyboardVerticalOffset={Platform.OS === 'android' ? 24 : 0}>
             <TouchableOpacity activeOpacity={1} style={styles.transferSheet}>
               <View style={styles.sheetHandle} />
               <Text style={styles.transferTitle}>Send Money</Text>
@@ -268,7 +272,7 @@ export default function WalletScreen() {
               <View style={styles.transferBalanceRow}>
                 <Ionicons name="wallet-outline" size={16} color={colors.textDim} />
                 <Text style={styles.transferBalanceText}>
-                  Available: <Text style={{ fontWeight: '700', color: colors.primary }}>${(wallet?.balance ?? 0).toFixed(2)}</Text>
+                  Available: <Text style={{ fontWeight: '700', color: colors.primary }}>${parseFloat(wallet?.balance ?? '0').toFixed(2)}</Text>
                 </Text>
               </View>
 

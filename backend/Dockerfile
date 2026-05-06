@@ -3,13 +3,13 @@
 # which meant a Docker Hub re-tag of `3.12-slim` could change the build
 # environment between runs without any visible PR diff.
 #
-# NEXT STEP — content-hash pin: add `@sha256:<digest>` after the tag to make
-# the base image bit-for-bit reproducible. This requires a `docker pull` of
-# the current upstream image, which is a manual step performed at the deploy
-# host (Railway / local dev). See `docs/runbooks/docker-image-pinning.md`
-# for the procedure. The digest should be refreshed quarterly or when a
-# Trivy/Grype scan flags the current base.
-FROM python:3.12.9-slim
+# B-P2-8 half 2 — content-hash pin: the `@sha256:` suffix makes the base
+# image bit-for-bit reproducible. Any Docker Hub re-tag or compromised mirror
+# must also rotate this digest, leaving an auditable PR diff. Digest captured
+# 2026-04-29 from the manifest list (all platforms; Docker resolves to the
+# correct arch). Refresh quarterly or on Trivy/Grype alert:
+# see `docs/runbooks/docker-image-pinning.md`.
+FROM python:3.12.9-slim@sha256:48a11b7ba705fd53bf15248d1f94d36c39549903c5d59edcfa2f3f84126e7b44
 
 WORKDIR /build
 
@@ -33,7 +33,7 @@ RUN pip install --no-cache-dir --prefix=/install --require-hashes -r requirement
 
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
-FROM python:3.12.9-slim AS runtime
+FROM python:3.12.9-slim@sha256:48a11b7ba705fd53bf15248d1f94d36c39549903c5d59edcfa2f3f84126e7b44 AS runtime
 
 # Apply OS security patches to the runtime image as well.
 # The builder's patched packages don't transfer to the runtime stage

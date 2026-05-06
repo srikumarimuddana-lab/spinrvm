@@ -151,6 +151,10 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
         with logger.contextualize(request_id=request_id):
             response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
+        # OTel/W3C-compatible alias: clients that look for X-Trace-ID
+        # (per OTel HTTP semantic conventions) get the same UUID without
+        # us having to introduce a separate trace ID generator yet.
+        response.headers["X-Trace-ID"] = request_id
         return response
 
 
@@ -463,8 +467,17 @@ def init_middleware(app):
         CORSMiddleware,
         allow_origins=origins,
         allow_credentials=allow_credentials,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "X-Requested-With",
+            "Idempotency-Key",
+            "X-Forwarded-For",
+            "Accept",
+            "Accept-Language",
+            "Cache-Control",
+        ],
     )
 
     # Security headers — applied after CORS so that every response
@@ -485,7 +498,6 @@ def init_middleware(app):
     app.add_middleware(FirebaseAppCheckMiddleware, enforcement_enabled=is_production)
 
     # FIX: Add CORS headers to exception responses (FastAPI bug fix)
-    @app.exception_handler(Exception)
     async def cors_exception_handler(request: Request, exc: Exception):
         origin = request.headers.get("origin")
 
@@ -505,7 +517,10 @@ def init_middleware(app):
                 if allow_credentials:
                     response.headers["Access-Control-Allow-Credentials"] = "true"
                 response.headers["Access-Control-Allow-Methods"] = "*"
-                response.headers["Access-Control-Allow-Headers"] = "*"
+                response.headers["Access-Control-Allow-Headers"] = (
+                    "Authorization, Content-Type, X-Requested-With, "
+                    "Idempotency-Key, X-Forwarded-For, Accept, Accept-Language, Cache-Control"
+                )
                 response.headers["Vary"] = "Origin"
             elif wildcard:
                 # Wildcard (dev only) — credentials already disabled above
@@ -519,6 +534,8 @@ def init_middleware(app):
         _apply_security_headers(response, request.url.path, enable_hsts=is_production)
 
         return response
+
+    app.add_exception_handler(Exception, cors_exception_handler)
 
     # Relative-redirect middleware — when FastAPI issues a 307 trailing-slash
     # redirect the Location header contains an absolute backend URL

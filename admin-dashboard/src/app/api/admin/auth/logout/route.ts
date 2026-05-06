@@ -48,7 +48,7 @@ function clearSessionCookies(res: NextResponse): void {
     httpOnly: false,
     sameSite: "strict",
     secure: isProduction,
-    path: "/api/admin/auth",
+    path: "/",
     maxAge: 0,
   });
 }
@@ -62,6 +62,7 @@ export async function POST(req: NextRequest) {
     return res;
   }
 
+  const log = logger.child({ domain: "auth" });
   const refreshToken = req.cookies.get(RT_COOKIE)?.value;
   log.info({ has_rt: !!refreshToken }, "admin logout");
 

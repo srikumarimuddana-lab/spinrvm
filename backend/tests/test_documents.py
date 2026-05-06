@@ -5,7 +5,7 @@ Tests cover document requirements, driver documents, file uploads, and document 
 
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -103,7 +103,7 @@ class TestDriverDocuments:
             "document_type": "license",
             "file_url": "https://storage.example.com/license.pdf",
             "status": "pending",
-            "uploaded_at": datetime.utcnow().isoformat(),
+            "uploaded_at": datetime.now(timezone.utc).isoformat(),
         }
 
     @pytest.mark.asyncio
@@ -425,7 +425,7 @@ class TestDocumentRegressions:
         included in server.py, causing all WebSocket upgrade requests to return
         403 Forbidden instead of 101 Switching Protocols.
         """
-        from server import app
+        from backend.server import app
 
         ws_routes = [r for r in app.routes if hasattr(r, "path") and r.path.startswith("/ws/")]
         assert len(ws_routes) > 0, (

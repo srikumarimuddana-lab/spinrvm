@@ -48,11 +48,21 @@ async def check_expiring_documents():
     now = datetime.now(timezone.utc)
     warning_cutoff = now + timedelta(days=EXPIRY_WARNING_DAYS)
 
-    try:
-        all_drivers = await db.get_rows("drivers", {}, limit=1000)
-    except Exception as e:
-        logger.error(f"Doc expiry: failed to fetch drivers: {e}")
-        return
+    _PAGE_SIZE = 100
+    all_drivers: list = []
+    offset = 0
+    while True:
+        try:
+            page = await db.get_rows("drivers", {}, limit=_PAGE_SIZE, offset=offset)
+        except Exception as e:
+            logger.error(f"Doc expiry: failed to fetch drivers (offset={offset}): {e}", exc_info=True)
+            return
+        if not page:
+            break
+        all_drivers.extend(page)
+        if len(page) < _PAGE_SIZE:
+            break
+        offset += _PAGE_SIZE
 
     notified = 0
     for driver in all_drivers:
@@ -129,14 +139,14 @@ async def check_expiring_documents():
                     {"is_online": False, "is_available": False, "status": "suspended"},
                 )
             except Exception as e:
-                logger.error(f"Doc expiry: failed to suspend driver {driver['id']}: {e}")
+                logger.error(f"Doc expiry: failed to suspend driver {driver['id']}: {e}", exc_info=True)
             # Clear Redis presence so dispatch filters drop this driver
             # immediately — otherwise they'd remain eligible for up to
             # PRESENCE_TTL (90 s) and could still be assigned a ride.
             try:
                 await clear_presence(driver["id"])
             except Exception as e:
-                logger.warning(f"Doc expiry: clear_presence failed for {driver['id']}: {e}")
+                logger.error(f"Doc expiry: clear_presence failed for {driver['id']}: {e}", exc_info=True)
             manager.disconnect(f"driver_{user_id}")
             # 2. Notification
             try:
@@ -210,7 +220,7 @@ async def document_expiry_loop():
         try:
             await check_expiring_documents()
         except Exception as e:
-            logger.error(f"Document expiry loop error: {e}")
+            logger.error(f"Document expiry loop error: {e}", exc_info=True)
             _had_error = True
         _metric_gauge("spinr_bgloop_duration_ms", (time.monotonic() - _t0) * 1000, {"loop": "document_expiry"})
         if _had_error:

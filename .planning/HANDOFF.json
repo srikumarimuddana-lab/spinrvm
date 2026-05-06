@@ -1,0 +1,99 @@
+{
+  "paused_at": "2026-05-04T17:45:00-06:00",
+  "branch": "fix/rider-app-expo-sdk55",
+  "head_commit": "40f4ad42",
+  "commits_ahead_of_main": 21,
+  "phase": "Expo SDK 55 Build Fix + Admin Login Unblock + Dependabot Cleanup",
+
+  "completed_this_session": [
+    "Killed stale backend (PID 19424 port 8000) and admin dashboard (PID 16116 port 3000) processes",
+    "Diagnosed admin login failure: super-admin path was calling CookieManager on FastAPI response (port 8000) instead of returning token in JSON body for the Next.js BFF proxy (port 3000)",
+    "Fixed backend/routes/admin/auth.py: removed CookieManager calls, added token+refresh_token to super-admin return dict — consistent with staff member path",
+    "Verified admin login works end-to-end via Playwright: URL redirected to /dashboard, dashboard loaded with live data (24 rides, 17 users, 7 drivers)",
+    "Committed fix as 40f4ad42: all 5 pre-commit checks passed",
+    "Merged all 11 open Dependabot PRs (#407–#417): sentry-sdk, botocore, cachetools(6→7), s3transfer, pytz, @sentry/nextjs, @tailwindcss/postcss, tailwindcss, jsdom, shadcn, eslint(9→10)"
+  ],
+
+  "completed_prior_sessions": [
+    "Gradle wrapper bumped 8.10.2 → 8.13 (cd4211d3)",
+    "Kotlin 2.0.21 → 2.1.20 in both app.config.ts (2b630634)",
+    "admin-dashboard/.env.local fixed to http://localhost:8000 (was Railway — gitignored)",
+    "Admin login rate limit made env-aware: dev 20/min + 2min lockout, prod 3/30min + 24h lockout (2cb7fb65)",
+    "Full runtime audit across all 4 surfaces",
+    "Expo SDK 55 migration: New Arch disabled, Gradle/Kotlin/compileSdk pinned, native deps aligned (21 commits total)"
+  ],
+
+  "remaining_work": [
+    {
+      "id": "EAS-1",
+      "priority": "P0",
+      "task": "Check EAS build for commit 2b630634 on expo.dev",
+      "detail": "GitHub integration auto-triggers on push; check expo.dev/accounts/spinr/projects for build status of both rider-app and driver-app. Build should be the first with Kotlin 2.1.20 + Gradle 8.13.",
+      "blocked_by": null
+    },
+    {
+      "id": "FIREBASE-1",
+      "priority": "P0",
+      "task": "Add FIREBASE_SERVICE_ACCOUNT_JSON to backend/.env",
+      "detail": "Download from Firebase console: project spinrapp-6e464 → Project Settings → Service Accounts → Generate new private key. Paste stringified JSON into backend/.env as FIREBASE_SERVICE_ACCOUNT_JSON. Also add FIREBASE_RIDER_APP_ID=1:879808882715:android:150f53e023204c47cb30be",
+      "blocked_by": "Firebase console access (human action)"
+    },
+    {
+      "id": "DEVICE-1",
+      "priority": "P0",
+      "task": "Install EAS APK on physical device → test OTP login",
+      "detail": "Verifies the OTP screen freeze fix (New Architecture disabled). Download APK from EAS build for commit 2b630634, install on Android device, test OTP flow end-to-end.",
+      "blocked_by": "EAS-1 must be green first"
+    },
+    {
+      "id": "UX-1",
+      "priority": "P1",
+      "task": "Admin login rate limit UX: show 'try again at HH:MM' instead of bare 'too many attempts'",
+      "detail": "In admin-dashboard/src/app/login/page.tsx handleLogin(), the 429 catch block shows a generic message. Should parse the Retry-After header or retryAfterSeconds from the RateLimitError and display a specific time. The api.ts RateLimitError already carries retryAfterSeconds.",
+      "blocked_by": null
+    },
+    {
+      "id": "A11Y-1",
+      "priority": "P1",
+      "task": "OI-001/OI-002: Admin dashboard accessibility — driver card role=button, close button aria-label",
+      "detail": "Pre-production accessibility findings. Need to locate driver card component and add role=button + keyboard handler. Find close/dismiss buttons missing aria-label.",
+      "blocked_by": null
+    },
+    {
+      "id": "SEC-1",
+      "priority": "P1",
+      "task": "OI-003 to OI-006: Flip security gates from warn to blocking in security-gates.yml",
+      "detail": "4 security gate checks currently use continue-on-error: true. Need to identify which ones and flip them to blocking as the project matures toward production.",
+      "blocked_by": null
+    },
+    {
+      "id": "PR-1",
+      "priority": "P1",
+      "task": "Create PR: fix/rider-app-expo-sdk55 → main",
+      "detail": "21 commits ahead of main. PR covers: Expo SDK 55 migration (New Arch disabled, dep alignment), Gradle 8.13, Kotlin 2.1.20, admin rate limit env-aware, admin .env.local fix (gitignored — don't include), admin login BFF fix (40f4ad42). Run /gsd-pr-branch or gh pr create.",
+      "blocked_by": "EAS-1 and DEVICE-1 ideally green before merge"
+    }
+  ],
+
+  "human_actions_required": [
+    "Check expo.dev for EAS build status on commit 2b630634",
+    "Download Firebase service account JSON from Firebase console (project spinrapp-6e464) and add to backend/.env",
+    "Install EAS APK on physical Android device and test OTP login"
+  ],
+
+  "key_decisions": [
+    "Super-admin login now returns token+refresh_token in JSON body (consistent with staff path) — Next.js BFF proxy handles HttpOnly cookie storage. CookieManager on FastAPI response (port 8000) was wrong pattern for BFF architecture.",
+    "Admin rate limit: dev 20/min + 2min lockout; prod 3/30min + 24h lockout — implemented via SlowAPI callable",
+    "Kotlin 2.1.20 source of truth: node_modules/@react-native/gradle-plugin/gradle/libs.versions.toml",
+    "All 11 Dependabot PRs merged including two major bumps: cachetools 6→7, eslint 9→10 (all CI passed)"
+  ],
+
+  "infra_state": {
+    "backend": "http://localhost:8000 — must be started fresh each session: python3 -m backend.server from repo root",
+    "admin_dashboard": "http://localhost:3000 — must be started fresh: npm run dev from admin-dashboard/",
+    "admin_login": "admin@spinr.ca / SpinrDev2026! — CONFIRMED WORKING as of this session",
+    "admin_env_local": "admin-dashboard/.env.local → NEXT_PUBLIC_API_URL=http://localhost:8000 (gitignored, already set)",
+    "rider_driver_env": "rider-app/.env and driver-app/.env point to Railway production backend",
+    "backend_env": "backend/.env complete for dev EXCEPT FIREBASE_SERVICE_ACCOUNT_JSON (missing)"
+  }
+}

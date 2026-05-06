@@ -8,6 +8,11 @@ Close all P0 security/safety findings across backend, admin, and rider surfaces 
 
 **Status (2026-04-27):** Sprint COMPLETE. All 6 P0s shipped. All P1/P2 candidates also shipped (B-P1-1 via #124, B-P1-5 via #124, B-P2-1 via #124, B-P2-2 via #124; B-P1-2 and B-P1-6 were already in-place). A-P0-3 GPS OOM fix (Postgres function + migration 54) shipped in #126. Sentry loguru bridge shipped in #126. logger.warning sweep on payment/dispatch/safety paths shipped in #127.
 
+**Status (2026-05-06):** Full audit sweep complete. All P0/P1/P2/P3/P4 actionable findings resolved.
+- PR #479 (merged): R-P2-30/31/33/43/44/45/46, B-P1-10, B-P2-1, R-P2-14, TASK-4-1, admin-07-1, B-P1-9
+- PR #484 (merged): P4-7 T4A annual issuance background job (CRA Feb 28 deadline), 12 unit tests
+- Remaining non-blockers: P3-4 coverage gap (2 pp), P4-5 E2E suite stabilising (non-blocking CI), rider-P4 roadmap items
+
 ## In-flight
 
 | Ticket | Owner | State | Notes |
@@ -71,6 +76,8 @@ None currently open in production (pre-launch).
 
 | PR | What |
 |---|---|
+| #310 | **Admin middleware dead-auth fix** — `src/proxy.ts` → `src/middleware.ts`, `export function proxy` → `export function middleware`; Next.js was silently ignoring the misnamed file, leaving all `/dashboard/*` routes accessible without a valid `admin_token` cookie. JWT expiry check, IP allowlist (F-06), and CSP nonce injection (F-05) now all active. Identified in auth coverage audit 2026-04-29. |
+| #305 | Dead `carpool.tsx` screen removed (309 lines, zero nav callsites; superseded by `fare-split.tsx`) |
 | #128 | `logger.warning` → `error` sweep: `stripe_charge.py`, `payments.py`, `users.py`, `drivers.py` — payment/dispatch/safety failures now reach Sentry |
 | #132 | `_vault_encrypt` fail-closed: driver PII (`license_number`, `vehicle_vin`) no longer stored as plaintext when Supabase Vault is unavailable |
 | manual | [17-4] Branch protection on `main` — PR + 1 review required; `Post guard rail summary` + `Security gates summary` required checks; force-push + deletion blocked |
@@ -84,6 +91,10 @@ None currently open in production (pre-launch).
 | #173 | **B-P3-3** (sub-processor monitor) — `.github/workflows/subprocessor-monitor.yml` runs every Monday 13:00 UTC; opens a `subprocessor-review` issue when `docs/vendor-inventory.md` hasn't been touched in 90+ days. Idempotent. Closes the cadence-enforcement gap PIPEDA s.4.1.3 + SOC 2 CC9.2 require. |
 | #176 | **Migration conflict-detection runbook** (`docs/runbooks/migration-conflict-detection.md`) — 5-step pre-merge checklist for any PR touching `backend/migrations/*.sql` to catch the slot-collision + outdated-fork failure mode that broke retention in #166. Includes verbatim incident timeline. |
 | #182 | **B-P2-8 partial** — `backend/Dockerfile` builder pinned to `python:3.12.9-slim` (was `3.12-slim` mutable tag); `docs/runbooks/docker-image-pinning.md` documents the SHA256 digest-pin procedure (manual step, requires `docker pull`). RO-root half noted as future host-migration item (Railway doesn't expose). |
+| #207 | **L-P1-4 + L-P1-2** — `gst_registered`/`gst_bn` T4A fields added (migration 58, `GET /drivers/me/t4a-summary`, CSV export); 10 unsafe `any` types tightened in `shared/store/authStore.ts`. Both next-sprint candidates now closed. |
+| #266 | **E2E regression suite** — Playwright specs for cancellation flow, payment guard (no double-charge), driver-cancel path, admin rides view, and SOS/emergency-alert (R-P0-1 regression). Covers the full ride lifecycle end-to-end. |
+| #313 | **B-P2-8 half 2 + L-P1-2 extended** — `backend/Dockerfile` both `FROM` lines pinned to `python:3.12.9-slim@sha256:48a11b7...` (bit-for-bit reproducible builds); `any` → `unknown` across `shared/api/client.ts`, `cachedClient.ts`, `offlineQueue.ts`, `upload.ts`, `locationStore.ts`; E2E CI `BACKEND_URL` fix. |
+| #551 | **Any-type sweep — stores** (in review) — 68 `any` occurrences eliminated across `rideStore.ts` (27), `driverStore.ts` (13), `walletStore.ts` (10), `documentStore.ts` (6), `questStore.ts` (4), `workProfileStore.ts` (3), `firebase.ts` (1). New interfaces: `Promo`, `ChatMessage`, `CompletedRideData`, `RideHistoryItem`, `AllowanceRequest`, `RNFileDescriptor`. |
 
 ## Lessons learned (2026-04-28 incident)
 
@@ -96,10 +107,10 @@ PRs #138 and #141 both used migration slot 56 to `CREATE OR REPLACE` the same Po
 ## Next sprint candidates
 
 - **Sentry alert rule**: Create a Sentry alert for `REFRESH TOKEN REUSE DETECTED` → PagerDuty. ~30 min in Sentry UI. No code required.
-- **L-P0-3 WAV dispatch**: Wheelchair-accessible vehicle matching in dispatch — needs `/plan` (5+ files + migration). Saskatchewan legal requirement.
-- **L-P1-2 authStore.ts**: 16+ `any` types on critical auth flows in `shared/store/authStore.ts`.
-- **L-P1-4 earnings GST/BN**: T4A export missing `gst_registered`/`gst_bn` — migration + drivers.py needed.
-- **Dockerfile SHA256 digest pin** (B-P2-8 second half): manual step, follow `docs/runbooks/docker-image-pinning.md`. Quarterly cadence.
+- ~~**L-P0-3 WAV dispatch**~~ — shipped PR #240 (merged 2026-04-29); migrations 60 + 61; `is_wav` on drivers, `requires_wav` on rides; WAV-only dispatch matching. Saskatchewan Transportation Act accessibility mandate now satisfied.
+- ~~**L-P1-2 authStore.ts**~~ — shipped in #207 (2026-04-28): 10 `any` types tightened in `shared/store/authStore.ts`.
+- ~~**L-P1-4 earnings GST/BN**~~ — shipped in #207 (2026-04-28): `gst_registered`/`gst_bn` fields added via migration 58 + `GET /drivers/me/t4a-summary` updated.
+- ~~**Dockerfile SHA256 digest pin** (B-P2-8 second half)~~ — shipped #313 (2026-05-06): both `FROM python:3.12.9-slim` lines pinned to `@sha256:48a11b7...`. Refresh quarterly per `docs/runbooks/docker-image-pinning.md`.
 - **Read-only-root-filesystem** (B-P2-8 third half): host migration off Railway (Fly.io / K8s / ECS); not gating launch.
 - ~~**CI enhancement: cross-PR migration target check**~~ — shipped (PR in flight on `claude/ci-error-audit-system-HPjKP`): new step in `migration-safety-gate` scans new `.sql` files for `CREATE OR REPLACE` targets and cross-checks against all existing migrations; annotate with `-- migration-override-ok: reason` to suppress.
 
@@ -142,7 +153,7 @@ _None._
 | `180bfd4` | **DV-9**: `driver-app/_layout.tsx` — `addNotificationResponseReceivedListener` added; push-notification taps now route to `/driver/` (ride offer) or `/driver/notifications` (all other types) instead of silent no-op. |
 | `99f7810` | **F-section**: `backend/utils/stripe_reconcile.py` — daily 02:00 UTC Stripe ↔ DB reconciliation cron; detects `DB_PAID_STRIPE_MISSING`, `DB_PAID_STRIPE_MISMATCH`, `DB_PAID_AMOUNT_MISMATCH`, `STRIPE_ORPHAN`; logs at ERROR (→ Sentry) + writes to `audit_logs`. |
 
-> **Migration note (2026-04-28):** `55_drivers_dispatch_partial_index.sql` and `55_find_nearby_drivers_suspended_filter.sql` share the `55_` numeric prefix — a CLAUDE.md convention violation. The migration runner uses the full filename as the idempotency key, so both are applied correctly in alphabetical order. Cannot be renamed since they are already merged and may be applied in production. Next free slot is **57**.
+> **Migration note (2026-04-29):** Multiple migrations share numeric prefixes (08, 28, 29, 48, 50, 51, 52, 54, 55, 56, 57, 58) — all pre-existing convention violations. The runner uses the full filename as idempotency key so they apply correctly. Cannot be renamed after merge. On `main`, the highest slot used is `59_reconciliation_discrepancies.sql`. PR #240 (in-flight) claims **60** (`60_wav_dispatch.sql`) and **61** (`61_drivers_total_ratings.sql`). **Next free slot after #240 merges: 62.** A CI prefix-uniqueness check has been added to the migration safety gate to prevent new collisions.
 
 ## Deferred (non-code or future sprint)
 

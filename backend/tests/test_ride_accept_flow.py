@@ -30,7 +30,7 @@ nothing — just removed the pin from the map without calling the API).
 """
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -58,7 +58,7 @@ def _ride_row(status: str, driver_id=None, driver_accepted_at=None):
         "pickup_lng": -104.65,
         "dropoff_lat": 50.45,
         "dropoff_lng": -104.60,
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
     return row
 
@@ -97,7 +97,7 @@ class TestAcceptRideFlipsStatus:
         post_ride = _ride_row(
             "driver_accepted",
             driver_id=DRIVER_ID,
-            driver_accepted_at=datetime.utcnow().isoformat(),
+            driver_accepted_at=datetime.now(timezone.utc).isoformat(),
         )
 
         # guard_ok signals that the atomic update matched one row
@@ -157,16 +157,14 @@ class TestAcceptRideFlipsStatus:
         assert send_push_mock.await_count >= 1
 
     def test_double_accept_rejected_by_guard(self):
-        """When the atomic guard returns modified_count=0 (ride already taken),
+        """When the atomic guard returns None (ride already taken by concurrent request),
         accept_ride must raise 409 — never return {success: True}."""
         from fastapi import HTTPException
 
         from backend.routes import drivers as drivers_mod
+        from backend.utils.error_handling import SpinrException
 
         pre_ride = _ride_row("driver_assigned", driver_id=DRIVER_ID)
-
-        # Guard says 0 rows matched → ride taken by a concurrent request
-        guard_fail = type("_Guard", (), {"modified_count": 0})()
 
         with (
             patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=pre_ride)),
@@ -174,13 +172,13 @@ class TestAcceptRideFlipsStatus:
                 "backend.routes.drivers.db_supabase.get_rows",
                 AsyncMock(return_value=[_driver_row()]),
             ),
-            patch("backend.routes.drivers.db.update_one", AsyncMock(return_value=guard_fail)),
+            patch("backend.routes.drivers.db.update_one", AsyncMock(return_value=None)),
             patch("backend.routes.drivers.db.find_one", AsyncMock(return_value=pre_ride)),
             patch("backend.routes.drivers.manager.send_personal_message", AsyncMock()),
             patch("backend.routes.drivers.manager.broadcast_ride_status", AsyncMock()),
             patch("backend.routes.drivers.send_push_notification", AsyncMock()),
         ):
-            with pytest.raises(HTTPException) as excinfo:
+            with pytest.raises((HTTPException, SpinrException)) as excinfo:
                 asyncio.run(
                     drivers_mod.accept_ride(
                         ride_id=RIDE_ID,
@@ -202,7 +200,7 @@ class TestGetRideReturnsAcceptedStatus:
         post_ride = _ride_row(
             "driver_accepted",
             driver_id=DRIVER_ID,
-            driver_accepted_at=datetime.utcnow().isoformat(),
+            driver_accepted_at=datetime.now(timezone.utc).isoformat(),
         )
         driver = _driver_row()
 
@@ -315,6 +313,7 @@ class TestAdminCancelRide:
 
         from backend.routes.admin import rides as admin_rides
         from backend.routes.admin.rides import AdminCancelRideRequest
+        from backend.utils.error_handling import SpinrException
 
         update_ride_mock = AsyncMock()
         with (
@@ -324,7 +323,7 @@ class TestAdminCancelRide:
             ),
             patch("backend.routes.admin.rides.db_supabase.update_ride", update_ride_mock),
         ):
-            with pytest.raises(HTTPException) as excinfo:
+            with pytest.raises((HTTPException, SpinrException)) as excinfo:
                 asyncio.run(
                     admin_rides.admin_cancel_ride(
                         ride_id=RIDE_ID,

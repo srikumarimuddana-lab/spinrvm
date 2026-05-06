@@ -1,0 +1,3 @@
+-- Rollback: ALTER TABLE drivers DROP COLUMN IF EXISTS total_ratings;
+ALTER TABLE drivers
+  ADD COLUMN IF NOT EXISTS total_ratings INTEGER NOT NULL DEFAULT 0;

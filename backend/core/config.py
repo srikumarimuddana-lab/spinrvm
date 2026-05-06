@@ -44,6 +44,14 @@ class Settings(BaseSettings):
     # Refresh-token TTL in days (30 days "remember this device").
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
+    # ──── Cookie Settings ────
+    # HTTP-only cookie flags for secure token storage (P3 HttpOnly migration)
+    COOKIE_SECURE: bool = True  # HTTPS only in production
+    COOKIE_HTTPONLY: bool = True  # JavaScript cannot read
+    COOKIE_SAMESITE: str = "Strict"  # Prevent CSRF token leaks
+    COOKIE_DOMAIN: str = ""  # Set to ".spinrvm.ca" in production env vars for cross-subdomain support
+    COOKIE_PATH: str = "/"  # Available to all routes
+
     # CORS settings
     # Comma-separated list of origins. Defaults to localhost dev ports so a
     # fresh deploy is not wide-open. Override in .env for staging/prod.
@@ -93,6 +101,11 @@ class Settings(BaseSettings):
 
     # Observability — optional; Sentry only initialises when this is set
     sentry_dsn: Optional[str] = None
+
+    # Operational alerting — Slack-compatible incoming webhook URL.
+    # When set, the loop watchdog posts a message here whenever a background
+    # loop goes stale.  Leave unset in development; required in production.
+    ALERT_WEBHOOK_URL: Optional[str] = None
 
     @model_validator(mode="after")
     def _hash_admin_password(self) -> "Settings":

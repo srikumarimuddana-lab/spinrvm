@@ -9,7 +9,7 @@ import logging
 from datetime import datetime
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from db_supabase import (  # noqa: E402
@@ -38,6 +38,11 @@ from schemas.corporate import (  # noqa: E402
 )
 from settings_loader import get_app_settings  # noqa: E402
 from validators import sanitize_string, validate_email, validate_id, validate_phone  # noqa: E402
+
+try:
+    from ..utils.audit_logger import log_admin_action
+except ImportError:
+    from utils.audit_logger import log_admin_action  # type: ignore[no-redef]
 
 logger = logging.getLogger(__name__)
 
@@ -82,34 +87,57 @@ class CorporateAccountResponse(CorporateAccountBase):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 @router.get("", response_model=List[CorporateAccountDetailResponse])
 async def get_corporate_accounts(
     request: Request,
-    skip: int = 0,
-    limit: int = 100,
+    response: Response,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+    offset: Optional[int] = Query(None, ge=0, description="Alias for skip"),
     search: Optional[str] = None,
     status: Optional[CompanyStatus] = None,
     size_tier: Optional[SizeTier] = None,
     is_active: Optional[bool] = None,
     current_admin: dict = Depends(get_current_admin),
 ):
-    """List corporate accounts with optional filters and pagination."""
-    from db_supabase import list_corporate_accounts_filtered
+    """List corporate accounts with optional filters and pagination.
+
+    Returns a flat array (backwards compatible). Total row count and the
+    applied limit are exposed via the ``X-Total-Count`` and ``X-Limit``
+    response headers. ``offset`` is accepted as an alias for the existing
+    ``skip`` query param so callers can use the standard offset/limit
+    convention. Default limit is 100 — the admin dashboard already pages
+    through this endpoint with PAGE_SIZE=50 so this is a no-op for the
+    current frontend.
+    """
+    from db_supabase import count_documents, list_corporate_accounts_filtered
+
+    effective_skip = offset if offset is not None else skip
+    capped_limit = min(limit, 500)
 
     try:
         rows = await list_corporate_accounts_filtered(
             status=status.value if status else None,
             size_tier=size_tier.value if size_tier else None,
             search=search,
-            skip=skip,
-            limit=min(limit, 500),
+            skip=effective_skip,
+            limit=capped_limit,
         )
         if is_active is not None:
             rows = [r for r in rows if bool(r.get("is_active")) == is_active]
+        # X-Total-Count reflects unfiltered table size when no server-side
+        # filters are active; with status/size_tier/search applied we'd need
+        # a parallel filtered count query — kept simple for now and the
+        # frontend uses hasNextPage (limit+1 trick) regardless.
+        try:
+            total = await count_documents("corporate_accounts")
+            response.headers["X-Total-Count"] = str(total)
+        except Exception:
+            logger.warning("Failed to compute corporate_accounts total count", exc_info=True)
+        response.headers["X-Limit"] = str(capped_limit)
         return rows
     except Exception as e:
         # B-P3-leak-cleanup: Postgres error strings carry constraint
@@ -203,6 +231,24 @@ async def kyb_review(
                 )
                 await update_corporate_stripe_customer_id(company_id=normalized_id, stripe_customer_id=customer.id)
 
+    try:
+        await log_admin_action(
+            admin=current_admin,
+            action="kyb_review",
+            resource="corporate_account",
+            resource_id=str(normalized_id),
+            details={
+                "decision": "approved" if decision.approve else "rejected",
+                "reviewer_id": current_admin["id"],
+                "note": decision.note,
+            },
+        )
+    except Exception as _ae:
+        logger.error(
+            f"Audit log failed for kyb_review {normalized_id}: {_ae}",
+            exc_info=True,
+        )
+
     return row
 
 
@@ -234,13 +280,28 @@ async def create_corporate_account(
 
     try:
         created_account = await insert_corporate_account(account.model_dump())
-        return created_account
     except Exception as e:
         logger.exception("Failed to create corporate account")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create corporate account.",
         ) from e
+
+    try:
+        await log_admin_action(
+            admin=current_admin,
+            action="create_corporate_account",
+            resource="corporate_account",
+            resource_id=str(created_account["id"]),
+            details={"company_name": created_account.get("name")},
+        )
+    except Exception as _ae:
+        logger.error(
+            f"Audit log failed for create_corporate_account {created_account.get('id')}: {_ae}",
+            exc_info=True,
+        )
+
+    return created_account
 
 
 @router.get("/{account_id}", response_model=CorporateAccountResponse)
@@ -309,13 +370,31 @@ async def update_corporate_account(
 
     try:
         updated_account = await db_update_corporate_account(normalized_id, update_data)
-        return updated_account
     except Exception as e:
         logger.exception("Failed to update corporate account")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update corporate account.",
         ) from e
+
+    try:
+        await log_admin_action(
+            admin=current_admin,
+            action="update_corporate_account",
+            resource="corporate_account",
+            resource_id=str(normalized_id),
+            details={
+                "changed_fields": list(update_data.keys()),
+                **{k: v for k, v in update_data.items() if k not in ("contact_email", "contact_phone")},
+            },
+        )
+    except Exception as _ae:
+        logger.error(
+            f"Audit log failed for update_corporate_account {normalized_id}: {_ae}",
+            exc_info=True,
+        )
+
+    return updated_account
 
 
 @router.delete("/{account_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -337,13 +416,28 @@ async def delete_corporate_account(account_id: str, current_admin: dict = Depend
 
     try:
         await db_delete_corporate_account(normalized_id)
-        return  # 204 No Content
     except Exception as e:
         logger.exception("Failed to delete corporate account")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to delete corporate account.",
         ) from e
+
+    try:
+        await log_admin_action(
+            admin=current_admin,
+            action="delete_corporate_account",
+            resource="corporate_account",
+            resource_id=str(normalized_id),
+            details={"company_name": existing_account.get("name")},
+        )
+    except Exception as _ae:
+        logger.error(
+            f"Audit log failed for delete_corporate_account {normalized_id}: {_ae}",
+            exc_info=True,
+        )
+
+    return  # 204 No Content
 
 
 @router.post(
@@ -390,5 +484,23 @@ async def change_company_status(
         wallet = await get_corporate_wallet_by_company(normalized_id)
         if wallet and wallet.get("auto_topup_enabled"):
             await update_corporate_wallet_config(wallet_id=wallet["id"], patch={"auto_topup_enabled": False})
+
+    try:
+        await log_admin_action(
+            admin=current_admin,
+            action="change_company_status",
+            resource="corporate_account",
+            resource_id=str(normalized_id),
+            details={
+                "old_status": current.get("status"),
+                "new_status": transition.status.value,
+                "reason": transition.reason if hasattr(transition, "reason") else None,
+            },
+        )
+    except Exception as _ae:
+        logger.error(
+            f"Audit log failed for change_company_status {normalized_id}: {_ae}",
+            exc_info=True,
+        )
 
     return row

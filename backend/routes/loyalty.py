@@ -126,7 +126,7 @@ async def earn_points_for_ride(ride_id: str = Query(...), current_user: dict = D
     if ride.get("status") != "completed":
         raise HTTPException(status_code=400, detail="Ride not completed")
 
-    fare = float(ride.get("total_fare", 0))
+    fare = Decimal(str(ride.get("total_fare") or 0))
     account = await _get_or_create_account(current_user["id"])
     tier = account.get("tier", "bronze")
     multiplier = TIER_MULTIPLIERS.get(tier, 1.0)
@@ -204,7 +204,7 @@ async def redeem_points(req: RedeemRequest, current_user: dict = Depends(get_cur
     credit_amount = (Decimal(req.points) / Decimal(REDEMPTION_RATE)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
     # Step 1: Credit the wallet first. If this fails the rider keeps their points.
-    from .wallet import _record_transaction, get_or_create_wallet
+    from .wallet import _money_str, _record_transaction, get_or_create_wallet
 
     wallet = await get_or_create_wallet(current_user["id"])
     new_wallet_balance = await wallet_increment_balance(wallet["id"], credit_amount)
@@ -212,8 +212,8 @@ async def redeem_points(req: RedeemRequest, current_user: dict = Depends(get_cur
         wallet_id=wallet["id"],
         user_id=current_user["id"],
         txn_type="bonus",
-        amount=float(credit_amount),
-        balance_after=float(new_wallet_balance),
+        amount=_money_str(credit_amount),
+        balance_after=_money_str(new_wallet_balance),
         description=f"Loyalty redemption: {req.points} pts → ${credit_amount:.2f}",
     )
 

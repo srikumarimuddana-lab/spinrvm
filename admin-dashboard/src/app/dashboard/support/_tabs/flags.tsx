@@ -15,11 +15,18 @@ import { Pagination } from "@/components/ui/pagination";
 import { Flag, Search, Plus, Trash2, Eye, RefreshCw, EyeOff, Users, Car } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { useServiceAreas, ServiceAreaFilter, ServiceAreaSelect } from "../_components/service-area-select";
+import { useToast } from "@/components/ui/use-toast";
+import {
+    AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+    AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 const PAGE_SIZE = 50;
 const REASONS = ["inappropriate_behavior", "safety_concern", "fraud", "policy_violation", "spam", "other"];
 
 export default function FlagsTab() {
+    const { toast } = useToast();
+    const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
     const { areas } = useServiceAreas();
     const [flags, setFlags] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
@@ -62,10 +69,10 @@ export default function FlagsTab() {
     const areaName = (id: string) => areas.find((a) => a.id === id)?.name || "";
 
     const handleCreate = async () => {
-        if (!form.ride_id.trim()) { alert("Enter a ride ID."); return; }
+        if (!form.ride_id.trim()) { toast({ title: "Missing ride ID", variant: "destructive" }); return; }
         setSaving(true);
         try { await flagRideParticipant(form.ride_id, { target_type: form.target_type, reason: form.reason, description: form.description, service_area_id: form.service_area_id || null }); setDialogOpen(false); setForm({ ride_id: "", target_type: "driver", reason: "other", description: "", service_area_id: "" }); load(); }
-        catch (e: any) { alert(e.message); } finally { setSaving(false); }
+        catch (e: any) { toast({ title: "Failed to create flag", description: e.message, variant: "destructive" }); } finally { setSaving(false); }
     };
 
     return (
@@ -97,7 +104,7 @@ export default function FlagsTab() {
                             <TableCell className="text-right"><div className="flex justify-end gap-0.5">
                                 <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); setSelected(f); }}><Eye className="h-3.5 w-3.5" /></Button>
                                 {f.is_active !== false && <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); deactivateFlag(f.id).then(load); }} title="Deactivate"><EyeOff className="h-3.5 w-3.5" /></Button>}
-                                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={(e) => { e.stopPropagation(); if (confirm("Delete?")) deleteFlag(f.id).then(load); }}><Trash2 className="h-3.5 w-3.5" /></Button>
+                                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={(e) => { e.stopPropagation(); setDeleteTarget(f.id); }}><Trash2 className="h-3.5 w-3.5" /></Button>
                             </div></TableCell>
                         </TableRow>
                     ))}</TableBody></Table>}
@@ -120,7 +127,7 @@ export default function FlagsTab() {
                         {selected.description && <div><Label className="text-[10px] text-muted-foreground">Description</Label><div className="rounded-lg bg-muted/50 p-2.5 text-xs mt-1">{selected.description}</div></div>}
                         <div className="flex gap-2">
                             {selected.is_active !== false && <Button size="sm" variant="outline" className="flex-1" onClick={() => { deactivateFlag(selected.id).then(() => { setSelected(null); load(); }); }}><EyeOff className="h-3.5 w-3.5 mr-1.5" />Deactivate</Button>}
-                            <Button size="sm" variant="destructive" className="flex-1" onClick={() => { if (confirm("Delete?")) deleteFlag(selected.id).then(() => { setSelected(null); load(); }); }}><Trash2 className="h-3.5 w-3.5 mr-1.5" />Delete</Button>
+                            <Button size="sm" variant="destructive" className="flex-1" onClick={() => setDeleteTarget(selected.id)}><Trash2 className="h-3.5 w-3.5 mr-1.5" />Delete</Button>
                         </div>
                     </div>)}
                 </DialogContent>
@@ -141,6 +148,19 @@ export default function FlagsTab() {
                     </div>
                 </DialogContent>
             </Dialog>
+
+            <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Delete flag?</AlertDialogTitle>
+                        <AlertDialogDescription>This cannot be undone.</AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction onClick={() => { if (deleteTarget) deleteFlag(deleteTarget).then(() => { setSelected(null); load(); }).finally(() => setDeleteTarget(null)); }} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </div>
     );
 }

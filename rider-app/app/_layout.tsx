@@ -1,7 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+
+// Exported so payment screens can guard CardField rendering behind a valid key.
+export const StripeKeyContext = React.createContext<string | null>(null);
 import { Stack, router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { View, ActivityIndicator, StyleSheet, Text, Platform } from 'react-native';
+import { Alert, View, ActivityIndicator, StyleSheet, Text, Platform } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { StripeProvider } from '@stripe/stripe-react-native';
 import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold, PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans';
@@ -331,6 +334,27 @@ export default function RootLayout() {
         return; // don't also refetch ride for reminder events
       }
 
+      // Safety check-in — ask the rider if they're okay; POST confirmation on tap.
+      if (remoteMessage?.data?.type === 'safety_checkin') {
+        const checkinRideId = remoteMessage?.data?.ride_id as string | undefined;
+        if (checkinRideId) {
+          Alert.alert(
+            'Safety check-in',
+            "Just checking in — are you okay?\n\nIf you don't respond, we'll follow up with you shortly.",
+            [
+              {
+                text: "I'm okay",
+                onPress: () => {
+                  api.post(`/rides/${checkinRideId}/safety-checkin`).catch(() => {});
+                },
+              },
+            ],
+            { cancelable: false },
+          );
+        }
+        return;
+      }
+
       // All other FCM types — refresh the active ride state
       const currentRide = useRideStore.getState().currentRide;
       if (currentRide?.id) {
@@ -361,6 +385,16 @@ export default function RootLayout() {
       }
     })();
   }, [isAuthInitialized]);
+
+  // Clear ride session data when the user logs out so a subsequent login
+  // doesn't show the previous session's ride, driver, or chat state.
+  const prevAuthTokenRef = useRef(authToken);
+  useEffect(() => {
+    if (prevAuthTokenRef.current && !authToken) {
+      useRideStore.getState().clearRide();
+    }
+    prevAuthTokenRef.current = authToken;
+  }, [authToken]);
 
   // ── Network connectivity monitoring for offline sync ──
   useEffect(() => {
@@ -399,8 +433,23 @@ export default function RootLayout() {
 
   return (
     <ThemeProvider>
-      <RootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} stripePublishableKey={stripePublishableKey} />
+      <RootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} stripePublishableKey={stripePublishableKey} wsState={wsState} />
     </ThemeProvider>
+  );
+}
+
+function MaybeStripeProvider({
+  publishableKey,
+  children,
+}: {
+  publishableKey: string | null;
+  children: React.ReactNode;
+}) {
+  if (!publishableKey) return <>{children}</>;
+  return (
+    <StripeProvider publishableKey={publishableKey} merchantIdentifier="merchant.com.spinr.user">
+      {children as React.ReactElement}
+    </StripeProvider>
   );
 }
 
@@ -408,29 +457,36 @@ function RootLayoutInner({
   isOffline,
   setIsOffline,
   stripePublishableKey,
+  wsState,
 }: {
   isOffline: boolean;
   setIsOffline: (v: boolean) => void;
   stripePublishableKey: string | null;
+  wsState: import('../hooks/useRiderSocket').RiderSocketState;
 }) {
   const { isDark } = useTheme();
   return (
     <ErrorBoundary>
       <OfflineBanner visible={isOffline} onVisibilityChange={setIsOffline} />
+      {(wsState === 'reconnecting' || wsState === 'connecting') && (
+        <View style={{ backgroundColor: '#F59E0B', paddingVertical: 4, alignItems: 'center' }}>
+          <Text style={{ color: '#fff', fontSize: 12, fontWeight: '600' }}>
+            Reconnecting to ride updates…
+          </Text>
+        </View>
+      )}
       <GestureHandlerRootView>
         <View style={{ flex: 1 }}>
           <SafeAreaProvider>
             <StatusBar style={isOffline ? "light" : isDark ? "light" : "dark"} />
-            {/* StripeProvider always wraps the Stack so useStripe() /
-                <CardField> work on any screen. When the publishable key
-                isn't loaded yet (or the fetch failed) we pass an empty
-                string; createPaymentMethod will reject with a clear
-                error and the manage-cards screen surfaces it as
-                "Payments unavailable — try again shortly". */}
-            <StripeProvider
-              publishableKey={stripePublishableKey || ''}
-              merchantIdentifier="merchant.com.spinr.user"
-            >
+            {/* MaybeStripeProvider defers mounting the native Stripe SDK until
+                the real publishable key is fetched from the backend. Passing
+                an empty string (or a malformed key) to StripeProvider's native
+                module throws IllegalArgumentException on Android and crashes
+                the app. StripeKeyContext exposes the key to child screens so
+                they can gate CardField rendering independently. */}
+            <StripeKeyContext.Provider value={stripePublishableKey}>
+            <MaybeStripeProvider publishableKey={stripePublishableKey}>
             <Stack
               screenOptions={{
                 headerShown: false,
@@ -472,7 +528,8 @@ function RootLayoutInner({
               <Stack.Screen name="ride-details" />
               <Stack.Screen name="settings" />
             </Stack>
-            </StripeProvider>
+            </MaybeStripeProvider>
+            </StripeKeyContext.Provider>
           </SafeAreaProvider>
         </View>
       </GestureHandlerRootView>

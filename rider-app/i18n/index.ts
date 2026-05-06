@@ -63,6 +63,19 @@ export function t(language: Language, key: string): string {
   return lookupKey(language, key);
 }
 
+// Convenience for non-component callsites (alert helpers, error pipelines)
+// that don't have a `useTranslation()` hook in scope. Reads the current
+// language from the zustand store and returns the translation, or the
+// `fallback` (or the key itself) when no entry matches.
+export function tKey(key: string, fallback?: string): string {
+  const { language } = useLanguageStore.getState();
+  for (const source of translationSources[language]) {
+    const value = getNestedValue(source, key);
+    if (value !== undefined) return value;
+  }
+  return fallback ?? key;
+}
+
 // ── Zustand store ─────────────────────────────────────────────────────────────
 interface LanguageState {
   language: Language;

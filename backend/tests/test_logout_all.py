@@ -81,7 +81,7 @@ class TestLogoutAllRiderDriver:
             inner = _resolve_inner(logout_all)
             request = MagicMock()
             current_user = {"id": "user-rider-1", "token_version": 7}
-            result = await inner(request, current_user=current_user)
+            result = await inner(request, MagicMock(), current_user=current_user)
 
         # token_version bumped from 7 -> 8 against the right row
         update_one.assert_awaited_once_with(
@@ -123,7 +123,7 @@ class TestLogoutAllRiderDriver:
             inner = _resolve_inner(logout_all)
             request = MagicMock()
             current_user = {"id": "user-rider-x", "token_version": 0}
-            result = await inner(request, current_user=current_user)
+            result = await inner(request, MagicMock(), current_user=current_user)
 
         # The durable contract still landed.
         update_one.assert_awaited_once()
@@ -151,7 +151,7 @@ class TestLogoutAllRiderDriver:
             request = MagicMock()
             # token_version key entirely absent — handler uses .get(...) or 0
             current_user = {"id": "user-rider-2"}
-            result = await inner(request, current_user=current_user)
+            result = await inner(request, MagicMock(), current_user=current_user)
 
         update_one.assert_awaited_once_with(
             "users",
@@ -179,7 +179,7 @@ class TestLogoutAllRiderDriver:
             request = MagicMock()
             current_user = {"id": "user-rider-3", "token_version": 1}
             with pytest.raises(HTTPException) as exc:
-                await inner(request, current_user=current_user)
+                await inner(request, MagicMock(), current_user=current_user)
 
         assert exc.value.status_code == 500
         assert "Could not invalidate sessions" in exc.value.detail
@@ -197,9 +197,10 @@ def _admin_jwt(user_id: str = "staff-001") -> str:
     """Mint a JWT the admin handler will accept. Uses the conftest
     JWT_SECRET fixture (test-secret-key-for-ci-only-32chars!!)."""
     from backend.core.config import settings
+    from backend.dependencies import JWT_AUD_ADMIN
 
     return jwt.encode(
-        {"user_id": user_id, "role": "support"},
+        {"user_id": user_id, "role": "support", "aud": JWT_AUD_ADMIN},
         settings.JWT_SECRET,
         algorithm=settings.ALGORITHM,
     )

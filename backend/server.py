@@ -35,6 +35,7 @@ from routes.promotions import api_router as promotions_router
 from routes.quests import api_router as quests_router
 from routes.rides import api_router as rides_router
 from routes.safety import api_router as safety_router
+from routes.service_areas import api_router as service_areas_router
 from routes.settings import api_router as settings_router
 from routes.support import api_router as support_chat_router
 from routes.users import api_router as users_router
@@ -65,11 +66,15 @@ async def health():
 # Counters cover: DB retries by policy/reason, cache hit/miss by
 # prefix, circuit-breaker state, call-level totals, and Redis stats.
 # See utils/metrics.py for the counter definitions.
+from fastapi import Request as _Request  # noqa: E402
 from fastapi import Response as _MetricsResponse  # noqa: E402
+
+from utils.rate_limiter import default_limiter as _metrics_limiter  # noqa: E402
 
 
 @app.get("/metrics")
-async def metrics() -> _MetricsResponse:
+@_metrics_limiter.limit("10/minute")
+async def metrics(request: _Request) -> _MetricsResponse:
     from utils.metrics import render_prometheus, set_gauge
     from utils.redis_client import get_redis_stats
 
@@ -147,6 +152,7 @@ v1_api_router.include_router(pricing_router)
 v1_api_router.include_router(faqs_router)
 v1_api_router.include_router(legal_documents_router)
 v1_api_router.include_router(safety_router)
+v1_api_router.include_router(service_areas_router)
 
 # Include API routers
 app.include_router(v1_api_router, prefix="/api/v1")

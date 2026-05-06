@@ -42,7 +42,7 @@ def _bank_account() -> dict:
         "id": "bank-001",
         "driver_id": DRIVER_ID,
         "bank_name": "Test Bank",
-        "account_number_last4": "1234",
+        "account_last4": "1234",
     }
 
 
@@ -100,7 +100,7 @@ class TestRequestPayout:
     Code under test: backend/routes/drivers.py::request_payout (~line 1353).
     """
 
-    async def _request(self, amount: float = 50.00, available_balance: float = 100.00, has_bank_account: bool = True):
+    async def _request(self, amount: float = 50.00, payable_balance: float = 100.00, has_bank_account: bool = True):
         from starlette.requests import Request as StarletteRequest
 
         from backend.routes.drivers import PayoutRequest, request_payout
@@ -123,7 +123,7 @@ class TestRequestPayout:
         # get_driver_balance is called internally and makes multiple get_rows calls.
         # Mock it directly to control the returned balance cleanly.
         async def _mock_balance(user):
-            return {"available_balance": available_balance}
+            return {"payable_balance": str(payable_balance)}
 
         async def _get_rows(table, query=None, **kwargs):
             if table == "drivers":
@@ -152,7 +152,7 @@ class TestRequestPayout:
         return result, inserted
 
     async def test_payout_persisted_with_pending_status(self):
-        result, inserted = await self._request(amount=50.00, available_balance=100.00)
+        result, inserted = await self._request(amount=50.00, payable_balance=100.00)
 
         assert result["success"] is True
         assert inserted, "Payout row was not persisted"
@@ -166,7 +166,7 @@ class TestRequestPayout:
         from fastapi import HTTPException
 
         with pytest.raises(HTTPException) as exc_info:
-            await self._request(amount=200.00, available_balance=50.00)
+            await self._request(amount=200.00, payable_balance=50.00)
 
         assert exc_info.value.status_code == 400
         assert "insufficient" in exc_info.value.detail.lower()
@@ -175,7 +175,7 @@ class TestRequestPayout:
         from fastapi import HTTPException
 
         with pytest.raises(HTTPException) as exc_info:
-            await self._request(amount=50.00, available_balance=100.00, has_bank_account=False)
+            await self._request(amount=50.00, payable_balance=100.00, has_bank_account=False)
 
         assert exc_info.value.status_code == 400
         assert "bank" in exc_info.value.detail.lower()
@@ -302,3 +302,119 @@ class TestGetT4ASummary:
                 await get_t4a_summary(year=2025, current_user={"id": "ghost"})
 
         assert exc_info.value.status_code == 404
+
+    async def test_t4a_includes_gst_fields_when_set(self):
+        """gst_registered=True + gst_bn propagate from driver row into summary."""
+        from backend.routes.drivers import get_t4a_summary
+
+        driver = {**_driver_row(), "gst_registered": True, "gst_bn": "123456789RT0001"}
+
+        with (
+            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[driver])),
+            patch("backend.routes.drivers.db_supabase.get_rides_for_driver", AsyncMock(return_value=[])),
+        ):
+            result = await get_t4a_summary(year=2025, current_user={"id": DRIVER_USER_ID})
+
+        assert result["gst_registered"] is True
+        assert result["gst_bn"] == "123456789RT0001"
+
+    async def test_t4a_gst_fields_default_when_absent(self):
+        """Driver rows without GST columns default to False / empty string."""
+        from backend.routes.drivers import get_t4a_summary
+
+        driver = _driver_row()  # no gst_registered / gst_bn keys
+
+        with (
+            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[driver])),
+            patch("backend.routes.drivers.db_supabase.get_rides_for_driver", AsyncMock(return_value=[])),
+        ):
+            result = await get_t4a_summary(year=2025, current_user={"id": DRIVER_USER_ID})
+
+        assert result["gst_registered"] is False
+        assert result["gst_bn"] == ""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PUT /drivers/me — gst_registered + gst_bn field write
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestUpdateDriverGstFields:
+    """Pins that gst_registered and gst_bn reach the DB via PUT /drivers/me.
+
+    L-P1-4: UpdateDriverProfileRequest previously used `gst_number` (wrong
+    column name) and was missing `gst_registered`.  The DB columns are
+    `gst_registered` (bool) and `gst_bn` (text), added in migration 58.
+    """
+
+    def _make_driver(self, **extra) -> dict:
+        return {"id": DRIVER_ID, "user_id": DRIVER_USER_ID, "status": "active", **extra}
+
+    def _patches(self, driver: dict, update_mock: AsyncMock):
+        """Return an ExitStack that covers all DB calls in update_my_driver."""
+        import contextlib
+
+        stack = contextlib.ExitStack()
+        stack.enter_context(patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[driver])))
+        stack.enter_context(patch("backend.routes.drivers.db_supabase.update_one", update_mock))
+        stack.enter_context(
+            patch("backend.routes.drivers.db_supabase.get_driver_by_id", AsyncMock(return_value=driver))
+        )
+        stack.enter_context(patch("backend.routes.drivers._encrypt_driver_pii", AsyncMock(side_effect=lambda d: d)))
+        stack.enter_context(patch("backend.routes.drivers._decrypt_driver_pii", AsyncMock(side_effect=lambda d: d)))
+        return stack
+
+    @pytest.mark.anyio
+    async def test_gst_registered_reaches_db(self):
+        """Setting gst_registered=True via PUT /drivers/me writes to drivers table."""
+        from backend.routes.drivers import UpdateDriverProfileRequest, update_my_driver
+
+        driver = self._make_driver()
+        update_mock = AsyncMock(return_value=None)
+
+        with self._patches(driver, update_mock):
+            await update_my_driver(
+                body=UpdateDriverProfileRequest(gst_registered=True),
+                current_user={"id": DRIVER_USER_ID},
+            )
+
+        update_mock.assert_called_once()
+        _, _filter, updates = update_mock.call_args.args
+        assert updates.get("gst_registered") is True
+        assert "gst_number" not in updates  # old wrong field must not appear
+
+    @pytest.mark.anyio
+    async def test_gst_bn_reaches_db(self):
+        """Setting gst_bn via PUT /drivers/me writes the correct column name."""
+        from backend.routes.drivers import UpdateDriverProfileRequest, update_my_driver
+
+        driver = self._make_driver()
+        update_mock = AsyncMock(return_value=None)
+
+        with self._patches(driver, update_mock):
+            await update_my_driver(
+                body=UpdateDriverProfileRequest(gst_registered=True, gst_bn="123456789RT0001"),
+                current_user={"id": DRIVER_USER_ID},
+            )
+
+        _, _filter, updates = update_mock.call_args.args
+        assert updates.get("gst_bn") == "123456789RT0001"
+        assert "gst_number" not in updates
+
+    @pytest.mark.anyio
+    async def test_omitted_gst_fields_not_written(self):
+        """Omitting GST fields from PUT body leaves driver row unchanged."""
+        from backend.routes.drivers import UpdateDriverProfileRequest, update_my_driver
+
+        driver = self._make_driver()
+        update_mock = AsyncMock(return_value=None)
+
+        with self._patches(driver, update_mock):
+            await update_my_driver(
+                body=UpdateDriverProfileRequest(preferred_language="fr"),
+                current_user={"id": DRIVER_USER_ID},
+            )
+
+        _, _filter, updates = update_mock.call_args.args
+        assert "gst_registered" not in updates
+        assert "gst_bn" not in updates

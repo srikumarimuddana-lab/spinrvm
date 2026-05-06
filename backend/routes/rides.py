@@ -541,6 +541,7 @@ class RideEstimateRequest(BaseModel):
     dropoff_lat: float
     dropoff_lng: float
     stops: Optional[List[dict]] = None
+    requires_wav: bool = False
 
 
 @api_router.post("/estimate")

@@ -263,6 +263,7 @@ class Ride(BaseModel):
     is_scheduled: bool = False
     scheduled_time: Optional[datetime] = None
     corporate_account_id: Optional[str] = None
+    requires_wav: bool = False
     distance_km: float
     duration_minutes: int
     base_fare: Decimal
@@ -325,6 +326,7 @@ class CreateRideRequest(BaseModel):
     estimate_token: Optional[str] = None
     payment_method_id: Optional[str] = None
     work_profile: Optional[bool] = None
+    requires_wav: bool = False
 
     # ── Input validation (SEC-017) ──────────────────────────────────────── #
 

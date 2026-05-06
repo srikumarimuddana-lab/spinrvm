@@ -154,7 +154,7 @@ async def create_payment_intent(
 
         return {"client_secret": intent.client_secret, "payment_intent_id": intent.id, "mock": False}
     except Exception as e:
-        logger.error(f"Stripe error: {e}")
+        logger.error(f"Stripe error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
 
 
@@ -184,7 +184,7 @@ async def confirm_payment(request: Dict[str, Any], current_user: dict = Depends(
 
             return {"status": intent.status, "mock": False}
         except Exception as e:
-            logger.error(f"Stripe error: {e}")
+            logger.error(f"Stripe error: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
 
     return {"status": "unknown", "mock": True}
@@ -205,10 +205,13 @@ async def create_setup_intent(current_user: dict = Depends(get_current_user)):
         if not customer_id:
             raise HTTPException(status_code=400, detail="Could not create Stripe customer")
 
+        import time as _time
+
         setup_intent = stripe.SetupIntent.create(
             customer=customer_id,
             payment_method_types=["card"],
             api_key=stripe_secret,
+            idempotency_key=f"setup-intent-{current_user['id']}-{int(_time.time() // 3600)}",
         )
 
         return {
@@ -218,7 +221,7 @@ async def create_setup_intent(current_user: dict = Depends(get_current_user)):
             "mock": False,
         }
     except Exception as e:
-        logger.error(f"Stripe error: {e}")
+        logger.error(f"Stripe error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
 
 
@@ -258,7 +261,7 @@ async def get_payment_methods(current_user: dict = Depends(get_current_user)):
             "mock": False,
         }
     except Exception as e:
-        logger.error(f"Stripe error: {e}")
+        logger.error(f"Stripe error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
 
 
@@ -292,7 +295,7 @@ async def get_cards(current_user: dict = Depends(get_current_user)):
             for m in methods.data
         ]
     except Exception as e:
-        logger.error(f"Get cards error: {e}")
+        logger.error(f"Get cards error: {e}", exc_info=True)
         return []
 
 
@@ -418,12 +421,15 @@ async def add_card(request: Request, current_user: dict = Depends(get_current_us
         pm = stripe.PaymentMethod.attach(payment_method_id, customer=customer_id, api_key=stripe_secret)
 
         # Confirm with SetupIntent — saves card for future off-session use.
+        import time as _time
+
         si = stripe.SetupIntent.create(
             customer=customer_id,
             payment_method=pm.id,
             confirm=True,
             automatic_payment_methods={"enabled": True, "allow_redirects": "never"},
             api_key=stripe_secret,
+            idempotency_key=f"setup-intent-{current_user['id']}-{int(_time.time() // 3600)}",
         )
 
         # Set as default if first card
@@ -451,7 +457,7 @@ async def add_card(request: Request, current_user: dict = Depends(get_current_us
             action_hint="Add a different card",
         ) from e
     except Exception as e:
-        logger.error(f"Add card error: {e}")
+        logger.error(f"Add card error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
 
 
@@ -540,10 +546,16 @@ async def create_payment_sheet(
         amount_cents = int(Decimal(str(body.amount)).quantize(Decimal("0.01")) * 100)
 
         # EphemeralKey lets the PaymentSheet modal manage the customer's
-        # saved cards. Must match the Stripe API version the SDK expects.
+        # saved cards. api_version must match the version configured on the
+        # Stripe webhook endpoint in the dashboard. We pin it to the version
+        # bundled with the installed SDK (stripe.api_version) so it stays in
+        # sync automatically on SDK upgrades.
+        # Current bundled version: 2026-04-22.dahlia (stripe==15.1.0)
+        # ACTION REQUIRED on SDK upgrade: verify the Stripe dashboard webhook
+        # endpoint API version matches stripe.api_version after upgrading.
         ephemeral_key = stripe.EphemeralKey.create(
             {"customer": customer_id},
-            api_version="2023-10-16",
+            api_version=stripe.api_version,
             api_key=stripe_secret,
         )
 

@@ -433,7 +433,7 @@ export default function RootLayout() {
 
   return (
     <ThemeProvider>
-      <RootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} stripePublishableKey={stripePublishableKey} />
+      <RootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} stripePublishableKey={stripePublishableKey} wsState={wsState} />
     </ThemeProvider>
   );
 }
@@ -448,7 +448,7 @@ function MaybeStripeProvider({
   if (!publishableKey) return <>{children}</>;
   return (
     <StripeProvider publishableKey={publishableKey} merchantIdentifier="merchant.com.spinr.user">
-      {children}
+      {children as React.ReactElement}
     </StripeProvider>
   );
 }
@@ -457,15 +457,24 @@ function RootLayoutInner({
   isOffline,
   setIsOffline,
   stripePublishableKey,
+  wsState,
 }: {
   isOffline: boolean;
   setIsOffline: (v: boolean) => void;
   stripePublishableKey: string | null;
+  wsState: import('../hooks/useRiderSocket').RiderSocketState;
 }) {
   const { isDark } = useTheme();
   return (
     <ErrorBoundary>
       <OfflineBanner visible={isOffline} onVisibilityChange={setIsOffline} />
+      {(wsState === 'reconnecting' || wsState === 'connecting') && (
+        <View style={{ backgroundColor: '#F59E0B', paddingVertical: 4, alignItems: 'center' }}>
+          <Text style={{ color: '#fff', fontSize: 12, fontWeight: '600' }}>
+            Reconnecting to ride updates…
+          </Text>
+        </View>
+      )}
       <GestureHandlerRootView>
         <View style={{ flex: 1 }}>
           <SafeAreaProvider>

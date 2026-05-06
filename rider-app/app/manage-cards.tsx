@@ -55,8 +55,8 @@ export default function ManageCardsScreen() {
   const fetchCards = async () => {
     setLoading(true);
     try {
-      const res = await api.get('/payments/cards');
-      setCards(res.data || []);
+      const res = await api.get<Card[]>('/payments/cards');
+      setCards((res.data as Card[]) || []);
     } catch {
       // No cards yet — show empty state
       setCards([]);

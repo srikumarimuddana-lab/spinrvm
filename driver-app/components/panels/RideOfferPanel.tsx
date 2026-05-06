@@ -186,7 +186,7 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
 
 const styles = StyleSheet.create({
     rideOfferOverlay: {
-        ...StyleSheet.absoluteFillObject,
+        ...StyleSheet.absoluteFill,
         zIndex: 20,
     },
     rideOfferGradient: {

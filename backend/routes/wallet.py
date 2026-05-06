@@ -10,12 +10,12 @@ import uuid
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 try:
     from ..utils.audit_logger import log_user_action as _audit_log_user
 except ImportError:
-    from utils.audit_logger import log_user_action as _audit_log_user, Query, Request
+    from utils.audit_logger import log_user_action as _audit_log_user
 from pydantic import BaseModel, Field
 
 try:

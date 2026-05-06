@@ -1349,8 +1349,9 @@ async def get_ride(ride_id: str, request: Request = None, current_user: dict = D
             settings = await get_app_settings()
             free_cancel_window = int(settings.get("free_cancel_window_seconds", 120))
             cancellation_fee_amount = float(settings.get("cancellation_fee", 3.0))
-        except Exception:  # noqa: S110
-            pass
+        except Exception:
+            # Non-fatal: fall back to hardcoded defaults if settings fetch fails
+            logger.error("Failed to fetch app settings for cancellation config", exc_info=True)
 
     driver_accepted_at = ride.get("driver_accepted_at")
     if driver_accepted_at:
@@ -1383,8 +1384,9 @@ async def get_ride(ride_id: str, request: Request = None, current_user: dict = D
             try:
                 settings = await get_app_settings()
                 offer_timeout_seconds = int(settings.get("ride_offer_timeout_seconds", 15))
-            except Exception:  # noqa: S110
-                pass
+            except Exception:
+                # Non-fatal: fall back to hardcoded default if settings fetch fails
+                logger.error("Failed to fetch app settings for offer timeout config", exc_info=True)
         ride["offer_timeout_seconds"] = offer_timeout_seconds
         if driver_notified_at:
             try:
@@ -1707,6 +1709,7 @@ async def process_payment(
                     amount=-_f(_master_debit),
                     notes=f"Ride fallback debit {ride_id}",
                     actor_user_id=ride.get("rider_id", "system"),
+                    floor=0.0,
                 )
             except Exception as _master_err:
                 # Compensate: re-grant the allowance that was debited in step 5.
@@ -1871,6 +1874,18 @@ async def process_payment(
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
+            # Notify rider their payment was declined
+            rider_id = ride.get("rider_id")
+            if rider_id:
+                try:
+                    await send_push_notification(
+                        rider_id,
+                        "Payment failed",
+                        "Your payment method was declined. Please update your payment method in the app.",
+                        data={"type": "payment_failed", "ride_id": ride_id, "deeplink": "/wallet"},
+                    )
+                except Exception as _push_err:
+                    logger.debug(f"Payment failure push to rider failed: {_push_err}")
             raise HTTPException(
                 status_code=402,
                 detail={
@@ -1898,6 +1913,18 @@ async def process_payment(
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
+            # Notify rider their payment failed
+            rider_id = ride.get("rider_id")
+            if rider_id:
+                try:
+                    await send_push_notification(
+                        rider_id,
+                        "Payment failed",
+                        "Your payment method was declined. Please update your payment method in the app.",
+                        data={"type": "payment_failed", "ride_id": ride_id, "deeplink": "/wallet"},
+                    )
+                except Exception as _push_err:
+                    logger.debug(f"Payment failure push to rider failed: {_push_err}")
             raise HTTPException(
                 status_code=402,
                 detail={
@@ -2892,6 +2919,19 @@ async def get_ride_receipt(ride_id: str, current_user: dict = Depends(get_curren
         if ride.get("status") == "cancelled"
         else 0,
         "tax_amount": ride.get("tax_amount", 0),
+        "tax_breakdown": (
+            lambda _tax: {
+                "gst": {
+                    "rate": 5.0,
+                    "amount": _f(_round(_tax * Decimal("0.05") / Decimal("0.11"))),
+                },
+                "pst": {
+                    "rate": 6.0,
+                    "amount": _f(_round(_tax - _round(_tax * Decimal("0.05") / Decimal("0.11")))),
+                },
+            }
+        )(_d(str(ride.get("tax_amount") or 0))),
+        "surge_multiplier": ride.get("surge_multiplier", 1.0),
         "tip_amount": ride.get("tip_amount", 0),
         "total_charged": ride.get("total_fare", 0),
         "payment_method": "Corporate Account"

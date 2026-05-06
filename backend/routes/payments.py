@@ -8,26 +8,26 @@ try:
     from .. import db_supabase
     from ..dependencies import get_current_user
     from ..settings_loader import get_app_settings
+    from ..utils.audit_logger import log_user_action as _audit_log_user
     from ..utils.error_handling import (
         PaymentException,
         PaymentMethodInvalidException,
     )
     from ..utils.error_keys import ErrorKeys
     from ..utils.idempotency import idempotent_endpoint
-    from ..utils.audit_logger import log_user_action as _audit_log_user
     from ..utils.rate_limiter import api_rate_limit, payment_action_limit
 except ImportError:
     import db_supabase
     from dependencies import get_current_user
     from settings_loader import get_app_settings
+    from utils.audit_logger import log_user_action as _audit_log_user
     from utils.error_handling import (
         PaymentException,
         PaymentMethodInvalidException,
     )
     from utils.error_keys import ErrorKeys
     from utils.idempotency import idempotent_endpoint
-    from utils.audit_logger import log_user_action as _audit_log_user
-    from utils.rate_limiter import api_rate_limit, payment_action_limit
+    from utils.rate_limiter import payment_action_limit
 import logging
 
 import stripe
@@ -171,7 +171,9 @@ async def create_payment_intent(
 
 @api_router.post("/confirm")
 @payment_action_limit
-async def confirm_payment(body: Dict[str, Any], request: Request = None, current_user: dict = Depends(get_current_user)):
+async def confirm_payment(
+    body: Dict[str, Any], request: Request = None, current_user: dict = Depends(get_current_user)
+):
     """Confirm payment was successful"""
     payment_intent_id = body.get("payment_intent_id")
     ride_id = body.get("ride_id")
@@ -196,7 +198,7 @@ async def confirm_payment(body: Dict[str, Any], request: Request = None, current
 
             return {"status": intent.status, "mock": False}
         except Exception as e:
-            logger.error(f"Stripe error: {e}")
+            logger.error(f"Stripe error: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
 
     return {"status": "unknown", "mock": True}
@@ -218,10 +220,13 @@ async def create_setup_intent(request: Request = None, current_user: dict = Depe
         if not customer_id:
             raise HTTPException(status_code=400, detail="Could not create Stripe customer")
 
+        import time as _time
+
         setup_intent = stripe.SetupIntent.create(
             customer=customer_id,
             payment_method_types=["card"],
             api_key=stripe_secret,
+            idempotency_key=f"setup-intent-{current_user['id']}-{int(_time.time() // 3600)}",
         )
 
         return {
@@ -231,7 +236,7 @@ async def create_setup_intent(request: Request = None, current_user: dict = Depe
             "mock": False,
         }
     except Exception as e:
-        logger.error(f"Stripe error: {e}")
+        logger.error(f"Stripe error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
 
 
@@ -271,7 +276,7 @@ async def get_payment_methods(current_user: dict = Depends(get_current_user)):
             "mock": False,
         }
     except Exception as e:
-        logger.error(f"Stripe error: {e}")
+        logger.error(f"Stripe error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
 
 
@@ -305,7 +310,7 @@ async def get_cards(current_user: dict = Depends(get_current_user)):
             for m in methods.data
         ]
     except Exception as e:
-        logger.error(f"Get cards error: {e}")
+        logger.error(f"Get cards error: {e}", exc_info=True)
         return []
 
 
@@ -432,12 +437,15 @@ async def add_card(request: Request = None, current_user: dict = Depends(get_cur
         pm = stripe.PaymentMethod.attach(payment_method_id, customer=customer_id, api_key=stripe_secret)
 
         # Confirm with SetupIntent — saves card for future off-session use.
+        import time as _time
+
         si = stripe.SetupIntent.create(
             customer=customer_id,
             payment_method=pm.id,
             confirm=True,
             automatic_payment_methods={"enabled": True, "allow_redirects": "never"},
             api_key=stripe_secret,
+            idempotency_key=f"setup-intent-{current_user['id']}-{int(_time.time() // 3600)}",
         )
 
         # Set as default if first card
@@ -496,6 +504,7 @@ async def set_default_card(card_id: str, request: Request = None, current_user: 
             logger.error(f"Stripe set default failed for card {card_id}: {e}", exc_info=True)
 
     import asyncio
+
     asyncio.create_task(
         _audit_log_user(
             current_user,
@@ -577,10 +586,16 @@ async def create_payment_sheet(
         amount_cents = int(Decimal(str(body.amount)).quantize(Decimal("0.01")) * 100)
 
         # EphemeralKey lets the PaymentSheet modal manage the customer's
-        # saved cards. Must match the Stripe API version the SDK expects.
+        # saved cards. api_version must match the version configured on the
+        # Stripe webhook endpoint in the dashboard. We pin it to the version
+        # bundled with the installed SDK (stripe.api_version) so it stays in
+        # sync automatically on SDK upgrades.
+        # Current bundled version: 2026-04-22.dahlia (stripe==15.1.0)
+        # ACTION REQUIRED on SDK upgrade: verify the Stripe dashboard webhook
+        # endpoint API version matches stripe.api_version after upgrading.
         ephemeral_key = stripe.EphemeralKey.create(
             {"customer": customer_id},
-            api_version="2023-10-16",
+            api_version=stripe.api_version,
             api_key=stripe_secret,
         )
 

@@ -1,6 +1,10 @@
 import { create } from 'zustand';
 import api from '@shared/api/client';
 
+function isAxiosError(e: unknown): e is { response?: { data?: { detail?: string } }; message?: string } {
+  return typeof e === 'object' && e !== null && ('response' in e || 'message' in e);
+}
+
 export interface Quest {
   id: string;
   title: string;
@@ -60,20 +64,20 @@ export const useQuestStore = create<QuestState>((set, get) => ({
   fetchAvailableQuests: async () => {
     try {
       set({ isLoading: true, error: null });
-      const res = await api.get('/quests');
+      const res = await api.get<Quest[]>('/quests');
       set({ availableQuests: res.data || [], isLoading: false });
-    } catch (error: any) {
-      set({ error: error.message, isLoading: false });
+    } catch (error: unknown) {
+      set({ error: isAxiosError(error) ? (error.message ?? 'Failed to fetch quests') : 'Failed to fetch quests', isLoading: false });
     }
   },
 
   fetchMyQuests: async () => {
     try {
       set({ isLoading: true, error: null });
-      const res = await api.get('/quests/my-quests');
+      const res = await api.get<MyQuestProgress[]>('/quests/my-quests');
       set({ myQuests: res.data || [], isLoading: false });
-    } catch (error: any) {
-      set({ error: error.message, isLoading: false });
+    } catch (error: unknown) {
+      set({ error: isAxiosError(error) ? (error.message ?? 'Failed to fetch quests') : 'Failed to fetch quests', isLoading: false });
     }
   },
 
@@ -85,8 +89,8 @@ export const useQuestStore = create<QuestState>((set, get) => ({
       await get().fetchAvailableQuests();
       await get().fetchMyQuests();
       set({ isLoading: false });
-    } catch (error: any) {
-      set({ error: error.response?.data?.detail || error.message, isLoading: false });
+    } catch (error: unknown) {
+      set({ error: isAxiosError(error) ? (error.response?.data?.detail || error.message || 'Failed to join quest') : 'Failed to join quest', isLoading: false });
       throw error;
     }
   },
@@ -94,12 +98,12 @@ export const useQuestStore = create<QuestState>((set, get) => ({
   claimReward: async (progressId: string) => {
     try {
       set({ isLoading: true, error: null });
-      const res = await api.post(`/quests/progress/${progressId}/claim`);
+      const res = await api.post<{ reward_amount: number }>(`/quests/progress/${progressId}/claim`);
       await get().fetchMyQuests();
       set({ isLoading: false });
       return res.data;
-    } catch (error: any) {
-      set({ error: error.response?.data?.detail || error.message, isLoading: false });
+    } catch (error: unknown) {
+      set({ error: isAxiosError(error) ? (error.response?.data?.detail || error.message || 'Failed to claim reward') : 'Failed to claim reward', isLoading: false });
       throw error;
     }
   },

@@ -62,7 +62,9 @@ export default function VehicleTypesPage() {
         setLoading(true);
         getVehicleTypes()
             .then(setTypes)
-            .catch(() => { })
+            .catch(() => {
+                toast({ title: "Failed to load vehicle types", description: "Please refresh the page.", variant: "destructive" });
+            })
             .finally(() => setLoading(false));
     };
 
@@ -97,10 +99,12 @@ export default function VehicleTypesPage() {
             } else {
                 await createVehicleType(form);
             }
+            toast({ title: "Vehicle type saved" });
             setDialogOpen(false);
             fetchTypes();
         } catch (err) {
             console.error("Error saving vehicle type:", err);
+            toast({ title: "Save failed", description: "Could not save vehicle type. Please try again.", variant: "destructive" });
         } finally {
             setSaving(false);
         }
@@ -133,6 +137,7 @@ export default function VehicleTypesPage() {
             );
         } catch (err) {
             console.error("Error toggling vehicle type:", err);
+            toast({ title: "Update failed", description: "Could not update vehicle type status. Please try again.", variant: "destructive" });
         }
     };
 

@@ -182,7 +182,7 @@ function RideCompletedScreenContent() {
       if (!alreadyPaid) {
         const result = await attemptRidePayment({
           api,
-          stripe: confirmPayment ? { confirmPayment } : null,
+          stripe: { confirmPayment },
           rideId: rideId as string,
           tipAmount,
         });

@@ -337,8 +337,9 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
     if datetime.now(timezone.utc) > expires_at:
         try:
             await db_supabase.delete_otp_record(otp_record["id"])
-        except Exception:  # noqa: S110
-            pass
+        except Exception:
+            # Non-fatal: OTP expiry cleanup failure does not block the error response
+            logger.warning("Failed to delete expired OTP record %s", otp_record["id"], exc_info=True)
         raise SpinrException(
             message="ERR_OTP_EXPIRED",
             error_code=ErrorCode.AUTH_OTP_EXPIRED,
@@ -349,8 +350,9 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
 
     try:
         await db_supabase.update_one("otp_records", {"id": otp_record["id"]}, {"verified": True})
-    except Exception:  # noqa: S110
-        pass
+    except Exception:
+        # Non-fatal: marking OTP as verified is best-effort; verification already succeeded
+        logger.warning("Failed to mark OTP record %s as verified", otp_record["id"], exc_info=True)
 
     # SEC-008: Clear failure counter + lockout on successful verification
     await _clear_otp_failures(phone)
@@ -842,7 +844,10 @@ async def refresh_access_token(request: Request, response: Response, body: Optio
 @api_router.post("/logout")
 @limiter.limit("3/minute")
 async def logout(
-    request: Request, response: Response, body: Optional[LogoutRequest] = None, current_user: dict = Depends(get_current_user)
+    request: Request,
+    response: Response,
+    body: Optional[LogoutRequest] = None,
+    current_user: dict = Depends(get_current_user),
 ):
     """Revoke the presented refresh token.
 

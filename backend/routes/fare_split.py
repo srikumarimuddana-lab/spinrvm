@@ -210,7 +210,7 @@ async def get_fare_split_for_ride(ride_id: str, current_user: dict = Depends(get
     if not (is_owner or is_participant):
         raise HTTPException(status_code=403, detail="Access denied")
 
-    share_amount = float(_d(Decimal(str(split["total_fare"])) / split["split_count"]))
+    share_amount = str(_d(Decimal(str(split["total_fare"])) / split["split_count"]))
 
     return {
         "has_split": True,

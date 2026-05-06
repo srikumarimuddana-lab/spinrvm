@@ -1,6 +1,7 @@
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -164,7 +165,7 @@ async def admin_get_drivers(
             }
             matching_users = await db_supabase.get_rows("users", user_filters, limit=100)
             matching_uids = [u["id"] for u in matching_users if u.get("id")]
-            
+
             # Match driver rows by phone/plate directly OR by user_id from user search above.
             # `name` is not a column on drivers — it's derived from the joined users row.
             filters["$or"] = [
@@ -327,7 +328,7 @@ async def admin_get_driver_stats(
     suspended_count = sum(1 for d in enriched_drivers if d.get("status") == "suspended")
     banned_count = sum(1 for d in enriched_drivers if d.get("status") == "banned")
     total_rides_sum = sum(int(d.get("total_rides") or 0) for d in enriched_drivers)
-    total_earnings_sum = sum(float(d.get("total_earnings") or 0) for d in enriched_drivers)
+    total_earnings_sum = float(sum(Decimal(str(d.get("total_earnings") or 0)) for d in enriched_drivers))
     avg_rating = 0.0
     rated = [d for d in enriched_drivers if d.get("rating") and float(d.get("rating", 0)) > 0]
     if rated:
@@ -356,7 +357,9 @@ async def admin_get_driver_stats(
         else:
             area_stats[aid]["unverified"] += 1
         area_stats[aid]["total_rides"] += int(d.get("total_rides") or 0)
-        area_stats[aid]["total_earnings"] += float(d.get("total_earnings") or 0)
+        area_stats[aid]["total_earnings"] = float(
+            Decimal(str(area_stats[aid]["total_earnings"])) + Decimal(str(d.get("total_earnings") or 0))
+        )
 
     # ── Daily charts (within date range) ──
     num_days = (range_end - range_start).days + 1
@@ -391,7 +394,9 @@ async def admin_get_driver_stats(
             day_key = dt.strftime("%Y-%m-%d")
             daily_rides[day_key] += 1
             if r.get("status") == "completed":
-                daily_earnings[day_key] += float(r.get("driver_earnings") or 0)
+                daily_earnings[day_key] = float(
+                    Decimal(str(daily_earnings[day_key])) + Decimal(str(r.get("driver_earnings") or 0))
+                )
 
     # Build chart arrays
     joins_chart = []

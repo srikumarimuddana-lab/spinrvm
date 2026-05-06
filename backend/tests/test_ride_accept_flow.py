@@ -30,7 +30,7 @@ nothing — just removed the pin from the map without calling the API).
 """
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -58,7 +58,7 @@ def _ride_row(status: str, driver_id=None, driver_accepted_at=None):
         "pickup_lng": -104.65,
         "dropoff_lat": 50.45,
         "dropoff_lng": -104.60,
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
     return row
 
@@ -97,7 +97,7 @@ class TestAcceptRideFlipsStatus:
         post_ride = _ride_row(
             "driver_accepted",
             driver_id=DRIVER_ID,
-            driver_accepted_at=datetime.utcnow().isoformat(),
+            driver_accepted_at=datetime.now(timezone.utc).isoformat(),
         )
 
         # guard_ok signals that the atomic update matched one row
@@ -200,7 +200,7 @@ class TestGetRideReturnsAcceptedStatus:
         post_ride = _ride_row(
             "driver_accepted",
             driver_id=DRIVER_ID,
-            driver_accepted_at=datetime.utcnow().isoformat(),
+            driver_accepted_at=datetime.now(timezone.utc).isoformat(),
         )
         driver = _driver_row()
 

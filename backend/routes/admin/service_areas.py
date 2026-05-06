@@ -329,7 +329,7 @@ async def admin_create_area_fee(area_id: str, fee: AreaFeeCreateRequest):
         "fee_name": fee.fee_name,
         "fee_type": fee.fee_type,
         "calc_mode": fee.calc_mode,
-        "amount": float(fee.amount),
+        "amount": fee.amount,
         "description": fee.description,
         "conditions": fee.conditions,
         "is_active": fee.is_active,
@@ -351,7 +351,7 @@ async def admin_update_area_fee(area_id: str, fee_id: str, fee: AreaFeeUpdateReq
     if fee.calc_mode is not None:
         updates["calc_mode"] = fee.calc_mode
     if fee.amount is not None:
-        updates["amount"] = float(fee.amount)
+        updates["amount"] = fee.amount
     if fee.description is not None:
         updates["description"] = fee.description
     if fee.conditions is not None:

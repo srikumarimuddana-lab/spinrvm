@@ -28,7 +28,7 @@ Marked `e2e` so CI can filter them independently from fast unit tests:
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -58,7 +58,7 @@ def _ride_row(status: str, driver_id: str | None = None, **extra) -> dict:
         "distance_km": 3.2,
         "duration_minutes": 8,
         "otp": "4242",
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
     row.update(extra)
     return row

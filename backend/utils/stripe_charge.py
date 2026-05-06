@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any, Dict, Optional
 
 try:
@@ -150,7 +151,7 @@ async def charge_ride(
         )
 
     ride_id = ride.get("id") or ""
-    amount_cents = int(round(float(total_amount) * 100))
+    amount_cents = int(Decimal(str(total_amount)).quantize(Decimal("0.01")) * 100)
 
     # Idempotency: the same ride can only be charged once within 24h
     # regardless of how many retries the client makes. If an existing

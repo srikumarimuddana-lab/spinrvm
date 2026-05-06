@@ -65,7 +65,7 @@ def _ride(status: str = "in_progress", **extra):
         "otp": "4242",
         "pickup_otp": "hashed_otp",
         "vehicle_type_id": "sedan",
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
         **extra,
     }
 

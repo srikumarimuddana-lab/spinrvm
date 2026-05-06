@@ -400,6 +400,14 @@ def reset_db_circuit_breaker() -> None:
             continue
 
 
+def _reset_limiter_storage(limiter_obj) -> None:
+    """Reset MemoryStorage on a SlowAPI Limiter instance (if present)."""
+    inner = getattr(limiter_obj, "_limiter", None)
+    storage = getattr(inner, "storage", None) if inner is not None else None
+    if storage is not None and callable(getattr(storage, "reset", None)):
+        storage.reset()
+
+
 @pytest.fixture(autouse=True)
 def reset_rate_limiters() -> None:
     """Reset in-process rate-limiter storage before each test.
@@ -413,16 +421,25 @@ def reset_rate_limiters() -> None:
     """
     import importlib
 
+    # Disable and reset the shared default_limiter used by all pre-configured limits
+    # (payment_action_limit, ride_action_limit, ride_request_limit, etc.).
+    # Setting enabled=False makes SlowAPI skip the starlette.Request lookup entirely,
+    # which prevents IndexError / "request must be Request" errors when tests call
+    # route handlers directly without an HTTP request object.
+    for rl_mod_path in ("backend.utils.rate_limiter", "utils.rate_limiter"):
+        try:
+            rl_mod = importlib.import_module(rl_mod_path)
+            limiter = getattr(rl_mod, "default_limiter", None)
+            if limiter is not None:
+                limiter.enabled = False
+            _reset_limiter_storage(limiter)
+        except (ImportError, ModuleNotFoundError):
+            continue
+
     for mod_path in ("backend.routes.admin.auth", "routes.admin.auth"):
         try:
             mod = importlib.import_module(mod_path)
-            limiter = getattr(mod, "limiter", None)
-            if limiter is None:
-                continue
-            inner = getattr(limiter, "_limiter", None)
-            storage = getattr(inner, "storage", None) if inner is not None else None
-            if storage is not None and callable(getattr(storage, "reset", None)):
-                storage.reset()
+            _reset_limiter_storage(getattr(mod, "limiter", None))
         except (ImportError, ModuleNotFoundError):
             continue
 

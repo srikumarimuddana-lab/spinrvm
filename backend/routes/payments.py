@@ -85,7 +85,7 @@ async def get_or_create_stripe_customer(user_id: str, stripe_secret: str):
 @idempotent_endpoint(scope="payment_intent")
 async def create_payment_intent(
     body: PaymentIntentRequest,
-    request: Request,
+    request: Request = None,
     current_user: dict = Depends(get_current_user),
 ):
     """Create a Stripe payment intent.
@@ -171,7 +171,7 @@ async def create_payment_intent(
 
 @api_router.post("/confirm")
 @payment_action_limit
-async def confirm_payment(body: Dict[str, Any], request: Request, current_user: dict = Depends(get_current_user)):
+async def confirm_payment(body: Dict[str, Any], request: Request = None, current_user: dict = Depends(get_current_user)):
     """Confirm payment was successful"""
     payment_intent_id = body.get("payment_intent_id")
     ride_id = body.get("ride_id")
@@ -204,7 +204,7 @@ async def confirm_payment(body: Dict[str, Any], request: Request, current_user: 
 
 @api_router.post("/setup-intent")
 @payment_action_limit
-async def create_setup_intent(request: Request, current_user: dict = Depends(get_current_user)):
+async def create_setup_intent(request: Request = None, current_user: dict = Depends(get_current_user)):
     """Create a SetupIntent to save a new payment method"""
     settings = await get_app_settings()
     stripe_secret = settings.get("stripe_secret_key", "")
@@ -348,7 +348,7 @@ _RAW_CARD_FIELDS = {
 
 @api_router.post("/cards")
 @payment_action_limit
-async def add_card(request: Request, current_user: dict = Depends(get_current_user)):
+async def add_card(request: Request = None, current_user: dict = Depends(get_current_user)):
     """Add a saved card. Requires client-side tokenization.
 
     Contract:
@@ -480,7 +480,7 @@ async def add_card(request: Request, current_user: dict = Depends(get_current_us
 
 @api_router.post("/cards/{card_id}/default")
 @payment_action_limit
-async def set_default_card(card_id: str, request: Request, current_user: dict = Depends(get_current_user)):
+async def set_default_card(card_id: str, request: Request = None, current_user: dict = Depends(get_current_user)):
     """Set card as default. Updates both our DB and Stripe customer."""
     await db_supabase.update_one("users", {"id": current_user["id"]}, {"default_payment_method": card_id})
 
@@ -510,7 +510,7 @@ async def set_default_card(card_id: str, request: Request, current_user: dict = 
 
 @api_router.delete("/cards/{card_id}")
 @payment_action_limit
-async def delete_card(card_id: str, request: Request, current_user: dict = Depends(get_current_user)):
+async def delete_card(card_id: str, request: Request = None, current_user: dict = Depends(get_current_user)):
     """Detach card from Stripe and clear default if needed."""
     settings = await get_app_settings()
     stripe_secret = settings.get("stripe_secret_key", "")
@@ -531,7 +531,7 @@ async def delete_card(card_id: str, request: Request, current_user: dict = Depen
 @payment_action_limit
 async def create_payment_sheet(
     body: PaymentSheetRequest,
-    request: Request,
+    request: Request = None,
     current_user: dict = Depends(get_current_user),
 ):
     """Return the three secrets needed to initialise Stripe PaymentSheet.

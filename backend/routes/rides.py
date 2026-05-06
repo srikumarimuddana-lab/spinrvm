@@ -596,7 +596,7 @@ class RideEstimateRequest(BaseModel):
 
 @api_router.post("/estimate")
 @api_rate_limit
-async def estimate_ride(request: Request, body: RideEstimateRequest, current_user: dict = Depends(get_current_user)):
+async def estimate_ride(body: RideEstimateRequest, request: Request = None, current_user: dict = Depends(get_current_user)):
     validate_ride_location(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng)
     distance_km = calculate_distance(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng)
     duration_minutes = int(distance_km / 30 * 60) + 5
@@ -772,7 +772,7 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
 @api_router.post("")
 @ride_request_limit
 @idempotent_endpoint(scope="ride_create")
-async def create_ride(request: Request, body: CreateRideRequest, current_user: dict = Depends(get_current_user)):
+async def create_ride(body: CreateRideRequest, request: Request = None, current_user: dict = Depends(get_current_user)):
     # SlowAPI's @ride_request_limit needs a parameter literally named
     # ``request`` that is a starlette Request; otherwise it raises
     # "parameter `request` must be an instance of starlette.requests.Request"
@@ -1164,7 +1164,7 @@ from fastapi import Request  # noqa: E402
 
 @ride_read_limit
 @api_router.get("/active")
-async def get_active_ride(request: Request, current_user: dict = Depends(get_current_user)):
+async def get_active_ride(request: Request = None, current_user: dict = Depends(get_current_user)):
     """Get rider's current active/pending ride (if any). Used on app launch to resume."""
     # First check for rides that need payment (completed but not paid)
     # Then check for active rides
@@ -1233,7 +1233,7 @@ async def get_active_ride(request: Request, current_user: dict = Depends(get_cur
 @ride_read_limit
 @api_router.get("/history")
 async def get_ride_history(
-    request: Request,
+    request: Request = None,
     limit: int = Query(default=20, ge=1, le=100),
     before: Optional[str] = Query(default=None),
     current_user: dict = Depends(get_current_user),
@@ -1284,7 +1284,7 @@ async def get_ride_history(
 
 @ride_read_limit
 @api_router.get("/{ride_id}")
-async def get_ride(request: Request, ride_id: str, current_user: dict = Depends(get_current_user)):
+async def get_ride(ride_id: str, request: Request = None, current_user: dict = Depends(get_current_user)):
     """Fetch details of a specific ride"""
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
@@ -1433,7 +1433,7 @@ async def get_ride(request: Request, ride_id: str, current_user: dict = Depends(
 async def add_tip(
     ride_id: str,
     req: TipRequest,
-    request: Request,
+    request: Request = None,
     current_user: dict = Depends(get_current_user),
 ):
     # Money arithmetic uses Decimal per CLAUDE.md. The old `float(req.amount)`
@@ -1547,7 +1547,7 @@ class ProcessPaymentRequest(BaseModel):
 @api_router.post("/{ride_id}/process-payment")
 @payment_action_limit
 async def process_payment(
-    ride_id: str, req: ProcessPaymentRequest, request: Request, current_user: dict = Depends(get_current_user)
+    ride_id: str, req: ProcessPaymentRequest, request: Request = None, current_user: dict = Depends(get_current_user)
 ):
     """Process payment for completed ride. Charges rider's card for fare + tip."""
     tip_amount = req.tip_amount  # already Decimal, validated by ProcessPaymentRequest
@@ -1966,7 +1966,7 @@ class ShareTripWithContactRequest(BaseModel):
 @api_router.post("/{ride_id}/share")
 @api_rate_limit
 async def share_trip_with_contact(
-    ride_id: str, request: Request, body: ShareTripWithContactRequest, current_user: dict = Depends(get_current_user)
+    ride_id: str, body: ShareTripWithContactRequest, request: Request = None, current_user: dict = Depends(get_current_user)
 ):
     """Share trip with a specific contact and send them a notification."""
     ride = await db.find_one("rides", {"id": ride_id})
@@ -2100,7 +2100,7 @@ async def track_shared_ride(share_token: str):
 @api_router.post("/{ride_id}/rate")
 @ride_rating_limit
 async def rate_driver(
-    ride_id: str, rating_data: RideRatingRequest, request: Request, current_user: dict = Depends(get_current_user)
+    ride_id: str, rating_data: RideRatingRequest, request: Request = None, current_user: dict = Depends(get_current_user)
 ):
     """Rider rates the driver"""
     ride = await db_supabase.get_ride(ride_id)
@@ -2179,7 +2179,7 @@ async def rate_driver(
 
 @api_router.post("/{ride_id}/cancel")
 @cancel_ride_limit
-async def cancel_ride_rider(request: Request, ride_id: str, current_user: dict = Depends(get_current_user)):
+async def cancel_ride_rider(ride_id: str, request: Request = None, current_user: dict = Depends(get_current_user)):
     """Rider cancels the ride"""
     try:
         from ..logging_utils import diag_logger  # type: ignore
@@ -2361,7 +2361,7 @@ class AddStopMidTripRequest(BaseModel):
 @api_router.post("/{ride_id}/stops")
 @ride_action_limit
 async def add_stop_mid_trip(
-    ride_id: str, req: AddStopMidTripRequest, request: Request, current_user: dict = Depends(get_current_user)
+    ride_id: str, req: AddStopMidTripRequest, request: Request = None, current_user: dict = Depends(get_current_user)
 ):
     """Add a stop to an active ride mid-trip."""
     ride = await db.find_one("rides", {"id": ride_id})
@@ -2407,8 +2407,7 @@ async def add_stop_mid_trip(
 @api_router.delete("/{ride_id}/stops/{stop_index}")
 @ride_action_limit
 async def remove_stop_mid_trip(
-    ride_id: str, stop_index: int, request: Request, current_user: dict = Depends(get_current_user)
-):
+    ride_id: str, stop_index: int, request: Request = None, current_user: dict = Depends(get_current_user)):
     """Remove a stop from an active ride by index."""
     ride = await db.find_one("rides", {"id": ride_id})
     if not ride:
@@ -2457,8 +2456,7 @@ class EmergencyRequest(BaseModel):
 @api_router.post("/{ride_id}/emergency")
 @ride_action_limit
 async def trigger_emergency(
-    ride_id: str, body: EmergencyRequest, request: Request, current_user: dict = Depends(get_current_user)
-):
+    ride_id: str, body: EmergencyRequest, request: Request = None, current_user: dict = Depends(get_current_user)):
     """Trigger an emergency alert for a live ride"""
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
@@ -2670,8 +2668,7 @@ class SendMessageRequest(BaseModel):
 @api_router.post("/{ride_id}/messages")
 @ride_message_limit
 async def send_ride_message(
-    ride_id: str, body: SendMessageRequest, request: Request, current_user: dict = Depends(get_current_user)
-):
+    ride_id: str, body: SendMessageRequest, request: Request = None, current_user: dict = Depends(get_current_user)):
     """Send a chat message for an active or recently completed ride.
 
     Persists the message in `ride_messages` and forwards it to the
@@ -2740,7 +2737,7 @@ async def get_scheduled_rides(current_user: dict = Depends(get_current_user)):
 
 @api_router.delete("/scheduled/{ride_id}")
 @cancel_ride_limit
-async def cancel_scheduled_ride(ride_id: str, request: Request, current_user: dict = Depends(get_current_user)):
+async def cancel_scheduled_ride(ride_id: str, request: Request = None, current_user: dict = Depends(get_current_user)):
     """Cancel a scheduled ride."""
     ride = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows(
@@ -2780,7 +2777,7 @@ async def cancel_scheduled_ride(ride_id: str, request: Request, current_user: di
 
 @api_router.post("/{ride_id}/simulate-arrival")
 @api_rate_limit
-async def simulate_driver_arrival(ride_id: str, request: Request, current_user: dict = Depends(get_current_user)):
+async def simulate_driver_arrival(ride_id: str, request: Request = None, current_user: dict = Depends(get_current_user)):
     """Dev/test only: Simulate driver arriving at pickup, returns OTP."""
     if _settings.ENV.lower() == "production":
         raise HTTPException(status_code=403, detail="Not available in production")
@@ -2804,7 +2801,7 @@ async def simulate_driver_arrival(ride_id: str, request: Request, current_user: 
 
 @api_router.post("/{ride_id}/start")
 @ride_action_limit
-async def rider_start_ride(ride_id: str, request: Request, current_user: dict = Depends(get_current_user)):
+async def rider_start_ride(ride_id: str, request: Request = None, current_user: dict = Depends(get_current_user)):
     """Start a ride. Restricted to the assigned driver only (R-P1-17)."""
     # R-P1-17: Only the assigned driver may mark a ride as started.
     if not current_user.get("is_driver"):
@@ -2834,7 +2831,7 @@ async def rider_start_ride(ride_id: str, request: Request, current_user: dict = 
 
 @api_router.post("/{ride_id}/complete")
 @ride_action_limit
-async def rider_complete_ride(ride_id: str, request: Request, current_user: dict = Depends(get_current_user)):
+async def rider_complete_ride(ride_id: str, request: Request = None, current_user: dict = Depends(get_current_user)):
     """Rider-side: Get completed ride data (ride is completed by driver; this fetches the result)."""
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
@@ -2921,7 +2918,7 @@ async def get_ride_receipt(ride_id: str, current_user: dict = Depends(get_curren
 @ride_action_limit
 async def safety_checkin_response(
     ride_id: str,
-    request: Request,
+    request: Request = None,
     current_user: dict = Depends(get_current_user),
 ):
     """Rider taps 'I'm okay' on the safety check-in push notification.

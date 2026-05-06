@@ -580,10 +580,10 @@ async def _offer_timeout_handler(
 
 
 class RideEstimateRequest(BaseModel):
-    pickup_lat: float
-    pickup_lng: float
-    dropoff_lat: float
-    dropoff_lng: float
+    pickup_lat: float = Field(..., ge=-90, le=90)
+    pickup_lng: float = Field(..., ge=-180, le=180)
+    dropoff_lat: float = Field(..., ge=-90, le=90)
+    dropoff_lng: float = Field(..., ge=-180, le=180)
     stops: Optional[List[dict]] = None
 
 
@@ -1237,32 +1237,39 @@ async def get_ride_history(
     Returns ``next_cursor`` (the id of the last ride in this page) to use as
     the next ``before`` value, or ``null`` when there are no more pages.
     """
-    all_rides = await db_supabase.get_rows(
+    # Resolve cursor to a timestamp so we can push the predicate to the DB.
+    # Fetching 500 rows and slicing in Python caused O(n) reads on busy accounts.
+    cursor_ts = None
+    if before:
+        cursor_ride = await db_supabase.find_one("rides", {"id": before, "rider_id": current_user["id"]})
+        if cursor_ride:
+            cursor_ts = cursor_ride.get("created_at")
+
+    filters: dict = {
+        "rider_id": current_user["id"],
+        "status": {"$in": ["completed", "cancelled"]},
+    }
+    if cursor_ts:
+        filters["created_at"] = {"$lt": cursor_ts}
+
+    # Fetch limit+1 so we know whether a next page exists without an extra
+    # count query. We then post-filter for meaningful rides (driver_id set
+    # on cancellations) and slice to limit.
+    candidates = await db_supabase.get_rows(
         "rides",
-        {
-            "rider_id": current_user["id"],
-            "status": {"$in": ["completed", "cancelled"]},
-        },
+        filters,
         order="created_at",
         desc=True,
-        limit=500,
+        limit=limit + 10,  # small buffer for the post-filter
     )
 
-    # Post-filter: exclude cancelled rides where no driver was ever matched
-    # (these are searching/auto-expired cancellations with no trip value to the rider)
-    result = [
+    # Exclude cancelled rides where no driver was ever matched
+    rides = [
         r
-        for r in all_rides
+        for r in candidates
         if r.get("status") == "completed" or (r.get("status") == "cancelled" and r.get("driver_id"))
-    ]
+    ][:limit]
 
-    # Cursor-based pagination: skip rides up to and including the cursor id
-    if before:
-        cursor_idx = next((i for i, r in enumerate(result) if r.get("id") == before), None)
-        if cursor_idx is not None:
-            result = result[cursor_idx + 1 :]
-
-    rides = result[:limit]
     next_cursor = rides[-1]["id"] if len(rides) == limit else None
 
     return {"rides": rides, "limit": limit, "next_cursor": next_cursor}
@@ -2646,7 +2653,7 @@ async def get_ride_messages(ride_id: str, current_user: dict = Depends(get_curre
 
 
 class SendMessageRequest(BaseModel):
-    text: str
+    text: str = Field(..., min_length=1, max_length=500)
 
 
 @api_router.post("/{ride_id}/messages")

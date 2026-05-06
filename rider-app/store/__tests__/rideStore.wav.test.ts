@@ -28,6 +28,7 @@ jest.mock('@shared/api/client', () => ({
   },
 }));
 jest.mock('@shared/store/authStore', () => ({
+  registerLogoutCallback: jest.fn(),
   useAuthStore: { getState: () => ({ user: { id: 'user-test' } }) },
 }));
 jest.mock('@shared/services/errorReporting', () => ({ recordNonFatal: jest.fn() }));

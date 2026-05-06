@@ -134,8 +134,14 @@ function RideOptionsScreenContent() {
   }, [estimates]);
 
   useEffect(() => {
+    // Bug 1 guard: bail out early if estimates is empty to avoid estimates[0] crash
+    if (!estimates || estimates.length === 0) return;
+
+    // Bug 2 guard: clamp selectedIndex to valid range whenever estimates array changes
+    setSelectedIndex(prev => (prev >= estimates.length ? 0 : prev));
+
     // Auto-select first AVAILABLE vehicle
-    if (estimates.length > 0 && !selectedVehicle) {
+    if (!selectedVehicle) {
       const firstAvailableIndex = estimates.findIndex(e => e.available);
       if (firstAvailableIndex !== -1) {
         setSelectedIndex(firstAvailableIndex);

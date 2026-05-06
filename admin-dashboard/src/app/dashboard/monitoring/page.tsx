@@ -4,6 +4,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Radio, X } from "lucide-react";
 import { useAuthStore } from "@/store/authStore";
 import { useToast } from "@/components/ui/use-toast";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 import { adminCancelRide, getFareConfigs, getMonitoringDrivers, getMonitoringRides, getServiceAreas, getVehicleTypes } from "@/lib/api";
 import { useMonitoringSocket } from "@/hooks/use-monitoring-socket";
@@ -59,6 +69,9 @@ export default function MonitoringPage() {
   // configured vehicle types; the dropdown shows "No vehicles configured".
   const [vehicleTypesByArea, setVehicleTypesByArea] = useState<Record<string, Set<string>>>({});
   const [alerts, setAlerts] = useState<AlertEvent[]>([]);
+  const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
+  const [cancelReason, setCancelReason] = useState("Cancelled by admin");
+  const [pendingCancelId, setPendingCancelId] = useState<string | null>(null);
 
   // ── Auth token for WebSocket ────────────────────────────────────────
   const token = useAuthStore((s) => s.token);
@@ -595,22 +608,10 @@ export default function MonitoringPage() {
               <RidePanel
                 ride={selectedRide}
                 onDriverClick={handleSelectDriver}
-                onCancelRide={async (id) => {
-                  const reason = window.prompt(
-                    "Cancellation reason (shown to rider + driver):",
-                    "Cancelled by admin",
-                  );
-                  if (reason === null) return; // user hit Cancel on the prompt
-                  try {
-                    await adminCancelRide(id, reason || "Cancelled by admin");
-                    ridesMapRef.current.delete(id);
-                    mapHandlesRef.current?.removeRideMarkers(id);
-                    refreshCounts();
-                    setSelected(null);
-                    setSelectedRide(null);
-                  } catch (err: any) {
-                    toast({ title: "Failed to cancel ride", description: err?.message ?? "Unknown error", variant: "destructive" });
-                  }
+                onCancelRide={(id) => {
+                  setPendingCancelId(id);
+                  setCancelReason("Cancelled by admin");
+                  setCancelDialogOpen(true);
                 }}
                 onCompleteRide={async (id) => {
                   try {
@@ -622,9 +623,7 @@ export default function MonitoringPage() {
                     setSelected(null);
                     setSelectedRide(null);
                   } catch (err: any) {
-                    window.alert(
-                      `Failed to complete ride: ${err?.message ?? "unknown error"}`,
-                    );
+                    toast({ title: "Failed to complete ride", description: err?.message ?? "Unknown error", variant: "destructive" });
                   }
                 }}
               />
@@ -632,6 +631,51 @@ export default function MonitoringPage() {
           ) : null}
         </div>
       </div>
+
+      {/* Cancel ride dialog */}
+      <Dialog open={cancelDialogOpen} onOpenChange={(open) => { if (!open) setCancelDialogOpen(false); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Cancel Ride</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2 py-2">
+            <Label htmlFor="cancel-reason">Cancellation reason (shown to rider &amp; driver)</Label>
+            <Input
+              id="cancel-reason"
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+              placeholder="Cancelled by admin"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCancelDialogOpen(false)}>
+              Back
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={async () => {
+                if (!pendingCancelId) return;
+                const id = pendingCancelId;
+                const reason = cancelReason.trim() || "Cancelled by admin";
+                setCancelDialogOpen(false);
+                setPendingCancelId(null);
+                try {
+                  await adminCancelRide(id, reason);
+                  ridesMapRef.current.delete(id);
+                  mapHandlesRef.current?.removeRideMarkers(id);
+                  refreshCounts();
+                  setSelected(null);
+                  setSelectedRide(null);
+                } catch (err: any) {
+                  toast({ title: "Failed to cancel ride", description: err?.message ?? "Unknown error", variant: "destructive" });
+                }
+              }}
+            >
+              Confirm Cancel
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -171,7 +171,7 @@ export default function SupportScreen({ role, initialTab = 'faq' }: Props) {
     api
       .get('/company-info')
       .then((r) => setCompanyInfo(r?.data || {}))
-      .catch(() => {});
+      .catch((e) => console.warn('[Support] company-info fetch failed:', e?.message ?? e));
   }, [role]);
 
   const filteredFaqs = useMemo(() => {

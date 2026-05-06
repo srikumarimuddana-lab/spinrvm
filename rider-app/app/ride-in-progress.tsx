@@ -164,7 +164,7 @@ function RideInProgressScreenContent() {
           onPress: () => {
             // Fire-and-forget — 911 is the primary action regardless of backend result.
             // .catch() prevents unhandled rejection now that triggerEmergency rethrows.
-            if (rideId) void triggerEmergency(rideId as string).catch(() => {});
+            if (rideId) void triggerEmergency(rideId as string).catch((e) => console.warn('[RideInProgress] Emergency trigger failed:', e?.message ?? e));
             Linking.openURL('tel:911');
           },
         },

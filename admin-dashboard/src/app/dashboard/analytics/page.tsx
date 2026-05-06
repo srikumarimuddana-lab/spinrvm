@@ -167,14 +167,14 @@ export default function AnalyticsPage() {
       )}
 
       {/* Daily Trend Chart */}
-      {overview?.daily_chart?.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Activity className="h-5 w-5" /> Daily Ride Trend
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Activity className="h-5 w-5" /> Daily Ride Trend
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {overview?.daily_chart && overview.daily_chart.length > 0 ? (
             <ResponsiveContainer width="100%" height={300}>
               <BarChart data={overview.daily_chart}>
                 <CartesianGrid strokeDasharray="3 3" />
@@ -186,9 +186,11 @@ export default function AnalyticsPage() {
                 <Bar dataKey="cancelled" fill="#EF4444" name="Cancelled" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
-          </CardContent>
-        </Card>
-      )}
+          ) : (
+            <p className="text-sm text-muted-foreground text-center py-8">No data for selected period</p>
+          )}
+        </CardContent>
+      </Card>
 
       <Tabs defaultValue="cancellations">
         <TabsList>
@@ -235,15 +237,19 @@ export default function AnalyticsPage() {
                 <CardTitle>Cancellations by Hour</CardTitle>
               </CardHeader>
               <CardContent>
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={cancellations?.hourly_distribution || []}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="hour" fontSize={11} tickFormatter={(h) => `${h}:00`} />
-                    <YAxis fontSize={11} />
-                    <Tooltip labelFormatter={(h) => `${h}:00`} />
-                    <Bar dataKey="count" fill="#EF4444" radius={[3, 3, 0, 0]} name="Cancellations" />
-                  </BarChart>
-                </ResponsiveContainer>
+                {(cancellations?.hourly_distribution?.length ?? 0) > 0 ? (
+                  <ResponsiveContainer width="100%" height={300}>
+                    <BarChart data={cancellations.hourly_distribution}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="hour" fontSize={11} tickFormatter={(h) => `${h}:00`} />
+                      <YAxis fontSize={11} />
+                      <Tooltip labelFormatter={(h) => `${h}:00`} />
+                      <Bar dataKey="count" fill="#EF4444" radius={[3, 3, 0, 0]} name="Cancellations" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <p className="text-sm text-muted-foreground text-center py-8">No cancellation data</p>
+                )}
               </CardContent>
             </Card>
           </div>

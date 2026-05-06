@@ -82,7 +82,9 @@ function PaymentConfirmScreenContent() {
       setSavedCards(cards);
       const defaultCard = cards.find((c) => c.is_default) ?? cards[0];
       if (defaultCard) setSelectedCardId(defaultCard.id);
-    }).catch(() => {});
+    }).catch((e) => {
+      console.warn('[PaymentConfirm] Failed to load saved cards:', e?.message ?? e);
+    });
   }, []);
 
   // Keep corporate toggle in sync when work mode is toggled elsewhere
@@ -147,7 +149,7 @@ function PaymentConfirmScreenContent() {
     }
   };
 
-  const totalFare = parseFloat(selectedEstimate?.total_fare || '0') - promoDiscount;
+  const totalFare = Math.max(0, parseFloat(selectedEstimate?.total_fare || '0') - promoDiscount);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>

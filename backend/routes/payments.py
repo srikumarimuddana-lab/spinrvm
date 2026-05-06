@@ -77,7 +77,9 @@ async def get_or_create_stripe_customer(user_id: str, stripe_secret: str):
         # Re-read to use the authoritative value in case a concurrent replica wrote first.
         # (The loser's Stripe customer is unused but harmless; deduplication can run offline.)
         fresh = await db_supabase.get_user_by_id(user_id)
-        stripe_customer_id = (fresh or {}).get("stripe_customer_id", stripe_customer_id)
+        if not fresh:
+            raise HTTPException(status_code=404, detail="User not found during Stripe customer creation")
+        stripe_customer_id = fresh["stripe_customer_id"]
 
     return stripe_customer_id
 
@@ -195,6 +197,9 @@ async def confirm_payment(
     if stripe_secret:
         try:
             intent = stripe.PaymentIntent.retrieve(payment_intent_id, api_key=stripe_secret)
+
+            if intent.metadata.get("user_id") != str(current_user["id"]):
+                raise HTTPException(status_code=403, detail="Not authorized to confirm this payment")
 
             if ride_id:
                 await db_supabase.update_ride(

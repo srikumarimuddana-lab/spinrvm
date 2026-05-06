@@ -73,7 +73,10 @@ export default function RideFlagForm({ open, onClose, rideId, targetType, target
                     </div>
                     <div>
                         <label className="text-xs font-medium text-muted-foreground">Description (optional)</label>
-                        <Input value={description} onChange={e => setDescription(e.target.value)} placeholder="Additional details..." className="mt-1" />
+                        <Input value={description} onChange={e => setDescription(e.target.value)} placeholder="Additional details..." className="mt-1" maxLength={500} />
+                        <p className="text-xs text-muted-foreground text-right">
+                            {(description || '').length}/500
+                        </p>
                     </div>
                 </div>
                 <DialogFooter>

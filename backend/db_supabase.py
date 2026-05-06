@@ -320,7 +320,7 @@ async def run_sync(
         raise DuplicateRecordError(details={"original": exc_str}) from last_exc
     _metric_inc("spinr_db_errors_total", {"kind": "database_error"})
     logger.error(f"[DB] Supabase call failed ({exc_name}): {exc_str}")
-    raise DatabaseError(details={"original": exc_str}) from last_exc
+    raise DatabaseError(details={"original": exc_str, "exception_type": exc_name}) from last_exc
 
 
 def _serialize_for_api(data: Any) -> Any:

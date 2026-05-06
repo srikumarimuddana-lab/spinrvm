@@ -244,7 +244,7 @@ function DriverArrivingScreenContent() {
           text: 'Call 911',
           style: 'destructive',
           onPress: () => {
-            if (rideId) void triggerEmergency(rideId as string).catch(() => {});
+            if (rideId) void triggerEmergency(rideId as string).catch((e) => console.warn('[DriverArriving] Emergency trigger failed:', e?.message ?? e));
             Linking.openURL('tel:911');
           },
         },

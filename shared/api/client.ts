@@ -692,6 +692,7 @@ const client = {
     const headers: Record<string, string> = {
       ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
       'X-Request-ID': generateRequestId(),
+      ...deadlineHeader(),
       ...traceparentHeader(),
       ...config?.headers,
     };

@@ -9,7 +9,10 @@ test.describe('Login page', () => {
         await route.fulfill({
           status: 200,
           contentType: 'application/json',
-          body: JSON.stringify({ token: 'test-token', user: { id: '1', email: 'admin@spinr.ca', role: 'admin' } }),
+          // access_expires_at MUST be present: without it scheduleTokenRefresh(undefined,…)
+          // computes delay=NaN → setTimeout fires at 0 ms → infinite refresh loop →
+          // networkidle never settles → every test times out.
+          body: JSON.stringify({ token: 'test-token', access_expires_at: '2100-01-01T00:00:00Z', csrf_token: 'test-csrf', user: { id: '1', email: 'admin@spinr.ca', role: 'admin' } }),
         });
       } else {
         await route.fulfill({ status: 401, contentType: 'application/json', body: '{}' });

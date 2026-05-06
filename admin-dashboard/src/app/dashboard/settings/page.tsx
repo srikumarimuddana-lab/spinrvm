@@ -161,19 +161,57 @@ export default function SettingsPage() {
                         </CardContent>
                     </Card>
 
-                    {/* SMS / Twilio */}
+                    {/* Email / SendGrid */}
                     <Card className="border-border/50">
                         <CardHeader>
-                            <CardTitle className="text-base">SMS / Twilio</CardTitle>
+                            <CardTitle className="text-base">Email (SendGrid)</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-4">
+                            <p className="text-xs text-muted-foreground">
+                                Used to send ride receipt emails to riders. If <strong>From Email</strong> is
+                                blank, the <code>email_from</code> setting is used as a fallback.
+                            </p>
+                            <div className="space-y-2">
+                                <Label>API Key</Label>
+                                <Input
+                                    type="password"
+                                    value={settings.sendgrid_api_key || ""}
+                                    onChange={(e) =>
+                                        update("sendgrid_api_key", e.target.value)
+                                    }
+                                    placeholder="SG...."
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>From Email</Label>
+                                <Input
+                                    type="email"
+                                    value={settings.sendgrid_from_email || ""}
+                                    onChange={(e) =>
+                                        update("sendgrid_from_email", e.target.value)
+                                    }
+                                    placeholder="receipts@spinr.ca"
+                                />
+                            </div>
+                        </CardContent>
+                    </Card>
+
+                    {/* Telephony / Twilio */}
+                    <Card className="border-border/50">
+                        <CardHeader>
+                            <CardTitle className="text-base">Telephony (Twilio)</CardTitle>
                         </CardHeader>
                         <Separator />
                         <CardContent className="pt-4 space-y-4">
                             <p className="text-xs text-muted-foreground">
                                 When not configured, OTP defaults to <strong>1234</strong> for testing.
+                                The Proxy Service SID enables anonymous in-ride calling.
                             </p>
                             <div className="space-y-2">
                                 <Label>Account SID</Label>
                                 <Input
+                                    type="password"
                                     value={settings.twilio_account_sid || ""}
                                     onChange={(e) =>
                                         update("twilio_account_sid", e.target.value)
@@ -201,6 +239,20 @@ export default function SettingsPage() {
                                     }
                                     placeholder="+1234567890"
                                 />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>Proxy Service SID</Label>
+                                <Input
+                                    type="password"
+                                    value={settings.twilio_proxy_service_sid || ""}
+                                    onChange={(e) =>
+                                        update("twilio_proxy_service_sid", e.target.value)
+                                    }
+                                    placeholder="KS..."
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    From Twilio Console &rarr; Proxy &rarr; Services
+                                </p>
                             </div>
                         </CardContent>
                     </Card>

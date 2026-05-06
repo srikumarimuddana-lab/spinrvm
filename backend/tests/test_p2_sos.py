@@ -103,7 +103,7 @@ class TestTriggerEmergency:
         ):
             result = await rides_mod.trigger_emergency(
                 ride_id=RIDE_ID,
-                request=_Req(),
+                body=_Req(),
                 current_user={"id": sender_user_id},
             )
 
@@ -151,7 +151,7 @@ class TestTriggerEmergency:
             with pytest.raises(HTTPException) as exc_info:
                 await rides_mod.trigger_emergency(
                     ride_id=RIDE_ID,
-                    request=_Req(),
+                    body=_Req(),
                     current_user={"id": "outsider-user"},
                 )
 
@@ -166,7 +166,7 @@ class TestTriggerEmergency:
             with pytest.raises(HTTPException) as exc_info:
                 await rides_mod.trigger_emergency(
                     ride_id="nonexistent-ride",
-                    request=_Req(),
+                    body=_Req(),
                     current_user={"id": RIDER_ID},
                 )
 

@@ -627,7 +627,7 @@ function DriverDashboard() {
           <SOSButton
             rideId={activeRide.ride.id}
             onTrigger={async (rideId, lat, lng) => {
-              try { await api.post(`/rides/${rideId}/emergency`, { latitude: lat, longitude: lng }); } catch {}
+              try { await api.post(`/rides/${rideId}/emergency`, { latitude: lat, longitude: lng }); } catch (err) { console.error('[index]', err); }
             }}
           />
         </View>

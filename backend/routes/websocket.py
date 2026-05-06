@@ -585,7 +585,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                             _app_cfg = await get_app_settings()
                             _maps_key_cache = (_app_cfg or {}).get("google_maps_api_key") or ""
                         except Exception:
-                            pass  # keep stale key; Maps call will fall back to haversine
+                            logger.debug("Maps API key refresh failed; retaining stale key", exc_info=True)
                         _maps_key_fetched_at = now_mono
 
                     location_update = {
@@ -625,7 +625,9 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                                     if eta_sec is not None:
                                         rider_msg["eta_seconds"] = eta_sec
                                 except Exception:
-                                    pass  # ETA is informational — never block the fan-out
+                                    logger.debug(
+                                        "ETA fetch failed; omitting eta_seconds from location update", exc_info=True
+                                    )
 
                         await manager.send_personal_message(
                             rider_msg,

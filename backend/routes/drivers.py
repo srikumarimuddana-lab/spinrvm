@@ -1802,6 +1802,10 @@ async def _build_and_email_data_export(user_id: str, email: str) -> None:
 
         await send_email(to=email, subject=subject, body=body)
         logger.info("Data export emailed to %s for user %s", email, user_id)
+        logger.info(
+            "dsar_export_completed",
+            extra={"user_id": user_id, "domain": "privacy", "metric": "dsar_export_completed"},
+        )
 
     except Exception as exc:
         logger.error("Data export failed for user %s: %s", user_id, exc)

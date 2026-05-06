@@ -7,7 +7,6 @@ annotated-types==0.7.0    # via pydantic
 anyio==4.13.0             # via -r requirements.in, httpx, starlette, watchfiles
 attrs==26.1.0             # via aiohttp
 bcrypt==5.0.0             # via -r requirements.in
-black==26.3.1             # via -r requirements.in
 boto3==1.42.96            # via -r requirements.in
 botocore==1.42.96         # via boto3, s3transfer
 cachecontrol==0.14.4      # via firebase-admin
@@ -15,7 +14,7 @@ cachetools==6.2.6         # via pyiceberg
 certifi==2026.4.22        # via -r requirements.in, cloudinary, httpcore, httpx, requests, sentry-sdk
 cffi==2.0.0               # via cryptography
 charset-normalizer==3.4.7  # via -r requirements.in, requests
-click==8.3.3              # via -r requirements.in, black, pyiceberg, typer, uvicorn
+click==8.3.3              # via -r requirements.in, pyiceberg, typer, uvicorn
 cloudinary==1.44.2        # via -r requirements.in
 coverage==7.13.5          # via pytest-cov
 cryptography==47.0.0      # via google-auth, pyjwt
@@ -26,7 +25,6 @@ dnspython==2.8.0          # via email-validator
 email-validator==2.3.0    # via -r requirements.in
 fastapi==0.136.1          # via -r requirements.in
 firebase-admin==7.4.0     # via -r requirements.in
-flake8==7.3.0             # via -r requirements.in
 fonttools==4.62.1         # via fpdf2
 fpdf2==2.8.7              # via -r requirements.in
 frozenlist==1.8.0         # via aiohttp, aiosignal
@@ -61,18 +59,14 @@ limits==5.8.0             # via slowapi
 loguru==0.7.3             # via -r requirements.in
 markdown-it-py==4.0.0     # via rich
 markupsafe==3.0.3         # via jinja2
-mccabe==0.7.0             # via flake8
 mdurl==0.1.2              # via markdown-it-py
 mmh3==5.2.1               # via pyiceberg
 msgpack==1.1.2            # via cachecontrol
 multidict==6.7.1          # via aiohttp, yarl
-mypy-extensions==1.1.0    # via black
 numpy==2.4.4              # via -r requirements.in, pandas
-packaging==26.2           # via black, deprecation, limits, pytest
+packaging==26.2           # via deprecation, limits, pytest
 pandas==3.0.2             # via -r requirements.in
-pathspec==1.1.1           # via black
 pillow==12.2.0            # via -r requirements.in, fpdf2, staticmap
-platformdirs==4.9.6       # via black
 pluggy==1.6.0             # via pytest, pytest-cov
 postgrest==2.29.0         # via -r requirements.in, supabase
 propcache==0.4.1          # via aiohttp, yarl
@@ -81,12 +75,10 @@ protobuf==5.29.6          # via google-ai-generativelanguage, google-api-core, g
 psycopg2-binary==2.9.12   # via -r requirements.in
 pyasn1==0.6.3             # via pyasn1-modules
 pyasn1-modules==0.4.2     # via google-auth
-pycodestyle==2.14.0       # via flake8
 pycparser==3.0            # via cffi
 pydantic==2.13.3          # via -r requirements.in, fastapi, google-generativeai, postgrest, pydantic-settings, pyiceberg, realtime, storage3, supabase-auth
 pydantic-core==2.46.3     # via pydantic
 pydantic-settings==2.14.0  # via -r requirements.in
-pyflakes==3.4.0           # via flake8
 pygments==2.20.0          # via pytest, rich
 pyiceberg==0.11.1         # via storage3
 pyjwt==2.12.1             # via -r requirements.in, firebase-admin, supabase-auth, twilio
@@ -101,7 +93,6 @@ pytest-mock==3.15.1       # via -r requirements.in
 python-dateutil==2.9.0.post0  # via -r requirements.in, botocore, pandas, strictyaml
 python-dotenv==1.2.2      # via -r requirements.in, pydantic-settings, pytest-env, uvicorn
 python-multipart==0.0.27  # via -r requirements.in
-pytokens==0.4.1           # via black
 pytz==2026.2              # via -r requirements.in
 pyyaml==6.0.3             # via -r requirements.in, uvicorn
 realtime==2.29.0          # via -r requirements.in, supabase

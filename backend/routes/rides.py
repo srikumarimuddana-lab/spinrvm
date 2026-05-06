@@ -1309,7 +1309,7 @@ async def get_ride(request: Request, ride_id: str, current_user: dict = Depends(
         try:
             settings = await get_app_settings()
             free_cancel_window = int(settings.get("free_cancel_window_seconds", 120))
-            cancellation_fee_amount = float(settings.get("cancellation_fee", 3.0))
+            cancellation_fee_amount = float(Decimal(str(settings.get("cancellation_fee", "3.0"))))
         except Exception:
             # Non-fatal: fall back to hardcoded defaults if settings fetch fails
             logger.error("Failed to fetch app settings for cancellation config", exc_info=True)
@@ -2219,6 +2219,25 @@ async def cancel_ride_rider(request: Request, ride_id: str, current_user: dict =
                             "created_at": datetime.now(timezone.utc).isoformat(),
                         },
                     )
+                    try:
+                        await db_supabase.insert_one(
+                            "audit_logs",
+                            {
+                                "id": str(uuid.uuid4()),
+                                "action": "cancellation_fee_charged",
+                                "entity_type": "rides",
+                                "entity_id": ride_id,
+                                "actor_id": current_user["id"],
+                                "details": {
+                                    "fee_amount": _f(fee_dec),
+                                    "driver_id": driver_id,
+                                    "ride_status_at_cancel": ride.get("status"),
+                                },
+                                "created_at": datetime.now(timezone.utc).isoformat(),
+                            },
+                        )
+                    except Exception:
+                        logger.warning("audit_log write failed for cancellation_fee_charged", exc_info=True)
                 await send_push_notification(
                     driver_user_id,
                     title="Cancellation fee earned",

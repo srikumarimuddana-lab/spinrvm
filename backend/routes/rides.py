@@ -249,13 +249,16 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
     #
     # We also require user_id IS NOT NULL to skip legacy "demo" driver rows
     # that lack a real user and can never be notified.
+    _dispatch_filter: dict = {
+        "is_online": True,
+        "is_available": True,
+        "vehicle_type_id": ride["vehicle_type_id"],
+    }
+    if ride.get("requires_wav"):
+        _dispatch_filter["is_wav"] = True
     all_drivers = await db_supabase.get_rows(
         "drivers",
-        {
-            "is_online": True,
-            "is_available": True,
-            "vehicle_type_id": ride["vehicle_type_id"],
-        },
+        _dispatch_filter,
         limit=500,
     )
 
@@ -611,6 +614,7 @@ async def estimate_ride(request: RideEstimateRequest, current_user: dict = Depen
         nearby_for_type = drivers_by_type.get(vt_id, [])
         driver_count = len(nearby_for_type)
         is_available = driver_count > 0
+        wav_available = sum(1 for entry in nearby_for_type if entry["driver"].get("is_wav"))
 
         # Calculate ETA: closest driver's distance / avg speed (30km/h in city)
         eta_minutes = None
@@ -646,6 +650,7 @@ async def estimate_ride(request: RideEstimateRequest, current_user: dict = Depen
                 "available": is_available,
                 "eta_minutes": eta_minutes,
                 "driver_count": driver_count,
+                "wav_available": wav_available,
                 "estimate_token": estimate_token,
             }
         )
@@ -933,6 +938,7 @@ async def create_ride(request: Request, body: CreateRideRequest, current_user: d
         admin_earnings=_f(admin_earnings),
         payment_method=body.payment_method,
         payment_method_id=body.payment_method_id,
+        requires_wav=body.requires_wav,
         status="searching",
         pickup_otp=hash_otp(pickup_otp_plain),
         ride_requested_at=datetime.now(timezone.utc),

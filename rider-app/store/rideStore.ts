@@ -7,7 +7,7 @@ import { RideStatus } from '../constants/rideStatus';
 import { recordNonFatal } from '../utils/crashlytics';
 
 const ACTIVE_RIDE_KEY = '@spinr:active_ride';
-const TERMINAL_STATUSES = new Set([RideStatus.COMPLETED, RideStatus.CANCELLED, RideStatus.FAILED]);
+const TERMINAL_STATUSES: Set<string> = new Set([RideStatus.COMPLETED, RideStatus.CANCELLED, RideStatus.FAILED]);
 
 function isErrorLike(e: unknown): e is { message: string } {
   return typeof e === 'object' && e !== null && 'message' in e;
@@ -341,7 +341,7 @@ export const useRideStore = create<RideState>((set, get) => ({
         id: string;
         type: 'create_ride' | 'cancel_ride' | 'rate_ride' | 'tip' | 'emergency';
         rideId?: string;
-        data?: any;
+        data?: Record<string, unknown>;
         retryCount?: number;
         timestamp?: number;
       };
@@ -494,9 +494,9 @@ export const useRideStore = create<RideState>((set, get) => ({
       await api.post(`/rides/${currentRide.id}/cancel`);
       set({ currentRide: null, currentDriver: null, isLoading: false });
       AsyncStorage.removeItem(ACTIVE_RIDE_KEY).catch(() => {});
-    } catch (error: any) {
+    } catch (error: unknown) {
       recordNonFatal(error, { store: 'rideStore', action: 'cancelRide' });
-      set({ isLoading: false, error: error.message });
+      set({ isLoading: false, error: isErrorLike(error) ? error.message : 'Failed to cancel ride' });
     }
   },
 
@@ -509,8 +509,8 @@ export const useRideStore = create<RideState>((set, get) => ({
       set({
         currentRide: { ...currentRide, status: RideStatus.DRIVER_ARRIVED, pickup_otp: response.data.pickup_otp ?? currentRide.pickup_otp },
       });
-    } catch (error: any) {
-      set({ error: error.message });
+    } catch (error: unknown) {
+      set({ error: isErrorLike(error) ? error.message : 'Failed to simulate arrival' });
     }
   },
 
@@ -523,8 +523,8 @@ export const useRideStore = create<RideState>((set, get) => ({
       set({
         currentRide: { ...currentRide, status: RideStatus.IN_PROGRESS },
       });
-    } catch (error: any) {
-      set({ error: error.message });
+    } catch (error: unknown) {
+      set({ error: isErrorLike(error) ? error.message : 'Failed to start ride' });
     }
   },
 
@@ -537,9 +537,9 @@ export const useRideStore = create<RideState>((set, get) => ({
       set({ currentRide: response.data });
       AsyncStorage.removeItem(ACTIVE_RIDE_KEY).catch(() => {});
       return response.data;
-    } catch (error: any) {
+    } catch (error: unknown) {
       recordNonFatal(error, { store: 'rideStore', action: 'completeRide' });
-      set({ error: error.message });
+      set({ error: isErrorLike(error) ? error.message : 'Failed to complete ride' });
     }
   },
 
@@ -550,9 +550,9 @@ export const useRideStore = create<RideState>((set, get) => ({
         comment,
         tip_amount: tipAmount || 0,
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       recordNonFatal(error, { store: 'rideStore', action: 'rateRide' });
-      set({ error: error.message });
+      set({ error: isErrorLike(error) ? error.message : 'Failed to rate ride' });
       throw error;
     }
   },
@@ -564,12 +564,12 @@ export const useRideStore = create<RideState>((set, get) => ({
       longitude,
     };
     const MAX_ATTEMPTS = 3;
-    let lastError: any;
+    let lastError: unknown;
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       try {
         await api.post(`/rides/${rideId}/emergency`, payload);
         return; // success
-      } catch (error: any) {
+      } catch (error: unknown) {
         lastError = error;
         if (attempt < MAX_ATTEMPTS) {
           await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
@@ -585,8 +585,8 @@ export const useRideStore = create<RideState>((set, get) => ({
     try {
       const response = await api.get<SavedAddress[]>('/addresses');
       set({ savedAddresses: response.data as SavedAddress[] });
-    } catch (error: any) {
-      console.log('Error fetching addresses:', error.message);
+    } catch (error: unknown) {
+      console.log('Error fetching addresses:', isErrorLike(error) ? error.message : error);
     }
   },
 
@@ -594,8 +594,8 @@ export const useRideStore = create<RideState>((set, get) => ({
     try {
       const response = await api.post<SavedAddress>('/addresses', address);
       set({ savedAddresses: [...get().savedAddresses, response.data as SavedAddress] });
-    } catch (error: any) {
-      set({ error: error.message });
+    } catch (error: unknown) {
+      set({ error: isErrorLike(error) ? error.message : 'Failed to add address' });
       throw error;
     }
   },
@@ -604,15 +604,15 @@ export const useRideStore = create<RideState>((set, get) => ({
     try {
       await api.delete(`/addresses/${id}`);
       set({ savedAddresses: get().savedAddresses.filter((a) => a.id !== id) });
-    } catch (error: any) {
-      set({ error: error.message });
+    } catch (error: unknown) {
+      set({ error: isErrorLike(error) ? error.message : 'Failed to delete address' });
     }
   },
 
   addChatMessage: (msg) => {
     const { chatMessages } = get();
     // Deduplicate by id (WS + poll can deliver the same message).
-    if (chatMessages.some((m: any) => m.id === msg.id)) return;
+    if (chatMessages.some((m) => m.id === msg.id)) return;
     set({ chatMessages: [...chatMessages, msg] });
   },
 
@@ -663,8 +663,8 @@ export const useRideStore = create<RideState>((set, get) => ({
     try {
       const response = await api.get<Ride[]>('/rides/scheduled');
       set({ scheduledRides: response.data as Ride[] });
-    } catch (error: any) {
-      console.log('Error fetching scheduled rides:', error.message);
+    } catch (error: unknown) {
+      console.log('Error fetching scheduled rides:', isErrorLike(error) ? error.message : error);
     }
   },
 
@@ -674,8 +674,8 @@ export const useRideStore = create<RideState>((set, get) => ({
       set((state) => ({
         scheduledRides: state.scheduledRides.filter((r) => r.id !== rideId),
       }));
-    } catch (error: any) {
-      set({ error: error.message });
+    } catch (error: unknown) {
+      set({ error: isErrorLike(error) ? error.message : 'Failed to cancel scheduled ride' });
     }
   },
 
@@ -735,13 +735,13 @@ export const useRideStore = create<RideState>((set, get) => ({
       // Validate against backend — if the ride completed or was cancelled
       // while the app was closed the stored data would be stale.
       try {
-        const live = await api.get<{ active?: boolean; ride?: Ride & { driver?: unknown } }>('/rides/active');
+        const live = await api.get<{ active?: boolean; ride?: Ride & { driver?: Driver | null } }>('/rides/active');
         if (!live.data?.active || live.data.ride?.id !== stored.id) {
           await AsyncStorage.removeItem(ACTIVE_RIDE_KEY);
           return; // stale — do not route
         }
         const liveRide = live.data.ride;
-        const liveDriver = (liveRide as any)?.driver || currentDriver || null;
+        const liveDriver = liveRide?.driver ?? currentDriver ?? null;
         if (!get().currentRide) {
           set({ currentRide: liveRide, currentDriver: liveDriver });
         }

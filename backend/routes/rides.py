@@ -32,6 +32,7 @@ try:
     )
     from ..utils.error_keys import ErrorKeys
     from ..utils.idempotency import idempotent_endpoint
+    from ..utils.audit_logger import log_user_action
     from ..utils.rate_limiter import (
         api_rate_limit,
         cancel_ride_limit,
@@ -65,6 +66,7 @@ except ImportError:
     )
     from utils.error_keys import ErrorKeys
     from utils.idempotency import idempotent_endpoint
+    from utils.audit_logger import log_user_action
     from utils.rate_limiter import (
         cancel_ride_limit,
         ride_read_limit,
@@ -471,7 +473,7 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
                 )
                 logger.info(f"[DISPATCH] push new_ride_assignment sent to user_id={selected_driver['user_id']}")
             except Exception as e:
-                logger.warning(f"[DISPATCH] push notification failed for user_id={selected_driver['user_id']}: {e}")
+                logger.error(f"[DISPATCH] push notification failed for user_id={selected_driver['user_id']}: {e}", exc_info=True)
         else:
             logger.error(
                 f"[DISPATCH] selected_driver has no user_id — cannot notify. "
@@ -1138,6 +1140,15 @@ async def create_ride(request: Request, body: CreateRideRequest, current_user: d
     if updated_ride and updated_ride.get("status") == "searching":
         asyncio.create_task(ride_search_timeout(ride.id))
 
+    asyncio.create_task(
+        log_user_action(
+            current_user,
+            "ride_created",
+            "rides",
+            ride.id,
+            {"status": updated_ride.get("status") if updated_ride else "searching"},
+        )
+    )
     return serialize_doc(updated_ride)
 
 
@@ -1476,7 +1487,7 @@ async def add_tip(
                 data={"type": "tip_received", "ride_id": str(ride_id), "amount": f"{tip_amount:.2f}"},
             )
         except Exception as exc:
-            logger.warning(f"[TIP] Push notify driver {driver_user_id} failed: {exc}")
+            logger.error(f"[TIP] Push notify driver {driver_user_id} failed: {exc}", exc_info=True)
 
     return {"success": True, "tip_amount": _f(new_tip)}
 
@@ -1897,7 +1908,7 @@ async def process_payment(
 
         email_sent = await send_receipt_email(ride, rider or {}, driver_info, _f(tip_amount))
     except Exception as e:
-        logger.warning(f"Receipt email error: {e}")
+        logger.error(f"Receipt email error: {e}", exc_info=True)
 
     return {"success": True, "charged_amount": _f(total_charge), "email_sent": email_sent}
 
@@ -1990,12 +2001,15 @@ async def share_trip_with_contact(
     if contact_user:
         rider = await db.find_one("users", {"id": current_user["id"]})
         rider_name = f"{rider.get('first_name', '')} {rider.get('last_name', '')}".strip() if rider else "Someone"
-        await send_push_notification(
-            contact_user["id"],
-            f"{rider_name} is sharing their ride with you",
-            f"Track their live location: {ride.get('pickup_address', '')} → {ride.get('dropoff_address', '')}",
-            data={"type": "trip_shared", "share_token": share_token, "ride_id": ride_id},
-        )
+        try:
+            await send_push_notification(
+                contact_user["id"],
+                f"{rider_name} is sharing their ride with you",
+                f"Track their live location: {ride.get('pickup_address', '')} → {ride.get('dropoff_address', '')}",
+                data={"type": "trip_shared", "share_token": share_token, "ride_id": ride_id},
+            )
+        except Exception as _push_exc:
+            logger.error(f"[SHARE] push to contact {contact_user['id']} failed: {_push_exc}", exc_info=True)
 
     return {
         "success": True,
@@ -2137,6 +2151,15 @@ async def rate_driver(
         except Exception as push_err:
             logger.warning(f"[RATING] Push notification failed: {push_err}")
 
+    asyncio.create_task(
+        log_user_action(
+            current_user,
+            "driver_rated",
+            "rides",
+            ride_id,
+            {"rating": str(rating_data.rating), "driver_id": driver_id},
+        )
+    )
     return {"success": True}
 
 
@@ -2299,6 +2322,15 @@ async def cancel_ride_rider(request: Request, ride_id: str, current_user: dict =
     except Exception as _exc:  # pragma: no cover - best effort
         logger.warning(f"rider cancel admin broadcast failed: {_exc}")
 
+    asyncio.create_task(
+        log_user_action(
+            current_user,
+            "ride_cancelled",
+            "rides",
+            ride_id,
+            {"reason": "rider_cancelled", "cancellation_fee": str(charged_admin + charged_driver)},
+        )
+    )
     return {"success": True, "cancellation_fee": charged_admin + charged_driver}
 
 

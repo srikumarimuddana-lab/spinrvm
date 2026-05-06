@@ -14,6 +14,7 @@ try:
     )
     from ..utils.error_keys import ErrorKeys
     from ..utils.idempotency import idempotent_endpoint
+    from ..utils.audit_logger import log_user_action as _audit_log_user
     from ..utils.rate_limiter import api_rate_limit, payment_action_limit
 except ImportError:
     import db_supabase
@@ -25,6 +26,7 @@ except ImportError:
     )
     from utils.error_keys import ErrorKeys
     from utils.idempotency import idempotent_endpoint
+    from utils.audit_logger import log_user_action as _audit_log_user
     from utils.rate_limiter import api_rate_limit, payment_action_limit
 import logging
 
@@ -156,8 +158,14 @@ async def create_payment_intent(
         )
 
         return {"client_secret": intent.client_secret, "payment_intent_id": intent.id, "mock": False}
+    except stripe.error.CardError as e:
+        logger.error(f"Stripe CardError on create-intent: {e}", exc_info=True)
+        raise HTTPException(status_code=402, detail=e.user_message or "Card declined") from e
+    except stripe.error.StripeError as e:
+        logger.error(f"Stripe API error on create-intent: {e}", exc_info=True)
+        raise HTTPException(status_code=502, detail="Payment service unavailable. Please try again.") from e
     except Exception as e:
-        logger.error(f"Stripe error: {e}")
+        logger.error(f"Unexpected error on create-intent: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
 
 
@@ -369,7 +377,7 @@ async def add_card(request: Request, current_user: dict = Depends(get_current_us
     if forbidden:
         # Log that a raw-card POST was attempted but DO NOT log the keys'
         # values. The client needs tokenization; tell them where to look.
-        logger.warning(
+        logger.error(
             f"Rejected raw-card POST to /payments/cards from user={current_user.get('id')}: {sorted(forbidden)} present"
         )
         raise HTTPException(
@@ -392,7 +400,7 @@ async def add_card(request: Request, current_user: dict = Depends(get_current_us
         # should reach clients via FastAPI's RequestValidationError
         # path normally; this except block is the fallback for the
         # ad-hoc dict-driven payload here.
-        logger.warning("AddCardRequest validation failed", exc_info=exc)
+        logger.error("AddCardRequest validation failed", exc_info=exc)
         raise HTTPException(
             status_code=400,
             detail="Invalid request payload.",
@@ -456,8 +464,17 @@ async def add_card(request: Request, current_user: dict = Depends(get_current_us
             message_key=ErrorKeys.PAYMENT_METHOD_INVALID,
             action_hint="Add a different card",
         ) from e
+    except stripe.error.CardError as e:
+        raise PaymentMethodInvalidException(
+            message=e.user_message or "Card declined",
+            message_key=ErrorKeys.PAYMENT_METHOD_INVALID,
+            action_hint="Add a different card",
+        ) from e
+    except stripe.error.StripeError as e:
+        logger.error(f"Stripe API error on add-card: {e}", exc_info=True)
+        raise HTTPException(status_code=502, detail="Payment service unavailable. Please try again.") from e
     except Exception as e:
-        logger.error(f"Add card error: {e}")
+        logger.error(f"Unexpected error on add-card: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
 
 
@@ -478,6 +495,16 @@ async def set_default_card(card_id: str, request: Request, current_user: dict = 
         except Exception as e:
             logger.error(f"Stripe set default failed for card {card_id}: {e}", exc_info=True)
 
+    import asyncio
+    asyncio.create_task(
+        _audit_log_user(
+            current_user,
+            "default_payment_method_set",
+            "users",
+            current_user["id"],
+            {"card_id": card_id},
+        )
+    )
     return {"success": True}
 
 

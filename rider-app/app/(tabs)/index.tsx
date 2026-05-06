@@ -93,6 +93,24 @@ export default function HomeScreen() {
       }
     }
 
+    // R-P2-45: Show a pre-prompt explanation on first launch before the system
+    // location dialog (PIPEDA data-minimization — user must understand why
+    // location is collected before consenting).
+    const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+    const prePromptShown = await AsyncStorage.getItem('spinr_location_preprompt_shown').catch(() => null);
+    if (!prePromptShown) {
+      await new Promise<void>(resolve => {
+        Alert.alert(
+          'Location Access',
+          'Spinr uses your location to show nearby drivers, calculate your pickup point, and provide accurate ETAs. ' +
+          'Your location is only used while the app is in use and is never sold or shared with advertisers.',
+          [{ text: 'Continue', style: 'default', onPress: resolve }],
+          { cancelable: false },
+        );
+      });
+      await AsyncStorage.setItem('spinr_location_preprompt_shown', '1').catch(() => {});
+    }
+
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') {
       Alert.alert(

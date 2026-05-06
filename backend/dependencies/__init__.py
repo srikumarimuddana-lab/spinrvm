@@ -216,13 +216,24 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     # Tokens minted before this fix carry no 'aud' claim; allow them through
     # for one 15-minute TTL window, then they naturally expire and new tokens
     # carry the claim. A present-but-wrong aud is always rejected immediately.
+    #
+    # S-3: Admin status is determined by the 'aud' claim, not the 'role' claim.
+    # Trusting payload.get("role") to route the token was a legacy path that
+    # allowed a crafted mobile JWT with an admin role claim to enter the admin
+    # code path. aud=JWT_AUD_ADMIN is the canonical signal; role claims in
+    # admin tokens are still trusted (per CLAUDE.md) but only after aud is confirmed.
     _admin_roles = {"admin", "super_admin", "operations", "support", "finance", "custom"}
-    _is_admin_payload = payload.get("role") in _admin_roles and bool(payload.get("email"))
-    _expected_aud = JWT_AUD_ADMIN if _is_admin_payload else JWT_AUD_MOBILE
     _token_aud = payload.get("aud")
+    # A token is admin only when aud explicitly says so, or (legacy: no aud present)
+    # when both role and email admin claims are present. Once all tokens carry aud
+    # (after one 15-min TTL window) the legacy branch below is dead code.
+    _is_admin_payload = _token_aud == JWT_AUD_ADMIN or (
+        _token_aud is None and payload.get("role") in _admin_roles and bool(payload.get("email"))
+    )
+    _expected_aud = JWT_AUD_ADMIN if _is_admin_payload else JWT_AUD_MOBILE
     if _token_aud is not None and _token_aud != _expected_aud:
         raise HTTPException(status_code=401, detail="ERR_TOKEN_AUDIENCE")
-    if payload.get("role") in _admin_roles and payload.get("email"):
+    if _is_admin_payload and payload.get("role") in _admin_roles and payload.get("email"):
         user_id = payload["user_id"]
         jti = payload.get("jti")
         if jti and await redis_get(f"admin:revoked:{jti}"):

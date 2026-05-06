@@ -157,10 +157,15 @@ async def send_otp(request: Request, body: SendOTPRequest):
         and app_settings.get("twilio_from_number")
     )
 
-    is_dev = settings.ENV.lower() in ("development", "test")
+    # Dev bypass is gated on "development" only — never "test" or "staging".
+    # An externally-reachable test/staging instance with a known OTP code is
+    # an account-takeover vector against any phone number. Mirrors
+    # `_is_dev_otp_bypass` so /send-otp and /verify-otp agree on the gate.
+    is_dev = settings.ENV.lower() == "development"
 
     if not twilio_configured and not is_dev:
-        # In production, refuse to silently fall back to a known OTP.
+        # In production / test / staging, refuse to silently fall back to a
+        # known OTP. Force the operator to configure Twilio.
         raise HTTPException(status_code=503, detail="SMS service not configured")
 
     # Dev fallback: fixed OTP so local testing doesn't need Twilio.
@@ -177,7 +182,11 @@ async def send_otp(request: Request, body: SendOTPRequest):
         await db_supabase.delete_many("otp_records", {"phone": phone})
         await db_supabase.insert_otp_record(otp_record.dict())
     except Exception as e:
-        logger.warning(f"Could not store OTP in DB: {e}")
+        # Returning 200 here would lie to the client: a missing OTP row means
+        # every subsequent /verify-otp will fail. Surface the DB error so the
+        # client retries instead of getting stuck.
+        logger.error(f"Could not store OTP in DB: {e}", exc_info=True)
+        raise HTTPException(status_code=503, detail="Service temporarily unavailable") from e
 
     # Send OTP via SMS (Twilio when configured, console log otherwise)
     sms_result = await send_otp_sms(
@@ -191,7 +200,7 @@ async def send_otp(request: Request, body: SendOTPRequest):
         logger.error(f"Failed to send OTP SMS: {sms_result.get('error')}")
         raise HTTPException(status_code=500, detail="Failed to send verification code")
 
-    response = {"success": True, "message": f"OTP sent to {phone}"}
+    response = {"success": True, "message": f"OTP sent to ***{phone[-4:]}"}
     # Dev OTP is logged to server console via sms_service.py — never return it
     # in the API response to avoid accidental exposure in client-side logs.
 
@@ -270,7 +279,7 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
         # Find or create user
         existing_user = None
         try:
-            logger.info(f"Searching for user with phone: {phone}")
+            logger.info("Searching for user by phone")
             existing_user = await db_supabase.get_user_by_phone(phone)
             logger.info(f"User search result found: {bool(existing_user)}")
         except Exception as e:
@@ -278,7 +287,10 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
             # wraps the original exception in .details["original"]; str(e)
             # only gives the generic "Database operation failed" message.
             original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
-            logger.error(f"get_user_by_phone failed for {phone}: type={type(e).__name__} msg={e} original={original}")
+            logger.error(
+                f"get_user_by_phone failed for ***{phone[-4:]}: type={type(e).__name__} msg={e} original={original}",
+                exc_info=True,
+            )
             # Refuse to silently fall through to user creation — a DB read
             # failure is NOT the same as "user doesn't exist". Creating a
             # new row here generates duplicate accounts on every retry and
@@ -350,7 +362,11 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
             try:
                 await db_supabase.create_user(new_user)
             except Exception as e:
-                logger.warning(f"Could not persist new user to DB: {e}")
+                # Issuing a JWT for a row that doesn't exist would break
+                # every subsequent authenticated call. Refuse to mint a
+                # token until persistence is confirmed.
+                logger.error(f"Could not persist new user to DB: {e}", exc_info=True)
+                raise HTTPException(status_code=503, detail="Service temporarily unavailable") from e
             await redis_set(
                 f"session:{user_id}",
                 session_id,
@@ -432,13 +448,20 @@ async def firebase_auth_login(request: Request, body: FirebaseAuthRequest):
         try:
             await db_supabase.create_user(new_user)
         except Exception as e:
-            logger.warning(f"firebase_auth: could not persist user {uid}: {e}")
+            # Same contract as the OTP path: never hand back a token for
+            # an unpersisted row.
+            logger.error(f"firebase_auth: could not persist user {uid}: {e}", exc_info=True)
+            raise HTTPException(status_code=503, detail="Service temporarily unavailable") from e
         user = new_user
     else:
         try:
             await db_supabase.update_one("users", {"id": uid}, {"current_session_id": session_id})
         except Exception as e:
-            logger.warning(f"firebase_auth: could not update session_id for {uid}: {e}")
+            # A stale session_id in DB means every subsequent request hits
+            # ERR_SESSION_EXPIRED. Surface the DB error instead of issuing
+            # a token guaranteed to fail on the next call.
+            logger.error(f"firebase_auth: could not update session_id for {uid}: {e}", exc_info=True)
+            raise HTTPException(status_code=503, detail="Service temporarily unavailable") from e
         user["current_session_id"] = session_id
 
     user_id = user["id"]
@@ -561,7 +584,11 @@ async def refresh_access_token(request: Request, body: RefreshRequest):
     try:
         user = await db.find_one("users", {"id": user_id})
     except Exception as e:
-        logger.warning(f"refresh: user lookup failed for {user_id}: {e}")
+        # Distinguish "DB unavailable" (503, retry with back-off) from
+        # "user not found" (401, prompt re-login). Returning 401 on a DB
+        # outage causes clients to wipe their session pointlessly.
+        logger.error(f"refresh: user lookup failed for {user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=503, detail="Service temporarily unavailable") from e
     if not user:
         raise HTTPException(status_code=401, detail="Invalid refresh token")
 

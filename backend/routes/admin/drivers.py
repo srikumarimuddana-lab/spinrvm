@@ -357,7 +357,9 @@ async def admin_get_driver_stats(
         else:
             area_stats[aid]["unverified"] += 1
         area_stats[aid]["total_rides"] += int(d.get("total_rides") or 0)
-        area_stats[aid]["total_earnings"] += float(Decimal(str(d.get("total_earnings") or 0)))
+        area_stats[aid]["total_earnings"] = float(
+            Decimal(str(area_stats[aid]["total_earnings"])) + Decimal(str(d.get("total_earnings") or 0))
+        )
 
     # ── Daily charts (within date range) ──
     num_days = (range_end - range_start).days + 1
@@ -392,7 +394,9 @@ async def admin_get_driver_stats(
             day_key = dt.strftime("%Y-%m-%d")
             daily_rides[day_key] += 1
             if r.get("status") == "completed":
-                daily_earnings[day_key] += float(Decimal(str(r.get("driver_earnings") or 0)))
+                daily_earnings[day_key] = float(
+                    Decimal(str(daily_earnings[day_key])) + Decimal(str(r.get("driver_earnings") or 0))
+                )
 
     # Build chart arrays
     joins_chart = []

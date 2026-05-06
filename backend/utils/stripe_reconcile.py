@@ -15,6 +15,9 @@ Discrepancy types detected:
   STRIPE_ORPHAN            — Stripe PI has no matching ride in DB and is not
                              in a terminal failed state (succeeded PIs with
                              no ride row require manual review)
+  DB_FAILED_STRIPE_SUCCEEDED — ride marked failed in DB; Stripe PI already
+                             succeeded — DB updated to 'paid' automatically,
+                             no re-attempt (double-charge prevention)
 
 Design:
   - Redis SET NX EX leader lock so only one replica runs per 23h window.
@@ -206,6 +209,91 @@ async def _run_reconciliation_tick() -> None:
                     expected_cents,
                     actual_cents,
                 )
+
+    # ── 3c. Stale-failed check: DB says failed/requires_action but Stripe
+    #        already succeeded — update DB to paid WITHOUT re-attempting the
+    #        charge (double-charge prevention mirror of payment_retry.py).
+    #
+    #  Design: we retrieve each PI individually rather than relying on the
+    #  stripe_pis dict (which only covers yesterday's window) because a
+    #  'failed' ride may have had its PI created on a different day.
+    #  Fail-open: if the Stripe retrieve call errors we leave the DB row
+    #  alone and let the payment_retry loop handle it normally.
+    stale_failed_rides: List[Dict[str, Any]] = []
+    try:
+        stale_failed_rides = (
+            await db_supabase.get_rows(
+                "rides",
+                {"payment_status": "failed"},
+                columns="id,payment_intent_id,fare,status,completed_at",
+                limit=500,
+            )
+            or []
+        )
+        stale_failed_rides = [
+            r
+            for r in stale_failed_rides
+            if r.get("payment_intent_id")
+            and r.get("completed_at")
+            and _in_window(r["completed_at"], window_start, window_end)
+        ]
+    except Exception:
+        logger.error("stripe_reconcile: stale-failed rides query failed", exc_info=True)
+        stale_failed_rides = []
+
+    loop = asyncio.get_event_loop()
+    for ride in stale_failed_rides:
+        pi_id = ride["payment_intent_id"]
+        _stripe_status: str | None = None
+        try:
+            pi_obj = await loop.run_in_executor(
+                None,
+                lambda _id=pi_id: _stripe.PaymentIntent.retrieve(_id),
+            )
+            _stripe_status = pi_obj.get("status") if isinstance(pi_obj, dict) else pi_obj.status
+        except Exception:
+            # Fail-open: Stripe API error → leave row alone, let payment_retry handle it
+            logger.error(
+                "stripe_reconcile: PI retrieve failed for stale-failed ride=%s pi=%s — skipping",
+                ride["id"],
+                pi_id,
+                exc_info=True,
+            )
+            continue
+
+        if _stripe_status in ("succeeded", "processing"):
+            # DB is stale — PI already resolved. Update DB to reflect reality,
+            # do NOT re-attempt the charge.
+            logger.warning(
+                "stripe_reconcile: stale DB for ride=%s pi=%s — Stripe is '%s' but DB says 'failed'; "
+                "updating DB to 'paid', no re-attempt",
+                ride["id"],
+                pi_id,
+                _stripe_status,
+            )
+            try:
+                await db_supabase.update_one(
+                    "rides",
+                    {"id": ride["id"]},
+                    {
+                        "payment_status": "paid",
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
+            except Exception:
+                logger.error(
+                    "stripe_reconcile: DB update failed for stale-failed ride=%s",
+                    ride["id"],
+                    exc_info=True,
+                )
+            discrepancies.append(
+                {
+                    "type": "DB_FAILED_STRIPE_SUCCEEDED",
+                    "ride_id": ride["id"],
+                    "payment_intent_id": pi_id,
+                    "stripe_status": _stripe_status,
+                }
+            )
 
     # ── 3b. Check for Stripe succeeded PIs with no DB ride ───────────────
     for pi_id, pi in stripe_pis.items():

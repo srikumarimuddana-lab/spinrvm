@@ -200,7 +200,7 @@ describe('authStore', () => {
     it('should logout on non-ok refresh response', async () => {
       (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
         ok: false,
-        status: 401,
+        status: 403,
       });
 
       useAuthStore.setState({ csrfToken: 'csrf-abc', isAuthenticated: true });

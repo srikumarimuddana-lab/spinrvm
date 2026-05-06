@@ -14,7 +14,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { useAuthStore } from '@shared/store/authStore';
+import { useAuthStore, type User } from '@shared/store/authStore';
 import api, { setInMemoryToken } from '@shared/api/client';
 import CustomAlert from '@shared/components/CustomAlert';
 import Analytics from '@shared/analytics';
@@ -66,6 +66,13 @@ export default function OtpScreen() {
     message: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
   }>({ visible: false, title: '', message: '', variant: 'info' });
+
+  useEffect(() => {
+    if (!phoneNumber) {
+      router.back();
+    }
+    return () => { resendInFlight.current = false; };
+  }, []);
 
   useEffect(() => {
     dotAnims.forEach((anim, i) => {
@@ -134,25 +141,26 @@ export default function OtpScreen() {
 
     try {
       if (isBackendMode) {
-        const response = await api.post('/auth/verify-otp', {
+        const response = await api.post<{ token?: string; refresh_token?: string; expires_in?: number; user?: User }>('/auth/verify-otp', {
           phone: phoneNumber,
           code: code,
         });
-        const { token, refresh_token, expires_in, user: userData } = response.data;
+        if (!response.data) throw new Error('Empty response from auth server');
+        const { token, refresh_token, expires_in, user: userData } = response.data as { token: string; refresh_token?: string; expires_in?: number; user?: any };
+        // P3 cookie auth: token is "" when HTTP-only cookies are used
         if (token) {
           await useAuthStore.getState().setTokens(token, refresh_token ?? "", expires_in ?? 900);
-          Analytics.otpVerified();
-
-          if (userData) {
-            useAuthStore.setState({
-              user: userData,
-              isInitialized: true,
-              isLoading: false,
-            });
-            Analytics.login();
-          } else {
-            await initialize();
-          }
+        }
+        Analytics.otpVerified();
+        if (userData) {
+          useAuthStore.setState({
+            user: userData,
+            isInitialized: true,
+            isLoading: false,
+          });
+          Analytics.login();
+        } else {
+          await initialize();
         }
       } else {
         await verifyOTP(verificationId!, code);

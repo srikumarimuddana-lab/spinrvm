@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { driverAction, overrideDriverStatus } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { useToast } from "@/components/ui/use-toast";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
@@ -33,6 +34,7 @@ const STATUS_CONFIG: Record<DriverStatus, { label: string; color: string; bg: st
 };
 
 export default function DriverActionBar({ driver, onActionComplete }: DriverActionBarProps) {
+    const { toast } = useToast();
     const [actionDialog, setActionDialog] = useState<{ action: string; title: string; description: string; requiresReason: boolean; buttonLabel: string; buttonClass: string } | null>(null);
     const [reason, setReason] = useState("");
     const [loading, setLoading] = useState(false);
@@ -60,7 +62,7 @@ export default function DriverActionBar({ driver, onActionComplete }: DriverActi
             setActionDialog(null);
             onActionComplete();
         } catch (e: any) {
-            alert(e?.message || "Action failed");
+            toast({ title: "Action failed", description: e?.message, variant: "destructive" });
         } finally {
             setLoading(false);
         }

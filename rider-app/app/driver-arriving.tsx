@@ -111,7 +111,7 @@ function DriverArrivingScreenContent() {
   }, [currentRide?.pickup_lat, currentRide?.pickup_lng, currentDriver?.lat, currentDriver?.lng]);
 
   useEffect(() => {
-    if (!rideId) return;
+    if (!rideId) { router.replace('/(tabs)' as any); return; }
     fetchRide(rideId);
     // Suspend fallback poll when WebSocket is healthy — saves battery/bandwidth.
     // Keep a fast 3 s poll during driver assignment negotiation in case a
@@ -125,6 +125,7 @@ function DriverArrivingScreenContent() {
   }, [rideId, currentRide?.status, wsConnected]);
 
   useEffect(() => {
+    if (!rideId) return;
     if (currentRide?.status === RideStatus.DRIVER_ARRIVED) {
       router.replace({ pathname: '/driver-arrived', params: { rideId } });
     } else if (currentRide?.status === RideStatus.IN_PROGRESS) {
@@ -576,6 +577,15 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
                   driverAcceptedAt={(currentRide as any)?.driver_accepted_at}
                   freeCancelWindowSeconds={freeCancelWindowSeconds}
                   cancellationFee={cancellationFee}
+                  onExpire={() =>
+                    setAlertState({
+                      visible: true,
+                      title: 'Free cancel window closed',
+                      message: `A $${cancellationFee.toFixed(2)} cancellation fee now applies if you cancel.`,
+                      variant: 'warning',
+                      buttons: [{ text: 'OK' }],
+                    })
+                  }
                 />
               </View>
             )}
@@ -767,7 +777,7 @@ function createStyles(colors: ThemeColors) {
     flex: 1,
   },
   map: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
   },
   mapPlaceholder: {
     flex: 1,

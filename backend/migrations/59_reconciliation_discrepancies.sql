@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS reconciliation_discrepancies (
     status              text        NOT NULL DEFAULT 'open'
                                     CHECK (status IN ('open', 'resolved', 'dismissed')),
     resolution_notes    text,
-    resolved_by         uuid        REFERENCES users(id),
+    resolved_by         text        REFERENCES users(id),
     resolved_at         timestamptz,
     created_at          timestamptz NOT NULL DEFAULT now()
 );
@@ -37,7 +37,7 @@ ALTER TABLE reconciliation_discrepancies ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY recon_admin_only ON reconciliation_discrepancies
     FOR ALL USING (
-        (SELECT role FROM users WHERE id = auth.uid()) = 'admin'
+        (SELECT role FROM users WHERE id = auth.uid()::text) = 'admin'
     );
 
 COMMENT ON TABLE reconciliation_discrepancies IS

@@ -95,10 +95,21 @@ def get_applied_versions(conn) -> set:
 
 
 def apply_migration(conn, version: str, sql: str, dry_run: bool) -> bool:
-    """Execute a single migration inside a transaction. Returns True on success."""
+    """Execute a single migration. Returns True on success.
+
+    Migrations containing CREATE INDEX CONCURRENTLY (or DROP INDEX CONCURRENTLY)
+    must run outside a transaction block. For those, we temporarily switch the
+    connection to autocommit, execute each statement individually, then record
+    the version. All other migrations run inside a single transaction.
+    """
     if dry_run:
         logger.info(f"  [DRY-RUN] Would apply: {version}")
         return True
+
+    needs_autocommit = "CONCURRENTLY" in sql.upper()
+
+    if needs_autocommit:
+        return _apply_migration_autocommit(conn, version, sql)
 
     try:
         with conn.cursor() as cur:
@@ -113,6 +124,36 @@ def apply_migration(conn, version: str, sql: str, dry_run: bool) -> bool:
         conn.rollback()
         logger.error(f"  ❌  Failed: {version} — {e}")
         return False
+
+
+def _apply_migration_autocommit(conn, version: str, sql: str) -> bool:
+    """Run a migration that contains CONCURRENTLY statements.
+
+    psycopg2 requires autocommit=True for any statement that cannot run inside
+    a transaction block (CREATE/DROP INDEX CONCURRENTLY, VACUUM, CLUSTER, etc.).
+    We execute each semicolon-delimited statement individually so that the
+    schema_migrations INSERT can follow without being inside the same implicit
+    transaction that CONCURRENTLY would reject.
+    """
+    try:
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            # Split on semicolons; skip blank/comment-only chunks.
+            statements = [s.strip() for s in sql.split(";") if s.strip()]
+            for stmt in statements:
+                if stmt.upper().startswith("--") or not stmt:
+                    continue
+                cur.execute(stmt)
+            cur.execute(
+                "INSERT INTO schema_migrations (version) VALUES (%s) ON CONFLICT (version) DO NOTHING;", (version,)
+            )
+        logger.info(f"  ✅  Applied (autocommit): {version}")
+        return True
+    except Exception as e:
+        logger.error(f"  ❌  Failed: {version} — {e}")
+        return False
+    finally:
+        conn.autocommit = False
 
 
 def main():

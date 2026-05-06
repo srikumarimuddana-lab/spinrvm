@@ -52,7 +52,7 @@ export default function ReportSafetyScreen() {
         setAlert({ visible: true, title, message, variant, buttons });
     };
 
-    const location = useLocationStore(state => state.coords);
+    const location = useLocationStore(state => state.currentLocation);
     const activeRide = useDriverStore(state => state.activeRide);
 
     const handleSubmit = async () => {
@@ -70,17 +70,16 @@ export default function ReportSafetyScreen() {
         const reportData = {
             category,
             description: issue,
-            location: location ? {
+            location: (location?.latitude != null && location?.longitude != null) ? {
                 latitude: location.latitude,
                 longitude: location.longitude,
-                accuracy: location.accuracy,
                 timestamp: new Date().toISOString(),
             } : null,
             ride_context: activeRide ? {
-                ride_id: activeRide.id,
-                pickup_location: activeRide.pickup_location,
-                dropoff_location: activeRide.dropoff_location,
-                rider_id: activeRide.rider_id,
+                ride_id: activeRide.ride?.id,
+                pickup_location: activeRide.ride?.pickup_address,
+                dropoff_location: activeRide.ride?.dropoff_address,
+                rider_id: activeRide.ride?.rider_id,
             } : null,
             reported_at: new Date().toISOString(),
         };

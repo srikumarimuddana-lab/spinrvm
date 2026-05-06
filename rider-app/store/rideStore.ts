@@ -104,6 +104,9 @@ interface Ride {
   is_scheduled?: boolean;
   scheduled_time?: string;
   created_at: string;
+  ride_code?: string;
+  ride_completed_at?: string;
+  share_token?: string;
 }
 
 interface SavedAddress {
@@ -227,13 +230,13 @@ export const useRideStore = create<RideState>((set, get) => ({
 
   fetchActiveRide: async () => {
     try {
-      const response = await api.get('/rides/active');
+      const response = await api.get<{ active?: boolean; ride?: Ride & { driver?: unknown } }>('/rides/active');
       if (response.data?.active && response.data.ride) {
         const ride = response.data.ride;
-        const driver = ride.driver || null;
+        const driver = ((ride as any).driver as Driver | null) || null;
         set({ currentRide: ride, currentDriver: driver });
         _persistRide(ride, driver);
-        return response.data;
+        return response.data as { active: boolean; ride: any };
       }
       // No active ride on server — clear any stale local state
       get().clearRide();
@@ -253,7 +256,7 @@ export const useRideStore = create<RideState>((set, get) => ({
 
     try {
       set({ isLoading: true, error: null });
-      const response = await api.post('/rides/estimate', {
+      const response = await api.post<RideEstimate[]>('/rides/estimate', {
         pickup_lat: pickup.lat,
         pickup_lng: pickup.lng,
         dropoff_lat: dropoff.lat,
@@ -261,7 +264,7 @@ export const useRideStore = create<RideState>((set, get) => ({
         stops: stops, // Send stops to backend
       });
       console.log('Ride API Response:', response.data);
-      set({ estimates: response.data, isLoading: false });
+      set({ estimates: response.data as RideEstimate[], isLoading: false });
     } catch (error: any) {
       console.error('fetchEstimates error:', error);
       set({ isLoading: false, error: error.message });
@@ -276,8 +279,8 @@ export const useRideStore = create<RideState>((set, get) => ({
       if (selectedVehicle?.id) {
         url += `&vehicle_type=${selectedVehicle.id}`;
       }
-      const response = await api.get(url);
-      set({ nearbyDrivers: response.data });
+      const response = await api.get<NearbyDriver[]>(url);
+      set({ nearbyDrivers: response.data as NearbyDriver[] });
     } catch (error) {
       console.log('Error fetching nearby drivers', error);
     }
@@ -288,8 +291,8 @@ export const useRideStore = create<RideState>((set, get) => ({
   fetchAvailablePromos: async (rideFare?: number) => {
     try {
       const fare = rideFare ?? 0;
-      const response = await api.get(`/promo/available?ride_fare=${fare}`);
-      const promos = response.data || [];
+      const response = await api.get<unknown[]>(`/promo/available?ride_fare=${fare}`);
+      const promos = (response.data as unknown[]) || [];
       set({ availablePromos: promos });
       // Auto-apply best promo (first one, already sorted by biggest discount)
       if (promos.length > 0 && !get().appliedPromo) {
@@ -425,7 +428,7 @@ export const useRideStore = create<RideState>((set, get) => ({
 
       const userId = useAuthStore.getState().user?.id ?? 'anon';
       const idempotencyKey = `ride-${userId}-${Date.now()}`;
-      const response = await api.post('/rides', rideData, {
+      const response = await api.post<Ride>('/rides', rideData, {
         headers: { 'Idempotency-Key': idempotencyKey },
       });
       set({ currentRide: response.data, isLoading: false, scheduledTime: null, requiresWav: false, quietMode: false, riderNotes: '' });
@@ -444,9 +447,9 @@ export const useRideStore = create<RideState>((set, get) => ({
       if (!get().currentRide) {
         set({ isLoading: true });
       }
-      const response = await api.get(`/rides/${rideId}`);
+      const response = await api.get<Ride & { driver?: unknown }>(`/rides/${rideId}`);
       const ride = response.data;
-      let driver = ride.driver || null;
+      let driver = (ride as any).driver || null;
       // R-P2-29: if a WS position update arrived within the last 10 s, the DB
       // value is stale — preserve the WS-sourced lat/lng so the map doesn't jump.
       const { _lastWsDriverPositionAt, currentDriver } = get();
@@ -482,9 +485,9 @@ export const useRideStore = create<RideState>((set, get) => ({
     if (!currentRide) return;
 
     try {
-      const response = await api.post(`/rides/${currentRide.id}/simulate-arrival`);
+      const response = await api.post<{ pickup_otp?: string }>(`/rides/${currentRide.id}/simulate-arrival`);
       set({
-        currentRide: { ...currentRide, status: RideStatus.DRIVER_ARRIVED, pickup_otp: response.data.pickup_otp },
+        currentRide: { ...currentRide, status: RideStatus.DRIVER_ARRIVED, pickup_otp: response.data.pickup_otp ?? currentRide.pickup_otp },
       });
     } catch (error: any) {
       set({ error: error.message });
@@ -510,7 +513,7 @@ export const useRideStore = create<RideState>((set, get) => ({
     if (!currentRide) return;
 
     try {
-      const response = await api.post(`/rides/${currentRide.id}/complete`);
+      const response = await api.post<Ride>(`/rides/${currentRide.id}/complete`);
       set({ currentRide: response.data });
       AsyncStorage.removeItem(ACTIVE_RIDE_KEY).catch(() => {});
       return response.data;
@@ -560,8 +563,8 @@ export const useRideStore = create<RideState>((set, get) => ({
 
   fetchSavedAddresses: async () => {
     try {
-      const response = await api.get('/addresses');
-      set({ savedAddresses: response.data });
+      const response = await api.get<SavedAddress[]>('/addresses');
+      set({ savedAddresses: response.data as SavedAddress[] });
     } catch (error: any) {
       console.log('Error fetching addresses:', error.message);
     }
@@ -569,8 +572,8 @@ export const useRideStore = create<RideState>((set, get) => ({
 
   addSavedAddress: async (address) => {
     try {
-      const response = await api.post('/addresses', address);
-      set({ savedAddresses: [...get().savedAddresses, response.data] });
+      const response = await api.post<SavedAddress>('/addresses', address);
+      set({ savedAddresses: [...get().savedAddresses, response.data as SavedAddress] });
     } catch (error: any) {
       set({ error: error.message });
       throw error;
@@ -638,8 +641,8 @@ export const useRideStore = create<RideState>((set, get) => ({
 
   fetchScheduledRides: async () => {
     try {
-      const response = await api.get('/rides/scheduled');
-      set({ scheduledRides: response.data });
+      const response = await api.get<Ride[]>('/rides/scheduled');
+      set({ scheduledRides: response.data as Ride[] });
     } catch (error: any) {
       console.log('Error fetching scheduled rides:', error.message);
     }
@@ -690,6 +693,8 @@ export const useRideStore = create<RideState>((set, get) => ({
     // while the next poll (reduced to 15 s via the WS fallback) fills
     // in any remaining details the WS message doesn't carry.
     const updated = { ...currentRide, status, ...(extra || {}) };
+    // Keep currentDriver so the ride-completed receipt screen can still show
+    // driver name/vehicle until the user taps Done. clearRide() will null it.
     set({ currentRide: updated });
     _persistRide(updated, currentDriver);
   },
@@ -710,13 +715,13 @@ export const useRideStore = create<RideState>((set, get) => ({
       // Validate against backend — if the ride completed or was cancelled
       // while the app was closed the stored data would be stale.
       try {
-        const live = await api.get('/rides/active');
+        const live = await api.get<{ active?: boolean; ride?: Ride & { driver?: unknown } }>('/rides/active');
         if (!live.data?.active || live.data.ride?.id !== stored.id) {
           await AsyncStorage.removeItem(ACTIVE_RIDE_KEY);
           return; // stale — do not route
         }
         const liveRide = live.data.ride;
-        const liveDriver = liveRide.driver || currentDriver || null;
+        const liveDriver = (liveRide as any)?.driver || currentDriver || null;
         if (!get().currentRide) {
           set({ currentRide: liveRide, currentDriver: liveDriver });
         }

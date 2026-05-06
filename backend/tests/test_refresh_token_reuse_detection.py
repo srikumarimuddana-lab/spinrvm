@@ -333,7 +333,7 @@ async def test_cascade_writes_audit_log_with_production_schema():
     assert payload["action"] == "refresh_token_reuse_detected"
     assert payload["entity_type"] == "user"
     assert payload["entity_id"] == "user-rider-1"
-    assert payload["user_email"] == "system:refresh_reuse_detector"
+    assert payload["actor_id"] == "system:refresh_reuse_detector"
     # details is TEXT (production schema, NOT JSONB) — a JSON string.
     import json as _json
 

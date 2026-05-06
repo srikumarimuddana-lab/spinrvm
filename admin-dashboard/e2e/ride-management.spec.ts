@@ -9,6 +9,7 @@
  */
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
+import { setAdminAuthCookie, TEST_ADMIN_JWT } from './auth-fixture';
 
 const MOCK_RIDES = [
   {
@@ -49,13 +50,9 @@ const MOCK_DRIVER = {
 };
 
 async function mockAdminAPIs(page: any) {
-  await page.addInitScript(() => {
-    localStorage.setItem('spinr_admin_token', 'test-admin-jwt-token');
-    localStorage.setItem(
-      'spinr_admin_user',
-      JSON.stringify({ id: 'admin_1', email: 'admin@spinr.ca', role: 'admin' })
-    );
-  });
+  // Set the admin_token cookie so Next.js edge middleware passes the request
+  // through to the dashboard instead of redirecting to /login.
+  await setAdminAuthCookie(page);
 
   await page.route('**/api/**', async (route: any) => {
     const url = route.request().url();
@@ -64,9 +61,13 @@ async function mockAdminAPIs(page: any) {
     const json = (status: number, body: unknown) =>
       route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 
-    // Auth
+    // Auth refresh — silentRefresh POSTs here; must return a token so isLoading resolves
+    if (url.includes('/auth/refresh')) {
+      return json(200, { token: TEST_ADMIN_JWT, access_expires_at: '2100-01-01T00:00:00Z', csrf_token: 'test-csrf' });
+    }
+    // Auth session — checkAuth expects { authenticated: true, user }
     if (url.includes('/auth/session') || url.includes('/auth/me') || url.includes('/admin/me')) {
-      return json(200, { user: { id: 'admin_1', email: 'admin@spinr.ca', role: 'admin' } });
+      return json(200, { authenticated: true, user: { id: 'admin_1', email: 'admin@spinr.ca', role: 'admin' } });
     }
 
     // Rides list
@@ -137,19 +138,20 @@ test.describe('admin dashboard: ride management', () => {
   test('rides page loads and renders ride list', async ({ page }) => {
     await mockAdminAPIs(page);
     await page.goto('/dashboard/rides');
-    await expect(page).toHaveURL(/dashboard\/rides/);
+    // h1/h2 only render after auth resolves (isLoading→false, isAuthenticated→true)
     await expect(page.locator('h1, h2, [data-testid="rides-heading"]').first()).toBeVisible({
-      timeout: 5000,
+      timeout: 20000,
     });
+    await expect(page).toHaveURL(/dashboard\/rides/);
   });
 
   test('drivers page loads and renders driver list', async ({ page }) => {
     await mockAdminAPIs(page);
     await page.goto('/dashboard/drivers');
-    await expect(page).toHaveURL(/dashboard\/drivers/);
     await expect(page.locator('h1, h2, [data-testid="drivers-heading"]').first()).toBeVisible({
-      timeout: 5000,
+      timeout: 20000,
     });
+    await expect(page).toHaveURL(/dashboard\/drivers/);
   });
 
   test('settings page loads without crashing', async ({ page }) => {
@@ -158,18 +160,17 @@ test.describe('admin dashboard: ride management', () => {
 
     await mockAdminAPIs(page);
     await page.goto('/dashboard/settings');
+    // <main> is rendered by the dashboard layout only when isAuthenticated=true
+    await expect(page.locator('main')).toBeVisible({ timeout: 20000 });
     await expect(page).toHaveURL(/dashboard\/settings/);
-    await expect(page.locator('body')).toBeVisible();
 
     expect(errors.filter((e) => !/chunk|hydrat/i.test(e))).toHaveLength(0);
   });
 
   test('refund action endpoint is reachable — no routing 404', async ({ page }) => {
-    let refundCalled = false;
     await mockAdminAPIs(page);
 
     await page.route('**/refund**', async (route) => {
-      refundCalled = true;
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -178,16 +179,13 @@ test.describe('admin dashboard: ride management', () => {
     });
 
     await page.goto('/dashboard/rides');
-    await page.waitForTimeout(2000);
-    await expect(page.locator('body')).toBeVisible();
+    await expect(page.locator('main')).toBeVisible({ timeout: 20000 });
   });
 
   test('driver approval flow endpoint is reachable', async ({ page }) => {
-    let approveCalled = false;
     await mockAdminAPIs(page);
 
     await page.route('**/approve**', async (route) => {
-      approveCalled = true;
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -196,8 +194,7 @@ test.describe('admin dashboard: ride management', () => {
     });
 
     await page.goto('/dashboard/drivers');
-    await page.waitForTimeout(2000);
-    await expect(page.locator('body')).toBeVisible();
+    await expect(page.locator('main')).toBeVisible({ timeout: 20000 });
   });
 
   test('driver suspension endpoint is reachable', async ({ page }) => {
@@ -212,8 +209,7 @@ test.describe('admin dashboard: ride management', () => {
     });
 
     await page.goto('/dashboard/drivers');
-    await page.waitForTimeout(2000);
-    await expect(page.locator('body')).toBeVisible();
+    await expect(page.locator('main')).toBeVisible({ timeout: 20000 });
   });
 
   test('dashboard pages meet WCAG 2.1 AA accessibility (axe-core)', async ({ page }) => {
@@ -222,7 +218,8 @@ test.describe('admin dashboard: ride management', () => {
     const pagesToCheck = ['/dashboard/rides', '/dashboard/drivers'];
     for (const path of pagesToCheck) {
       await page.goto(path);
-      await page.waitForTimeout(1500);
+      // Wait for dashboard layout to render (only visible when authenticated)
+      await page.locator('h1, h2, main').first().waitFor({ state: 'visible', timeout: 20000 });
 
       const results = await new AxeBuilder({ page })
         .withTags(['wcag2a', 'wcag2aa'])

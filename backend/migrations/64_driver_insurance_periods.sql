@@ -27,14 +27,14 @@
 
 CREATE TABLE IF NOT EXISTS driver_insurance_periods (
     id          uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
-    driver_id   uuid        NOT NULL REFERENCES drivers(id),
+    driver_id   text        NOT NULL REFERENCES drivers(id),
     period      smallint    NOT NULL CHECK (period IN (0, 1, 2, 3)),
     started_at  timestamptz NOT NULL DEFAULT now(),
     -- ended_at is NULL while the period is open; set when the driver
     -- transitions to a different period or goes offline.
     ended_at    timestamptz,
     -- Period 3 (and most period-2 rows) carry a ride_id. Period 0/1 do not.
-    ride_id     uuid        REFERENCES rides(id),
+    ride_id     text        REFERENCES rides(id),
     created_at  timestamptz NOT NULL DEFAULT now(),
     -- A row is "open" while ended_at IS NULL. Period 3 must always have a
     -- ride_id; we enforce that at the row level rather than via trigger so
@@ -69,9 +69,9 @@ ALTER TABLE driver_insurance_periods ENABLE ROW LEVEL SECURITY;
 CREATE POLICY driver_insurance_periods_select ON driver_insurance_periods
     FOR SELECT USING (
         driver_id = (
-            SELECT id FROM drivers WHERE user_id = auth.uid()
+            SELECT id FROM drivers WHERE user_id = auth.uid()::text
         )
-        OR (SELECT role FROM users WHERE id = auth.uid()) IN ('admin', 'super_admin')
+        OR (SELECT role FROM users WHERE id = auth.uid()::text) IN ('admin', 'super_admin')
     );
 
 -- No INSERT, UPDATE, or DELETE policies → those operations are denied for

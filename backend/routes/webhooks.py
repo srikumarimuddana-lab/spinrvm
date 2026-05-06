@@ -127,7 +127,7 @@ async def stripe_webhook(request: Request):
         payment_intent_id = data_object.get("id")
 
         if ride_id:
-            await db_supabase.update_ride(
+            updated = await db_supabase.update_ride(
                 ride_id,
                 {
                     "payment_status": "paid",
@@ -135,15 +135,23 @@ async def stripe_webhook(request: Request):
                     "paid_at": datetime.now(timezone.utc),
                 },
             )
-            logger.info(f"Payment confirmed via webhook for ride {ride_id}")
+            if updated is None:
+                logger.warning(f"Webhook payment_intent.succeeded: ride {ride_id} not found in DB")
+            else:
+                logger.info(f"Payment confirmed via webhook for ride {ride_id}")
 
         if user_id:
-            await send_push_notification(
-                user_id,
-                "Payment Confirmed ✅",
-                "Your payment has been processed successfully.",
-                {"type": "payment_confirmed", "ride_id": ride_id or ""},
-            )
+            # Wrap push notification so a Firebase outage does not cause Stripe
+            # to retry the webhook for days (which would re-process the payment event).
+            try:
+                await send_push_notification(
+                    user_id,
+                    "Payment Confirmed ✅",
+                    "Your payment has been processed successfully.",
+                    {"type": "payment_confirmed", "ride_id": ride_id or ""},
+                )
+            except Exception as _push_err:
+                logger.error(f"Webhook: push notification failed for user {user_id}: {_push_err}")
 
     elif event_type == "payment_intent.payment_failed":
         ride_id = data_object.get("metadata", {}).get("ride_id")
@@ -163,12 +171,15 @@ async def stripe_webhook(request: Request):
             logger.warning(f"Payment failed for ride {ride_id}: {failure_message}")
 
         if user_id:
-            await send_push_notification(
-                user_id,
-                "Payment Failed ❌",
-                f"Your payment could not be processed: {failure_message}",
-                {"type": "payment_failed", "ride_id": ride_id or ""},
-            )
+            try:
+                await send_push_notification(
+                    user_id,
+                    "Payment Failed ❌",
+                    f"Your payment could not be processed: {failure_message}",
+                    {"type": "payment_failed", "ride_id": ride_id or ""},
+                )
+            except Exception as _push_err:
+                logger.error(f"Webhook: push notification failed for user {user_id}: {_push_err}")
 
         # Notify the driver so they know the rider's payment failed (13-10)
         if ride_id:

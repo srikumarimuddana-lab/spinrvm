@@ -1,0 +1,120 @@
+name: Mobile Dependency Health
+
+on:
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'rider-app/package.json'
+      - 'rider-app/yarn.lock'
+      - 'driver-app/package.json'
+      - 'driver-app/yarn.lock'
+  push:
+    branches: [main]
+    paths:
+      - 'rider-app/package.json'
+      - 'driver-app/package.json'
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  rider-app-dep-check:
+    name: rider-app — Expo dep audit + TypeScript
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Cache rider-app node_modules
+        uses: actions/cache@v5
+        with:
+          path: rider-app/node_modules
+          key: ${{ runner.os }}-rider-node-${{ hashFiles('rider-app/yarn.lock') }}
+          restore-keys: ${{ runner.os }}-rider-node-
+
+      - name: Install dependencies
+        working-directory: rider-app
+        run: yarn install --frozen-lockfile
+
+      - name: Expo dependency version audit
+        working-directory: rider-app
+        # Fails if any installed package version drifts from the SDK-expected version.
+        # expo.install.exclude in package.json protects intentionally-pinned packages.
+        # continue-on-error: expo install --check requires Expo API access (EXPO_TOKEN);
+        # without it the CLI returns non-JSON and exits 1. We degrade gracefully so the
+        # TypeScript check below always runs regardless.
+        continue-on-error: true
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: npx expo install --check
+
+      - name: TypeScript check
+        working-directory: rider-app
+        run: yarn tsc --noEmit
+
+  driver-app-dep-check:
+    name: driver-app — Expo dep audit + TypeScript
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Cache driver-app node_modules
+        uses: actions/cache@v5
+        with:
+          path: driver-app/node_modules
+          key: ${{ runner.os }}-driver-node-${{ hashFiles('driver-app/yarn.lock') }}
+          restore-keys: ${{ runner.os }}-driver-node-
+
+      - name: Install dependencies
+        working-directory: driver-app
+        run: yarn install --frozen-lockfile
+
+      - name: Expo dependency version audit
+        working-directory: driver-app
+        continue-on-error: true
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: npx expo install --check
+
+      - name: TypeScript check
+        working-directory: driver-app
+        run: yarn tsc --noEmit
+
+  os-target-check:
+    name: iOS/Android minimum target audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Verify iOS minimum target is explicitly set (rider-app)
+        run: |
+          if ! grep -q "minimumOsVersion" rider-app/app.config.ts; then
+            echo "ERROR: rider-app/app.config.ts is missing minimumOsVersion."
+            echo "SDK upgrades silently change the iOS floor — pin it explicitly."
+            exit 1
+          fi
+
+      - name: Verify iOS minimum target is explicitly set (driver-app)
+        run: |
+          if ! grep -q "minimumOsVersion" driver-app/app.config.ts; then
+            echo "ERROR: driver-app/app.config.ts is missing minimumOsVersion."
+            exit 1
+          fi
+
+      - name: Verify no package-lock.json in mobile apps (project uses yarn)
+        run: |
+          if [ -f rider-app/package-lock.json ] || [ -f driver-app/package-lock.json ]; then
+            echo "ERROR: package-lock.json found in a yarn-managed app."
+            echo "Delete it and commit the removal — having both lockfiles causes split installs."
+            exit 1
+          fi

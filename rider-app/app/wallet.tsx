@@ -44,11 +44,10 @@ export default function WalletScreen() {
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   const {
-    wallet, transactions, isLoading,
+    wallet, transactions, walletLoading, transactionsLoading, error: storeError,
     fetchWallet, topUp, fetchTransactions, transfer, clearError,
   } = useWalletStore();
 
-  const [walletError, setWalletError] = useState<string | null>(null);
   const [showTopUp, setShowTopUp] = useState(false);
   const [showTransfer, setShowTransfer] = useState(false);
   const [customAmount, setCustomAmount] = useState('');
@@ -62,10 +61,8 @@ export default function WalletScreen() {
   }>({ visible: false, title: '', message: '', variant: 'info' });
 
   useEffect(() => {
-    setWalletError(null);
-    Promise.all([fetchWallet(), fetchTransactions(30)]).catch(() => {
-      setWalletError('Balance unavailable');
-    });
+    clearError();
+    Promise.all([fetchWallet(), fetchTransactions(30)]);
   }, []);
 
   const handleTopUp = async (amount: number) => {
@@ -158,8 +155,14 @@ export default function WalletScreen() {
       {/* Balance Card */}
       <View style={styles.balanceCard}>
         <Text style={styles.balanceLabel}>Available Balance</Text>
-        {walletError ? (
-          <Text style={[styles.balanceAmount, { fontSize: 20 }]}>Balance unavailable</Text>
+        {storeError ? (
+          <TouchableOpacity onPress={() => {
+            clearError();
+            Promise.all([fetchWallet(), fetchTransactions(30)]);
+          }}>
+            <Text style={[styles.balanceAmount, { fontSize: 18 }]}>Balance unavailable</Text>
+            <Text style={{ color: '#FFF', opacity: 0.8, textAlign: 'center', marginTop: 4 }}>Tap to retry</Text>
+          </TouchableOpacity>
         ) : (
           <Text style={styles.balanceAmount}>
             ${parseFloat(wallet?.balance ?? '0').toFixed(2)}
@@ -236,7 +239,7 @@ export default function WalletScreen() {
         <Text style={styles.txnTitle}>Recent Activity</Text>
       </View>
 
-      {isLoading && transactions.length === 0 ? (
+      {(walletLoading || transactionsLoading) && transactions.length === 0 ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={colors.primary} />
         </View>

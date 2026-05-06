@@ -177,7 +177,7 @@ export default function CorporateAccountsPage() {
             fetchAccounts();
         } catch (error) {
             console.error("Failed to save account:", error);
-            alert("Failed to save account. Please try again.");
+            toast({ title: "Failed to save account", description: "Please try again.", variant: "destructive" });
         } finally {
             setFormLoading(false);
         }
@@ -192,7 +192,7 @@ export default function CorporateAccountsPage() {
             fetchAccounts();
         } catch (error) {
             console.error("Failed to delete account:", error);
-            alert("Failed to delete account.");
+            toast({ title: "Failed to delete account", variant: "destructive" });
         } finally {
             setFormLoading(false);
         }

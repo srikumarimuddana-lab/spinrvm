@@ -8,7 +8,7 @@ on:
 
 env:
   PYTHON_VERSION: '3.12'
-  NODE_VERSION: '20'
+  NODE_VERSION: '22'
 
 jobs:
   # Backend Tests
@@ -96,8 +96,15 @@ jobs:
           name: backend-coverage
 
   # Frontend (Rider App) Tests
+  # DISABLED: frontend/ was deprecated 2026-04-14 (Decision D-003/D-004).
+  # It runs Expo SDK 54 / RN 0.81.5, one SDK behind rider-app and driver-app,
+  # and has 42% screen parity with zero unique features.  Keeping it in the
+  # required CI gate blocks every PR on a stale surface.  The rider-app-test
+  # job covers the production mobile surface.  Re-enable or delete this job
+  # once frontend/ is fully archived or removed from the repo.
   frontend-test:
     runs-on: ubuntu-latest
+    if: false
     timeout-minutes: 15
 
     steps:
@@ -169,6 +176,10 @@ jobs:
             exit 1
           fi
 
+      - name: TypeScript check
+        working-directory: driver-app
+        run: yarn tsc --noEmit
+
       - name: Run driver app tests
         working-directory: driver-app
         run: yarn test --ci --coverage --forceExit --reporters=default
@@ -216,6 +227,10 @@ jobs:
             echo "ERROR: Private key found in EXPO_PUBLIC_ variable — never embed server-side secrets in mobile builds"
             exit 1
           fi
+
+      - name: TypeScript check
+        working-directory: rider-app
+        run: yarn tsc --noEmit
 
       - name: Run rider app tests
         working-directory: rider-app
@@ -285,7 +300,7 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: admin-dashboard/package-lock.json
 
@@ -308,6 +323,8 @@ jobs:
           npm run test:e2e
         env:
           PLAYWRIGHT_BASE_URL: http://localhost:3000
+          NEXT_PUBLIC_API_URL: http://localhost:8000
+          BACKEND_URL: http://localhost:8000
           CI: true
 
       - name: Upload Playwright report
@@ -348,11 +365,11 @@ jobs:
             "https://api.render.com/v1/services/${{ secrets.RENDER_BACKEND_SERVICE_ID }}/deploys" \
             -H "Authorization: Bearer ${{ secrets.RENDER_API_KEY }}"
 
-  # Deploy Frontend
+  # Deploy Frontend — DISABLED: frontend/ deprecated 2026-04-14 (see frontend-test comment).
   deploy-frontend:
     runs-on: ubuntu-latest
     needs: [frontend-test]
-    if: github.ref == 'refs/heads/main'
+    if: false
 
     steps:
       - uses: actions/checkout@v6
@@ -373,7 +390,7 @@ jobs:
         run: npx expo export --platform web
 
       - name: Deploy to Vercel
-        uses: amondnet/vercel-action@v25
+        uses: amondnet/vercel-action@v42
         with:
           vercel-token: ${{ secrets.VERCEL_TOKEN }}
           vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
@@ -412,7 +429,7 @@ jobs:
           rm gitleaks
 
       - name: Deploy to Vercel
-        uses: amondnet/vercel-action@v25
+        uses: amondnet/vercel-action@v42
         with:
           vercel-token: ${{ secrets.VERCEL_TOKEN }}
           vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
@@ -633,7 +650,7 @@ jobs:
   # Notify on failure
   notify-failure:
     runs-on: ubuntu-latest
-    needs: [backend-test, frontend-test, rider-app-test, driver-app-test, admin-test]
+    needs: [backend-test, rider-app-test, driver-app-test, admin-test]
     if: failure()
 
     steps:
@@ -651,4 +668,4 @@ jobs:
         if: always()
         run: |
           echo "::warning::One or more CI jobs failed. Configure SLACK_WEBHOOK in repo secrets for Slack alerts."
-          echo "Failed needs: backend-test, frontend-test, rider-app-test, driver-app-test, or admin-test"
+          echo "Failed needs: backend-test, rider-app-test, driver-app-test, or admin-test"

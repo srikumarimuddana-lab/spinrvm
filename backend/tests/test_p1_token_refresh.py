@@ -24,11 +24,13 @@ import pytest
 from starlette.requests import Request as StarletteRequest
 
 
-def _make_request(user_agent: str = "") -> StarletteRequest:
+def _make_request(user_agent: str = "", refresh_token: str = "") -> StarletteRequest:
     """Return a real Starlette Request so SlowAPI's rate-limit decorator accepts it."""
     headers = []
     if user_agent:
         headers.append((b"user-agent", user_agent.encode()))
+    if refresh_token:
+        headers.append((b"cookie", f"refresh_token={refresh_token}".encode()))
     return StarletteRequest(
         {
             "type": "http",
@@ -101,13 +103,15 @@ class TestRefreshAccessToken:
                 refresh_token = "old-refresh-raw"
 
             result = await auth_mod.refresh_access_token(
-                request=_make_request(user_agent="TestApp/1.0"),
+                request=_make_request(user_agent="TestApp/1.0", refresh_token="old-refresh-raw"),
                 response=MagicMock(),
                 body=_Body(),
             )
 
-        assert result.token == "new-access-token-abc"
-        assert result.refresh_token == new_raw_token
+        # P3: tokens are set as HTTP-only cookies, not returned in body
+        assert result.token == ""
+        assert result.refresh_token == ""
+        assert result.access_expires_at is not None
 
     async def test_invalid_refresh_token_returns_401(self):
         """Revoked / unknown refresh tokens must return 401 without distinguishing
@@ -199,7 +203,7 @@ class TestRefreshAccessToken:
                 refresh_token = "old-raw"
 
             await auth_mod.refresh_access_token(
-                request=_make_request(user_agent="UA"), response=MagicMock(), body=_Body()
+                request=_make_request(user_agent="UA", refresh_token="old-raw"), response=MagicMock(), body=_Body()
             )
 
         assert issue_calls, "issue_refresh_token was not called"

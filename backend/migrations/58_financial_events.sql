@@ -24,8 +24,8 @@ CREATE TABLE IF NOT EXISTS financial_events (
                                  'driver_payout',
                                  'tax_adjust'
                              )),
-    user_id      uuid        NOT NULL REFERENCES users(id),
-    ride_id      uuid        REFERENCES rides(id),
+    user_id      text        NOT NULL REFERENCES users(id),
+    ride_id      text        REFERENCES rides(id),
     -- Amount in cents (positive = credit/charge, negative = debit/refund)
     delta_cents  bigint      NOT NULL,
     -- External reference (e.g. Stripe PaymentIntent ID, payout transfer ID)
@@ -57,8 +57,8 @@ CREATE POLICY financial_events_insert ON financial_events
 
 CREATE POLICY financial_events_select ON financial_events
     FOR SELECT USING (
-        user_id = auth.uid()
-        OR (SELECT role FROM users WHERE id = auth.uid()) = 'admin'
+        user_id = auth.uid()::text
+        OR (SELECT role FROM users WHERE id = auth.uid()::text) = 'admin'
     );
 
 -- No UPDATE or DELETE policies → those operations are denied by default.

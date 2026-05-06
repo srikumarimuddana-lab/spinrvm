@@ -2491,12 +2491,14 @@ async def get_ride_receipt(ride_id: str, current_user: dict = Depends(get_curren
 
     receipt_data = {
         "ride_id": ride_id,
+        "ride_code": ride.get("ride_code"),
         "date": ride.get("ride_completed_at") or ride.get("cancelled_at") or ride.get("created_at"),
         "status": ride.get("status"),
         "pickup_address": ride.get("pickup_address"),
         "dropoff_address": ride.get("dropoff_address"),
         "stops": ride.get("stops", []),
         "distance_km": ride.get("distance_km"),
+        "duration_minutes": ride.get("duration_minutes"),
         "base_fare": ride.get("base_fare", 0),
         "distance_fare": ride.get("distance_fare", 0),
         "time_fare": ride.get("time_fare", 0),
@@ -2505,9 +2507,24 @@ async def get_ride_receipt(ride_id: str, current_user: dict = Depends(get_curren
         "cancellation_fee": (ride.get("cancellation_fee_admin", 0) + ride.get("cancellation_fee_driver", 0))
         if ride.get("status") == "cancelled"
         else 0,
+        # Itemised charges so the rider receipt and the support audit can
+        # reconcile to the cent. tax_breakdown / area_fees_breakdown were
+        # added in migration 46; they may be missing on legacy rides, in
+        # which case clients should fall back to the scalar totals.
+        "surge_multiplier": ride.get("surge_multiplier", 1.0),
+        "area_fees_total": ride.get("area_fees_total", 0),
+        "area_fees_breakdown": ride.get("area_fees_breakdown", []),
         "tax_amount": ride.get("tax_amount", 0),
+        "tax_breakdown": ride.get("tax_breakdown", {}),
         "tip_amount": ride.get("tip_amount", 0),
         "total_charged": ride.get("total_fare", 0),
+        "grand_total": ride.get("grand_total")
+        or (
+            (ride.get("total_fare", 0) or 0)
+            + (ride.get("area_fees_total", 0) or 0)
+            + (ride.get("tax_amount", 0) or 0)
+            + (ride.get("tip_amount", 0) or 0)
+        ),
         "payment_method": "Corporate Account"
         if corporate_account
         else (ride.get("payment_method_id") or "Credit Card ending in ****"),

@@ -13,12 +13,14 @@ Domain auto-match flow:
 
 from __future__ import annotations
 
+import logging
 import secrets
 from typing import Any, Dict, List, Tuple
 
 try:
     from ..db_supabase import (  # type: ignore
         accept_member_invite,
+        ensure_corporate_wallet,
         find_companies_by_email_domain,
         get_corporate_account_by_id,
         get_member_by_invite_token,
@@ -28,12 +30,15 @@ try:
 except ImportError:
     from db_supabase import (  # type: ignore
         accept_member_invite,
+        ensure_corporate_wallet,
         find_companies_by_email_domain,
         get_corporate_account_by_id,
         get_member_by_invite_token,
         insert_corporate_member_invite,
         list_active_memberships_for_user,
     )
+
+logger = logging.getLogger(__name__)
 
 
 class InviteNotFound(Exception):
@@ -73,7 +78,11 @@ async def invite_member(
 
 
 async def accept_invite(*, token: str, user_id: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """Look up token, flip invited→active. Returns (company, member)."""
+    """Look up token, flip invited→active. Returns (company, member).
+
+    After activation the company wallet is idempotently initialised so that
+    ride payment settlement never hits a missing-wallet error for this company.
+    """
     member = await get_member_by_invite_token(token)
     if not member:
         raise InviteNotFound("invite token not found")
@@ -82,7 +91,19 @@ async def accept_invite(*, token: str, user_id: str) -> Tuple[Dict[str, Any], Di
     updated = await accept_member_invite(member_id=member["id"], user_id=user_id)
     if not updated:
         raise InviteAlreadyConsumed("invite was just consumed")
-    company = await get_corporate_account_by_id(member["company_id"])
+    company_id = member["company_id"]
+    company = await get_corporate_account_by_id(company_id)
+    try:
+        await ensure_corporate_wallet(company_id=company_id)
+    except Exception:
+        logger.error(
+            "corporate: failed to ensure wallet for company %s after invite acceptance "
+            "(member %s) — ride settlement will fail until wallet is created",
+            company_id,
+            member["id"],
+            exc_info=True,
+        )
+        raise
     return company or {}, updated
 
 
@@ -118,6 +139,9 @@ async def join_via_domain(
     Reused on the rider app's in-app "Join Acme Corp?" confirmation. We still
     write a corporate_members row, but skip the invited-status step because
     the domain match is itself proof of employment.
+
+    The company wallet is idempotently initialised here too so that ride
+    payment settlement never hits a missing-wallet error for this company.
     """
     token = _generate_token()
     member = await insert_corporate_member_invite(
@@ -128,4 +152,15 @@ async def join_via_domain(
         invited_by=user_id,
     )
     updated = await accept_member_invite(member_id=member["id"], user_id=user_id)
+    try:
+        await ensure_corporate_wallet(company_id=company_id)
+    except Exception:
+        logger.error(
+            "corporate: failed to ensure wallet for company %s after domain join "
+            "(member %s) — ride settlement will fail until wallet is created",
+            company_id,
+            member["id"],
+            exc_info=True,
+        )
+        raise
     return updated or member

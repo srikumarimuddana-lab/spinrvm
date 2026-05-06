@@ -41,6 +41,10 @@ async def test_accept_invite_activates_and_stamps_user_id():
             "services.corporate_membership_service.get_corporate_account_by_id",
             AsyncMock(return_value={"id": "c1", "name": "Acme"}),
         ),
+        patch(
+            "services.corporate_membership_service.ensure_corporate_wallet",
+            AsyncMock(return_value={"id": "w1"}),
+        ) as m_wallet,
     ):
         from services.corporate_membership_service import accept_invite
 
@@ -48,6 +52,7 @@ async def test_accept_invite_activates_and_stamps_user_id():
     assert member["status"] == "active"
     assert company["id"] == "c1"
     m_accept.assert_awaited_once_with(member_id="m1", user_id="u1")
+    m_wallet.assert_awaited_once_with(company_id="c1")
 
 
 @pytest.mark.asyncio

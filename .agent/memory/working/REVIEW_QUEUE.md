@@ -10,4 +10,4 @@ Run `python .agent/tools/list_candidates.py` for detail, then:
 
 ## Priority order (top 10)
 
-- **6e3cc3fc1443** (priority=24.00, size=2, rejections=0) — FAILURE in claude-code: Command failed: cd /usr/local/lib/hermes-agent && uv ven
+- **6e3cc3fc1443** (priority=25.78, size=2, rejections=0) — FAILURE in claude-code: Command failed: cd /usr/local/lib/hermes-agent && uv ven

@@ -3,7 +3,6 @@ module.exports = function (api) {
     return {
         presets: ['babel-preset-expo'],
         plugins: [
-            'react-native-reanimated/plugin',
             [
                 'module-resolver',
                 {
@@ -15,6 +14,8 @@ module.exports = function (api) {
                     extensions: ['.ios.js', '.android.js', '.js', '.ts', '.tsx', '.json'],
                 },
             ],
+            // react-native-reanimated/plugin MUST be last (Babel processes in reverse order)
+            'react-native-reanimated/plugin',
         ],
     };
 };

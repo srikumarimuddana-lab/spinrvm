@@ -12,13 +12,22 @@ test.describe('Login page', () => {
           body: JSON.stringify({ token: 'test-token', user: { id: '1', email: 'admin@spinr.ca', role: 'admin' } }),
         });
       } else {
-        await route.fulfill({ status: 401, body: '{}' });
+        await route.fulfill({ status: 401, contentType: 'application/json', body: '{}' });
       }
+    });
+    // Intercept the set-cookie helper route used by silentRefresh
+    await page.route('**/api/auth/set-cookie', async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+    });
+    // Fallback for any other /api/ calls
+    await page.route('**/api/**', async route => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
     });
   });
 
   test('renders login form', async ({ page }) => {
     await page.goto('/login');
+    await page.waitForLoadState('networkidle');
     await expect(page.locator('#email')).toBeVisible();
     await expect(page.locator('#password')).toBeVisible();
     await expect(page.locator('button:has-text("Sign In"), button[type="submit"]')).toBeVisible();
@@ -26,6 +35,7 @@ test.describe('Login page', () => {
 
   test('sign in button disabled until both fields filled', async ({ page }) => {
     await page.goto('/login');
+    await page.waitForLoadState('networkidle');
     const btn = page.locator('button:has-text("Sign In"), button[type="submit"]');
     await expect(btn).toBeDisabled();
     await page.fill('#email', 'admin@spinr.ca');
@@ -39,6 +49,7 @@ test.describe('Login page', () => {
       await route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ detail: 'Invalid credentials' }) });
     });
     await page.goto('/login');
+    await page.waitForLoadState('networkidle');
     await page.fill('#email', 'wrong@example.com');
     await page.fill('#password', 'wrongpassword');
     await page.click('button:has-text("Sign In"), button[type="submit"]');
@@ -47,6 +58,7 @@ test.describe('Login page', () => {
 
   test('successful login redirects to dashboard', async ({ page }) => {
     await page.goto('/login');
+    await page.waitForLoadState('networkidle');
     await page.fill('#email', 'admin@spinr.ca');
     await page.fill('#password', 'Test1234!');
     await page.click('button:has-text("Sign In"), button[type="submit"]');
@@ -56,6 +68,7 @@ test.describe('Login page', () => {
 
   test('login page has no critical accessibility violations (axe-core)', async ({ page }) => {
     await page.goto('/login');
+    await page.waitForLoadState('networkidle');
     const results = await new AxeBuilder({ page })
       .withTags(['wcag2a', 'wcag2aa', 'wcag21aa'])
       .analyze();

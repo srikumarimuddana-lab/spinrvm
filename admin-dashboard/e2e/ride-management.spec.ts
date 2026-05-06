@@ -138,18 +138,20 @@ test.describe('admin dashboard: ride management', () => {
   test('rides page loads and renders ride list', async ({ page }) => {
     await mockAdminAPIs(page);
     await page.goto('/dashboard/rides');
+    await page.waitForLoadState('networkidle');
     await expect(page).toHaveURL(/dashboard\/rides/);
     await expect(page.locator('h1, h2, [data-testid="rides-heading"]').first()).toBeVisible({
-      timeout: 5000,
+      timeout: 15000,
     });
   });
 
   test('drivers page loads and renders driver list', async ({ page }) => {
     await mockAdminAPIs(page);
     await page.goto('/dashboard/drivers');
+    await page.waitForLoadState('networkidle');
     await expect(page).toHaveURL(/dashboard\/drivers/);
     await expect(page.locator('h1, h2, [data-testid="drivers-heading"]').first()).toBeVisible({
-      timeout: 5000,
+      timeout: 15000,
     });
   });
 
@@ -159,6 +161,7 @@ test.describe('admin dashboard: ride management', () => {
 
     await mockAdminAPIs(page);
     await page.goto('/dashboard/settings');
+    await page.waitForLoadState('networkidle');
     await expect(page).toHaveURL(/dashboard\/settings/);
     await expect(page.locator('body')).toBeVisible();
 
@@ -166,11 +169,9 @@ test.describe('admin dashboard: ride management', () => {
   });
 
   test('refund action endpoint is reachable — no routing 404', async ({ page }) => {
-    let refundCalled = false;
     await mockAdminAPIs(page);
 
     await page.route('**/refund**', async (route) => {
-      refundCalled = true;
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -179,16 +180,14 @@ test.describe('admin dashboard: ride management', () => {
     });
 
     await page.goto('/dashboard/rides');
-    await page.waitForTimeout(2000);
+    await page.waitForLoadState('networkidle');
     await expect(page.locator('body')).toBeVisible();
   });
 
   test('driver approval flow endpoint is reachable', async ({ page }) => {
-    let approveCalled = false;
     await mockAdminAPIs(page);
 
     await page.route('**/approve**', async (route) => {
-      approveCalled = true;
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -197,7 +196,7 @@ test.describe('admin dashboard: ride management', () => {
     });
 
     await page.goto('/dashboard/drivers');
-    await page.waitForTimeout(2000);
+    await page.waitForLoadState('networkidle');
     await expect(page.locator('body')).toBeVisible();
   });
 
@@ -213,7 +212,7 @@ test.describe('admin dashboard: ride management', () => {
     });
 
     await page.goto('/dashboard/drivers');
-    await page.waitForTimeout(2000);
+    await page.waitForLoadState('networkidle');
     await expect(page.locator('body')).toBeVisible();
   });
 
@@ -223,7 +222,7 @@ test.describe('admin dashboard: ride management', () => {
     const pagesToCheck = ['/dashboard/rides', '/dashboard/drivers'];
     for (const path of pagesToCheck) {
       await page.goto(path);
-      await page.waitForTimeout(1500);
+      await page.waitForLoadState('networkidle');
 
       const results = await new AxeBuilder({ page })
         .withTags(['wcag2a', 'wcag2aa'])

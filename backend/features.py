@@ -20,7 +20,7 @@ try:
     from .geo_utils import get_service_area_polygon
 except ImportError:
     import db_supabase
-    from dependencies import get_current_user
+    from dependencies import get_admin_user, get_current_user
     from geo_utils import get_service_area_polygon
 
 # Legacy alias for call sites that still reference the pre-refactor ``db`` module.

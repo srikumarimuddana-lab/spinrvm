@@ -1304,12 +1304,12 @@ async def get_ride(request: Request, ride_id: str, current_user: dict = Depends(
             get_app_settings = None  # type: ignore
 
     free_cancel_window = 120
-    cancellation_fee_amount = 3.0
+    cancellation_fee_amount = Decimal("3.0")
     if get_app_settings:
         try:
             settings = await get_app_settings()
             free_cancel_window = int(settings.get("free_cancel_window_seconds", 120))
-            cancellation_fee_amount = float(Decimal(str(settings.get("cancellation_fee", "3.0"))))
+            cancellation_fee_amount = Decimal(str(settings.get("cancellation_fee", "3.0")))
         except Exception:
             # Non-fatal: fall back to hardcoded defaults if settings fetch fails
             logger.error("Failed to fetch app settings for cancellation config", exc_info=True)

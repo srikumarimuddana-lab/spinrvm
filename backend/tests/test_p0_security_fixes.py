@@ -5,23 +5,17 @@ Fix 1 (Dispatch filter gap):
     is_verified=True so suspended or unverified drivers are never offered rides.
 
 Fix 2 (Card ownership verification):
-    delete_card and set_default_card must verify that the Stripe PaymentMethod
+    delete_card and set_default_card verify that the Stripe PaymentMethod
     belongs to the authenticated user's stripe_customer_id before proceeding,
-    returning 403 on mismatch.  (Implementation pending — tests marked xfail.)
+    returning 403 on mismatch.
 
 Fix 3 (Wallet pay ride-status guard):
-    /wallet/pay must check that the ride has status='completed' before
+    /wallet/pay checks that the ride has status='completed' before
     deducting the balance, returning 400 if not completed.
-    (Implementation pending — test marked xfail.)
 
 Fix 4 (Quests double-claim guard):
-    The claim endpoint must perform an atomic update WHERE status='completed'
-    and return 409 when the row was already claimed.
-    (Implementation pending — test marked xfail.)
-
-Tests marked xfail(strict=True) will fail loudly if the production code is
-NOT fixed, and pass (become xpass) once the fix lands — at which point the
-xfail marker should be removed.
+    The claim endpoint performs an atomic update WHERE status='completed'
+    and returns 409 when the row was already claimed.
 """
 
 from __future__ import annotations
@@ -315,10 +309,6 @@ def test_dispatch_filter_dict_contains_both_eligibility_keys():
 
 
 @_skip_app
-@pytest.mark.xfail(
-    strict=True,
-    reason="Fix not yet implemented: delete_card lacks PM ownership check",
-)
 def test_delete_card_rejects_wrong_owner():
     """DELETE /api/v1/payments/cards/{id} must return 403 when the Stripe PM
     belongs to a different customer than the authenticated user.
@@ -373,10 +363,6 @@ def test_delete_card_allows_correct_owner():
 
 
 @_skip_app
-@pytest.mark.xfail(
-    strict=True,
-    reason="Fix not yet implemented: set_default_card lacks PM ownership check",
-)
 def test_set_default_card_rejects_wrong_owner():
     """POST /api/v1/payments/cards/{id}/default must return 403 when the
     Stripe PM belongs to a different customer than the authenticated user.
@@ -416,10 +402,6 @@ _WALLET_ROW = {"id": "wallet_001", "user_id": "rider_001", "balance": "50.00", "
 
 
 @_skip_app
-@pytest.mark.xfail(
-    strict=True,
-    reason="Fix not yet implemented: wallet_pay lacks ride-status guard",
-)
 def test_wallet_pay_rejects_non_completed_ride():
     """POST /api/v1/wallet/pay must return 400 with 'completed' in the detail
     when the ride has status='in_progress' (not yet completed).
@@ -513,10 +495,6 @@ _QUEST_WALLET = {
 
 
 @_skip_app
-@pytest.mark.xfail(
-    strict=True,
-    reason="Fix not yet implemented: claim_quest_reward lacks atomic double-claim guard",
-)
 def test_quest_claim_rejects_already_claimed():
     """POST /api/v1/quests/progress/{id}/claim must return 409 when the
     atomic claim update returns None (row already claimed by a prior request).

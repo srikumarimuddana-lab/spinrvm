@@ -1664,6 +1664,7 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
                     amount=-_f(_master_debit),
                     notes=f"Ride fallback debit {ride_id}",
                     actor_user_id=ride.get("rider_id", "system"),
+                    floor=0.0,
                 )
             except Exception as _master_err:
                 # Compensate: re-grant the allowance that was debited in step 5.

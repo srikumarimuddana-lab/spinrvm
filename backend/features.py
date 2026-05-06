@@ -29,6 +29,7 @@ def _q2(v: Decimal) -> Decimal:
     """Quantize to 2 dp HALF_UP."""
     return v.quantize(_TAX_TWO_PLACES, rounding=ROUND_HALF_UP)
 
+
 try:
     from . import db_supabase
     from .dependencies import get_current_user

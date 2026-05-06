@@ -176,7 +176,10 @@ export function RidePanel({ ride, onDriverClick, onCancelRide }: RidePanelProps)
                         </p>
                         <div
                             className="flex cursor-pointer items-center gap-2 rounded-lg border border-border p-2 hover:bg-muted"
+                            role="button"
+                            tabIndex={0}
                             onClick={() => ride.driver_id && onDriverClick(ride.driver_id)}
+                            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); ride.driver_id && onDriverClick(ride.driver_id); } }}
                         >
                             <Avatar className="h-8 w-8">
                                 <AvatarFallback className="text-xs">

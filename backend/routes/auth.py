@@ -140,7 +140,7 @@ async def _record_otp_failure(phone: str) -> None:
                     )
                 )
             except Exception:
-                pass
+                logger.debug("audit_log write failed for OTP failure event", exc_info=True)
     except Exception as e:
         logger.error(f"_record_otp_failure: {e}", exc_info=True)
 
@@ -897,7 +897,7 @@ async def logout(
                 )
             )
         except Exception:
-            pass
+            logger.debug("audit_log write failed for logout event", exc_info=True)
     clear_csrf_cookie(response)
     return {"success": True}
 

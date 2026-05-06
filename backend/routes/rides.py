@@ -859,6 +859,15 @@ async def create_ride(request: Request, body: CreateRideRequest, current_user: d
         )
         surge = _d(1)
 
+    # Scheduled ride surge exclusion (policy): a rider who books a scheduled ride
+    # locks in the fare at booking time, before the surge window opens. Applying
+    # the current area surge at dispatch time would retroactively charge a higher
+    # multiplier than the rider was shown — a hidden-fee violation. Reset to 1.0
+    # unconditionally when is_scheduled is True or a scheduled_time is present.
+    if (body.is_scheduled or body.scheduled_time) and surge > _d(1):
+        logger.info(f"Scheduled ride: surge reset from {float(surge)} to 1.0 for rider={current_user['id']}")
+        surge = _d(1)
+
     distance_fare = _round(_d(fare_info["per_km_rate"]) * _d(distance_km) * surge)
     time_fare = _round(_d(fare_info["per_minute_rate"]) * _d(duration_minutes) * surge)
     booking_fee = _d(fare_info.get("booking_fee", 2.0))

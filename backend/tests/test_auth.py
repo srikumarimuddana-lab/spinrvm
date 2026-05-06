@@ -5,7 +5,7 @@ Tests cover JWT token handling, OTP generation/verification, and user authentica
 
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -121,7 +121,7 @@ class TestJWTTokenHandling:
         payload = {
             "sub": "user_123",
             "phone": "+1234567890",
-            "exp": datetime.utcnow() - timedelta(minutes=5),  # Expired 5 minutes ago
+            "exp": datetime.now(timezone.utc) - timedelta(minutes=5),  # Expired 5 minutes ago
         }
 
         expired_token = jwt.encode(
@@ -146,7 +146,7 @@ class TestJWTTokenHandling:
         payload = {
             "sub": "user_123",
             "phone": "+1234567890",
-            "exp": datetime.utcnow() + timedelta(minutes=30),
+            "exp": datetime.now(timezone.utc) + timedelta(minutes=30),
         }
 
         wrong_token = jwt.encode(payload, "wrong-secret-key", algorithm=mock_settings.ALGORITHM)

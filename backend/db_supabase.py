@@ -898,6 +898,30 @@ async def update_ride(ride_id: str, updates: Dict[str, Any]):
     )
 
 
+async def claim_ride_payment_processing(ride_id: str) -> bool:
+    """Atomically transition payment_status from 'pending' to 'processing'.
+
+    Returns True if this caller claimed the row (proceed to call Stripe).
+    Returns False if another concurrent request already claimed it (return 409).
+    Raises if Supabase is unreachable.
+    """
+    if not supabase:
+        raise RuntimeError("Supabase client not configured")
+
+    def _fn() -> bool:
+        res = (
+            supabase.table("rides")
+            .update({"payment_status": "processing"})
+            .eq("id", ride_id)
+            .eq("payment_status", "pending")
+            .execute()
+        )
+        rows = _rows_from_res(res)
+        return len(rows) > 0
+
+    return await run_sync(_fn)
+
+
 async def get_rides_for_user(rider_id: str, limit: int = 100):
     if not supabase:
         return []

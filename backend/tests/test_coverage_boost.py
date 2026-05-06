@@ -1120,41 +1120,64 @@ class TestGetRedisDirect:
 
     def test_creates_new_client_when_not_cached(self):
         import os
+        import sys
 
         import backend.utils.redis_client as rc
 
         mock_client = MagicMock()
+        mock_aioredis = MagicMock()
+        mock_aioredis.from_url = MagicMock(return_value=mock_client)
+        # `import redis.asyncio as x` uses IMPORT_FROM which reads redis.asyncio
+        # as an attribute of the redis module object, not sys.modules["redis.asyncio"].
+        # Patch the attribute on the redis module directly.
+        redis_mod = sys.modules.get("redis")
+        saved_attr = getattr(redis_mod, "asyncio", None) if redis_mod is not None else None
         saved = rc._redis
         saved_url = rc._redis_url
         try:
             rc._redis = None
             rc._redis_url = None
+            if redis_mod is not None:
+                redis_mod.asyncio = mock_aioredis
             with (
                 patch.dict(os.environ, {"REDIS_URL": "redis://newhost:6379"}),
-                patch("redis.asyncio.from_url", return_value=mock_client),
+                patch.dict(sys.modules, {"redis.asyncio": mock_aioredis}),
             ):
                 result = asyncio.run(rc._get_redis())
         finally:
             rc._redis = saved
             rc._redis_url = saved_url
+            if redis_mod is not None:
+                if saved_attr is not None:
+                    redis_mod.asyncio = saved_attr
         assert result is mock_client
 
     def test_returns_none_on_connection_error(self):
         import os
+        import sys
 
         import backend.utils.redis_client as rc
 
+        mock_aioredis = MagicMock()
+        mock_aioredis.from_url = MagicMock(side_effect=Exception("connection refused"))
+        redis_mod = sys.modules.get("redis")
+        saved_attr = getattr(redis_mod, "asyncio", None) if redis_mod is not None else None
         saved = rc._redis
         saved_url = rc._redis_url
         try:
             rc._redis = None
             rc._redis_url = None
+            if redis_mod is not None:
+                redis_mod.asyncio = mock_aioredis
             with (
                 patch.dict(os.environ, {"REDIS_URL": "redis://badhost:6379"}),
-                patch("redis.asyncio.from_url", side_effect=Exception("connection refused")),
+                patch.dict(sys.modules, {"redis.asyncio": mock_aioredis}),
             ):
                 result = asyncio.run(rc._get_redis())
         finally:
             rc._redis = saved
             rc._redis_url = saved_url
+            if redis_mod is not None:
+                if saved_attr is not None:
+                    redis_mod.asyncio = saved_attr
         assert result is None

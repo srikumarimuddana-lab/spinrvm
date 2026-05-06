@@ -273,6 +273,22 @@ async def send_otp(request: Request, body: SendOTPRequest):
     response = {"success": True, "message": f"OTP sent to ***{phone[-4:]}"}
     # Dev OTP is logged to server console via sms_service.py — never return it
     # in the API response to avoid accidental exposure in client-side logs.
+    import asyncio
+    import hashlib
+
+    _ph = hashlib.sha256(phone.encode()).hexdigest()[:16]
+    try:
+        asyncio.create_task(
+            _audit_log_user(
+                {"id": f"phone_hash:{_ph}", "role": "anonymous"},
+                "otp_sent",
+                "users",
+                _ph,
+                {"phone_last4": phone[-4:]},
+            )
+        )
+    except Exception:
+        logger.error("audit_log write failed for otp_sent", exc_info=True)
 
     return response
 
@@ -430,6 +446,20 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
             set_csrf_cookie(
                 response, csrf, secure=settings.ENV == "production", max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
             )
+            try:
+                import asyncio
+
+                asyncio.create_task(
+                    _audit_log_user(
+                        existing_user,
+                        "otp_verify_success",
+                        "users",
+                        user_id,
+                        {"is_new_user": False},
+                    )
+                )
+            except Exception:
+                logger.error("audit_log write failed for otp_verify_success (returning user)", exc_info=True)
             return _make_auth_response(
                 response,
                 token,
@@ -481,6 +511,20 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
             set_csrf_cookie(
                 response, csrf, secure=settings.ENV == "production", max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
             )
+            try:
+                import asyncio
+
+                asyncio.create_task(
+                    _audit_log_user(
+                        new_user,
+                        "otp_verify_success",
+                        "users",
+                        user_id,
+                        {"is_new_user": True},
+                    )
+                )
+            except Exception:
+                logger.error("audit_log write failed for otp_verify_success (new user)", exc_info=True)
             return _make_auth_response(
                 response,
                 token,
@@ -646,6 +690,20 @@ async def firebase_auth_login(request: Request, response: Response, body: Fireba
     set_csrf_cookie(
         response, csrf, secure=settings.ENV == "production", max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
     )
+    try:
+        import asyncio
+
+        asyncio.create_task(
+            _audit_log_user(
+                user,
+                "firebase_auth_login",
+                "users",
+                user_id,
+                {"is_new_user": is_new_user},
+            )
+        )
+    except Exception:
+        logger.error("audit_log write failed for firebase_auth_login", exc_info=True)
     return _make_auth_response(
         response,
         token,
@@ -897,7 +955,7 @@ async def logout(
                 )
             )
         except Exception:
-            logger.debug("audit_log write failed for logout event", exc_info=True)
+            logger.error("audit_log write failed for logout event", exc_info=True)
     clear_csrf_cookie(response)
     return {"success": True}
 

@@ -95,8 +95,15 @@ jobs:
           name: backend-coverage
 
   # Frontend (Rider App) Tests
+  # DISABLED: frontend/ was deprecated 2026-04-14 (Decision D-003/D-004).
+  # It runs Expo SDK 54 / RN 0.81.5, one SDK behind rider-app and driver-app,
+  # and has 42% screen parity with zero unique features.  Keeping it in the
+  # required CI gate blocks every PR on a stale surface.  The rider-app-test
+  # job covers the production mobile surface.  Re-enable or delete this job
+  # once frontend/ is fully archived or removed from the repo.
   frontend-test:
     runs-on: ubuntu-latest
+    if: false
 
     steps:
       - uses: actions/checkout@v6
@@ -344,11 +351,11 @@ jobs:
             "https://api.render.com/v1/services/${{ secrets.RENDER_BACKEND_SERVICE_ID }}/deploys" \
             -H "Authorization: Bearer ${{ secrets.RENDER_API_KEY }}"
 
-  # Deploy Frontend
+  # Deploy Frontend — DISABLED: frontend/ deprecated 2026-04-14 (see frontend-test comment).
   deploy-frontend:
     runs-on: ubuntu-latest
     needs: [frontend-test]
-    if: github.ref == 'refs/heads/main'
+    if: false
 
     steps:
       - uses: actions/checkout@v6
@@ -627,7 +634,7 @@ jobs:
   # Notify on failure
   notify-failure:
     runs-on: ubuntu-latest
-    needs: [backend-test, frontend-test, rider-app-test, driver-app-test, admin-test]
+    needs: [backend-test, rider-app-test, driver-app-test, admin-test]
     if: failure()
 
     steps:
@@ -645,4 +652,4 @@ jobs:
         if: always()
         run: |
           echo "::warning::One or more CI jobs failed. Configure SLACK_WEBHOOK in repo secrets for Slack alerts."
-          echo "Failed needs: backend-test, frontend-test, rider-app-test, driver-app-test, or admin-test"
+          echo "Failed needs: backend-test, rider-app-test, driver-app-test, or admin-test"

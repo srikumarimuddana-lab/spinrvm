@@ -48,7 +48,12 @@ def _f(v: Decimal) -> float:
     return float(v)
 
 
-def build_default_fares(vehicle_types: List[Dict[str, Any]], surge: Decimal = _d(1)) -> List[Dict[str, Any]]:
+def _fd(v: Any) -> float:
+    """Convert any numeric value to a 2-decimal-place float (backward-compat alias for tests)."""
+    return float(_round(_d(v)))
+
+
+def build_default_fares(vehicle_types: List[Dict[str, Any]], surge: Any = _d(1)) -> List[Dict[str, Any]]:
     """
     Build a default fare entry per vehicle type.
 
@@ -66,7 +71,7 @@ def build_default_fares(vehicle_types: List[Dict[str, Any]], surge: Decimal = _d
             "per_minute_rate": _round(_d(DEFAULT_FARE["per_minute_rate"])),
             "minimum_fare": _round(_d(DEFAULT_FARE["minimum_fare"])),
             "booking_fee": _round(_d(DEFAULT_FARE["booking_fee"])),
-            "surge_multiplier": _round(surge),
+            "surge_multiplier": _round(_d(surge)),
         }
         for vt in vehicle_types
     ]
@@ -109,7 +114,7 @@ def merge_fare_configs_with_vehicle_types(
                     "per_minute_rate": _round(_d(fare["per_minute_rate"])),
                     "minimum_fare": _round(_d(fare["minimum_fare"])),
                     "booking_fee": _round(_d(fare["booking_fee"])),
-                    "surge_multiplier": _round(surge),
+                    "surge_multiplier": _round(_d(surge)),
                 }
             )
     return result

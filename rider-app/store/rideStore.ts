@@ -153,6 +153,7 @@ interface RideState {
   recentSearches: Location[];
   scheduledTime: Date | null;
   scheduledRides: Ride[];
+  requiresWav: boolean;
   userLocation: { latitude: number; longitude: number } | null;
   availablePromos: Promo[];
   appliedPromo: Promo | null;
@@ -231,6 +232,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   riderNotes: '',
   scheduledTime: null,
   scheduledRides: [],
+  requiresWav: false,
   userLocation: null,
   isLoading: false,
   error: null,

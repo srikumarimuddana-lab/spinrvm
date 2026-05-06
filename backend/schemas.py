@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, EmailStr, Field, validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 try:
     from .validators import validate_license_plate, validate_vehicle_year, validate_vin
@@ -140,8 +140,7 @@ class AppSettings(BaseModel):
     company_website: str = ""
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-    class Config:
-        json_encoders = {Decimal: str}
+    model_config = ConfigDict(json_encoders={Decimal: str})
 
 
 class ServiceArea(BaseModel):
@@ -155,8 +154,7 @@ class ServiceArea(BaseModel):
     surge_multiplier: float = 1.0
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-    class Config:
-        json_encoders = {Decimal: str}
+    model_config = ConfigDict(json_encoders={Decimal: str})
 
 
 class VehicleType(BaseModel):
@@ -182,8 +180,7 @@ class FareConfig(BaseModel):
     is_active: bool = True
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-    class Config:
-        json_encoders = {Decimal: str}
+    model_config = ConfigDict(json_encoders={Decimal: str})
 
 
 class SavedAddress(BaseModel):
@@ -242,21 +239,24 @@ class Driver(BaseModel):
     is_available: bool = True
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-    @validator("license_plate")
-    def _check_license_plate(cls, v: str) -> str:
-        return validate_license_plate(v)
+    @field_validator("license_plate")
+    @classmethod
+    def _check_license_plate(cls, value: str) -> str:
+        return validate_license_plate(value)
 
-    @validator("vehicle_vin", pre=True, always=True)
-    def _check_vin(cls, v: Optional[str]) -> Optional[str]:
-        if v is None:
-            return v
-        return validate_vin(v)
+    @field_validator("vehicle_vin", mode="before")
+    @classmethod
+    def _check_vin(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        return validate_vin(value)
 
-    @validator("vehicle_year", pre=True, always=True)
-    def _check_vehicle_year(cls, v: Optional[int]) -> Optional[int]:
-        if v is None:
-            return v
-        return validate_vehicle_year(v)
+    @field_validator("vehicle_year", mode="before")
+    @classmethod
+    def _check_vehicle_year(cls, value: Optional[int]) -> Optional[int]:
+        if value is None:
+            return value
+        return validate_vehicle_year(value)
 
 
 class Ride(BaseModel):
@@ -311,8 +311,7 @@ class Ride(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-    class Config:
-        json_encoders = {Decimal: str}
+    model_config = ConfigDict(json_encoders={Decimal: str})
 
 
 class RideRatingRequest(BaseModel):
@@ -320,8 +319,7 @@ class RideRatingRequest(BaseModel):
     comment: Optional[str] = None
     tip_amount: Decimal = Field(default=Decimal("0.0"), ge=0, description="Tip amount must be non-negative")
 
-    class Config:
-        json_encoders = {Decimal: str}
+    model_config = ConfigDict(json_encoders={Decimal: str})
 
 
 class CreateRideRequest(BaseModel):
@@ -351,28 +349,32 @@ class CreateRideRequest(BaseModel):
 
     # ── Input validation (SEC-017) ──────────────────────────────────────── #
 
-    @validator("pickup_address", "dropoff_address")
-    def validate_address(cls, v: str) -> str:
-        v = v.strip()
-        if len(v) < 3:
+    @field_validator("pickup_address", "dropoff_address")
+    @classmethod
+    def validate_address(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) < 3:
             raise ValueError("Address must be at least 3 characters")
-        if len(v) > 500:
+        if len(value) > 500:
             raise ValueError("Address must be 500 characters or fewer")
-        return v
+        return value
 
-    @validator("pickup_lat", "dropoff_lat")
-    def validate_lat(cls, v: float) -> float:
-        if not (-90.0 <= v <= 90.0):
+    @field_validator("pickup_lat", "dropoff_lat")
+    @classmethod
+    def validate_lat(cls, value: float) -> float:
+        if not (-90.0 <= value <= 90.0):
             raise ValueError("Latitude must be between -90 and 90")
-        return v
+        return value
 
-    @validator("pickup_lng", "dropoff_lng")
-    def validate_lng(cls, v: float) -> float:
-        if not (-180.0 <= v <= 180.0):
+    @field_validator("pickup_lng", "dropoff_lng")
+    @classmethod
+    def validate_lng(cls, value: float) -> float:
+        if not (-180.0 <= value <= 180.0):
             raise ValueError("Longitude must be between -180 and 180")
-        return v
+        return value
 
-    @validator("stops")
+    @field_validator("stops")
+    @classmethod
     def validate_stops(cls, stops: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         for stop in stops:
             lat = stop.get("lat")
@@ -385,20 +387,21 @@ class CreateRideRequest(BaseModel):
                 raise ValueError(f"Stop longitude out of range: {lng}")
         return stops
 
-    @validator("scheduled_time", always=True)
-    def validate_scheduled_time(cls, v: Optional[datetime], values: dict) -> Optional[datetime]:
-        if v is not None:
+    @field_validator("scheduled_time", mode="after")
+    @classmethod
+    def validate_scheduled_time(cls, value: Optional[datetime], info) -> Optional[datetime]:
+        if value is not None:
             from datetime import timedelta
 
             # Normalise to UTC-aware for the "in the future" comparison, then
             # strip tz for the DST-gap round-trip check which needs a naive wall time.
-            v_utc = v if v.tzinfo else v.replace(tzinfo=timezone.utc)
+            v_utc = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
             if v_utc < datetime.now(timezone.utc) + timedelta(minutes=5):
                 raise ValueError("Scheduled time must be at least 5 minutes in the future")
 
             naive = v_utc.replace(tzinfo=None)
 
-            tz_name: Optional[str] = values.get("scheduled_timezone")
+            tz_name: Optional[str] = info.data.get("scheduled_timezone")
             if tz_name:
                 try:
                     import zoneinfo
@@ -421,4 +424,4 @@ class CreateRideRequest(BaseModel):
                         f"{tz_name} on that date (DST spring-forward gap). "
                         "Please choose a time after the clocks change."
                     )
-        return v
+        return value

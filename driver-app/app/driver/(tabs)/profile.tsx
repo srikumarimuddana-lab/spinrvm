@@ -52,7 +52,7 @@ export default function ProfileScreen() {
   useEffect(() => {
     api.get<{ name?: string; address?: string; phone?: string; email?: string; website?: string }>('/company-info')
       .then(res => setCompanyInfo(res?.data || {}))
-      .catch(() => {});
+      .catch((e) => console.warn('[DriverProfile] company-info fetch failed:', e?.message ?? e));
   }, []);
 
   // Edit modal state

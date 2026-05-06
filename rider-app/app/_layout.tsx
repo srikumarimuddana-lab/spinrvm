@@ -345,7 +345,7 @@ export default function RootLayout() {
               {
                 text: "I'm okay",
                 onPress: () => {
-                  api.post(`/rides/${checkinRideId}/safety-checkin`).catch(() => {});
+                  api.post(`/rides/${checkinRideId}/safety-checkin`).catch((e) => console.warn('[Layout] Safety checkin failed:', e?.message ?? e));
                 },
               },
             ],
@@ -358,7 +358,7 @@ export default function RootLayout() {
       // All other FCM types — refresh the active ride state
       const currentRide = useRideStore.getState().currentRide;
       if (currentRide?.id) {
-        useRideStore.getState().fetchRide(currentRide.id).catch(() => {});
+        useRideStore.getState().fetchRide(currentRide.id).catch((e) => console.warn('[Layout] fetchRide on foreground failed:', e?.message ?? e));
       }
     });
 

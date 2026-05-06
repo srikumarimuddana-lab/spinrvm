@@ -39,48 +39,49 @@ async def _dispatch_scheduled_ride(ride: dict):
     """Transition a scheduled ride from 'scheduled' to 'searching' and start driver matching."""
     ride_id = ride["id"]
     try:
-        # Only dispatch if still in scheduled state
-        current = await db.find_one("rides", {"id": ride_id})
-        if not current or current.get("status") != "searching":
-            # Already dispatched, cancelled, or status changed
-            if current and current.get("is_scheduled") and current.get("status") == "searching":
-                pass  # Already searching — proceed to match
-            else:
-                return
-
-        # Mark as dispatched so we don't process it again
-        await db.update_one(
+        now_iso = datetime.now(timezone.utc).isoformat()
+        # Atomic claim: only proceed if the ride is still in 'scheduled' state.
+        # Using a conditional update guards against duplicate dispatch on
+        # multi-replica deployments (both replicas reach this point at the same
+        # tick; only the one whose UPDATE matches a row proceeds).
+        updated = await db.update_one(
             "rides",
-            {"id": ride_id},
+            {"id": ride_id, "status": "scheduled"},
             {
-                "$set": {
-                    "scheduled_dispatched": True,
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                }
+                "status": "searching",
+                "scheduled_dispatched": True,
+                "updated_at": now_iso,
             },
         )
+        if not updated:
+            # Already dispatched or cancelled by another replica / admin.
+            return
 
         # Import and run driver matching
         try:
             from routes.rides import match_driver_to_ride
         except ImportError:
-            from ..routes.rides import match_driver_to_ride
+            from ..routes.rides import match_driver_to_ride  # type: ignore
 
         await match_driver_to_ride(ride_id)
         logger.info(f"Dispatched scheduled ride {ride_id}")
 
-        # Notify rider
+        # Notify rider — best effort; failure must not roll back the dispatch.
         rider_id = ride.get("rider_id")
         if rider_id:
-            await send_push_notification(
-                rider_id,
-                "Your scheduled ride is starting!",
-                f"We're finding a driver for your ride to {ride.get('dropoff_address', 'your destination')}.",
-                data={"type": "scheduled_ride_dispatched", "ride_id": ride_id},
-            )
+            try:
+                dropoff = (ride.get("dropoff_address") or "your destination")[:60]
+                await send_push_notification(
+                    rider_id,
+                    "Your scheduled ride is starting!",
+                    f"We're finding a driver for your ride to {dropoff}.",
+                    data={"type": "scheduled_ride_dispatched", "ride_id": ride_id},
+                )
+            except Exception as push_err:
+                logger.warning(f"Scheduled ride push failed for ride {ride_id}: {push_err}")
 
     except Exception as e:
-        logger.error(f"Failed to dispatch scheduled ride {ride_id}: {e}")
+        logger.error(f"Failed to dispatch scheduled ride {ride_id}: {e}", exc_info=True)
 
 
 async def _send_reminder(ride: dict):
@@ -104,7 +105,7 @@ async def _send_reminder(ride: dict):
         await db.update_one(
             "rides",
             {"id": ride_id},
-            {"$set": {"reminder_sent": True}},
+            {"reminder_sent": True},
         )
         logger.info(f"Sent reminder for scheduled ride {ride_id}")
 
@@ -118,12 +119,14 @@ async def check_scheduled_rides():
     ten_min_from_now = now + timedelta(minutes=10)
 
     try:
-        # Get all pending scheduled rides
+        # Get all pending scheduled rides (still in 'scheduled' state, not yet
+        # dispatched to 'searching').  The dispatcher transitions them to
+        # 'searching' atomically inside _dispatch_scheduled_ride.
         scheduled = await db.get_rows(
             "rides",
             {
                 "is_scheduled": True,
-                "status": "searching",
+                "status": "scheduled",
             },
             limit=100,
             order="scheduled_time",

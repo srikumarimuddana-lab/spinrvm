@@ -64,7 +64,7 @@ async def safety_checkin_loop() -> None:
     while True:
         try:
             await _tick()
-            _record_heartbeat("safety_checkin_loop")
+            _record_heartbeat("safety_checkin (30s)")
         except Exception:
             logger.error("safety_checkin_loop tick failed", exc_info=True)
         await asyncio.sleep(_INTERVAL_SECONDS)
@@ -168,7 +168,7 @@ async def _escalate(ride: dict, now: datetime) -> None:
         await _supabase_db.insert_one("safety_incidents", incident)
         # Mark escalated so we don't create duplicate incidents.
         await redis_set(_escalated_key(ride_id), "1", ttl=4 * 3600)
-        logger.warning(f"[SAFETY_CHECKIN] No response from rider {rider_id} on ride {ride_id}; safety incident opened.")
+        logger.info(f"[SAFETY_CHECKIN] No response from rider {rider_id} on ride {ride_id}; safety incident opened.")
     except Exception:
         logger.error(
             f"[SAFETY_CHECKIN] Failed to escalate ride {ride_id}",

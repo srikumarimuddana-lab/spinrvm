@@ -30,6 +30,8 @@ LOOP_THRESHOLDS: Dict[str, float] = {
     "corporate_low_balance (1h)": 1 * 3600 * 4,  # 4 h
     "allowance_reset (1h)": 1 * 3600 * 4,  # 4 h
     "presence_sweeper (60s)": 60 * 4,  # 4 min
+    "safety_checkin (30s)": 30 * 4,  # 2 min
+    "reconciliation (daily 02:00 UTC)": 24 * 3600 * 2,  # 48 h
     "retention_purge (24h)": 24 * 3600 * 2,  # 48 h
     "stripe_reconcile (24h)": 24 * 3600 * 2,  # 48 h
 }

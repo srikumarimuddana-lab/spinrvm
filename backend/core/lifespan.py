@@ -227,7 +227,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("safety_checkin (30s)", safety_checkin_loop)
     except Exception as e:
-        logger.warning(f"Failed to import safety checkin loop: {e}")
+        logger.error(f"Failed to import safety checkin loop: {e}", exc_info=True)
 
     # PII retention purge — daily SECURITY DEFINER call to anonymize
     # ride GPS at 3y, hard-delete rides at 7y, delete location history
@@ -250,7 +250,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("reconciliation (daily 02:00 UTC)", reconciliation_loop)
     except Exception as e:
-        logger.warning(f"Failed to import reconciliation loop: {e}")
+        logger.error(f"Failed to import reconciliation loop: {e}", exc_info=True)
 
     # Stripe ↔ DB daily reconciliation — runs at 02:00 UTC, one replica
     # via Redis leader lock. Flags paid rides with no matching Stripe
@@ -261,26 +261,26 @@ async def lifespan(app: FastAPI):
 
         _spawn("stripe_reconcile (24h)", stripe_reconcile_loop)
     except Exception as e:
-        logger.warning(f"Failed to import Stripe reconciliation loop: {e}")
+        logger.error(f"Failed to import Stripe reconciliation loop: {e}", exc_info=True)
 
     # Loop watchdog — scans heartbeats every 5 minutes and posts a
     # Slack-compatible alert when any loop has gone stale.  No-op when
     # ALERT_WEBHOOK_URL is unset.
-    _WATCHDOG_LOOP_NAMES = list(
-        [
-            "subscription_expiry (6h)",
-            "surge_engine (2min)",
-            "scheduled_dispatcher (60s)",
-            "payment_retry (5min)",
-            "document_expiry (12h)",
-            "corporate_autotopup (10min)",
-            "corporate_low_balance (1h)",
-            "allowance_reset (1h)",
-            "presence_sweeper (60s)",
-            "retention_purge (24h)",
-            "stripe_reconcile (24h)",
-        ]
-    )
+    _WATCHDOG_LOOP_NAMES = [
+        "subscription_expiry (6h)",
+        "surge_engine (2min)",
+        "scheduled_dispatcher (60s)",
+        "payment_retry (5min)",
+        "document_expiry (12h)",
+        "corporate_autotopup (10min)",
+        "corporate_low_balance (1h)",
+        "allowance_reset (1h)",
+        "presence_sweeper (60s)",
+        "safety_checkin (30s)",
+        "retention_purge (24h)",
+        "reconciliation (daily 02:00 UTC)",
+        "stripe_reconcile (24h)",
+    ]
 
     async def _loop_watchdog():
         import asyncio as _asyncio

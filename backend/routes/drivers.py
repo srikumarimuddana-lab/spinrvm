@@ -3308,7 +3308,7 @@ async def get_current_subscription(current_user: dict = Depends(get_current_user
                 await db_supabase.update_one("driver_subscriptions", {"id": sub["id"]}, {"status": "expired"})
                 return {"has_subscription": False, "subscription": None, "expired": True}
         except Exception:  # noqa: S110
-            pass
+            logger.warning("get_current_subscription: failed to check/update subscription expiry", exc_info=True)
 
     # Get today's ride count
     today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -3780,7 +3780,11 @@ async def check_expiring_subscriptions():
                             }
                         )
                     except Exception:  # noqa: S110
-                        pass
+                        logger.warning(
+                            "check_expiring_subscriptions: admin broadcast failed for driver %s",
+                            driver["id"],
+                            exc_info=True,
+                        )
 
                     enforced_count += 1
                     continue

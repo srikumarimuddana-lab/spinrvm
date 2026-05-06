@@ -328,7 +328,7 @@ class _WSPubSub:
             try:
                 await self._task
             except (asyncio.CancelledError, Exception):  # noqa: S110
-                pass
+                logger.debug("ws_pubsub: stop: consumer task did not exit cleanly", exc_info=True)
             self._task = None
 
         await self._safe_close_pubsub()
@@ -342,11 +342,11 @@ class _WSPubSub:
         try:
             await self._pubsub.unsubscribe(CHANNEL)
         except Exception:  # noqa: S110
-            pass
+            logger.warning("ws_pubsub: _safe_close_pubsub: unsubscribe failed", exc_info=True)
         try:
             await self._pubsub.close()
         except Exception:  # noqa: S110
-            pass
+            logger.warning("ws_pubsub: _safe_close_pubsub: close failed", exc_info=True)
         self._pubsub = None
 
     async def _safe_close_redis(self) -> None:
@@ -355,7 +355,7 @@ class _WSPubSub:
         try:
             await self._redis.close()
         except Exception:  # noqa: S110
-            pass
+            logger.warning("ws_pubsub: _safe_close_redis: close failed", exc_info=True)
         self._redis = None
 
 

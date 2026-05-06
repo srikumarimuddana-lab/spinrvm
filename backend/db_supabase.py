@@ -2148,11 +2148,12 @@ async def list_wallets_needing_autotopup() -> List[Dict[str, Any]]:
     return [
         r
         for r in rows
-        if r.get("auto_topup_threshold") is not None and float(r["balance"]) < float(r["auto_topup_threshold"])
+        if r.get("auto_topup_threshold") is not None
+        and Decimal(str(r["balance"])) < Decimal(str(r["auto_topup_threshold"]))
     ]
 
 
-async def sum_autotopups_today(wallet_id: str) -> float:
+async def sum_autotopups_today(wallet_id: str) -> Decimal:
     """Sum of today's successful top-ups for a wallet (for daily-cap enforcement)."""
     today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
 
@@ -2168,7 +2169,7 @@ async def sum_autotopups_today(wallet_id: str) -> float:
 
     res = await run_sync(_fn)
     rows = _rows_from_res(res)
-    return sum(float(r["amount"]) for r in rows)
+    return sum((Decimal(str(r["amount"])) for r in rows), Decimal("0"))
 
 
 async def get_default_payment_method(stripe_customer_id: str, stripe_secret: str) -> Optional[str]:
@@ -2194,7 +2195,8 @@ async def list_wallets_low_balance_no_autotopup() -> List[Dict[str, Any]]:
     return [
         r
         for r in rows
-        if r.get("auto_topup_threshold") is not None and float(r["balance"]) < float(r["auto_topup_threshold"])
+        if r.get("auto_topup_threshold") is not None
+        and Decimal(str(r["balance"])) < Decimal(str(r["auto_topup_threshold"]))
     ]
 
 

@@ -125,6 +125,7 @@ export default function CorporateAccountsPage() {
         } catch (error) {
             if (reqId !== reqIdRef.current) return;
             console.error("Failed to fetch corporate accounts:", error);
+            toast({ title: "Failed to load accounts", variant: "destructive" });
             setAccounts([]);
             setHasNextPage(false);
         } finally {

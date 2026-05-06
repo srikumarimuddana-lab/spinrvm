@@ -205,10 +205,13 @@ async def create_setup_intent(current_user: dict = Depends(get_current_user)):
         if not customer_id:
             raise HTTPException(status_code=400, detail="Could not create Stripe customer")
 
+        import time as _time
+
         setup_intent = stripe.SetupIntent.create(
             customer=customer_id,
             payment_method_types=["card"],
             api_key=stripe_secret,
+            idempotency_key=f"setup-intent-{current_user['id']}-{int(_time.time() // 3600)}",
         )
 
         return {
@@ -418,12 +421,15 @@ async def add_card(request: Request, current_user: dict = Depends(get_current_us
         pm = stripe.PaymentMethod.attach(payment_method_id, customer=customer_id, api_key=stripe_secret)
 
         # Confirm with SetupIntent — saves card for future off-session use.
+        import time as _time
+
         si = stripe.SetupIntent.create(
             customer=customer_id,
             payment_method=pm.id,
             confirm=True,
             automatic_payment_methods={"enabled": True, "allow_redirects": "never"},
             api_key=stripe_secret,
+            idempotency_key=f"setup-intent-{current_user['id']}-{int(_time.time() // 3600)}",
         )
 
         # Set as default if first card

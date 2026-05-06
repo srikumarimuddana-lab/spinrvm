@@ -14,6 +14,7 @@ from pydantic import BaseModel
 try:
     from .. import db_supabase
     from ..dependencies import get_admin_user, get_current_user
+    from ..features import send_push_notification
     from ..settings_loader import get_app_settings
     from ..utils.audit_logger import log_admin_action
 except ImportError:
@@ -81,6 +82,19 @@ async def create_dispute(
     }
 
     await db_supabase.insert_one("disputes", dispute)
+
+    rider_id = ride.get("rider_id") or current_user["id"]
+    if rider_id:
+        try:
+            await send_push_notification(
+                rider_id,
+                "Dispute received",
+                "We've received your dispute and will review it within 1-2 business days.",
+                data={"type": "dispute_created", "dispute_id": str(dispute["id"])},
+            )
+        except Exception as notif_err:
+            logger.debug(f"Dispute created notification failed: {notif_err}")
+
     return {"success": True, "dispute": dispute}
 
 
@@ -244,6 +258,25 @@ async def admin_resolve_dispute(
             "admin_note": req.admin_note or "",
         },
     )
+
+    # Notify rider of outcome
+    rider_id = dispute.get("user_id")
+    if rider_id:
+        resolution_label = "approved" if req.resolution == "refund" else "reviewed"
+        amount_text = (
+            f" A refund of ${req.refund_amount:.2f} has been issued."
+            if req.resolution in ("approved", "partial_refund") and req.refund_amount
+            else ""
+        )
+        try:
+            await send_push_notification(
+                rider_id,
+                "Dispute update",
+                f"Your dispute has been {resolution_label}.{amount_text}",
+                data={"type": "dispute_resolved", "dispute_id": str(dispute_id), "resolution": req.resolution},
+            )
+        except Exception as notif_err:
+            logger.debug(f"Dispute resolved notification failed: {notif_err}")
 
     return {
         "success": True,

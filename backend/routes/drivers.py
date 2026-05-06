@@ -2309,10 +2309,9 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         else:
             raise
 
-    # Post-ride receipt notification stub
-    rider = await db_supabase.get_user_by_id(ride.get("rider_id"))
-    if rider and rider.get("email"):
-        logger.info(f"Sending email receipt for ride {ride_id} to {rider['email']}")
+    # Fetch rider now so the receipt task has it ready when completed_ride is
+    # available (see asyncio.create_task below, after completed_ride is loaded).
+    _receipt_rider = await db_supabase.get_user_by_id(ride.get("rider_id"))
 
     # Fire-and-forget: render the route PNG from phase_polylines and
     # upload to Cloudinary so the admin drawer + email receipt can
@@ -2338,6 +2337,20 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     )
 
     completed_ride = await db_supabase.get_ride(ride_id)
+
+    # Fire-and-forget receipt email. Uses completed_ride so the email reflects
+    # any fare recalculation that happened at trip completion. Never blocks the
+    # driver response — any failure is caught inside send_ride_receipt_email.
+    if completed_ride and _receipt_rider and _receipt_rider.get("email"):
+        try:
+            from utils.receipt_email import send_ride_receipt_email as _send_receipt
+        except ImportError:
+            try:
+                from ..utils.receipt_email import send_ride_receipt_email as _send_receipt  # type: ignore
+            except ImportError:
+                _send_receipt = None  # type: ignore
+        if _send_receipt is not None:
+            asyncio.create_task(_send_receipt(completed_ride, _receipt_rider))
 
     if completed_ride and completed_ride.get("rider_id"):
         await manager.send_personal_message(

@@ -36,7 +36,6 @@ These advisory CI gates must be flipped to **blocking** before production. They 
 | OI-004 | HIGH | `security-gates.yml` | `eslint-security` (JS SAST) | 55, 70 | Set `continue-on-error: false` |
 | OI-005 | HIGH | `security-gates.yml` | `semgrep` | 90 | Set `continue-on-error: false` |
 | OI-006 | HIGH | `security-gates.yml` | `pip-audit` | 115 | Set `continue-on-error: false` |
-| OI-007 | MEDIUM | `ci-guardrails.yml` | Multiple jobs | 31, 49, 124, 200, 325, 543 | Review per-job; flip security-relevant ones to blocking |
 | OI-008 | LOW | `claude-review.yml` | `review` | 47 | Keep `continue-on-error: true` — advisory by design |
 
 **Note**: OI-003 through OI-006 are Phase 5 SEC-1 work. Do not flip them before device testing (Phase 3) completes — some scans produce noisy findings that need triage before becoming hard blocks.
@@ -75,6 +74,7 @@ These advisory CI gates must be flipped to **blocking** before production. They 
 | Q-2 | MEDIUM | `any` types in `shared/services/firebase.ts` and `shared/config/firebaseConfig.ts` | a7ae53eb | 2026-05-06 |
 | OI-001 | MEDIUM | Driver-card `<div onClick>` — added `role="button"`, `tabIndex={0}`, `onKeyDown` in `monitoring/ride-panel.tsx` | claude/audit-expo-dependencies-Jt8BL | 2026-05-06 |
 | OI-002 | MEDIUM | Ride-detail close button missing `aria-label` — added `aria-label="Close ride panel"` and `aria-hidden="true"` on icon in `monitoring/page.tsx` | claude/audit-expo-dependencies-Jt8BL | 2026-05-06 |
+| OI-007 | MEDIUM | `ci-guardrails.yml` per-job `continue-on-error` review — `migration-safety-gate` flipped to `continue-on-error: false` (blocking); `coverage-regression-gate` (line 31), `lint-trend-gate` (line 124), and `breaking-change-gate` (line 543) intentionally kept `continue-on-error: true` (advisory by design) | claude/audit-expo-dependencies-Jt8BL | 2026-05-06 |
 
 ---
 
@@ -92,7 +92,7 @@ Before production, all of the following must be true:
 - [x] OI-001 resolved (driver card accessibility)
 - [x] OI-002 resolved (close button aria-label)
 - [ ] OI-003 through OI-006 flipped to blocking in `security-gates.yml`
-- [ ] OI-007 jobs reviewed and appropriate ones made blocking
+- [x] OI-007 jobs reviewed and appropriate ones made blocking (resolved 2026-05-06)
 - [ ] pip-audit run against `requirements-locked.txt` — 0 HIGH/CRITICAL
 - [ ] yarn audit run in rider-app and driver-app — 0 HIGH/CRITICAL
 - [ ] All findings opened during Phase 3 device testing resolved or downgraded

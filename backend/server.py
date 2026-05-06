@@ -380,10 +380,11 @@ app.include_router(
 app.include_router(corporate_company_router)
 app.include_router(corporate_rider_router)
 # DUPLICATE MOUNT — files_router (prefix /documents) is served at both
-# /api/documents/{id} (used by admin dashboard) and /api/v1/documents/{id}
-# (resolves legacy driver_documents rows written by the old base64-in-DB upload
-# path). Both mounts are intentional; /api/documents/... is the older mount and
-# should be removed after the admin dashboard is updated to use /api/v1/ prefix.
+# /api/documents/{id} and /api/v1/documents/{id} (canonical).
+# Admin dashboard now uses /api/v1 — this legacy /api mount is kept only for
+# old document_url rows in driver_documents that still contain /api/documents/{id}
+# paths.  Remove after a one-time DB migration updates those rows to
+# /api/v1/documents/... (see admin-dashboard/next.config.ts note).
 app.include_router(files_router, prefix="/api")
 app.include_router(files_router, prefix="/api/v1")
 app.include_router(monitoring_router, prefix="/api")  # /api/admin/monitoring/... — /api only, NOT a duplicate

@@ -70,6 +70,13 @@ const nextConfig: NextConfig = {
   async rewrites() {
     return [
       {
+        // All /api/* calls are proxied to the FastAPI backend.
+        // NOTE: document_url values stored in driver_documents rows may still
+        // contain paths like /api/documents/{id} (legacy backend mount).
+        // Those are resolved here via the /api/* → BACKEND_URL/api/* proxy.
+        // Once a one-time DB migration rewrites those rows to /api/v1/documents/{id},
+        // the legacy backend mount can be removed. There are no hardcoded
+        // /api/documents/ calls in admin-dashboard source — all URLs come from DB.
         source: "/api/:path*",
         destination: `${BACKEND_URL}/api/:path*`,
       },

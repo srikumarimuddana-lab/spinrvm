@@ -16,7 +16,8 @@ export default function DashboardLayout({
 
     useEffect(() => {
         if (!isLoading && !isAuthenticated) {
-            router.push('/login');
+            const next = pathname && pathname !== '/login' ? `?next=${encodeURIComponent(pathname)}` : '';
+            router.replace(`/login${next}`);
         }
     }, [isAuthenticated, isLoading, router, pathname]);
 

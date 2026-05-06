@@ -157,6 +157,11 @@ async def admin_create_promotion(promotion: PromotionCreateRequest, admin: dict 
     # Reject negative discount values — a negative discount is a charge (F-30).
     if promotion.discount_value < 0:
         raise HTTPException(status_code=400, detail="discount_value cannot be negative")
+    # TASK-4-1: enforce upper bound so a typo can't grant 9999% off.
+    if promotion.discount_type == "percentage" and promotion.discount_value > 100:
+        raise HTTPException(status_code=400, detail="discount_value cannot exceed 100 for percentage discounts")
+    if promotion.discount_type == "flat" and promotion.discount_value > 500:
+        raise HTTPException(status_code=400, detail="discount_value cannot exceed $500 for flat discounts")
     for field, value in [
         ("max_discount", promotion.max_discount),
         ("total_budget", promotion.total_budget),

@@ -614,8 +614,8 @@ async def admin_get_stats():
         ),
     )
 
-    revenue_today = sum(float(r.get("total_fare") or 0) for r in (completed_today or []))
-    revenue_month = sum(float(r.get("total_fare") or 0) for r in completed_month)
+    revenue_today = float(sum(Decimal(str(r.get("total_fare") or 0)) for r in (completed_today or [])))
+    revenue_month = float(sum(Decimal(str(r.get("total_fare") or 0)) for r in completed_month))
     # Earnings + tip totals are aggregated over completed rides in the
     # current month; upstream's stats API never wired these up so we compute
     # them here rather than returning stale zeroes.
@@ -669,7 +669,7 @@ async def admin_get_ride_stats():
     completed_today = await db_supabase.get_rows(
         "rides", {"status": "completed", "ride_completed_at": {"$gte": today_start.isoformat()}}, limit=10000
     )
-    total_revenue = sum(float(r.get("total_fare") or 0) for r in completed_today)
+    total_revenue = float(sum(Decimal(str(r.get("total_fare") or 0)) for r in completed_today))
     total_tips = float(sum(Decimal(str(r.get("tip_amount") or 0)) for r in completed_today))
     completed_count = len(completed_today)
 
@@ -677,7 +677,7 @@ async def admin_get_ride_stats():
     completed_month = await db_supabase.get_rows(
         "rides", {"status": "completed", "ride_completed_at": {"$gte": month_start.isoformat()}}, limit=10000
     )
-    month_revenue = sum(float(r.get("total_fare") or 0) for r in completed_month)
+    month_revenue = float(sum(Decimal(str(r.get("total_fare") or 0)) for r in completed_month))
 
     # Daily chart data for last 14 days
     daily_chart = []
@@ -961,7 +961,7 @@ async def admin_get_earnings(period: str = Query("month")):
     )
 
     # Calculate totals
-    total_revenue = sum(float(r.get("total_fare") or 0) for r in completed_rides)
+    total_revenue = float(sum(Decimal(str(r.get("total_fare") or 0)) for r in completed_rides))
     driver_earnings = float(sum(Decimal(str(r.get("driver_earnings") or 0)) for r in completed_rides))
     platform_fees = float(sum(Decimal(str(r.get("admin_earnings") or 0)) for r in completed_rides))
 
@@ -1176,9 +1176,9 @@ async def admin_get_payout_stats():
     except Exception:
         all_payouts = []
 
-    total_paid = sum(float(p.get("amount", 0)) for p in all_payouts if p.get("status") == "completed")
-    total_pending = sum(float(p.get("amount", 0)) for p in all_payouts if p.get("status") == "pending")
-    total_failed = sum(float(p.get("amount", 0)) for p in all_payouts if p.get("status") == "failed")
+    total_paid = float(sum(Decimal(str(p.get("amount", 0))) for p in all_payouts if p.get("status") == "completed"))
+    total_pending = float(sum(Decimal(str(p.get("amount", 0))) for p in all_payouts if p.get("status") == "pending"))
+    total_failed = float(sum(Decimal(str(p.get("amount", 0))) for p in all_payouts if p.get("status") == "failed"))
 
     return {
         "total_paid": round(total_paid, 2),

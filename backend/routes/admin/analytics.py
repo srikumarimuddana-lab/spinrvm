@@ -277,7 +277,9 @@ async def get_analytics_overview(
     completion_rate = round(completed / total * 100, 1) if total > 0 else 0
     cancellation_rate = round(cancelled / total * 100, 1) if total > 0 else 0
 
-    total_revenue = sum(float(r.get("total_fare") or 0) for r in period_rides if r.get("status") == "completed")
+    total_revenue = float(
+        sum(Decimal(str(r.get("total_fare") or 0)) for r in period_rides if r.get("status") == "completed")
+    )
     total_tips = float(
         sum(Decimal(str(r.get("tip_amount") or 0)) for r in period_rides if r.get("status") == "completed")
     )

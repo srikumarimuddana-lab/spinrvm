@@ -185,8 +185,18 @@ async def confirm_payment(
     payment_intent_id = body.get("payment_intent_id")
     ride_id = body.get("ride_id")
 
+    if ride_id:
+        ride = await db_supabase.get_ride(ride_id)
+        if not ride:
+            raise HTTPException(status_code=404, detail="Ride not found")
+        if ride["rider_id"] != current_user["id"]:
+            raise HTTPException(status_code=403, detail="forbidden")
+
+        claimed = await db_supabase.claim_ride_payment_processing(ride_id)
+        if not claimed:
+            raise HTTPException(status_code=409, detail="payment_already_processing")
+
     if payment_intent_id and payment_intent_id.startswith("pi_mock_"):
-        # Mock payment
         if ride_id:
             await db_supabase.update_ride(ride_id, {"payment_status": "paid", "payment_intent_id": payment_intent_id})
         return {"status": "succeeded", "mock": True}

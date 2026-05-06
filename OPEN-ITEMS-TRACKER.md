@@ -16,16 +16,13 @@ Updated at each phase gate and after any security scan run.
 All 55 Fortune 100 production readiness findings resolved across 9 categories
 (SEC, INF, CQ, TST, MOB, DOC, AI, COM, FEAT). Reference: `docs/audit/12_SPRINT_9_COMPLETION.md`.
 
-**Current posture: 0 CRITICAL · 0 HIGH · 2 MEDIUM (accessibility) · 0 LOW open**
+**Current posture: 0 CRITICAL · 0 HIGH · 0 MEDIUM · 0 LOW open**
 
 ---
 
 ## Open — MEDIUM
 
-| ID | Severity | Area | Finding | Source | Opened | Owner |
-|----|----------|------|---------|--------|--------|-------|
-| OI-001 | MEDIUM | Admin / Accessibility | Driver list cards use `<div onClick>` without `role="button"` or `tabIndex` — fails `interactive-supports-focus` eslint-jsx-a11y rule | Sprint 9 a11y audit | 2026-04-09 | — |
-| OI-002 | MEDIUM | Admin / Accessibility | Ride detail panel close button (`X` icon) has no `aria-label` — fails `interactive-supports-focus` | Sprint 9 a11y audit | 2026-04-09 | — |
+_No open MEDIUM items._
 
 ---
 
@@ -76,6 +73,8 @@ These advisory CI gates must be flipped to **blocking** before production. They 
 | B-P2-8 | MEDIUM | Docker base images unpinned — `backend/Dockerfile` | PR in P0 sprint | 2026-04-29 |
 | Q-5 | MEDIUM | Root `Dockerfile` unpinned (dev/CI image) | 16606100 | 2026-05-06 |
 | Q-2 | MEDIUM | `any` types in `shared/services/firebase.ts` and `shared/config/firebaseConfig.ts` | a7ae53eb | 2026-05-06 |
+| OI-001 | MEDIUM | Driver-card `<div onClick>` — added `role="button"`, `tabIndex={0}`, `onKeyDown` in `monitoring/ride-panel.tsx` | claude/audit-expo-dependencies-Jt8BL | 2026-05-06 |
+| OI-002 | MEDIUM | Ride-detail close button missing `aria-label` — added `aria-label="Close ride panel"` and `aria-hidden="true"` on icon in `monitoring/page.tsx` | claude/audit-expo-dependencies-Jt8BL | 2026-05-06 |
 
 ---
 
@@ -90,8 +89,8 @@ These advisory CI gates must be flipped to **blocking** before production. They 
 
 Before production, all of the following must be true:
 
-- [ ] OI-001 resolved (driver card accessibility)
-- [ ] OI-002 resolved (close button aria-label)
+- [x] OI-001 resolved (driver card accessibility)
+- [x] OI-002 resolved (close button aria-label)
 - [ ] OI-003 through OI-006 flipped to blocking in `security-gates.yml`
 - [ ] OI-007 jobs reviewed and appropriate ones made blocking
 - [ ] pip-audit run against `requirements-locked.txt` — 0 HIGH/CRITICAL

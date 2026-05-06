@@ -90,28 +90,6 @@ default_limiter = Limiter(
     storage_uri=_rate_limit_storage_uri,
 )
 
-# ---------------------------------------------------------------------------
-# OTP fail-closed policy (S-8)
-# ---------------------------------------------------------------------------
-# For keys that identify OTP flows ("otp", "send_otp", "verify_otp"), the
-# in-memory fallback is NOT acceptable: on a multi-replica deployment each
-# replica keeps its own counter, so the effective limit becomes
-# (limit × N_replicas)/window — making brute-force trivially easy.
-#
-# If Redis is unavailable at request time for an OTP key we therefore raise
-# HTTP 503 rather than silently degrade.  Non-OTP keys continue to use the
-# in-memory fallback because the risk is much lower (general API rate
-# limiting, not auth security).
-# ---------------------------------------------------------------------------
-_OTP_KEY_FRAGMENTS = ("otp", "send_otp", "verify_otp")
-
-
-def _is_otp_key(key: str) -> bool:
-    """Return True if *key* belongs to an OTP rate-limit bucket."""
-    lower = key.lower()
-    return any(fragment in lower for fragment in _OTP_KEY_FRAGMENTS)
-
-
 # ============================================================================
 # Custom Key Functions
 # ============================================================================

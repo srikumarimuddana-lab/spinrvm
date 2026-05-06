@@ -754,7 +754,7 @@ export default function PromotionsPage() {
                             </>
                         )}
 
-                        <Button className="w-full" onClick={handleSave} disabled={saving}>{saving ? "Saving..." : editingPromo ? "Update" : "Create"}</Button>
+                        <Button className="w-full" onClick={handleSave} disabled={saving || !form.code.trim() || !form.discount_value}>{saving ? "Saving..." : editingPromo ? "Update" : "Create"}</Button>
                     </div>
                 </DialogContent>
             </Dialog>

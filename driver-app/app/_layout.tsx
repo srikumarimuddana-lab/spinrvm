@@ -114,6 +114,8 @@ setBackgroundMessageHandler(async (remoteMessage: any) => {
 // can read the notification content rather than landing on a random screen.
 function usePushNotificationRouter() {
   const router = useRouter();
+
+  // Foreground / backgrounded-tap listener (fires when app is already running).
   useEffect(() => {
     if (!Notifications) return;
     const sub = Notifications.addNotificationResponseReceivedListener(
@@ -127,6 +129,37 @@ function usePushNotificationRouter() {
       },
     );
     return () => sub?.remove?.();
+  }, [router]);
+
+  // Killed-state deep linking — getInitialNotificationResponseAsync() returns
+  // the tapped notification when the app was fully killed. The routing call is
+  // deferred 100ms to ensure the Expo Router Stack is fully mounted before
+  // navigation is attempted — calls fired before hydration are silently dropped.
+  // This hook is only mounted after isAuthInitialized is true (the loading gate
+  // in RootLayout blocks DriverRootLayoutInner until then).
+  useEffect(() => {
+    if (!canUseNotifications || !Notifications) return;
+    let timer: ReturnType<typeof setTimeout>;
+    (async () => {
+      try {
+        const response = await Notifications.getInitialNotificationResponseAsync?.();
+        if (response?.notification?.request?.content?.data) {
+          const data = response.notification.request.content.data as Record<string, string>;
+          console.log('[Push] Driver killed-state notification tap — routing from data:', data);
+          // Add a small defer to ensure Stack is mounted
+          timer = setTimeout(() => {
+            if (data?.type === 'new_ride_assignment') {
+              router.push('/driver/');
+            } else {
+              router.push('/driver/notifications');
+            }
+          }, 100);
+        }
+      } catch (e) {
+        console.log('[Push] Driver getInitialNotification failed:', e);
+      }
+    })();
+    return () => clearTimeout(timer);
   }, [router]);
 }
 

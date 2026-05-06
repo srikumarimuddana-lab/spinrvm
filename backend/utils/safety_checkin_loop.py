@@ -77,7 +77,6 @@ async def safety_checkin_loop() -> None:
 async def _tick() -> None:
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(minutes=_CHECKIN_AFTER_MINUTES)
-    cutoff_iso = cutoff.isoformat()
 
     in_progress = await _supabase_db.get_rows(
         "rides",
@@ -154,7 +153,7 @@ async def _tick() -> None:
             logger.error(
                 f"[SAFETY_CHECKIN] Escalation failed for ride {ride_id}; "
                 "will retry on next tick. Check DB/Redis connectivity.",
-                exc_info=False,
+                exc_info=True,
             )
 
 

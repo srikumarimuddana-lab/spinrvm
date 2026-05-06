@@ -5,12 +5,13 @@ import { MonitoringRide } from "./types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Copy, MapPin, Phone, XCircle } from "lucide-react";
+import { CheckCircle, Copy, MapPin, Phone, XCircle } from "lucide-react";
 
 interface RidePanelProps {
     ride: MonitoringRide;
     onDriverClick: (driverId: string) => void;
     onCancelRide: (rideId: string) => void;
+    onCompleteRide?: (rideId: string) => Promise<void>;
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -29,7 +30,7 @@ const STATUS_COLORS: Record<string, string> = {
     in_progress: "bg-green-500",
 };
 
-export function RidePanel({ ride, onDriverClick, onCancelRide }: RidePanelProps) {
+export function RidePanel({ ride, onDriverClick, onCancelRide, onCompleteRide }: RidePanelProps) {
     const currentStepIdx = STATUS_STEPS.indexOf(ride.status);
     const elapsed = Math.floor(
         (Date.now() - new Date(ride.created_at).getTime()) / 60_000
@@ -211,6 +212,16 @@ export function RidePanel({ ride, onDriverClick, onCancelRide }: RidePanelProps)
                 )}
 
                 {/* Actions */}
+                {ride.status === "in_progress" && onCompleteRide && (
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-full gap-1.5 text-xs text-green-600 border-green-600 hover:bg-green-50"
+                        onClick={() => onCompleteRide(ride.id)}
+                    >
+                        <CheckCircle className="h-3.5 w-3.5" /> Complete Ride
+                    </Button>
+                )}
                 <Button
                     variant="destructive"
                     size="sm"

@@ -4,6 +4,7 @@ jest.mock('@shared/api/client', () => ({
   default: { post: jest.fn(), get: jest.fn(), put: jest.fn(), patch: jest.fn(), delete: jest.fn() },
 }));
 jest.mock('@shared/store/authStore', () => ({
+  registerLogoutCallback: jest.fn(),
   useAuthStore: { getState: jest.fn(() => ({ user: { id: 'user-abc' } })) },
 }));
 jest.mock('@react-native-async-storage/async-storage', () => ({

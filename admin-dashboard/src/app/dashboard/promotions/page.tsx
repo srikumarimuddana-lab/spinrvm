@@ -352,6 +352,42 @@ export default function PromotionsPage() {
             toast({ title: "Missing required fields", description: "Please fill in code and discount value.", variant: "destructive" });
             return;
         }
+        const discountVal = parseFloat(form.discount_value);
+        if (isNaN(discountVal) || discountVal <= 0) {
+            toast({ title: "Invalid discount value", description: "Discount must be greater than zero.", variant: "destructive" });
+            return;
+        }
+        if (form.discount_type === "percentage" && discountVal > 100) {
+            toast({ title: "Invalid percentage", description: "Percentage discount cannot exceed 100%.", variant: "destructive" });
+            return;
+        }
+        if (form.discount_type === "flat" && discountVal > 500) {
+            toast({ title: "Discount too large", description: "Flat discount cannot exceed $500.", variant: "destructive" });
+            return;
+        }
+        if (form.max_discount) {
+            const maxD = parseFloat(form.max_discount);
+            if (isNaN(maxD) || maxD <= 0) {
+                toast({ title: "Invalid max discount cap", description: "Max discount cap must be greater than zero.", variant: "destructive" });
+                return;
+            }
+            if (maxD > 500) {
+                toast({ title: "Max discount cap too large", description: "Max discount cap cannot exceed $500.", variant: "destructive" });
+                return;
+            }
+        }
+        const maxUses = parseInt(form.max_uses);
+        if (isNaN(maxUses) || maxUses < 1) {
+            toast({ title: "Invalid max uses", description: "Max uses must be at least 1.", variant: "destructive" });
+            return;
+        }
+        if (form.expiry_date) {
+            const expiry = new Date(form.expiry_date);
+            if (expiry <= new Date()) {
+                toast({ title: "Invalid expiry date", description: "Expiry date must be in the future.", variant: "destructive" });
+                return;
+            }
+        }
         setSaving(true);
         try {
             const isPrivateTab = promoTab === "private" || (editingPromo?.promo_type === "private");

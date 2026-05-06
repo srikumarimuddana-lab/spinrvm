@@ -466,9 +466,10 @@ async def billing_summary(
     average fare, and per-member breakdown sorted by total desc.
     """
     from datetime import datetime as _dt
+    from datetime import timezone as _tz
 
     if month is None:
-        month = _dt.utcnow().strftime("%Y-%m")
+        month = _dt.now(_tz.utc).strftime("%Y-%m")
     from_iso, to_iso = _month_bounds(month)
 
     # Page through all rows so the summary is never silently truncated.

@@ -87,7 +87,30 @@ export function setCsrfToken(token: string | null): void {
 // request is retried with the newly-stored in-memory token.
 type RefreshFn = () => Promise<boolean>;
 let _refreshCallback: RefreshFn | null = null;
+// _refreshPromise deduplicates concurrent refresh calls: every in-flight
+// request that hits 401 while a refresh is already running awaits the
+// same promise instead of firing N parallel /auth/refresh requests.
 let _refreshPromise: Promise<boolean> | null = null;
+// Subscriber queue: requests that arrived while a refresh was in progress
+// register here. When the refresh succeeds they are all retried with the
+// newly-stored token rather than racing to start a second refresh.
+let _refreshSubscribers: Array<(token: string) => void> = [];
+
+function _subscribeTokenRefresh(cb: (token: string) => void): void {
+  _refreshSubscribers.push(cb);
+}
+
+function _onRefreshed(token: string): void {
+  _refreshSubscribers.forEach(cb => cb(token));
+  _refreshSubscribers = [];
+}
+
+// Exposed so the auth store can sign the user out when the refresh token
+// is itself rejected — prevents the client from entering a limbo state.
+let _signOutCallback: (() => Promise<void>) | null = null;
+export function setSignOutCallback(fn: () => Promise<void>): void {
+  _signOutCallback = fn;
+}
 
 export function setRefreshCallback(fn: RefreshFn): void {
   _refreshCallback = fn;
@@ -443,21 +466,57 @@ const recordApiError = (entry: ApiErrorLogEntry) => {
 };
 
 const handleApiError = async (response: Response, method: string, url: string, retryFn?: () => Promise<unknown>): Promise<never> => {
+  // ── Guard: refresh endpoint itself returned 401 ──────────────────
+  // If the /auth/refresh call is rejected by the server the refresh token is
+  // expired or revoked. Sign the user out immediately to clear invalid state
+  // rather than letting every queued request spin and eventually time-out.
+  if (response.status === 401 && url.includes('/auth/refresh')) {
+    console.log('[API] Refresh token rejected (401) — signing out');
+    if (_signOutCallback) {
+      await _signOutCallback().catch(() => {});
+    } else {
+      // Fallback: clear in-process state directly if the callback was not
+      // registered yet (e.g. very early cold-start before authStore init).
+      setInMemoryToken(null);
+      try {
+        const { useAuthStore } = require('../store/authStore');
+        useAuthStore.getState().logout();
+      } catch { /* store not yet initialised */ }
+    }
+    _refreshSubscribers = [];
+    return Promise.reject(response) as Promise<never>;
+  }
+
   // On 401, attempt a single silent token refresh then retry the original request.
-  if (response.status === 401 && _refreshCallback && retryFn && url !== '/auth/refresh') {
+  if (response.status === 401 && _refreshCallback && retryFn) {
     try {
-      // Deduplicate concurrent refresh calls — only one in-flight at a time.
-      if (!_refreshPromise) {
-        _refreshPromise = _refreshCallback().finally(() => {
-          _refreshPromise = null;
+      if (_refreshPromise) {
+        // A refresh is already in-flight — queue this request and wait for
+        // the new token rather than firing a second /auth/refresh call.
+        const retried = await new Promise<unknown>((resolve, reject) => {
+          _subscribeTokenRefresh((_newToken) => {
+            retryFn().then(resolve).catch(reject);
+          });
         });
+        return retried as never;
       }
+
+      // First caller: start the refresh and notify all subscribers on completion.
+      _refreshPromise = _refreshCallback().finally(() => {
+        _refreshPromise = null;
+      });
       const refreshed = await _refreshPromise;
       if (refreshed) {
+        const newToken = _inMemoryToken ?? '';
+        _onRefreshed(newToken);
         return retryFn() as Promise<never>; // retry with the new token now in _inMemoryToken
       }
+      // Refresh returned false (transient failure) — flush subscribers with
+      // empty token so they fall through to throw their own 401 errors.
+      _onRefreshed('');
     } catch {
-      // refresh failed — fall through to throw the original 401
+      // refresh threw — flush subscribers and fall through to throw the original 401
+      _onRefreshed('');
     }
   }
 

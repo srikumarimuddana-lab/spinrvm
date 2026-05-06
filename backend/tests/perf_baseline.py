@@ -27,7 +27,7 @@ import json
 import os
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from statistics import mean
 from typing import Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -330,7 +330,7 @@ def print_table(http_results: list[dict], ws_result: dict):
     divider = "-" * (COL_W + 52)
     header = f"{'Endpoint':<{COL_W}} {'P50':>7} {'P95':>7} {'P99':>7} {'Mean':>7} {'Max':>7} {'Err':>4}"
     print("\n" + divider)
-    print(" Spinr API Performance Baseline — " + datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"))
+    print(" Spinr API Performance Baseline — " + datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"))
     print(divider)
     print(header)
     print(divider)
@@ -378,7 +378,7 @@ async def main(http_samples: int, ws_samples: int, out_path: str, baseline_path:
     print_table(http_results, ws_result)
 
     report = {
-        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
         "http_samples_per_endpoint": http_samples,
         "ws_samples": ws_samples,
         "http": http_results,

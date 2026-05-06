@@ -15,6 +15,7 @@ import asyncio
 import logging
 import random
 import time
+from decimal import Decimal
 
 import stripe
 
@@ -77,8 +78,8 @@ async def _process_one(wallet: dict, stripe_secret: str) -> None:
         logger.error("wallet %s has no stripe_customer_id", wallet["id"])
         return
 
-    topup_amount = float(wallet["auto_topup_amount"])
-    daily_cap = float(wallet.get("auto_topup_daily_cap") or 5000)
+    topup_amount = Decimal(str(wallet["auto_topup_amount"]))
+    daily_cap = Decimal(str(wallet.get("auto_topup_daily_cap") or 5000))
     today_sum = await sum_autotopups_today(wallet["id"])
     if today_sum + topup_amount > daily_cap:
         logger.info(
@@ -96,7 +97,7 @@ async def _process_one(wallet: dict, stripe_secret: str) -> None:
         return
 
     stripe.PaymentIntent.create(
-        amount=int(round(topup_amount * 100)),
+        amount=int(topup_amount * 100),
         currency="cad",
         customer=company["stripe_customer_id"],
         payment_method=pm_id,

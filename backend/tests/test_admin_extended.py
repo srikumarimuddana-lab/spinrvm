@@ -7,7 +7,7 @@ routes/admin/drivers.py — currently 20.2%  (target 55%)
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -30,7 +30,7 @@ def _ride(status: str = "searching", **extra):
         "tip_amount": 0,
         "pickup_address": "100 Main",
         "dropoff_address": "200 Broadway",
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
         **extra,
     }
 
@@ -46,7 +46,7 @@ def _driver(**extra):
         "status": "active",
         "rating": 4.8,
         "total_rides": 100,
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
         **extra,
     }
 

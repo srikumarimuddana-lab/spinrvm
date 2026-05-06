@@ -37,7 +37,9 @@ def _q(v) -> Decimal:
 
 class AdminCreditRequest(BaseModel):
     user_id: str
-    amount: float = Field(..., gt=0, le=10_000, description="CAD amount to credit (max $10,000/txn)")
+    amount: Decimal = Field(
+        ..., gt=Decimal("0.01"), le=Decimal("10000"), description="CAD amount to credit (max $10,000/txn)"
+    )
     reason: str = Field(..., min_length=3, max_length=200)
     idempotency_key: str | None = Field(
         None, description="Caller-supplied key; duplicate requests return the original result"

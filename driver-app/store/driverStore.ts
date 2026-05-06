@@ -298,6 +298,7 @@ interface DriverState {
 
     // Loading states
     isLoading: boolean;
+    isCancellingRide: boolean;
     error: string | null;
 
     // Actions - Ride lifecycle
@@ -379,6 +380,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
     // Chat messages for the active ride (seeded via REST, kept live by WS)
     chatMessages: [],
     isLoading: false,
+    isCancellingRide: false,
     error: null,
 
     setIncomingRide: (ride) => {
@@ -548,7 +550,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
     },
 
     cancelRide: async (rideId: string, reason?: string) => {
-        set({ isLoading: true, error: null });
+        set({ isLoading: true, isCancellingRide: true, error: null });
         try {
             await api.post(`/drivers/rides/${rideId}/cancel?reason=${encodeURIComponent(reason || '')}`);
             set({ rideState: 'idle', activeRide: null, incomingRide: null });
@@ -557,7 +559,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             recordNonFatal(err, { store: 'driverStore', action: 'cancelRide' });
             set({ error: isAxiosError(err) ? (err.response?.data?.detail || 'Failed to cancel ride') : 'Failed to cancel ride' });
         } finally {
-            set({ isLoading: false });
+            set({ isLoading: false, isCancellingRide: false });
         }
     },
 

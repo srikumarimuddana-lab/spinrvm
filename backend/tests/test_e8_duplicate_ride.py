@@ -20,7 +20,7 @@ Run:
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -56,7 +56,7 @@ def _active_ride(status: str = "searching") -> dict:
         "pickup_address": "123 Main",
         "dropoff_address": "456 Broadway",
         "total_fare": 15.0,
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
 

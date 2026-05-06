@@ -58,6 +58,8 @@ function DriverDashboard() {
     rateRider,
   } = useDriverStore();
 
+  const isCancellingRide = useDriverStore((s) => s.isCancellingRide);
+
   const { t } = useLanguageStore();
 
   const {
@@ -658,7 +660,7 @@ function DriverDashboard() {
           ride={activeRide?.ride as unknown as any || null}
           rider={activeRide?.rider || null}
           driverLocation={location}
-          isLoading={false}
+          isLoading={isCancellingRide}
           otpInput={otpInput}
           setOtpInput={setOtpInput}
           onVerifyOTP={(otp) => verifyOTP(activeRide!.ride.id, otp)}

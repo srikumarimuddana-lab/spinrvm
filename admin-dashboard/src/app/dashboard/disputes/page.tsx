@@ -64,6 +64,7 @@ export default function DisputesPage() {
   const [resolution, setResolution] = useState("approved");
   const [refundAmount, setRefundAmount] = useState("");
   const [adminNote, setAdminNote] = useState("");
+  const [resolveError, setResolveError] = useState<string | null>(null);
 
   const fetchDisputes = async () => {
     setLoading(true);
@@ -116,6 +117,23 @@ export default function DisputesPage() {
 
   const handleResolve = async () => {
     if (!selected) return;
+    setResolveError(null);
+
+    if (resolution === "partial_refund") {
+      const amount = parseFloat(refundAmount);
+      if (isNaN(amount) || amount <= 0) {
+        setResolveError("Refund amount must be greater than zero");
+        return;
+      }
+      const originalFareAmount = Number(selected.original_fare || 0);
+      if (amount > originalFareAmount) {
+        setResolveError(
+          `Refund cannot exceed the original fare of $${originalFareAmount.toFixed(2)}`
+        );
+        return;
+      }
+    }
+
     setResolving(true);
     try {
       await resolveDispute(selected.id, {
@@ -127,6 +145,7 @@ export default function DisputesPage() {
       setResolution("approved");
       setRefundAmount("");
       setAdminNote("");
+      setResolveError(null);
       refresh();
     } catch (err) {
       console.error("Failed to resolve dispute:", err);
@@ -293,7 +312,7 @@ export default function DisputesPage() {
                 <>
                   <div>
                     <Label>Resolution</Label>
-                    <Select value={resolution} onValueChange={setResolution}>
+                    <Select value={resolution} onValueChange={(v) => { setResolution(v); setResolveError(null); }}>
                       <SelectTrigger><SelectValue /></SelectTrigger>
                       <SelectContent>
                         <SelectItem value="approved">Approve Full Refund</SelectItem>
@@ -312,8 +331,11 @@ export default function DisputesPage() {
                     <Label>Admin Note (optional)</Label>
                     <Input value={adminNote} onChange={e => setAdminNote(e.target.value)} placeholder="Internal note about this resolution" />
                   </div>
+                  {resolveError && (
+                    <p className="text-sm text-red-600">{resolveError}</p>
+                  )}
                   <div className="flex gap-2">
-                    <Button variant="outline" className="flex-1" onClick={() => setSelected(null)}>Cancel</Button>
+                    <Button variant="outline" className="flex-1" onClick={() => { setSelected(null); setResolveError(null); }}>Cancel</Button>
                     <Button className="flex-1" onClick={handleResolve} disabled={resolving}>
                       {resolving ? "Processing..." : "Submit Resolution"}
                     </Button>

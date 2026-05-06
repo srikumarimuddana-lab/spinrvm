@@ -1,6 +1,7 @@
 import logging
 import re
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -336,7 +337,7 @@ async def admin_get_promo_stats(date_range: Optional[str] = Query(None, alias="r
 
     # Usage stats
     total_redemptions = len(filtered_usage)
-    total_discount = sum(float(u.get("discount_applied", 0)) for u in filtered_usage)
+    total_discount = float(sum(Decimal(str(u.get("discount_applied", 0))) for u in filtered_usage))
 
     # Daily usage for charts (last 30 days)
     daily: Dict[str, Dict[str, Any]] = {}
@@ -348,7 +349,7 @@ async def admin_get_promo_stats(date_range: Optional[str] = Query(None, alias="r
         d = u.get("created_at", "")[:10]
         if d in daily:
             daily[d]["count"] += 1
-            daily[d]["amount"] += float(u.get("discount_applied", 0))
+            daily[d]["amount"] = float(Decimal(str(daily[d]["amount"])) + Decimal(str(u.get("discount_applied", 0))))
 
     daily_usage = sorted(daily.values(), key=lambda x: x["date"])
 

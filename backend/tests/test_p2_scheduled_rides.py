@@ -23,7 +23,7 @@ Run:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -38,7 +38,7 @@ def _scheduled_ride(status: str = "searching", **extra) -> dict:
         "rider_id": RIDER_ID,
         "status": status,
         "is_scheduled": True,
-        "scheduled_time": (datetime.utcnow() + timedelta(hours=2)).isoformat(),
+        "scheduled_time": (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
         "pickup_address": "123 Main",
         "dropoff_address": "456 Broadway",
         **extra,

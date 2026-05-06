@@ -7,6 +7,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import {
     ShieldCheck, ShieldAlert, Ban, AlertTriangle,
     Pause, Play, CheckCircle, Loader2, ShieldOff,
@@ -33,9 +34,13 @@ const STATUS_CONFIG: Record<DriverStatus, { label: string; color: string; bg: st
     banned: { label: "Banned", color: "text-red-800 dark:text-red-400", bg: "bg-red-100 dark:bg-red-900/20 border-red-300 dark:border-red-800", icon: Ban, description: "Driver is permanently banned from the platform." },
 };
 
+// Actions that require an AlertDialog pre-confirmation before the reason dialog.
+const DESTRUCTIVE_ACTIONS = new Set(["ban", "suspend", "override_banned", "override_suspended"]);
+
 export default function DriverActionBar({ driver, onActionComplete }: DriverActionBarProps) {
     const { toast } = useToast();
     const [actionDialog, setActionDialog] = useState<{ action: string; title: string; description: string; requiresReason: boolean; buttonLabel: string; buttonClass: string } | null>(null);
+    const [pendingDestructiveAction, setPendingDestructiveAction] = useState<{ action: string; title: string; description: string; requiresReason: boolean; buttonLabel: string; buttonClass: string; alertTitle: string; alertDescription: string } | null>(null);
     const [reason, setReason] = useState("");
     const [loading, setLoading] = useState(false);
 
@@ -45,7 +50,25 @@ export default function DriverActionBar({ driver, onActionComplete }: DriverActi
 
     const openAction = (action: string, title: string, description: string, requiresReason: boolean, buttonLabel: string, buttonClass: string) => {
         setReason("");
+        if (DESTRUCTIVE_ACTIONS.has(action)) {
+            const isBan = action === "ban" || action === "override_banned";
+            setPendingDestructiveAction({
+                action, title, description, requiresReason, buttonLabel, buttonClass,
+                alertTitle: isBan ? `Ban ${driver.first_name} ${driver.last_name}?` : `Suspend ${driver.first_name} ${driver.last_name}?`,
+                alertDescription: isBan
+                    ? `This will permanently ban ${driver.first_name} ${driver.last_name}. They will not be able to log in or accept rides. This action should be reviewed by a supervisor.`
+                    : `This will suspend ${driver.first_name} ${driver.last_name} temporarily. They will not be able to go online until reactivated.`,
+            });
+            return;
+        }
         setActionDialog({ action, title, description, requiresReason, buttonLabel, buttonClass });
+    };
+
+    const confirmDestructiveAction = () => {
+        if (!pendingDestructiveAction) return;
+        const { alertTitle: _at, alertDescription: _ad, ...actionDetails } = pendingDestructiveAction;
+        setPendingDestructiveAction(null);
+        setActionDialog(actionDetails);
     };
 
     const executeAction = async () => {
@@ -189,7 +212,26 @@ export default function DriverActionBar({ driver, onActionComplete }: DriverActi
                 </div>
             </div>
 
-            {/* Action Confirmation Dialog */}
+            {/* Destructive Action Pre-Confirmation */}
+            <AlertDialog open={!!pendingDestructiveAction} onOpenChange={(open) => { if (!open) setPendingDestructiveAction(null); }}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>{pendingDestructiveAction?.alertTitle}</AlertDialogTitle>
+                        <AlertDialogDescription>{pendingDestructiveAction?.alertDescription}</AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                            className={pendingDestructiveAction?.buttonClass || "bg-destructive text-destructive-foreground hover:bg-destructive/90"}
+                            onClick={confirmDestructiveAction}
+                        >
+                            {pendingDestructiveAction?.buttonLabel}
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
+
+            {/* Action Confirmation Dialog (reason collection) */}
             <Dialog open={!!actionDialog} onOpenChange={open => { if (!open) setActionDialog(null); }}>
                 <DialogContent className="sm:max-w-md">
                     <DialogHeader>

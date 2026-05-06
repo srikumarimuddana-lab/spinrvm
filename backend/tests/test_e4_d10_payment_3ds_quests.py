@@ -34,7 +34,7 @@ Run:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -56,13 +56,13 @@ def _ride(payment_status: str = "requires_action", retry_count: int = 0, **extra
         "payment_status": payment_status,
         "payment_retry_count": retry_count,
         "total_fare": 20.0,
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
         **extra,
     }
 
 
 def _quest(now_offset_hours: int = 0) -> dict:
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     return {
         "id": QUEST_ID,
         "title": "Complete 10 rides",
@@ -88,10 +88,10 @@ def _progress(status: str = "active", current_value: float = 5.0) -> dict:
         "driver_id": DRIVER_ID,
         "current_value": current_value,
         "status": status,
-        "started_at": datetime.utcnow().isoformat(),
-        "completed_at": datetime.utcnow().isoformat() if status == "completed" else None,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "completed_at": datetime.now(timezone.utc).isoformat() if status == "completed" else None,
         "claimed_at": None,
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -282,7 +282,7 @@ class TestGetAvailableQuests:
     async def test_expired_quest_not_returned(self):
         from backend.routes.quests import get_available_quests
 
-        past_quest = {**_quest(), "end_date": (datetime.utcnow() - timedelta(hours=1)).isoformat()}
+        past_quest = {**_quest(), "end_date": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()}
 
         with (
             patch("backend.routes.quests.db.find_one", AsyncMock(return_value=_driver_row())),
@@ -360,7 +360,7 @@ class TestJoinQuest:
 
         from backend.routes.quests import join_quest
 
-        expired = {**_quest(), "end_date": (datetime.utcnow() - timedelta(hours=1)).isoformat()}
+        expired = {**_quest(), "end_date": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()}
 
         with patch(
             "backend.routes.quests.db.find_one",

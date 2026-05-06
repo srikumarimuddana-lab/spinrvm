@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 try:
     from ..db import db
+    from ..db_supabase import insert_one as _db_insert_one
     from ..db_supabase import wallet_increment_balance, wallet_pay_for_ride
     from ..db_supabase import wallet_transfer as _wallet_transfer_rpc
     from ..dependencies import get_current_user
@@ -23,6 +24,7 @@ try:
     from ..utils.idempotency import idempotent_endpoint
 except ImportError:
     from db import db
+    from db_supabase import insert_one as _db_insert_one
     from db_supabase import wallet_increment_balance, wallet_pay_for_ride
     from db_supabase import wallet_transfer as _wallet_transfer_rpc
     from dependencies import get_current_user
@@ -311,5 +313,25 @@ async def transfer_to_user(
         balance_after=_money_str(new_recipient_balance),
         description=f"Received from {current_user.get('phone', 'user')}",
     )
+
+    try:
+        await _db_insert_one(
+            "audit_logs",
+            {
+                "id": str(uuid.uuid4()),
+                "action": "wallet_transfer",
+                "entity_type": "wallets",
+                "entity_id": sender_wallet["id"],
+                "actor_id": current_user["id"],
+                "details": {
+                    "amount": _money_str(transfer_amount),
+                    "recipient_id": recipient["id"],
+                    "new_sender_balance": _money_str(new_sender_balance),
+                },
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+    except Exception:
+        logger.warning("audit_log write failed for wallet_transfer", exc_info=True)
 
     return {"balance": _money_str(new_sender_balance), "success": True}

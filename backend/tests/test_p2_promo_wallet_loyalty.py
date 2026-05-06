@@ -17,7 +17,7 @@ Run:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -48,7 +48,7 @@ def _promo(code: str = "SAVE5", **extra) -> dict:
         "max_uses": 100,
         "uses": 0,
         "max_uses_per_user": 1,
-        "expiry_date": (datetime.utcnow() + timedelta(days=30)).isoformat(),
+        "expiry_date": (datetime.now(timezone.utc) + timedelta(days=30)).isoformat(),
         "assigned_user_ids": [],
         "first_ride_only": False,
         "new_user_days": 0,
@@ -69,7 +69,7 @@ def _wallet(balance: float = 50.00, active: bool = True) -> dict:
         "user_id": USER_ID,
         "balance": balance,
         "is_active": active,
-        "updated_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -80,7 +80,7 @@ def _loyalty_account(points: int = 200, lifetime: int = 700, tier: str = "silver
         "points": points,
         "lifetime_points": lifetime,
         "tier": tier,
-        "updated_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -153,7 +153,7 @@ class TestValidatePromo:
     async def test_expired_promo_raises_400(self):
         from fastapi import HTTPException
 
-        promo = _promo(expiry_date=(datetime.utcnow() - timedelta(days=1)).isoformat())
+        promo = _promo(expiry_date=(datetime.now(timezone.utc) - timedelta(days=1)).isoformat())
 
         with pytest.raises(HTTPException) as exc_info:
             await self._call("EXPIRED", 20.00, promo)

@@ -33,17 +33,27 @@ DEFAULT_FARE = {
 }
 
 
+def _d(v: Any) -> Decimal:
+    """Convert any numeric value to Decimal without float precision loss."""
+    return Decimal(str(v))
+
+
+def _round(v: Decimal) -> Decimal:
+    """Round a Decimal to 2 decimal places (ROUND_HALF_UP)."""
+    return v.quantize(_TWO_PLACES, rounding=ROUND_HALF_UP)
+
+
+def _f(v: Decimal) -> float:
+    """Convert Decimal to float — only for use at the final JSON response boundary."""
+    return float(v)
+
+
 def _fd(v: Any) -> float:
-    """
-    Round a numeric value to 2 decimal places via Decimal to avoid float drift.
-
-    Used to normalize monetary values so downstream Decimal arithmetic in
-    `routes/rides.py` starts from clean 2-dp floats.
-    """
-    return float(Decimal(str(v)).quantize(_TWO_PLACES, rounding=ROUND_HALF_UP))
+    """Convert any numeric value to a 2-decimal-place float (backward-compat alias for tests)."""
+    return float(_round(_d(v)))
 
 
-def build_default_fares(vehicle_types: List[Dict[str, Any]], surge: float = 1.0) -> List[Dict[str, Any]]:
+def build_default_fares(vehicle_types: List[Dict[str, Any]], surge: Any = _d(1)) -> List[Dict[str, Any]]:
     """
     Build a default fare entry per vehicle type.
 
@@ -56,12 +66,12 @@ def build_default_fares(vehicle_types: List[Dict[str, Any]], surge: float = 1.0)
     return [
         {
             "vehicle_type": vt,
-            "base_fare": _fd(DEFAULT_FARE["base_fare"]),
-            "per_km_rate": _fd(DEFAULT_FARE["per_km_rate"]),
-            "per_minute_rate": _fd(DEFAULT_FARE["per_minute_rate"]),
-            "minimum_fare": _fd(DEFAULT_FARE["minimum_fare"]),
-            "booking_fee": _fd(DEFAULT_FARE["booking_fee"]),
-            "surge_multiplier": _fd(surge),
+            "base_fare": _round(_d(DEFAULT_FARE["base_fare"])),
+            "per_km_rate": _round(_d(DEFAULT_FARE["per_km_rate"])),
+            "per_minute_rate": _round(_d(DEFAULT_FARE["per_minute_rate"])),
+            "minimum_fare": _round(_d(DEFAULT_FARE["minimum_fare"])),
+            "booking_fee": _round(_d(DEFAULT_FARE["booking_fee"])),
+            "surge_multiplier": _round(_d(surge)),
         }
         for vt in vehicle_types
     ]
@@ -83,7 +93,7 @@ def find_service_area_for_point(areas: List[Dict[str, Any]], lat: float, lng: fl
 def merge_fare_configs_with_vehicle_types(
     fare_configs: List[Dict[str, Any]],
     vehicle_types: List[Dict[str, Any]],
-    surge: float,
+    surge: Decimal,
 ) -> List[Dict[str, Any]]:
     """
     Join fare_configs to vehicle_types and apply surge.
@@ -99,12 +109,12 @@ def merge_fare_configs_with_vehicle_types(
             result.append(
                 {
                     "vehicle_type": vt,
-                    "base_fare": _fd(fare["base_fare"]),
-                    "per_km_rate": _fd(fare["per_km_rate"]),
-                    "per_minute_rate": _fd(fare["per_minute_rate"]),
-                    "minimum_fare": _fd(fare["minimum_fare"]),
-                    "booking_fee": _fd(fare["booking_fee"]),
-                    "surge_multiplier": _fd(surge),
+                    "base_fare": _round(_d(fare["base_fare"])),
+                    "per_km_rate": _round(_d(fare["per_km_rate"])),
+                    "per_minute_rate": _round(_d(fare["per_minute_rate"])),
+                    "minimum_fare": _round(_d(fare["minimum_fare"])),
+                    "booking_fee": _round(_d(fare["booking_fee"])),
+                    "surge_multiplier": _round(_d(surge)),
                 }
             )
     return result
@@ -147,7 +157,7 @@ class FareService:
         if not matching_area:
             return build_default_fares(vehicle_types)
 
-        surge = min(float(matching_area.get("surge_multiplier", 1.0)), SURGE_CAP)
+        surge = min(_d(matching_area.get("surge_multiplier", 1)), _d(SURGE_CAP))
         fare_configs = await self.db.get_rows(
             "fare_configs",
             {"service_area_id": matching_area["id"], "is_active": True},

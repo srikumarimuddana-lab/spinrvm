@@ -46,11 +46,6 @@ google-generativeai>=0.8.6
 google-api-python-client>=2.194.0
 google-cloud-storage>=3.4.1
 google-cloud-firestore>=2.27.0
-# grpcio and grpcio-status must stay version-aligned — a mismatch (e.g. 1.80 vs
-# 1.71) causes silent wrong-status deserialization in Firebase/Firestore error
-# paths.  Pin both to the same floor so pip-compile always resolves them together.
-grpcio>=1.80.0
-grpcio-status>=1.80.0
 
 
 # Utilities

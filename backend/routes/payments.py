@@ -77,7 +77,9 @@ async def get_or_create_stripe_customer(user_id: str, stripe_secret: str):
         # Re-read to use the authoritative value in case a concurrent replica wrote first.
         # (The loser's Stripe customer is unused but harmless; deduplication can run offline.)
         fresh = await db_supabase.get_user_by_id(user_id)
-        stripe_customer_id = (fresh or {}).get("stripe_customer_id", stripe_customer_id)
+        if not fresh:
+            raise HTTPException(status_code=404, detail="User not found during Stripe customer creation")
+        stripe_customer_id = fresh["stripe_customer_id"]
 
     return stripe_customer_id
 

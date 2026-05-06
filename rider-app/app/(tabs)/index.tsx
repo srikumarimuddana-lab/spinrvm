@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   Platform,
   Image,
+  Alert,
   Linking,
   AppState,
 } from 'react-native';
@@ -93,7 +94,17 @@ export default function HomeScreen() {
     }
 
     const { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== 'granted') return;
+    if (status !== 'granted') {
+      Alert.alert(
+        'Location Required',
+        'Spinr needs your location to show nearby drivers and confirm your pickup. Please enable location in Settings.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Open Settings', onPress: () => Linking.openSettings() },
+        ]
+      );
+      return;
+    }
 
     if (useCache) {
       try {
@@ -345,7 +356,17 @@ export default function HomeScreen() {
           onPress={async () => {
           if (!mapRef.current) return;
           const { status } = await Location.requestForegroundPermissionsAsync();
-          if (status !== 'granted') return;
+          if (status !== 'granted') {
+            Alert.alert(
+              'Location Required',
+              'Spinr needs your location to show nearby drivers and confirm your pickup. Please enable location in Settings.',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                { text: 'Open Settings', onPress: () => Linking.openSettings() },
+              ]
+            );
+            return;
+          }
           let loc: any;
           try {
             loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });

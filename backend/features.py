@@ -1185,12 +1185,12 @@ async def send_email(*, to: str, subject: str, body: str) -> bool:
                     "content": [{"type": "text/plain", "value": body}],
                 },
             )
-            logger.info(f"[EMAIL] SendGrid to={to} subject={subject!r} status={response.status_code}")
+            logger.info(f"[EMAIL] SendGrid sent subject={subject!r} status={response.status_code}")
             return response.status_code in (200, 201, 202)
     except Exception as e:
         logger.warning(f"[EMAIL] SendGrid failed: {e}")
 
-    logger.info(f"[EMAIL] (fallback log) to={to} subject={subject!r}")
+    logger.info(f"[EMAIL] (fallback log) subject={subject!r}")
     return False
 
 

@@ -163,7 +163,7 @@ async def send_receipt_email(ride: dict, rider: dict, driver: dict = None, tip: 
                     "content": [{"type": "text/html", "value": html}],
                 },
             )
-            logger.info(f"[EMAIL] SendGrid receipt sent to {email} (status: {response.status_code})")
+            logger.info(f"[EMAIL] SendGrid receipt sent for ride {ride.get('id')} (status: {response.status_code})")
             return response.status_code in (200, 201, 202)
     except ImportError:
         pass
@@ -171,5 +171,5 @@ async def send_receipt_email(ride: dict, rider: dict, driver: dict = None, tip: 
         logger.warning(f"[EMAIL] SendGrid failed: {e}")
 
     # Fallback: log only
-    logger.info(f"[EMAIL] Receipt for ride {ride.get('id')} → {email} | Total: ${total:.2f} (SendGrid not configured)")
+    logger.info(f"[EMAIL] Receipt for ride {ride.get('id')} | Total: ${total:.2f} (SendGrid not configured)")
     return False

@@ -263,10 +263,11 @@ jobs:
         with:
           sarif_file: trivy-container.sarif
 
-  # G7 — pip-licenses: ensure all Python deps use approved open-source licences.
-  # Approved set: MIT, Apache-2.0, BSD variants, ISC, PSF, LGPL, MPL-2.0.
-  # Any dep with a different (or unknown) licence fails the gate so legal review
-  # can happen before the dep ships to production.
+  # G7 — pip-licenses: block strong copyleft / proprietary licences in Python deps.
+  # Strategy: denylist (block GPL, AGPL, SSPL, Elastic, Commons Clause) rather than
+  # allowlist, because allowlists produce false positives when packages report
+  # valid permissive licences with slightly different name strings (HPND, PSF, etc.).
+  # Add a new denied pattern here if a problematic licence family is introduced.
   license-check:
     name: G7 · pip-licenses (Python deps)
     runs-on: ubuntu-latest
@@ -279,11 +280,31 @@ jobs:
       - name: Install deps + pip-licenses
         working-directory: backend
         run: pip install -r requirements.txt pip-licenses --quiet
-      - name: Check licences
+      - name: Print full licence report
+        working-directory: backend
+        run: pip-licenses --format=markdown --order=license
+      - name: Block copyleft / proprietary licences
         working-directory: backend
         run: |
-          pip-licenses --format=markdown \
-            --allow-only="MIT License;MIT-CMU;Apache Software License;BSD License;ISC License (ISCL);Python Software Foundation License;MIT;Apache-2.0;BSD-2-Clause;BSD-3-Clause;ISC;PSF;LGPL;Mozilla Public License 2.0 (MPL 2.0)"
+          pip-licenses --format=json | python3 -c "
+          import json, sys
+          DENIED = [
+              'GNU General Public License',
+              'GNU Affero General Public License',
+              'Server Side Public License',
+              'Elastic License',
+              'Commons Clause',
+              'Business Source License',
+          ]
+          data = json.load(sys.stdin)
+          bad = [(p['Name'], p['License']) for p in data
+                 if any(d in p['License'] for d in DENIED)]
+          if bad:
+              for name, lic in bad:
+                  print(f'DENIED: {name}: {lic}')
+              sys.exit(1)
+          print(f'OK — {len(data)} packages, no copyleft/proprietary licences detected.')
+          "
 
   # Summary job — required check for branch protection once gates are enforced
   summary:

@@ -453,8 +453,9 @@ async def _read_cached_row(key: str) -> Optional[Dict[str, Any]]:
         _metric_inc("spinr_cache_error_total", {"prefix": prefix, "op": "decode"})
         try:
             await redis_delete(key)
-        except Exception:  # noqa: S110
-            pass
+        except Exception:
+            # Non-fatal: best-effort eviction of corrupt cache entry; miss is acceptable
+            logger.warning("Failed to evict corrupt cache key %s", key, exc_info=True)
         return None
 
 

@@ -218,7 +218,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     # carry the claim. A present-but-wrong aud is always rejected immediately.
     #
     # S-3: Admin status is determined by the 'aud' claim, not the 'role' claim.
-    # Trusting payload.get("role") to route the token was a legacy path that
+    # Trusting payload.get("role") to route the token was the legacy path that
     # allowed a crafted mobile JWT with an admin role claim to enter the admin
     # code path. aud=JWT_AUD_ADMIN is the canonical signal; role claims in
     # admin tokens are still trusted (per CLAUDE.md) but only after aud is confirmed.
@@ -226,7 +226,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     _token_aud = payload.get("aud")
     # A token is admin only when aud explicitly says so, or (legacy: no aud present)
     # when both role and email admin claims are present. Once all tokens carry aud
-    # (after one 15-min TTL window) the legacy branch below is dead code.
+    # (after one 15-min TTL window) the legacy branch is unreachable.
     _is_admin_payload = _token_aud == JWT_AUD_ADMIN or (
         _token_aud is None and payload.get("role") in _admin_roles and bool(payload.get("email"))
     )

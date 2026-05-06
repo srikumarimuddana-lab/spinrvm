@@ -39,6 +39,11 @@ from schemas.corporate import (  # noqa: E402
 from settings_loader import get_app_settings  # noqa: E402
 from validators import sanitize_string, validate_email, validate_id, validate_phone  # noqa: E402
 
+try:
+    from ..utils.audit_logger import log_admin_action
+except ImportError:
+    from utils.audit_logger import log_admin_action  # type: ignore[no-redef]
+
 logger = logging.getLogger(__name__)
 
 # Alias for backward compatibility
@@ -226,6 +231,24 @@ async def kyb_review(
                 )
                 await update_corporate_stripe_customer_id(company_id=normalized_id, stripe_customer_id=customer.id)
 
+    try:
+        await log_admin_action(
+            admin=current_admin,
+            action="kyb_review",
+            resource="corporate_account",
+            resource_id=str(normalized_id),
+            details={
+                "decision": "approved" if decision.approve else "rejected",
+                "reviewer_id": current_admin["id"],
+                "note": decision.note,
+            },
+        )
+    except Exception as _ae:
+        logger.error(
+            f"Audit log failed for kyb_review {normalized_id}: {_ae}",
+            exc_info=True,
+        )
+
     return row
 
 
@@ -257,13 +280,28 @@ async def create_corporate_account(
 
     try:
         created_account = await insert_corporate_account(account.model_dump())
-        return created_account
     except Exception as e:
         logger.exception("Failed to create corporate account")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create corporate account.",
         ) from e
+
+    try:
+        await log_admin_action(
+            admin=current_admin,
+            action="create_corporate_account",
+            resource="corporate_account",
+            resource_id=str(created_account["id"]),
+            details={"company_name": created_account.get("name")},
+        )
+    except Exception as _ae:
+        logger.error(
+            f"Audit log failed for create_corporate_account {created_account.get('id')}: {_ae}",
+            exc_info=True,
+        )
+
+    return created_account
 
 
 @router.get("/{account_id}", response_model=CorporateAccountResponse)
@@ -332,13 +370,31 @@ async def update_corporate_account(
 
     try:
         updated_account = await db_update_corporate_account(normalized_id, update_data)
-        return updated_account
     except Exception as e:
         logger.exception("Failed to update corporate account")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update corporate account.",
         ) from e
+
+    try:
+        await log_admin_action(
+            admin=current_admin,
+            action="update_corporate_account",
+            resource="corporate_account",
+            resource_id=str(normalized_id),
+            details={
+                "changed_fields": list(update_data.keys()),
+                **{k: v for k, v in update_data.items() if k not in ("contact_email", "contact_phone")},
+            },
+        )
+    except Exception as _ae:
+        logger.error(
+            f"Audit log failed for update_corporate_account {normalized_id}: {_ae}",
+            exc_info=True,
+        )
+
+    return updated_account
 
 
 @router.delete("/{account_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -360,13 +416,28 @@ async def delete_corporate_account(account_id: str, current_admin: dict = Depend
 
     try:
         await db_delete_corporate_account(normalized_id)
-        return  # 204 No Content
     except Exception as e:
         logger.exception("Failed to delete corporate account")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to delete corporate account.",
         ) from e
+
+    try:
+        await log_admin_action(
+            admin=current_admin,
+            action="delete_corporate_account",
+            resource="corporate_account",
+            resource_id=str(normalized_id),
+            details={"company_name": existing_account.get("name")},
+        )
+    except Exception as _ae:
+        logger.error(
+            f"Audit log failed for delete_corporate_account {normalized_id}: {_ae}",
+            exc_info=True,
+        )
+
+    return  # 204 No Content
 
 
 @router.post(
@@ -413,5 +484,23 @@ async def change_company_status(
         wallet = await get_corporate_wallet_by_company(normalized_id)
         if wallet and wallet.get("auto_topup_enabled"):
             await update_corporate_wallet_config(wallet_id=wallet["id"], patch={"auto_topup_enabled": False})
+
+    try:
+        await log_admin_action(
+            admin=current_admin,
+            action="change_company_status",
+            resource="corporate_account",
+            resource_id=str(normalized_id),
+            details={
+                "old_status": current.get("status"),
+                "new_status": transition.status.value,
+                "reason": transition.reason if hasattr(transition, "reason") else None,
+            },
+        )
+    except Exception as _ae:
+        logger.error(
+            f"Audit log failed for change_company_status {normalized_id}: {_ae}",
+            exc_info=True,
+        )
 
     return row

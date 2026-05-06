@@ -540,10 +540,16 @@ async def create_payment_sheet(
         amount_cents = int(Decimal(str(body.amount)).quantize(Decimal("0.01")) * 100)
 
         # EphemeralKey lets the PaymentSheet modal manage the customer's
-        # saved cards. Must match the Stripe API version the SDK expects.
+        # saved cards. api_version must match the version configured on the
+        # Stripe webhook endpoint in the dashboard. We pin it to the version
+        # bundled with the installed SDK (stripe.api_version) so it stays in
+        # sync automatically on SDK upgrades.
+        # Current bundled version: 2026-04-22.dahlia (stripe==15.1.0)
+        # ACTION REQUIRED on SDK upgrade: verify the Stripe dashboard webhook
+        # endpoint API version matches stripe.api_version after upgrading.
         ephemeral_key = stripe.EphemeralKey.create(
             {"customer": customer_id},
-            api_version="2023-10-16",
+            api_version=stripe.api_version,
             api_key=stripe_secret,
         )
 

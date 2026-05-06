@@ -237,6 +237,12 @@ async def retry_failed_payments():
                 if claimed is None:
                     continue
 
+            else:
+                logger.warning(
+                    f"PaymentIntent {intent.id} in unexpected state {intent.status!r} for ride {ride_id}; skipping confirm"
+                )
+                continue
+
         except Exception as e:
             # CLAUDE.md: never warn-and-continue on payment errors.
             logger.error(f"Payment retry failed for ride {ride_id}: {e}", exc_info=True)

@@ -12,44 +12,47 @@
       "zustand": [
         "./node_modules/zustand"
       ],
-      "expo-secure-store": [
-        "./node_modules/expo-secure-store"
-      ],
-      "react-native": [
-        "./node_modules/react-native"
-      ],
-      "firebase/*": [
-        "./node_modules/firebase/*"
-      ],
-      "react-native-maps": [
-        "./node_modules/react-native-maps"
-      ],
-      "expo-constants": [
-        "./node_modules/expo-constants"
-      ],
-      "@react-native-community/netinfo": [
-        "./node_modules/@react-native-community/netinfo"
-      ],
       "zustand/middleware": [
         "./node_modules/zustand/middleware"
+      ],
+      "expo-secure-store": [
+        "./node_modules/expo-secure-store"
       ],
       "react": [
         "./node_modules/@types/react"
       ],
-      "@react-native-async-storage/async-storage": [
-        "./node_modules/@react-native-async-storage/async-storage"
+      "react-native": [
+        "./node_modules/react-native"
+      ],
+      "react-native-maps": [
+        "./node_modules/react-native-maps"
       ],
       "react-native-safe-area-context": [
         "./node_modules/react-native-safe-area-context"
       ],
-      "@expo/vector-icons": [
-        "./node_modules/@expo/vector-icons"
+      "@react-native-async-storage/async-storage": [
+        "./node_modules/@react-native-async-storage/async-storage"
+      ],
+      "@react-native-community/netinfo": [
+        "./node_modules/@react-native-community/netinfo"
+      ],
+      "firebase/*": [
+        "./node_modules/firebase/*"
+      ],
+      "expo-constants": [
+        "./node_modules/expo-constants"
       ],
       "expo-location": [
         "./node_modules/expo-location"
       ],
       "expo-router": [
         "./node_modules/expo-router"
+      ],
+      "@expo/vector-icons": [
+        "./node_modules/@expo/vector-icons"
+      ],
+      "@expo/vector-icons/*": [
+        "./node_modules/@expo/vector-icons/*"
       ],
       "@react-native-firebase/messaging": [
         "./node_modules/@react-native-firebase/messaging"

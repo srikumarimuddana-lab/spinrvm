@@ -13,6 +13,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     icon: './assets/images/icon.png',
     scheme: SCHEME,
     userInterfaceStyle: 'automatic',
+    // @ts-expect-error newArchEnabled is valid Expo config but not yet typed in ExpoConfig
     newArchEnabled: false, // disabled: pre-launch stability over perf; re-enable post go-live as a planned migration
     updates: {
         url: 'https://u.expo.dev/1ed02cf4-97cb-4678-b5a2-0881f89abaa8',
@@ -29,9 +30,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         image: './assets/images/icon.png',
         imageWidth: 160,
     },
-    ios: {
+    ios: ({
         supportsTablet: true,
-        // @ts-expect-error minimumOsVersion is valid Expo config but not yet in SDK 54 type defs
         minimumOsVersion: '16.0', // SDK 55 minimum; was 13.0 on SDK 54
         bundleIdentifier: BUNDLE_ID,
         googleServicesFile: './GoogleService-Info.plist',
@@ -135,7 +135,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
                 },
             ],
         },
-    },
+    } as any),
     android: {
         adaptiveIcon: {
             foregroundImage: './assets/images/adaptive-icon.png',

@@ -131,7 +131,7 @@ interface Promo {
   [key: string]: unknown;
 }
 
-interface ChatMessage {
+export interface ChatMessage {
   id: string;
   text: string;
   sender: string;

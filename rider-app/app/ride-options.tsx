@@ -577,11 +577,11 @@ function RideOptionsScreenContent() {
 
                 {/* Price — with promo struck-through */}
                 <View style={[styles.optionPriceContainer, !isAvailable && { opacity: 0.4 }]}>
-                  {appliedPromo && appliedPromo.discount_amount > 0 && isSelected ? (
+                  {appliedPromo && appliedPromo.discount_value > 0 && isSelected ? (
                     <View style={{ alignItems: 'flex-end' }}>
                       <Text style={styles.optionPriceStruck} allowFontScaling={false}>${parseFloat(estimate.total_fare || '0').toFixed(2)}</Text>
                       <Text style={styles.optionPriceDiscounted} allowFontScaling={false}>
-                        ${Math.max(0, parseFloat(estimate.total_fare || '0') - appliedPromo.discount_amount).toFixed(2)}
+                        ${Math.max(0, parseFloat(estimate.total_fare || '0') - appliedPromo.discount_value).toFixed(2)}
                       </Text>
                     </View>
                   ) : (

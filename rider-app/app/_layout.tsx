@@ -468,7 +468,7 @@ function RootLayoutInner({
   return (
     <ErrorBoundary>
       <OfflineBanner visible={isOffline} onVisibilityChange={setIsOffline} />
-      {(wsState === 'reconnecting' || wsState === 'connecting') && (
+      {wsState === 'reconnecting' && (
         <View style={{ backgroundColor: '#F59E0B', paddingVertical: 4, alignItems: 'center' }}>
           <Text style={{ color: '#fff', fontSize: 12, fontWeight: '600' }}>
             Reconnecting to ride updates…

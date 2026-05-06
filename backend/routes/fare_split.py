@@ -15,7 +15,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 try:
     from ..db import db
@@ -47,11 +47,13 @@ class CreateFareSplitRequest(BaseModel):
         ..., min_length=1, max_length=5
     )  # Product limit: max 5 participants by design
 
-    @validator("participant_phones", each_item=True)
-    def validate_phone(cls, v: str) -> str:
-        if not re.match(r"^\+1\d{10}$", v):
-            raise ValueError(f"Phone must be in +1XXXXXXXXXX format: {v}")
-        return v
+    @field_validator("participant_phones", mode="before")
+    @classmethod
+    def validate_phone(cls, value: List[str]) -> List[str]:
+        for v in value:
+            if not re.match(r"^\+1\d{10}$", v):
+                raise ValueError(f"Phone must be in +1XXXXXXXXXX format: {v}")
+        return value
 
 
 class RespondToSplitRequest(BaseModel):

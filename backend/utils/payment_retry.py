@@ -9,15 +9,17 @@ Replay-safety contract (CLAUDE.md, Background loops):
   same tick must NOT charge twice or fire double notifications. We rely
   on two layers:
 
-    1. Stripe idempotency_key on PaymentIntent.confirm — derived from
-       (ride_id, retry_count). Two replicas confirming the same intent
-       at the same retry_count produce the same key, so Stripe returns
-       the same response and no second charge happens.
+    1. Atomic claim via conditional update — each ride is claimed by
+       flipping ``payment_status`` from its current value to 'retrying'
+       while also asserting ``payment_retry_count`` equals the value
+       read. Only the replica whose UPDATE returns a row proceeds to
+       call Stripe; the other gets None back and skips the ride entirely.
 
-    2. Atomic claim via conditional update — bumping
-       ``payment_retry_count`` filters on the prior count, so only the
-       replica that won the increment proceeds to fire the rider /
-       driver push. The loser sees update_one return None and bails.
+    2. Stripe idempotency_key on PaymentIntent.confirm — derived from
+       (ride_id, retry_count). In the unlikely event two replicas both
+       win a claim race (e.g. concurrent reads before either write
+       commits), Stripe deduplicates the confirm call so no second
+       charge happens.
 """
 
 import asyncio
@@ -143,6 +145,7 @@ async def retry_failed_payments():
     for ride in rides:
         ride_id = ride["id"]
         retry_count = ride.get("payment_retry_count", 0)
+        current_status = ride.get("payment_status", "failed")
 
         if retry_count >= MAX_RETRIES:
             continue
@@ -156,6 +159,23 @@ async def retry_failed_payments():
         if not payment_intent_id or not stripe_secret:
             continue
 
+        # Atomic claim: only the replica that transitions payment_status →
+        # 'retrying' (while it is still the fetched status and retry_count
+        # is unchanged) proceeds. The other replica gets None back and skips,
+        # preventing duplicate Stripe charges and double push notifications.
+        claimed = await db.update_one(
+            "rides",
+            {"id": ride_id, "payment_status": current_status, "payment_retry_count": retry_count},
+            {
+                "$set": {
+                    "payment_status": "retrying",
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+            },
+        )
+        if claimed is None:
+            continue
+
         try:
             import stripe
 
@@ -163,11 +183,6 @@ async def retry_failed_payments():
             intent = stripe.PaymentIntent.retrieve(payment_intent_id, api_key=stripe_secret)
 
             if intent.status == "succeeded":
-                # Already succeeded (webhook may have missed it) — mark paid but do
-                # NOT increment retry_count, otherwise the `retry_count + 1 >= MAX`
-                # check at the bottom of this loop would fire a false "payment
-                # failed" push to the rider. Setting status='paid' is idempotent
-                # so two replicas writing the same value is harmless.
                 await db.update_one(
                     "rides",
                     {"id": ride_id},
@@ -182,18 +197,15 @@ async def retry_failed_payments():
                 continue
 
             elif intent.status in ("requires_payment_method", "requires_confirmation"):
-                # Idempotency key dedupes the confirm call when two replicas
-                # both pick up the same ride at the same retry_count, so
-                # Stripe returns the cached response instead of charging twice.
+                attempt = retry_count + 1
                 stripe.PaymentIntent.confirm(
                     payment_intent_id,
                     api_key=stripe_secret,
                     idempotency_key=f"retry-confirm-{ride_id}-{retry_count}",
                 )
-                attempt = retry_count + 1
-                claimed = await db.update_one(
+                await db.update_one(
                     "rides",
-                    {"id": ride_id, "payment_retry_count": retry_count},
+                    {"id": ride_id},
                     {
                         "$set": {
                             "payment_status": "processing",
@@ -202,10 +214,7 @@ async def retry_failed_payments():
                         }
                     },
                 )
-                if claimed is None:
-                    continue
                 logger.info(f"Payment retry: ride {ride_id} retry #{attempt} submitted")
-                # Notify the driver so they know a retry is in progress (13-9)
                 driver_id = ride.get("driver_id")
                 if driver_id:
                     try:
@@ -225,16 +234,17 @@ async def retry_failed_payments():
                         logger.debug(f"Payment retry push to driver failed: {push_err}")
 
             elif intent.status == "canceled":
-                # Cannot retry a cancelled intent — pin count to MAX
-                # under a claim so the rider notification below fires
-                # exactly once.
-                claimed = await db.update_one(
+                await db.update_one(
                     "rides",
-                    {"id": ride_id, "payment_retry_count": retry_count},
-                    {"$set": {"payment_retry_count": MAX_RETRIES}},
+                    {"id": ride_id},
+                    {
+                        "$set": {
+                            "payment_status": "failed",
+                            "payment_retry_count": MAX_RETRIES,
+                            "updated_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                    },
                 )
-                if claimed is None:
-                    continue
 
             else:
                 logger.warning(
@@ -245,35 +255,30 @@ async def retry_failed_payments():
         except Exception as e:
             # CLAUDE.md: never warn-and-continue on payment errors.
             logger.error(f"Payment retry failed for ride {ride_id}: {e}", exc_info=True)
-            # Atomic claim on the count bump — only the replica that won
-            # the race fires the rider failure push below.
-            claimed = await db.update_one(
+            new_count = retry_count + 1
+            await db.update_one(
                 "rides",
-                {"id": ride_id, "payment_retry_count": retry_count},
+                {"id": ride_id},
                 {
                     "$set": {
-                        "payment_retry_count": retry_count + 1,
+                        "payment_status": "failed",
+                        "payment_retry_count": new_count,
                         "updated_at": datetime.now(timezone.utc).isoformat(),
                     }
                 },
             )
-            if claimed is None:
-                continue
-
-        # Notify rider on final failure — only the replica that won the
-        # bump above reaches here, so the push fires once per ride.
-        if retry_count + 1 >= MAX_RETRIES:
-            rider_id = ride.get("rider_id")
-            if rider_id:
-                try:
-                    await send_push_notification(
-                        rider_id,
-                        "Payment failed",
-                        "We couldn't process payment for your ride. Please update your payment method.",
-                        data={"type": "payment_failed", "ride_id": ride_id},
-                    )
-                except Exception as push_err:
-                    logger.debug(f"Payment failure push notification failed: {push_err}")
+            if new_count >= MAX_RETRIES:
+                rider_id = ride.get("rider_id")
+                if rider_id:
+                    try:
+                        await send_push_notification(
+                            rider_id,
+                            "Payment failed",
+                            "We couldn't process payment for your ride. Please update your payment method.",
+                            data={"type": "payment_failed", "ride_id": ride_id},
+                        )
+                    except Exception as push_err:
+                        logger.debug(f"Payment failure push notification failed: {push_err}")
 
 
 async def payment_retry_loop():

@@ -25,6 +25,7 @@ try:
     from ..db import db
     from ..features import send_push_notification
     from .datetime_utils import parse_iso_utc
+    from .redis_client import redis_set_nx
 except ImportError:
     from db import db
     from features import send_push_notification
@@ -112,6 +113,12 @@ async def _send_reminder(ride: dict):
 
 async def check_scheduled_rides():
     """Check for scheduled rides that need dispatching or reminders."""
+    try:
+        if not await redis_set_nx("spinr:scheduled_rides:lock", "1", ttl=90):
+            return
+    except Exception as _lock_err:
+        logger.warning(f"scheduled_rides: Redis leader lock unavailable ({_lock_err}), proceeding without lock")
+
     now = datetime.now(timezone.utc)
     ten_min_from_now = now + timedelta(minutes=10)
 

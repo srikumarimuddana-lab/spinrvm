@@ -238,11 +238,11 @@ async def payment_retry_loop():
         try:
             await retry_failed_payments()
         except Exception as e:
-            logger.error(f"Payment retry loop error: {e}")
+            logger.error(f"Payment retry loop error: {e}", exc_info=True)
         try:
             await retry_stuck_payouts()
         except Exception as e:
-            logger.error(f"Payout retry loop error: {e}")
+            logger.error(f"Payout retry loop error: {e}", exc_info=True)
         _record_heartbeat("payment_retry (5min)")
         # B-P3-2: per-tick ±10% jitter so replicas don't tick in lockstep
         # and create a thundering herd against Stripe + Supabase. Tested

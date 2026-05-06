@@ -370,20 +370,29 @@ export default function RootLayout() {
   // R-P1-29: Killed-state deep linking — check if the app was opened by tapping
   // a notification while it was fully killed. expo-notifications.getInitialNotificationResponseAsync()
   // returns the tapped notification response in that case.
+  // The routing call is deferred 100ms to ensure the Expo Router Stack is fully
+  // mounted before navigation is attempted — calls fired before hydration are
+  // silently dropped.
   useEffect(() => {
+    // Only route from notification AFTER auth is initialized and app is ready
     if (!isAuthInitialized || !canUseNotifications || !Notifications) return;
+    let timer: ReturnType<typeof setTimeout>;
     (async () => {
       try {
         const response = await Notifications.getInitialNotificationResponseAsync?.();
         if (response?.notification?.request?.content?.data) {
           const data = response.notification.request.content.data as Record<string, string>;
           console.log('[Push] Killed-state notification tap — routing from data:', data);
-          routeFromNotificationData(data);
+          // Add a small defer to ensure Stack is mounted
+          timer = setTimeout(() => {
+            routeFromNotificationData(data);
+          }, 100);
         }
       } catch (e) {
         console.log('[Push] getInitialNotification failed:', e);
       }
     })();
+    return () => clearTimeout(timer);
   }, [isAuthInitialized]);
 
   // Clear ride session data when the user logs out so a subsequent login

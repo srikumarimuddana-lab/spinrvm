@@ -1829,6 +1829,18 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
+            # Notify rider their payment was declined
+            rider_id = ride.get("rider_id")
+            if rider_id:
+                try:
+                    await send_push_notification(
+                        rider_id,
+                        "Payment failed",
+                        "Your payment method was declined. Please update your payment method in the app.",
+                        data={"type": "payment_failed", "ride_id": ride_id, "deeplink": "/wallet"},
+                    )
+                except Exception as _push_err:
+                    logger.debug(f"Payment failure push to rider failed: {_push_err}")
             raise HTTPException(
                 status_code=402,
                 detail={
@@ -1856,6 +1868,18 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
+            # Notify rider their payment failed
+            rider_id = ride.get("rider_id")
+            if rider_id:
+                try:
+                    await send_push_notification(
+                        rider_id,
+                        "Payment failed",
+                        "Your payment method was declined. Please update your payment method in the app.",
+                        data={"type": "payment_failed", "ride_id": ride_id, "deeplink": "/wallet"},
+                    )
+                except Exception as _push_err:
+                    logger.debug(f"Payment failure push to rider failed: {_push_err}")
             raise HTTPException(
                 status_code=402,
                 detail={

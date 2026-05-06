@@ -1,8 +1,8 @@
 """Phase 5 contract test — money fields serialize as Decimal strings.
 
 Regression guard for the Phase 1 wire-format fix (PR #324). Any future
-contributor who removes `class Config: json_encoders = {Decimal: str}`
-from a money-bearing Pydantic model will trip this test.
+contributor who removes the `DecimalStr` / `PlainSerializer` annotation
+from a money-bearing Pydantic field will trip this test.
 """
 
 import json
@@ -17,9 +17,9 @@ except ImportError:
 
 
 def _model_to_json_dict(model) -> dict:
-    """Round-trip a Pydantic v1 model through .json() to mirror what FastAPI
-    sends on the wire (jsonable_encoder honours model Config json_encoders)."""
-    return json.loads(model.json())
+    """Round-trip a Pydantic model through .model_dump_json() to mirror what
+    FastAPI sends on the wire (PlainSerializer annotations are honoured)."""
+    return json.loads(model.model_dump_json())
 
 
 @pytest.mark.unit

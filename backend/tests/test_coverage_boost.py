@@ -921,3 +921,240 @@ def _async_iter(items):
             yield item
 
     return _gen()
+
+
+# ===========================================================================
+# utils/rate_limiter.py — rate_limit_exceeded_handler exception branch
+# ===========================================================================
+
+
+class TestRateLimitExceededHandler:
+    """Cover the exc.limit.limit.get_expiry() failure path (lines 255-259)."""
+
+    def test_handler_uses_default_when_exc_is_malformed(self):
+
+        from backend.utils.rate_limiter import rate_limit_exceeded_handler
+
+        req = MagicMock()
+        req.url.path = "/api/test"
+        req.method = "POST"
+        req.headers = {}
+        req.client = MagicMock()
+        req.client.host = "1.2.3.4"
+
+        # exc.limit is a MagicMock whose .limit.get_expiry() raises AttributeError
+        exc = MagicMock()
+        exc.limit.limit.get_expiry.side_effect = AttributeError("no get_expiry")
+
+        result = asyncio.run(rate_limit_exceeded_handler(req, exc))
+        assert result.status_code == 429
+
+    def test_handler_returns_json_with_retry_after(self):
+        import json
+
+        from backend.utils.rate_limiter import rate_limit_exceeded_handler
+
+        req = MagicMock()
+        req.url.path = "/api/v1/auth/otp"
+        req.method = "POST"
+        req.headers = {}
+        req.client = MagicMock()
+        req.client.host = "10.0.0.1"
+
+        # Well-formed limit object
+        exc = MagicMock()
+        exc.limit.limit.get_expiry.return_value = 60
+        exc.limit.limit.amount = 5
+
+        result = asyncio.run(rate_limit_exceeded_handler(req, exc))
+        body = json.loads(result.body)
+        assert result.status_code == 429
+        assert "retry_after" in body
+        assert body["error"] == "rate_limit_exceeded"
+
+
+# ===========================================================================
+# utils/subprocessor_audit.py — run_audit edge cases + main()
+# ===========================================================================
+
+
+class TestSubprocessorAuditRunAudit:
+    def _mock_path(self, exists=True, text=None):
+        m = MagicMock()
+        m.exists.return_value = exists
+        if text is not None:
+            m.read_text.return_value = text
+        return m
+
+    def _sa_mod(self):
+        import sys
+
+        from backend.utils import subprocessor_audit as sa
+
+        # The module may be cached under bare key "utils.subprocessor_audit"
+        # (conftest adds backend/ to sys.path first) OR under the qualified
+        # key.  Determine which one to patch.
+        if "utils.subprocessor_audit" in sys.modules:
+            return sa, "utils.subprocessor_audit"
+        return sa, "backend.utils.subprocessor_audit"
+
+    def test_returns_2_when_baseline_missing(self):
+        sa, mod_key = self._sa_mod()
+        mp = self._mock_path(exists=False)
+        with patch(f"{mod_key}.BASELINE_PATH", mp):
+            result = sa.run_audit()
+        assert result == 2
+
+    def test_returns_2_when_baseline_not_parseable(self):
+        sa, mod_key = self._sa_mod()
+        mp = self._mock_path(exists=True, text="not json {{{{")
+        with patch(f"{mod_key}.BASELINE_PATH", mp):
+            result = sa.run_audit()
+        assert result == 2
+
+    def test_skips_vendor_with_no_url(self):
+        import json
+
+        sa, mod_key = self._sa_mod()
+        baseline = {"vendors": {"acme": {"name": "Acme Corp"}}}
+        mp = self._mock_path(exists=True, text=json.dumps(baseline))
+        with patch(f"{mod_key}.BASELINE_PATH", mp):
+            result = sa.run_audit(dry_run=True)
+        assert result == 0
+
+    def test_no_change_path(self):
+        import hashlib
+        import json
+
+        sa, mod_key = self._sa_mod()
+        content = "page content"
+        h = hashlib.sha256(content.encode()).hexdigest()
+        baseline = {
+            "vendors": {
+                "stripe": {
+                    "name": "Stripe",
+                    "subprocessor_url": "https://stripe.com/subs",
+                    "content_hash": h,
+                    "etag": None,
+                }
+            }
+        }
+        mp = self._mock_path(exists=True, text=json.dumps(baseline))
+        with (
+            patch(f"{mod_key}.BASELINE_PATH", mp),
+            patch(f"{mod_key}._fetch_page", return_value=(content, None)),
+        ):
+            result = sa.run_audit(dry_run=True)
+        assert result == 0
+
+
+class TestSubprocessorAuditMain:
+    def test_main_exits_with_audit_result(self):
+        from backend.utils import subprocessor_audit as sa
+
+        with (
+            patch("sys.argv", ["subprocessor_audit"]),
+            patch.object(sa, "run_audit", return_value=0),
+            patch("sys.exit") as mock_exit,
+        ):
+            sa.main()
+        mock_exit.assert_called_once_with(0)
+
+    def test_main_passes_dry_run_flag(self):
+        from backend.utils import subprocessor_audit as sa
+
+        with (
+            patch("sys.argv", ["subprocessor_audit", "--dry-run"]),
+            patch.object(sa, "run_audit", return_value=0) as mock_run,
+            patch("sys.exit"),
+        ):
+            sa.main()
+        mock_run.assert_called_once_with(dry_run=True)
+
+
+# ===========================================================================
+# utils/redis_client.py — _get_redis direct coverage
+# ===========================================================================
+
+
+class TestGetRedisDirect:
+    """Test _get_redis() directly to cover cache-hit and creation paths."""
+
+    def test_returns_none_when_no_redis_url(self):
+        import backend.utils.redis_client as rc
+
+        saved = rc._redis
+        saved_url = rc._redis_url
+        try:
+            rc._redis = None
+            rc._redis_url = None
+            with patch.dict(__import__("os").environ, {}, clear=False):
+                orig = __import__("os").environ.pop("REDIS_URL", None)
+                try:
+                    result = asyncio.run(rc._get_redis())
+                finally:
+                    if orig is not None:
+                        __import__("os").environ["REDIS_URL"] = orig
+        finally:
+            rc._redis = saved
+            rc._redis_url = saved_url
+        assert result is None
+
+    def test_returns_cached_client_on_second_call(self):
+        import os
+
+        import backend.utils.redis_client as rc
+
+        mock_client = MagicMock()
+        saved = rc._redis
+        saved_url = rc._redis_url
+        try:
+            rc._redis = mock_client
+            rc._redis_url = "redis://cached:6379"
+            with patch.dict(os.environ, {"REDIS_URL": "redis://cached:6379"}):
+                result = asyncio.run(rc._get_redis())
+        finally:
+            rc._redis = saved
+            rc._redis_url = saved_url
+        assert result is mock_client
+
+    def test_creates_new_client_when_not_cached(self):
+        import os
+
+        import backend.utils.redis_client as rc
+
+        mock_client = MagicMock()
+        saved = rc._redis
+        saved_url = rc._redis_url
+        try:
+            rc._redis = None
+            rc._redis_url = None
+            with (
+                patch.dict(os.environ, {"REDIS_URL": "redis://newhost:6379"}),
+                patch("redis.asyncio.from_url", return_value=mock_client),
+            ):
+                result = asyncio.run(rc._get_redis())
+        finally:
+            rc._redis = saved
+            rc._redis_url = saved_url
+        assert result is mock_client
+
+    def test_returns_none_on_connection_error(self):
+        import os
+
+        import backend.utils.redis_client as rc
+
+        saved = rc._redis
+        saved_url = rc._redis_url
+        try:
+            rc._redis = None
+            rc._redis_url = None
+            with (
+                patch.dict(os.environ, {"REDIS_URL": "redis://badhost:6379"}),
+                patch("redis.asyncio.from_url", side_effect=Exception("connection refused")),
+            ):
+                result = asyncio.run(rc._get_redis())
+        finally:
+            rc._redis = saved
+            rc._redis_url = saved_url
+        assert result is None

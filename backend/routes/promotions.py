@@ -9,7 +9,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 try:
     from .. import db_supabase
@@ -56,11 +56,12 @@ class CreatePromoCodeRequest(BaseModel):
     is_active: bool = True
     description: Optional[str] = None
 
-    @validator("discount_value")
-    def validate_discount_value(cls, v, values):
-        if values.get("discount_type") == "percentage" and v > 100:
+    @field_validator("discount_value")
+    @classmethod
+    def validate_discount_value(cls, value, info):
+        if info.data.get("discount_type") == "percentage" and value > 100:
             raise ValueError("Percentage discount cannot exceed 100")
-        return v
+        return value
 
 
 class UpdatePromoCodeRequest(BaseModel):

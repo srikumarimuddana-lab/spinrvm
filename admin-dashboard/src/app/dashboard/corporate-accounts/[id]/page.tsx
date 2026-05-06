@@ -144,17 +144,30 @@ export default function CompanyDetailPage() {
         }
     }, [company?.status, loadWallet]);
 
+    const MAX_SINGLE_ADJUSTMENT = 10000; // $10,000 CAD safety cap
+
     const handleAdjust = async () => {
         if (!id) return;
         const raw = window.prompt("Adjustment amount (signed CAD):");
         if (!raw) return;
-        const amount = parseFloat(raw);
-        if (!Number.isFinite(amount) || amount === 0) return;
+        const adjustmentAmount = parseFloat(raw);
+        if (isNaN(adjustmentAmount) || adjustmentAmount === 0) {
+            toast({ title: "Invalid amount", description: "Adjustment amount cannot be zero", variant: "destructive" });
+            return;
+        }
+        if (Math.abs(adjustmentAmount) > MAX_SINGLE_ADJUSTMENT) {
+            toast({
+                title: "Amount exceeds limit",
+                description: `Single adjustment cannot exceed $${MAX_SINGLE_ADJUSTMENT.toFixed(2)}`,
+                variant: "destructive",
+            });
+            return;
+        }
         const notes = window.prompt("Reason (required):") ?? "";
         if (!notes.trim()) return;
         setWalletBusy(true);
         try {
-            await walletAdjust(id, { amount, notes: notes.trim() });
+            await walletAdjust(id, { amount: adjustmentAmount, notes: notes.trim() });
             await loadWallet();
         } catch (e: any) {
             toast({ title: "Adjustment failed", description: e?.message, variant: "destructive" });

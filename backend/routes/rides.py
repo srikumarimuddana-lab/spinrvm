@@ -946,7 +946,7 @@ async def create_ride(body: CreateRideRequest, request: Request = None, current_
             rider_id=current_user["id"],
             estimated_fare=total_fare,
             ride_type="standard",
-            pickup_time=datetime.utcnow(),
+            pickup_time=datetime.now(timezone.utc),
         )
         if not _policy_result.allowed:
             raise HTTPException(
@@ -1343,12 +1343,12 @@ async def get_ride(ride_id: str, request: Request = None, current_user: dict = D
             get_app_settings = None  # type: ignore
 
     free_cancel_window = 120
-    cancellation_fee_amount = 3.0
+    cancellation_fee_amount = Decimal("3.0")
     if get_app_settings:
         try:
             settings = await get_app_settings()
             free_cancel_window = int(settings.get("free_cancel_window_seconds", 120))
-            cancellation_fee_amount = float(settings.get("cancellation_fee", 3.0))
+            cancellation_fee_amount = Decimal(str(settings.get("cancellation_fee", "3.0")))
         except Exception:
             # Non-fatal: fall back to hardcoded defaults if settings fetch fails
             logger.error("Failed to fetch app settings for cancellation config", exc_info=True)
@@ -2278,6 +2278,25 @@ async def cancel_ride_rider(ride_id: str, request: Request = None, current_user:
                             "created_at": datetime.now(timezone.utc).isoformat(),
                         },
                     )
+                    try:
+                        await db_supabase.insert_one(
+                            "audit_logs",
+                            {
+                                "id": str(uuid.uuid4()),
+                                "action": "cancellation_fee_charged",
+                                "entity_type": "rides",
+                                "entity_id": ride_id,
+                                "actor_id": current_user["id"],
+                                "details": {
+                                    "fee_amount": _f(fee_dec),
+                                    "driver_id": driver_id,
+                                    "ride_status_at_cancel": ride.get("status"),
+                                },
+                                "created_at": datetime.now(timezone.utc).isoformat(),
+                            },
+                        )
+                    except Exception:
+                        logger.warning("audit_log write failed for cancellation_fee_charged", exc_info=True)
                 await send_push_notification(
                     driver_user_id,
                     title="Cancellation fee earned",
@@ -2560,6 +2579,12 @@ async def trigger_emergency(
             )
     except Exception as e:
         logger.error(f"SOS emergency contact notification failed: {e}", exc_info=True)
+        return {
+            "success": True,
+            "incident_id": incident["id"],
+            "contacts_notified": 0,
+            "notification_warning": "Emergency contacts could not be reached — please call them directly.",
+        }
 
     return {
         "success": True,

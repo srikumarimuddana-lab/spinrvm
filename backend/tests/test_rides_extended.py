@@ -45,7 +45,7 @@ def _ride(status: str = "completed", **extra):
         "vehicle_type_id": "sedan",
         "shared_trip_token": None,
         "ride_completed_at": datetime.now(timezone.utc).isoformat(),
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
         **extra,
     }
 

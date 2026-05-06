@@ -1138,14 +1138,17 @@ async def get_active_ride(request: Request, current_user: dict = Depends(get_cur
     # Then check for active rides
     active_statuses = ["searching", "driver_assigned", "driver_accepted", "driver_arrived", "in_progress"]
 
-    # Check for unpaid completed ride first (must pay before new ride)
+    # Check for unpaid completed ride first (must pay before new ride).
+    # ``waived_admin`` is the terminal value written by admin force-complete
+    # (admin/rides.py admin_complete_ride) — no real charge happened, but
+    # the rider must not be trapped on the payment screen.
     unpaid_ride = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows(
             "rides",
             {
                 "rider_id": current_user["id"],
                 "status": "completed",
-                "payment_status": {"$ne": "paid"},
+                "payment_status": {"$nin": ["paid", "waived_admin"]},
             },
             limit=1,
         )
@@ -1661,6 +1664,7 @@ async def process_payment(ride_id: str, req: ProcessPaymentRequest, current_user
                     amount=-_f(_master_debit),
                     notes=f"Ride fallback debit {ride_id}",
                     actor_user_id=ride.get("rider_id", "system"),
+                    floor=0.0,
                 )
             except Exception as _master_err:
                 # Compensate: re-grant the allowance that was debited in step 5.
@@ -2054,6 +2058,9 @@ async def rate_driver(ride_id: str, rating_data: RideRatingRequest, current_user
     if not ride or ride.get("rider_id") != current_user["id"]:
         raise HTTPException(status_code=404, detail="Ride not found or unauthorized")
 
+    if ride.get("status") != "completed":
+        raise HTTPException(status_code=400, detail="Ride must be completed before rating")
+
     # Save rating using existing columns (rider_rating = rating rider gave the driver)
     await db_supabase.update_ride(
         ride_id,
@@ -2078,15 +2085,17 @@ async def rate_driver(ride_id: str, rating_data: RideRatingRequest, current_user
     driver = await db_supabase.get_driver_by_id(driver_id)
     if driver:
         old_count = int(driver.get("total_ratings") or 0)
-        old_avg = float(driver.get("rating") or 0)
+        old_avg = Decimal(str(driver.get("rating") or 0))
         new_count = old_count + 1
-        new_avg = round((old_avg * old_count + float(rating_data.rating)) / new_count, 2)
+        new_avg = ((old_avg * old_count + Decimal(str(rating_data.rating))) / new_count).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
         await db_supabase.update_one(
             "drivers",
             {"id": driver_id},
             {
-                "rating": new_avg,
-                "average_rating": new_avg,
+                "rating": float(new_avg),
+                "average_rating": float(new_avg),
                 "total_ratings": new_count,
             },
         )

@@ -477,12 +477,6 @@ async def add_card(request: Request = None, current_user: dict = Depends(get_cur
             message_key=ErrorKeys.PAYMENT_METHOD_INVALID,
             action_hint="Add a different card",
         ) from e
-    except stripe.error.CardError as e:
-        raise PaymentMethodInvalidException(
-            message=e.user_message or "Card declined",
-            message_key=ErrorKeys.PAYMENT_METHOD_INVALID,
-            action_hint="Add a different card",
-        ) from e
     except stripe.error.StripeError as e:
         logger.error(f"Stripe API error on add-card: {e}", exc_info=True)
         raise HTTPException(status_code=502, detail="Payment service unavailable. Please try again.") from e

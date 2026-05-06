@@ -302,6 +302,17 @@ function RideCompletedScreenContent() {
             <Text style={styles.chatBtnText}>Message Driver</Text>
             <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
           </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.viewReceiptBtn}
+            onPress={() => router.push(`/receipt/${rideId}` as any)}
+            accessibilityRole="button"
+            accessibilityLabel="View receipt"
+            accessibilityHint="Opens the detailed fare breakdown for this ride"
+          >
+            <Ionicons name="document-text-outline" size={18} color={colors.text} />
+            <Text style={styles.viewReceiptBtnText}>View Receipt</Text>
+            <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
+          </TouchableOpacity>
         </View>
 
         {/* Route Map */}
@@ -626,6 +637,12 @@ function createStyles(colors: ThemeColors) {
       borderWidth: 1, borderColor: '#DBEAFE',
     },
     chatBtnText: { flex: 1, fontSize: 14, fontWeight: '600', color: '#3B82F6' },
+    viewReceiptBtn: {
+      flexDirection: 'row', alignItems: 'center', gap: 8, width: '100%',
+      backgroundColor: colors.surfaceLight, borderRadius: 14, padding: 14,
+      borderWidth: 1, borderColor: colors.border,
+    },
+    viewReceiptBtnText: { flex: 1, fontSize: 14, fontWeight: '600', color: colors.text },
 
     // Route Map
     mapCard: {

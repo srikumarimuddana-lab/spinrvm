@@ -23,8 +23,6 @@ try:
     from ..features import send_push_notification
     from ..settings_loader import get_app_settings
     from .datetime_utils import parse_iso_utc
-    from .metrics import inc as _metric_inc
-    from .metrics import set_gauge as _metric_gauge
 except ImportError:
     from db import db
     from features import send_push_notification
@@ -121,28 +119,52 @@ async def retry_failed_payments():
         try:
             import stripe
 
-            # Attempt to confirm the payment intent
-            intent = stripe.PaymentIntent.retrieve(payment_intent_id, api_key=stripe_secret)
+            # --- Step 1: Check Stripe-side status before attempting any charge.
+            # This prevents double-charging when a Stripe charge succeeded but
+            # the subsequent DB write failed (network blip), leaving the DB row
+            # as 'failed' while Stripe already captured the funds.
+            _stripe_status: str | None = None
+            try:
+                logger.debug(f"[RETRY] Retrieving PI {payment_intent_id} from Stripe for ride {ride_id}")
+                intent = stripe.PaymentIntent.retrieve(payment_intent_id, api_key=stripe_secret)
+                _stripe_status = intent.status
+            except Exception as retrieve_err:
+                # Fail open: if we can't reach Stripe to check, proceed with
+                # the retry attempt rather than silently skipping it.
+                logger.warning(
+                    f"[RETRY] Could not retrieve PI {payment_intent_id} from Stripe "
+                    f"(ride {ride_id}); proceeding with retry attempt: {retrieve_err}"
+                )
 
-            if intent.status == "succeeded":
-                # Already succeeded (webhook may have missed it)
+            if _stripe_status in ("succeeded", "processing"):
+                # Stripe already processed this payment — the DB row is stale.
+                # Reconcile locally without issuing a second charge.
+                logger.warning(
+                    f"[RETRY] PI {payment_intent_id} already {_stripe_status} on Stripe "
+                    f"— updating DB to reflect reality, skipping charge (ride {ride_id})"
+                )
                 await db.update_one(
                     "rides",
                     {"id": ride_id},
                     {
                         "$set": {
                             "payment_status": "paid",
-                            "payment_retry_count": retry_count + 1,
                             "updated_at": datetime.now(timezone.utc).isoformat(),
                         }
                     },
                 )
-                logger.info(f"Payment retry: ride {ride_id} already paid (intent succeeded)")
+                # Skip to next ride — no retry needed.
+                continue
 
-            elif intent.status in ("requires_payment_method", "requires_confirmation"):
-                # Try to confirm again
-                stripe.PaymentIntent.confirm(payment_intent_id, api_key=stripe_secret)
+            elif _stripe_status in ("requires_payment_method", "requires_confirmation") or _stripe_status is None:
+                # Either Stripe confirms the payment needs a retry, or the
+                # retrieve failed (fail-open): attempt to confirm.
                 attempt = retry_count + 1
+                stripe.PaymentIntent.confirm(
+                    payment_intent_id,
+                    api_key=stripe_secret,
+                    idempotency_key=f"retry-{ride_id}-{attempt}",
+                )
                 await db.update_one(
                     "rides",
                     {"id": ride_id},
@@ -174,8 +196,8 @@ async def retry_failed_payments():
                     except Exception as push_err:
                         logger.debug(f"Payment retry push to driver failed: {push_err}")
 
-            elif intent.status == "canceled":
-                # Cannot retry a cancelled intent
+            elif _stripe_status == "canceled":
+                # Cannot retry a cancelled intent; exhaust retries to stop polling.
                 await db.update_one(
                     "rides",
                     {"id": ride_id},
@@ -183,7 +205,11 @@ async def retry_failed_payments():
                 )
 
         except Exception as e:
-            logger.error(f"Payment retry failed for ride {ride_id}: {e}", exc_info=True)
+            logger.error(
+                f"Payment retry failed for ride {ride_id}: {e}",
+                exc_info=True,
+                extra={"domain": "payments", "ride_id": ride_id},
+            )
             await db.update_one(
                 "rides",
                 {"id": ride_id},

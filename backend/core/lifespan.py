@@ -277,6 +277,17 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to import Stripe reconciliation loop: {e}")
 
+    # T4A annual issuance — runs on the last day of February each year at
+    # 08:00 UTC. Identifies drivers with ≥ $500 prior-year earnings, sends
+    # each a push notification that their T4A slip is available, and logs
+    # the batch to audit_logs (CRA regulatory requirement, P4-7).
+    try:
+        from utils.t4a_annual_job import t4a_annual_job_loop
+
+        _spawn("t4a_annual_job (yearly Feb 28)", t4a_annual_job_loop)
+    except Exception as e:
+        logger.error(f"Failed to import T4A annual job loop: {e}", exc_info=True)
+
     # Loop watchdog — scans heartbeats every 5 minutes and posts a
     # Slack-compatible alert when any loop has gone stale.  No-op when
     # ALERT_WEBHOOK_URL is unset.
@@ -293,6 +304,7 @@ async def lifespan(app: FastAPI):
             "presence_sweeper (60s)",
             "retention_purge (24h)",
             "stripe_reconcile (24h)",
+            "t4a_annual_job (yearly Feb 28)",
         ]
     )
 

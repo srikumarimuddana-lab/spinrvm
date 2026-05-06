@@ -91,7 +91,7 @@ export interface Driver {
   insurance_expiry_date?: string;
   background_check_expiry_date?: string;
   vehicle_inspection_expiry_date?: string;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
 export type DriverOnboardingStatus =
@@ -130,6 +130,14 @@ interface RefreshTokenResponse {
   token: string;
   refresh_token: string;
   expires_in: number;
+  csrf_token?: string | null;
+}
+
+// Shape of Axios-style errors returned by the backend API. Only the
+// properties we actually access are listed; extras are ignored.
+interface ApiError {
+  response?: { status?: number; data?: { detail?: string } };
+  message?: string;
 }
 
 // Payload accepted by POST /drivers/register — all fields are optional;
@@ -202,20 +210,21 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     if (!storedRefresh) return false;
     try {
       const res = await api.post('/auth/refresh', { refresh_token: storedRefresh });
-      const { token, refresh_token: newRefresh, expires_in, csrf_token } = res.data as any;
+      const { token, refresh_token: newRefresh, expires_in, csrf_token } = res.data as RefreshTokenResponse;
       await get().setTokens(token, newRefresh, expires_in, csrf_token);
       return true;
-    } catch (e: any) {
+    } catch (e: unknown) {
       // Only wipe the session when the server explicitly rejects the refresh
       // token (401). Network errors, timeouts, and 5xx are transient — keeping
       // the refresh token lets the next app launch / request try again instead
       // of forcing the user back to the OTP screen on a flaky connection.
-      const status = e?.response?.status;
+      const err = e as ApiError;
+      const status = err?.response?.status;
       if (status === 401) {
         console.log('[Auth] Refresh token rejected (401) — logging out');
         await get().logout();
       } else {
-        console.log('[Auth] Token refresh failed transiently, keeping session:', status ?? e?.message);
+        console.log('[Auth] Token refresh failed transiently, keeping session:', status ?? err?.message);
       }
       return false;
     }
@@ -274,8 +283,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
             });
             driverData = driverRes.data as Driver;
             await appCache.set(CACHE_KEYS.DRIVER_PROFILE, driverData, CACHE_CONFIG.USER_PROFILE_TTL);
-          } catch (e: any) {
-            if (e?.response?.status === 404) {
+          } catch (e: unknown) {
+            if ((e as ApiError)?.response?.status === 404) {
               // No driver row — auto-create one from the user's profile.
               // The backend fills all required fields from the authenticated user.
               if (__DEV__) console.log('[Auth] No driver row on init — auto-registering');
@@ -303,8 +312,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           isLoading: false
         });
         return; // Done — valid session restored
-      } catch (error: any) {
-        if (__DEV__) console.log('[Auth] Stored token invalid or expired:', error.message);
+      } catch (error: unknown) {
+        if (__DEV__) console.log('[Auth] Stored token invalid or expired:', (error as ApiError)?.message);
         await storage.deleteItem('auth_token');
         // Fall through to no-session state below
       }
@@ -334,8 +343,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
               const driverRes = await api.get('/drivers/me');
               driverData = driverRes.data as Driver;
               await appCache.set(CACHE_KEYS.DRIVER_PROFILE, driverData, CACHE_CONFIG.USER_PROFILE_TTL);
-            } catch (e: any) {
-              if (e?.response?.status === 404) {
+            } catch (e: unknown) {
+              if ((e as ApiError)?.response?.status === 404) {
                 if (__DEV__) console.log('[Auth] No driver row on refresh-init — auto-registering');
                 try {
                   const regRes = await api.post('/drivers/register', {});
@@ -420,7 +429,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
               if (__DEV__) console.log('[Auth] Firebase user but backend fetch failed');
               set({ isLoading: false, isInitialized: true, error: 'Failed to sync user' });
             }
-          } catch (error: any) {
+          } catch (error: unknown) {
             if (__DEV__) console.log('[Auth] Failed to get Firebase token:', error);
             set({ isLoading: false, isInitialized: true, error: 'Failed to sync user' });
           }
@@ -452,9 +461,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       await signInWithCredential(auth, credential);
 
       // onAuthStateChanged will handle the rest
-    } catch (error: any) {
+    } catch (error: unknown) {
       if (__DEV__) console.log('Verify OTP Error:', error);
-      const message = error.message || 'Invalid verification code';
+      const message = (error as ApiError)?.message || 'Invalid verification code';
       set({ isLoading: false, error: message });
       throw new Error(message);
     }
@@ -471,8 +480,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         const meRes = await api.get('/auth/me');
         set({ user: meRes.data });
       } catch {}
-    } catch (error: any) {
-      const message = error.response?.data?.detail || 'Failed to create profile';
+    } catch (error: unknown) {
+      const message = (error as ApiError)?.response?.data?.detail || 'Failed to create profile';
       set({ isLoading: false, error: message });
       throw new Error(message);
     }
@@ -512,9 +521,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         try {
           const driverRes = await api.get('/drivers/me');
           set({ driver: driverRes.data as Driver });
-        } catch (e: any) {
+        } catch (e: unknown) {
           if (__DEV__) console.log('refreshProfile: driver fetch failed', e);
-          if (e?.response?.status === 404) {
+          if ((e as ApiError)?.response?.status === 404) {
             // No driver row — auto-create one silently so the driver can
             // reach the home screen without going through become-driver.
             if (__DEV__) console.log('[Auth] No driver row on refresh — auto-registering');
@@ -545,8 +554,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         isLoading: false,
         isDriverMode: true
       });
-    } catch (error: any) {
-      const message = error.response?.data?.detail || 'Failed to register driver';
+    } catch (error: unknown) {
+      const message = (error as ApiError)?.response?.data?.detail || 'Failed to register driver';
       set({ isLoading: false, error: message });
       throw new Error(message);
     }
@@ -574,7 +583,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       await api.put(`/drivers/${driver.id}/status`, { is_online: isOnline });
       set({ driver: { ...driver, is_online: isOnline } });
-    } catch (error: any) {
+    } catch (error: unknown) {
       if (__DEV__) console.log('Failed to update status');
       throw error;
     }
@@ -627,8 +636,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       const res = await api.post<{ success: boolean; revoked_refresh_tokens: number }>('/auth/logout-all');
       revoked = Number(res.data?.revoked_refresh_tokens ?? 0);
-    } catch (error: any) {
-      if (__DEV__) console.log('logout-all backend call failed:', error?.message || error);
+    } catch (error: unknown) {
+      if (__DEV__) console.log('logout-all backend call failed:', (error as ApiError)?.message ?? String(error));
     } finally {
       await get().logout();
     }
@@ -647,7 +656,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         uri: imageUri,
         name: filename,
         type,
-      } as any);
+      } as unknown as Blob); // React Native FormData accepts file-like objects; Blob is the closest web type
 
       // The api client detects FormData and lets fetch set the multipart
       // boundary itself — do not pass a Content-Type header here.
@@ -656,8 +665,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
       // Invalidate user cache to reflect the new profile image
       await appCache.remove(CACHE_KEYS.USER_PROFILE);
-    } catch (error: any) {
-      const message = error.response?.data?.detail || 'Failed to upload profile image';
+    } catch (error: unknown) {
+      const message = (error as ApiError)?.response?.data?.detail || 'Failed to upload profile image';
       set({ isLoading: false, error: message });
       throw new Error(message);
     }

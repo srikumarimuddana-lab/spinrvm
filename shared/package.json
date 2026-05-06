@@ -4,113 +4,30 @@
   "private": true,
   "description": "Shared code used across Spinr rider-app, driver-app, and admin-dashboard",
   "sideEffects": false,
-  "main": "dist/api/client.js",
-  "types": "dist/types/index.d.ts",
   "exports": {
-    "./api": {
-      "types": "./dist/api/client.d.ts",
-      "default": "./dist/api/client.js",
-      "source": "./api/client.ts"
-    },
-    "./api/client": {
-      "types": "./dist/api/client.d.ts",
-      "default": "./dist/api/client.js",
-      "source": "./api/client.ts"
-    },
-    "./api/cachedClient": {
-      "types": "./dist/api/cachedClient.d.ts",
-      "default": "./dist/api/cachedClient.js",
-      "source": "./api/cachedClient.ts"
-    },
-    "./api/upload": {
-      "types": "./dist/api/upload.d.ts",
-      "default": "./dist/api/upload.js",
-      "source": "./api/upload.ts"
-    },
-    "./api/queryClient": {
-      "types": "./dist/api/queryClient.d.ts",
-      "default": "./dist/api/queryClient.js",
-      "source": "./api/queryClient.ts"
-    },
-    "./hooks/queries": {
-      "types": "./dist/hooks/queries/index.d.ts",
-      "default": "./dist/hooks/queries/index.js",
-      "source": "./hooks/queries/index.ts"
-    },
-    "./validators": {
-      "types": "./dist/validators/index.d.ts",
-      "default": "./dist/validators/index.js",
-      "source": "./validators/index.ts"
-    },
-    "./config": {
-      "types": "./dist/config/index.d.ts",
-      "default": "./dist/config/index.js",
-      "source": "./config/index.ts"
-    },
-    "./config/spinr.config": {
-      "types": "./dist/config/spinr.config.d.ts",
-      "default": "./dist/config/spinr.config.js",
-      "source": "./config/spinr.config.ts"
-    },
-    "./config/supabase": {
-      "types": "./dist/config/supabase.d.ts",
-      "default": "./dist/config/supabase.js",
-      "source": "./config/supabase.ts"
-    },
-    "./config/firebaseConfig": {
-      "types": "./dist/config/firebaseConfig.d.ts",
-      "default": "./dist/config/firebaseConfig.js",
-      "source": "./config/firebaseConfig.ts"
-    },
-    "./store/authStore": {
-      "types": "./dist/store/authStore.d.ts",
-      "default": "./dist/store/authStore.js",
-      "source": "./store/authStore.ts"
-    },
-    "./store/locationStore": {
-      "types": "./dist/store/locationStore.d.ts",
-      "default": "./dist/store/locationStore.js",
-      "source": "./store/locationStore.ts"
-    },
-    "./services/firebase": {
-      "types": "./dist/services/firebase.d.ts",
-      "default": "./dist/services/firebase.js",
-      "source": "./services/firebase.ts"
-    },
-    "./utils/logger": {
-      "types": "./dist/utils/logger.d.ts",
-      "default": "./dist/utils/logger.js",
-      "source": "./utils/logger.ts"
-    },
-    "./utils/responsive": {
-      "types": "./dist/utils/responsive.d.ts",
-      "default": "./dist/utils/responsive.js",
-      "source": "./utils/responsive.ts"
-    },
-    "./cache": {
-      "types": "./dist/cache/index.d.ts",
-      "default": "./dist/cache/index.js",
-      "source": "./cache/index.ts"
-    },
-    "./types": {
-      "types": "./dist/types/index.d.ts",
-      "default": "./dist/types/index.js",
-      "source": "./types/index.ts"
-    },
-    "./types/*": {
-      "types": "./dist/types/*.d.ts",
-      "default": "./dist/types/*.js",
-      "source": "./types/*.ts"
-    },
-    "./components/*": {
-      "types": "./dist/components/*.d.ts",
-      "default": "./dist/components/*.js",
-      "source": "./components/*.tsx"
-    }
+    "./api": "./api/client.ts",
+    "./api/client": "./api/client.ts",
+    "./api/cachedClient": "./api/cachedClient.ts",
+    "./api/upload": "./api/upload.ts",
+    "./api/queryClient": "./api/queryClient.ts",
+    "./hooks/queries": "./hooks/queries/index.ts",
+    "./validators": "./validators/index.ts",
+    "./config": "./config/index.ts",
+    "./config/spinr.config": "./config/spinr.config.ts",
+    "./config/supabase": "./config/supabase.ts",
+    "./config/firebaseConfig": "./config/firebaseConfig.ts",
+    "./store/authStore": "./store/authStore.ts",
+    "./store/locationStore": "./store/locationStore.ts",
+    "./services/firebase": "./services/firebase.ts",
+    "./utils/logger": "./utils/logger.ts",
+    "./utils/responsive": "./utils/responsive.ts",
+    "./cache": "./cache/index.ts",
+    "./types": "./types/index.ts",
+    "./types/*": "./types/*",
+    "./components/*": "./components/*"
   },
   "scripts": {
-    "build": "tsc --project tsconfig.build.json",
-    "prepare": "npm run build"
+    "build": "tsc --project tsconfig.build.json"
   },
   "dependencies": {
     "@react-native-community/netinfo": "^11.5.2"

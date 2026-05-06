@@ -75,7 +75,7 @@ These advisory CI gates must be flipped to **blocking** before production. They 
 | L-P0-3 | HIGH | WAV dispatch missing — wheelchair-accessible vehicle matching | PR #240 | 2026-04-29 |
 | B-P2-8 | MEDIUM | Docker base images unpinned — `backend/Dockerfile` | PR in P0 sprint | 2026-04-29 |
 | Q-5 | MEDIUM | Root `Dockerfile` unpinned (dev/CI image) | This session | 2026-05-02 |
-| Q-2 | MEDIUM | `any` types in `shared/services/firebase.ts` and `shared/config/firebaseConfig.ts` | This session | 2026-05-02 |
+| Q-2 | MEDIUM | `any` types in `shared/services/firebase.ts` and `shared/config/firebaseConfig.ts` | a7ae53eb | 2026-05-06 |
 
 ---
 

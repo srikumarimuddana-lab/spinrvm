@@ -3,42 +3,47 @@ import AxeBuilder from '@axe-core/playwright';
 
 test.describe('Login page', () => {
   test.beforeEach(async ({ page }) => {
-    // Mock auth endpoints
-    await page.route('**/api/admin/auth/**', async route => {
-      if (route.request().method() === 'POST') {
-        await route.fulfill({
+    // Single catch-all handler — avoids Playwright's LIFO route evaluation
+    // causing the generic fallback to fire before auth-specific branches.
+    //
+    // access_expires_at MUST be present on the refresh response: without it,
+    // scheduleTokenRefresh(undefined,…) computes delay=NaN → setTimeout fires
+    // at 0 ms → infinite refresh loop → every test times out.
+    await page.route('**/api/**', async route => {
+      const url = route.request().url();
+      const method = route.request().method();
+
+      if (url.includes('/auth/refresh') && method === 'POST') {
+        return route.fulfill({
           status: 200,
           contentType: 'application/json',
-          // access_expires_at MUST be present: without it scheduleTokenRefresh(undefined,…)
-          // computes delay=NaN → setTimeout fires at 0 ms → infinite refresh loop →
-          // networkidle never settles → every test times out.
           body: JSON.stringify({ token: 'test-token', access_expires_at: '2100-01-01T00:00:00Z', csrf_token: 'test-csrf', user: { id: '1', email: 'admin@spinr.ca', role: 'admin' } }),
         });
-      } else {
-        await route.fulfill({ status: 401, contentType: 'application/json', body: '{}' });
       }
-    });
-    // Intercept the set-cookie helper route used by silentRefresh
-    await page.route('**/api/auth/set-cookie', async route => {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
-    });
-    // Fallback for any other /api/ calls
-    await page.route('**/api/**', async route => {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
+
+      if (url.includes('/auth/session') || url.includes('/auth/me')) {
+        return route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ authenticated: true, user: { id: '1', email: 'admin@spinr.ca', role: 'admin' } }),
+        });
+      }
+
+      return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
     });
   });
 
   test('renders login form', async ({ page }) => {
     await page.goto('/login');
-    await page.waitForLoadState('networkidle');
-    await expect(page.locator('#email')).toBeVisible();
+    // #email renders immediately on the public /login page; no auth wait needed
+    await expect(page.locator('#email')).toBeVisible({ timeout: 10000 });
     await expect(page.locator('#password')).toBeVisible();
     await expect(page.locator('button:has-text("Sign In"), button[type="submit"]')).toBeVisible();
   });
 
   test('sign in button disabled until both fields filled', async ({ page }) => {
     await page.goto('/login');
-    await page.waitForLoadState('networkidle');
+    await expect(page.locator('#email')).toBeVisible({ timeout: 10000 });
     const btn = page.locator('button:has-text("Sign In"), button[type="submit"]');
     await expect(btn).toBeDisabled();
     await page.fill('#email', 'admin@spinr.ca');
@@ -48,11 +53,12 @@ test.describe('Login page', () => {
   });
 
   test('shows error on bad credentials', async ({ page }) => {
+    // Registered after beforeEach → evaluated first (LIFO) for this specific URL
     await page.route('**/api/admin/auth/login', async route => {
       await route.fulfill({ status: 401, contentType: 'application/json', body: JSON.stringify({ detail: 'Invalid credentials' }) });
     });
     await page.goto('/login');
-    await page.waitForLoadState('networkidle');
+    await expect(page.locator('#email')).toBeVisible({ timeout: 10000 });
     await page.fill('#email', 'wrong@example.com');
     await page.fill('#password', 'wrongpassword');
     await page.click('button:has-text("Sign In"), button[type="submit"]');
@@ -61,7 +67,7 @@ test.describe('Login page', () => {
 
   test('successful login redirects to dashboard', async ({ page }) => {
     await page.goto('/login');
-    await page.waitForLoadState('networkidle');
+    await expect(page.locator('#email')).toBeVisible({ timeout: 10000 });
     await page.fill('#email', 'admin@spinr.ca');
     await page.fill('#password', 'Test1234!');
     await page.click('button:has-text("Sign In"), button[type="submit"]');
@@ -71,11 +77,10 @@ test.describe('Login page', () => {
 
   test('login page has no critical accessibility violations (axe-core)', async ({ page }) => {
     await page.goto('/login');
-    await page.waitForLoadState('networkidle');
+    await expect(page.locator('#email')).toBeVisible({ timeout: 10000 });
     const results = await new AxeBuilder({ page })
       .withTags(['wcag2a', 'wcag2aa', 'wcag21aa'])
       .analyze();
-    // Log violations for visibility but don't hard-fail (audit mode)
     if (results.violations.length > 0) {
       console.warn('Accessibility violations on /login:');
       results.violations.forEach(v => {

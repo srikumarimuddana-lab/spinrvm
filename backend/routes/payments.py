@@ -192,6 +192,20 @@ async def confirm_payment(
         if ride["rider_id"] != current_user["id"]:
             raise HTTPException(status_code=403, detail="forbidden")
 
+        # C-3: Idempotency check — if a prior webhook already settled this payment,
+        # return early with a clear signal rather than re-entering the Stripe flow.
+        # This covers the case where the rider app retries confirm_payment after a
+        # network timeout when the webhook has already processed the payment.
+        # HTTP 200 (not 409) because the payment succeeded — this is not an error.
+        payment_status = ride.get("payment_status")
+        if payment_status in ("paid", "processing"):
+            logger.info(
+                "confirm_payment: ride %s already in payment_status=%s, returning early (C-3 idempotency)",
+                ride_id,
+                payment_status,
+            )
+            return {"status": "already_processed", "payment_status": payment_status}
+
         claimed = await db_supabase.claim_ride_payment_processing(ride_id)
         if not claimed:
             raise HTTPException(status_code=409, detail="payment_already_processing")

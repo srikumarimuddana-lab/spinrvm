@@ -162,6 +162,7 @@ async def get_driver_acceptance_rates(
             )
         except Exception as e:
             logger.error(f"Failed to fetch rides for acceptance stats: {e}", exc_info=True, extra={"domain": "admin"})
+            raise HTTPException(status_code=503, detail="analytics_unavailable") from e
 
     users_list: list = []
     if user_ids:
@@ -169,6 +170,7 @@ async def get_driver_acceptance_rates(
             users_list = await db.get_rows("users", {"id": {"$in": user_ids}}, limit=len(user_ids))
         except Exception as e:
             logger.error(f"Failed to fetch users for acceptance stats: {e}", exc_info=True, extra={"domain": "admin"})
+            raise HTTPException(status_code=503, detail="analytics_unavailable") from e
 
     rides_by_driver: dict = {}
     for r in all_rides:

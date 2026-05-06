@@ -10,5 +10,5 @@ export const RideStatus = {
   FAILED: 'failed',
 } as const;
 
-// Convenience alias — union of all valid ride status strings.
+// Convenience alias kept for backwards compatibility.
 export type RideStatusType = typeof RideStatus[keyof typeof RideStatus];

@@ -77,8 +77,8 @@ export const useWalletStore = create<WalletState>((set, get) => ({
   fetchWallet: async () => {
     try {
       set({ walletLoading: true, error: null });
-      const res = await api.get('/wallet');
-      set({ wallet: res.data as WalletInfo, walletLoading: false });
+      const res = await api.get<WalletInfo>('/wallet');
+      set({ wallet: res.data, walletLoading: false });
     } catch (error: any) {
       set({ error: error.message, walletLoading: false });
     }
@@ -112,8 +112,8 @@ export const useWalletStore = create<WalletState>((set, get) => ({
   fetchTransactions: async (limit = 20) => {
     try {
       set({ transactionsLoading: true, error: null });
-      const res = await api.get(`/wallet/transactions?limit=${limit}`);
-      set({ transactions: (res.data as { transactions: WalletTransaction[] }).transactions || [], transactionsLoading: false });
+      const res = await api.get<{ transactions?: WalletTransaction[] }>(`/wallet/transactions?limit=${limit}`);
+      set({ transactions: res.data.transactions || [], transactionsLoading: false });
     } catch (error: any) {
       set({ error: error.message, transactionsLoading: false });
     }
@@ -135,9 +135,9 @@ export const useWalletStore = create<WalletState>((set, get) => ({
   createFareSplit: async (rideId: string, phones: string[]) => {
     try {
       set({ isLoading: true, error: null });
-      const res = await api.post('/fare-split', { ride_id: rideId, participant_phones: phones });
-      set({ currentSplit: res.data as FareSplit, isLoading: false });
-      return res.data as FareSplit;
+      const res = await api.post<FareSplit>('/fare-split', { ride_id: rideId, participant_phones: phones });
+      set({ currentSplit: res.data, isLoading: false });
+      return res.data;
     } catch (error: any) {
       set({ error: error.response?.data?.detail || error.message, isLoading: false });
       throw error;
@@ -146,10 +146,9 @@ export const useWalletStore = create<WalletState>((set, get) => ({
 
   fetchFareSplitForRide: async (rideId: string) => {
     try {
-      const res = await api.get(`/fare-split/ride/${rideId}`);
-      const splitRes = res.data as { has_split: boolean; split: FareSplit };
-      if (splitRes.has_split) {
-        set({ currentSplit: splitRes.split });
+      const res = await api.get<{ has_split?: boolean; split?: FareSplit }>(`/fare-split/ride/${rideId}`);
+      if (res.data.has_split) {
+        set({ currentSplit: res.data.split ?? null });
       } else {
         set({ currentSplit: null });
       }

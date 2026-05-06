@@ -76,8 +76,8 @@ function EarningsScreen() {
 
   useEffect(() => {
     api
-      .get('/drivers/earnings/forecast')
-      .then((r) => setForecast(r.data as any))
+      .get<{ this_week_earnings: number; projected_weekly_total: number; days_remaining_this_week: number; this_week_trips: number }>('/drivers/earnings/forecast')
+      .then((r) => setForecast(r.data))
       .catch(() => {}); // forecast is informational — ignore errors silently
   }, []);
 
@@ -383,8 +383,8 @@ function EarningsScreen() {
                           : ''}
                       </Text>
                       <Text style={styles.bookingIdText}>
-                        {(trip as any).ride_code
-                          ? (trip as any).ride_code
+                        {trip.ride_code
+                          ? trip.ride_code
                           : `ID: #${String(trip.ride_id).substring(0, 8).toUpperCase()}`}
                       </Text>
                     </View>

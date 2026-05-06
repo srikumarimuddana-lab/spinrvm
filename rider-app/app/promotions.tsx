@@ -43,7 +43,7 @@ export default function PromotionsScreen() {
   const loadPromos = async () => {
     setLoading(true);
     try {
-      const res = await api.get('/promo/available?ride_fare=20');
+      const res = await api.get<Promo[]>('/promo/available?ride_fare=20');
       setPromos((res.data as Promo[]) || []);
     } catch {}
     finally { setLoading(false); }
@@ -54,11 +54,11 @@ export default function PromotionsScreen() {
     if (!c) return;
     setApplying(true);
     try {
-      const res = await api.post('/promo/validate', { code: c, ride_fare: 20 });
+      const res = await api.post<{ discount_type?: string; discount_value?: number }>('/promo/validate', { code: c, ride_fare: 20 });
       setAlertState({
         visible: true,
         title: 'Promo Valid!',
-        message: `${(res.data as Promo).discount_type === 'percentage' ? `${(res.data as Promo).discount_value}% off` : `$${(res.data as Promo).discount_value} off`} — will apply on your next ride.`,
+        message: `${res.data.discount_type === 'percentage' ? `${res.data.discount_value}% off` : `$${res.data.discount_value} off`} — will apply on your next ride.`,
         variant: 'success',
       });
       setCode('');

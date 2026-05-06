@@ -331,6 +331,7 @@ export function RidePanel({ ride, onDriverClick, onCancelRide, onCompleteRide }:
                                 tabIndex={0}
                                 className="group flex cursor-pointer items-center gap-3 rounded-lg p-2.5 transition-all hover:bg-muted/60 active:scale-[0.99]"
                                 onClick={() => ride.driver_id && onDriverClick(ride.driver_id)}
+                                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); ride.driver_id && onDriverClick(ride.driver_id); } }}
                             >
                                 <div className="relative shrink-0">
                                     <Avatar className="h-11 w-11 border-2 border-background shadow-sm">

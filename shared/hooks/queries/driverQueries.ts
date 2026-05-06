@@ -88,7 +88,7 @@ export const useDriverEarnings = (period: 'today' | 'week' | 'month' | string) =
     return useQuery({
         queryKey: queryKeys.driver.earnings(period),
         queryFn: async () => {
-            const res = await api.get(`/drivers/earnings?period=${period}`);
+            const res = await api.get(`/drivers/earnings?period=${encodeURIComponent(period)}`);
             return res.data;
         },
         staleTime: 60_000,

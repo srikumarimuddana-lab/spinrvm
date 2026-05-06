@@ -68,10 +68,9 @@ export default function NotificationsScreen() {
   const loadNotifications = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     try {
-      const res = await api.get('/notifications?limit=50&offset=0');
-      const notifData = res.data as { notifications: any[]; unread_count: number };
-      setNotifications(notifData.notifications || []);
-      setUnreadCount(notifData.unread_count ?? 0);
+      const res = await api.get<{ notifications?: AppNotification[]; unread_count?: number }>('/notifications?limit=50&offset=0');
+      setNotifications(res.data.notifications || []);
+      setUnreadCount(res.data.unread_count ?? 0);
     } catch {}
     finally {
       setLoading(false);

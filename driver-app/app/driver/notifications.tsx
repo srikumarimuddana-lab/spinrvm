@@ -44,10 +44,10 @@ export default function NotificationsScreen() {
     // handles dedupe, cache, refetch on focus, and the persisted cache
     // means re-opening this screen renders the inbox instantly while a
     // background refetch keeps it fresh.
-    const { data, isFetching, refetch } = useNotifications(50);
-    const notifData = data as { notifications?: Notification[]; unread_count?: number } | null;
-    const notifications: Notification[] = notifData?.notifications ?? [];
-    const unreadCount: number = notifData?.unread_count ?? 0;
+    const { data: rawNotifData, isFetching, refetch } = useNotifications(50);
+    const data = rawNotifData as { notifications?: Notification[]; unread_count?: number } | undefined;
+    const notifications: Notification[] = data?.notifications ?? [];
+    const unreadCount: number = data?.unread_count ?? 0;
     const markReadMutation = useMarkNotificationRead();
     const markAllReadMutation = useMarkAllNotificationsRead();
 

@@ -70,7 +70,7 @@ export default function ReportSafetyScreen() {
         const reportData = {
             category,
             description: issue,
-            location: location ? {
+            location: (location?.latitude != null && location?.longitude != null) ? {
                 latitude: location.latitude,
                 longitude: location.longitude,
                 timestamp: new Date().toISOString(),

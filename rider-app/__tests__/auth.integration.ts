@@ -56,7 +56,7 @@ describe('HttpOnly Cookie Auth Integration', () => {
         phone: '+16475551234',
         email: 'test@example.com',
         role: 'rider',
-        created_at: '2026-01-01T00:00:00Z',
+        created_at: '2025-01-01T00:00:00Z',
         profile_complete: true,
       }
 
@@ -101,7 +101,7 @@ describe('HttpOnly Cookie Auth Integration', () => {
     it('should clear user and tokens on logout', async () => {
       // Set up logged-in state
       useAuthStore.setState({
-        user: { id: '123', phone: '+16475551234', role: 'rider', created_at: '2026-01-01T00:00:00Z', profile_complete: true },
+        user: { id: '123', phone: '+16475551234', role: 'rider', created_at: '2025-01-01T00:00:00Z', profile_complete: true },
         token: 'access-token',
         refreshToken: 'refresh-token',
       })

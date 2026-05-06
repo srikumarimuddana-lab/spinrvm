@@ -454,7 +454,7 @@ const handleApiError = async (response: Response, method: string, url: string, r
       }
       const refreshed = await _refreshPromise;
       if (refreshed) {
-        return retryFn() as never; // retry with the new token now in _inMemoryToken
+        return retryFn() as Promise<never>; // retry with the new token now in _inMemoryToken
       }
     } catch {
       // refresh failed — fall through to throw the original 401
@@ -471,7 +471,7 @@ const handleApiError = async (response: Response, method: string, url: string, r
   if (response.status === 503 && retryFn && url !== '/auth/refresh') {
     await new Promise(r => setTimeout(r, 1500));
     try {
-      return retryFn() as never;
+      return retryFn() as Promise<never>;
     } catch {
       // retry threw — fall through to the original error surface below
     }

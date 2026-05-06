@@ -48,7 +48,7 @@ const DRIVER_RIDE_KEY = '@spinr:driver_active_ride';
 const makeActiveRide = (overrides: Record<string, unknown> = {}) => ({
   ride: {
     id: (overrides.id as string) || 'ride-drv-001',
-    status: 'driver_accepted',
+    status: 'in_progress',
     rider_id: 'rider-abc',
     pickup_address: '100 Queen St',
     pickup_lat: 43.65,
@@ -59,10 +59,11 @@ const makeActiveRide = (overrides: Record<string, unknown> = {}) => ({
     total_fare: '15.00',
     distance_km: 2.0,
     duration_minutes: 10,
-    created_at: new Date().toISOString(),
+    created_at: '2024-01-01',
+    ...overrides,
   },
-  rider: { id: 'rider-abc', first_name: 'Alice' },
-  vehicle_type: { id: 'standard', name: 'Standard' },
+  rider: { id: 'rider-abc' },
+  vehicle_type: { id: 'vt-1', name: 'Standard' },
 });
 
 const resetStore = () =>
@@ -173,7 +174,7 @@ describe('hydrateDriverRideState — mid-trip restart restore (P1-7 / D12)', () 
   it('does not override an already-populated in-memory store', async () => {
     // fetchActiveRide ran before hydrateDriverRideState and already set state
     const liveRide = makeActiveRide({ id: 'ride-LIVE' });
-    useDriverStore.setState({ activeRide: liveRide as any, rideState: 'trip_in_progress' });
+    useDriverStore.setState({ activeRide: liveRide, rideState: 'trip_in_progress' });
 
     const cachedRide = makeActiveRide({ id: 'ride-OLD' });
     (AsyncStorage.getItem as jest.Mock).mockResolvedValueOnce(

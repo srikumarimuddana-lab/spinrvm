@@ -157,7 +157,7 @@ class TestAcceptRideFlipsStatus:
         assert send_push_mock.await_count >= 1
 
     def test_double_accept_rejected_by_guard(self):
-        """When the atomic guard returns modified_count=0 (ride already taken),
+        """When the atomic guard returns None (ride already taken by concurrent request),
         accept_ride must raise 409 — never return {success: True}."""
         from fastapi import HTTPException
 

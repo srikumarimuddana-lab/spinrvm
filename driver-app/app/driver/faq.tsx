@@ -57,8 +57,8 @@ export default function FaqScreen() {
 
     const fetchFaqs = async () => {
         try {
-            const res = await api.get('/faqs?audience=driver');
-            setFaqs((res.data as FaqItem[]) || []);
+            const res = await api.get<FaqItem[]>('/faqs?audience=driver');
+            setFaqs(res.data || []);
         } catch (err) {
             console.log('FAQ fetch error:', err);
         } finally {

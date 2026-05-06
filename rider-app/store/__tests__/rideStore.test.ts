@@ -143,7 +143,7 @@ describe('rideStore — ride lifecycle', () => {
   test('createRide throws when pickup/dropoff/vehicle are missing', async () => {
     // No pickup, dropoff, or vehicle set
     await expect(
-      act(async () => useRideStore.getState().createRide('card'))
+      act(async () => { await useRideStore.getState().createRide('card'); })
     ).rejects.toThrow('Missing ride details');
   });
 
@@ -298,7 +298,7 @@ describe('rideStore — double-booking prevention', () => {
 
     // The store guard throws before the API is ever called, so no mock is needed.
     await expect(
-      act(async () => useRideStore.getState().createRide('card'))
+      act(async () => { await useRideStore.getState().createRide('card'); })
     ).rejects.toThrow('A ride is already active');
   });
 });
@@ -373,7 +373,7 @@ describe('rideStore — createRide double-booking guard', () => {
     mockApi.post.mockRejectedValueOnce(conflictErr);
 
     await expect(
-      act(async () => useRideStore.getState().createRide('card'))
+      act(async () => { await useRideStore.getState().createRide('card'); })
     ).rejects.toThrow();
 
     expect(useRideStore.getState().isLoading).toBe(false);

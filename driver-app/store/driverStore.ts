@@ -133,6 +133,7 @@ export interface TripEarning {
     tip_amount: string; // MoneyString
     rider_rating: number | null;
     completed_at: string;
+    ride_code?: string;
 }
 
 export interface BankAccount {
@@ -527,11 +528,10 @@ export const useDriverStore = create<DriverState>((set, get) => ({
 
     fetchActiveRide: async () => {
         try {
-            const res = await api.get('/drivers/rides/active');
-            const resData = res.data as ActiveRide & { ride?: any; rider?: any } | null;
-            if (resData && (resData as any).ride) {
-                const ride = (resData as any).ride;
-                const rider = (resData as any).rider;
+            const res = await api.get<ActiveRide | null>('/drivers/rides/active');
+            if (res.data && res.data.ride) {
+                const ride = res.data.ride;
+                const rider = res.data.rider;
 
                 // `driver_assigned` means the backend dispatched the offer to
                 // this driver but they have NOT clicked accept yet — resume
@@ -546,7 +546,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                         ? Number(rider.rating)
                         : undefined;
                     set({
-                        activeRide: resData as ActiveRide,
+                        activeRide: res.data,
                         rideState: 'ride_offered',
                         incomingRide: {
                             ride_id: ride.id,
@@ -556,10 +556,10 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                             pickup_lng: ride.pickup_lng,
                             dropoff_lat: ride.dropoff_lat,
                             dropoff_lng: ride.dropoff_lng,
-                            fare: ride.driver_earnings ?? ride.fare,
+                            fare: (ride.driver_earnings ?? ride.fare) as string,
                             distance_km: ride.distance_km,
                             duration_minutes: ride.duration_minutes,
-                            rider_name: riderName,
+                            rider_name: riderName as string | undefined,
                             rider_rating: riderRating,
                         },
                         countdownSeconds: countdown,
@@ -577,12 +577,12 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                 else if (ride.status === 'in_progress') rideState = 'trip_in_progress';
 
                 set({
-                    activeRide: resData as ActiveRide,
+                    activeRide: res.data,
                     rideState,
                     incomingRide: null,
                     countdownSeconds: 0,
                 });
-                _persistDriverState(rideState, resData);
+                _persistDriverState(rideState, res.data);
             } else {
                 // No active ride on the server — reset everything including
                 // rideState so a stale AsyncStorage restore (from hydrateDriverRideState)
@@ -601,9 +601,8 @@ export const useDriverStore = create<DriverState>((set, get) => ({
 
     fetchRideHistory: async (limit = 20, offset = 0) => {
         try {
-            const res = await api.get(`/drivers/rides/history?limit=${limit}&offset=${offset}`);
-            const histData = res.data as { rides?: any[]; total?: number } | null;
-            set({ rideHistory: histData?.rides || [], historyTotal: histData?.total || 0 });
+            const res = await api.get<{ rides: any[]; total: number }>(`/drivers/rides/history?limit=${limit}&offset=${offset}`);
+            set({ rideHistory: res.data.rides || [], historyTotal: res.data.total || 0 });
         } catch (err) {
             console.log('Fetch history error:', err);
         }
@@ -611,8 +610,8 @@ export const useDriverStore = create<DriverState>((set, get) => ({
 
     fetchEarnings: async (period = 'day') => {
         try {
-            const res = await api.get(`/drivers/earnings?period=${period}`);
-            set({ earnings: res.data as EarningsSummary | null });
+            const res = await api.get<EarningsSummary>(`/drivers/earnings?period=${period}`);
+            set({ earnings: res.data });
         } catch (err) {
             throw err;
         }
@@ -620,8 +619,8 @@ export const useDriverStore = create<DriverState>((set, get) => ({
 
     fetchDailyEarnings: async (days = 7) => {
         try {
-            const res = await api.get(`/drivers/earnings/daily?days=${days}`);
-            set({ dailyEarnings: (res.data as DailyEarning[] | null) || [] });
+            const res = await api.get<DailyEarning[]>(`/drivers/earnings/daily?days=${days}`);
+            set({ dailyEarnings: res.data || [] });
         } catch (err) {
             throw err;
         }
@@ -629,8 +628,8 @@ export const useDriverStore = create<DriverState>((set, get) => ({
 
     fetchWeeklyEarnings: async (weeks = 4) => {
         try {
-            const res = await api.get(`/drivers/earnings/weekly?weeks=${weeks}`);
-            set({ weeklyEarnings: (res.data as WeeklyEarning[] | null) || [] });
+            const res = await api.get<WeeklyEarning[]>(`/drivers/earnings/weekly?weeks=${weeks}`);
+            set({ weeklyEarnings: res.data || [] });
         } catch (err) {
             throw err;
         }
@@ -638,8 +637,8 @@ export const useDriverStore = create<DriverState>((set, get) => ({
 
     fetchMonthlyEarnings: async (months = 6) => {
         try {
-            const res = await api.get(`/drivers/earnings/monthly?months=${months}`);
-            set({ monthlyEarnings: (res.data as MonthlyEarning[] | null) || [] });
+            const res = await api.get<MonthlyEarning[]>(`/drivers/earnings/monthly?months=${months}`);
+            set({ monthlyEarnings: res.data || [] });
         } catch (err) {
             throw err;
         }
@@ -647,8 +646,8 @@ export const useDriverStore = create<DriverState>((set, get) => ({
 
     fetchEarningsComparison: async (period = 'week') => {
         try {
-            const res = await api.get(`/drivers/earnings/comparison?period=${period}`);
-            set({ earningsComparison: (res.data as EarningsComparison | null) || null });
+            const res = await api.get<EarningsComparison>(`/drivers/earnings/comparison?period=${period}`);
+            set({ earningsComparison: res.data || null });
         } catch (err) {
             throw err;
         }
@@ -656,12 +655,12 @@ export const useDriverStore = create<DriverState>((set, get) => ({
 
     fetchTripEarnings: async (limit = 20, offset = 0) => {
         try {
-            const res = await api.get(`/drivers/earnings/trips?limit=${limit}&offset=${offset}`);
+            const res = await api.get<{ trips: TripEarning[]; limit: number; offset: number }>(`/drivers/earnings/trips?limit=${limit}&offset=${offset}`);
             // Backend returns { trips, limit, offset } — pull out the array.
             // Previously set res.data directly, which left the store holding
             // an object; earnings.tsx then called .map() on it and threw
             // "undefined is not a function".
-            set({ tripEarnings: ((res.data as { trips?: TripEarning[] } | null)?.trips) || [] });
+            set({ tripEarnings: res.data?.trips || [] });
         } catch (err) {
             throw err;
         }
@@ -727,11 +726,10 @@ export const useDriverStore = create<DriverState>((set, get) => ({
     // ============ Payout Actions ============
     fetchBankAccount: async () => {
         try {
-            const res = await api.get('/drivers/bank-account');
-            const bankData = res.data as { has_bank_account?: boolean; bank_account?: BankAccount } | null;
+            const res = await api.get<{ has_bank_account: boolean; bank_account: BankAccount | null }>('/drivers/bank-account');
             set({
-                hasBankAccount: bankData?.has_bank_account || false,
-                bankAccount: bankData?.bank_account || null
+                hasBankAccount: res.data.has_bank_account || false,
+                bankAccount: res.data.bank_account || null
             });
         } catch (err) {
             console.log('Fetch bank account error:', err);
@@ -769,8 +767,8 @@ export const useDriverStore = create<DriverState>((set, get) => ({
 
     fetchDriverBalance: async () => {
         try {
-            const res = await api.get('/drivers/balance');
-            set({ driverBalance: res.data as DriverBalance | null });
+            const res = await api.get<DriverBalance>('/drivers/balance');
+            set({ driverBalance: res.data });
         } catch (err) {
             throw err;
         }
@@ -794,8 +792,8 @@ export const useDriverStore = create<DriverState>((set, get) => ({
 
     fetchPayoutHistory: async (limit = 20, offset = 0) => {
         try {
-            const res = await api.get(`/drivers/payouts?limit=${limit}&offset=${offset}`);
-            set({ payoutHistory: ((res.data as { payouts?: Payout[] } | null)?.payouts) || [] });
+            const res = await api.get<{ payouts: Payout[] }>(`/drivers/payouts?limit=${limit}&offset=${offset}`);
+            set({ payoutHistory: res.data.payouts || [] });
         } catch (err) {
             console.log('Fetch payout history error:', err);
         }
@@ -803,9 +801,8 @@ export const useDriverStore = create<DriverState>((set, get) => ({
 
     exportEarnings: async (year?: number): Promise<{ data: string; filename: string } | null> => {
         try {
-            const res = await api.get(`/drivers/earnings/export?year=${year || new Date().getFullYear()}`);
-            const exportData = res.data as { data?: string; filename?: string } | null;
-            return { data: exportData?.data || '', filename: exportData?.filename || '' };
+            const res = await api.get<{ data: string; filename: string }>(`/drivers/earnings/export?year=${year || new Date().getFullYear()}`);
+            return { data: res.data.data, filename: res.data.filename };
         } catch (err) {
             console.log('Export earnings error:', err);
             return null;
@@ -820,7 +817,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             set({ availableYears: years });
 
             const promises = years.map(year =>
-                api.get(`/drivers/t4a/${year}`).then(res => res.data).catch(() => null)
+                api.get<T4ASummary>(`/drivers/t4a/${year}`).then(res => res.data).catch(() => null)
             );
             const results = await Promise.all(promises);
             const summaries = results.filter((r): r is T4ASummary => r !== null);
@@ -833,14 +830,13 @@ export const useDriverStore = create<DriverState>((set, get) => ({
     fetchT4ADetails: async (year: number) => {
         try {
             set({ selectedYear: year, isLoading: true });
-            const res = await api.get(`/drivers/t4a/${year}`);
-            const t4aData = res.data as T4ASummary;
+            const res = await api.get<T4ASummary>(`/drivers/t4a/${year}`);
             set({
                 t4aSummaries: get().t4aSummaries.map(s =>
-                    s.year === year ? t4aData : s
+                    s.year === year ? res.data : s
                 ).length === get().t4aSummaries.length
                     ? get().t4aSummaries
-                    : [...get().t4aSummaries, t4aData],
+                    : [...get().t4aSummaries, res.data],
                 isLoading: false
             });
         } catch (err) {

@@ -40,7 +40,7 @@ apiClient.interceptors.response.use(
         return apiClient.request(originalRequest)
       } catch (refreshError) {
         // Refresh failed: token invalid, force logout
-        void useAuthStore.getState().logout()
+        useAuthStore.getState().logout()
         // Redirect to login
         return Promise.reject(refreshError)
       }

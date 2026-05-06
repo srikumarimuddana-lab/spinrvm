@@ -20,18 +20,16 @@ module.exports = {
   ],
   coverageThreshold: {
     global: {
-      // P3-4: step +5 pp/sprint toward 50/40/50 target.
-      // Actuals at 2026-04-28: lines≈35%, functions≈26%, statements≈35%.
-      // Next step: 2026-07 sprint → 40/30/40.
-      lines: 35,
-      functions: 25,
-      statements: 34,
+      // P3-4: raised to actuals minus ~2 pp headroom (measured 2026-05-05).
+      // Actuals: lines≈50.32%, functions≈35.89%, statements≈49.1%.
+      // Next step: 2026-07 sprint → 55/40/52.
+      lines: 48,
+      functions: 34,
+      statements: 47,
     },
   },
   moduleNameMapper: {
-    // jest-expo reads tsconfig paths and converts them to moduleNameMapper. Our tsconfig
-    // maps "react" → @types/react so TypeScript resolves shared/ declarations; override
-    // here so Jest uses the actual runtime package instead of the type stubs.
+    // Redirect `require('react')` to the runtime package, not @types/react (which has no exports).
     '^react$': '<rootDir>/node_modules/react',
     // Expo SDK 54 winter (WinterCG) runtime executes require('./ImportMetaRegistry')
     // lazily via installGlobal — that require fails inside Jest's sandbox.

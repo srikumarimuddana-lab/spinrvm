@@ -92,7 +92,7 @@ describe('walletStore', () => {
   describe('topUp', () => {
     it('updates wallet balance after top-up', async () => {
       useWalletStore.setState({ wallet: makeWallet({ balance: '50.00' }) });
-      mockApi.post.mockResolvedValueOnce({ data: { balance: '70.00' }, status: 200 });
+      mockApi.post.mockResolvedValueOnce({ data: { balance: 70.0 }, status: 200 });
       mockApi.get.mockResolvedValueOnce({ data: makeWallet({ balance: '70.00' }), status: 200 });
 
       await useWalletStore.getState().topUp(20.0);
@@ -114,7 +114,7 @@ describe('walletStore', () => {
   // ---------------------------------------------------------------------------
   describe('fetchTransactions', () => {
     it('stores transactions list', async () => {
-      const txs = [makeTx(), makeTx({ id: 'tx-2', type: 'ride_payment', amount: '-9.50' })];
+      const txs = [makeTx(), makeTx({ id: 'tx-2', type: 'ride_payment', amount: -9.5 })];
       mockApi.get.mockResolvedValueOnce({ data: { transactions: txs }, status: 200 });
 
       await useWalletStore.getState().fetchTransactions();
@@ -153,7 +153,7 @@ describe('walletStore', () => {
   describe('cancelFareSplit', () => {
     it('clears currentSplit after cancellation', async () => {
       useWalletStore.setState({ currentSplit: makeSplit() });
-      mockApi.post.mockResolvedValueOnce({ data: {}, status: 200 });
+      mockApi.post.mockResolvedValueOnce({ data: null, status: 200 });
 
       await useWalletStore.getState().cancelFareSplit('split-1');
 
@@ -177,7 +177,7 @@ describe('walletStore', () => {
   describe('payWithWallet', () => {
     it('deducts balance on success', async () => {
       useWalletStore.setState({ wallet: makeWallet({ balance: '50.00' }) });
-      mockApi.post.mockResolvedValueOnce({ data: { balance: '40.50' }, status: 200 });
+      mockApi.post.mockResolvedValueOnce({ data: { balance: 40.5 }, status: 200 });
       mockApi.get.mockResolvedValueOnce({ data: makeWallet({ balance: '40.50' }), status: 200 });
 
       await useWalletStore.getState().payWithWallet('ride-99', 9.5);

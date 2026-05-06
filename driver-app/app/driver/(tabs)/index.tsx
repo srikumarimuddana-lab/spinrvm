@@ -87,10 +87,10 @@ function DriverDashboard() {
     let cancelled = false;
     const fetchSurge = async () => {
       try {
-        const res = await api.get('/service-areas');
+        const res = await api.get<Array<{ id: string; surge_multiplier?: number; surge_active?: boolean }>>('/service-areas');
         if (cancelled) return;
         const areaId = driverData?.service_area_id;
-        const areas: Array<{ id: string; surge_multiplier?: number; surge_active?: boolean }> = (res.data as any[]) || [];
+        const areas: Array<{ id: string; surge_multiplier?: number; surge_active?: boolean }> = res.data || [];
         const myArea = areaId ? areas.find((a) => a.id === areaId) : areas[0];
         if (myArea?.surge_active && typeof myArea.surge_multiplier === 'number') {
           setSurgeMultiplier(myArea.surge_multiplier);
@@ -153,14 +153,13 @@ function DriverDashboard() {
     let cancelled = false;
     (async () => {
       try {
-        const res = await api.get('/drivers/demand-heatmap');
+        const res = await api.get<{ enabled: boolean; points?: number[][] }>('/drivers/demand-heatmap');
         if (cancelled) return;
-        const heatData = res.data as { enabled?: boolean; points?: number[][] } | null;
-        if (!heatData?.enabled) {
+        if (!res.data.enabled) {
           setHeatmapPoints([]);
           return;
         }
-        const pts = (heatData.points || []).map((p: number[]) => ({
+        const pts = (res.data.points || []).map((p: number[]) => ({
           latitude: p[0],
           longitude: p[1],
           weight: p[2] || 1,
@@ -656,7 +655,7 @@ function DriverDashboard() {
         rideState === 'trip_in_progress') && (
         <ActiveRidePanel
           rideState={rideState}
-          ride={(activeRide?.ride as any) || null}
+          ride={activeRide?.ride as unknown as any || null}
           rider={activeRide?.rider || null}
           driverLocation={location}
           isLoading={false}

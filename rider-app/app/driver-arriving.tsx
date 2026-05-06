@@ -577,6 +577,15 @@ I'm sharing this ride for safety. If you don't hear from me, please check on me.
                   driverAcceptedAt={(currentRide as any)?.driver_accepted_at}
                   freeCancelWindowSeconds={freeCancelWindowSeconds}
                   cancellationFee={cancellationFee}
+                  onExpire={() =>
+                    setAlertState({
+                      visible: true,
+                      title: 'Free cancel window closed',
+                      message: `A $${cancellationFee.toFixed(2)} cancellation fee now applies if you cancel.`,
+                      variant: 'warning',
+                      buttons: [{ text: 'OK' }],
+                    })
+                  }
                 />
               </View>
             )}
@@ -768,7 +777,7 @@ function createStyles(colors: ThemeColors) {
     flex: 1,
   },
   map: {
-    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+    ...StyleSheet.absoluteFill,
   },
   mapPlaceholder: {
     flex: 1,

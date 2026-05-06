@@ -41,10 +41,9 @@ export default function ChatDriverScreen() {
     if (!rideId) { router.replace('/(tabs)' as any); return; }
     (async () => {
       try {
-        const res = await api.get(`/rides/${rideId}/messages`);
-        const msgData = res.data as { messages: any[] };
-        if (msgData?.messages) {
-          setChatMessages(msgData.messages);
+        const res = await api.get<{ messages: unknown[] }>(`/rides/${rideId}/messages`);
+        if (res.data?.messages) {
+          setChatMessages(res.data.messages);
         }
       } catch (e) {
         console.log('[Chat] Failed to load history:', e);
@@ -81,11 +80,10 @@ export default function ChatDriverScreen() {
   const handleCall = async () => {
     if (!rideId) return;
     try {
-      const res = await api.get(`/rides/${rideId}/call`);
-      const callData = res.data as { phone?: string };
-      if (callData?.phone) {
+      const res = await api.get<{ phone?: string }>(`/rides/${rideId}/call`);
+      if (res.data?.phone) {
         const { Linking } = require('react-native');
-        Linking.openURL(`tel:${callData.phone}`);
+        Linking.openURL(`tel:${res.data.phone}`);
       }
     } catch (e: any) {
       console.log('[Chat] Call failed:', e?.response?.data?.detail || e.message);
@@ -96,11 +94,10 @@ export default function ChatDriverScreen() {
     if (!text.trim() || !rideId || sending) return;
     setSending(true);
     try {
-      const res = await api.post(`/rides/${rideId}/messages`, { text: text.trim() });
-      const msgRes = res.data as { message?: any };
-      if (msgRes?.message) {
+      const res = await api.post<{ message?: unknown }>(`/rides/${rideId}/messages`, { text: text.trim() });
+      if (res.data?.message) {
         // Optimistically add to local state (deduplicated by the store).
-        addChatMessage(msgRes.message);
+        addChatMessage(res.data.message);
       }
     } catch (e) {
       console.log('[Chat] Send failed:', e);

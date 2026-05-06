@@ -48,7 +48,8 @@ function PayoutScreen() {
     // gst_number is part of the driver row served by useDriverMe — keep
     // a local form state for the input field but seed it from the cached
     // server value (also re-seeds from the background refetch).
-    const { data: driverMe } = useDriverMe();
+    const { data: driverMeRaw } = useDriverMe();
+    const driverMe = driverMeRaw as { gst_number?: string } | undefined;
     const updateDriverMe = useUpdateDriverMe();
     const [gstNumber, setGstNumber] = useState('');
     const [showGstForm, setShowGstForm] = useState(false);
@@ -86,10 +87,9 @@ function PayoutScreen() {
 
     const loadStripeStatus = async () => {
         try {
-            const res = await api.get('/drivers/balance');
-            const balData = res.data as { stripe_account_onboarded?: boolean } | null;
+            const res = await api.get<{ stripe_account_onboarded?: boolean }>('/drivers/balance');
             setStripeAccountStatus(
-                balData?.stripe_account_onboarded ? 'active' : 'not_onboarded'
+                res.data.stripe_account_onboarded ? 'active' : 'not_onboarded'
             );
         } catch {
             setStripeAccountStatus('not_onboarded');
@@ -100,7 +100,7 @@ function PayoutScreen() {
     // The hook has its own cache + background refetch, so this replaces
     // the legacy `loadGstNumber()` round-trip entirely.
     useEffect(() => {
-        if (driverMe) setGstNumber((driverMe as any).gst_number || '');
+        if (driverMe) setGstNumber(driverMe.gst_number || '');
     }, [driverMe]);
 
     useEffect(() => {
@@ -113,8 +113,8 @@ function PayoutScreen() {
     const handleStripeOnboarding = async () => {
         setStripeOnboarding(true);
         try {
-            const res = await api.post('/drivers/stripe-onboard');
-            const { url, mock } = res.data as { url?: string; mock?: boolean };
+            const res = await api.post<{ url?: string; mock?: boolean }>('/drivers/stripe-onboard');
+            const { url, mock } = res.data;
 
             if (mock) {
                 showAlert(
@@ -177,15 +177,14 @@ function PayoutScreen() {
             // CRA T4A is generated per tax year — default to the most recently
             // completed year so drivers don't get an in-progress year's partial total.
             const year = new Date().getFullYear() - 1;
-            const res = await api.get(`/drivers/t4a/${year}`);
-            const t4aData = res.data as { url?: string; file_url?: string; total_earnings?: string | number; year?: number; total_trips?: number; net_earnings?: string | number } | null;
-            const url = t4aData?.url || t4aData?.file_url;
+            const res = await api.get<{ url?: string; file_url?: string; total_earnings?: string; year?: number; total_trips?: number; net_earnings?: string }>(`/drivers/t4a/${year}`);
+            const url = res.data?.url || res.data?.file_url;
             if (url) {
                 await Linking.openURL(url);
-            } else if (t4aData?.total_earnings != null) {
+            } else if (res.data?.total_earnings != null) {
                 showAlert(
-                    `T4A Summary — ${t4aData.year}`,
-                    `Total earnings: $${Number(t4aData.total_earnings).toFixed(2)}\nTotal trips: ${t4aData.total_trips}\nNet earnings: $${Number(t4aData.net_earnings).toFixed(2)}\n\nA downloadable PDF will be available once tax documents are finalized.`,
+                    `T4A Summary — ${res.data.year}`,
+                    `Total earnings: $${Number(res.data.total_earnings).toFixed(2)}\nTotal trips: ${res.data.total_trips}\nNet earnings: $${Number(res.data.net_earnings).toFixed(2)}\n\nA downloadable PDF will be available once tax documents are finalized.`,
                     'info',
                 );
             } else {
@@ -202,15 +201,14 @@ function PayoutScreen() {
         setDownloadingCSV(true);
         try {
             const year = new Date().getFullYear();
-            const res = await api.get(`/drivers/earnings/export?year=${year}`);
-            const csvData = res.data as { url?: string; file_url?: string; data?: string } | null;
-            const url = csvData?.url || csvData?.file_url;
+            const res = await api.get<{ url?: string; file_url?: string; data?: string }>(`/drivers/earnings/export?year=${year}`);
+            const url = res.data?.url || res.data?.file_url;
             if (url) {
                 await Linking.openURL(url);
-            } else if (csvData?.data) {
+            } else if (res.data?.data) {
                 // Backend returns { data: <csv-string>, filename }. Open a data: URL
                 // so the OS share sheet can hand it to Mail/Drive/Files.
-                const encoded = encodeURIComponent(csvData.data);
+                const encoded = encodeURIComponent(res.data.data);
                 await Linking.openURL(`data:text/csv;charset=utf-8,${encoded}`);
             } else {
                 showAlert('Unavailable', 'Earnings CSV is not yet available. Please try again later.', 'warning');

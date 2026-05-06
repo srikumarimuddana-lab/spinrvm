@@ -176,10 +176,9 @@ function RideInProgressScreenContent() {
     // Get share token from backend API
     let shareToken = rideId || 'demo';
     try {
-      const shareRes = await api.post(`/rides/${rideId}/share`);
-      const shareData = shareRes.data as { share_token?: string };
-      if (shareData?.share_token) {
-        shareToken = shareData.share_token;
+      const shareRes = await api.post<{ share_token?: string }>(`/rides/${rideId}/share`);
+      if (shareRes.data?.share_token) {
+        shareToken = shareRes.data.share_token;
       }
     } catch {
       // Fall back to ride ID
@@ -231,10 +230,9 @@ I've shared my live location with you for safety.
   const handleCopyTrackingLink = async () => {
     let shareToken = rideId || 'demo';
     try {
-      const shareRes = await api.post(`/rides/${rideId}/share`);
-      const shareData2 = shareRes.data as { share_token?: string };
-      if (shareData2?.share_token) {
-        shareToken = shareData2.share_token;
+      const shareRes = await api.post<{ share_token?: string }>(`/rides/${rideId}/share`);
+      if (shareRes.data?.share_token) {
+        shareToken = shareRes.data.share_token;
       }
     } catch {
       // Fall back to ride ID
@@ -668,7 +666,7 @@ function createStyles(colors: ThemeColors) {
       alignItems: 'flex-end', paddingTop: 8,
     },
     mapContainer: { flex: 1, position: 'relative' },
-    map: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
+    map: { ...StyleSheet.absoluteFill },
     mapPlaceholder: { flex: 1, backgroundColor: colors.border, justifyContent: 'center', alignItems: 'center' },
     mapPlaceholderText: { marginTop: 12, fontSize: 15, fontWeight: '500', color: '#555' },
     retryBtn: { marginTop: 16, paddingHorizontal: 28, paddingVertical: 12, backgroundColor: '#EE2B2B', borderRadius: 24 },

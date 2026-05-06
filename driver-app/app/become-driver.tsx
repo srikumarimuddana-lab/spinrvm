@@ -65,8 +65,8 @@ export default function BecomeDriverScreen() {
       try {
         const res = await api.get('/vehicle-types');  // just to verify API works
         // Public endpoint — returns only active areas, no admin auth required.
-        const areasRes = await api.get('/service-areas');
-        const active = (areasRes.data as any[]) || [];
+        const areasRes = await api.get<any[]>('/service-areas');
+        const active = areasRes.data || [];
         setServiceAreas(active);
         if (active.length > 0 && !serviceAreaId) setServiceAreaId(active[0].id);
       } catch (e) {

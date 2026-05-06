@@ -483,13 +483,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   createProfile: async (data: Parameters<AuthState['createProfile']>[0]) => {
     try {
       set({ isLoading: true, error: null });
-      const response = await api.post('/users/profile', data);
-      set({ user: response.data as User, isLoading: false });
+      const response = await api.post<User>('/users/profile', data);
+      set({ user: response.data, isLoading: false });
       // Re-fetch /auth/me so driver_onboarding_status gets computed
       // (the POST /users/profile response doesn't include it).
       try {
-        const meRes = await api.get('/auth/me');
-        set({ user: meRes.data as User });
+        const meRes = await api.get<User>('/auth/me');
+        set({ user: meRes.data });
       } catch {}
     } catch (error: unknown) {
       const message = (isApiError(error) && error.response?.data?.detail) || 'Failed to create profile';
@@ -500,8 +500,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   fetchDriverProfile: async () => {
     try {
-      const response = await api.get('/drivers/me');
-      set({ driver: response.data as Driver });
+      const response = await api.get<Driver>('/drivers/me');
+      set({ driver: response.data });
     } catch (error) {
       if (__DEV__) console.log('Failed to fetch driver profile');
       set({ driver: null });
@@ -556,11 +556,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   registerDriver: async (data: DriverRegistrationPayload) => {
     try {
       set({ isLoading: true, error: null });
-      const response = await api.post('/drivers/register', data);
+      const response = await api.post<Driver>('/drivers/register', data);
       const user = get().user;
       const updatedUser = user ? { ...user, role: 'driver', is_driver: true } : user;
       set({
-        driver: response.data as Driver,
+        driver: response.data,
         user: updatedUser,
         isLoading: false,
         isDriverMode: true
@@ -671,8 +671,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
       // The api client detects FormData and lets fetch set the multipart
       // boundary itself — do not pass a Content-Type header here.
-      const response = await api.put('/users/profile-image', formData);
-      set({ user: response.data as User, isLoading: false });
+      const response = await api.put<User>('/users/profile-image', formData);
+      set({ user: response.data, isLoading: false });
 
       // Invalidate user cache to reflect the new profile image
       await appCache.remove(CACHE_KEYS.USER_PROFILE);

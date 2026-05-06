@@ -61,9 +61,8 @@ export default function ActivityScreen() {
       const url = cursor
         ? `/rides/history?limit=${PAGE_LIMIT}&before=${cursor}`
         : `/rides/history?limit=${PAGE_LIMIT}`;
-      const res = await api.get(url).catch(() => ({ data: { rides: [], next_cursor: null } }));
-      const resData = res.data as { rides: any[]; next_cursor: string | null };
-      return { rides: resData?.rides ?? [], next_cursor: resData?.next_cursor ?? null };
+      const res = await api.get<{ rides: RideHistory[]; next_cursor: string | null }>(url).catch(() => ({ data: { rides: [], next_cursor: null } }));
+      return { rides: res.data?.rides ?? [], next_cursor: res.data?.next_cursor ?? null };
     } catch {
       return { rides: [], next_cursor: null };
     }
@@ -80,7 +79,7 @@ export default function ActivityScreen() {
       setNextCursor(pageResult.next_cursor);
 
       const typesMap: Record<string, string> = {};
-      ((typesRes.data as any[]) || []).forEach((t: any) => {
+      ((typesRes.data as unknown[]) || []).forEach((t: any) => {
         typesMap[t.id] = t.name;
       });
       setVehicleTypes(typesMap);

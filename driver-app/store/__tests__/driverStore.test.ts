@@ -212,11 +212,18 @@ describe('driverStore — ride state machine', () => {
           pickup_lng: -106.6700,
           pickup_address: '123 Main St',
           dropoff_address: '456 Oak Ave',
-        } as any,
-        rider: { id: 'user-1', first_name: 'Alice' } as any,
-        vehicle_type: null as any,
+          dropoff_lat: 52.2,
+          dropoff_lng: -106.8,
+          total_fare: '12.50',
+          distance_km: 5.2,
+          duration_minutes: 12,
+          rider_id: 'user-1',
+          created_at: '2024-01-01',
+        },
+        rider: { id: 'user-1' },
+        vehicle_type: { id: 'vt-1', name: 'Standard' },
       },
-    });
+    } as any);
 
     // Driver is ~14.8 km away — well outside 100m radius
     const result = await act(async () =>
@@ -239,11 +246,18 @@ describe('driverStore — ride state machine', () => {
           pickup_lng: -106.6700,
           pickup_address: '123 Main St',
           dropoff_address: '456 Oak Ave',
-        } as any,
-        rider: { id: 'user-1', first_name: 'Alice' } as any,
-        vehicle_type: null as any,
+          dropoff_lat: 52.2,
+          dropoff_lng: -106.8,
+          total_fare: '12.50',
+          distance_km: 5.2,
+          duration_minutes: 12,
+          rider_id: 'user-1',
+          created_at: '2024-01-01',
+        },
+        rider: { id: 'user-1' },
+        vehicle_type: { id: 'vt-1', name: 'Standard' },
       },
-    });
+    } as any);
 
     mockApi.post.mockResolvedValueOnce({ data: {}, status: 200 } as any);
     // fetchActiveRide called after arrive
@@ -313,8 +327,12 @@ describe('driverStore — ride state machine', () => {
     useDriverStore.setState({
       rideState: 'trip_completed',
       completedRide: { fare: 12.5 } as any,
-      activeRide: { ride: {} as any, rider: {} as any, vehicle_type: null as any },
-      incomingRide: makeMockRide(),
+      activeRide: {
+        ride: { id: 'ride-1', status: 'completed', pickup_address: '1 Main', dropoff_address: '2 Main', pickup_lat: 0, pickup_lng: 0, dropoff_lat: 0, dropoff_lng: 0, total_fare: '12.50', distance_km: 5, duration_minutes: 10, rider_id: 'r-1', created_at: '2024-01-01' },
+        rider: { id: 'r-1' },
+        vehicle_type: { id: 'vt-1', name: 'Standard' },
+      },
+      incomingRide: makeMockRide() as any,
       countdownSeconds: 5,
       error: 'some error',
     });
@@ -390,8 +408,12 @@ describe('driverStore — ride state machine', () => {
   test('cancelRide resets to idle and clears active/incoming ride', async () => {
     useDriverStore.setState({
       rideState: 'navigating_to_pickup',
-      activeRide: { ride: { id: 'ride-123' } as any, rider: {} as any, vehicle_type: null as any },
-    });
+      activeRide: {
+        ride: { id: 'ride-123', status: 'driver_accepted', pickup_address: '1 Main', dropoff_address: '2 Main', pickup_lat: 0, pickup_lng: 0, dropoff_lat: 0, dropoff_lng: 0, total_fare: '12.50', distance_km: 5, duration_minutes: 10, rider_id: 'r-1', created_at: '2024-01-01' },
+        rider: { id: 'r-1' },
+        vehicle_type: { id: 'vt-1', name: 'Standard' },
+      },
+    } as any);
 
     mockApi.post.mockResolvedValueOnce({ data: {}, status: 200 } as any);
 

@@ -395,7 +395,7 @@ function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: '#E8E8E8' },
     mapErrorContainer: {
-      position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+      ...StyleSheet.absoluteFill,
       backgroundColor: '#D4E4D4',
       justifyContent: 'center',
       alignItems: 'center',

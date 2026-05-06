@@ -162,8 +162,8 @@ export default function SupportScreen({ role, initialTab = 'faq' }: Props) {
   useEffect(() => {
     setFaqsLoading(true);
     api
-      .get(`/faqs?audience=${role}`)
-      .then((r) => setFaqs(Array.isArray(r?.data) ? r.data as any[] : []))
+      .get(`/faqs?audience=${encodeURIComponent(role)}`)
+      .then((r) => setFaqs(Array.isArray(r?.data) ? r.data : []))
       .catch(() => setFaqs([]))
       .finally(() => setFaqsLoading(false));
 

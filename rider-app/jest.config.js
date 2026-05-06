@@ -12,9 +12,10 @@ module.exports = {
   ],
   modulePaths: ['<rootDir>/node_modules'],
   moduleNameMapper: {
-    // jest-expo reads tsconfig paths and converts them to moduleNameMapper. Our tsconfig
-    // maps "react" → @types/react so TypeScript resolves shared/ declarations; override
-    // here so Jest uses the actual runtime package instead of the type stubs.
+    // tsconfig paths include "react" → "@types/react" to fix TypeScript resolution for
+    // shared/ files; jest-expo converts tsconfig paths to moduleNameMapper, which would
+    // redirect require('react') to a types-only package with no runtime code.
+    // Override here to always use the real react module for tests.
     '^react$': '<rootDir>/node_modules/react',
     // Expo SDK 54 winter (WinterCG) runtime executes require('./ImportMetaRegistry')
     // lazily via installGlobal — that require fails inside Jest's sandbox.

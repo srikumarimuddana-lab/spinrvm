@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 try:
     from . import db_supabase
-    from .dependencies import get_current_user
+    from .dependencies import get_admin_user, get_current_user
     from .geo_utils import get_service_area_polygon
 except ImportError:
     import db_supabase
@@ -292,7 +292,7 @@ async def get_faqs(category: Optional[str] = None):
 
 
 @admin_support_router.get("/tickets")
-async def admin_get_tickets(status: Optional[str] = None):
+async def admin_get_tickets(status: Optional[str] = None, _: dict = Depends(get_admin_user)):
     """Get all support tickets (admin)."""
     query: Dict[str, Any] = {}
     if status:
@@ -302,7 +302,7 @@ async def admin_get_tickets(status: Optional[str] = None):
 
 
 @admin_support_router.post("/tickets/{ticket_id}/reply")
-async def admin_reply_ticket(ticket_id: str, req: ReplyToTicketRequest):
+async def admin_reply_ticket(ticket_id: str, req: ReplyToTicketRequest, _: dict = Depends(get_admin_user)):
     """Reply to a support ticket."""
     ticket = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("support_tickets", {"id": ticket_id}, limit=1)
@@ -332,7 +332,7 @@ async def admin_reply_ticket(ticket_id: str, req: ReplyToTicketRequest):
 
 
 @admin_support_router.post("/tickets/{ticket_id}/close")
-async def admin_close_ticket(ticket_id: str):
+async def admin_close_ticket(ticket_id: str, _: dict = Depends(get_admin_user)):
     """Close a support ticket."""
     result = await db_supabase.update_one(
         "support_tickets", {"id": ticket_id}, {"status": "closed", "updated_at": datetime.now(timezone.utc)}
@@ -346,14 +346,14 @@ async def admin_close_ticket(ticket_id: str):
 
 
 @admin_support_router.get("/faqs")
-async def admin_get_faqs():
+async def admin_get_faqs(_: dict = Depends(get_admin_user)):
     """Get all FAQs (including inactive) for admin."""
     faqs = await db_supabase.get_rows("faqs", None, limit=500, order="sort_order", desc=False)
     return faqs
 
 
 @admin_support_router.post("/faqs")
-async def admin_create_faq(req: CreateFaqRequest):
+async def admin_create_faq(req: CreateFaqRequest, _: dict = Depends(get_admin_user)):
     """Create a new FAQ."""
     faq = {
         "id": str(uuid.uuid4()),
@@ -370,7 +370,7 @@ async def admin_create_faq(req: CreateFaqRequest):
 
 
 @admin_support_router.put("/faqs/{faq_id}")
-async def admin_update_faq(faq_id: str, req: UpdateFaqRequest):
+async def admin_update_faq(faq_id: str, req: UpdateFaqRequest, _: dict = Depends(get_admin_user)):
     """Update an existing FAQ."""
     update_data: Dict[str, Any] = {"updated_at": datetime.now(timezone.utc)}
     if req.question is not None:
@@ -389,7 +389,7 @@ async def admin_update_faq(faq_id: str, req: UpdateFaqRequest):
 
 
 @admin_support_router.delete("/faqs/{faq_id}")
-async def admin_delete_faq(faq_id: str):
+async def admin_delete_faq(faq_id: str, _: dict = Depends(get_admin_user)):
     """Delete a FAQ."""
     await db_supabase.delete_one("faqs", {"id": faq_id})
     return {"deleted": True}
@@ -399,7 +399,7 @@ async def admin_delete_faq(faq_id: str):
 
 
 @admin_support_router.put("/service-areas/{area_id}/surge")
-async def admin_update_surge(area_id: str, req: UpdateSurgeRequest):
+async def admin_update_surge(area_id: str, req: UpdateSurgeRequest, _: dict = Depends(get_admin_user)):
     """Update surge pricing for a service area."""
     update_data: Dict[str, Any] = {}
     if req.surge_active is not None:
@@ -419,7 +419,7 @@ async def admin_update_surge(area_id: str, req: UpdateSurgeRequest):
 
 
 @admin_support_router.put("/service-areas/{area_id}/surge/auto")
-async def admin_reset_surge_to_auto(area_id: str):
+async def admin_reset_surge_to_auto(area_id: str, _: dict = Depends(get_admin_user)):
     """Reset surge pricing to automatic mode for a service area."""
     area = await db.find_one("service_areas", {"id": area_id})
     if not area:
@@ -468,7 +468,7 @@ class UpdateTaxConfigRequest(BaseModel):
 
 
 @pricing_router.get("/areas/{area_id}/fees")
-async def get_area_fees(area_id: str):
+async def get_area_fees(area_id: str, _: dict = Depends(get_admin_user)):
     """Get all fees for a service area."""
     fees = await db_supabase.get_rows(
         "area_fees", {"service_area_id": area_id}, limit=100, order="created_at", desc=False
@@ -477,7 +477,7 @@ async def get_area_fees(area_id: str):
 
 
 @pricing_router.post("/areas/{area_id}/fees")
-async def create_area_fee(area_id: str, req: CreateAreaFeeRequest):
+async def create_area_fee(area_id: str, req: CreateAreaFeeRequest, _: dict = Depends(get_admin_user)):
     """Add a fee to a service area."""
     area = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1))
     if not area:
@@ -505,7 +505,7 @@ async def create_area_fee(area_id: str, req: CreateAreaFeeRequest):
 
 
 @pricing_router.put("/areas/{area_id}/fees/{fee_id}")
-async def update_area_fee(area_id: str, fee_id: str, req: UpdateAreaFeeRequest):
+async def update_area_fee(area_id: str, fee_id: str, req: UpdateAreaFeeRequest, _: dict = Depends(get_admin_user)):
     """Update an area fee."""
     update_data: Dict[str, Any] = {"updated_at": datetime.now(timezone.utc)}
     for field in ["fee_name", "fee_type", "calc_mode", "amount", "description", "conditions", "is_active"]:
@@ -521,14 +521,14 @@ async def update_area_fee(area_id: str, fee_id: str, req: UpdateAreaFeeRequest):
 
 
 @pricing_router.delete("/areas/{area_id}/fees/{fee_id}")
-async def delete_area_fee(area_id: str, fee_id: str):
+async def delete_area_fee(area_id: str, fee_id: str, _: dict = Depends(get_admin_user)):
     """Delete an area fee."""
     await db_supabase.delete_one("area_fees", {"id": fee_id, "service_area_id": area_id})
     return {"deleted": True}
 
 
 @pricing_router.put("/areas/{area_id}/tax")
-async def update_area_tax(area_id: str, req: UpdateTaxConfigRequest):
+async def update_area_tax(area_id: str, req: UpdateTaxConfigRequest, _: dict = Depends(get_admin_user)):
     """Update tax configuration for a service area."""
     update_data: Dict[str, Any] = {}
     for field in ["gst_enabled", "gst_rate", "pst_enabled", "pst_rate", "hst_enabled", "hst_rate"]:
@@ -553,7 +553,7 @@ async def update_area_tax(area_id: str, req: UpdateTaxConfigRequest):
 
 
 @pricing_router.get("/areas/{area_id}/tax")
-async def get_area_tax(area_id: str):
+async def get_area_tax(area_id: str, _: dict = Depends(get_admin_user)):
     """Get tax configuration for a service area."""
     area = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1))
     if not area:
@@ -569,7 +569,7 @@ async def get_area_tax(area_id: str):
 
 
 @pricing_router.get("/areas/{area_id}/vehicle-pricing")
-async def get_vehicle_pricing(area_id: str):
+async def get_vehicle_pricing(area_id: str, _: dict = Depends(get_admin_user)):
     """Get all fare configs for a service area grouped by vehicle type."""
     configs = await db_supabase.get_rows("fare_configs", {"service_area_id": area_id}, limit=50)
     vehicles = await db_supabase.get_rows("vehicle_types", None, limit=50)
@@ -577,7 +577,7 @@ async def get_vehicle_pricing(area_id: str):
 
 
 @pricing_router.put("/drivers/{driver_id}/area")
-async def assign_driver_area(driver_id: str, service_area_id: str = Query(...)):
+async def assign_driver_area(driver_id: str, service_area_id: str = Query(...), _: dict = Depends(get_admin_user)):
     """Assign a driver to a service area (restricts them to that zone)."""
     area = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("service_areas", {"id": service_area_id}, limit=1)
@@ -1195,7 +1195,7 @@ async def send_email(*, to: str, subject: str, body: str) -> bool:
 
 
 @admin_support_router.post("/notifications/send")
-async def admin_send_notification(req: SendNotificationRequest):
+async def admin_send_notification(req: SendNotificationRequest, _: dict = Depends(get_admin_user)):
     """Send a push notification to a specific user (admin)."""
     success = await send_push_notification(req.user_id, req.title, req.body, req.data)
     return {"sent": success}

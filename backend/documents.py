@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 try:
     from . import db_supabase
-    from .dependencies import get_current_user
+    from .dependencies import get_admin_user, get_current_user
     from .supabase_client import supabase
 except ImportError:
     import db_supabase
@@ -647,14 +647,14 @@ async def delete_driver_document(
 
 
 @admin_documents_router.get("/requirements")
-async def admin_get_requirements():
+async def admin_get_requirements(_: dict = Depends(get_admin_user)):
     """Get all document requirements."""
     requirements = await db_supabase.get_rows("document_requirements", None, limit=100, order="created_at", desc=False)
     return requirements
 
 
 @admin_documents_router.post("/requirements")
-async def admin_create_requirement(req: CreateRequirementRequest):
+async def admin_create_requirement(req: CreateRequirementRequest, _: dict = Depends(get_admin_user)):
     """Create a new document requirement."""
     new_req = {
         "id": str(uuid.uuid4()),
@@ -669,7 +669,7 @@ async def admin_create_requirement(req: CreateRequirementRequest):
 
 
 @admin_documents_router.put("/requirements/{req_id}")
-async def admin_update_requirement(req_id: str, req: UpdateRequirementRequest):
+async def admin_update_requirement(req_id: str, req: UpdateRequirementRequest, _: dict = Depends(get_admin_user)):
     """Update a document requirement."""
     update_data = {}
     if req.name is not None:
@@ -694,7 +694,7 @@ async def admin_update_requirement(req_id: str, req: UpdateRequirementRequest):
 
 
 @admin_documents_router.delete("/requirements/{req_id}")
-async def admin_delete_requirement(req_id: str):
+async def admin_delete_requirement(req_id: str, _: dict = Depends(get_admin_user)):
     """Delete a document requirement."""
     # Check if used?
     # For now, allow delete.
@@ -705,7 +705,7 @@ async def admin_delete_requirement(req_id: str):
 
 
 @admin_documents_router.get("/drivers/{driver_id}")
-async def admin_get_driver_documents(driver_id: str):
+async def admin_get_driver_documents(driver_id: str, _: dict = Depends(get_admin_user)):
     """Get all documents uploaded by a specific driver."""
     documents = await db_supabase.get_rows(
         "driver_documents", {"driver_id": driver_id}, limit=100, order="uploaded_at", desc=True
@@ -720,7 +720,7 @@ class ReviewDocumentRequest(BaseModel):
 
 
 @admin_documents_router.post("/{doc_id}/review")
-async def admin_review_document(doc_id: str, req: ReviewDocumentRequest):
+async def admin_review_document(doc_id: str, req: ReviewDocumentRequest, _: dict = Depends(get_admin_user)):
     """Approve or reject a driver document.
 
     On approval, if an ``expiry_date`` is provided (or already stored on the

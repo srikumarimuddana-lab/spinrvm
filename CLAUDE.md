@@ -230,7 +230,7 @@ Rules:
 
 Migrations live in `backend/migrations/` and are applied in filename order by `backend/migrate.py`.
 
-Naming: `NN_short_description.sql` where `NN` is a zero-padded sequence number (currently highest applied is `67_fix_purge_pii_retention_actor_id.sql`; **next free slot is `68`**). Pick the next available number — never reuse or reorder existing numbers. If two PRs conflict on a number, the second one renames to the next free slot before merge. Note: the runner uses the full filename as the idempotency key, so already-applied migrations must never be renamed.
+Naming: `NN_short_description.sql` where `NN` is a zero-padded sequence number (currently highest applied is `70_fix_financial_events_rls.sql`; **next free slot is `71`**). Pick the next available number — never reuse or reorder existing numbers. If two PRs conflict on a number, the second one renames to the next free slot before merge. Note: the runner uses the full filename as the idempotency key, so already-applied migrations must never be renamed.
 
 Migration rules:
 - **Append-only**: never edit a merged migration. Schema changes go in a new file.

@@ -383,19 +383,22 @@ class TestAllowedStripeEvents:
 
 class TestLoopMonitor:
     def test_record_heartbeat(self):
-        from backend.utils.loop_monitor import record_heartbeat, _heartbeats
+        from backend.utils.loop_monitor import _heartbeats, record_heartbeat
+
         record_heartbeat("test_loop_xyz")
         assert "test_loop_xyz" in _heartbeats
 
     def test_get_loop_status_never_ticked(self):
         from backend.utils.loop_monitor import get_loop_status
+
         status = get_loop_status(["unknown_loop_abc"])
         assert "unknown_loop_abc" in status["loops"]
         assert status["loops"]["unknown_loop_abc"]["status"] == "never_ticked"
         assert status["healthy"] is True  # never_ticked is not flagged unhealthy
 
     def test_get_loop_status_ok(self):
-        from backend.utils.loop_monitor import record_heartbeat, get_loop_status
+        from backend.utils.loop_monitor import get_loop_status, record_heartbeat
+
         record_heartbeat("test_loop_ok")
         status = get_loop_status(["test_loop_ok"])
         assert status["loops"]["test_loop_ok"]["status"] == "ok"
@@ -404,7 +407,9 @@ class TestLoopMonitor:
     def test_get_loop_status_stale(self):
         import time
         from unittest.mock import patch as mpatch
-        from backend.utils.loop_monitor import record_heartbeat, get_loop_status, _heartbeats, _lock
+
+        from backend.utils.loop_monitor import _heartbeats, _lock, get_loop_status
+
         # Record a heartbeat at time=0, then move time forward far beyond threshold
         with _lock:
             _heartbeats["stale_test_loop"] = 0.0  # very old
@@ -417,13 +422,15 @@ class TestLoopMonitor:
         assert status["healthy"] is False
 
     def test_get_loop_status_no_registered_names(self):
-        from backend.utils.loop_monitor import record_heartbeat, get_loop_status
+        from backend.utils.loop_monitor import get_loop_status, record_heartbeat
+
         record_heartbeat("auto_discovered_loop")
         status = get_loop_status(None)
         assert "auto_discovered_loop" in status["loops"]
 
     def test_get_loop_status_known_threshold(self):
-        from backend.utils.loop_monitor import record_heartbeat, get_loop_status, LOOP_THRESHOLDS
+        from backend.utils.loop_monitor import LOOP_THRESHOLDS, get_loop_status, record_heartbeat
+
         loop_name = "surge_engine (2min)"
         record_heartbeat(loop_name)
         status = get_loop_status([loop_name])
@@ -433,6 +440,7 @@ class TestLoopMonitor:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_stripe_event(event_type: str, data_object: dict, event_id: str = "evt_test_1") -> dict:
     return {
@@ -445,7 +453,6 @@ def _make_stripe_event(event_type: str, data_object: dict, event_id: str = "evt_
 # ---------------------------------------------------------------------------
 # routes/main.py — health_check + root
 # ---------------------------------------------------------------------------
-
 
 
 class TestStripeWebhookMissingEventId:
@@ -637,7 +644,10 @@ class TestStripeWebhookPaymentFailedPushFails:
             patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
             patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
             patch("backend.routes.webhooks.db_supabase.update_ride", AsyncMock(return_value={"id": "ride_2"})),
-            patch("backend.routes.webhooks.db_supabase.get_ride", AsyncMock(return_value={"id": "ride_2", "driver_id": "drv_1"})),
+            patch(
+                "backend.routes.webhooks.db_supabase.get_ride",
+                AsyncMock(return_value={"id": "ride_2", "driver_id": "drv_1"}),
+            ),
             patch("backend.routes.webhooks.db_supabase.get_rows", AsyncMock(return_value=[{"user_id": "drv_user"}])),
             # Push raises for user → still continues to try driver notification
             patch("backend.routes.webhooks.send_push_notification", AsyncMock(side_effect=Exception("Firebase down"))),
@@ -653,6 +663,7 @@ class TestStripeWebhookCorporateTopupSuccess:
     def _settings(self):
         async def f():
             return {"stripe_webhook_secret": "ws", "stripe_secret_key": "sk"}
+
         return f
 
     def _mock_req(self):

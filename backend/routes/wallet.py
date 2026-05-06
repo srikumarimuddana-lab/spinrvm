@@ -11,10 +11,16 @@ from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+
+try:
+    from ..utils.audit_logger import log_user_action as _audit_log_user
+except ImportError:
+    from utils.audit_logger import log_user_action as _audit_log_user
 from pydantic import BaseModel, Field
 
 try:
     from ..db import db
+    from ..db_supabase import insert_one as _db_insert_one
     from ..db_supabase import wallet_increment_balance, wallet_pay_for_ride
     from ..db_supabase import wallet_transfer as _wallet_transfer_rpc
     from ..dependencies import get_current_user
@@ -23,6 +29,7 @@ try:
     from ..utils.idempotency import idempotent_endpoint
 except ImportError:
     from db import db
+    from db_supabase import insert_one as _db_insert_one
     from db_supabase import wallet_increment_balance, wallet_pay_for_ride
     from db_supabase import wallet_transfer as _wallet_transfer_rpc
     from dependencies import get_current_user
@@ -149,6 +156,16 @@ async def top_up_wallet(
         description=f"Wallet top-up ${req.amount:.2f}",
     )
 
+    import asyncio
+    asyncio.create_task(
+        _audit_log_user(
+            current_user,
+            "wallet_top_up",
+            "wallets",
+            wallet["id"],
+            {"amount": _money_str(req.amount), "transaction_id": txn["id"]},
+        )
+    )
     return {
         "balance": _money_str(new_balance),
         "transaction_id": txn["id"],
@@ -205,6 +222,16 @@ async def wallet_pay(req: WalletPayRequest, current_user: dict = Depends(get_cur
         description=f"Ride payment ${req.amount:.2f}",
     )
 
+    import asyncio
+    asyncio.create_task(
+        _audit_log_user(
+            current_user,
+            "wallet_payment",
+            "wallets",
+            wallet["id"],
+            {"amount": _money_str(req.amount), "ride_id": req.ride_id, "transaction_id": txn["id"]},
+        )
+    )
     return {
         "balance": _money_str(new_balance),
         "transaction_id": txn["id"],
@@ -311,5 +338,25 @@ async def transfer_to_user(
         balance_after=_money_str(new_recipient_balance),
         description=f"Received from {current_user.get('phone', 'user')}",
     )
+
+    try:
+        await _db_insert_one(
+            "audit_logs",
+            {
+                "id": str(uuid.uuid4()),
+                "action": "wallet_transfer",
+                "entity_type": "wallets",
+                "entity_id": sender_wallet["id"],
+                "actor_id": current_user["id"],
+                "details": {
+                    "amount": _money_str(transfer_amount),
+                    "recipient_id": recipient["id"],
+                    "new_sender_balance": _money_str(new_sender_balance),
+                },
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+    except Exception:
+        logger.warning("audit_log write failed for wallet_transfer", exc_info=True)
 
     return {"balance": _money_str(new_sender_balance), "success": True}

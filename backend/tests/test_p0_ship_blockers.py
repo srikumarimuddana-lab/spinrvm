@@ -18,7 +18,7 @@ Run as:
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -52,7 +52,7 @@ def _ride(status: str, driver_id: str | None = None, **extra) -> dict:
         "duration_minutes": 8,
         "payment_method": "card",
         "payment_status": "pending",
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
     row.update(extra)
     return row

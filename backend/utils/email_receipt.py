@@ -4,6 +4,7 @@ Generates HTML receipt and sends via email (SendGrid when configured, logs other
 """
 
 import logging
+from decimal import Decimal
 
 try:
     from .datetime_utils import parse_iso_utc
@@ -13,9 +14,9 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-def generate_receipt_html(ride: dict, rider: dict, driver: dict = None, tip: float = 0) -> str:
+def generate_receipt_html(ride: dict, rider: dict, driver: dict = None, tip: Decimal = Decimal(0)) -> str:
     """Generate HTML receipt for a completed ride."""
-    fare = ride.get("total_fare", 0) or 0
+    fare = Decimal(str(ride.get("total_fare") or 0))
     total = fare + tip
     rider_name = f"{rider.get('first_name', '')} {rider.get('last_name', '')}".strip() or "Rider"
     driver_name = "Unknown"
@@ -133,7 +134,7 @@ def generate_receipt_html(ride: dict, rider: dict, driver: dict = None, tip: flo
     """
 
 
-async def send_receipt_email(ride: dict, rider: dict, driver: dict = None, tip: float = 0):
+async def send_receipt_email(ride: dict, rider: dict, driver: dict = None, tip: Decimal = Decimal(0)):
     """Send receipt email. Uses SendGrid when configured, logs otherwise."""
     email = rider.get("email", "")
     if not email:
@@ -141,7 +142,7 @@ async def send_receipt_email(ride: dict, rider: dict, driver: dict = None, tip: 
         return False
 
     html = generate_receipt_html(ride, rider, driver, tip)
-    total = (ride.get("total_fare", 0) or 0) + tip
+    total = Decimal(str(ride.get("total_fare") or 0)) + tip
 
     # Try SendGrid
     try:

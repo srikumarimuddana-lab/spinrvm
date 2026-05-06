@@ -173,6 +173,10 @@ jobs:
             exit 1
           fi
 
+      - name: TypeScript check
+        working-directory: driver-app
+        run: yarn tsc --noEmit
+
       - name: Run driver app tests
         working-directory: driver-app
         run: yarn test --ci --coverage --reporters=default
@@ -219,6 +223,10 @@ jobs:
             echo "ERROR: Private key found in EXPO_PUBLIC_ variable — never embed server-side secrets in mobile builds"
             exit 1
           fi
+
+      - name: TypeScript check
+        working-directory: rider-app
+        run: yarn tsc --noEmit
 
       - name: Run rider app tests
         working-directory: rider-app

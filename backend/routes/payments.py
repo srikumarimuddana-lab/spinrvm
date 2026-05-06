@@ -154,7 +154,7 @@ async def create_payment_intent(
 
         return {"client_secret": intent.client_secret, "payment_intent_id": intent.id, "mock": False}
     except Exception as e:
-        logger.error(f"Stripe error: {e}")
+        logger.error(f"Stripe error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
 
 
@@ -184,7 +184,7 @@ async def confirm_payment(request: Dict[str, Any], current_user: dict = Depends(
 
             return {"status": intent.status, "mock": False}
         except Exception as e:
-            logger.error(f"Stripe error: {e}")
+            logger.error(f"Stripe error: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
 
     return {"status": "unknown", "mock": True}
@@ -218,7 +218,7 @@ async def create_setup_intent(current_user: dict = Depends(get_current_user)):
             "mock": False,
         }
     except Exception as e:
-        logger.error(f"Stripe error: {e}")
+        logger.error(f"Stripe error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
 
 
@@ -258,7 +258,7 @@ async def get_payment_methods(current_user: dict = Depends(get_current_user)):
             "mock": False,
         }
     except Exception as e:
-        logger.error(f"Stripe error: {e}")
+        logger.error(f"Stripe error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
 
 
@@ -292,7 +292,7 @@ async def get_cards(current_user: dict = Depends(get_current_user)):
             for m in methods.data
         ]
     except Exception as e:
-        logger.error(f"Get cards error: {e}")
+        logger.error(f"Get cards error: {e}", exc_info=True)
         return []
 
 
@@ -451,7 +451,7 @@ async def add_card(request: Request, current_user: dict = Depends(get_current_us
             action_hint="Add a different card",
         ) from e
     except Exception as e:
-        logger.error(f"Add card error: {e}")
+        logger.error(f"Add card error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
 
 

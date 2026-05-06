@@ -57,7 +57,10 @@ const storage = {
       }
       return await SecureStore.getItemAsync(key);
     } catch (e) {
-      console.log('Storage getItem error:', e);
+      if (__DEV__) {
+        console.warn('[Storage] SecureStore.getItemAsync failed — tokens will not persist across restarts:',
+          e instanceof Error ? e.message : e);
+      }
       return null;
     }
   },
@@ -69,7 +72,10 @@ const storage = {
       }
       return await SecureStore.setItemAsync(key, value);
     } catch (e) {
-      console.log('Storage setItem error:', e);
+      if (__DEV__) {
+        console.warn('[Storage] SecureStore.setItemAsync failed — tokens will not persist across restarts:',
+          e instanceof Error ? e.message : e);
+      }
     }
   },
   async deleteItem(key: string): Promise<void> {
@@ -80,7 +86,10 @@ const storage = {
       }
       return await SecureStore.deleteItemAsync(key);
     } catch (e) {
-      console.log('Storage deleteItem error:', e);
+      if (__DEV__) {
+        console.warn('[Storage] SecureStore.deleteItemAsync failed — tokens will not persist across restarts:',
+          e instanceof Error ? e.message : e);
+      }
     }
   },
 };

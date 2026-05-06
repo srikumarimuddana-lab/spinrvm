@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { getDriverActivity } from "@/lib/api";
 import {
-    UserPlus, FileText, CheckCircle, XCircle, ShieldCheck, ShieldAlert,
+    UserPlus, FileText, CheckCircle, XCircle, ShieldCheck,
     Ban, Pause, Play, AlertTriangle, StickyNote, CreditCard, Car,
     Wifi, WifiOff, Settings, Clock, Loader2, ChevronDown, ChevronUp,
 } from "lucide-react";
@@ -154,7 +154,7 @@ export default function DriverTimeline({ driverId, driver }: { driverId: string;
                 <span className="text-[10px] text-muted-foreground bg-muted px-2 py-0.5 rounded-full">{activities.length} events</span>
             </div>
 
-            {dates.map((date, dateIdx) => {
+            {dates.map((date, _dateIdx) => {
                 const events = groups[date];
                 const isExpanded = expanded[date] !== false; // default expanded
                 const isToday = date === new Date().toISOString().split("T")[0];
@@ -176,7 +176,7 @@ export default function DriverTimeline({ driverId, driver }: { driverId: string;
                         {/* Events for this date */}
                         {isExpanded && (
                             <div className="ml-[5px] pl-5 border-l-2 border-muted-foreground/10 space-y-0">
-                                {events.map((event, i) => {
+                                {events.map((event, _i) => {
                                     const cfg = EVENT_CONFIG[event.event_type] || DEFAULT_CONFIG;
                                     const Icon = cfg.icon;
                                     const meta = event.metadata || {};

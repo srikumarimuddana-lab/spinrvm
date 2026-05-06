@@ -6,8 +6,7 @@ import { formatCurrency } from "@/lib/utils";
 import { useAuthStore } from "@/store/authStore";
 import {
     Car, Users, DollarSign, TrendingUp, Activity, UserCheck,
-    XCircle, Zap, CreditCard, Ticket, Gift, ArrowUpRight,
-    ArrowDownRight, Clock, MapPin,
+    XCircle, Zap, CreditCard, Gift, Clock, MapPin,
 } from "lucide-react";
 
 interface Stats {
@@ -72,7 +71,7 @@ export default function DashboardPage() {
                         {greeting()}, {user?.first_name || 'Admin'}
                     </h1>
                     <p className="text-sm text-muted-foreground mt-1">
-                        Here's what's happening with Spinr today.
+                        Here&apos;s what&apos;s happening with Spinr today.
                     </p>
                 </div>
                 <div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/50 px-3 py-1.5 rounded-full">
@@ -180,15 +179,28 @@ export default function DashboardPage() {
 
 // ─── Components ───
 
+// Static lookup avoids dynamic Tailwind class interpolation (bg-${color}-500/10),
+// which is purged at build time and produces invisible icons in production.
+const STAT_COLOR_CLASSES: Record<string, { bg: string; text: string }> = {
+    blue:   { bg: 'bg-blue-500/10',    text: 'text-blue-500' },
+    emerald: { bg: 'bg-emerald-500/10', text: 'text-emerald-500' },
+    violet: { bg: 'bg-violet-500/10',  text: 'text-violet-500' },
+    amber:  { bg: 'bg-amber-500/10',   text: 'text-amber-500' },
+    red:    { bg: 'bg-red-500/10',     text: 'text-red-500' },
+    teal:   { bg: 'bg-teal-500/10',    text: 'text-teal-500' },
+    sky:    { bg: 'bg-sky-500/10',     text: 'text-sky-500' },
+};
+
 function StatCard({ icon: Icon, label, value, color, subtitle, pulse }: {
     icon: any; label: string; value: number; color: string; subtitle?: string; pulse?: boolean;
 }) {
+    const c = STAT_COLOR_CLASSES[color] ?? STAT_COLOR_CLASSES.blue;
     return (
         <div className="bg-card border rounded-2xl p-4 hover:shadow-md transition-shadow">
             <div className="flex items-center justify-between mb-3">
                 <p className="text-xs font-medium text-muted-foreground">{label}</p>
-                <div className={`w-8 h-8 rounded-lg bg-${color}-500/10 flex items-center justify-center`}>
-                    <Icon className={`h-4 w-4 text-${color}-500`} />
+                <div className={`w-8 h-8 rounded-lg ${c.bg} flex items-center justify-center`}>
+                    <Icon className={`h-4 w-4 ${c.text}`} />
                 </div>
             </div>
             <div className="flex items-end gap-2">

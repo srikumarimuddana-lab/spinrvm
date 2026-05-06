@@ -2,7 +2,7 @@
 
 import { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { loginAdminSession } from "@/lib/api";
+import { loginAdminSession, mfaChallenge } from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,38 +25,71 @@ function sanitizeNextPath(next: string | null): string {
 function LoginForm() {
     const router = useRouter();
     const searchParams = useSearchParams();
-    const { setToken, setUser, setRefreshToken, scheduleRefresh } = useAuthStore();
+    const { setToken, setUser, setCsrfToken, scheduleRefresh } = useAuthStore();
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
     const [showPassword, setShowPassword] = useState(false);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
+    const [mfaRequired, setMfaRequired] = useState(false);
+    const [mfaToken, setMfaToken] = useState("");
+    const [totpCode, setTotpCode] = useState("");
+
+    const _storeSessionAndRedirect = async (data: any) => {
+        setToken(data.token);
+        if (data.csrf_token) setCsrfToken(data.csrf_token);
+        if (data.access_expires_at) scheduleRefresh(data.access_expires_at);
+        setUser({
+            id: data.user.id,
+            email: data.user.email,
+            role: data.user.role,
+            first_name: data.user.first_name,
+            last_name: data.user.last_name,
+            modules: data.user.modules,
+        });
+        // Await the HttpOnly admin_token cookie being written before navigating.
+        // router.push triggers middleware immediately; if the cookie isn't committed
+        // yet the middleware redirects back to /login, causing an instant logout loop.
+        // If the cookie write fails, surface an error instead of redirecting into a
+        // broken session — auth succeeded but the session cannot be persisted.
+        const cookieRes = await fetch('/api/auth/set-cookie', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: data.token }),
+        });
+        if (!cookieRes.ok) {
+            throw new Error('Login succeeded but session could not be saved. Please try again.');
+        }
+        const next = sanitizeNextPath(searchParams.get("next"));
+        router.push(next);
+    };
+
+    const handleMfaSubmit = async () => {
+        setError("");
+        setLoading(true);
+        try {
+            const data = await mfaChallenge(mfaToken, totpCode);
+            await _storeSessionAndRedirect(data);
+        } catch (e: any) {
+            setError(e.message || "Invalid code. Please try again.");
+        } finally {
+            setLoading(false);
+        }
+    };
 
     const handleLogin = async () => {
         setError("");
         setLoading(true);
         try {
-            // Call the admin login API
             const data = await loginAdminSession(email, password);
 
-            // Store token in memory + cookie, refresh token in sessionStorage.
-            // The access JWT is NOT persisted — only the opaque refresh token is.
-            setToken(data.token);
-            setRefreshToken(data.refresh_token);
-            if (data.access_expires_at) scheduleRefresh(data.access_expires_at);
-            setUser({
-                id: data.user.id,
-                email: data.user.email,
-                role: data.user.role,
-                first_name: data.user.first_name,
-                last_name: data.user.last_name,
-                modules: data.user.modules,
-            });
+            if ("mfa_required" in data && data.mfa_required) {
+                setMfaToken(data.mfa_token);
+                setMfaRequired(true);
+                return;
+            }
 
-            // Bounce back to the originally requested page if middleware
-            // redirected the user here, otherwise land on /dashboard.
-            const next = sanitizeNextPath(searchParams.get("next"));
-            router.push(next);
+            await _storeSessionAndRedirect(data);
         } catch (e: any) {
             if (process.env.NODE_ENV === "development") {
                 console.error('Login error:', e);
@@ -91,52 +124,90 @@ function LoginForm() {
                         </div>
                     )}
 
-                    <div className="space-y-2">
-                        <Label htmlFor="email">Email</Label>
-                        <Input
-                            id="email"
-                            type="email"
-                            placeholder="admin@example.com"
-                            value={email}
-                            onChange={(e) => setEmail(e.target.value)}
-                            onKeyDown={(e) => e.key === "Enter" && handleLogin()}
-                        />
-                    </div>
-
-                    <div className="space-y-2">
-                        <Label htmlFor="password">Password</Label>
-                        <div className="relative">
-                            <Input
-                                id="password"
-                                type={showPassword ? "text" : "password"}
-                                placeholder="Enter your password"
-                                value={password}
-                                onChange={(e) => setPassword(e.target.value)}
-                                onKeyDown={(e) => e.key === "Enter" && handleLogin()}
-                                className="pr-10"
-                            />
+                    {mfaRequired ? (
+                        <>
+                            <p className="text-sm text-muted-foreground">
+                                Enter the 6-digit code from your authenticator app, or a backup code.
+                            </p>
+                            <div className="space-y-2">
+                                <Label htmlFor="totp">Authentication Code</Label>
+                                <Input
+                                    id="totp"
+                                    type="text"
+                                    inputMode="numeric"
+                                    placeholder="000000"
+                                    maxLength={8}
+                                    value={totpCode}
+                                    onChange={(e) => setTotpCode(e.target.value.toUpperCase())}
+                                    onKeyDown={(e) => e.key === "Enter" && handleMfaSubmit()}
+                                    autoFocus
+                                />
+                            </div>
+                            <Button
+                                className="w-full"
+                                onClick={handleMfaSubmit}
+                                disabled={loading || totpCode.length < 6}
+                            >
+                                {loading ? "Verifying..." : "Verify"}
+                            </Button>
                             <button
                                 type="button"
-                                aria-label={showPassword ? "Hide password" : "Show password"}
-                                onClick={() => setShowPassword(!showPassword)}
-                                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground focus:outline-none"
+                                className="w-full text-sm text-muted-foreground hover:text-foreground"
+                                onClick={() => { setMfaRequired(false); setMfaToken(""); setTotpCode(""); setError(""); }}
                             >
-                                {showPassword ? (
-                                    <EyeOff className="h-4 w-4" aria-hidden="true" />
-                                ) : (
-                                    <Eye className="h-4 w-4" aria-hidden="true" />
-                                )}
+                                Back to login
                             </button>
-                        </div>
-                    </div>
+                        </>
+                    ) : (
+                        <>
+                            <div className="space-y-2">
+                                <Label htmlFor="email">Email</Label>
+                                <Input
+                                    id="email"
+                                    type="email"
+                                    placeholder="admin@example.com"
+                                    value={email}
+                                    onChange={(e) => setEmail(e.target.value)}
+                                    onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+                                />
+                            </div>
 
-                    <Button
-                        className="w-full"
-                        onClick={handleLogin}
-                        disabled={loading || !email || !password}
-                    >
-                        {loading ? "Signing in..." : "Sign In"}
-                    </Button>
+                            <div className="space-y-2">
+                                <Label htmlFor="password">Password</Label>
+                                <div className="relative">
+                                    <Input
+                                        id="password"
+                                        type={showPassword ? "text" : "password"}
+                                        placeholder="Enter your password"
+                                        value={password}
+                                        onChange={(e) => setPassword(e.target.value)}
+                                        onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+                                        className="pr-10"
+                                    />
+                                    <button
+                                        type="button"
+                                        aria-label={showPassword ? "Hide password" : "Show password"}
+                                        onClick={() => setShowPassword(!showPassword)}
+                                        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground focus:outline-none"
+                                    >
+                                        {showPassword ? (
+                                            <EyeOff className="h-4 w-4" aria-hidden="true" />
+                                        ) : (
+                                            <Eye className="h-4 w-4" aria-hidden="true" />
+                                        )}
+                                    </button>
+                                </div>
+                            </div>
+
+                            <Button
+                                className="w-full"
+                                onClick={handleLogin}
+                                disabled={loading || !email || !password}
+                            >
+                                {loading ? "Signing in..." : "Sign In"}
+                            </Button>
+                        </>
+                    )}
                 </CardContent>
             </Card>
         </div>

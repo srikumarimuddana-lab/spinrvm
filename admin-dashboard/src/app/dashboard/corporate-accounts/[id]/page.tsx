@@ -40,6 +40,7 @@ import {
     Wallet,
     XCircle,
 } from "lucide-react";
+import { useToast } from "@/components/ui/use-toast";
 
 const STATUS_PILL_CLASSES: Record<CompanyStatus, string> = {
     pending_verification: "bg-yellow-100 text-yellow-800 hover:bg-yellow-100",
@@ -100,6 +101,7 @@ function formatDate(iso?: string | null) {
 export default function CompanyDetailPage() {
     const params = useParams<{ id: string }>();
     const id = params?.id;
+    const { toast } = useToast();
 
     const [company, setCompany] = useState<CorporateAccount | null>(null);
     const [loading, setLoading] = useState(true);
@@ -142,20 +144,33 @@ export default function CompanyDetailPage() {
         }
     }, [company?.status, loadWallet]);
 
+    const MAX_SINGLE_ADJUSTMENT = 10000; // $10,000 CAD safety cap
+
     const handleAdjust = async () => {
         if (!id) return;
         const raw = window.prompt("Adjustment amount (signed CAD):");
         if (!raw) return;
-        const amount = parseFloat(raw);
-        if (!Number.isFinite(amount) || amount === 0) return;
+        const adjustmentAmount = parseFloat(raw);
+        if (isNaN(adjustmentAmount) || adjustmentAmount === 0) {
+            toast({ title: "Invalid amount", description: "Adjustment amount cannot be zero", variant: "destructive" });
+            return;
+        }
+        if (Math.abs(adjustmentAmount) > MAX_SINGLE_ADJUSTMENT) {
+            toast({
+                title: "Amount exceeds limit",
+                description: `Single adjustment cannot exceed $${MAX_SINGLE_ADJUSTMENT.toFixed(2)}`,
+                variant: "destructive",
+            });
+            return;
+        }
         const notes = window.prompt("Reason (required):") ?? "";
         if (!notes.trim()) return;
         setWalletBusy(true);
         try {
-            await walletAdjust(id, { amount, notes: notes.trim() });
+            await walletAdjust(id, { amount: adjustmentAmount, notes: notes.trim() });
             await loadWallet();
         } catch (e: any) {
-            alert(e?.message ?? "Adjustment failed");
+            toast({ title: "Adjustment failed", description: e?.message, variant: "destructive" });
         } finally {
             setWalletBusy(false);
         }
@@ -170,7 +185,7 @@ export default function CompanyDetailPage() {
             });
             await loadWallet();
         } catch (e: any) {
-            alert(e?.message ?? "Failed to toggle auto top-up");
+            toast({ title: "Failed to toggle auto top-up", description: e?.message, variant: "destructive" });
         } finally {
             setWalletBusy(false);
         }
@@ -194,7 +209,7 @@ export default function CompanyDetailPage() {
             setPendingTransition(null);
             setReason("");
         } catch (e: any) {
-            alert(e?.message ?? "Status change failed");
+            toast({ title: "Status change failed", description: e?.message, variant: "destructive" });
         } finally {
             setTransitioning(false);
         }

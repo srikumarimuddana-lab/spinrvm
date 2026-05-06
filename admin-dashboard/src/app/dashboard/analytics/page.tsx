@@ -12,11 +12,11 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
-  BarChart3, TrendingUp, TrendingDown, XCircle, CheckCircle, Users,
-  Clock, RefreshCw, Activity, Car, DollarSign, Target,
+  BarChart3, TrendingDown, XCircle, CheckCircle,
+  RefreshCw, Activity, Car, DollarSign, Target,
 } from "lucide-react";
 import {
-  BarChart, Bar, PieChart, Pie, Cell, LineChart, Line,
+  BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
 import {
@@ -54,18 +54,23 @@ const REASON_LABELS: Record<string, string> = {
 export default function AnalyticsPage() {
   const [dateRange, setDateRange] = useState("30d");
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(false);
   const [overview, setOverview] = useState<any>(null);
   const [cancellations, setCancellations] = useState<any>(null);
   const [driverRates, setDriverRates] = useState<any>(null);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
+    setFetchError(false);
     try {
       const [ov, cancel, drivers] = await Promise.all([
         getAnalyticsOverview(dateRange).catch(() => null),
         getCancellationBreakdown(dateRange).catch(() => null),
         getDriverAcceptanceRates(dateRange).catch(() => null),
       ]);
+      if (ov === null || cancel === null || drivers === null) {
+        setFetchError(true);
+      }
       setOverview(ov);
       setCancellations(cancel);
       setDriverRates(drivers);
@@ -112,6 +117,16 @@ export default function AnalyticsPage() {
           </Button>
         </div>
       </div>
+
+      {/* Backend error banner */}
+      {fetchError && !loading && (
+        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 flex items-center justify-between">
+          <span>Analytics data unavailable — the backend returned an error. Check service health and try again.</span>
+          <Button variant="outline" size="sm" onClick={fetchAll} className="ml-4 text-red-700 border-red-300 hover:bg-red-100">
+            <RefreshCw className="h-3 w-3 mr-1" /> Retry
+          </Button>
+        </div>
+      )}
 
       {/* KPI Cards */}
       {overview && (

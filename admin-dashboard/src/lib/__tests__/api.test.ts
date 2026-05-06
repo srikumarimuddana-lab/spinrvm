@@ -28,6 +28,30 @@ function okResponse(body: unknown = {}) {
   } as Response);
 }
 
+// Helper to build a 429 response with configurable headers + body.
+// Mirrors the contract pinned in
+// docs/runbooks/rate-limits.md and
+// backend/tests/test_rate_limit_response_shape.py.
+function rateLimitedResponse(opts: {
+  headers?: Record<string, string>;
+  body?: any;
+} = {}) {
+  const body = opts.body ?? {
+    error: 'rate_limit_exceeded',
+    message: 'Too many requests',
+    retry_after: 60,
+    limit: 5,
+  };
+  return Promise.resolve({
+    ok: false,
+    status: 429,
+    headers: {
+      get: (k: string) => (opts.headers ?? {})[k] ?? null,
+    },
+    json: () => Promise.resolve(body),
+  } as unknown as Response);
+}
+
 // ---------- import after mocks are in place ----------
 import {
   loginAdminSession,
@@ -37,6 +61,7 @@ import {
   getDrivers,
   getSettings,
   updateSettings,
+  RateLimitError,
 } from '../api';
 
 describe('api.ts contract tests', () => {
@@ -122,5 +147,116 @@ describe('api.ts contract tests', () => {
     expect(init.method).toBe('PUT');
     const body = JSON.parse(init.body as string);
     expect(body.free_cancel_window_seconds).toBe(120);
+  });
+
+  // ─── B-P1-8: typed RateLimitError on 429 ────────────────────────────
+  // Without a typed error, admin login / "Sign out everywhere" /
+  // password change all surface 429s as a generic "Too many requests"
+  // string with no countdown, no limit context. These tests pin the
+  // typed-error parsing so the UI can render "try again in 60s".
+
+  it('429 throws RateLimitError with retryAfterSeconds parsed from header', async () => {
+    mockFetch.mockReturnValueOnce(
+      rateLimitedResponse({
+        headers: {
+          'Retry-After': '60',
+          'RateLimit-Limit': '5',
+          'RateLimit-Remaining': '0',
+          'RateLimit-Reset': '60',
+        },
+      }),
+    );
+
+    let caught: unknown = null;
+    try {
+      await loginAdminSession('admin@spinr.io', 'pass');
+    } catch (e) {
+      caught = e;
+    }
+
+    expect(caught).toBeInstanceOf(RateLimitError);
+    const err = caught as RateLimitError;
+    expect(err.status).toBe(429);
+    expect(err.retryAfterSeconds).toBe(60);
+    expect(err.limit).toBe(5);
+    expect(err.remaining).toBe(0);
+    expect(err.resetSeconds).toBe(60);
+  });
+
+  it('429 falls back to body.retry_after when Retry-After header is absent', async () => {
+    // Some corporate WAFs strip non-standard headers. The body field
+    // is our defence-in-depth; never both stripped, so RateLimitError
+    // always surfaces a usable retryAfterSeconds.
+    mockFetch.mockReturnValueOnce(
+      rateLimitedResponse({
+        headers: {},
+        body: {
+          error: 'rate_limit_exceeded',
+          message: 'Too many requests',
+          retry_after: 30,
+          limit: 5,
+        },
+      }),
+    );
+
+    let caught: unknown = null;
+    try {
+      await loginAdminSession('admin@spinr.io', 'pass');
+    } catch (e) {
+      caught = e;
+    }
+
+    expect(caught).toBeInstanceOf(RateLimitError);
+    expect((caught as RateLimitError).retryAfterSeconds).toBe(30);
+    expect((caught as RateLimitError).limit).toBe(5);
+  });
+
+  it('429 parses HTTP-date form of Retry-After (RFC 9110 alternative)', async () => {
+    const futureDate = new Date(Date.now() + 90_000).toUTCString();
+    mockFetch.mockReturnValueOnce(
+      rateLimitedResponse({ headers: { 'Retry-After': futureDate } }),
+    );
+
+    let caught: unknown = null;
+    try {
+      await loginAdminSession('admin@spinr.io', 'pass');
+    } catch (e) {
+      caught = e;
+    }
+
+    const err = caught as RateLimitError;
+    // Allow ±2s slack between Date.now() in the test and inside the
+    // parser to absorb test execution time.
+    expect(err.retryAfterSeconds).toBeGreaterThanOrEqual(88);
+    expect(err.retryAfterSeconds).toBeLessThanOrEqual(91);
+  });
+
+  it('429 surfaces the backend message string, not a generic fallback', async () => {
+    // The whole point of the typed error is that callers can render
+    // the backend's message. If we accidentally swap in a hardcoded
+    // "Too many requests" the UX loses the "try again at HH:MM" hint
+    // some endpoints emit.
+    mockFetch.mockReturnValueOnce(
+      rateLimitedResponse({
+        headers: { 'Retry-After': '60' },
+        body: {
+          error: 'rate_limit_exceeded',
+          message: 'Too many login attempts. Try again at 14:32 PT.',
+          retry_after: 60,
+          limit: 5,
+        },
+      }),
+    );
+
+    let caught: unknown = null;
+    try {
+      await loginAdminSession('admin@spinr.io', 'pass');
+    } catch (e) {
+      caught = e;
+    }
+
+    expect((caught as RateLimitError).message).toBe(
+      'Too many login attempts. Try again at 14:32 PT.',
+    );
   });
 });

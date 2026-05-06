@@ -31,7 +31,7 @@ import logging
 import os
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from statistics import mean
 from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock, patch
@@ -371,7 +371,7 @@ async def bench_create_ride(samples: int) -> Dict[str, Any]:
 def print_report(current: Dict[str, Any], baseline: Optional[Dict[str, Any]]) -> None:
     divider = "-" * 72
     print("\n" + divider)
-    print(" POST /api/v1/rides -- perf snapshot -- " + datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"))
+    print(" POST /api/v1/rides -- perf snapshot -- " + datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"))
     print(divider)
     if current.get("samples", 0) == 0:
         print("  ERR: no successful samples")

@@ -66,11 +66,11 @@ export default function ReferralScreen() {
     const fetchReferralInfo = async () => {
         setIsLoading(true);
         try {
-            const res = await api.get('/drivers/referral');
+            const res = await api.get<ReferralInfo>('/drivers/referral');
             setReferralInfo(res.data);
 
             // Fetch referred drivers
-            const driversRes = await api.get('/drivers/referrals?limit=50');
+            const driversRes = await api.get<{ referred_drivers: any[] }>('/drivers/referrals?limit=50');
             setReferredDrivers(driversRes.data.referred_drivers || []);
         } catch (err) {
             console.log('Error fetching referral info:', err);

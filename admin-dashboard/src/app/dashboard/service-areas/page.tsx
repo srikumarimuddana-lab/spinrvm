@@ -2,9 +2,14 @@
 
 import { useEffect, useState, lazy, Suspense } from "react";
 import { useRouter } from "next/navigation";
+import { useToast } from "@/components/ui/use-toast";
+import {
+    AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+    AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { getServiceAreas, createServiceArea, updateServiceArea, deleteServiceArea, getSubscriptionPlans, createSubscriptionPlan, updateSubscriptionPlan, deleteSubscriptionPlan, getDriverSubscriptions, getAreaFees, createAreaFee, updateAreaFee, deleteAreaFee, getVehicleTypes } from "@/lib/api";
-import { Infinity as InfinityIcon } from "lucide-react";
-import { Plus, Trash2, Pencil, MapPin, Settings, DollarSign, Car, CreditCard, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, X, FileText, GripVertical, Clock, ShieldCheck, ShieldAlert, CheckCircle, AlertTriangle, Image, Plane, Radar } from "lucide-react";
+import { Plus, Trash2, Pencil, MapPin, Settings, DollarSign, Car, CreditCard, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, FileText, Clock, ShieldCheck, ShieldAlert, CheckCircle, Image, Plane, Radar } from "lucide-react";
+import { useRequireModule } from "@/hooks/useRequireModule";
 
 const GeofenceMap = lazy(() => import("@/components/geofence-map"));
 
@@ -48,7 +53,10 @@ function getAreaCenter(area: any): { lat: number; lng: number } {
 }
 
 export default function ServiceAreasPage() {
+  const { allowed } = useRequireModule("service_areas");
   const router = useRouter();
+  const { toast } = useToast();
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   const [areas, setAreas] = useState<any[]>([]);
   const [plans, setPlans] = useState<any[]>([]);
   // Existing vehicle types (from /api/admin/vehicle-types) so the
@@ -135,13 +143,13 @@ export default function ServiceAreasPage() {
       setShowCreate(false);
       setCreateForm({ name: "", city: "", province: "SK", preset: "", polygon: [], polygonText: "", is_active: true, is_airport: false });
       load();
-    } catch (e: any) { alert(e?.message || "Failed to create"); }
+    } catch (e: any) { toast({ title: "Failed to create service area", description: e?.message, variant: "destructive" }); }
   };
 
   const handleCreateAirportSubRegion = async (parentId: string) => {
     const parent = areas.find(a => a.id === parentId);
     if (!airportForm.name || airportForm.polygon.length < 3) {
-      alert("Please enter a name and draw the airport boundary on the map.");
+      toast({ title: "Missing airport boundary", description: "Please enter a name and draw the airport boundary on the map.", variant: "destructive" });
       return;
     }
     try {
@@ -158,7 +166,7 @@ export default function ServiceAreasPage() {
       setAddAirportFor(null);
       setAirportForm({ name: "", airport_fee: 2.0, polygon: [] });
       load();
-    } catch (e: any) { alert(e?.message || "Failed to create airport zone"); }
+    } catch (e: any) { toast({ title: "Failed to create airport zone", description: e?.message, variant: "destructive" }); }
   };
 
   const handleFieldUpdate = async (areaId: string, field: string, value: any) => {
@@ -171,18 +179,25 @@ export default function ServiceAreasPage() {
         }
         return a;
       }));
-    } catch (e: any) { alert("Failed to update: " + (e?.message || "")); }
+    } catch (e: any) { toast({ title: "Failed to update field", description: e?.message, variant: "destructive" }); }
   };
 
   const handleVehiclePricingUpdate = async (areaId: string, pricing: any[]) => {
     await handleFieldUpdate(areaId, 'vehicle_pricing', pricing);
   };
 
-  const handleDelete = async (id: string, name: string) => {
-    if (!confirm(`Delete "${name}"? This cannot be undone.`)) return;
-    await deleteServiceArea(id);
-    load();
+  const handleDelete = (id: string, name: string) => {
+    setDeleteTarget({ id, name });
   };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    try { await deleteServiceArea(deleteTarget.id); load(); }
+    catch (e: any) { toast({ title: "Failed to delete service area", description: e?.message, variant: "destructive" }); }
+    finally { setDeleteTarget(null); }
+  };
+
+  if (!allowed) return null;
 
   return (
     <div>
@@ -269,7 +284,7 @@ export default function ServiceAreasPage() {
             return (
               <div key={area.id} className="bg-white rounded-2xl border overflow-hidden">
                 {/* Area Header — click to expand */}
-                <div className="flex items-center gap-4 p-5 cursor-pointer" onClick={() => { const newId = isExpanded ? null : area.id; setExpandedId(newId); setEditTab("general"); if (newId && !areaFees[newId]) loadAreaFees(newId); }}>
+                <div className="flex items-center gap-4 p-5 cursor-pointer" role="button" tabIndex={0} aria-expanded={isExpanded} onClick={() => { const newId = isExpanded ? null : area.id; setExpandedId(newId); setEditTab("general"); if (newId && !areaFees[newId]) loadAreaFees(newId); }} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); const newId = isExpanded ? null : area.id; setExpandedId(newId); setEditTab("general"); if (newId && !areaFees[newId]) loadAreaFees(newId); } }}>
                   <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${area.is_active ? 'bg-green-100' : 'bg-gray-100'}`}>
                     <MapPin className={`h-5 w-5 ${area.is_active ? 'text-green-600' : 'text-gray-400'}`} />
                   </div>
@@ -325,7 +340,7 @@ export default function ServiceAreasPage() {
                           try {
                             await updateServiceArea(area.id, updates);
                             setAreas(prev => prev.map(a => a.id === area.id ? { ...a, ...updates } : a));
-                          } catch (e: any) { alert("Failed to save: " + (e?.message || "")); }
+                          } catch (e: any) { toast({ title: "Failed to save", description: e?.message, variant: "destructive" }); }
                         }} onDelete={() => handleDelete(area.id, area.name)} />
                       )}
 
@@ -486,6 +501,19 @@ export default function ServiceAreasPage() {
           })}
         </div>
       )}
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete "{deleteTarget?.name}"?</AlertDialogTitle>
+            <AlertDialogDescription>This cannot be undone.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDelete} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -606,7 +634,7 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
         </div>
         <p className="text-sm text-gray-500 mb-3">
           Temporarily raise fares in this area during high-demand periods. When active,
-          every vehicle's fare is multiplied by the surge factor.
+          every vehicle&apos;s fare is multiplied by the surge factor.
           {area.surge_source === "auto" && (
             <span className="text-blue-600"> Currently auto-managed by the surge engine; editing these fields will switch it to manual.</span>
           )}
@@ -717,7 +745,7 @@ function FieldInput({ label, value, type = "text", onSave }: { label: string; va
   );
 }
 
-function FieldSelect({ label, value, options, onSave }: { label: string; value: string; options: string[]; onSave: (v: string) => void }) {
+function _FieldSelect({ label, value, options, onSave }: { label: string; value: string; options: string[]; onSave: (v: string) => void }) {
   return (
     <div>
       <label className="block text-xs font-semibold text-gray-500 mb-1">{label}</label>
@@ -1012,6 +1040,8 @@ function AreaFeesEditor({ areaId, area, fees, loading, onReload, onFieldUpdate }
     areaId: string; area: any; fees: any[]; loading: boolean;
     onReload: () => void; onFieldUpdate: (areaId: string, field: string, value: any) => void;
 }) {
+    const { toast } = useToast();
+    const [feeDeleteTarget, setFeeDeleteTarget] = useState<string | null>(null);
     const [editingFee, setEditingFee] = useState<any>(null);
     const [saving, setSaving] = useState(false);
 
@@ -1034,20 +1064,27 @@ function AreaFeesEditor({ areaId, area, fees, loading, onReload, onFieldUpdate }
         try {
             await createAreaFee(areaId, { fee_name: 'New Fee', fee_type: 'custom', calc_mode: 'flat', amount: 0, is_active: true });
             onReload();
-        } catch (e: any) { alert(e?.message || 'Failed'); }
+        } catch (e: any) { toast({ title: "Failed to create fee", description: e?.message, variant: "destructive" }); }
         setSaving(false);
     };
 
     const handleUpdate = async (feeId: string, data: any) => {
-        try { await updateAreaFee(areaId, feeId, data); onReload(); } catch (e: any) { alert(e?.message || 'Failed'); }
+        try { await updateAreaFee(areaId, feeId, data); onReload(); } catch (e: any) { toast({ title: "Failed to update fee", description: e?.message, variant: "destructive" }); }
     };
 
-    const handleDelete = async (feeId: string) => {
-        if (!confirm('Delete this fee?')) return;
-        try { await deleteAreaFee(areaId, feeId); onReload(); } catch (e: any) { alert(e?.message || 'Failed'); }
+    const handleDelete = (feeId: string) => {
+        setFeeDeleteTarget(feeId);
+    };
+
+    const confirmFeeDelete = async () => {
+        if (!feeDeleteTarget) return;
+        try { await deleteAreaFee(areaId, feeDeleteTarget); onReload(); }
+        catch (e: any) { toast({ title: "Failed to delete fee", description: e?.message, variant: "destructive" }); }
+        finally { setFeeDeleteTarget(null); }
     };
 
     return (
+        <>
         <div className="space-y-6">
             {/* SECTION 1: Area Fees */}
             <div>
@@ -1173,6 +1210,20 @@ function AreaFeesEditor({ areaId, area, fees, loading, onReload, onFieldUpdate }
                 </div>
             </div>
         </div>
+
+        <AlertDialog open={!!feeDeleteTarget} onOpenChange={(open) => { if (!open) setFeeDeleteTarget(null); }}>
+            <AlertDialogContent>
+                <AlertDialogHeader>
+                    <AlertDialogTitle>Delete fee?</AlertDialogTitle>
+                    <AlertDialogDescription>This cannot be undone.</AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction onClick={confirmFeeDelete} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
+                </AlertDialogFooter>
+            </AlertDialogContent>
+        </AlertDialog>
+        </>
     );
 }
 
@@ -1261,6 +1312,8 @@ const DURATION_OPTIONS = [
 function SpinrPassAreaTab({ area, plans, onToggle, onPlansChanged }: {
   area: any; plans: any[]; onToggle: (v: boolean) => void; onPlansChanged: () => void;
 }) {
+  const { toast } = useToast();
+  const [planDeleteTarget, setPlanDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [subs, setSubs] = useState<any[]>([]);
@@ -1286,7 +1339,7 @@ function SpinrPassAreaTab({ area, plans, onToggle, onPlansChanged }: {
       if (editingId) { await updateSubscriptionPlan(editingId, data); }
       else { await createSubscriptionPlan(data); }
       resetForm(); onPlansChanged();
-    } catch (e: any) { alert(e?.message || "Failed to save plan"); }
+    } catch (e: any) { toast({ title: "Failed to save plan", description: e?.message, variant: "destructive" }); }
   };
 
   const handleEdit = (p: any) => {
@@ -1295,9 +1348,15 @@ function SpinrPassAreaTab({ area, plans, onToggle, onPlansChanged }: {
     setShowForm(true);
   };
 
-  const handleDeletePlan = async (p: any) => {
-    if (!confirm(`Delete "${p.name}" plan?`)) return;
-    await deleteSubscriptionPlan(p.id); onPlansChanged();
+  const handleDeletePlan = (p: any) => {
+    setPlanDeleteTarget({ id: p.id, name: p.name });
+  };
+
+  const confirmPlanDelete = async () => {
+    if (!planDeleteTarget) return;
+    try { await deleteSubscriptionPlan(planDeleteTarget.id); onPlansChanged(); }
+    catch (e: any) { toast({ title: "Failed to delete plan", description: e?.message, variant: "destructive" }); }
+    finally { setPlanDeleteTarget(null); }
   };
 
   const handleTogglePlan = async (p: any) => {
@@ -1455,6 +1514,19 @@ function SpinrPassAreaTab({ area, plans, onToggle, onPlansChanged }: {
           )}
         </div>
       )}
+
+      <AlertDialog open={!!planDeleteTarget} onOpenChange={(open) => { if (!open) setPlanDeleteTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete "{planDeleteTarget?.name}" plan?</AlertDialogTitle>
+            <AlertDialogDescription>This cannot be undone.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmPlanDelete} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

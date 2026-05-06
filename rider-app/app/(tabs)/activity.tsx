@@ -12,6 +12,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import SkeletonBox from '../../components/SkeletonBox';
 import { useRideStore } from '../../store/rideStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -60,7 +61,7 @@ export default function ActivityScreen() {
       const url = cursor
         ? `/rides/history?limit=${PAGE_LIMIT}&before=${cursor}`
         : `/rides/history?limit=${PAGE_LIMIT}`;
-      const res = await api.get(url).catch(() => ({ data: { rides: [], next_cursor: null } }));
+      const res = await api.get<{ rides: RideHistory[]; next_cursor: string | null }>(url).catch(() => ({ data: { rides: [], next_cursor: null } }));
       return { rides: res.data?.rides ?? [], next_cursor: res.data?.next_cursor ?? null };
     } catch {
       return { rides: [], next_cursor: null };
@@ -78,7 +79,7 @@ export default function ActivityScreen() {
       setNextCursor(pageResult.next_cursor);
 
       const typesMap: Record<string, string> = {};
-      (typesRes.data || []).forEach((t: any) => {
+      ((typesRes.data as unknown[]) || []).forEach((t: any) => {
         typesMap[t.id] = t.name;
       });
       setVehicleTypes(typesMap);
@@ -209,10 +210,14 @@ export default function ActivityScreen() {
       return <Text style={styles.monthHeader}>{item.title}</Text>;
     }
     const { ride } = item;
+    const fare = ride.status === 'cancelled' ? '0.00' : ride.total_fare?.toFixed(2) || '0.00';
     return (
       <TouchableOpacity
         style={styles.rideCard}
         onPress={() => handleRidePress(ride)}
+        accessibilityRole="button"
+        accessibilityLabel={`${getStatusText(ride.status)} ride to ${ride.dropoff_address || 'unknown destination'}, $${fare}`}
+        accessibilityHint="Double-tap to view ride details"
       >
         <View style={[styles.rideIcon, { backgroundColor: '#FFF0F0' }]}>
           <Ionicons
@@ -232,12 +237,12 @@ export default function ActivityScreen() {
         </View>
 
         <View style={styles.rideFareContainer}>
-          <Text style={[styles.rideFare, ride.status === 'cancelled' && styles.rideFareCancelled]}>
-            ${ride.status === 'cancelled' ? '0.00' : ride.total_fare?.toFixed(2) || '0.00'}
+          <Text style={[styles.rideFare, ride.status === 'cancelled' && styles.rideFareCancelled]} allowFontScaling={false}>
+            ${fare}
           </Text>
           <View style={styles.rideStatusContainer}>
             <View style={[styles.statusDot, { backgroundColor: getStatusColor(ride.status) }]} />
-            <Text style={[styles.rideStatus, { color: getStatusColor(ride.status) }]}>
+            <Text style={[styles.rideStatus, { color: getStatusColor(ride.status) }]} allowFontScaling={false}>
               {getStatusText(ride.status)}
             </Text>
           </View>
@@ -255,22 +260,34 @@ export default function ActivityScreen() {
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.title}>{t('activity.title')}</Text>
-        <TouchableOpacity style={styles.filterIcon}>
+        <TouchableOpacity
+          style={styles.filterIcon}
+          accessibilityRole="button"
+          accessibilityLabel="Filter rides"
+          accessibilityHint="Opens ride filter options"
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+        >
           <Ionicons name="options-outline" size={24} color={colors.text} />
         </TouchableOpacity>
       </View>
 
       {/* Tab Switcher — History vs Upcoming (R-P1-5) */}
-      <View style={styles.tabRow}>
+      <View style={styles.tabRow} accessibilityRole="tablist">
         <TouchableOpacity
           style={[styles.tab, activeTab === 'history' && styles.tabActive]}
           onPress={() => setActiveTab('history')}
+          accessibilityRole="tab"
+          accessibilityLabel="Ride history"
+          accessibilityState={{ selected: activeTab === 'history' }}
         >
           <Text style={[styles.tabText, activeTab === 'history' && styles.tabTextActive]}>{t('activity.history_tab')}</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.tab, activeTab === 'upcoming' && styles.tabActive]}
           onPress={() => setActiveTab('upcoming')}
+          accessibilityRole="tab"
+          accessibilityLabel={`Upcoming rides${scheduledRides.length > 0 ? `, ${scheduledRides.length} scheduled` : ''}`}
+          accessibilityState={{ selected: activeTab === 'upcoming' }}
         >
           <Text style={[styles.tabText, activeTab === 'upcoming' && styles.tabTextActive]}>
             {t('activity.upcoming_tab')}{scheduledRides.length > 0 ? ` (${scheduledRides.length})` : ''}
@@ -287,6 +304,9 @@ export default function ActivityScreen() {
                 key={f}
                 style={[styles.filterTab, filter === f && styles.filterTabActive]}
                 onPress={() => setFilter(f as FilterType)}
+                accessibilityRole="radio"
+                accessibilityLabel={`${f.charAt(0).toUpperCase() + f.slice(1)} rides`}
+                accessibilityState={{ checked: filter === f }}
               >
                 <Text style={[styles.filterTabText, filter === f && styles.filterTabTextActive]}>
                   {f.charAt(0).toUpperCase() + f.slice(1)}
@@ -300,6 +320,22 @@ export default function ActivityScreen() {
               <Ionicons name="alert-circle-outline" size={48} color="#EF4444" />
               <Text style={[styles.emptyTitle, { color: '#EF4444' }]}>Could not load rides</Text>
               <Text style={styles.emptyText}>Pull down to refresh.</Text>
+            </View>
+          ) : loading && rides.length === 0 ? (
+            <View style={{ paddingHorizontal: 16, paddingTop: 8 }}>
+              {[0, 1, 2, 3].map((i) => (
+                <View key={i} style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' }}>
+                  <SkeletonBox width={40} height={40} borderRadius={20} style={{ marginRight: 12 }} />
+                  <View style={{ flex: 1, gap: 8 }}>
+                    <SkeletonBox width="60%" height={14} />
+                    <SkeletonBox width="40%" height={12} />
+                  </View>
+                  <View style={{ alignItems: 'flex-end', gap: 8 }}>
+                    <SkeletonBox width={50} height={14} />
+                    <SkeletonBox width={40} height={12} />
+                  </View>
+                </View>
+              ))}
             </View>
           ) : rides.length === 0 && !loading ? (
             <View style={styles.emptyState}>
@@ -349,6 +385,9 @@ export default function ActivityScreen() {
                 key={ride.id}
                 style={styles.rideCard}
                 onPress={() => handleRidePress(ride)}
+                accessibilityRole="button"
+                accessibilityLabel={`Scheduled ride to ${ride.dropoff_address || 'unknown destination'}, ${ride.scheduled_time ? formatDate(ride.scheduled_time) : 'scheduled'}`}
+                accessibilityHint="Double-tap to view ride details"
               >
                 <View style={[styles.rideIcon, { backgroundColor: '#EFF6FF' }]}>
                   <Ionicons name="calendar" size={20} color="#3B82F6" />
@@ -362,12 +401,12 @@ export default function ActivityScreen() {
                   </Text>
                 </View>
                 <View style={styles.rideFareContainer}>
-                  <Text style={styles.rideFare}>
+                  <Text style={styles.rideFare} allowFontScaling={false}>
                     ${ride.total_fare?.toFixed(2) || '0.00'}
                   </Text>
                   <View style={styles.rideStatusContainer}>
                     <View style={[styles.statusDot, { backgroundColor: '#3B82F6' }]} />
-                    <Text style={[styles.rideStatus, { color: '#3B82F6' }]}>{t('activity.scheduled')}</Text>
+                    <Text style={[styles.rideStatus, { color: '#3B82F6' }]} allowFontScaling={false}>{t('activity.scheduled')}</Text>
                   </View>
                 </View>
               </TouchableOpacity>

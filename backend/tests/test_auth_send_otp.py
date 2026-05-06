@@ -70,6 +70,10 @@ async def _call_send_otp(db_settings_return=None, db_settings_raise=None):
         ),
         patch("backend.routes.auth.db_supabase.delete_many", AsyncMock()),
         patch("backend.routes.auth.db_supabase.insert_otp_record", AsyncMock()),
+        # Dev-OTP fallback is gated on ENV=development per the production-
+        # hardening note in routes/auth.py — pytest.ini defaults to ENV=test
+        # which (correctly) refuses the bypass, so patch it for these tests.
+        patch("backend.routes.auth.settings.ENV", "development"),
     ]
     for p in patches:
         p.start()
@@ -93,7 +97,9 @@ class TestSendOtpShadowingRegression:
         In test ENV, should fall back to dev OTP 123456 and return success."""
         result = asyncio.run(_call_send_otp(db_settings_return={}))
         assert result["success"] is True
-        assert PHONE in result["message"]
+        # Response masks phone as ***NNNN for PIPEDA compliance — never echo
+        # the full E.164 number back to the client.
+        assert PHONE[-4:] in result["message"]
 
     def test_db_returns_twilio_config_dict(self):
         """get_app_settings returns a dict WITH twilio creds — the code must
@@ -117,9 +123,12 @@ class TestSendOtpShadowingRegression:
         assert result["success"] is True
 
     def test_phone_is_normalized_in_response(self):
-        """Sanity check that the E.164 phone the user provided flows through."""
+        """Sanity check that the E.164 phone the user provided flows through —
+        only the last 4 digits should appear (PII masking)."""
         result = asyncio.run(_call_send_otp(db_settings_return={}))
-        assert PHONE in result["message"]
+        # Full number must NOT be echoed back; only the last-4 mask is allowed.
+        assert PHONE not in result["message"]
+        assert PHONE[-4:] in result["message"]
 
 
 class TestVerifyOtpLockoutHelpers:
@@ -143,17 +152,26 @@ class TestVerifyOtpLockoutHelpers:
             "_clear_otp_failures missing — verify_otp will NameError on success path"
         )
 
-    def test_check_lockout_swallows_redis_errors(self):
-        """If Redis is down, login must NOT be bricked — the check should
-        return silently rather than bubble the exception out of auth."""
+    def test_check_lockout_raises_503_on_redis_error(self):
+        """If Redis is down the endpoint must fail closed (503) rather than
+        letting unauthenticated requests through.
+
+        The current implementation is intentionally fail-closed:
+        if we cannot consult the lockout store we cannot guarantee the
+        brute-force limit is being enforced, so we return 503 to tell
+        the client to retry when the store is back up.
+        """
+        from fastapi import HTTPException
+
         from backend.routes import auth
 
         with patch(
             "backend.routes.auth.redis_get",
             AsyncMock(side_effect=RuntimeError("redis down")),
         ):
-            # Must NOT raise — login should still proceed if Redis is unavailable.
-            asyncio.run(auth._check_otp_lockout(PHONE))
+            with pytest.raises(HTTPException) as excinfo:
+                asyncio.run(auth._check_otp_lockout(PHONE))
+        assert excinfo.value.status_code == 503
 
     def test_check_lockout_raises_429_when_locked(self):
         from fastapi import HTTPException

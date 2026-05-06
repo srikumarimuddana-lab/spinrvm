@@ -38,6 +38,12 @@ db = db_supabase  # legacy alias
 # with DIFFERENT secrets — a silent auth hazard. Unified here so both
 # `routes/admin/auth.py` and this module share the same source of truth.
 JWT_ALGORITHM = "HS256"
+# Audience constants — present in every token we mint so cross-environment
+# token reuse is rejected at decode time (rider token can't hit admin endpoint
+# and vice-versa). Missing aud is tolerated during the 15-min rollout window
+# when old tokens (no aud) are still in circulation; wrong aud is always rejected.
+JWT_AUD_MOBILE = "spinr:rider"
+JWT_AUD_ADMIN = "spinr:admin"
 OTP_EXPIRY_MINUTES = 5
 # Product decision: 4-digit OTP across the whole app (login + ride pickup).
 # Trade-off: 1/10,000 guess odds per attempt vs 1/1,000,000 for 6 digits.
@@ -96,6 +102,7 @@ def create_jwt_token(
     payload: dict = {
         "user_id": user_id,
         "phone": phone,
+        "aud": JWT_AUD_MOBILE,
         "iat": now,
         "exp": now + ttl,
         "token_version": int(token_version or 0),
@@ -108,7 +115,7 @@ def create_jwt_token(
 
 def verify_jwt_token(token: str) -> dict:
     try:
-        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[JWT_ALGORITHM], options={"verify_aud": False})
         return payload
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token has expired") from None
@@ -149,10 +156,14 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             payload = None
 
         if payload:
-            # R-P1-12: Enforce rider app audience — reject tokens minted for the
-            # driver app (which would otherwise create/access rider accounts).
-            rider_app_id = getattr(settings, "FIREBASE_RIDER_APP_ID", None)
-            if rider_app_id and payload.get("aud") != rider_app_id:
+            # R-P1-12 / B-P1-1 / DV-10: enforce rider app audience unconditionally.
+            # Production fails fast in core/config._guard_production_secrets when
+            # FIREBASE_RIDER_APP_ID is unset, so the empty-string branch below is
+            # only reachable in dev/test.
+            rider_app_id = getattr(settings, "FIREBASE_RIDER_APP_ID", None) or ""
+            if not rider_app_id:
+                raise HTTPException(status_code=503, detail="Rider Firebase audience not configured")
+            if payload.get("aud") != rider_app_id:
                 raise HTTPException(status_code=401, detail="ERR_TOKEN_AUDIENCE")
 
             uid = payload.get("uid") or payload.get("user_id")
@@ -201,16 +212,51 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         logger.error(f"JWT verification failed: {e}")
         raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}") from e
 
-    # Admin tokens are minted by routes/admin/auth.py and carry `role` +
-    # `email` + `modules` claims that regular rider/driver tokens do not
-    # have. Since the token is signed with our own JWT_SECRET, we can
-    # trust these claims and return the user directly without a DB lookup.
-    # Without this check, admin-001 (which has no users row) would be
-    # auto-created as a rider and fail the get_admin_user role check.
+    # Audience enforcement — reject cross-environment token reuse.
+    # Tokens minted before this fix carry no 'aud' claim; allow them through
+    # for one 15-minute TTL window, then they naturally expire and new tokens
+    # carry the claim. A present-but-wrong aud is always rejected immediately.
     _admin_roles = {"admin", "super_admin", "operations", "support", "finance", "custom"}
+    _is_admin_payload = payload.get("role") in _admin_roles and bool(payload.get("email"))
+    _expected_aud = JWT_AUD_ADMIN if _is_admin_payload else JWT_AUD_MOBILE
+    _token_aud = payload.get("aud")
+    if _token_aud is not None and _token_aud != _expected_aud:
+        raise HTTPException(status_code=401, detail="ERR_TOKEN_AUDIENCE")
     if payload.get("role") in _admin_roles and payload.get("email"):
+        user_id = payload["user_id"]
+        jti = payload.get("jti")
+        if jti and await redis_get(f"admin:revoked:{jti}"):
+            raise HTTPException(status_code=401, detail="ERR_TOKEN_REVOKED")
+        if user_id != "admin-001":
+            staff_rows = await db_supabase.get_rows("admin_staff", {"id": user_id}, limit=1)
+            staff = staff_rows[0] if staff_rows else None
+            if not staff or not staff.get("is_active", True):
+                raise HTTPException(status_code=401, detail="ERR_ACCOUNT_INACTIVE")
+            if _token_version_mismatch(payload, staff):
+                raise HTTPException(status_code=401, detail="ERR_SESSION_REVOKED")
+            # Server-side idle timeout: 30 min of inactivity → force re-login
+            # (audit A-P2-2). admin-001 has no DB row so this only runs for
+            # staff accounts.
+            _IDLE_SECONDS = 30 * 60
+            last_active_raw = staff.get("last_activity_at")
+            if last_active_raw:
+                try:
+                    last_active = datetime.fromisoformat(last_active_raw.replace("Z", "+00:00"))
+                    if (datetime.now(timezone.utc) - last_active).total_seconds() > _IDLE_SECONDS:
+                        raise HTTPException(status_code=401, detail="ERR_IDLE_TIMEOUT")
+                except HTTPException:
+                    raise
+                except Exception as _ts_err:
+                    logger.warning(f"Malformed last_activity_at for staff {user_id} — letting through: {_ts_err}")
+            # Fire-and-forget activity timestamp update (best-effort; auth must not fail here)
+            try:
+                await db_supabase.update_one(
+                    "admin_staff", {"id": user_id}, {"last_activity_at": datetime.now(timezone.utc).isoformat()}
+                )
+            except Exception as _upd_err:
+                logger.warning(f"Could not update last_activity_at for staff {user_id}: {_upd_err}")
         return {
-            "id": payload["user_id"],
+            "id": user_id,
             "email": payload.get("email"),
             "phone": payload.get("phone", ""),
             "role": payload["role"],
@@ -312,6 +358,36 @@ async def get_admin_user(current_user: dict = Depends(get_current_user)) -> dict
     if role not in ("admin", "super_admin", "operations", "support", "finance", "custom"):
         raise HTTPException(status_code=403, detail="Admin access required")
     return current_user
+
+
+def require_module(module: str):
+    """Return a FastAPI dependency that enforces module-level RBAC.
+
+    Usage::
+
+        @router.post("/wallet/credit")
+        async def credit(admin: dict = Depends(require_module("earnings"))):
+            ...
+
+    Or at include_router time::
+
+        admin_router.include_router(wallet_router, dependencies=[Depends(require_module("earnings"))])
+
+    super_admin always passes regardless of the modules claim.
+    """
+
+    async def _check(current_user: dict = Depends(get_admin_user)) -> dict:
+        if current_user.get("role") == "super_admin":
+            return current_user
+        modules: list = current_user.get("modules") or []
+        if module not in modules:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Access denied — module '{module}' not in your role permissions",
+            )
+        return current_user
+
+    return _check
 
 
 # Alias for backward compatibility

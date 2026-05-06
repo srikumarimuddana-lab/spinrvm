@@ -3,8 +3,23 @@ import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 import { auth } from '../config/firebaseConfig';
 import { PhoneAuthProvider, signInWithCredential, signOut, User as FirebaseUser } from 'firebase/auth';
-import api, { setInMemoryToken, setRefreshCallback } from '../api/client';
+import api, { setCsrfToken, setInMemoryToken, setRefreshCallback } from '../api/client';
 import { appCache, CACHE_KEYS, CACHE_CONFIG } from '../cache';
+
+// Narrows an unknown caught value to an Axios-style error shape so callers
+// can safely access `.response.status` and `.response.data.detail` without
+// casting to `any`.
+function isApiError(e: unknown): e is {
+  response?: { status?: number; data?: { detail?: string } };
+  message?: string;
+} {
+  return typeof e === 'object' && e !== null;
+}
+
+// React Native's FormData.append accepts a file descriptor object that the
+// native fetch serialises to multipart/form-data. The standard TS types only
+// expose Blob/string, so we name the RN extension to avoid `as any`.
+type RNFormFile = { uri: string; name: string; type: string };
 
 // Wipe every auth artifact from local storage. Called whenever initialize
 // lands in a "no valid session" state so stale refresh tokens from a past
@@ -91,7 +106,8 @@ export interface Driver {
   insurance_expiry_date?: string;
   background_check_expiry_date?: string;
   vehicle_inspection_expiry_date?: string;
-  [key: string]: any;
+  is_wav?: boolean;
+  [key: string]: unknown;
 }
 
 export type DriverOnboardingStatus =
@@ -119,12 +135,24 @@ export interface User {
   profile_image?: string;  // Base64 data URI
   profile_image_status?: 'pending_review' | 'approved' | 'rejected' | null;
   rating?: number;
+  total_rides?: number;
   // Driver onboarding state machine (computed server-side on every /auth/me).
   // Null for riders. Clients should route on this rather than profile_complete.
   driver_onboarding_status?: DriverOnboardingStatus | null;
   driver_onboarding_detail?: string | null;
   driver_onboarding_next_screen?: string | null;
 }
+
+interface RefreshTokenResponse {
+  token: string;
+  refresh_token: string;
+  expires_in: number;
+  csrf_token?: string | null;
+}
+
+// Payload accepted by POST /drivers/register — all fields are optional;
+// the backend populates required fields from the authenticated user.
+export type DriverRegistrationPayload = Record<string, unknown>;
 
 interface AuthState {
   user: User | null;
@@ -140,7 +168,7 @@ interface AuthState {
   // Actions
   initialize: () => Promise<void>;
   verifyOTP: (verificationId: string, code: string) => Promise<void>;
-  setTokens: (token: string, refreshToken: string, expiresIn: number) => Promise<void>;
+  setTokens: (token: string, refreshToken: string, expiresIn: number, csrfToken?: string | null) => Promise<void>;
   refreshTokens: () => Promise<boolean>;
   createProfile: (data: {
     first_name: string;
@@ -152,15 +180,16 @@ interface AuthState {
   }) => Promise<void>;
   fetchDriverProfile: () => Promise<void>;
   refreshProfile: () => Promise<void>;
-  registerDriver: (data: any) => Promise<void>;
+  registerDriver: (data: DriverRegistrationPayload) => Promise<void>;
   toggleDriverMode: () => void;
   updateDriverStatus: (isOnline: boolean) => Promise<void>;
   updateProfileImage: (imageUri: string) => Promise<void>;
   logout: () => Promise<void>;
+  logoutAll: () => Promise<{ revoked_refresh_tokens: number }>;
   clearError: () => void;
 }
 
-export const useAuthStore = create<AuthState>((set: any, get: any) => ({
+export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
   driver: null,
   isDriverMode: false,
@@ -173,11 +202,12 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
 
   // ── Token helpers ──────────────────────────────────────────────────────── //
 
-  setTokens: async (token: string, refreshToken: string, expiresIn: number) => {
+  setTokens: async (token: string, refreshToken: string, expiresIn: number, csrfToken?: string | null) => {
     const expiresAt = Date.now() + expiresIn * 1000;
     // Access token is memory-only (wiped on restart, stays within JWT TTL).
     // Only the refresh token is persisted to hardware-backed secure storage.
     setInMemoryToken(token);
+    if (csrfToken !== undefined) setCsrfToken(csrfToken);
     await storage.setItem('refresh_token', refreshToken);
     await storage.setItem('token_expires_at', String(expiresAt));
     // Remove any previously-persisted access token from older app versions.
@@ -190,20 +220,20 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
     if (!storedRefresh) return false;
     try {
       const res = await api.post('/auth/refresh', { refresh_token: storedRefresh });
-      const { token, refresh_token: newRefresh, expires_in } = res.data as any;
-      await get().setTokens(token, newRefresh, expires_in);
+      const { token, refresh_token: newRefresh, expires_in, csrf_token } = res.data as RefreshTokenResponse;
+      await get().setTokens(token, newRefresh, expires_in, csrf_token);
       return true;
-    } catch (e: any) {
+    } catch (e: unknown) {
       // Only wipe the session when the server explicitly rejects the refresh
       // token (401). Network errors, timeouts, and 5xx are transient — keeping
       // the refresh token lets the next app launch / request try again instead
       // of forcing the user back to the OTP screen on a flaky connection.
-      const status = e?.response?.status;
+      const status = isApiError(e) ? e.response?.status : undefined;
       if (status === 401) {
         console.log('[Auth] Refresh token rejected (401) — logging out');
         await get().logout();
       } else {
-        console.log('[Auth] Token refresh failed transiently, keeping session:', status ?? e?.message);
+        console.log('[Auth] Token refresh failed transiently, keeping session:', status ?? (isApiError(e) ? e.message : String(e)));
       }
       return false;
     }
@@ -216,89 +246,12 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
     if (__DEV__) console.log("Auth initializing...");
     set({ isLoading: true });
 
-    // Strategy:
-    //   1. ALWAYS check for a stored backend JWT first.
-    //   2. Only fall through to Firebase if there's no stored token.
-    //   This prevents Firebase onAuthStateChanged (which fires with null
-    //   when no Firebase phone-auth session exists) from deleting a
-    //   perfectly valid backend JWT.
+    // Strategy: access tokens are memory-only (never persisted).
+    // On cold start, go straight to the refresh token path.
+    // The refresh token flow re-hydrates the session without forcing
+    // the user back to the OTP screen.
 
-    const storedToken = await storage.getItem('auth_token');
-    if (__DEV__) console.log('[Auth] Stored token:', storedToken ? 'EXISTS' : 'NULL');
-
-    if (storedToken) {
-      // ── Stored backend JWT path ──
-      try {
-        const response = await api.get('/auth/me', {
-          headers: { Authorization: `Bearer ${storedToken}` }
-        });
-        const userData = response.data as User;
-
-        if (__DEV__) console.log('[Auth] /auth/me →', {
-          phone: userData?.phone,
-          first_name: userData?.first_name,
-          last_name: userData?.last_name,
-          email: userData?.email,
-          profile_complete: userData?.profile_complete,
-          is_driver: userData?.is_driver,
-          driver_onboarding_status: userData?.driver_onboarding_status,
-          driver_onboarding_next_screen: userData?.driver_onboarding_next_screen,
-        });
-
-        await appCache.set(CACHE_KEYS.USER_PROFILE, userData, CACHE_CONFIG.USER_PROFILE_TTL);
-
-        let driverData: Driver | null = null;
-        // See refreshProfile for why we also gate on driver_onboarding_status:
-        // it's the reliable "driver row exists" signal when is_driver/role
-        // flags are stale on legacy user rows.
-        const looksLikeDriver =
-          !!(userData as any).is_driver ||
-          (userData as any).role === 'driver' ||
-          !!(userData as any).driver_onboarding_status;
-        if (looksLikeDriver) {
-          try {
-            const driverRes = await api.get('/drivers/me', {
-              headers: { Authorization: `Bearer ${storedToken}` }
-            });
-            driverData = driverRes.data as Driver;
-            await appCache.set(CACHE_KEYS.DRIVER_PROFILE, driverData, CACHE_CONFIG.USER_PROFILE_TTL);
-          } catch (e: any) {
-            if (e?.response?.status === 404) {
-              // No driver row — auto-create one from the user's profile.
-              // The backend fills all required fields from the authenticated user.
-              if (__DEV__) console.log('[Auth] No driver row on init — auto-registering');
-              try {
-                const regRes = await api.post('/drivers/register', {}, {
-                  headers: { Authorization: `Bearer ${storedToken}` }
-                });
-                driverData = regRes.data as Driver;
-                await appCache.set(CACHE_KEYS.DRIVER_PROFILE, driverData, CACHE_CONFIG.USER_PROFILE_TTL);
-              } catch (regErr) {
-                if (__DEV__) console.log('[Auth] Auto-register failed on init:', regErr);
-              }
-            } else {
-              if (__DEV__) console.log('Failed to fetch driver data on init');
-            }
-          }
-        }
-
-        setInMemoryToken(storedToken);
-        set({
-          user: userData,
-          driver: driverData,
-          token: storedToken,
-          isInitialized: true,
-          isLoading: false
-        });
-        return; // Done — valid session restored
-      } catch (error: any) {
-        if (__DEV__) console.log('[Auth] Stored token invalid or expired:', error.message);
-        await storage.deleteItem('auth_token');
-        // Fall through to no-session state below
-      }
-    }
-
-    // ── No valid stored access token — try silent refresh ──
+    // ── No stored access token — try silent refresh ──
     // setTokens() keeps the access token in memory only but persists the
     // refresh token. On cold start (memory wiped), this is the normal path
     // to restore a session without forcing the user back to the OTP screen.
@@ -314,16 +267,16 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
 
           let driverData: Driver | null = null;
           const looksLikeDriver =
-            !!(userData as any).is_driver ||
-            (userData as any).role === 'driver' ||
-            !!(userData as any).driver_onboarding_status;
+            !!userData.is_driver ||
+            userData.role === 'driver' ||
+            !!userData.driver_onboarding_status;
           if (looksLikeDriver) {
             try {
               const driverRes = await api.get('/drivers/me');
               driverData = driverRes.data as Driver;
               await appCache.set(CACHE_KEYS.DRIVER_PROFILE, driverData, CACHE_CONFIG.USER_PROFILE_TTL);
-            } catch (e: any) {
-              if (e?.response?.status === 404) {
+            } catch (e: unknown) {
+              if (isApiError(e) && e.response?.status === 404) {
                 if (__DEV__) console.log('[Auth] No driver row on refresh-init — auto-registering');
                 try {
                   const regRes = await api.post('/drivers/register', {});
@@ -372,13 +325,15 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
         }
       }, 4000);
 
-      firebaseAuthInstance.onAuthStateChanged(async (firebaseUser: any) => {
+      firebaseAuthInstance.onAuthStateChanged(async (firebaseUser: FirebaseUser | null) => {
         if (get().isInitialized) return; // Already resolved by timeout or previous call
 
         if (firebaseUser) {
           try {
             const token = await firebaseUser.getIdToken();
             if (__DEV__) console.log('[Auth] Got Firebase token');
+            // Set in-memory token immediately so subsequent API calls don't hang on Firebase
+            setInMemoryToken(token);
 
             let userData: User | null = null;
             let driverData: Driver | null = null;
@@ -390,9 +345,9 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
                 await appCache.set(CACHE_KEYS.USER_PROFILE, userData, CACHE_CONFIG.USER_PROFILE_TTL);
               }
               const looksLikeDriver2 =
-                !!(userData as any)?.is_driver ||
-                (userData as any)?.role === 'driver' ||
-                !!(userData as any)?.driver_onboarding_status;
+                !!userData?.is_driver ||
+                userData?.role === 'driver' ||
+                !!userData?.driver_onboarding_status;
               if (looksLikeDriver2) {
                 try {
                   const driverRes = await api.get('/drivers/me');
@@ -403,12 +358,11 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
                 }
               }
               set({ user: userData, driver: driverData, token, isInitialized: true, isLoading: false });
-              await storage.setItem('auth_token', token);
             } catch (err) {
               if (__DEV__) console.log('[Auth] Firebase user but backend fetch failed');
               set({ isLoading: false, isInitialized: true, error: 'Failed to sync user' });
             }
-          } catch (error: any) {
+          } catch (error: unknown) {
             if (__DEV__) console.log('[Auth] Failed to get Firebase token:', error);
             set({ isLoading: false, isInitialized: true, error: 'Failed to sync user' });
           }
@@ -440,27 +394,27 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
       await signInWithCredential(auth, credential);
 
       // onAuthStateChanged will handle the rest
-    } catch (error: any) {
+    } catch (error: unknown) {
       if (__DEV__) console.log('Verify OTP Error:', error);
-      const message = error.message || 'Invalid verification code';
+      const message = (isApiError(error) && error.message) || 'Invalid verification code';
       set({ isLoading: false, error: message });
       throw new Error(message);
     }
   },
 
-  createProfile: async (data: any) => {
+  createProfile: async (data: Parameters<AuthState['createProfile']>[0]) => {
     try {
       set({ isLoading: true, error: null });
-      const response = await api.post('/users/profile', data);
+      const response = await api.post<User>('/users/profile', data);
       set({ user: response.data, isLoading: false });
       // Re-fetch /auth/me so driver_onboarding_status gets computed
       // (the POST /users/profile response doesn't include it).
       try {
-        const meRes = await api.get('/auth/me');
+        const meRes = await api.get<User>('/auth/me');
         set({ user: meRes.data });
       } catch {}
-    } catch (error: any) {
-      const message = error.response?.data?.detail || 'Failed to create profile';
+    } catch (error: unknown) {
+      const message = (isApiError(error) && error.response?.data?.detail) || 'Failed to create profile';
       set({ isLoading: false, error: message });
       throw new Error(message);
     }
@@ -468,7 +422,7 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
 
   fetchDriverProfile: async () => {
     try {
-      const response = await api.get('/drivers/me');
+      const response = await api.get<Driver>('/drivers/me');
       set({ driver: response.data });
     } catch (error) {
       if (__DEV__) console.log('Failed to fetch driver profile');
@@ -493,16 +447,16 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
       // those flags. Without this, /drivers/me is never called and the GO
       // button stays disabled because `driver` is null in the store.
       const looksLikeDriver =
-        !!(userData as any)?.is_driver ||
-        (userData as any)?.role === 'driver' ||
-        !!(userData as any)?.driver_onboarding_status;
+        !!userData?.is_driver ||
+        userData?.role === 'driver' ||
+        !!userData?.driver_onboarding_status;
       if (looksLikeDriver) {
         try {
           const driverRes = await api.get('/drivers/me');
           set({ driver: driverRes.data as Driver });
-        } catch (e: any) {
+        } catch (e: unknown) {
           if (__DEV__) console.log('refreshProfile: driver fetch failed', e);
-          if (e?.response?.status === 404) {
+          if (isApiError(e) && e.response?.status === 404) {
             // No driver row — auto-create one silently so the driver can
             // reach the home screen without going through become-driver.
             if (__DEV__) console.log('[Auth] No driver row on refresh — auto-registering');
@@ -521,10 +475,10 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
     }
   },
 
-  registerDriver: async (data: any) => {
+  registerDriver: async (data: DriverRegistrationPayload) => {
     try {
       set({ isLoading: true, error: null });
-      const response = await api.post('/drivers/register', data);
+      const response = await api.post<Driver>('/drivers/register', data);
       const user = get().user;
       const updatedUser = user ? { ...user, role: 'driver', is_driver: true } : user;
       set({
@@ -533,8 +487,8 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
         isLoading: false,
         isDriverMode: true
       });
-    } catch (error: any) {
-      const message = error.response?.data?.detail || 'Failed to register driver';
+    } catch (error: unknown) {
+      const message = (isApiError(error) && error.response?.data?.detail) || 'Failed to register driver';
       set({ isLoading: false, error: message });
       throw new Error(message);
     }
@@ -562,7 +516,7 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
     try {
       await api.put(`/drivers/${driver.id}/status`, { is_online: isOnline });
       set({ driver: { ...driver, is_online: isOnline } });
-    } catch (error: any) {
+    } catch (error: unknown) {
       if (__DEV__) console.log('Failed to update status');
       throw error;
     }
@@ -592,12 +546,35 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
       if (__DEV__) console.log('Logout error:', error);
     }
     setInMemoryToken(null);
+    setCsrfToken(null);
     await storage.deleteItem('auth_token');
     await storage.deleteItem('refresh_token');
     await storage.deleteItem('token_expires_at');
     // Clear user cache on logout
     await appCache.clearUserCache();
     set({ user: null, driver: null, token: null, refreshToken: null, tokenExpiresAt: null, isDriverMode: false });
+  },
+
+  // "Sign out of all devices" — closes B-P1-13. Backend bumps
+  // users.token_version (kills every in-flight access token on its
+  // next request via dependencies.py middleware re-read) and revokes
+  // every refresh token row for the user. Pairs with the B-P1-3 reuse-
+  // detection cascade: this is the user-driven recovery path the
+  // runbook (docs/runbooks/auth-tokens.md) sends compromised users to.
+  // Falls through to logout() either way so the local session ends
+  // even if the network call failed (we don't want to leave the user
+  // sitting on a screen that thinks they're signed in).
+  logoutAll: async () => {
+    let revoked = 0;
+    try {
+      const res = await api.post<{ success: boolean; revoked_refresh_tokens: number }>('/auth/logout-all');
+      revoked = Number(res.data?.revoked_refresh_tokens ?? 0);
+    } catch (error: unknown) {
+      if (__DEV__) console.log('logout-all backend call failed:', isApiError(error) ? (error.message ?? error) : String(error));
+    } finally {
+      await get().logout();
+    }
+    return { revoked_refresh_tokens: revoked };
   },
 
   updateProfileImage: async (imageUri: string) => {
@@ -612,17 +589,17 @@ export const useAuthStore = create<AuthState>((set: any, get: any) => ({
         uri: imageUri,
         name: filename,
         type,
-      } as any);
+      } as unknown as File);
 
       // The api client detects FormData and lets fetch set the multipart
       // boundary itself — do not pass a Content-Type header here.
-      const response = await api.put('/users/profile-image', formData);
+      const response = await api.put<User>('/users/profile-image', formData);
       set({ user: response.data, isLoading: false });
 
       // Invalidate user cache to reflect the new profile image
       await appCache.remove(CACHE_KEYS.USER_PROFILE);
-    } catch (error: any) {
-      const message = error.response?.data?.detail || 'Failed to upload profile image';
+    } catch (error: unknown) {
+      const message = (isApiError(error) && error.response?.data?.detail) || 'Failed to upload profile image';
       set({ isLoading: false, error: message });
       throw new Error(message);
     }

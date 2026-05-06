@@ -10,6 +10,7 @@ Routes under test (backend/routes/wallet.py):
 
 import os
 import sys
+from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -39,16 +40,25 @@ RECIPIENT_WALLET = {
     "updated_at": "2026-01-01T00:00:00",
 }
 
+SAMPLE_RIDE = {
+    "id": "ride_123",
+    "rider_id": "user_123",
+    "status": "completed",
+    "total_fare": 15.0,
+}
+
 
 def make_mock_db():
+    """Build a mock db using the flat Supabase-style interface wallet routes use.
+
+    wallet.py calls db.find_one(table, filter), db.insert_one(table, data),
+    db.update_one(table, filter, update), and db.get_rows(table, filter, ...).
+    """
     mock = MagicMock()
+    mock.find_one = AsyncMock(return_value=None)
+    mock.insert_one = AsyncMock(return_value=None)
+    mock.update_one = AsyncMock(return_value=None)
     mock.get_rows = AsyncMock(return_value=[])
-    for col in ("wallets", "wallet_transactions", "users", "rides"):
-        col_mock = MagicMock()
-        col_mock.find_one = AsyncMock(return_value=None)
-        col_mock.insert_one = AsyncMock(return_value=None)
-        col_mock.update_one = AsyncMock(return_value=None)
-        setattr(mock, col, col_mock)
     return mock
 
 
@@ -70,27 +80,27 @@ class TestGetWallet:
 
     def test_returns_existing_balance(self, client):
         mock_db = make_mock_db()
-        mock_db.wallets.find_one = AsyncMock(return_value=SAMPLE_WALLET)
+        mock_db.find_one = AsyncMock(return_value=SAMPLE_WALLET)
 
         with patch("routes.wallet.db", mock_db):
             resp = client.get("/api/v1/wallet")
 
         assert resp.status_code == 200
         data = resp.json()
-        assert data["balance"] == 50.0
+        assert data["balance"] == "50.00"
         assert data["currency"] == "CAD"
         assert data["is_active"] is True
 
     def test_auto_creates_wallet_for_new_user(self, client):
         mock_db = make_mock_db()
-        mock_db.wallets.find_one = AsyncMock(return_value=None)
+        mock_db.find_one = AsyncMock(return_value=None)
 
         with patch("routes.wallet.db", mock_db):
             resp = client.get("/api/v1/wallet")
 
         assert resp.status_code == 200
         data = resp.json()
-        assert data["balance"] == 0.0
+        assert data["balance"] == "0.00"
         assert data["currency"] == "CAD"
 
     def test_unauthenticated_request_rejected(self):
@@ -108,20 +118,23 @@ class TestTopUp:
 
     def test_top_up_increases_balance(self, client):
         mock_db = make_mock_db()
-        mock_db.wallets.find_one = AsyncMock(return_value=SAMPLE_WALLET)
+        mock_db.find_one = AsyncMock(return_value=SAMPLE_WALLET)
 
-        with patch("routes.wallet.db", mock_db):
+        with (
+            patch("routes.wallet.db", mock_db),
+            patch("routes.wallet.wallet_increment_balance", AsyncMock(return_value=Decimal("75.00"))),
+        ):
             resp = client.post("/api/v1/wallet/top-up", json={"amount": 25.0})
 
         assert resp.status_code == 200
         data = resp.json()
-        assert data["balance"] == 75.0  # 50 + 25
+        assert data["balance"] == "75.00"  # 50 + 25
         assert "transaction_id" in data
 
     def test_top_up_suspended_wallet_returns_403(self, client):
         suspended = {**SAMPLE_WALLET, "is_active": False}
         mock_db = make_mock_db()
-        mock_db.wallets.find_one = AsyncMock(return_value=suspended)
+        mock_db.find_one = AsyncMock(return_value=suspended)
 
         with patch("routes.wallet.db", mock_db):
             resp = client.post("/api/v1/wallet/top-up", json={"amount": 10.0})
@@ -131,7 +144,7 @@ class TestTopUp:
 
     def test_top_up_exceeds_maximum_returns_422(self, client):
         mock_db = make_mock_db()
-        mock_db.wallets.find_one = AsyncMock(return_value=SAMPLE_WALLET)
+        mock_db.find_one = AsyncMock(return_value=SAMPLE_WALLET)
 
         with patch("routes.wallet.db", mock_db):
             resp = client.post("/api/v1/wallet/top-up", json={"amount": 600.0})
@@ -152,23 +165,32 @@ class TestWalletPay:
 
     def test_pay_for_ride_deducts_balance(self, client):
         mock_db = make_mock_db()
-        mock_db.wallets.find_one = AsyncMock(return_value=SAMPLE_WALLET)
-        mock_db.rides.update_one = AsyncMock(return_value=None)
+        # find_one is called twice: first for wallet, then for ride
+        mock_db.find_one = AsyncMock(side_effect=[SAMPLE_WALLET, SAMPLE_RIDE])
 
-        with patch("routes.wallet.db", mock_db):
+        with (
+            patch("routes.wallet.db", mock_db),
+            patch("routes.wallet.wallet_pay_for_ride", AsyncMock(return_value=Decimal("35.00"))),
+        ):
             resp = client.post("/api/v1/wallet/pay", json={"ride_id": "ride_123", "amount": 15.0})
 
         assert resp.status_code == 200
         data = resp.json()
-        assert data["balance"] == 35.0  # 50 - 15
+        assert data["balance"] == "35.00"  # 50 - 15
         assert "transaction_id" in data
 
     def test_insufficient_balance_returns_400(self, client):
         low_balance = {**SAMPLE_WALLET, "balance": 5.0}
         mock_db = make_mock_db()
-        mock_db.wallets.find_one = AsyncMock(return_value=low_balance)
+        mock_db.find_one = AsyncMock(side_effect=[low_balance, SAMPLE_RIDE])
 
-        with patch("routes.wallet.db", mock_db):
+        with (
+            patch("routes.wallet.db", mock_db),
+            patch(
+                "routes.wallet.wallet_pay_for_ride",
+                AsyncMock(side_effect=ValueError("insufficient_funds")),
+            ),
+        ):
             resp = client.post("/api/v1/wallet/pay", json={"ride_id": "ride_123", "amount": 15.0})
 
         assert resp.status_code == 400
@@ -177,7 +199,7 @@ class TestWalletPay:
     def test_pay_from_suspended_wallet_returns_403(self, client):
         suspended = {**SAMPLE_WALLET, "is_active": False}
         mock_db = make_mock_db()
-        mock_db.wallets.find_one = AsyncMock(return_value=suspended)
+        mock_db.find_one = AsyncMock(return_value=suspended)
 
         with patch("routes.wallet.db", mock_db):
             resp = client.post("/api/v1/wallet/pay", json={"ride_id": "ride_123", "amount": 10.0})
@@ -190,7 +212,7 @@ class TestGetTransactions:
 
     def test_empty_transaction_history(self, client):
         mock_db = make_mock_db()
-        mock_db.wallets.find_one = AsyncMock(return_value=SAMPLE_WALLET)
+        mock_db.find_one = AsyncMock(return_value=SAMPLE_WALLET)
         mock_db.get_rows = AsyncMock(return_value=[])
 
         with patch("routes.wallet.db", mock_db):
@@ -214,7 +236,7 @@ class TestGetTransactions:
             }
         ]
         mock_db = make_mock_db()
-        mock_db.wallets.find_one = AsyncMock(return_value=SAMPLE_WALLET)
+        mock_db.find_one = AsyncMock(return_value=SAMPLE_WALLET)
         mock_db.get_rows = AsyncMock(return_value=txns)
 
         with patch("routes.wallet.db", mock_db):
@@ -230,29 +252,35 @@ class TestTransfer:
 
     def test_transfer_to_valid_recipient(self, client):
         mock_db = make_mock_db()
-        mock_db.users.find_one = AsyncMock(return_value=RECIPIENT_USER)
-        mock_db.wallets.find_one = AsyncMock(side_effect=[SAMPLE_WALLET, RECIPIENT_WALLET])
+        # find_one is called: users (recipient lookup), wallets (sender), wallets (recipient)
+        mock_db.find_one = AsyncMock(side_effect=[RECIPIENT_USER, SAMPLE_WALLET, RECIPIENT_WALLET])
 
-        with patch("routes.wallet.db", mock_db):
+        with (
+            patch("routes.wallet.db", mock_db),
+            patch(
+                "routes.wallet._wallet_transfer_rpc",
+                AsyncMock(return_value=(Decimal("40.00"), Decimal("20.00"))),
+            ),
+        ):
             resp = client.post(
                 "/api/v1/wallet/transfer",
-                json={"recipient_phone": "+9876543210", "amount": 10.0},
+                json={"recipient_phone": "+19876543210", "amount": 10.0},
             )
 
         assert resp.status_code == 200
         data = resp.json()
-        assert data["balance"] == 40.0  # 50 - 10
+        assert data["balance"] == "40.00"  # 50 - 10
         assert data["success"] is True
 
     def test_transfer_to_self_returns_400(self, client):
         mock_db = make_mock_db()
         # Recipient has same id as sender
-        mock_db.users.find_one = AsyncMock(return_value=SAMPLE_USER)
+        mock_db.find_one = AsyncMock(return_value=SAMPLE_USER)
 
         with patch("routes.wallet.db", mock_db):
             resp = client.post(
                 "/api/v1/wallet/transfer",
-                json={"recipient_phone": "+1234567890", "amount": 10.0},
+                json={"recipient_phone": "+11234567890", "amount": 10.0},
             )
 
         assert resp.status_code == 400
@@ -260,12 +288,12 @@ class TestTransfer:
 
     def test_transfer_recipient_not_found_returns_404(self, client):
         mock_db = make_mock_db()
-        mock_db.users.find_one = AsyncMock(return_value=None)
+        mock_db.find_one = AsyncMock(return_value=None)
 
         with patch("routes.wallet.db", mock_db):
             resp = client.post(
                 "/api/v1/wallet/transfer",
-                json={"recipient_phone": "+0000000000", "amount": 10.0},
+                json={"recipient_phone": "+10000000000", "amount": 10.0},
             )
 
         assert resp.status_code == 404
@@ -273,13 +301,18 @@ class TestTransfer:
     def test_transfer_insufficient_balance_returns_400(self, client):
         empty_wallet = {**SAMPLE_WALLET, "balance": 2.0}
         mock_db = make_mock_db()
-        mock_db.users.find_one = AsyncMock(return_value=RECIPIENT_USER)
-        mock_db.wallets.find_one = AsyncMock(side_effect=[empty_wallet, RECIPIENT_WALLET])
+        mock_db.find_one = AsyncMock(side_effect=[RECIPIENT_USER, empty_wallet, RECIPIENT_WALLET])
 
-        with patch("routes.wallet.db", mock_db):
+        with (
+            patch("routes.wallet.db", mock_db),
+            patch(
+                "routes.wallet._wallet_transfer_rpc",
+                AsyncMock(side_effect=ValueError("insufficient_funds")),
+            ),
+        ):
             resp = client.post(
                 "/api/v1/wallet/transfer",
-                json={"recipient_phone": "+9876543210", "amount": 10.0},
+                json={"recipient_phone": "+19876543210", "amount": 10.0},
             )
 
         assert resp.status_code == 400
@@ -291,7 +324,7 @@ class TestTransfer:
         with patch("routes.wallet.db", mock_db):
             resp = client.post(
                 "/api/v1/wallet/transfer",
-                json={"recipient_phone": "+9876543210", "amount": 300.0},
+                json={"recipient_phone": "+19876543210", "amount": 300.0},
             )
 
         assert resp.status_code == 422

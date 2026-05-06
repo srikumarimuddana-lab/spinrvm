@@ -55,12 +55,16 @@ try:
     from .money import dollars_to_cents
 except ImportError:
     from settings_loader import get_app_settings
+    from utils.money import dollars_to_cents
 
 try:
     import stripe
-    from stripe.error import CardError as _StripeCardError
-    from stripe.error import StripeError as _StripeBaseError
-except ImportError:  # pragma: no cover — stripe is a runtime dep in prod
+
+    # stripe v10+ exposes errors directly on the top-level package;
+    # the stripe.error sub-module was removed in stripe-python v15.
+    _StripeCardError = stripe.CardError  # type: ignore[attr-defined]
+    _StripeBaseError = stripe.StripeError  # type: ignore[attr-defined]
+except (ImportError, AttributeError):  # pragma: no cover
     stripe = None  # type: ignore[assignment]
     _StripeCardError = Exception  # type: ignore[misc,assignment]
     _StripeBaseError = Exception  # type: ignore[misc,assignment]
@@ -126,7 +130,7 @@ async def charge_ride(
     settings = await get_app_settings()
     stripe_secret = settings.get("stripe_secret_key", "") or ""
     if not stripe_secret:
-        logger.warning(
+        logger.error(
             "stripe_secret_key not configured; skipping real charge for ride=%s",
             ride.get("id"),
         )
@@ -250,7 +254,7 @@ async def charge_ride(
     # Any other status (canceled, processing) is a failure we don't
     # automatically retry — processing should resolve via webhook;
     # canceled means someone else killed the PI.
-    logger.warning(
+    logger.error(
         "Unhandled PaymentIntent status=%s for ride=%s pi=%s",
         status,
         ride_id,

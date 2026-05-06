@@ -1,7 +1,9 @@
 import asyncio
 import json as _json
+import os as _os
 import random as _random
 import re
+from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Literal, Optional
@@ -108,6 +110,21 @@ class _CircuitBreaker:
 _breaker = _CircuitBreaker()
 
 
+# ── DB thread pool (B-P2-7) ──────────────────────────────────────────
+# The default `loop.run_in_executor(None, ...)` uses asyncio's default
+# ThreadPoolExecutor whose `max_workers` is `min(32, os.cpu_count() + 4)`
+# — i.e. 8 on a 4-core Railway container. Every Supabase call (read, RPC,
+# write) goes through this pool, so a burst of slow queries (e.g. heatmap
+# aggregations or webhook handlers under load) saturates it and starves
+# every other `run_in_executor` caller.
+#
+# A dedicated pool sized for our DB-bound workload (default 32, override
+# via DB_THREAD_POOL_SIZE env var) gives Supabase calls headroom without
+# competing with whatever else may use the default executor.
+_DB_THREAD_POOL_SIZE = int(_os.environ.get("DB_THREAD_POOL_SIZE", "32"))
+_DB_EXECUTOR = _ThreadPoolExecutor(max_workers=_DB_THREAD_POOL_SIZE, thread_name_prefix="spinr-db")
+
+
 # ── Retry policy per call class ──────────────────────────────────────
 # Different DB call classes have different retry semantics. Hot reads
 # want many retries (cheap, safe). Idempotent writes want one. Non-
@@ -134,8 +151,15 @@ _BACKOFFS_BY_POLICY: Dict[str, list] = {
 # new SPOF.
 
 import os as _os  # noqa: E402
+from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor  # noqa: E402
 
 _RETRY_BUDGET_PER_SEC = int(_os.environ.get("RETRY_BUDGET_PER_SEC", "50"))
+
+# Dedicated executor for all Supabase calls. Sized independently of the
+# default event-loop executor so DB thread saturation doesn't affect other
+# background tasks. Override with DB_THREAD_POOL_MAX env var.
+_DB_POOL_MAX = int(_os.environ.get("DB_THREAD_POOL_MAX", "64"))
+_db_executor = _ThreadPoolExecutor(max_workers=_DB_POOL_MAX, thread_name_prefix="spinr-db")
 
 
 async def _consume_retry_token() -> bool:
@@ -201,11 +225,22 @@ async def run_sync(
 
     for attempt in range(len(backoffs) + 1):
         try:
-            result = await loop.run_in_executor(None, func)  # type: ignore
+            # B-P2-7: explicit DB executor (max_workers=DB_THREAD_POOL_SIZE,
+            # default 32) instead of the asyncio default pool capped at 8
+            # workers on a 4-core box. Prevents Supabase bursts from starving
+            # every other run_in_executor caller in the process.
+            result = await loop.run_in_executor(_DB_EXECUTOR, func)  # type: ignore
             _breaker.record_success()
             _metric_gauge("spinr_db_circuit_state", 0, {"state": "closed"})
+            _metric_gauge("spinr_db_thread_pool_threads", len(_db_executor._threads))
             return result
         except Exception as exc:
+            # ValueError signals a deliberate application-level outcome
+            # (e.g. insufficient_funds, wallet_not_found) — not an
+            # infrastructure failure. Re-raise directly so callers get
+            # the typed signal and the circuit breaker stays clean.
+            if isinstance(exc, ValueError):
+                raise
             last_exc = exc
             exc_name = type(exc).__name__
             exc_str = str(exc)
@@ -291,8 +326,8 @@ async def run_sync(
 def _serialize_for_api(data: Any) -> Any:
     """Recursively prepare a payload for Supabase/PostgREST JSON encoding.
 
-    Converts datetime/date → ISO strings and Decimal → float. Decimal
-    conversion matches the _f() convention used throughout fare code and
+    Converts datetime/date → ISO strings and Decimal → string. Decimal
+    conversion preserves full precision for Postgres NUMERIC columns and
     catches Pydantic models whose Decimal-typed fields leak through
     .dict() (e.g. Ride.base_fare, Ride.tip_amount) without a manual _f().
     """
@@ -303,7 +338,7 @@ def _serialize_for_api(data: Any) -> Any:
     if isinstance(data, (datetime, date)):
         return data.isoformat()
     if isinstance(data, Decimal):
-        return float(data)
+        return str(data)
     return data
 
 
@@ -418,8 +453,9 @@ async def _read_cached_row(key: str) -> Optional[Dict[str, Any]]:
         _metric_inc("spinr_cache_error_total", {"prefix": prefix, "op": "decode"})
         try:
             await redis_delete(key)
-        except Exception:  # noqa: S110
-            pass
+        except Exception:
+            # Non-fatal: best-effort eviction of corrupt cache entry; miss is acceptable
+            logger.warning("Failed to evict corrupt cache key %s", key, exc_info=True)
         return None
 
 
@@ -877,7 +913,13 @@ async def get_rides_for_user(rider_id: str, limit: int = 100):
     )
 
 
-async def get_rides_for_driver(driver_id: str, statuses: Optional[List[str]] = None, limit: int = 100):
+async def get_rides_for_driver(
+    driver_id: str,
+    statuses: Optional[List[str]] = None,
+    limit: int = 100,
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+):
     if not supabase:
         return []
 
@@ -886,6 +928,10 @@ async def get_rides_for_driver(driver_id: str, statuses: Optional[List[str]] = N
         if statuses:
             status_filters = ",".join([f"status.eq.{s}" for s in statuses])
             q = q.or_(status_filters)
+        if from_date:
+            q = q.gte("created_at", from_date)
+        if to_date:
+            q = q.lt("created_at", to_date)
         q = q.order("created_at", desc=True).limit(limit)
         return _rows_from_res(q.execute())
 
@@ -1047,12 +1093,13 @@ async def get_rows(
     desc: bool = False,
     limit: Optional[int] = None,
     offset: Optional[int] = None,
+    columns: str = "*",
 ):
     if not supabase:
         return []
 
     def _fn():
-        q = supabase.table(table).select("*")
+        q = supabase.table(table).select(columns)
         q = _apply_filters(q, filters)
         if order:
             q = q.order(order, desc=desc)
@@ -1224,6 +1271,156 @@ async def rpc(func_name: str, params: Dict[str, Any]):
     return await run_sync(_fn)
 
 
+# ============ Atomic Wallet RPCs (P0-4, P0-5, P0-6) ============
+
+
+async def wallet_increment_balance(wallet_id: str, amount: "Decimal") -> "Decimal":
+    """Atomically increment a wallet balance. Returns the new balance."""
+    from decimal import Decimal as _Decimal  # noqa: PLC0415
+
+    if not supabase:
+        raise DatabaseError(details={"original": "supabase not initialised"})
+
+    def _fn():
+        res = supabase.rpc(
+            "wallet_increment_balance",
+            {"p_wallet_id": wallet_id, "p_amount": str(amount)},
+        ).execute()
+        data = getattr(res, "data", None)
+        if data is None:
+            raise DatabaseError(details={"original": "wallet_increment_balance: no data returned"})
+        return _Decimal(str(data))
+
+    return await run_sync(_fn)
+
+
+async def wallet_pay_for_ride(wallet_id: str, ride_id: str, amount: "Decimal") -> "Decimal":
+    """Atomically debit wallet and mark ride paid. Returns the new balance.
+
+    Raises ValueError('insufficient_funds') if balance < amount.
+    """
+    from decimal import Decimal as _Decimal  # noqa: PLC0415
+
+    if not supabase:
+        raise DatabaseError(details={"original": "supabase not initialised"})
+
+    def _fn():
+        try:
+            res = supabase.rpc(
+                "wallet_pay_for_ride",
+                {"p_wallet_id": wallet_id, "p_ride_id": ride_id, "p_amount": str(amount)},
+            ).execute()
+        except Exception as exc:
+            msg = str(exc).lower()
+            if "insufficient_funds" in msg:
+                raise ValueError("insufficient_funds") from exc
+            if "wallet not found" in msg:
+                raise ValueError("wallet_not_found") from exc
+            raise
+        data = getattr(res, "data", None)
+        if data is None:
+            raise DatabaseError(details={"original": "wallet_pay_for_ride: no data returned"})
+        return _Decimal(str(data))
+
+    return await run_sync(_fn)
+
+
+async def wallet_transfer(sender_id: str, recipient_id: str, amount: "Decimal") -> "tuple[Decimal, Decimal]":
+    """Atomically transfer between two wallets. Returns (sender_balance, recipient_balance).
+
+    Raises ValueError('insufficient_funds') if sender balance < amount.
+    """
+    from decimal import Decimal as _Decimal  # noqa: PLC0415
+
+    if not supabase:
+        raise DatabaseError(details={"original": "supabase not initialised"})
+
+    def _fn():
+        try:
+            res = supabase.rpc(
+                "wallet_transfer",
+                {
+                    "p_sender_id": sender_id,
+                    "p_recipient_id": recipient_id,
+                    "p_amount": str(amount),
+                },
+            ).execute()
+        except Exception as exc:
+            msg = str(exc).lower()
+            if "insufficient_funds" in msg:
+                raise ValueError("insufficient_funds") from exc
+            if "wallet not found" in msg:
+                raise ValueError("wallet_not_found") from exc
+            raise
+        data = getattr(res, "data", None)
+        if not data:
+            raise DatabaseError(details={"original": "wallet_transfer: no data returned"})
+        row = data[0] if isinstance(data, list) else data
+        return (
+            _Decimal(str(row["sender_balance"])),
+            _Decimal(str(row["recipient_balance"])),
+        )
+
+    return await run_sync(_fn)
+
+
+async def increment_promo_uses(promo_id: str, max_uses: int) -> bool:
+    """Atomically increment promo uses if uses < max_uses. Returns True if
+    the promo still had capacity (row updated), False if exhausted.
+    Callers should raise HTTP 409 on False.
+    """
+    if not supabase:
+        raise DatabaseError(details={"original": "supabase not initialised"})
+
+    def _fn():
+        res = supabase.rpc(
+            "increment_promo_uses",
+            {"p_promo_id": promo_id, "p_max_uses": max_uses},
+        ).execute()
+        data = getattr(res, "data", None)
+        return data is True or data == 1 or (isinstance(data, list) and len(data) > 0)
+
+    return await run_sync(_fn)
+
+
+async def fare_split_pay_share(wallet_id: str, participant_id: str, amount: "Decimal") -> "Decimal":
+    """Atomically deduct `amount` from `wallet_id` and mark `participant_id`
+    as paid in a single Postgres transaction. Returns the new wallet balance.
+    Raises ValueError('insufficient_funds') when balance is insufficient.
+    """
+    if not supabase:
+        raise DatabaseError(details={"original": "supabase not initialised"})
+
+    def _fn():
+        try:
+            res = supabase.rpc(
+                "fare_split_pay_share",
+                {
+                    "p_wallet_id": wallet_id,
+                    "p_participant_id": participant_id,
+                    "p_amount": str(amount),
+                },
+            ).execute()
+        except Exception as exc:
+            msg = str(exc).lower()
+            if "insufficient_funds" in msg:
+                raise ValueError("insufficient_funds") from exc
+            raise
+        data = getattr(res, "data", None)
+        if data is None:
+            raise DatabaseError(details={"original": "fare_split_pay_share returned no data"})
+        return data
+
+    try:
+        raw = await run_sync(_fn)
+        return Decimal(str(raw))
+    except Exception as exc:
+        msg = str(exc)
+        if "insufficient_funds" in msg:
+            raise ValueError("insufficient_funds") from exc
+        raise
+
+
 # ============ Rides Admin Dashboard – New Helpers ============
 
 
@@ -1260,10 +1457,15 @@ async def get_ride_details_enriched(ride_id: str) -> Optional[Dict[str, Any]]:
     if not ride:
         return None
 
-    # Fetch rider details
     rider_id = ride.get("rider_id")
-    if rider_id:
-        rider = await run_sync(
+    driver_id = ride.get("driver_id")
+
+    # --- Batch 1: all queries that depend only on rider_id / driver_id / ride_id ---
+
+    async def _fetch_rider():
+        if not rider_id:
+            return None
+        return await run_sync(
             lambda rid=rider_id: _single_row_from_res(
                 supabase.table("users")
                 .select("first_name,last_name,phone,email,profile_image,status,created_at")
@@ -1271,16 +1473,11 @@ async def get_ride_details_enriched(ride_id: str) -> Optional[Dict[str, Any]]:
                 .execute()
             )
         )
-        if rider:
-            ride["rider_name"] = f"{rider.get('first_name', '')} {rider.get('last_name', '')}".strip() or rider_id[:12]
-            ride["rider_phone"] = rider.get("phone", "")
-            ride["rider_email"] = rider.get("email", "")
-            ride["rider_profile_image"] = rider.get("profile_image", "")
-            ride["rider_status"] = rider.get("status", "active")
-            ride["rider_joined"] = rider.get("created_at", "")
 
-        # Rider's service area (region) from most recent ride
-        rider_area = await run_sync(
+    async def _fetch_rider_area():
+        if not rider_id:
+            return None
+        return await run_sync(
             lambda rid=rider_id: _single_row_from_res(
                 supabase.table("rides")
                 .select("service_area_id")
@@ -1291,33 +1488,20 @@ async def get_ride_details_enriched(ride_id: str) -> Optional[Dict[str, Any]]:
                 .execute()
             )
         )
-        rider_area_id = rider_area.get("service_area_id") if rider_area else None
-        if rider_area_id:
-            area = await run_sync(
-                lambda aid=rider_area_id: _single_row_from_res(
-                    supabase.table("service_areas").select("name,city").eq("id", aid).execute()
-                )
-            )
-            ride["rider_region"] = area.get("name", "") if area else ""
-            ride["rider_city"] = area.get("city", "") if area else ""
-        else:
-            ride["rider_region"] = ""
-            ride["rider_city"] = ""
 
-        # Rider's total past rides count
-        rider_count_res = await run_sync(
+    async def _fetch_rider_count():
+        if not rider_id:
+            return None
+        return await run_sync(
             lambda rid=rider_id: (
                 supabase.table("rides").select("id", count="exact").limit(1).eq("rider_id", rid).execute()
             )
         )
-        ride["rider_total_rides"] = (
-            int(rider_count_res.count) if hasattr(rider_count_res, "count") and rider_count_res.count is not None else 0
-        )
 
-    # Fetch driver details
-    driver_id = ride.get("driver_id")
-    if driver_id:
-        driver = await run_sync(
+    async def _fetch_driver():
+        if not driver_id:
+            return None
+        return await run_sync(
             lambda did=driver_id: _single_row_from_res(
                 supabase.table("drivers")
                 .select(
@@ -1327,80 +1511,34 @@ async def get_ride_details_enriched(ride_id: str) -> Optional[Dict[str, Any]]:
                 .execute()
             )
         )
-        if driver:
-            ride["driver_name"] = driver.get("name", driver_id[:12])
-            ride["driver_phone"] = driver.get("phone", "")
-            ride["driver_vehicle_make"] = driver.get("vehicle_make", "")
-            ride["driver_vehicle_model"] = driver.get("vehicle_model", "")
-            ride["driver_vehicle_color"] = driver.get("vehicle_color", "")
-            ride["driver_vehicle_year"] = driver.get("vehicle_year")
-            ride["driver_vehicle_vin"] = driver.get("vehicle_vin", "")
-            ride["driver_license_plate"] = driver.get("license_plate", "")
-            ride["driver_rating"] = driver.get("rating", 0)
-            ride["driver_status"] = driver.get("status", "active")
-            ride["driver_photo_url"] = driver.get("photo_url", "")
 
-            # Driver region/service area
-            driver_area_id = driver.get("service_area_id")
-            if driver_area_id:
-                d_area = await run_sync(
-                    lambda aid=driver_area_id: _single_row_from_res(
-                        supabase.table("service_areas").select("name,city").eq("id", aid).execute()
-                    )
-                )
-                ride["driver_region"] = d_area.get("name", "") if d_area else ""
-                ride["driver_city"] = d_area.get("city", "") if d_area else ""
-            else:
-                ride["driver_region"] = ""
-                ride["driver_city"] = ""
-            ride["driver_vehicle"] = f"{driver.get('vehicle_make', '')} {driver.get('vehicle_model', '')}".strip()
-            ride["driver_total_rides"] = driver.get("total_rides", 0)
+    async def _fetch_driver_completed():
+        if not driver_id:
+            return None
+        return await run_sync(
+            lambda did=driver_id: (
+                supabase.table("rides")
+                .select("id", count="exact")
+                .limit(1)
+                .eq("driver_id", did)
+                .eq("status", "completed")
+                .execute()
+            )
+        )
 
-            # Compute acceptance rate: completed / (completed + cancelled as driver)
-            vtype_id = driver.get("vehicle_type_id")
-            if vtype_id:
-                vtype = await run_sync(
-                    lambda vid=vtype_id: _single_row_from_res(
-                        supabase.table("vehicle_types").select("name,description,capacity").eq("id", vid).execute()
-                    )
-                )
-                if vtype:
-                    ride["driver_vehicle_type_name"] = vtype.get("name", "")
-                    ride["driver_vehicle_capacity"] = vtype.get("capacity", 0)
+    async def _fetch_driver_total():
+        if not driver_id:
+            return None
+        return await run_sync(
+            lambda did=driver_id: (
+                supabase.table("rides").select("id", count="exact").limit(1).eq("driver_id", did).execute()
+            )
+        )
 
-            # Acceptance rate: total rides assigned to driver vs cancelled by driver
-            driver_completed_res = await run_sync(
-                lambda did=driver_id: (
-                    supabase.table("rides")
-                    .select("id", count="exact")
-                    .limit(1)
-                    .eq("driver_id", did)
-                    .eq("status", "completed")
-                    .execute()
-                )
-            )
-            completed = (
-                int(driver_completed_res.count)
-                if hasattr(driver_completed_res, "count") and driver_completed_res.count is not None
-                else 0
-            )
-            driver_total_assigned_res = await run_sync(
-                lambda did=driver_id: (
-                    supabase.table("rides").select("id", count="exact").limit(1).eq("driver_id", did).execute()
-                )
-            )
-            total_assigned = (
-                int(driver_total_assigned_res.count)
-                if hasattr(driver_total_assigned_res, "count") and driver_total_assigned_res.count is not None
-                else 0
-            )
-            ride["driver_acceptance_rate"] = round((completed / total_assigned * 100), 1) if total_assigned > 0 else 0
-            ride["driver_completed_rides"] = completed
-
-    # Fetch flags for both rider and driver
-    flags = []
-    if rider_id:
-        rider_flags = await run_sync(
+    async def _fetch_rider_flags():
+        if not rider_id:
+            return []
+        return await run_sync(
             lambda rid=rider_id: _rows_from_res(
                 supabase.table("flags")
                 .select("*")
@@ -1411,9 +1549,11 @@ async def get_ride_details_enriched(ride_id: str) -> Optional[Dict[str, Any]]:
                 .execute()
             )
         )
-        flags.extend([{**f, "_party": "rider"} for f in rider_flags])
-    if driver_id:
-        driver_flags = await run_sync(
+
+    async def _fetch_driver_flags():
+        if not driver_id:
+            return []
+        return await run_sync(
             lambda did=driver_id: _rows_from_res(
                 supabase.table("flags")
                 .select("*")
@@ -1424,36 +1564,155 @@ async def get_ride_details_enriched(ride_id: str) -> Optional[Dict[str, Any]]:
                 .execute()
             )
         )
-        flags.extend([{**f, "_party": "driver"} for f in driver_flags])
+
+    async def _fetch_complaints():
+        return await run_sync(
+            lambda rid=ride_id: _rows_from_res(
+                supabase.table("complaints").select("*").eq("ride_id", rid).order("created_at", desc=True).execute()
+            )
+        )
+
+    async def _fetch_lost_items():
+        return await run_sync(
+            lambda rid=ride_id: _rows_from_res(
+                supabase.table("lost_and_found").select("*").eq("ride_id", rid).order("created_at", desc=True).execute()
+            )
+        )
+
+    async def _fetch_location_trail():
+        return await run_sync(
+            lambda rid=ride_id: _rows_from_res(
+                supabase.table("driver_location_history")
+                .select("lat,lng,speed,heading,tracking_phase,timestamp")
+                .eq("ride_id", rid)
+                .order("timestamp")
+                .limit(5000)
+                .execute()
+            )
+        )
+
+    (
+        rider,
+        rider_area,
+        rider_count_res,
+        driver,
+        driver_completed_res,
+        driver_total_assigned_res,
+        rider_flags,
+        driver_flags,
+        ride_complaints,
+        ride_lost_items,
+        ride_location_trail,
+    ) = await asyncio.gather(
+        _fetch_rider(),
+        _fetch_rider_area(),
+        _fetch_rider_count(),
+        _fetch_driver(),
+        _fetch_driver_completed(),
+        _fetch_driver_total(),
+        _fetch_rider_flags(),
+        _fetch_driver_flags(),
+        _fetch_complaints(),
+        _fetch_lost_items(),
+        _fetch_location_trail(),
+    )
+
+    # --- Batch 2: lookups that depend on batch 1 results ---
+    rider_area_id = rider_area.get("service_area_id") if rider_area else None
+    driver_area_id = driver.get("service_area_id") if driver else None
+    vtype_id = driver.get("vehicle_type_id") if driver else None
+
+    async def _fetch_service_area(area_id):
+        if not area_id:
+            return None
+        return await run_sync(
+            lambda aid=area_id: _single_row_from_res(
+                supabase.table("service_areas").select("name,city").eq("id", aid).execute()
+            )
+        )
+
+    async def _fetch_vehicle_type(vid):
+        if not vid:
+            return None
+        return await run_sync(
+            lambda v=vid: _single_row_from_res(
+                supabase.table("vehicle_types").select("name,description,capacity").eq("id", v).execute()
+            )
+        )
+
+    area, d_area, vtype = await asyncio.gather(
+        _fetch_service_area(rider_area_id),
+        _fetch_service_area(driver_area_id),
+        _fetch_vehicle_type(vtype_id),
+    )
+
+    # --- Assemble rider fields ---
+    if rider_id and rider:
+        ride["rider_name"] = f"{rider.get('first_name', '')} {rider.get('last_name', '')}".strip() or rider_id[:12]
+        ride["rider_phone"] = rider.get("phone", "")
+        ride["rider_email"] = rider.get("email", "")
+        ride["rider_profile_image"] = rider.get("profile_image", "")
+        ride["rider_status"] = rider.get("status", "active")
+        ride["rider_joined"] = rider.get("created_at", "")
+
+    if rider_id:
+        ride["rider_region"] = area.get("name", "") if area else ""
+        ride["rider_city"] = area.get("city", "") if area else ""
+        ride["rider_total_rides"] = (
+            int(rider_count_res.count)
+            if rider_count_res is not None and hasattr(rider_count_res, "count") and rider_count_res.count is not None
+            else 0
+        )
+
+    # --- Assemble driver fields ---
+    if driver_id and driver:
+        ride["driver_name"] = driver.get("name", driver_id[:12])
+        ride["driver_phone"] = driver.get("phone", "")
+        ride["driver_vehicle_make"] = driver.get("vehicle_make", "")
+        ride["driver_vehicle_model"] = driver.get("vehicle_model", "")
+        ride["driver_vehicle_color"] = driver.get("vehicle_color", "")
+        ride["driver_vehicle_year"] = driver.get("vehicle_year")
+        ride["driver_vehicle_vin"] = driver.get("vehicle_vin", "")
+        ride["driver_license_plate"] = driver.get("license_plate", "")
+        ride["driver_rating"] = driver.get("rating", 0)
+        ride["driver_status"] = driver.get("status", "active")
+        ride["driver_photo_url"] = driver.get("photo_url", "")
+        ride["driver_region"] = d_area.get("name", "") if d_area else ""
+        ride["driver_city"] = d_area.get("city", "") if d_area else ""
+        ride["driver_vehicle"] = f"{driver.get('vehicle_make', '')} {driver.get('vehicle_model', '')}".strip()
+        ride["driver_total_rides"] = driver.get("total_rides", 0)
+
+        if vtype:
+            ride["driver_vehicle_type_name"] = vtype.get("name", "")
+            ride["driver_vehicle_capacity"] = vtype.get("capacity", 0)
+
+        completed = (
+            int(driver_completed_res.count)
+            if driver_completed_res is not None
+            and hasattr(driver_completed_res, "count")
+            and driver_completed_res.count is not None
+            else 0
+        )
+        total_assigned = (
+            int(driver_total_assigned_res.count)
+            if driver_total_assigned_res is not None
+            and hasattr(driver_total_assigned_res, "count")
+            and driver_total_assigned_res.count is not None
+            else 0
+        )
+        ride["driver_acceptance_rate"] = round((completed / total_assigned * 100), 1) if total_assigned > 0 else 0
+        ride["driver_completed_rides"] = completed
+
+    # --- Flags ---
+    flags = [{**f, "_party": "rider"} for f in rider_flags] + [{**f, "_party": "driver"} for f in driver_flags]
     ride["flags"] = flags
     ride["rider_flag_count"] = sum(1 for f in flags if f.get("_party") == "rider")
     ride["driver_flag_count"] = sum(1 for f in flags if f.get("_party") == "driver")
 
-    # Fetch complaints for this ride
-    ride["complaints"] = await run_sync(
-        lambda: _rows_from_res(
-            supabase.table("complaints").select("*").eq("ride_id", ride_id).order("created_at", desc=True).execute()
-        )
-    )
-
-    # Fetch lost and found items for this ride
-    ride["lost_and_found"] = await run_sync(
-        lambda: _rows_from_res(
-            supabase.table("lost_and_found").select("*").eq("ride_id", ride_id).order("created_at", desc=True).execute()
-        )
-    )
-
-    # Fetch location trail for this ride
-    ride["location_trail"] = await run_sync(
-        lambda: _rows_from_res(
-            supabase.table("driver_location_history")
-            .select("lat,lng,speed,heading,tracking_phase,timestamp")
-            .eq("ride_id", ride_id)
-            .order("timestamp")
-            .limit(5000)
-            .execute()
-        )
-    )
+    # --- Ride-level data ---
+    ride["complaints"] = ride_complaints
+    ride["lost_and_found"] = ride_lost_items
+    ride["location_trail"] = ride_location_trail
 
     return ride
 
@@ -1667,7 +1926,21 @@ async def claim_stripe_event(event_id: str, event_type: str, payload: Dict[str, 
         except Exception as e:  # noqa: BLE001
             msg = str(e).lower()
             if _PG_UNIQUE_VIOLATION in msg or "duplicate key" in msg or "already exists" in msg:
-                logger.info(f"Stripe event {event_id} already claimed — treating as duplicate")
+                # Check if the previous claim was actually completed. A row with
+                # processed_at=NULL means a prior handler crashed mid-way and Stripe
+                # is retrying — log a CRITICAL so the reconciliation alert fires, but
+                # still return False (do not re-process automatically to avoid
+                # double-charging). The ops team can replay via the admin endpoint.
+                existing = (
+                    supabase.table("stripe_events").select("processed_at").eq("event_id", event_id).limit(1).execute()
+                )
+                if existing.data and existing.data[0].get("processed_at") is None:
+                    logger.critical(
+                        "Stripe event %s is STUCK: claimed but never marked processed. Manual reconciliation required.",
+                        event_id,
+                    )
+                else:
+                    logger.info("Stripe event %s already processed — deduplicating", event_id)
                 return False
             raise
 
@@ -1875,11 +2148,12 @@ async def list_wallets_needing_autotopup() -> List[Dict[str, Any]]:
     return [
         r
         for r in rows
-        if r.get("auto_topup_threshold") is not None and float(r["balance"]) < float(r["auto_topup_threshold"])
+        if r.get("auto_topup_threshold") is not None
+        and Decimal(str(r["balance"])) < Decimal(str(r["auto_topup_threshold"]))
     ]
 
 
-async def sum_autotopups_today(wallet_id: str) -> float:
+async def sum_autotopups_today(wallet_id: str) -> Decimal:
     """Sum of today's successful top-ups for a wallet (for daily-cap enforcement)."""
     today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
 
@@ -1895,7 +2169,7 @@ async def sum_autotopups_today(wallet_id: str) -> float:
 
     res = await run_sync(_fn)
     rows = _rows_from_res(res)
-    return sum(float(r["amount"]) for r in rows)
+    return sum((Decimal(str(r["amount"])) for r in rows), Decimal("0"))
 
 
 async def get_default_payment_method(stripe_customer_id: str, stripe_secret: str) -> Optional[str]:
@@ -1921,7 +2195,8 @@ async def list_wallets_low_balance_no_autotopup() -> List[Dict[str, Any]]:
     return [
         r
         for r in rows
-        if r.get("auto_topup_threshold") is not None and float(r["balance"]) < float(r["auto_topup_threshold"])
+        if r.get("auto_topup_threshold") is not None
+        and Decimal(str(r["balance"])) < Decimal(str(r["auto_topup_threshold"]))
     ]
 
 
@@ -2199,7 +2474,9 @@ async def list_pending_allowance_requests_for_member(
 
 
 async def list_company_allowance_requests(
-    company_id: str, statuses: Optional[List[str]] = None
+    company_id: str,
+    statuses: Optional[List[str]] = None,
+    member_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     def _fn():
         q = (
@@ -2207,6 +2484,8 @@ async def list_company_allowance_requests(
             .select("*, member:corporate_members!inner(id,company_id,invited_email,user_id)")
             .eq("member.company_id", company_id)
         )
+        if member_id:
+            q = q.eq("member_id", member_id)
         if statuses:
             q = q.in_("status", statuses)
         res = q.order("created_at", desc=True).execute()

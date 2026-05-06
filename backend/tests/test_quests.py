@@ -13,16 +13,16 @@ Routes under test (backend/routes/quests.py):
 
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-_FUTURE = (datetime.utcnow() + timedelta(days=30)).isoformat()
-_PAST = (datetime.utcnow() - timedelta(days=1)).isoformat()
-_NOW = datetime.utcnow().isoformat()
+_FUTURE = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+_PAST = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+_NOW = datetime.now(timezone.utc).isoformat()
 
 SAMPLE_USER = {"id": "user_123", "phone": "+1234567890", "role": "rider", "is_driver": True}
 SAMPLE_ADMIN = {"id": "admin_1", "phone": "+1112223333", "role": "admin", "is_driver": False}
@@ -65,14 +65,54 @@ SAMPLE_PROGRESS = {
 
 
 def make_mock_db():
+    """Build a mock that mirrors the db_supabase flat-function interface.
+
+    Routes call ``await db.find_one("drivers", {...})``, not
+    ``await db.drivers.find_one({...})``.  We expose per-table sub-mocks as
+    attributes so individual tests can override them with::
+
+        mock_db.drivers.find_one = AsyncMock(return_value=SAMPLE_DRIVER)
+
+    The top-level ``find_one`` / ``insert_one`` / ``update_one`` AsyncMocks
+    dispatch to the per-table attribute by table name.
+    """
     mock = MagicMock()
-    mock.get_rows = AsyncMock(return_value=[])
-    for col in ("drivers", "quests", "quest_progress", "wallets", "wallet_transactions", "users"):
+
+    # Per-table sub-mocks
+    _tables = ("drivers", "quests", "quest_progress", "wallets", "wallet_transactions", "users")
+    for tbl in _tables:
         col_mock = MagicMock()
         col_mock.find_one = AsyncMock(return_value=None)
         col_mock.insert_one = AsyncMock(return_value=None)
         col_mock.update_one = AsyncMock(return_value=None)
-        setattr(mock, col, col_mock)
+        setattr(mock, tbl, col_mock)
+
+    # Default get_rows at top level (table-agnostic)
+    mock.get_rows = AsyncMock(return_value=[])
+
+    # Dispatcher: routes call db.find_one("drivers", ...) — delegate to per-table mock
+    async def _find_one(table, filters=None, **kwargs):
+        tbl_attr = getattr(mock, table, None)
+        if tbl_attr is not None:
+            return await tbl_attr.find_one(filters, **kwargs)
+        return None
+
+    async def _insert_one(table, doc, **kwargs):
+        tbl_attr = getattr(mock, table, None)
+        if tbl_attr is not None:
+            return await tbl_attr.insert_one(doc, **kwargs)
+        return None
+
+    async def _update_one(table, filters, update, **kwargs):
+        tbl_attr = getattr(mock, table, None)
+        if tbl_attr is not None:
+            return await tbl_attr.update_one(filters, update, **kwargs)
+        return None
+
+    mock.find_one = _find_one
+    mock.insert_one = _insert_one
+    mock.update_one = _update_one
+
     return mock
 
 

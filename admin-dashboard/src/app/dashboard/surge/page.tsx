@@ -1,3 +1,2 @@
-"use client";
 import { redirect } from "next/navigation";
-export default function SurgeRedirect() { redirect("/dashboard/pricing"); }
+export default function SurgeRedirect() { redirect("/dashboard/service-areas"); }

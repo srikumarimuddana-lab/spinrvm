@@ -16,7 +16,6 @@ import {
 
 import {
     AllowanceRequestRow,
-    CorporateAllowance,
     CorporateMember,
     CorporateMemberStatus,
     decideAllowanceRequest,
@@ -55,6 +54,11 @@ import {
     DialogTitle,
 } from "@/components/ui/dialog";
 import AllowanceDialog from "./allowance-dialog";
+import { useToast } from "@/components/ui/use-toast";
+import {
+    AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+    AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 const STATUS_COLORS: Record<CorporateMember["status"], string> = {
     invited: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300",
@@ -146,6 +150,8 @@ function DecisionDialog({ request, approve, onConfirm, onCancel, busy }: Decisio
 export default function CompanyMembersPage() {
     const { id } = useParams<{ id: string }>();
     const companyId = id as string;
+    const { toast } = useToast();
+    const [removeTarget, setRemoveTarget] = useState<string | null>(null);
 
     const [members, setMembers] = useState<CorporateMember[]>([]);
     const [requests, setRequests] = useState<AllowanceRequestRow[]>([]);
@@ -192,19 +198,25 @@ export default function CompanyMembersPage() {
             setInviteUrl(res.invite_url);
             refresh();
         } catch (e: any) {
-            alert(e?.message ?? "Invite failed");
+            toast({ title: "Invite failed", description: e?.message, variant: "destructive" });
         } finally {
             setInviting(false);
         }
     }
 
     async function handleRemove(memberId: string) {
-        if (!window.confirm("Remove this member? Their allowance stops immediately.")) return;
+        setRemoveTarget(memberId);
+    }
+
+    async function confirmRemove() {
+        if (!removeTarget) return;
         try {
-            await removeCompanyMember(companyId, memberId);
+            await removeCompanyMember(companyId, removeTarget);
             refresh();
         } catch (e: any) {
-            alert(e?.message ?? "Remove failed");
+            toast({ title: "Remove failed", description: e?.message, variant: "destructive" });
+        } finally {
+            setRemoveTarget(null);
         }
     }
 
@@ -213,7 +225,7 @@ export default function CompanyMembersPage() {
             await updateCompanyMember(companyId, member.id, { status: newStatus });
             refresh();
         } catch (e: any) {
-            alert(e?.message ?? "Status change failed");
+            toast({ title: "Status change failed", description: e?.message, variant: "destructive" });
         }
     }
 
@@ -228,7 +240,7 @@ export default function CompanyMembersPage() {
             setDecisionTarget(null);
             refresh();
         } catch (e: any) {
-            alert(e?.message ?? "Decision failed");
+            toast({ title: "Decision failed", description: e?.message, variant: "destructive" });
         } finally {
             setDecisionBusy(false);
         }
@@ -543,6 +555,19 @@ export default function CompanyMembersPage() {
                     busy={decisionBusy}
                 />
             )}
+
+            <AlertDialog open={!!removeTarget} onOpenChange={(open) => { if (!open) setRemoveTarget(null); }}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Remove member?</AlertDialogTitle>
+                        <AlertDialogDescription>Their allowance stops immediately. This cannot be undone.</AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction onClick={confirmRemove} className="bg-red-600 hover:bg-red-700">Remove</AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </div>
     );
 }

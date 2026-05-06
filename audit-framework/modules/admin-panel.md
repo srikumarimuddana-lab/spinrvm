@@ -1,8 +1,8 @@
 # Module: Admin Panel
 
-**Status:** Plan v1 ready — Phase A–E execution pending (2026-04-23)
-**Root folder:** `backend/routes/admin/` + `admin-dashboard/` (Next.js 16)
-**Audit plan:** `reports/audits/2026-04-23-admin-panel-audit-plan-v1.md`
+**Status:** Audit complete (2026-04-26) — 54 findings, 3 resolved during audit, remediation plan filed  
+**Root folder:** `backend/routes/admin/` + `admin-dashboard/` (Next.js 16)  
+**Audit reports:** `docs/audit/admin-dashboard/` (phases 00–06 + REPORT.md + REMEDIATION_PLAN.md)  
 **Applicable dimensions:** 16 (D01–D04, D07, D09–D12, D14–D15, D17–D22)
 
 ---
@@ -41,45 +41,53 @@ Admin panels are frequently the highest-risk attack surface in any system:
 
 ---
 
-## Admin-Specific Security Checklist
+## Audit Results (2026-04-26)
+
+| Severity | Count | Key Examples |
+|---|---|---|
+| CRITICAL | 2 (1 fixed) | F-24 settings credential exposure, F-11 runtime crashes (fixed) |
+| HIGH | 4 | F-01 no MFA, F-07 15% audit coverage, F-25 privilege escalation, F-26 surge cap bypass |
+| MEDIUM | 25 | F-02 cookie not HttpOnly, F-17 no middleware.ts, F-37 wallet idempotency, F-41 unlogged exports |
+| LOW/INFO | 23 | Session hardening, a11y, analytics performance, data residency |
+
+**Resolved during audit:** F-11 (missing imports), F-12 (B904), F-13 (hono CVE)  
+**Remediation:** See `docs/audit/admin-dashboard/REMEDIATION_PLAN.md` — P0 hotfixes estimated at 2 days, full remediation 3–4 weeks.
+
+---
+
+## Admin-Specific Security Checklist (Updated with Audit Results)
 
 ### Authentication
-- [ ] Admin accounts require MFA (TOTP or hardware key) — SMS is not sufficient
-- [ ] Admin session timeout: ≤ 30 minutes idle
-- [ ] Admin login IP-restricted to office/VPN IP range
-- [ ] Failed admin login generates an alert
-- [ ] Admin password policy: ≥ 16 chars, bcrypt cost ≥ 12
+- [ ] Admin accounts require MFA (TOTP or hardware key) — SMS is not sufficient **(F-01: NOT DONE)**
+- [ ] Admin session timeout: ≤ 30 minutes idle **(F-19: NOT DONE)**
+- [ ] Admin login IP-restricted to office/VPN IP range **(F-06: NOT DONE)**
+- [ ] Failed admin login generates an alert **(F-08, F-21: NOT DONE)**
+- [x] Admin password policy: ≥ 12 chars, bcrypt cost=12 **(done; 12 chars not 16)**
 
 ### Authorisation
-- [ ] Role-based access control: super-admin vs. support vs. finance vs. operations
-- [ ] Support cannot access payment card data or payout bank accounts
-- [ ] Finance cannot modify driver status
-- [ ] Every admin action checks role — not just "is_admin=True"
+- [x] Role-based access control: super_admin vs support vs finance **(done — require_module() at router level)**
+- [ ] Every admin action checks role — not just "is_admin=True" **(F-25: update/delete staff missing check)**
+- [x] Audience-scoped refresh tokens prevent rider→admin escalation
 
 ### Audit Logging
-- [ ] Every admin action logged: who, what, when, which record
-- [ ] Logs immutable — admin cannot delete their own audit trail
-- [ ] Bulk operations (suspend all drivers in a city) require second confirmation
-- [ ] Logs exported and stored outside the primary database
+- [ ] Every admin action logged: who, what, when, which record **(F-07, F-33: ~15% coverage)**
+- [ ] Logs immutable — admin cannot delete their own audit trail **(F-46: RLS allows DELETE)**
+- [ ] Bulk operations require second confirmation **(F-39: partial — only Redis flush has gate)**
+- [ ] CSV/PDF exports logged with row count **(F-41: NOT DONE)**
 
 ### Data Access
-- [ ] PII fields (licence number, bank account) require elevated permission to view
-- [ ] "View as driver/rider" feature shows only what the user sees — not raw DB
-- [ ] Search results paginated — no "export all users" without approval
-- [ ] Sensitive reports (earnings, tax) require finance role
+- [ ] Credentials (Stripe, Twilio) masked in GET responses **(F-24: CRITICAL — not done)**
+- [ ] Export endpoints server-side rate limited and logged **(F-41, F-43: NOT DONE)**
+- [x] Search results paginated on users/drivers endpoints
+- [ ] GPS coordinates not included in downloadable exports **(F-42: coordinates in PDF)**
 
 ---
 
-## Known Admin Routes (from driver-app v4 audit discovery)
+## Known Admin Routes (21 files confirmed)
 
-- `backend/routes/admin/faqs.py` — FAQ CRUD (confirmed exists)
-- Other admin routes: TBD during audit
+`__init__.py`, `auth.py`, `analytics.py`, `documents.py`, `drivers.py`, `faqs.py`,
+`legal_documents.py`, `maintenance.py`, `messaging.py`, `monitoring.py`, `promotions.py`,
+`rides.py`, `service_areas.py`, `settings.py`, `staff.py`, `subscriptions.py`,
+`support.py`, `users.py`, `vehicle_fleet.py`, `wallet.py`
 
----
-
-## Pre-Audit Setup
-
-1. Map all files in `backend/routes/admin/`
-2. Confirm admin frontend location (separate repo? Next.js in `/admin`?)
-3. Identify admin roles and permissions in the DB schema
-4. Run Dimension 02 first — confirm MFA is enforced
+**Architecture note:** All sub-routers under `admin_router` with `dependencies=[Depends(get_admin_user)]` + `require_module()` except `monitoring.py` (mounted separately at `/api` — bypasses `require_module()`, F-03/F-10).

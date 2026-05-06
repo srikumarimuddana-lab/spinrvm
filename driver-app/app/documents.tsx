@@ -75,11 +75,11 @@ export default function DocumentsScreen() {
     const loadData = async () => {
         try {
             const [reqRes, docRes] = await Promise.all([
-                api.get('/drivers/requirements'),
-                api.get('/drivers/documents')
+                api.get<Requirement[]>('/drivers/requirements'),
+                api.get<DriverDocument[]>('/drivers/documents')
             ]);
-            setRequirements(reqRes.data);
-            setDocuments(docRes.data);
+            setRequirements(reqRes.data as Requirement[]);
+            setDocuments(docRes.data as DriverDocument[]);
         } catch (err: any) {
             console.error("Documents load error:", err);
             if (err.response) {

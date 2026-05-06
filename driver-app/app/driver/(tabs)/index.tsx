@@ -58,6 +58,8 @@ function DriverDashboard() {
     rateRider,
   } = useDriverStore();
 
+  const isCancellingRide = useDriverStore((s) => s.isCancellingRide);
+
   const { t } = useLanguageStore();
 
   const {
@@ -79,6 +81,35 @@ function DriverDashboard() {
     wsError,
     refreshLocation,
   } = useDriverDashboard();
+
+  // Surge multiplier for the driver's service area — fetched on mount and
+  // refreshed every 2 minutes (matching the surge engine interval).
+  const [surgeMultiplier, setSurgeMultiplier] = useState<number>(1.0);
+  useEffect(() => {
+    let cancelled = false;
+    const fetchSurge = async () => {
+      try {
+        const res = await api.get<Array<{ id: string; surge_multiplier?: number; surge_active?: boolean }>>('/service-areas');
+        if (cancelled) return;
+        const areaId = driverData?.service_area_id;
+        const areas: Array<{ id: string; surge_multiplier?: number; surge_active?: boolean }> = res.data || [];
+        const myArea = areaId ? areas.find((a) => a.id === areaId) : areas[0];
+        if (myArea?.surge_active && typeof myArea.surge_multiplier === 'number') {
+          setSurgeMultiplier(myArea.surge_multiplier);
+        } else {
+          setSurgeMultiplier(1.0);
+        }
+      } catch {
+        // surge badge is informational — silently ignore fetch failures
+      }
+    };
+    fetchSurge();
+    const timer = setInterval(fetchSurge, 2 * 60 * 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [driverData?.service_area_id]);
 
   // Route polyline coordinates for active rides
   const [routeCoords, setRouteCoords] = useState<{ latitude: number; longitude: number }[]>([]);
@@ -124,7 +155,7 @@ function DriverDashboard() {
     let cancelled = false;
     (async () => {
       try {
-        const res = await api.get('/drivers/demand-heatmap');
+        const res = await api.get<{ enabled: boolean; points?: number[][] }>('/drivers/demand-heatmap');
         if (cancelled) return;
         if (!res.data.enabled) {
           setHeatmapPoints([]);
@@ -297,7 +328,7 @@ function DriverDashboard() {
     // the visual bar stuck past 100%.
     const maxCountdown = configuredCountdownSeconds || 15;
     const progress = Math.max(0, Math.min(1, countdown / maxCountdown));
-    const fare = (incomingRide.fare || 0).toFixed(2);
+    const fare = parseFloat(incomingRide.fare || '0').toFixed(2);
 
     // Haversine distance from driver → pickup so the offer shows how far
     // the driver has to travel to start the trip (not just the trip
@@ -443,7 +474,7 @@ function DriverDashboard() {
       )}
 
       {/* Map */}
-      <View style={StyleSheet.absoluteFillObject} pointerEvents="box-none">
+      <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
       <MapView
         key={mapKey}
         ref={mapRef}
@@ -588,7 +619,7 @@ function DriverDashboard() {
       </View>
 
       {/* Top Bar */}
-      <DriverTopBar driverData={driverData} user={user} isOnline={isOnline} connectionState={connectionState} />
+      <DriverTopBar driverData={driverData ?? undefined} user={user ?? undefined} isOnline={isOnline} connectionState={connectionState} surgeMultiplier={surgeMultiplier} />
 
       {/* SOS Button — visible during active ride */}
       {(rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup' || rideState === 'trip_in_progress') && activeRide?.ride?.id && (
@@ -596,7 +627,7 @@ function DriverDashboard() {
           <SOSButton
             rideId={activeRide.ride.id}
             onTrigger={async (rideId, lat, lng) => {
-              try { await api.post(`/rides/${rideId}/emergency`, { latitude: lat, longitude: lng }); } catch {}
+              try { await api.post(`/rides/${rideId}/emergency`, { latitude: lat, longitude: lng }); } catch (err) { console.error('[index]', err); }
             }}
           />
         </View>
@@ -614,7 +645,7 @@ function DriverDashboard() {
       {rideState === 'idle' && (
         <DriverIdlePanel
           isOnline={isOnline}
-          driverData={driverData}
+          driverData={driverData as any ?? undefined}
           earnings={earnings ?? undefined}
           onToggleOnline={toggleOnline}
           pulseAnim={pulseAnim}
@@ -626,10 +657,10 @@ function DriverDashboard() {
         rideState === 'trip_in_progress') && (
         <ActiveRidePanel
           rideState={rideState}
-          ride={activeRide?.ride || null}
+          ride={activeRide?.ride as unknown as any || null}
           rider={activeRide?.rider || null}
           driverLocation={location}
-          isLoading={false}
+          isLoading={isCancellingRide}
           otpInput={otpInput}
           setOtpInput={setOtpInput}
           onVerifyOTP={(otp) => verifyOTP(activeRide!.ride.id, otp)}
@@ -677,7 +708,7 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.background,
     },
     map: {
-      ...StyleSheet.absoluteFillObject,
+      ...StyleSheet.absoluteFill,
     },
     wsErrorBanner: {
       position: 'absolute',

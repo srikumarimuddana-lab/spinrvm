@@ -35,6 +35,7 @@ from routes.promotions import api_router as promotions_router
 from routes.quests import api_router as quests_router
 from routes.rides import api_router as rides_router
 from routes.safety import api_router as safety_router
+from routes.service_areas import api_router as service_areas_router
 from routes.settings import api_router as settings_router
 from routes.support import api_router as support_chat_router
 from routes.users import api_router as users_router
@@ -65,11 +66,15 @@ async def health():
 # Counters cover: DB retries by policy/reason, cache hit/miss by
 # prefix, circuit-breaker state, call-level totals, and Redis stats.
 # See utils/metrics.py for the counter definitions.
+from fastapi import Request as _Request  # noqa: E402
 from fastapi import Response as _MetricsResponse  # noqa: E402
+
+from utils.rate_limiter import default_limiter as _metrics_limiter  # noqa: E402
 
 
 @app.get("/metrics")
-async def metrics() -> _MetricsResponse:
+@_metrics_limiter.limit("10/minute")
+async def metrics(request: _Request) -> _MetricsResponse:
     from utils.metrics import render_prometheus, set_gauge
     from utils.redis_client import get_redis_stats
 
@@ -147,6 +152,7 @@ v1_api_router.include_router(pricing_router)
 v1_api_router.include_router(faqs_router)
 v1_api_router.include_router(legal_documents_router)
 v1_api_router.include_router(safety_router)
+v1_api_router.include_router(service_areas_router)
 
 # Include API routers
 app.include_router(v1_api_router, prefix="/api/v1")
@@ -159,6 +165,9 @@ app.include_router(websocket_router)
 # Public settings endpoints (GET /settings, GET /settings/legal). Mounted at
 # root so mobile apps can call them without an auth token, and also at /api/v1
 # for parity. The legal screen fetch uses backendUrl/settings/legal directly.
+# Rate-limit note: double-mounting means slowapi tracks each prefix separately.
+# The settings endpoint is public+read-only so the doubled effective rate is
+# acceptable; add a shared key_func if this ever needs tighter control.
 app.include_router(settings_router)
 app.include_router(settings_router, prefix="/api/v1")
 
@@ -168,7 +177,9 @@ app.include_router(admin_auth_router, prefix="/api")
 app.include_router(corporate_accounts_router, prefix="/api")
 app.include_router(corporate_wallet_router, prefix="/api")
 # Corporate member/allowance/domain endpoints served at root (`/company/{id}/...`)
-# because the rider app hits them without the `/api` prefix.
+# because the rider app calls /company/{id}/policy and /company/{id}/allowances
+# without an /api prefix (verified in workProfileStore.ts). Do not remove until
+# a coordinated mobile release migrates those calls to /api/company/{id}/...
 app.include_router(corporate_company_router)
 app.include_router(corporate_rider_router)
 # files_router serves document files at /api/documents/{id} (used by admin dashboard).
@@ -226,8 +237,23 @@ if sentry_dsn:
         traces_sample_rate=0.1,
         profiles_sample_rate=0.1,
         environment=settings.ENV if hasattr(settings, "ENV") else "production",
-        send_default_pii=True,
+        # PIPEDA: never send IP, cookies, or auth headers to Sentry.
+        send_default_pii=False,
     )
+
+    # Bridge loguru → Sentry. The LoggingIntegration above only captures
+    # stdlib `logging` records; the rest of the backend uses loguru and
+    # would otherwise be invisible in Sentry (including the high-signal
+    # REFRESH TOKEN REUSE DETECTED alert in utils/refresh_tokens.py).
+    def _loguru_sentry_sink(message: "Any") -> None:  # noqa: ANN401, F821
+        record = message.record
+        exc_info = record["exception"]
+        if exc_info is not None and exc_info.value is not None:
+            sentry_sdk.capture_exception(exc_info.value)
+        else:
+            sentry_sdk.capture_message(record["message"], level="error")
+
+    logger.add(_loguru_sentry_sink, level="ERROR")
     logger.info("Sentry SDK initialized for error monitoring")
 
 if __name__ == "__main__":

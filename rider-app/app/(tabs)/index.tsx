@@ -4,10 +4,11 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  Dimensions,
+  useWindowDimensions,
   ActivityIndicator,
   Platform,
   Image,
+  Alert,
   Linking,
   AppState,
 } from 'react-native';
@@ -18,6 +19,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import Constants from 'expo-constants';
 import { useAuthStore } from '@shared/store/authStore';
+import api from '@shared/api/client';
 import { DEFAULT_LATITUDE, DEFAULT_LONGITUDE } from '../../constants/geo';
 import { useRideStore } from '../../store/rideStore';
 import AppMap from '@shared/components/AppMap';
@@ -27,8 +29,6 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
 const HOME_DATA_TTL_MS = 5 * 60 * 1000; // 5 minutes
-
-const { width, height } = Dimensions.get('window');
 
 const getBackendUrl = () => {
   if (process.env.EXPO_PUBLIC_BACKEND_URL) return process.env.EXPO_PUBLIC_BACKEND_URL;
@@ -44,6 +44,7 @@ export default function HomeScreen() {
   const router = useRouter();
   const { user } = useAuthStore();
   const { savedAddresses, fetchSavedAddresses, setUserLocation, currentRide, triggerEmergency } = useRideStore();
+  const [unreadNotifCount, setUnreadNotifCount] = useState(0);
   const [showPromo, setShowPromo] = useState(true);
   const [location, setLocation] = useState<any>(null);
   const [region, setRegion] = useState<any>(null);
@@ -57,6 +58,8 @@ export default function HomeScreen() {
   const mapRef = useRef<any>(null);
   const lastFetchedAt = useRef<number>(0);
 
+  const { width, height } = useWindowDimensions();
+  const isTablet = width >= 768;
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
@@ -65,7 +68,7 @@ export default function HomeScreen() {
     try {
       const AsyncStorage = require('@react-native-async-storage/async-storage').default;
       await AsyncStorage.setItem('spinr_last_location', JSON.stringify({ lat, lng }));
-    } catch {}
+    } catch (err) { console.error('[index]', err); }
   };
 
   const loadLastLocation = async () => {
@@ -73,7 +76,7 @@ export default function HomeScreen() {
       const AsyncStorage = require('@react-native-async-storage/async-storage').default;
       const saved = await AsyncStorage.getItem('spinr_last_location');
       if (saved) return JSON.parse(saved);
-    } catch {}
+    } catch (err) { console.error('[index]', err); }
     return null;
   };
 
@@ -90,8 +93,36 @@ export default function HomeScreen() {
       }
     }
 
+    // R-P2-45: Show a pre-prompt explanation on first launch before the system
+    // location dialog (PIPEDA data-minimization — user must understand why
+    // location is collected before consenting).
+    const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+    const prePromptShown = await AsyncStorage.getItem('spinr_location_preprompt_shown').catch(() => null);
+    if (!prePromptShown) {
+      await new Promise<void>(resolve => {
+        Alert.alert(
+          'Location Access',
+          'Spinr uses your location to show nearby drivers, calculate your pickup point, and provide accurate ETAs. ' +
+          'Your location is only used while the app is in use and is never sold or shared with advertisers.',
+          [{ text: 'Continue', style: 'default', onPress: () => resolve() }],
+          { cancelable: false },
+        );
+      });
+      await AsyncStorage.setItem('spinr_location_preprompt_shown', '1').catch(() => {});
+    }
+
     const { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== 'granted') return;
+    if (status !== 'granted') {
+      Alert.alert(
+        'Location Required',
+        'Spinr needs your location to show nearby drivers and confirm your pickup. Please enable location in Settings.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Open Settings', onPress: () => Linking.openSettings() },
+        ]
+      );
+      return;
+    }
 
     if (useCache) {
       try {
@@ -101,7 +132,7 @@ export default function HomeScreen() {
           setUserLocation({ latitude: lastKnown.coords.latitude, longitude: lastKnown.coords.longitude });
           saveLastLocation(lastKnown.coords.latitude, lastKnown.coords.longitude);
         }
-      } catch {}
+      } catch (err) { console.error('[index]', err); }
     }
 
     Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
@@ -126,6 +157,10 @@ export default function HomeScreen() {
   const fetchHomeData = useCallback(async () => {
     await refreshLocation(true);
     fetchSavedAddresses();
+    // R-P2-48: refresh unread notification badge count each time home mounts
+    api.get('/notifications?limit=1').then((res: any) => {
+      setUnreadNotifCount(res.data?.unread_count ?? 0);
+    }).catch(() => {});
   }, [refreshLocation, fetchSavedAddresses]);
 
   useFocusEffect(
@@ -191,7 +226,7 @@ export default function HomeScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, isTablet && { flexDirection: 'row' as const }]}>
       {/* Map Implementation */}
       <View style={styles.mapContainer}>
         {/* Header */}
@@ -224,10 +259,19 @@ export default function HomeScreen() {
             </View>
             <TouchableOpacity
               style={styles.notificationButton}
-              accessibilityLabel="Notifications"
+              onPress={() => router.push('/notifications' as any)}
+              accessibilityLabel={unreadNotifCount > 0 ? `Notifications, ${unreadNotifCount} unread` : 'Notifications'}
               accessibilityRole="button"
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
               <Ionicons name="notifications-outline" size={24} color={colors.text} />
+              {unreadNotifCount > 0 && (
+                <View style={styles.notifBadge}>
+                  <Text style={styles.notifBadgeText}>
+                    {unreadNotifCount > 9 ? '9+' : unreadNotifCount}
+                  </Text>
+                </View>
+              )}
             </TouchableOpacity>
           </View>
         </SafeAreaView>
@@ -264,27 +308,41 @@ export default function HomeScreen() {
         {/* Map Controls Container - Right Side */}
         {/* Map Controls Container - Right Side */}
         <View style={styles.mapControls}>
-          <TouchableOpacity style={styles.mapControlButton} onPress={() => {
-            if (region && mapRef.current) {
-              mapRef.current.animateToRegion({
-                ...region,
-                latitudeDelta: region.latitudeDelta / 2,
-                longitudeDelta: region.longitudeDelta / 2,
-              }, 500);
-            }
-          }}>
+          <TouchableOpacity
+            style={styles.mapControlButton}
+            onPress={() => {
+              if (region && mapRef.current) {
+                mapRef.current.animateToRegion({
+                  ...region,
+                  latitudeDelta: region.latitudeDelta / 2,
+                  longitudeDelta: region.longitudeDelta / 2,
+                }, 500);
+              }
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Zoom in"
+            accessibilityHint="Zooms the map in"
+            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+          >
             <Ionicons name="add" size={24} color={colors.text} />
           </TouchableOpacity>
           <View style={styles.divider} />
-          <TouchableOpacity style={styles.mapControlButton} onPress={() => {
-            if (region && mapRef.current) {
-              mapRef.current.animateToRegion({
-                ...region,
-                latitudeDelta: region.latitudeDelta * 2,
-                longitudeDelta: region.longitudeDelta * 2,
-              }, 500);
-            }
-          }}>
+          <TouchableOpacity
+            style={styles.mapControlButton}
+            onPress={() => {
+              if (region && mapRef.current) {
+                mapRef.current.animateToRegion({
+                  ...region,
+                  latitudeDelta: region.latitudeDelta * 2,
+                  longitudeDelta: region.longitudeDelta * 2,
+                }, 500);
+              }
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Zoom out"
+            accessibilityHint="Zooms the map out"
+            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+          >
             <Ionicons name="remove" size={24} color={colors.text} />
           </TouchableOpacity>
         </View>
@@ -307,10 +365,26 @@ export default function HomeScreen() {
         {/* Current Location Button — always fetches a fresh fix. Tapping
             this is an explicit user request for "where am I now", so we
             bypass any cached state and hit getCurrentPositionAsync. */}
-        <TouchableOpacity style={styles.locationButton} onPress={async () => {
+        <TouchableOpacity
+          style={styles.locationButton}
+          accessibilityRole="button"
+          accessibilityLabel="Go to my location"
+          accessibilityHint="Centers the map on your current GPS position"
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          onPress={async () => {
           if (!mapRef.current) return;
           const { status } = await Location.requestForegroundPermissionsAsync();
-          if (status !== 'granted') return;
+          if (status !== 'granted') {
+            Alert.alert(
+              'Location Required',
+              'Spinr needs your location to show nearby drivers and confirm your pickup. Please enable location in Settings.',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                { text: 'Open Settings', onPress: () => Linking.openSettings() },
+              ]
+            );
+            return;
+          }
           let loc: any;
           try {
             loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
@@ -332,9 +406,9 @@ export default function HomeScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Bottom Sheet */}
-      <View style={styles.bottomSheet}>
-        <View style={styles.sheetHandle} />
+      {/* Bottom Sheet / Side Panel */}
+      <View style={[styles.bottomSheet, isTablet && styles.sidePanel]}>
+        {!isTablet && <View style={styles.sheetHandle} />}
 
         {/* Search Bar + AI Button */}
         <View style={styles.searchRow}>
@@ -372,21 +446,39 @@ export default function HomeScreen() {
 
         {/* Quick Actions */}
         <View style={styles.quickActions}>
-          <TouchableOpacity style={styles.quickAction} onPress={() => handleQuickAction('home')}>
+          <TouchableOpacity
+            style={styles.quickAction}
+            onPress={() => handleQuickAction('home')}
+            accessibilityRole="button"
+            accessibilityLabel="Go home"
+            accessibilityHint="Sets your saved home address as destination"
+          >
             <View style={styles.quickActionIcon}>
               <Ionicons name="home" size={22} color={colors.primary} />
             </View>
             <Text style={styles.quickActionText}>Home</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.quickAction} onPress={() => handleQuickAction('work')}>
+          <TouchableOpacity
+            style={styles.quickAction}
+            onPress={() => handleQuickAction('work')}
+            accessibilityRole="button"
+            accessibilityLabel="Go to work"
+            accessibilityHint="Sets your saved work address as destination"
+          >
             <View style={styles.quickActionIcon}>
               <Ionicons name="briefcase" size={22} color={colors.primary} />
             </View>
             <Text style={styles.quickActionText}>Work</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.quickAction} onPress={() => handleQuickAction('saved')}>
+          <TouchableOpacity
+            style={styles.quickAction}
+            onPress={() => handleQuickAction('saved')}
+            accessibilityRole="button"
+            accessibilityLabel="Saved places"
+            accessibilityHint="Browse your saved locations"
+          >
             <View style={styles.quickActionIcon}>
               <Ionicons name="star" size={22} color={colors.primary} />
             </View>
@@ -406,7 +498,13 @@ export default function HomeScreen() {
                 We take 0% commission. 100% of{"\n"}your fare goes to your driver.
               </Text>
             </View>
-            <TouchableOpacity onPress={() => setShowPromo(false)} style={styles.promoClose}>
+            <TouchableOpacity
+              onPress={() => setShowPromo(false)}
+              style={styles.promoClose}
+              accessibilityRole="button"
+              accessibilityLabel="Dismiss promotion banner"
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            >
               <Ionicons name="close" size={20} color={colors.textDim} />
             </TouchableOpacity>
           </View>
@@ -497,12 +595,21 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.surface,
       justifyContent: 'center',
       alignItems: 'center',
+      position: 'relative',
       shadowColor: '#000',
       shadowOffset: { width: 0, height: 2 },
       shadowOpacity: 0.1,
       shadowRadius: 4,
       elevation: 3,
     },
+    notifBadge: {
+      position: 'absolute', top: 6, right: 6,
+      minWidth: 16, height: 16, borderRadius: 8,
+      backgroundColor: '#EF4444',
+      justifyContent: 'center', alignItems: 'center',
+      paddingHorizontal: 3,
+    },
+    notifBadgeText: { color: '#FFF', fontSize: 10, fontWeight: '700', lineHeight: 14 },
     mapPlaceholder: {
       flex: 1,
       backgroundColor: '#E0E7E0',
@@ -699,6 +806,16 @@ function createStyles(colors: ThemeColors) {
     },
     promoClose: {
       padding: 4,
+    },
+    sidePanel: {
+      width: 340,
+      borderTopLeftRadius: 0,
+      borderTopRightRadius: 0,
+      borderLeftWidth: 1,
+      borderLeftColor: colors.border,
+      shadowOffset: { width: -4, height: 0 },
+      paddingTop: 60,
+      flexShrink: 0 as const,
     },
   });
 }

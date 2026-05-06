@@ -31,7 +31,7 @@ jobs:
     name: Deploy to Railway
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Verify RAILWAY_TOKEN is set
         run: |
@@ -74,3 +74,35 @@ jobs:
         run: railway up --service spinr-backend
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+
+      # Poll /health for up to 3 minutes (18 × 10 s). If the service never
+      # becomes healthy, roll back to the previous deployment and fail the job.
+      # Set BACKEND_HEALTH_URL to https://<your-service>.up.railway.app in
+      # repo secrets (or leave unset to skip the probe in forks/staging).
+      - name: Health check
+        id: health
+        if: ${{ secrets.BACKEND_HEALTH_URL != '' }}
+        env:
+          HEALTH_URL: ${{ secrets.BACKEND_HEALTH_URL }}
+        run: |
+          echo "Polling ${HEALTH_URL}/health …"
+          for i in $(seq 1 18); do
+            STATUS=$(curl -sf --max-time 5 "${HEALTH_URL}/health" \
+              -o /dev/null -w "%{http_code}" 2>/dev/null || echo "000")
+            echo "  attempt ${i}/18 → HTTP ${STATUS}"
+            if [ "$STATUS" = "200" ]; then
+              echo "Service is healthy."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::Health check timed out after 3 minutes."
+          exit 1
+
+      - name: Rollback on health check failure
+        if: failure() && steps.health.outcome == 'failure'
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          echo "::warning::Health check failed — rolling back to previous deployment."
+          railway rollback --service spinr-backend || true

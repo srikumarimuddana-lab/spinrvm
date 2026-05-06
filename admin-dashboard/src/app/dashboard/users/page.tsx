@@ -21,6 +21,16 @@ import {
     DialogTitle,
 } from "@/components/ui/dialog";
 import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
     Select,
     SelectContent,
     SelectItem,
@@ -31,10 +41,12 @@ import { Pagination } from "@/components/ui/pagination";
 import { Users, Search, Mail, Phone, MapPin, Star, Calendar, Car, ShieldCheck, Download, RefreshCw, Ban, CheckCircle, AlertTriangle, Wallet, Plus, Minus } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { getUsersPaginated, updateUserStatus, getStats, getUserWallet, creditUserWallet, debitUserWallet } from "@/lib/api";
+import { useRequireModule } from "@/hooks/useRequireModule";
 
 const PAGE_SIZE = 50;
 
 export default function UsersPage() {
+    const { allowed } = useRequireModule("users");
     const [users, setUsers] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
@@ -46,6 +58,8 @@ export default function UsersPage() {
     const [hasNextPage, setHasNextPage] = useState(false);
     const [stats, setStats] = useState<{ total_users: number; total_drivers: number } | null>(null);
     const reqIdRef = useRef(0);
+
+    const [pendingStatusChange, setPendingStatusChange] = useState<{ id: string; status: "suspended" | "banned"; name: string } | null>(null);
 
     // Wallet state for the user-details dialog
     const [walletData, setWalletData] = useState<any>(null);
@@ -187,6 +201,8 @@ export default function UsersPage() {
             ? (stats && (stats.total_users - (stats.total_drivers || 0)))
             : stats?.total_users;
 
+    if (!allowed) return null;
+
     return (
         <div className="space-y-6">
             <div className="flex items-center justify-between">
@@ -286,13 +302,14 @@ export default function UsersPage() {
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                     <Input
                         placeholder="Search by name, email, phone..."
+                        aria-label="Search users"
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}
                         className="pl-9"
                     />
                 </div>
                 <Select value={roleFilter} onValueChange={(v) => setRoleFilter(v as "all" | "rider" | "driver")}>
-                    <SelectTrigger className="w-36">
+                    <SelectTrigger className="w-36" aria-label="Filter by role">
                         <SelectValue placeholder="Role" />
                     </SelectTrigger>
                     <SelectContent>
@@ -524,14 +541,11 @@ export default function UsersPage() {
                                             className="flex-1"
                                             variant="outline"
                                             disabled={statusUpdating === selectedUser.id}
-                                            onClick={async () => {
-                                                setStatusUpdating(selectedUser.id);
-                                                try {
-                                                    await updateUserStatus(selectedUser.id, { status: "suspended" });
-                                                    setSelectedUser({ ...selectedUser, status: "suspended" });
-                                                    setUsers(prev => prev.map(u => u.id === selectedUser.id ? { ...u, status: "suspended" } : u));
-                                                } catch {} finally { setStatusUpdating(null); }
-                                            }}
+                                            onClick={() => setPendingStatusChange({
+                                                id: selectedUser.id,
+                                                status: "suspended",
+                                                name: `${selectedUser.first_name || ''} ${selectedUser.last_name || ''}`.trim() || selectedUser.phone,
+                                            })}
                                         >
                                             <AlertTriangle className="h-4 w-4 mr-2 text-amber-600" /> Suspend
                                         </Button>
@@ -541,14 +555,11 @@ export default function UsersPage() {
                                             className="flex-1"
                                             variant="destructive"
                                             disabled={statusUpdating === selectedUser.id}
-                                            onClick={async () => {
-                                                setStatusUpdating(selectedUser.id);
-                                                try {
-                                                    await updateUserStatus(selectedUser.id, { status: "banned" });
-                                                    setSelectedUser({ ...selectedUser, status: "banned" });
-                                                    setUsers(prev => prev.map(u => u.id === selectedUser.id ? { ...u, status: "banned" } : u));
-                                                } catch {} finally { setStatusUpdating(null); }
-                                            }}
+                                            onClick={() => setPendingStatusChange({
+                                                id: selectedUser.id,
+                                                status: "banned",
+                                                name: `${selectedUser.first_name || ''} ${selectedUser.last_name || ''}`.trim() || selectedUser.phone,
+                                            })}
                                         >
                                             <Ban className="h-4 w-4 mr-2" /> Ban
                                         </Button>
@@ -586,12 +597,14 @@ export default function UsersPage() {
                                                 step="0.01"
                                                 min="0.01"
                                                 placeholder="Amount (CAD)"
+                                                aria-label="Adjustment amount in CAD"
                                                 value={walletAmount}
                                                 onChange={(e) => setWalletAmount(e.target.value)}
                                                 disabled={walletSubmitting !== null}
                                             />
                                             <Input
                                                 placeholder="Reason (min 3 chars)"
+                                                aria-label="Reason for adjustment"
                                                 value={walletReason}
                                                 onChange={(e) => setWalletReason(e.target.value)}
                                                 disabled={walletSubmitting !== null}
@@ -685,6 +698,41 @@ export default function UsersPage() {
                     )}
                 </DialogContent>
             </Dialog>
+
+            <AlertDialog open={!!pendingStatusChange} onOpenChange={(open) => !open && setPendingStatusChange(null)}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>
+                            {pendingStatusChange?.status === "banned" ? "Ban this user?" : "Suspend this user?"}
+                        </AlertDialogTitle>
+                        <AlertDialogDescription>
+                            {pendingStatusChange?.status === "banned"
+                                ? `${pendingStatusChange?.name} will be permanently banned and unable to book rides or log in.`
+                                : `${pendingStatusChange?.name} will be suspended and unable to book rides until reactivated.`}
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                            className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                            onClick={async () => {
+                                if (!pendingStatusChange) return;
+                                setStatusUpdating(pendingStatusChange.id);
+                                try {
+                                    await updateUserStatus(pendingStatusChange.id, { status: pendingStatusChange.status });
+                                    setSelectedUser((prev: any) => prev ? { ...prev, status: pendingStatusChange.status } : prev);
+                                    setUsers(prev => prev.map(u => u.id === pendingStatusChange.id ? { ...u, status: pendingStatusChange.status } : u));
+                                } catch {} finally {
+                                    setStatusUpdating(null);
+                                }
+                                setPendingStatusChange(null);
+                            }}
+                        >
+                            {pendingStatusChange?.status === "banned" ? "Ban user" : "Suspend user"}
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </div>
     );
 }

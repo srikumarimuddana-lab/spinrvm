@@ -1,21 +1,54 @@
 import logging
 import re
-import uuid
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Query
 
 try:
     from ... import db_supabase
-    from ...utils.datetime_utils import parse_iso_utc
+    from ...db_supabase import run_sync as _run_sync
+    from ...supabase_client import supabase as _supabase_client
 except ImportError:
     import db_supabase
-    from utils.datetime_utils import parse_iso_utc
 
 db = db_supabase  # legacy alias
 
 logger = logging.getLogger(__name__)
+
+
+async def log_audit(
+    action: str,
+    entity_type: str,
+    entity_id: str,
+    actor: str,
+    details: str = "",
+) -> None:
+    """Write a single row to the audit_logs table.
+
+    Non-raising: callers wrap this in try/except so a DB hiccup never
+    blocks the parent operation. Failures are logged at WARNING level.
+    """
+    try:
+        await db_supabase.insert_one(
+            "audit_logs",
+            {
+                "action": action,
+                "entity_type": entity_type,
+                "resource_id": entity_id,
+                "actor_id": actor,
+                "details": details,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+    except Exception as exc:
+        logger.error(
+            f"[AUDIT] log_audit({action}, {entity_type}, {entity_id}) failed: {exc}",
+            exc_info=True,
+            extra={"domain": "admin"},
+        )
+
 
 router = APIRouter()
 
@@ -23,7 +56,7 @@ router = APIRouter()
 
 
 @router.post("/maintenance/cleanup-location-history")
-async def admin_cleanup_location_history(days: int = 30):
+async def admin_cleanup_location_history(days: int = Query(30, ge=7, le=1095)):
     """Delete old driver_location_history rows.
 
     By default deletes rows older than 30 days. On ride completion the
@@ -37,36 +70,22 @@ async def admin_cleanup_location_history(days: int = 30):
     cutoff_historical = (now - timedelta(days=days)).isoformat()
     cutoff_idle = (now - timedelta(hours=24)).isoformat()
 
-    deleted_historical = 0
-    deleted_idle = 0
+    deleted_historical = -1
+    deleted_idle = -1
     try:
-        # Count rows to be deleted for reporting
-        old_rows = await db_supabase.get_rows(
-            "driver_location_history",
-            {"timestamp": {"$lt": cutoff_historical}},
-            limit=100000,
-        )
-        deleted_historical = len(old_rows or [])
-        if deleted_historical > 0:
-            await db_supabase.delete_many("driver_location_history", {"timestamp": {"$lt": cutoff_historical}})
+        await db_supabase.delete_many("driver_location_history", {"timestamp": {"$lt": cutoff_historical}})
     except Exception as e:
-        logger.warning(f"Cleanup historical GPS failed: {e}")
+        logger.error(f"Cleanup historical GPS failed: {e}", exc_info=True)
 
     try:
-        idle_rows = await db_supabase.get_rows(
+        await db_supabase.delete_many(
             "driver_location_history",
             {"timestamp": {"$lt": cutoff_idle}, "tracking_phase": "online_idle"},
-            limit=100000,
         )
-        deleted_idle = len(idle_rows or [])
-        if deleted_idle > 0:
-            await db_supabase.delete_many(
-                "driver_location_history", {"timestamp": {"$lt": cutoff_idle}, "tracking_phase": "online_idle"}
-            )
     except Exception as e:
-        logger.warning(f"Cleanup idle GPS failed: {e}")
+        logger.error(f"Cleanup idle GPS failed: {e}", exc_info=True)
 
-    logger.info(f"[CLEANUP] Deleted {deleted_historical} historical + {deleted_idle} idle GPS points")
+    logger.info("[CLEANUP] Deleted historical + idle GPS points (counts not tracked — direct delete)")
     return {
         "deleted_historical": deleted_historical,
         "deleted_idle": deleted_idle,
@@ -90,7 +109,6 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
     Run nightly via a cron job hitting this endpoint with yesterday's date.
     Idempotent — upserts by (driver_id, stat_date).
     """
-    import math
     from collections import defaultdict
 
     # Default to yesterday (UTC)
@@ -103,16 +121,6 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
     day_end = day_start + timedelta(days=1)
     day_start_iso = day_start.isoformat()
     day_end_iso = day_end.isoformat()
-
-    def _haversine(lat1, lng1, lat2, lng2):
-        R = 6371.0
-        dlat = math.radians(lat2 - lat1)
-        dlng = math.radians(lng2 - lng1)
-        a = (
-            math.sin(dlat / 2) ** 2
-            + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlng / 2) ** 2
-        )
-        return 2 * R * math.asin(math.sqrt(a))
 
     # Pull all rides from that day to determine the set of active driver IDs
     # and to count/sum earnings. 10 k rides/day is a safe upper bound for the
@@ -132,7 +140,7 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
     decline_logs = await db.get_rows(
         "audit_logs",
         {"action": "ride_declined", "created_at": {"$gte": day_start_iso, "$lt": day_end_iso}},
-        limit=100000,
+        limit=10000,  # capped from 100k — decline events are sparse; 10k covers any realistic day
     )
     declines_by_driver: Dict[str, int] = defaultdict(int)
     for entry in decline_logs or []:
@@ -149,7 +157,8 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
         "driver_location_history",
         {"timestamp": {"$gte": day_start_iso, "$lt": day_end_iso}},
         order="timestamp",
-        limit=50000,  # enough to identify all active drivers; full points fetched per-driver
+        columns="driver_id",
+        limit=10000,  # enough to identify all active drivers; per-driver aggregation is done in SQL
     )
     drivers_with_gps: set = set()
     for p in presence_rows or []:
@@ -162,49 +171,38 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
     created = 0
     updated = 0
     for driver_id in all_driver_ids:
-        # Fetch this driver's GPS points for the day in a targeted query rather
-        # than carrying all drivers' points in memory simultaneously.
-        raw_points = await db_supabase.get_rows(
-            "driver_location_history",
-            {"driver_id": driver_id, "timestamp": {"$gte": day_start_iso, "$lt": day_end_iso}},
-            order="timestamp",
-            limit=100000,  # ~1 GPS point/sec × max 24 h online = 86 400 points; 100 k is a safe cap
-        )
-        points = [p for p in (raw_points or []) if p.get("lat") and p.get("lng")]
         rides = rides_by_driver.get(driver_id, [])
 
-        # Online minutes (simple: span from first to last point)
-        online_minutes = 0
-        first_online_at = None
-        last_online_at = None
-        if points:
-            first_online_at = points[0].get("timestamp")
-            last_online_at = points[-1].get("timestamp")
-            t_first = parse_iso_utc(first_online_at)
-            t_last = parse_iso_utc(last_online_at)
-            if t_first and t_last:
-                online_minutes = max(0, int((t_last - t_first).total_seconds() / 60))
+        # Call the server-side SQL function instead of fetching up to 100 k GPS
+        # rows into Python and running haversine in a loop. Returns 7 scalars.
+        def _rpc(did=driver_id):
+            return _supabase_client.rpc(
+                "compute_driver_phase_distances",
+                {"p_driver_id": did, "p_day_start": day_start_iso, "p_day_end": day_end_iso},
+            ).execute()
 
-        # Per-phase distances
-        idle_km = 0.0
-        navigating_km = 0.0
-        trip_km = 0.0
-        for i in range(1, len(points)):
-            prev, curr = points[i - 1], points[i]
-            seg = _haversine(prev["lat"], prev["lng"], curr["lat"], curr["lng"])
-            phase = curr.get("tracking_phase") or "unknown"
-            if phase == "online_idle":
-                idle_km += seg
-            elif phase == "navigating_to_pickup":
-                navigating_km += seg
-            elif phase == "trip_in_progress":
-                trip_km += seg
+        gps_stats: Dict[str, Any] = {}
+        try:
+            resp = await _run_sync(_rpc)
+            rows = getattr(resp, "data", None) or []
+            gps_stats = rows[0] if rows else {}
+        except Exception as e:
+            logger.error(f"[ROLLUP] compute_driver_phase_distances failed driver={driver_id}: {e}", exc_info=True)
+
+        idle_km = float(gps_stats.get("idle_km") or 0)
+        navigating_km = float(gps_stats.get("navigating_km") or 0)
+        trip_km = float(gps_stats.get("trip_km") or 0)
+        online_minutes = int(gps_stats.get("online_minutes") or 0)
+        first_online_at = gps_stats.get("first_online_at")
+        last_online_at = gps_stats.get("last_online_at")
 
         # Ride counts and earnings
         rides_completed = sum(1 for r in rides if r.get("status") == "completed")
         rides_cancelled = sum(1 for r in rides if r.get("status") == "cancelled")
-        total_earnings = sum(float(r.get("driver_earnings") or 0) for r in rides if r.get("status") == "completed")
-        total_tips = sum(float(r.get("tip_amount") or 0) for r in rides if r.get("status") == "completed")
+        total_earnings = float(
+            sum(Decimal(str(r.get("driver_earnings") or 0)) for r in rides if r.get("status") == "completed")
+        )
+        total_tips = float(sum(Decimal(str(r.get("tip_amount") or 0)) for r in rides if r.get("status") == "completed"))
 
         # Determine service area from driver profile
         drv = await db_supabase.get_driver_by_id(driver_id)
@@ -276,25 +274,9 @@ async def get_audit_logs(
         term = re.escape(search.strip())
         if term:
             filters["$or"] = [
-                {"user_email": {"$regex": term, "$options": "i"}},
-                {"entity_id": {"$regex": term, "$options": "i"}},
+                {"actor_id": {"$regex": term, "$options": "i"}},
+                {"resource_id": {"$regex": term, "$options": "i"}},
                 {"details": {"$regex": term, "$options": "i"}},
             ]
     logs = await db_supabase.get_rows("audit_logs", filters, order="created_at", desc=True, limit=limit, offset=offset)
     return logs
-
-
-async def log_audit(action: str, entity_type: str, entity_id: str, user_email: str, details: str = ""):
-    """Record an audit log entry. Call from admin endpoints."""
-    await db_supabase.insert_one(
-        "audit_logs",
-        {
-            "id": str(uuid.uuid4()),
-            "action": action,  # created, updated, deleted, login, status_change
-            "entity_type": entity_type,  # driver, user, ride, promotion, service_area, staff, setting
-            "entity_id": entity_id,
-            "user_email": user_email,
-            "details": details,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        },
-    )

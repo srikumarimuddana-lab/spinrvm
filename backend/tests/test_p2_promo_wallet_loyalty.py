@@ -17,11 +17,13 @@ Run:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+pytestmark = pytest.mark.anyio
 
 USER_ID = "user_p2_15"
 RIDE_ID = "ride_p2_15_001"
@@ -46,7 +48,7 @@ def _promo(code: str = "SAVE5", **extra) -> dict:
         "max_uses": 100,
         "uses": 0,
         "max_uses_per_user": 1,
-        "expiry_date": (datetime.utcnow() + timedelta(days=30)).isoformat(),
+        "expiry_date": (datetime.now(timezone.utc) + timedelta(days=30)).isoformat(),
         "assigned_user_ids": [],
         "first_ride_only": False,
         "new_user_days": 0,
@@ -67,7 +69,7 @@ def _wallet(balance: float = 50.00, active: bool = True) -> dict:
         "user_id": USER_ID,
         "balance": balance,
         "is_active": active,
-        "updated_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -78,7 +80,7 @@ def _loyalty_account(points: int = 200, lifetime: int = 700, tier: str = "silver
         "points": points,
         "lifetime_points": lifetime,
         "tier": tier,
-        "updated_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -88,7 +90,6 @@ def _loyalty_account(points: int = 200, lifetime: int = 700, tier: str = "silver
 
 
 @pytest.mark.e2e
-@pytest.mark.asyncio
 class TestValidatePromo:
     """Pins promo validation rules.
 
@@ -96,10 +97,14 @@ class TestValidatePromo:
     """
 
     async def _call(self, code: str, ride_fare: float, promo_row: dict, user_uses: int = 0):
+        from starlette.requests import Request as StarletteRequest
+
         from backend.routes.promotions import ValidatePromoRequest, validate_promo
 
         req = ValidatePromoRequest(code=code, ride_fare=Decimal(str(ride_fare)))
-        mock_request = MagicMock()
+        mock_request = StarletteRequest(
+            {"type": "http", "method": "POST", "path": "/promo/validate", "query_string": b"", "headers": []}
+        )
 
         with (
             patch(
@@ -148,7 +153,7 @@ class TestValidatePromo:
     async def test_expired_promo_raises_400(self):
         from fastapi import HTTPException
 
-        promo = _promo(expiry_date=(datetime.utcnow() - timedelta(days=1)).isoformat())
+        promo = _promo(expiry_date=(datetime.now(timezone.utc) - timedelta(days=1)).isoformat())
 
         with pytest.raises(HTTPException) as exc_info:
             await self._call("EXPIRED", 20.00, promo)
@@ -200,11 +205,14 @@ class TestValidatePromo:
 
     async def test_unknown_code_raises_404(self):
         from fastapi import HTTPException
+        from starlette.requests import Request as StarletteRequest
 
         from backend.routes.promotions import ValidatePromoRequest, validate_promo
 
         req = ValidatePromoRequest(code="GHOST", ride_fare=Decimal("20.00"))
-        mock_request = MagicMock()
+        mock_request = StarletteRequest(
+            {"type": "http", "method": "POST", "path": "/promo/validate", "query_string": b"", "headers": []}
+        )
 
         with patch("backend.routes.promotions.db_supabase.get_rows", AsyncMock(return_value=[])):
             with pytest.raises(HTTPException) as exc_info:
@@ -219,7 +227,6 @@ class TestValidatePromo:
 
 
 @pytest.mark.e2e
-@pytest.mark.asyncio
 class TestApplyPromo:
     """Pins apply_promo: server-fare used, application recorded.
 
@@ -251,7 +258,7 @@ class TestApplyPromo:
             patch("backend.routes.promotions.db_supabase.find_one", AsyncMock(return_value=_ride(total_fare=20.00))),
             patch("backend.routes.promotions.db_supabase.insert_one", AsyncMock()),
             patch("backend.routes.promotions.db_supabase.get_rows", AsyncMock(return_value=[_promo()])),
-            patch("backend.routes.promotions.db_supabase.update_one", AsyncMock()),
+            patch("backend.routes.promotions.increment_promo_uses", AsyncMock(return_value=True)),
             patch("backend.routes.promotions.validate_promo", AsyncMock(side_effect=_fake_validate)),
         ):
             result = await apply_promo(req=req, current_user={"id": USER_ID})
@@ -293,7 +300,6 @@ class TestApplyPromo:
 
 
 @pytest.mark.e2e
-@pytest.mark.asyncio
 class TestWalletPay:
     """Pins wallet_pay: balance deduction, guards, and state updates.
 
@@ -314,6 +320,7 @@ class TestWalletPay:
             txns.append(row)
             return row
 
+        expected_balance = Decimal(str(wallet_balance)) - Decimal(str(amount))
         with (
             patch(
                 "backend.routes.wallet.db.find_one",
@@ -324,6 +331,7 @@ class TestWalletPay:
                     ]
                 ),
             ),
+            patch("backend.routes.wallet.wallet_pay_for_ride", AsyncMock(return_value=expected_balance)),
             patch("backend.routes.wallet.db.update_one", AsyncMock(side_effect=_update)),
             patch("backend.routes.wallet.db.insert_one", AsyncMock(side_effect=_insert)),
         ):
@@ -343,12 +351,13 @@ class TestWalletPay:
         ride_updates = [(t, d) for t, d in updated if t == "rides"]
         assert ride_updates, "Ride was not updated after payment"
         data = ride_updates[0][1]
-        assert data.get("$set", data).get("payment_status") == "paid"
+        assert data.get("$set", data).get("payment_method") == "wallet"
 
     async def test_insufficient_balance_raises_400(self):
         from fastapi import HTTPException
 
         from backend.routes.wallet import WalletPayRequest, wallet_pay
+        from backend.utils.error_handling import SpinrException
 
         req = WalletPayRequest(ride_id=RIDE_ID, amount=Decimal("100.00"))
 
@@ -362,12 +371,17 @@ class TestWalletPay:
                     ]
                 ),
             ),
+            patch(
+                "backend.routes.wallet.wallet_pay_for_ride",
+                AsyncMock(side_effect=ValueError("insufficient_funds")),
+            ),
         ):
-            with pytest.raises(HTTPException) as exc_info:
+            with pytest.raises((HTTPException, SpinrException)) as exc_info:
                 await wallet_pay(req=req, current_user={"id": USER_ID})
 
         assert exc_info.value.status_code == 400
-        assert "insufficient" in exc_info.value.detail.lower()
+        text = getattr(exc_info.value, "detail", None) or getattr(exc_info.value, "message", "")
+        assert "insufficient" in str(text).lower()
 
     async def test_amount_exceeds_fare_raises_400(self):
         """Client cannot pay more than the server-stored fare (fare-inflation guard)."""
@@ -416,7 +430,6 @@ class TestWalletPay:
 
 
 @pytest.mark.e2e
-@pytest.mark.asyncio
 class TestWalletTopUp:
     """Pins top_up_wallet: balance increment and transaction record.
 
@@ -427,19 +440,20 @@ class TestWalletTopUp:
         from backend.routes.wallet import TopUpRequest, top_up_wallet
 
         req = TopUpRequest(amount=Decimal("25.00"))
-        updated = []
+        mock_request = MagicMock()
+        mock_request.headers.get.return_value = None
         txns = []
 
         with (
             patch("backend.routes.wallet.db.find_one", AsyncMock(return_value=_wallet(balance=10.00))),
-            patch("backend.routes.wallet.db.update_one", AsyncMock(side_effect=lambda t, q, d: updated.append(d))),
+            patch("backend.routes.wallet.wallet_increment_balance", AsyncMock(return_value=Decimal("35.00"))),
             patch("backend.routes.wallet.db.insert_one", AsyncMock(side_effect=lambda t, r: txns.append(r) or r)),
         ):
-            result = await top_up_wallet(req=req, current_user={"id": USER_ID})
+            result = await top_up_wallet(req=req, request=mock_request, current_user={"id": USER_ID})
 
         assert float(result["balance"]) == pytest.approx(35.00, abs=0.01)
         assert txns, "Transaction not recorded"
-        assert txns[0]["txn_type"] == "top_up"
+        assert txns[0]["type"] == "top_up"
 
     async def test_suspended_wallet_blocks_top_up(self):
         from fastapi import HTTPException
@@ -448,9 +462,11 @@ class TestWalletTopUp:
 
         req = TopUpRequest(amount=Decimal("10.00"))
 
+        mock_request = MagicMock()
+        mock_request.headers.get.return_value = None
         with patch("backend.routes.wallet.db.find_one", AsyncMock(return_value=_wallet(active=False))):
             with pytest.raises(HTTPException) as exc_info:
-                await top_up_wallet(req=req, current_user={"id": USER_ID})
+                await top_up_wallet(req=req, request=mock_request, current_user={"id": USER_ID})
 
         assert exc_info.value.status_code == 403
 
@@ -461,7 +477,6 @@ class TestWalletTopUp:
 
 
 @pytest.mark.e2e
-@pytest.mark.asyncio
 class TestLoyaltyEarn:
     """Pins earn_points_for_ride: points calculation, tier upgrade, dedup.
 
@@ -548,15 +563,20 @@ class TestLoyaltyEarn:
 
     async def test_duplicate_award_returns_already_awarded(self):
         from backend.routes.loyalty import earn_points_for_ride
+        from backend.utils.error_handling import DuplicateRecordError
 
         async def _find_one(table, query):
             if table == "rides":
                 return _ride(total_fare=20.00)
-            if table == "loyalty_transactions":
-                return {"id": "existing-txn"}
             return _loyalty_account()
 
-        with patch("backend.routes.loyalty.db.find_one", AsyncMock(side_effect=_find_one)):
+        with (
+            patch("backend.routes.loyalty.db.find_one", AsyncMock(side_effect=_find_one)),
+            patch(
+                "backend.routes.loyalty.db.insert_one",
+                AsyncMock(side_effect=DuplicateRecordError("duplicate")),
+            ),
+        ):
             result = await earn_points_for_ride(
                 ride_id=RIDE_ID,
                 current_user={"id": USER_ID},
@@ -599,7 +619,6 @@ class TestLoyaltyEarn:
 
 
 @pytest.mark.e2e
-@pytest.mark.asyncio
 class TestLoyaltyRedeem:
     """Pins redeem_points: points deducted, wallet credited, guards.
 
@@ -617,6 +636,7 @@ class TestLoyaltyRedeem:
             patch("backend.routes.loyalty.db.find_one", AsyncMock(return_value=acc)),
             patch("backend.routes.loyalty.db.update_one", AsyncMock()),
             patch("backend.routes.loyalty.db.insert_one", AsyncMock(return_value={"id": "txn-001"})),
+            patch("backend.routes.loyalty.wallet_increment_balance", AsyncMock(return_value=Decimal("12.00"))),
             # wallet.get_or_create_wallet / _record_transaction imported locally inside fn
             patch("backend.routes.wallet.get_or_create_wallet", AsyncMock(return_value=wallet_row)),
             patch("backend.routes.wallet._record_transaction", AsyncMock(return_value={"id": "t1"})),

@@ -2,6 +2,18 @@ import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import api from '@shared/api/client';
 
+function isErrorLike(e: unknown): e is { message: string } {
+  return typeof e === 'object' && e !== null && 'message' in e;
+}
+
+export interface AllowanceRequest {
+  id: string;
+  amount: string;
+  reason: string;
+  status: string;
+  created_at: string;
+}
+
 const STORAGE_KEY = '@spinr:work_profile';
 
 export interface WorkProfile {
@@ -49,7 +61,7 @@ interface WorkProfileState {
   workModeEnabled: boolean;
   balance: AllowanceBalance | null;
   policy: WorkPolicy | null;
-  requests: any[];
+  requests: AllowanceRequest[];
   isLoading: boolean;
   balanceLoading: boolean;
   error: string | null;
@@ -61,7 +73,7 @@ interface WorkProfileState {
   fetchBalance(): Promise<void>;
   fetchPolicy(): Promise<void>;
   fetchRequests(): Promise<void>;
-  submitRequest(amount: number, reason: string): Promise<any>;
+  submitRequest(amount: number, reason: string): Promise<AllowanceRequest>;
   checkRide(fare: number, pickupAt?: Date): { ok: boolean; reasons: string[] };
 }
 
@@ -102,8 +114,8 @@ export const useWorkProfileStore = create<WorkProfileState>((set, get) => ({
       const firstId = profiles[0]?.company?.id ?? null;
       const nextId = validId ?? firstId;
       set({ profiles, isLoading: false, activeCompanyId: nextId });
-    } catch (e: any) {
-      set({ isLoading: false, error: e.message || 'Failed to load work profiles' });
+    } catch (e: unknown) {
+      set({ isLoading: false, error: isErrorLike(e) ? (e.message || 'Failed to load work profiles') : 'Failed to load work profiles' });
     }
   },
 
@@ -169,7 +181,7 @@ export const useWorkProfileStore = create<WorkProfileState>((set, get) => ({
     const { activeCompanyId } = get();
     if (!activeCompanyId) return;
     try {
-      const res = await api.get<any[]>(`/rider/work-profile/${activeCompanyId}/allowance-requests`);
+      const res = await api.get<AllowanceRequest[]>(`/rider/work-profile/${activeCompanyId}/allowance-requests`);
       set({ requests: res.data || [] });
     } catch {
       set({ requests: [] });
@@ -179,7 +191,7 @@ export const useWorkProfileStore = create<WorkProfileState>((set, get) => ({
   submitRequest: async (amount, reason) => {
     const { activeCompanyId } = get();
     if (!activeCompanyId) throw new Error('No active work profile');
-    const res = await api.post(
+    const res = await api.post<AllowanceRequest>(
       `/rider/work-profile/${activeCompanyId}/allowance-requests`,
       { amount, reason },
     );

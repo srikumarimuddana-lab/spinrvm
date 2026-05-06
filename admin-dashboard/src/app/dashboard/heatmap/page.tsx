@@ -43,6 +43,7 @@ export default function HeatMapPage() {
     const [endDate, setEndDate] = useState("");
     const [serviceAreaId, setServiceAreaId] = useState<string>("all");
     const [groupBy, setGroupBy] = useState<"pickup" | "dropoff" | "both">("both");
+    const [dateError, setDateError] = useState("");
 
     // Display toggles
     const [showPickups, setShowPickups] = useState(true);
@@ -103,6 +104,12 @@ export default function HeatMapPage() {
 
     // Fetch heat map data when filters change
     const fetchHeatMapData = useCallback(() => {
+        if (startDate && endDate && startDate > endDate) {
+            setDateError("Start date must be before end date.");
+            setLoading(false);
+            return;
+        }
+        setDateError("");
         setLoading(true);
         const { start_date, end_date } = getDateRange();
 
@@ -151,7 +158,7 @@ export default function HeatMapPage() {
                         variant="outline"
                         size="sm"
                         onClick={fetchHeatMapData}
-                        disabled={loading}
+                        disabled={loading || !!dateError}
                     >
                         <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
                         Refresh
@@ -289,6 +296,9 @@ export default function HeatMapPage() {
                             />
                         </div>
                     </div>
+                    {dateError && (
+                        <p className="text-sm text-destructive mt-2">{dateError}</p>
+                    )}
 
                     {/* Display Toggles */}
                     <div className="flex items-center gap-6 mt-4 pt-4 border-t">

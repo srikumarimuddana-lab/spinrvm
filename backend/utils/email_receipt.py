@@ -161,7 +161,7 @@ def _build_fare_rows(ride: Dict[str, Any], tip: Decimal) -> tuple[str, Decimal]:
     return "".join(rows), grand_total_d
 
 
-def generate_receipt_html(ride: dict, rider: dict, driver: dict = None, tip: float = 0) -> str:
+def generate_receipt_html(ride: dict, rider: dict, driver: dict = None, tip: Decimal = Decimal(0)) -> str:
     """Generate HTML receipt for a completed ride."""
     tip_d = _d(tip)
     fare_rows, total_d = _build_fare_rows(ride, tip_d)

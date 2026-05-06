@@ -1,20 +1,75 @@
-// Use relative URL to go through Next.js proxy (avoids CORS and IPv6 issues)
-// For production, set NEXT_PUBLIC_API_URL to your backend URL.
-// Default is "" (empty) so /api/* requests route through next.config.ts rewrites
-// → http://127.0.0.1:8001. Never talk directly to the backend from the browser.
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "";
+// Always use relative URL so /api/* requests route through next.config.ts rewrites.
+// Never talk directly to the backend from the browser — that bypasses the proxy and triggers CORS.
+const API_BASE = "";
 
 // Import Zustand store for token management
 import { useAuthStore } from "@/store/authStore";
 
+// ─── B-P1-8: typed rate-limit error ──────────────────────────────────
+// Mirrors shared/api/client.ts's RateLimitError so admin login,
+// staff "Sign out everywhere", and admin password-change screens can
+// show "try again in N seconds" UX. The contract is pinned in
+// docs/runbooks/rate-limits.md.
+export class RateLimitError extends Error {
+    readonly status = 429;
+    retryAfterSeconds: number;
+    limit: number | null;
+    remaining: number | null;
+    resetSeconds: number | null;
+    data: any;
+
+    constructor(opts: {
+        message: string;
+        retryAfterSeconds: number;
+        limit: number | null;
+        remaining: number | null;
+        resetSeconds: number | null;
+        data: any;
+    }) {
+        super(opts.message);
+        this.name = "RateLimitError";
+        this.retryAfterSeconds = opts.retryAfterSeconds;
+        this.limit = opts.limit;
+        this.remaining = opts.remaining;
+        this.resetSeconds = opts.resetSeconds;
+        this.data = opts.data;
+    }
+}
+
+// RFC 9110 §10.2.3: integer seconds OR HTTP-date. Negative clamped to 0.
+const parseRetryAfter = (header: string | null, fallback: number): number => {
+    if (!header) return fallback;
+    const trimmed = header.trim();
+    if (/^\d+$/.test(trimmed)) {
+        const seconds = parseInt(trimmed, 10);
+        return Number.isFinite(seconds) ? Math.max(seconds, 0) : fallback;
+    }
+    const dateMs = Date.parse(trimmed);
+    if (Number.isFinite(dateMs)) {
+        return Math.max(Math.ceil((dateMs - Date.now()) / 1000), 0);
+    }
+    return fallback;
+};
+
+const parseIntHeader = (header: string | null): number | null => {
+    if (!header) return null;
+    const n = parseInt(header.trim(), 10);
+    return Number.isFinite(n) ? n : null;
+};
+
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     // Get token from Zustand store
-    const token = useAuthStore.getState().token;
+    const store = useAuthStore.getState();
+    const token = store.token;
     const headers: Record<string, string> = {
         "Content-Type": "application/json",
         ...(options.headers as Record<string, string>),
     };
     if (token) headers["Authorization"] = `Bearer ${token}`;
+    const method = (options.method ?? "GET").toUpperCase();
+    if (!["GET", "HEAD", "OPTIONS"].includes(method) && store.csrfToken) {
+        headers["X-CSRF-Token"] = store.csrfToken;
+    }
 
     const url = `${API_BASE}${path}`;
     try {
@@ -27,27 +82,24 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
             // For the login endpoint, fall through to the !res.ok handler so
             // "Invalid credentials" is shown to the user rather than "Unauthorized".
             if (path !== "/api/admin/auth/login") {
-                const store = useAuthStore.getState();
-                // Attempt one silent refresh before giving up. This handles the
-                // case where the access token expired mid-session and the timer
-                // hasn't fired yet (e.g. the tab was backgrounded).
-                if (store.refresh_token) {
-                    await store.silentRefresh();
-                    const newToken = useAuthStore.getState().token;
-                    if (newToken) {
-                        const retryHeaders = { ...headers, Authorization: `Bearer ${newToken}` };
-                        const retryRes = await fetch(url, { ...options, headers: retryHeaders });
-                        if (retryRes.ok) return retryRes.json() as T;
-                        if (retryRes.status !== 401) {
-                            const retryBody = await retryRes.json().catch(() => ({}));
-                            const retryMsg =
-                                retryBody.detail ||
-                                retryBody.error?.detail ||
-                                retryBody.error?.message ||
-                                retryBody.message ||
-                                retryRes.statusText;
-                            throw new Error(retryMsg);
-                        }
+                // Attempt one silent refresh before giving up. The HttpOnly
+                // refresh cookie is sent automatically — no need to check for
+                // a token in JS state.
+                await store.silentRefresh();
+                const newToken = useAuthStore.getState().token;
+                if (newToken) {
+                    const retryHeaders = { ...headers, Authorization: `Bearer ${newToken}` };
+                    const retryRes = await fetch(url, { ...options, headers: retryHeaders });
+                    if (retryRes.ok) return retryRes.json() as T;
+                    if (retryRes.status !== 401) {
+                        const retryBody = await retryRes.json().catch(() => ({}));
+                        const retryMsg =
+                            retryBody.detail ||
+                            retryBody.error?.detail ||
+                            retryBody.error?.message ||
+                            retryBody.message ||
+                            retryRes.statusText;
+                        throw new Error(retryMsg);
                     }
                 }
                 useAuthStore.getState().logout();
@@ -56,6 +108,38 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
                 }
                 throw new Error("Unauthorized");
             }
+        }
+
+        // B-P1-8: throw typed RateLimitError before the generic !res.ok
+        // path so the admin login / staff "Sign out everywhere"
+        // screens can render a countdown rather than a generic
+        // "Request failed". Always reads body so callers still get
+        // the backend's `message`/`detail` for display.
+        if (res.status === 429) {
+            const body = await res.json().catch(() => ({}));
+            const retryAfterSeconds = parseRetryAfter(
+                res.headers.get("Retry-After"),
+                typeof body?.retry_after === "number" ? body.retry_after : 60,
+            );
+            const limit =
+                parseIntHeader(res.headers.get("RateLimit-Limit")) ??
+                (typeof body?.limit === "number" ? body.limit : null);
+            const remaining = parseIntHeader(res.headers.get("RateLimit-Remaining"));
+            const resetSeconds = parseIntHeader(res.headers.get("RateLimit-Reset"));
+            const msg =
+                body?.message ||
+                body?.detail ||
+                body?.error?.message ||
+                body?.error?.detail ||
+                "Too many requests";
+            throw new RateLimitError({
+                message: msg,
+                retryAfterSeconds,
+                limit,
+                remaining,
+                resetSeconds,
+                data: body,
+            });
         }
 
         if (!res.ok) {
@@ -101,9 +185,8 @@ export interface AuthResponse {
 
 export interface AdminLoginResponse {
     token: string;
-    refresh_token: string;
     access_expires_at: string;
-    refresh_expires_at: string;
+    csrf_token?: string;
     user: {
         id: string;
         email: string;
@@ -114,6 +197,13 @@ export interface AdminLoginResponse {
     };
 }
 
+export interface AdminMfaRequired {
+    mfa_required: true;
+    mfa_token: string;
+}
+
+export type AdminLoginResult = AdminLoginResponse | AdminMfaRequired;
+
 export const loginAdmin = (phone: string, code: string) =>
     request<AuthResponse>("/api/auth/verify-otp", {
         method: "POST",
@@ -121,15 +211,49 @@ export const loginAdmin = (phone: string, code: string) =>
     });
 
 export const loginAdminSession = (email: string, password: string) =>
-    request<AdminLoginResponse>("/api/admin/auth/login", {
+    request<AdminLoginResult>("/api/admin/auth/login", {
         method: "POST",
         body: JSON.stringify({ email, password }),
+    });
+
+export const mfaChallenge = (mfa_token: string, totp_code: string) =>
+    request<AdminLoginResponse>("/api/admin/auth/mfa/challenge", {
+        method: "POST",
+        body: JSON.stringify({ mfa_token, totp_code }),
+    });
+
+export const mfaStatus = () =>
+    request<{ mfa_enabled: boolean }>("/api/admin/auth/mfa/status");
+
+export const mfaEnroll = () =>
+    request<{ secret: string; otpauth_uri: string }>("/api/admin/auth/mfa/enroll", { method: "POST" });
+
+export const mfaConfirm = (totp_code: string) =>
+    request<{ backup_codes: string[] }>("/api/admin/auth/mfa/confirm", {
+        method: "POST",
+        body: JSON.stringify({ totp_code }),
+    });
+
+export const mfaDisable = (totp_code: string, password: string) =>
+    request<{ success: boolean }>("/api/admin/auth/mfa/disable", {
+        method: "POST",
+        body: JSON.stringify({ totp_code, password }),
     });
 
 export const sendOtp = (phone: string) =>
     request<{ success: boolean }>("/api/auth/send-otp", {
         method: "POST",
         body: JSON.stringify({ phone }),
+    });
+
+// Admin "sign out everywhere" — closes B-P1-13. Bumps
+// admin_staff.token_version (kills all in-flight admin access tokens
+// on next request) and revokes every refresh token for this staff row.
+// Refused server-side for admin-001 (env-var super admin); rotate
+// ADMIN_PASSWORD to globally kill that account.
+export const logoutAllAdmin = () =>
+    request<{ success: boolean; revoked_refresh_tokens: number }>("/api/admin/auth/logout-all", {
+        method: "POST",
     });
 
 /* ── Dashboard ────────────────────────────── */
@@ -298,19 +422,46 @@ export const getDrivers = (opts: {
     offset?: number;
     is_verified?: boolean;
     is_online?: boolean;
+    is_available?: boolean;
     status?: string;
     service_area_id?: string;
+    search?: string;
 } = {}) => {
     const sp = new URLSearchParams();
     if (opts.limit != null) sp.set("limit", String(opts.limit));
     if (opts.offset != null) sp.set("offset", String(opts.offset));
     if (opts.is_verified != null) sp.set("is_verified", String(opts.is_verified));
     if (opts.is_online != null) sp.set("is_online", String(opts.is_online));
+    if (opts.is_available != null) sp.set("is_available", String(opts.is_available));
     if (opts.status) sp.set("status", opts.status);
     if (opts.service_area_id) sp.set("service_area_id", opts.service_area_id);
+    if (opts.search) sp.set("search", opts.search);
     const qs = sp.toString();
     return request<any[]>(`/api/admin/drivers${qs ? `?${qs}` : ""}`);
 };
+
+/** POST-based typeahead search — keeps search terms (may include phone digits) out of URL/server logs. */
+export const adminSearchDrivers = (opts: {
+    search: string;
+    limit?: number;
+    is_online?: boolean;
+    is_available?: boolean;
+}) =>
+    request<any[]>("/api/admin/drivers/search", {
+        method: "POST",
+        body: JSON.stringify(opts),
+    });
+
+/** POST-based typeahead search — keeps search terms out of URL/server logs. */
+export const adminSearchUsers = (opts: {
+    search: string;
+    role?: "all" | "rider" | "driver" | "admin";
+    limit?: number;
+}) =>
+    request<any[]>("/api/admin/users/search", {
+        method: "POST",
+        body: JSON.stringify(opts),
+    });
 export const getDriverRides = (id: string) =>
     request<any>(`/api/admin/drivers/${id}/rides`);
 
@@ -1147,6 +1298,9 @@ export const overrideDriverStatus = (driverId: string, status: string, reason?: 
         body: JSON.stringify({ status, reason }),
     });
 
+export const exportDrivers = () =>
+    request<{ drivers: any[]; count: number }>("/api/admin/export/drivers");
+
 export const getDriverNotes = (driverId: string) =>
     request<any[]>(`/api/admin/drivers/${driverId}/notes`);
 
@@ -1301,6 +1455,9 @@ export const getSurgeHistory = (areaId: string, hours = 24) =>
 export const getPayouts = (status?: string) =>
     request<any[]>(`/api/admin/payouts${status ? `?status=${status}` : ''}`);
 
+export const getPayoutById = (id: string) =>
+    request<any>(`/api/admin/payouts/${id}`);
+
 export const getPayoutStats = () =>
     request<any>("/api/admin/payouts/stats");
 
@@ -1324,6 +1481,46 @@ export const adminCancelRide = (rideId: string, reason?: string) =>
         {
             method: "POST",
             body: JSON.stringify({ reason: reason ?? "Cancelled by admin" }),
+        },
+    );
+
+export const adminCompleteRide = (rideId: string) =>
+    request<{ success: boolean; ride_id: string; status: string }>(
+        `/api/admin/rides/${rideId}/complete`,
+        { method: "POST" },
+    );
+
+export const adminPlacesAutocomplete = (input: string, sessionToken?: string) => {
+    const sp = new URLSearchParams({ input });
+    if (sessionToken) sp.set("session_token", sessionToken);
+    return request<{ predictions: any[] }>(`/api/admin/places/autocomplete?${sp.toString()}`);
+};
+
+export const adminPlacesDetails = (placeId: string, sessionToken?: string) => {
+    const sp = new URLSearchParams({ place_id: placeId });
+    if (sessionToken) sp.set("session_token", sessionToken);
+    return request<{ lat: number; lng: number; formatted_address: string }>(`/api/admin/places/details?${sp.toString()}`);
+};
+
+export const adminCreateRide = (data: {
+    rider_id: string;
+    driver_id?: string;
+    pickup_address: string;
+    pickup_lat: number;
+    pickup_lng: number;
+    dropoff_address: string;
+    dropoff_lat: number;
+    dropoff_lng: number;
+    // Pass as string to preserve Decimal precision on the backend
+    // (Pydantic Decimal accepts string/number; string avoids float drift).
+    total_fare?: string | number;
+    vehicle_type_id?: string;
+}) =>
+    request<{ success: boolean; ride_id: string; status: string }>(
+        "/api/admin/rides/create",
+        {
+            method: "POST",
+            body: JSON.stringify(data),
         },
     );
 
@@ -1409,3 +1606,40 @@ export const flushRedisPrefix = (prefix: string) =>
             body: JSON.stringify({ prefix, confirm: "FLUSH" }),
         },
     );
+
+/* ── Document Requirements (A-P4-1) ─────── */
+export const getDocumentRequirements = () =>
+    request<any[]>("/api/admin/documents/requirements");
+
+export const createDocumentRequirement = (data: {
+    name: string;
+    description?: string;
+    document_type?: string;
+    is_required?: boolean;
+    applicable_to?: string;
+}) => request<any>("/api/admin/documents/requirements", { method: "POST", body: JSON.stringify(data) });
+
+export const updateDocumentRequirement = (id: string, data: Partial<{
+    name: string;
+    description: string;
+    document_type: string;
+    is_required: boolean;
+    applicable_to: string;
+}>) => request<any>(`/api/admin/documents/requirements/${id}`, { method: "PUT", body: JSON.stringify(data) });
+
+export const deleteDocumentRequirement = (id: string) =>
+    request<any>(`/api/admin/documents/requirements/${id}`, { method: "DELETE" });
+
+/* ── Pending Documents paginated (A-P4-4) ── */
+export const getPendingDocuments = (params?: { limit?: number; cursor?: string; status?: string }) => {
+    const sp = new URLSearchParams();
+    if (params?.limit) sp.set("limit", String(params.limit));
+    if (params?.cursor) sp.set("cursor", params.cursor);
+    if (params?.status) sp.set("status", params.status);
+    const qs = sp.toString();
+    return request<{ items: any[]; next_cursor: string | null }>(`/api/admin/documents/pending${qs ? `?${qs}` : ""}`);
+};
+
+/* ── Payout retry (A-P4-2) ──────────────── */
+export const retryPayout = (id: string) =>
+    request<any>(`/api/admin/payouts/${id}/retry`, { method: "POST" });

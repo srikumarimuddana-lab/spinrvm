@@ -7,6 +7,13 @@ import { useRouter } from 'expo-router';
 import SpinrConfig from '@shared/config/spinr.config';
 import { useLanguageStore } from '../../store/languageStore';
 
+const n = (v: number | string | null | undefined): number => {
+  if (v == null) return 0;
+  const parsed = typeof v === 'string' ? parseFloat(v) : v;
+  return Number.isFinite(parsed) ? Math.round(parsed * 100) / 100 : 0;
+};
+const money = (v: number | string | null | undefined): string => n(v).toFixed(2);
+
 const COLORS = {
   primary: SpinrConfig.theme.colors.background,
   accent: SpinrConfig.theme.colors.primary,
@@ -100,21 +107,21 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
         <View style={styles.fareBreakdown}>
           <View style={styles.fareRow}>
             <Text allowFontScaling={false} style={styles.fareItemLabel}>{t('tripCompleted.baseFare')}</Text>
-            <Text style={styles.fareItemValue}>${(completedRide.base_fare || 0).toFixed(2)}</Text>
+            <Text style={styles.fareItemValue}>${money(completedRide?.base_fare)}</Text>
           </View>
           <View style={styles.fareRow}>
             <Text allowFontScaling={false} style={styles.fareItemLabel}>{t('tripCompleted.distanceFare')}</Text>
-            <Text style={styles.fareItemValue}>${(completedRide.distance_fare || 0).toFixed(2)}</Text>
+            <Text style={styles.fareItemValue}>${money(completedRide?.distance_fare)}</Text>
           </View>
           <View style={styles.fareRow}>
             <Text allowFontScaling={false} style={styles.fareItemLabel}>{t('tripCompleted.timeFare')}</Text>
-            <Text style={styles.fareItemValue}>${(completedRide.time_fare || 0).toFixed(2)}</Text>
+            <Text style={styles.fareItemValue}>${money(completedRide?.time_fare)}</Text>
           </View>
           <View style={styles.fareDivider} />
           <View style={styles.fareRow}>
             <Text allowFontScaling={false} style={styles.fareEarningsLabel}>{t('tripCompleted.yourEarnings')}</Text>
             <Text style={styles.fareEarningsValue}>
-              ${(completedRide.driver_earnings || 0).toFixed(2)}
+              ${money(completedRide?.driver_earnings)}
             </Text>
           </View>
         </View>
@@ -123,11 +130,11 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
         <View style={styles.tripStats}>
           <View style={styles.tripStat}>
             <Ionicons name="speedometer" size={18} color={COLORS.textDim} />
-            <Text style={styles.tripStatValue}>{(completedRide.distance_km || 0).toFixed(1)} km</Text>
+            <Text style={styles.tripStatValue}>{n(completedRide?.distance_km).toFixed(1)} km</Text>
           </View>
           <View style={styles.tripStat}>
             <Ionicons name="time" size={18} color={COLORS.textDim} />
-            <Text style={styles.tripStatValue}>{completedRide.duration_minutes || 0} min</Text>
+            <Text style={styles.tripStatValue}>{n(completedRide?.duration_minutes)} min</Text>
           </View>
         </View>
 
@@ -150,17 +157,17 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
               completedRide.dropoff_address ? `🏁 ${t('tripCompleted.receiptDropoff')}: ${completedRide.dropoff_address}` : null,
               `📅 ${date}`,
               '',
-              `${t('tripCompleted.receiptDistance')}: ${(completedRide.distance_km || 0).toFixed(1)} km`,
-              `${t('tripCompleted.receiptDuration')}: ${completedRide.duration_minutes || 0} min`,
+              `${t('tripCompleted.receiptDistance')}: ${n(completedRide?.distance_km).toFixed(1)} km`,
+              `${t('tripCompleted.receiptDuration')}: ${n(completedRide?.duration_minutes)} min`,
               '',
               `── ${t('tripCompleted.receiptFareBreakdown')} ──`,
-              `${t('tripCompleted.baseFare')}:     $${(completedRide.base_fare || 0).toFixed(2)}`,
-              `${t('tripCompleted.distanceFare')}: $${(completedRide.distance_fare || 0).toFixed(2)}`,
-              `${t('tripCompleted.timeFare')}:     $${(completedRide.time_fare || 0).toFixed(2)}`,
-              completedRide.booking_fee ? `${t('tripCompleted.bookingFee')}:   $${completedRide.booking_fee.toFixed(2)}` : null,
-              completedRide.tip_amount ? `${t('tripCompleted.tip')}:           $${completedRide.tip_amount.toFixed(2)}` : null,
+              `${t('tripCompleted.baseFare')}:     $${money(completedRide?.base_fare)}`,
+              `${t('tripCompleted.distanceFare')}: $${money(completedRide?.distance_fare)}`,
+              `${t('tripCompleted.timeFare')}:     $${money(completedRide?.time_fare)}`,
+              n(completedRide?.booking_fee) > 0 ? `${t('tripCompleted.bookingFee')}:   $${money(completedRide?.booking_fee)}` : null,
+              n(completedRide?.tip_amount) > 0 ? `${t('tripCompleted.tip')}:           $${money(completedRide?.tip_amount)}` : null,
               '━━━━━━━━━━━━━━━━━━━━━━━',
-              `${t('tripCompleted.receiptYourEarnings')}: $${(completedRide.driver_earnings || 0).toFixed(2)}`,
+              `${t('tripCompleted.receiptYourEarnings')}: $${money(completedRide?.driver_earnings)}`,
               '',
               completedRide.id ? `${t('tripCompleted.receiptTripId')}: ${completedRide.id}` : null,
               '',

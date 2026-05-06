@@ -17,6 +17,7 @@ import type { ThemeColors } from '@shared/theme/index';
 import Analytics from '@shared/analytics';
 import { useStripe } from '@stripe/stripe-react-native';
 import { attemptRidePayment, PaymentAlertButton } from '../utils/attemptRidePayment';
+import { useSpinrPaymentSheet } from '../hooks/useSpinrPaymentSheet';
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
@@ -30,6 +31,7 @@ function RideCompletedScreenContent() {
   // requires_action for 3DS / SCA. StripeProvider is wired at the app
   // root in app/_layout.tsx so useStripe() resolves here.
   const { confirmPayment } = useStripe();
+  const { presentSheet, isLoading: sheetLoading } = useSpinrPaymentSheet();
 
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -54,12 +56,13 @@ function RideCompletedScreenContent() {
   const mapRef = React.useRef<MapView>(null);
 
   const tipOptions = [2, 5, 10];
-  const fare = currentRide?.total_fare || 0;
+  const fare = parseFloat(currentRide?.total_fare || '0');
   const duration = currentRide?.duration_minutes || 0;
   const distance = currentRide?.distance_km || 0;
 
   useEffect(() => {
-    if (rideId) fetchRide(rideId);
+    if (!rideId) { router.replace('/(tabs)' as any); return; }
+    fetchRide(rideId);
   }, [rideId]);
 
   // Check if ride was already paid (e.g. coming back to this screen)
@@ -76,7 +79,7 @@ function RideCompletedScreenContent() {
   }, []);
 
   const buildReceiptText = () => {
-    const tipAmount = selectedTip || (customTip ? parseFloat(customTip) || 0 : 0);
+    const tipAmount = selectedTip !== null ? selectedTip : (customTip ? parseFloat(customTip) || 0 : 0);
     const total = fare + tipAmount;
     const rideDate = currentRide?.ride_completed_at
       ? new Date(currentRide.ride_completed_at).toLocaleString('en-CA', {
@@ -100,10 +103,10 @@ function RideCompletedScreenContent() {
       `▸ TO    ${currentRide?.dropoff_address || '—'}`,
       ``,
       `━━━━━━ FARE BREAKDOWN ━━━━━━`,
-      `Base fare:     $${(currentRide?.base_fare || 0).toFixed(2)}`,
-      `Distance fare: $${(currentRide?.distance_fare || 0).toFixed(2)}  (${distance.toFixed(1)} km)`,
-      `Time fare:     $${(currentRide?.time_fare || 0).toFixed(2)}  (${duration} min)`,
-      `Booking fee:   $${(currentRide?.booking_fee || 0).toFixed(2)}`,
+      `Base fare:     $${parseFloat(currentRide?.base_fare || '0').toFixed(2)}`,
+      `Distance fare: $${parseFloat((currentRide as any)?.distance_fare || '0').toFixed(2)}  (${distance.toFixed(1)} km)`,
+      `Time fare:     $${parseFloat((currentRide as any)?.time_fare || '0').toFixed(2)}  (${duration} min)`,
+      `Booking fee:   $${parseFloat((currentRide as any)?.booking_fee || '0').toFixed(2)}`,
       tipAmount > 0 ? `Tip:           $${tipAmount.toFixed(2)}` : null,
       `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
       `TOTAL:         $${total.toFixed(2)} CAD`,
@@ -124,7 +127,7 @@ function RideCompletedScreenContent() {
   const handleShareInvoice = async () => {
     try {
       await Share.share({ message: buildReceiptText(), title: 'Spinr Ride Receipt' });
-    } catch {}
+    } catch (err) { console.error('[ride-completed]', err); }
   };
 
   // Payment is processed when rider taps "Done" — includes tip amount
@@ -164,7 +167,7 @@ function RideCompletedScreenContent() {
     if (isSubmitting) return; // prevent double tap
     setIsSubmitting(true);
     try {
-      const tipAmount = selectedTip || (customTip ? parseFloat(customTip) : 0);
+      const tipAmount = selectedTip !== null ? selectedTip : (customTip ? parseFloat(customTip) || 0 : 0);
 
       // 1. Rate the driver first — this is fire-and-forget because
       //    rating may fail if already rated (idempotent upstream).
@@ -179,7 +182,7 @@ function RideCompletedScreenContent() {
       if (!alreadyPaid) {
         const result = await attemptRidePayment({
           api,
-          stripe: confirmPayment ? { confirmPayment } : null,
+          stripe: { confirmPayment },
           rideId: rideId as string,
           tipAmount,
         });
@@ -196,11 +199,11 @@ function RideCompletedScreenContent() {
         return;
       }
 
-      const total = (currentRide?.total_fare || 0) + (tipAmount || 0);
+      const total = parseFloat(currentRide?.total_fare || '0') + (tipAmount || 0);
       Analytics.paymentCompleted({ method: 'default', amount: chargedAmount ?? total });
 
       Analytics.rideCompleted({
-        fare: currentRide?.total_fare || 0,
+        fare: parseFloat(currentRide?.total_fare || '0'),
         distance_km: currentRide?.distance_km,
       });
 
@@ -217,6 +220,33 @@ function RideCompletedScreenContent() {
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  // Google Pay path — presents the Stripe PaymentSheet modal so riders can
+  // pay without re-entering a card. Only shown for card payment rides on
+  // Android (Apple Pay uses the same sheet on iOS via handleSubmit in future).
+  const handleGooglePay = async () => {
+    if (isSubmitting || sheetLoading || alreadyPaid) return;
+    const tipAmount = selectedTip !== null ? selectedTip : (customTip ? parseFloat(customTip) || 0 : 0);
+    const result = await presentSheet({
+      rideId: rideId as string,
+      amount: parseFloat(currentRide?.total_fare || '0'),
+      tipAmount,
+    });
+    if (!result.ok) {
+      if (result.errorMessage !== 'Payment cancelled.') {
+        setAlertState({ visible: true, title: 'Payment failed', message: result.errorMessage || 'Please try again.', variant: 'danger' });
+      }
+      return;
+    }
+    try {
+      await rateRide(rideId as string, rating, comment || undefined, tipAmount > 0 ? tipAmount : undefined);
+    } catch { /* already rated guard */ }
+    const total = parseFloat(currentRide?.total_fare || '0') + tipAmount;
+    Analytics.paymentCompleted({ method: 'google_pay', amount: total });
+    Analytics.rideCompleted({ fare: parseFloat(currentRide?.total_fare || '0'), distance_km: currentRide?.distance_km });
+    clearRide();
+    router.replace('/(tabs)');
   };
 
   return (
@@ -238,7 +268,13 @@ function RideCompletedScreenContent() {
         {/* Post-Trip Actions */}
         <View style={styles.postTripActions}>
           <View style={styles.receiptRow}>
-            <TouchableOpacity style={[styles.invoiceBtn, { flex: 1 }]} onPress={handleShareInvoice}>
+            <TouchableOpacity
+              style={[styles.invoiceBtn, { flex: 1 }]}
+              onPress={handleShareInvoice}
+              accessibilityRole="button"
+              accessibilityLabel="Share receipt"
+              accessibilityHint="Shares your trip receipt"
+            >
               <Ionicons name="receipt-outline" size={18} color={colors.primary} />
               <Text style={styles.invoiceBtnText}>Share Receipt</Text>
               <Ionicons name="share-outline" size={16} color={colors.textDim} />
@@ -249,6 +285,9 @@ function RideCompletedScreenContent() {
                 Clipboard.setString(buildReceiptText());
                 setAlertState({ visible: true, title: 'Copied!', message: 'Receipt copied to clipboard.', variant: 'success' });
               }}
+              accessibilityRole="button"
+              accessibilityLabel="Copy receipt to clipboard"
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
             >
               <Ionicons name="copy-outline" size={18} color={colors.textDim} />
             </TouchableOpacity>
@@ -256,6 +295,9 @@ function RideCompletedScreenContent() {
           <TouchableOpacity
             style={styles.chatBtn}
             onPress={() => router.push(`/chat-driver?rideId=${rideId}` as any)}
+            accessibilityRole="button"
+            accessibilityLabel="Message driver"
+            accessibilityHint="Opens a chat with your driver"
           >
             <Ionicons name="chatbubble-ellipses-outline" size={18} color="#3B82F6" />
             <Text style={styles.chatBtnText}>Message Driver</Text>
@@ -358,7 +400,7 @@ function RideCompletedScreenContent() {
 
         {/* Fare Card */}
         <View style={styles.fareCard}>
-          <Text style={styles.fareAmount}>${fare.toFixed(2)}</Text>
+          <Text style={styles.fareAmount} allowFontScaling={false}>${fare.toFixed(2)}</Text>
           <View style={styles.paymentBadge}>
             <Ionicons name="card" size={14} color={colors.textDim} />
             <Text style={styles.paymentText}>
@@ -367,7 +409,7 @@ function RideCompletedScreenContent() {
             {alreadyPaid && (
               <>
                 <Ionicons name="checkmark-circle" size={14} color="#10B981" />
-                <Text style={{ fontSize: 11, fontWeight: '700', color: '#10B981' }}>PAID</Text>
+                <Text style={{ fontSize: 11, fontWeight: '700', color: '#10B981' }} allowFontScaling={false}>PAID</Text>
               </>
             )}
           </View>
@@ -376,19 +418,19 @@ function RideCompletedScreenContent() {
           <View style={styles.statsRow}>
             <View style={styles.stat}>
               <Ionicons name="time-outline" size={18} color={colors.textDim} />
-              <Text style={styles.statVal}>{duration} min</Text>
+              <Text style={styles.statVal} allowFontScaling={false}>{duration} min</Text>
               <Text style={styles.statLbl}>Duration</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.stat}>
               <Ionicons name="speedometer-outline" size={18} color={colors.textDim} />
-              <Text style={styles.statVal}>{distance.toFixed(1)} km</Text>
+              <Text style={styles.statVal} allowFontScaling={false}>{distance.toFixed(1)} km</Text>
               <Text style={styles.statLbl}>Distance</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.stat}>
               <Ionicons name="cash-outline" size={18} color={colors.textDim} />
-              <Text style={styles.statVal}>${fare.toFixed(2)}</Text>
+              <Text style={styles.statVal} allowFontScaling={false}>${fare.toFixed(2)}</Text>
               <Text style={styles.statLbl}>Total</Text>
             </View>
           </View>
@@ -458,6 +500,9 @@ function RideCompletedScreenContent() {
                   key={amt}
                   style={[styles.tipBtn, selectedTip === amt && styles.tipBtnActive]}
                   onPress={() => { setSelectedTip(amt); setCustomTip(''); }}
+                  accessibilityRole="radio"
+                  accessibilityLabel={`Tip $${amt}`}
+                  accessibilityState={{ checked: selectedTip === amt }}
                 >
                   <Text style={[styles.tipBtnText, selectedTip === amt && styles.tipBtnTextActive]}>${amt}</Text>
                 </TouchableOpacity>
@@ -471,6 +516,7 @@ function RideCompletedScreenContent() {
                   keyboardType="decimal-pad"
                   value={customTip}
                   onChangeText={(t) => { setCustomTip(t); setSelectedTip(null); }}
+                  returnKeyType="done"
                 />
               </View>
             </View>
@@ -482,11 +528,35 @@ function RideCompletedScreenContent() {
 
       {/* Submit Button */}
       <View style={styles.bottomBar}>
+        {/* Google Pay button — Android only, card payments, not yet paid */}
+        {Platform.OS === 'android' && !alreadyPaid && currentRide?.payment_method === 'card' && (
+          <TouchableOpacity
+            style={[styles.submitBtn, styles.googlePayBtn]}
+            onPress={handleGooglePay}
+            disabled={isSubmitting || sheetLoading}
+            activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityLabel="Pay with Google Pay"
+            accessibilityState={{ disabled: isSubmitting || sheetLoading }}
+          >
+            {sheetLoading ? (
+              <ActivityIndicator size="small" color="#FFF" />
+            ) : (
+              <>
+                <Ionicons name="logo-google" size={18} color="#FFF" />
+                <Text style={styles.submitBtnText}>Pay with Google Pay</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        )}
         <TouchableOpacity
           style={styles.submitBtn}
           onPress={handleSubmit}
-          disabled={isSubmitting}
+          disabled={isSubmitting || sheetLoading}
           activeOpacity={0.8}
+          accessibilityRole="button"
+          accessibilityLabel={alreadyPaid ? 'Rate and finish' : `Pay and finish`}
+          accessibilityState={{ disabled: isSubmitting || sheetLoading, busy: isSubmitting }}
         >
           {isSubmitting ? (
             <ActivityIndicator size="small" color="#FFF" />
@@ -649,6 +719,9 @@ function createStyles(colors: ThemeColors) {
     submitBtn: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
       backgroundColor: colors.primary, paddingVertical: 16, borderRadius: 28,
+    },
+    googlePayBtn: {
+      backgroundColor: '#3C4043', marginBottom: 10,
     },
     submitBtnText: { fontSize: 17, fontWeight: '700', color: '#FFF' },
   });

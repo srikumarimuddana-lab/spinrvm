@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useMemo, useCallback } from "react";
+import { useToast } from "@/components/ui/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,6 +15,10 @@ import {
     Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import {
+    AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+    AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
     Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
@@ -26,6 +31,7 @@ import {
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { getPromotions, createPromotion, updatePromotion, deletePromotion, getPromoUsage, getPromoStats, getUsers } from "@/lib/api";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { useRequireModule } from "@/hooks/useRequireModule";
 
 // --- Types ---
 
@@ -101,6 +107,9 @@ function getPromoStatus(p: PromoCode): string {
 // --- Component ---
 
 export default function PromotionsPage() {
+    const { allowed } = useRequireModule("promotions");
+    const { toast } = useToast();
+    const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
     const [promos, setPromos] = useState<PromoCode[]>([]);
     const [usage, setUsage] = useState<PromoUsageRecord[]>([]);
     const [stats, setStats] = useState<PromoStatsData | null>(null);
@@ -217,7 +226,7 @@ export default function PromotionsPage() {
     };
 
     // Re-fetch stats when range changes
-    useEffect(() => { fetchStats(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [usageDateRange]);
+    useEffect(() => { fetchStats(); }, [usageDateRange]);
 
     // Reset to page 0 when tab/search changes (debounce search)
     useEffect(() => {
@@ -339,7 +348,46 @@ export default function PromotionsPage() {
     };
 
     const handleSave = async () => {
-        if (!form.code.trim() || !form.discount_value) { alert("Please fill in code and discount value."); return; }
+        if (!form.code.trim() || !form.discount_value) {
+            toast({ title: "Missing required fields", description: "Please fill in code and discount value.", variant: "destructive" });
+            return;
+        }
+        const discountVal = parseFloat(form.discount_value);
+        if (isNaN(discountVal) || discountVal <= 0) {
+            toast({ title: "Invalid discount value", description: "Discount must be greater than zero.", variant: "destructive" });
+            return;
+        }
+        if (form.discount_type === "percentage" && discountVal > 100) {
+            toast({ title: "Invalid percentage", description: "Percentage discount cannot exceed 100%.", variant: "destructive" });
+            return;
+        }
+        if (form.discount_type === "flat" && discountVal > 500) {
+            toast({ title: "Discount too large", description: "Flat discount cannot exceed $500.", variant: "destructive" });
+            return;
+        }
+        if (form.max_discount) {
+            const maxD = parseFloat(form.max_discount);
+            if (isNaN(maxD) || maxD <= 0) {
+                toast({ title: "Invalid max discount cap", description: "Max discount cap must be greater than zero.", variant: "destructive" });
+                return;
+            }
+            if (maxD > 500) {
+                toast({ title: "Max discount cap too large", description: "Max discount cap cannot exceed $500.", variant: "destructive" });
+                return;
+            }
+        }
+        const maxUses = parseInt(form.max_uses);
+        if (isNaN(maxUses) || maxUses < 1) {
+            toast({ title: "Invalid max uses", description: "Max uses must be at least 1.", variant: "destructive" });
+            return;
+        }
+        if (form.expiry_date) {
+            const expiry = new Date(form.expiry_date);
+            if (expiry <= new Date()) {
+                toast({ title: "Invalid expiry date", description: "Expiry date must be in the future.", variant: "destructive" });
+                return;
+            }
+        }
         setSaving(true);
         try {
             const isPrivateTab = promoTab === "private" || (editingPromo?.promo_type === "private");
@@ -363,7 +411,7 @@ export default function PromotionsPage() {
             resetForm();
             await fetchAll();
         } catch (error: any) {
-            alert(`Failed to save: ${error.message}`);
+            toast({ title: "Failed to save", description: error.message, variant: "destructive" });
         } finally {
             setSaving(false);
         }
@@ -371,13 +419,18 @@ export default function PromotionsPage() {
 
     const toggleActive = async (p: PromoCode) => {
         try { await updatePromotion(p.id, { is_active: !p.is_active }); await fetchAll(); }
-        catch (e: any) { alert(`Failed: ${e.message}`); }
+        catch (e: any) { toast({ title: "Failed to toggle promo", description: e.message, variant: "destructive" }); }
     };
 
     const handleDelete = async (id: string) => {
-        if (!confirm("Delete this promo code?")) return;
-        try { await deletePromotion(id); await fetchAll(); }
-        catch (e: any) { alert(`Failed: ${e.message}`); }
+        setDeleteTarget(id);
+    };
+
+    const confirmDelete = async () => {
+        if (!deleteTarget) return;
+        try { await deletePromotion(deleteTarget); await fetchAll(); }
+        catch (e: any) { toast({ title: "Failed to delete promo", description: e.message, variant: "destructive" }); }
+        finally { setDeleteTarget(null); }
     };
 
     const toggleUserSelection = (opt: UserOption) => {
@@ -407,6 +460,8 @@ export default function PromotionsPage() {
         const blob = new Blob([csv], { type: "text/csv" }); const url = URL.createObjectURL(blob);
         const a = document.createElement("a"); a.href = url; a.download = `promo-usage-${new Date().toISOString().split("T")[0]}.csv`; a.click(); URL.revokeObjectURL(url);
     };
+
+    if (!allowed) return null;
 
     return (
         <div className="space-y-6">
@@ -463,7 +518,7 @@ export default function PromotionsPage() {
                 </CardHeader>
                 <CardContent className="space-y-4">
                     <div className="flex flex-wrap items-center gap-3">
-                        <div className="relative flex-1 max-w-sm"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Search by code or description..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" /></div>
+                        <div className="relative flex-1 max-w-sm"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Search by code or description..." aria-label="Search promotions" value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9" /></div>
                     </div>
 
                     {loading ? (
@@ -521,7 +576,7 @@ export default function PromotionsPage() {
                     <div className="flex items-center justify-between">
                         <h2 className="text-lg font-semibold flex items-center gap-2"><BarChart3 className="h-5 w-5 text-blue-500" /> Analytics</h2>
                         <Select value={chartFilter} onValueChange={setChartFilter}>
-                            <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
+                            <SelectTrigger className="w-44" aria-label="Filter chart by promotion type"><SelectValue /></SelectTrigger>
                             <SelectContent>
                                 <SelectItem value="all">All Promos</SelectItem>
                                 <SelectItem value="public">Public Codes Only</SelectItem>
@@ -580,21 +635,21 @@ export default function PromotionsPage() {
                         ))}
                         <Separator orientation="vertical" className="h-6 mx-1" />
                         <div className="flex items-center gap-2">
-                            <Label className="text-xs text-muted-foreground">From</Label>
-                            <Input type="date" value={usageDateFrom} onChange={(e) => setUsageDateFrom(e.target.value)} className="w-36 h-8 text-xs" />
+                            <Label className="text-xs text-muted-foreground" htmlFor="usage-date-from">From</Label>
+                            <Input id="usage-date-from" type="date" value={usageDateFrom} onChange={(e) => setUsageDateFrom(e.target.value)} className="w-36 h-8 text-xs" />
                         </div>
                         <div className="flex items-center gap-2">
-                            <Label className="text-xs text-muted-foreground">To</Label>
-                            <Input type="date" value={usageDateTo} onChange={(e) => setUsageDateTo(e.target.value)} className="w-36 h-8 text-xs" />
+                            <Label className="text-xs text-muted-foreground" htmlFor="usage-date-to">To</Label>
+                            <Input id="usage-date-to" type="date" value={usageDateTo} onChange={(e) => setUsageDateTo(e.target.value)} className="w-36 h-8 text-xs" />
                         </div>
                         {(usageDateFrom || usageDateTo) && <Button variant="ghost" size="sm" onClick={() => { setUsageDateFrom(""); setUsageDateTo(""); }}>Clear</Button>}
                     </div>
 
                     {/* Usage filters */}
                     <div className="flex flex-wrap items-center gap-3">
-                        <div className="relative flex-1 max-w-sm"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Search by code or user ID..." value={usageSearch} onChange={(e) => setUsageSearch(e.target.value)} className="pl-9" /></div>
+                        <div className="relative flex-1 max-w-sm"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Search by code or user ID..." aria-label="Search usage history" value={usageSearch} onChange={(e) => setUsageSearch(e.target.value)} className="pl-9" /></div>
                         <Select value={usageTypeFilter} onValueChange={setUsageTypeFilter}>
-                            <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
+                            <SelectTrigger className="w-44" aria-label="Filter usage by promotion type"><SelectValue /></SelectTrigger>
                             <SelectContent>
                                 <SelectItem value="all">All Promos</SelectItem>
                                 <SelectItem value="public">Public Codes Only</SelectItem>
@@ -703,6 +758,19 @@ export default function PromotionsPage() {
                     </div>
                 </DialogContent>
             </Dialog>
+
+            <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Delete promo code?</AlertDialogTitle>
+                        <AlertDialogDescription>This action cannot be undone.</AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction onClick={confirmDelete} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </div>
     );
 }

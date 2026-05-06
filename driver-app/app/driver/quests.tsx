@@ -56,7 +56,7 @@ export default function QuestsScreen() {
     setActionLoading(questId);
     try {
       await joinQuest(questId);
-    } catch {}
+    } catch (err) { console.error('[quests]', err); }
     setActionLoading(null);
   };
 
@@ -65,7 +65,7 @@ export default function QuestsScreen() {
     try {
       const result = await claimReward(progressId);
       // Could show a success modal here
-    } catch {}
+    } catch (err) { console.error('[quests]', err); }
     setActionLoading(null);
   };
 

@@ -14,7 +14,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { useAuthStore } from '@shared/store/authStore';
+import { useAuthStore, type User } from '@shared/store/authStore';
 import api, { setInMemoryToken } from '@shared/api/client';
 import CustomAlert from '@shared/components/CustomAlert';
 import Analytics from '@shared/analytics';
@@ -66,6 +66,13 @@ export default function OtpScreen() {
     message: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
   }>({ visible: false, title: '', message: '', variant: 'info' });
+
+  useEffect(() => {
+    if (!phoneNumber) {
+      router.back();
+    }
+    return () => { resendInFlight.current = false; };
+  }, []);
 
   useEffect(() => {
     dotAnims.forEach((anim, i) => {
@@ -134,25 +141,26 @@ export default function OtpScreen() {
 
     try {
       if (isBackendMode) {
-        const response = await api.post('/auth/verify-otp', {
+        const response = await api.post<{ token?: string; refresh_token?: string; expires_in?: number; user?: User }>('/auth/verify-otp', {
           phone: phoneNumber,
           code: code,
         });
-        const { token, refresh_token, expires_in, user: userData } = response.data;
+        if (!response.data) throw new Error('Empty response from auth server');
+        const { token, refresh_token, expires_in, user: userData } = response.data as { token: string; refresh_token?: string; expires_in?: number; user?: any };
+        // P3 cookie auth: token is "" when HTTP-only cookies are used
         if (token) {
           await useAuthStore.getState().setTokens(token, refresh_token ?? "", expires_in ?? 900);
-          Analytics.otpVerified();
-
-          if (userData) {
-            useAuthStore.setState({
-              user: userData,
-              isInitialized: true,
-              isLoading: false,
-            });
-            Analytics.login();
-          } else {
-            await initialize();
-          }
+        }
+        Analytics.otpVerified();
+        if (userData) {
+          useAuthStore.setState({
+            user: userData,
+            isInitialized: true,
+            isLoading: false,
+          });
+          Analytics.login();
+        } else {
+          await initialize();
         }
       } else {
         await verifyOTP(verificationId!, code);
@@ -185,14 +193,27 @@ export default function OtpScreen() {
         message: 'A new verification code has been sent to your phone.',
         variant: 'success',
       });
-    } catch (e) {
-      console.log('[Auth] resend failed', e);
-      setAlertState({
-        visible: true,
-        title: 'Failed',
-        message: 'Could not resend code. Please try again.',
-        variant: 'danger',
-      });
+    } catch (e: any) {
+      if (e?.response?.status === 429) {
+        // Parse retry-after from header or detail message (e.g. "Try again in 60s")
+        const retryAfterHeader = parseInt(e.response.headers?.['retry-after'] ?? '0', 10);
+        const detailMatch = String(e.response?.data?.detail ?? '').match(/(\d+)\s*s/i);
+        const retrySeconds = retryAfterHeader || (detailMatch ? parseInt(detailMatch[1], 10) : 60);
+        setCountdown(retrySeconds > 0 ? retrySeconds : 60);
+        setAlertState({
+          visible: true,
+          title: 'Too Many Attempts',
+          message: `Please wait ${retrySeconds > 0 ? retrySeconds : 60} seconds before requesting another code.`,
+          variant: 'warning',
+        });
+      } else {
+        setAlertState({
+          visible: true,
+          title: 'Failed',
+          message: 'Could not resend code. Please try again.',
+          variant: 'danger',
+        });
+      }
     } finally {
       resendInFlight.current = false;
     }
@@ -266,6 +287,8 @@ export default function OtpScreen() {
                     isFilled && styles.codeBoxFilled,
                     { transform: [{ scale }] },
                   ]}
+                  accessibilityLabel={`Digit ${i + 1}${isFilled ? `, entered` : ', empty'}`}
+                  accessibilityRole="text"
                 >
                   <Text style={[styles.codeDigit, isFilled && styles.codeDigitFilled]}>
                     {code[i] || ''}

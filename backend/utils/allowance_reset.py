@@ -9,8 +9,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
+import time
 from datetime import date
 from typing import Optional
+
+try:
+    from utils.loop_monitor import record_heartbeat as _record_heartbeat
+except ImportError:
+
+    def _record_heartbeat(name: str) -> None:  # type: ignore[misc]
+        pass
+
 
 try:
     from ..db_supabase import (  # type: ignore
@@ -28,6 +38,13 @@ except ImportError:
         reset_allowance_period,
     )
     from services.corporate_allowance_service import apply_reset  # type: ignore
+
+try:
+    from .metrics import inc as _metric_inc
+    from .metrics import set_gauge as _metric_gauge
+except ImportError:
+    from utils.metrics import inc as _metric_inc
+    from utils.metrics import set_gauge as _metric_gauge
 
 
 logger = logging.getLogger(__name__)
@@ -82,8 +99,15 @@ async def run_allowance_reset_tick(now: Optional[date] = None) -> int:
 
 async def allowance_reset_loop(interval_seconds: int = 3600) -> None:
     while True:
+        _t0 = time.monotonic()
+        _had_error = False
         try:
             await run_allowance_reset_tick()
         except Exception:
             logger.exception("allowance reset tick raised")
-        await asyncio.sleep(interval_seconds)
+            _had_error = True
+        _metric_gauge("spinr_bgloop_duration_ms", (time.monotonic() - _t0) * 1000, {"loop": "allowance_reset"})
+        if _had_error:
+            _metric_inc("spinr_bgloop_errors_total", {"loop": "allowance_reset"})
+        _record_heartbeat("allowance_reset (1h)")
+        await asyncio.sleep(interval_seconds * (0.9 + random.random() * 0.2))

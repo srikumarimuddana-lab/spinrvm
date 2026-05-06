@@ -67,6 +67,10 @@ def test_create_approve_suspend_reactivate_flow(test_client, admin_override):
             "db_supabase.update_corporate_account_status",
             AsyncMock(side_effect=[suspended_row, active_row]),
         ),
+        patch(
+            "routes.corporate_accounts.get_corporate_wallet_by_company",
+            AsyncMock(return_value=None),  # no wallet → skip freeze step
+        ),
     ):
         # 1. Create the company
         resp = test_client.post(

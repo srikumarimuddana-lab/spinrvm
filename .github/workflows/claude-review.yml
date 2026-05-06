@@ -21,6 +21,7 @@ permissions:
   contents: read
   pull-requests: write
   issues: write
+  id-token: write
 
 concurrency:
   # Coalesce rapid pushes to the same PR — only latest review matters
@@ -40,10 +41,14 @@ jobs:
         github.event.comment.author_association == 'COLLABORATOR'))
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Review is advisory — a missing/invalid ANTHROPIC_API_KEY or model error
+    # should never block merging. Add the key in repo Settings → Secrets to
+    # enable full AI review; until then PRs proceed without it.
+    continue-on-error: true
 
     steps:
       - name: Checkout PR code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -90,5 +95,4 @@ jobs:
             suggest code edits inline — reviewers will ask for fixes
             separately. Do NOT restate the auto-summary table or the size
             advisory.
-          # Hard budget — Spinr controls cost, not the model
-          max_turns: "8"
+          # max_turns removed — not a valid input for claude-code-action@v1

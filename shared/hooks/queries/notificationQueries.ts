@@ -20,7 +20,7 @@ export const useNotifications = (limit = 50) => {
     return useQuery({
         queryKey: [...queryKeys.notifications.list, limit],
         queryFn: async () => {
-            const res = await api.get('/notifications', { params: { limit, offset: 0 } });
+            const res = await api.get(`/notifications?limit=${limit}&offset=0`);
             return res.data;
         },
         staleTime: 30_000,
@@ -44,6 +44,9 @@ export const useMarkNotificationRead = () => {
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: queryKeys.notifications.list });
         },
+        onError: () => {
+            queryClient.invalidateQueries({ queryKey: queryKeys.notifications.list });
+        },
     });
 };
 
@@ -59,6 +62,9 @@ export const useMarkAllNotificationsRead = () => {
             return res.data;
         },
         onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: queryKeys.notifications.list });
+        },
+        onError: () => {
             queryClient.invalidateQueries({ queryKey: queryKeys.notifications.list });
         },
     });
@@ -87,6 +93,9 @@ export const useUpdateNotificationPreferences = () => {
             return res.data;
         },
         onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: queryKeys.notifications.preferences });
+        },
+        onError: () => {
             queryClient.invalidateQueries({ queryKey: queryKeys.notifications.preferences });
         },
     });

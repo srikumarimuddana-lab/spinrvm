@@ -73,6 +73,7 @@ describe('driverStore reconnect sync (P1-6)', () => {
         },
         rider: null,
       },
+      status: 200,
     });
 
     await useDriverStore.getState().fetchActiveRide();
@@ -89,7 +90,7 @@ describe('driverStore reconnect sync (P1-6)', () => {
     });
 
     // Server returns nothing — the cancelled ride is no longer "active".
-    mockApi.get.mockResolvedValueOnce({ data: {} });
+    mockApi.get.mockResolvedValueOnce({ data: {}, status: 200 });
 
     await useDriverStore.getState().fetchActiveRide();
 
@@ -128,6 +129,7 @@ describe('driverStore reconnect sync (P1-6)', () => {
         },
         rider: { first_name: 'Sam', rating: 4.8 },
       },
+      status: 200,
     });
 
     await useDriverStore.getState().fetchActiveRide();

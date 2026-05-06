@@ -12,17 +12,24 @@ try:
     from ..core.config import settings
     from ..geo_utils import get_service_area_polygon, point_in_polygon
     from ..utils.redis_client import redis_delete_pattern, redis_get, redis_set
+    from ..utils.surge_engine import SURGE_CAP
 except ImportError:
     import db_supabase
     from core.config import settings
     from geo_utils import get_service_area_polygon, point_in_polygon
     from utils.redis_client import redis_delete_pattern, redis_get, redis_set
+    from utils.surge_engine import SURGE_CAP
 
 db = db_supabase  # legacy alias
 logger = logging.getLogger(__name__)
 api_router = APIRouter(tags=["Fares"])
 
-# PERF-001: Fare cache TTL in seconds (default 5 min)
+# PERF-001: Fare cache TTL in seconds (default 5 min).
+# WARNING: cached fares embed the surge multiplier at cache-fill time.
+# If surge changes within the TTL window the rider sees a stale estimate;
+# payments.py re-validates the fare at settlement and will reject a mismatch.
+# Set FARE_CACHE_TTL_SECONDS=60 in production to tighten the window during
+# surge events without fully disabling the cache.
 _FARE_CACHE_TTL = int(os.environ.get("FARE_CACHE_TTL_SECONDS", "300"))
 
 # ── Decimal helpers (CQ-009) ──────────────────────────────────────────
@@ -35,6 +42,14 @@ def _fd(v) -> float:
         return float(Decimal(str(v)).quantize(_TWO_PLACES, rounding=ROUND_HALF_UP))
     except (TypeError, ValueError, decimal.InvalidOperation):
         return 0.0
+
+
+def _money_str(v) -> str:
+    """Serialise a money value as an exact 2-dp Decimal string (never float)."""
+    try:
+        return str(Decimal(str(v)).quantize(_TWO_PLACES, rounding=ROUND_HALF_UP))
+    except (TypeError, ValueError, decimal.InvalidOperation):
+        return "0.00"
 
 
 def serialize_doc(doc):
@@ -87,19 +102,18 @@ async def get_public_service_areas():
 def _build_default_fares(vt_list, surge=1.0):
     """Default fare rows when no service area / fare_configs apply.
 
-    Literal values go through ``_fd()`` so they are stored as exact 2-dp
-    floats rather than raw IEEE-754 representations — keeps downstream
-    Decimal arithmetic drift-free.
+    Money values serialised as exact 2-dp Decimal strings; surge_multiplier
+    stays float (it is a ratio, not a money amount).
     """
     return [
         serialize_doc(
             {
                 "vehicle_type": vt,
-                "base_fare": _fd(3.50),
-                "per_km_rate": _fd(1.50),
-                "per_minute_rate": _fd(0.25),
-                "minimum_fare": _fd(8.00),
-                "booking_fee": _fd(2.00),
+                "base_fare": _money_str(3.50),
+                "per_km_rate": _money_str(1.50),
+                "per_minute_rate": _money_str(0.25),
+                "minimum_fare": _money_str(8.00),
+                "booking_fee": _money_str(2.00),
                 "surge_multiplier": _fd(surge),
             }
         )
@@ -158,7 +172,9 @@ async def build_fares_for_area(matched_area, vehicle_types):
     # toggle is off. Matches surge_engine.py's convention (only
     # writes multiplier when active) and the admin UI toggle under
     # Service Areas → General.
-    surge = matched_area.get("surge_multiplier", 1.0) if matched_area.get("surge_active", False) else 1.0
+    surge = (
+        min(matched_area.get("surge_multiplier", 1.0), SURGE_CAP) if matched_area.get("surge_active", False) else 1.0
+    )
 
     # Name → pricing row from vehicle_pricing JSONB (source of truth).
     # Field names: vehicle_type (NAME), base_fare, per_km, per_min,
@@ -207,16 +223,16 @@ async def build_fares_for_area(matched_area, vehicle_types):
         pricing = _pick(vt)
         if not pricing:
             continue
-        # Normalise all monetary values from DB through _fd() so downstream
-        # Decimal arithmetic in rides.py starts from clean 2-dp floats.
+        # Normalise all monetary values from DB through _money_str() so they
+        # serialise as exact Decimal strings; surge_multiplier stays float.
         result.append(
             {
                 "vehicle_type": serialize_doc(vt),
-                "base_fare": _fd(pricing["base_fare"]),
-                "per_km_rate": _fd(pricing["per_km_rate"]),
-                "per_minute_rate": _fd(pricing["per_minute_rate"]),
-                "minimum_fare": _fd(pricing["minimum_fare"]),
-                "booking_fee": _fd(pricing["booking_fee"]),
+                "base_fare": _money_str(pricing["base_fare"]),
+                "per_km_rate": _money_str(pricing["per_km_rate"]),
+                "per_minute_rate": _money_str(pricing["per_minute_rate"]),
+                "minimum_fare": _money_str(pricing["minimum_fare"]),
+                "booking_fee": _money_str(pricing["booking_fee"]),
                 "surge_multiplier": _fd(surge),
             }
         )
@@ -252,12 +268,12 @@ async def _fares_for_location_impl(
     logger.info(f"Fares: Found {len(vehicle_types)} active vehicle types")
 
     if not vehicle_types:
-        logger.warning("Fares: No active vehicle types found in database!")
+        logger.error("Fares: No active vehicle types found in database!")
         return []
 
     matching_area = await resolve_service_area_for_point(lat, lng, all_areas=all_areas)
     if not matching_area:
-        logger.info("Fares: No matching service area for requested location, using defaults")
+        logger.info("Fares: No matching service area for location, using defaults")
         return _build_default_fares(vehicle_types)
 
     logger.info(f"Fares: Matched service area '{matching_area.get('name', matching_area['id'])}'")
@@ -265,7 +281,10 @@ async def _fares_for_location_impl(
 
 
 @api_router.get("/fares")
-async def get_fares_for_location(lat: float = Query(...), lng: float = Query(...)):
+async def get_fares_for_location(
+    lat: float = Query(..., ge=-90.0, le=90.0),
+    lng: float = Query(..., ge=-180.0, le=180.0),
+):
     """HTTP handler for /fares with Redis caching.
 
     Check cache first using a coordinates-based key (~1.1km grid).

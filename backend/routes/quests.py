@@ -31,6 +31,11 @@ def _d(v) -> Decimal:
     return Decimal(str(v)).quantize(_TWO, rounding=ROUND_HALF_UP)
 
 
+def _f(v: Decimal) -> str:
+    """Serialize Decimal → string for DB writes and API responses. Never use for arithmetic."""
+    return str(v)
+
+
 # ── Request Schemas ──────────────────────────────────────────────────
 
 
@@ -278,7 +283,7 @@ async def claim_quest_reward(progress_id: str, current_user: dict = Depends(get_
     if not quest:
         raise HTTPException(status_code=404, detail="Quest not found")
 
-    reward_amount = float(quest["reward_amount"])
+    reward_amount = _d(quest["reward_amount"])
 
     # Pay reward to wallet
     if quest.get("reward_type", "wallet_credit") == "wallet_credit":
@@ -291,14 +296,14 @@ async def claim_quest_reward(progress_id: str, current_user: dict = Depends(get_
         await db.update_one(
             "wallets",
             {"id": wallet["id"]},
-            {"$set": {"balance": float(new_balance), "updated_at": datetime.now(timezone.utc).isoformat()}},
+            {"$set": {"balance": _f(new_balance), "updated_at": datetime.now(timezone.utc).isoformat()}},
         )
         await _record_transaction(
             wallet_id=wallet["id"],
             user_id=current_user["id"],
             txn_type="quest_reward",
-            amount=reward_amount,
-            balance_after=float(new_balance),
+            amount=_f(reward_amount),
+            balance_after=_f(new_balance),
             reference_id=quest["id"],
             description=f"Quest reward: {quest['title']}",
         )
@@ -369,7 +374,7 @@ async def admin_list_quests(
             "quests",
             filters,
             limit=limit,
-            skip=offset,
+            offset=offset,
             order="created_at",
         )
     except Exception as e:
@@ -451,7 +456,7 @@ async def admin_get_quest_participants(
             "quest_progress",
             filters,
             limit=limit,
-            skip=offset,
+            offset=offset,
             order="created_at",
         )
     except Exception as e:

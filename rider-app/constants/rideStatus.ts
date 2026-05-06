@@ -1,3 +1,4 @@
+// Runtime lookup object — used throughout the app as RideStatus.COMPLETED etc.
 export const RideStatus = {
   SEARCHING: 'searching',
   DRIVER_ASSIGNED: 'driver_assigned',
@@ -9,4 +10,5 @@ export const RideStatus = {
   FAILED: 'failed',
 } as const;
 
+// Convenience alias kept for backwards compatibility.
 export type RideStatusType = typeof RideStatus[keyof typeof RideStatus];

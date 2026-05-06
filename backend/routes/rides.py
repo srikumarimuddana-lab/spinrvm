@@ -1803,9 +1803,16 @@ async def rate_driver(ride_id: str, rating_data: RideRatingRequest, current_user
         return {"success": True}
 
     if rating_data.tip_amount > 0:
-        new_tip = ride.get("tip_amount", 0) + rating_data.tip_amount
-        new_driver_earnings = ride.get("driver_earnings", 0) + rating_data.tip_amount
-        await db_supabase.update_ride(ride_id, {"tip_amount": new_tip, "driver_earnings": new_driver_earnings})
+        # Decimal-safe accumulation: float addition drifts when summing existing
+        # tip + this tip (e.g. 0.1 + 0.2 == 0.30000000000000004), and would
+        # corrupt driver_earnings on rides that receive multiple tips.
+        tip_delta = _d(rating_data.tip_amount)
+        new_tip = _round(_d(ride.get("tip_amount", 0)) + tip_delta)
+        new_driver_earnings = _round(_d(ride.get("driver_earnings", 0)) + tip_delta)
+        await db_supabase.update_ride(
+            ride_id,
+            {"tip_amount": _f(new_tip), "driver_earnings": _f(new_driver_earnings)},
+        )
 
     # Aggregate driver rating accurately
     driver = await db_supabase.get_driver_by_id(driver_id)

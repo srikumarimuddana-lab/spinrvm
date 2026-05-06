@@ -163,7 +163,9 @@ class TestWAVDispatchQuery:
                 "backend.routes.rides.dispatch.resolve_matching_config", AsyncMock(return_value=("nearest", 4.0, 10.0))
             ),
             patch("backend.routes.rides.db_supabase.update_ride", AsyncMock()),
-            patch("backend.routes.rides.db_supabase.claim_driver", AsyncMock(return_value=wav_driver)),
+            patch("backend.routes.rides.db_supabase.claim_driver_atomic", AsyncMock(return_value=True)),
+            patch("backend.routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value={**wav_driver, "is_online": True})),
+            patch("backend.routes.rides.db_supabase.get_user_by_id", AsyncMock(return_value={"first_name": "Test", "last_name": "Rider"})),
             patch("backend.routes.rides.manager.send_personal_message", AsyncMock()),
             patch("backend.routes.rides.send_push_notification", AsyncMock()),
             patch("backend.routes.rides.get_app_settings", AsyncMock(return_value={"offer_timeout_seconds": 15})),
@@ -200,7 +202,9 @@ class TestWAVDispatchQuery:
                 "backend.routes.rides.dispatch.resolve_matching_config", AsyncMock(return_value=("nearest", 4.0, 10.0))
             ),
             patch("backend.routes.rides.db_supabase.update_ride", AsyncMock()),
-            patch("backend.routes.rides.db_supabase.claim_driver", AsyncMock(return_value=std_driver)),
+            patch("backend.routes.rides.db_supabase.claim_driver_atomic", AsyncMock(return_value=True)),
+            patch("backend.routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value={**std_driver, "is_online": True})),
+            patch("backend.routes.rides.db_supabase.get_user_by_id", AsyncMock(return_value={"first_name": "Test", "last_name": "Rider"})),
             patch("backend.routes.rides.manager.send_personal_message", AsyncMock()),
             patch("backend.routes.rides.send_push_notification", AsyncMock()),
             patch("backend.routes.rides.get_app_settings", AsyncMock(return_value={"offer_timeout_seconds": 15})),

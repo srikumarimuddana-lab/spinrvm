@@ -90,7 +90,6 @@ default_limiter = Limiter(
     storage_uri=_rate_limit_storage_uri,
 )
 
-
 # ============================================================================
 # Custom Key Functions
 # ============================================================================
@@ -381,6 +380,7 @@ class RedisRateLimiter:
             # Fail-closed for OTP keys: in-memory fallback is unsafe on
             # multi-replica deployments because each replica tracks its own
             # counter, multiplying the effective limit by N_replicas.
+            # See module-level comment on _OTP_KEY_FRAGMENTS for the rationale.
             if _is_otp_key(key):
                 raise HTTPException(
                     status_code=503,

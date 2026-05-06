@@ -48,6 +48,8 @@ function RideOptionsScreenContent() {
     selectVehicle,
     isLoading,
     error: storeError,
+    requiresWav,
+    setRequiresWav,
     scheduledTime,
     setScheduledTime,
     availablePromos,
@@ -605,6 +607,36 @@ function RideOptionsScreenContent() {
               thumbColor={isScheduling ? colors.primary : '#F3F4F6'}
             />
           </View>
+
+          {/* WAV Toggle — Saskatchewan Transportation Act s.22 */}
+          {(() => {
+            const wavCount = selectedEstimate?.wav_available ?? 0;
+            const wavDisabled = wavCount === 0;
+            return (
+              <View style={[styles.scheduleRow, wavDisabled && { opacity: 0.45 }]}>
+                <View style={styles.scheduleInfo}>
+                  <Ionicons name="accessibility-outline" size={20} color="#1A1A1A" />
+                  <View>
+                    <Text style={styles.scheduleLabel}>Wheelchair accessible</Text>
+                    {wavDisabled ? (
+                      <Text style={{ fontSize: 11, color: '#9CA3AF' }}>No WAV drivers nearby</Text>
+                    ) : (
+                      <Text style={{ fontSize: 11, color: '#6B7280' }}>{wavCount} WAV driver{wavCount !== 1 ? 's' : ''} available</Text>
+                    )}
+                  </View>
+                </View>
+                <Switch
+                  value={requiresWav}
+                  onValueChange={(v) => !wavDisabled && setRequiresWav(v)}
+                  disabled={wavDisabled}
+                  trackColor={{ false: '#D1D5DB', true: colors.primary + '60' }}
+                  thumbColor={requiresWav ? colors.primary : '#F3F4F6'}
+                  accessibilityLabel="Request wheelchair-accessible vehicle"
+                  accessibilityHint={wavDisabled ? 'No WAV drivers are available near your pickup' : undefined}
+                />
+              </View>
+            );
+          })()}
 
           {/* Scheduled Time Display */}
           {isScheduling && scheduledTime && (

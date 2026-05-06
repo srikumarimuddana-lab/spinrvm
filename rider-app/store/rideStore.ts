@@ -128,6 +128,7 @@ interface RideState {
   recentSearches: Location[];
   scheduledTime: Date | null;
   scheduledRides: Ride[];
+  requiresWav: boolean;
   userLocation: { latitude: number; longitude: number } | null;
   availablePromos: any[];
   appliedPromo: any | null;
@@ -163,6 +164,7 @@ interface RideState {
   syncOfflineRequests: () => Promise<void>;
   clearRecentSearches: () => void;
   setScheduledTime: (time: Date | null) => void;
+  setRequiresWav: (value: boolean) => void;
   fetchScheduledRides: () => Promise<void>;
   cancelScheduledRide: (rideId: string) => Promise<void>;
   setUserLocation: (loc: { latitude: number; longitude: number } | null) => void;
@@ -196,6 +198,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   appliedPromo: null,
   scheduledTime: null,
   scheduledRides: [],
+  requiresWav: false,
   userLocation: null,
   isLoading: false,
   error: null,
@@ -358,7 +361,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   },
 
   createRide: async (paymentMethod, corporateAccountId, paymentMethodId) => {
-    const { pickup, dropoff, selectedVehicle, stops, scheduledTime, estimates } = get();
+    const { pickup, dropoff, selectedVehicle, stops, scheduledTime, estimates, requiresWav } = get();
     if (!pickup || !dropoff || !selectedVehicle) {
       throw new Error('Missing ride details');
     }
@@ -387,6 +390,7 @@ export const useRideStore = create<RideState>((set, get) => ({
         payment_method_id: paymentMethodId ?? null,
         corporate_account_id: corporateAccountId || null,
         estimate_token: selectedEstimate?.estimate_token,
+        requires_wav: requiresWav,
         created_at: new Date().toISOString(),
       };
 
@@ -603,6 +607,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   },
 
   setScheduledTime: (time) => set({ scheduledTime: time }),
+  setRequiresWav: (value) => set({ requiresWav: value }),
 
   fetchScheduledRides: async () => {
     try {

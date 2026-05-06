@@ -8,6 +8,11 @@ Close all P0 security/safety findings across backend, admin, and rider surfaces 
 
 **Status (2026-04-27):** Sprint COMPLETE. All 6 P0s shipped. All P1/P2 candidates also shipped (B-P1-1 via #124, B-P1-5 via #124, B-P2-1 via #124, B-P2-2 via #124; B-P1-2 and B-P1-6 were already in-place). A-P0-3 GPS OOM fix (Postgres function + migration 54) shipped in #126. Sentry loguru bridge shipped in #126. logger.warning sweep on payment/dispatch/safety paths shipped in #127.
 
+**Status (2026-05-06):** Full audit sweep complete. All P0/P1/P2/P3/P4 actionable findings resolved.
+- PR #479 (merged): R-P2-30/31/33/43/44/45/46, B-P1-10, B-P2-1, R-P2-14, TASK-4-1, admin-07-1, B-P1-9
+- PR #484 (merged): P4-7 T4A annual issuance background job (CRA Feb 28 deadline), 12 unit tests
+- Remaining non-blockers: P3-4 coverage gap (2 pp), P4-5 E2E suite stabilising (non-blocking CI), rider-P4 roadmap items
+
 ## In-flight
 
 | Ticket | Owner | State | Notes |

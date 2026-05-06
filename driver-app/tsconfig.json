@@ -137,6 +137,8 @@
     "node_modules",
     "../shared/api/queryClient.ts",
     "../shared/hooks/queries/driverQueries.ts",
-    "../shared/hooks/queries/notificationQueries.ts"
+    "../shared/hooks/queries/notificationQueries.ts",
+    "../shared/build-types/**",
+    "../shared/types/peer-deps.d.ts"
   ]
 }

@@ -326,8 +326,8 @@ async def run_sync(
 def _serialize_for_api(data: Any) -> Any:
     """Recursively prepare a payload for Supabase/PostgREST JSON encoding.
 
-    Converts datetime/date → ISO strings and Decimal → float. Decimal
-    conversion matches the _f() convention used throughout fare code and
+    Converts datetime/date → ISO strings and Decimal → string. Decimal
+    conversion preserves full precision for Postgres NUMERIC columns and
     catches Pydantic models whose Decimal-typed fields leak through
     .dict() (e.g. Ride.base_fare, Ride.tip_amount) without a manual _f().
     """
@@ -338,7 +338,7 @@ def _serialize_for_api(data: Any) -> Any:
     if isinstance(data, (datetime, date)):
         return data.isoformat()
     if isinstance(data, Decimal):
-        return float(data)
+        return str(data)
     return data
 
 

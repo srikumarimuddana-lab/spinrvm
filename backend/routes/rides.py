@@ -923,7 +923,7 @@ async def create_ride(request: Request, body: CreateRideRequest, current_user: d
             rider_id=current_user["id"],
             estimated_fare=total_fare,
             ride_type="standard",
-            pickup_time=datetime.utcnow(),
+            pickup_time=datetime.now(timezone.utc),
         )
         if not _policy_result.allowed:
             raise HTTPException(

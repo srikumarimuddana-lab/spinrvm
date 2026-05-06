@@ -199,16 +199,15 @@ class TestUpdateMyDriver:
 
         assert result is not None
 
-    def test_raises_404_when_no_driver(self):
-        from fastapi import HTTPException
-
+    def test_empty_update_returns_success_without_driver(self):
+        # update_my_driver auto-creates a driver row rather than raising 404.
+        # An empty request (no fields) exits early with {"success": True}.
         from backend.routes import drivers as drv
 
         with patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[])):
-            with pytest.raises(HTTPException) as exc:
-                req = drv.UpdateDriverProfileRequest()
-                asyncio.run(drv.update_my_driver(body=req, current_user={"id": USER_ID}))
-        assert exc.value.status_code == 404
+            req = drv.UpdateDriverProfileRequest()
+            result = asyncio.run(drv.update_my_driver(body=req, current_user={"id": USER_ID}))
+        assert result == {"success": True}
 
 
 # ---------------------------------------------------------------------------

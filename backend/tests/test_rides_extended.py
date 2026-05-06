@@ -564,8 +564,9 @@ class TestCancelScheduledRide:
         from fastapi import HTTPException
 
         from backend.routes import rides as rides_mod
+        from backend.utils.error_handling import SpinrException
 
         with patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[])):
-            with pytest.raises(HTTPException) as exc:
+            with pytest.raises((HTTPException, SpinrException)) as exc:
                 asyncio.run(rides_mod.cancel_scheduled_ride(ride_id=RIDE_ID, current_user={"id": RIDER_ID}))
         assert exc.value.status_code == 404

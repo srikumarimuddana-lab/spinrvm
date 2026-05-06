@@ -209,7 +209,7 @@ class TestAdminGetRideDetails:
         rider = _user(id=RIDER_ID)
 
         with (
-            patch("backend.routes.admin.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.admin.rides.db_supabase.get_ride_details_enriched", AsyncMock(return_value=ride)),
             patch("backend.routes.admin.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
             patch("backend.routes.admin.rides.db_supabase.get_user_by_id", AsyncMock(return_value=rider)),
             patch("backend.routes.admin.rides.db_supabase.get_rows", AsyncMock(return_value=[])),
@@ -473,7 +473,6 @@ class TestAdminDriverAction:
             patch("backend.routes.admin.drivers.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
             patch("backend.routes.admin.drivers.db_supabase.update_one", AsyncMock(return_value=driver)),
             patch("backend.routes.admin.drivers._log_driver_activity", AsyncMock()),
-            patch("backend.routes.admin.drivers.manager.send_personal_message", AsyncMock()),
             patch("backend.routes.admin.drivers.send_push_notification", AsyncMock()),
         ):
             req = DriverActionRequest(action="suspend", reason="Violation")
@@ -491,7 +490,6 @@ class TestAdminDriverAction:
             patch("backend.routes.admin.drivers.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
             patch("backend.routes.admin.drivers.db_supabase.update_one", AsyncMock(return_value=driver)),
             patch("backend.routes.admin.drivers._log_driver_activity", AsyncMock()),
-            patch("backend.routes.admin.drivers.manager.send_personal_message", AsyncMock()),
             patch("backend.routes.admin.drivers.send_push_notification", AsyncMock()),
         ):
             req = DriverActionRequest(action="reactivate")
@@ -536,7 +534,7 @@ class TestAdminGetDriverRides:
         rides = [_ride("completed")]
 
         with patch("backend.routes.admin.drivers.db_supabase.get_rows", AsyncMock(return_value=rides)):
-            result = asyncio.run(admin_drivers.admin_get_driver_rides(driver_id=DRIVER_ID))
+            result = asyncio.run(admin_drivers.admin_get_driver_rides(driver_id=DRIVER_ID, limit=50, offset=0))
 
         assert "rides" in result
 
@@ -551,7 +549,7 @@ class TestAdminGetDriverLocationTrail:
         ]
 
         with patch("backend.routes.admin.drivers.db_supabase.get_rows", AsyncMock(return_value=trail)):
-            result = asyncio.run(admin_drivers.admin_get_driver_location_trail(driver_id=DRIVER_ID))
+            result = asyncio.run(admin_drivers.admin_get_driver_location_trail(driver_id=DRIVER_ID, hours=24))
 
         assert "trail" in result or isinstance(result, list) or isinstance(result, dict)
 

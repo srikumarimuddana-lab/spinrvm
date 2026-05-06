@@ -7,16 +7,15 @@ main.py is at 0%   — health_check and root are trivial but untested.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_stripe_event(event_type: str, data_object: dict, event_id: str = "evt_test_1") -> dict:
     return {
@@ -37,20 +36,32 @@ class TestHealthCheck:
         # May 404 depending on prefix mount — only check it's not a server error
         assert r.status_code in (200, 404)
 
-    def test_health_check_db_ok(self, test_client: TestClient):
+    def test_health_check_db_ok(self):
+        # routes/main.py health_check is not mounted under /api/v1 in server.py;
+        # call the handler directly to test the DB-check logic.
+
+        from backend.routes.main import health_check
+
         with patch("backend.db_supabase.ping", AsyncMock()):
-            r = test_client.get("/api/v1/health")
-        assert r.status_code in (200, 503)
-        data = r.json()
-        assert "status" in data
+            result = asyncio.run(health_check(request=None))
+        data = result if isinstance(result, dict) else result.body and __import__("json").loads(result.body)
+        assert data["status"] in ("healthy", "degraded")
         assert "db" in data
 
-    def test_health_check_db_down_returns_503(self, test_client: TestClient):
+    def test_health_check_db_down_returns_503(self):
+        from fastapi.responses import JSONResponse
+
+        from backend.routes.main import health_check
+
         with patch("backend.db_supabase.ping", AsyncMock(side_effect=Exception("DB unreachable"))):
-            r = test_client.get("/api/v1/health")
-        # DB down → degraded or 503
-        assert r.status_code in (200, 503)
-        data = r.json()
+            result = asyncio.run(health_check(request=None))
+        if isinstance(result, JSONResponse):
+            import json
+
+            data = json.loads(result.body)
+            assert result.status_code == 503
+        else:
+            data = result
         assert data["status"] in ("healthy", "degraded")
 
 
@@ -126,7 +137,9 @@ class TestStripeWebhookSignatureFailure:
 
         with (
             patch("backend.routes.webhooks.get_app_settings", mock_get_app_settings),
-            patch.object(stripe.Webhook, "construct_event", side_effect=stripe.error.SignatureVerificationError("fail", "sig")),
+            patch.object(
+                stripe.Webhook, "construct_event", side_effect=stripe.error.SignatureVerificationError("fail", "sig")
+            ),
         ):
             with pytest.raises(Exception) as exc:
                 asyncio.run(wh.stripe_webhook(request=req))
@@ -178,6 +191,7 @@ class TestStripeWebhookPaymentIntentSucceeded:
     def _settings(self):
         async def f():
             return {"stripe_webhook_secret": "ws", "stripe_secret_key": "sk"}
+
         return f
 
     def _mock_req(self):
@@ -253,6 +267,7 @@ class TestStripeWebhookPaymentFailed:
     def _settings(self):
         async def f():
             return {"stripe_webhook_secret": "ws", "stripe_secret_key": "sk"}
+
         return f
 
     def _mock_req(self):
@@ -282,7 +297,10 @@ class TestStripeWebhookPaymentFailed:
             patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
             patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
             patch("backend.routes.webhooks.db_supabase.update_ride", AsyncMock(return_value={"id": "ride_1"})),
-            patch("backend.routes.webhooks.db_supabase.get_ride", AsyncMock(return_value={"id": "ride_1", "driver_id": "drv_1"})),
+            patch(
+                "backend.routes.webhooks.db_supabase.get_ride",
+                AsyncMock(return_value={"id": "ride_1", "driver_id": "drv_1"}),
+            ),
             patch("backend.routes.webhooks.db_supabase.get_rows", AsyncMock(return_value=[{"user_id": "user_drv"}])),
             patch("backend.routes.webhooks.send_push_notification", AsyncMock()),
         ):
@@ -295,6 +313,7 @@ class TestStripeWebhookCheckoutSession:
     def _settings(self):
         async def f():
             return {"stripe_webhook_secret": "ws", "stripe_secret_key": "sk"}
+
         return f
 
     def _mock_req(self):
@@ -369,6 +388,7 @@ class TestStripeWebhookUnknownEventType:
 class TestAllowedStripeEvents:
     def test_allowed_events_constant_exported(self):
         from backend.routes.webhooks import ALLOWED_STRIPE_EVENTS
+
         assert "payment_intent.succeeded" in ALLOWED_STRIPE_EVENTS
         assert "payment_intent.payment_failed" in ALLOWED_STRIPE_EVENTS
         assert "checkout.session.completed" in ALLOWED_STRIPE_EVENTS

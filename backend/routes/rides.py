@@ -1310,8 +1310,9 @@ async def get_ride(request: Request, ride_id: str, current_user: dict = Depends(
             settings = await get_app_settings()
             free_cancel_window = int(settings.get("free_cancel_window_seconds", 120))
             cancellation_fee_amount = float(settings.get("cancellation_fee", 3.0))
-        except Exception:  # noqa: S110
-            pass
+        except Exception:
+            # Non-fatal: fall back to hardcoded defaults if settings fetch fails
+            logger.error("Failed to fetch app settings for cancellation config", exc_info=True)
 
     driver_accepted_at = ride.get("driver_accepted_at")
     if driver_accepted_at:
@@ -1344,8 +1345,9 @@ async def get_ride(request: Request, ride_id: str, current_user: dict = Depends(
             try:
                 settings = await get_app_settings()
                 offer_timeout_seconds = int(settings.get("ride_offer_timeout_seconds", 15))
-            except Exception:  # noqa: S110
-                pass
+            except Exception:
+                # Non-fatal: fall back to hardcoded default if settings fetch fails
+                logger.error("Failed to fetch app settings for offer timeout config", exc_info=True)
         ride["offer_timeout_seconds"] = offer_timeout_seconds
         if driver_notified_at:
             try:

@@ -32,7 +32,7 @@ async def send_sms(
         logger.info(f"SMS sent to {to_phone} via Twilio (SID: {sms.sid})")
         return {"success": True, "provider": "twilio", "sid": sms.sid}
     except Exception as e:
-        logger.error(f"Failed to send SMS to {to_phone}: {e}")
+        logger.error(f"Failed to send SMS to ...{to_phone[-4:]}: {e}")
         return {"success": False, "provider": "twilio", "error": str(e)}
 
 

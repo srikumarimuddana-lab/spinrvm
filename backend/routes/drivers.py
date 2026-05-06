@@ -1803,7 +1803,7 @@ async def _build_and_email_data_export(user_id: str, email: str) -> None:
         )
 
         await send_email(to=email, subject=subject, body=body)
-        logger.info("Data export emailed to %s for user %s", email, user_id)
+        logger.info("Data export emailed for user %s", user_id)
         logger.info(
             "dsar_export_completed",
             extra={"user_id": user_id, "domain": "privacy", "metric": "dsar_export_completed"},
@@ -2443,7 +2443,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     # Post-ride receipt notification stub
     rider = await db_supabase.get_user_by_id(ride.get("rider_id"))
     if rider and rider.get("email"):
-        logger.info(f"Sending email receipt for ride {ride_id} to {rider['email']}")
+        logger.info(f"Sending email receipt for ride {ride_id} to user {rider['id']}")
 
     # Fire-and-forget: render the route PNG from phase_polylines and
     # upload to Cloudinary so the admin drawer + email receipt can

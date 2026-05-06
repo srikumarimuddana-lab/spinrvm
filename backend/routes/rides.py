@@ -129,6 +129,38 @@ def _f(v: Decimal) -> float:
     return float(v)
 
 
+def _is_corporate_paid(
+    *,
+    payment_method: Optional[str],
+    work_profile: Optional[bool],
+    corporate_account_id: Optional[str],
+) -> bool:
+    """True when the ride will be settled against a corporate account.
+
+    Surge does not apply to corporate-paid rides (CLAUDE.md Surge rules:
+    "Surge does not apply to corporate account-paid rides"). The caller
+    needs the answer before fare arithmetic so the multiplier can be
+    pinned to 1.0× before distance/time fares are computed.
+
+    Two booking shapes route to corporate billing:
+      1. ``payment_method == "company_allowance"`` — the rider explicitly
+         picked Company Allowance.
+      2. ``work_profile=True`` with a ``corporate_account_id`` — the
+         rider toggled Work mode; rides.py:907 reclassifies these to
+         ``payment_method="company_allowance"`` at persist time.
+    Both paths must bypass surge before the fare is locked in, otherwise
+    the rider would see the surged estimate and the company would be
+    billed for it.
+    """
+    if not corporate_account_id:
+        return False
+    if (payment_method or "").lower() == "company_allowance":
+        return True
+    if work_profile:
+        return True
+    return False
+
+
 api_router = APIRouter(prefix="/rides", tags=["Rides"])
 
 
@@ -480,6 +512,12 @@ class RideEstimateRequest(BaseModel):
     dropoff_lat: float
     dropoff_lng: float
     stops: Optional[List[dict]] = None
+    # Corporate-billing context — when present, surge is suppressed so the
+    # quote shown to the rider matches what the company will be invoiced.
+    # Optional for backwards compatibility with consumer-only callers.
+    payment_method: Optional[str] = None
+    corporate_account_id: Optional[str] = None
+    work_profile: Optional[bool] = False
 
 
 @api_router.post("/estimate")
@@ -533,11 +571,18 @@ async def estimate_ride(request: RideEstimateRequest, current_user: dict = Depen
     )
     airport_fee = airport_result.get("airport_fee", 0.0)
 
+    # CLAUDE.md: surge does not apply to corporate-paid rides. Resolve the
+    # bypass once per request — fares list is per-vehicle, not per-payment.
+    corporate_bypass = _is_corporate_paid(
+        payment_method=request.payment_method,
+        work_profile=request.work_profile,
+        corporate_account_id=request.corporate_account_id,
+    )
+
     estimates = []
     for fare_info in fares:
         # Use Decimal for all monetary arithmetic (CQ-009 — eliminates float rounding errors)
-        # Use Decimal for all monetary arithmetic (CQ-009 — eliminates float rounding errors)
-        surge = _d(fare_info.get("surge_multiplier", 1.0))
+        surge = Decimal("1.0") if corporate_bypass else _d(fare_info.get("surge_multiplier", 1.0))
         distance_fare = _round(_d(fare_info["per_km_rate"]) * _d(distance_km) * surge)
         time_fare = _round(_d(fare_info["per_minute_rate"]) * _d(duration_minutes) * surge)
         booking_fee = _d(fare_info.get("booking_fee", 2.0))
@@ -769,6 +814,21 @@ async def create_ride(request: Request, body: CreateRideRequest, current_user: d
                 f"estimate_token rejected ({e}); falling back to current surge "
                 f"{float(current_surge)} for rider={current_user['id']}"
             )
+
+    # Corporate surge bypass — applied AFTER estimate_token resolution so the
+    # corporate flag wins over any token-locked multiplier. Without this
+    # ordering a rider could pin a surged token in personal mode, switch the
+    # toggle to Work, and still bill the company at the surged rate.
+    if _is_corporate_paid(
+        payment_method=body.payment_method,
+        work_profile=body.work_profile,
+        corporate_account_id=body.corporate_account_id,
+    ) and surge != Decimal("1.0"):
+        logger.info(
+            f"Corporate surge bypass for rider={current_user['id']} "
+            f"corp={body.corporate_account_id}: forcing surge {float(surge)} → 1.0"
+        )
+        surge = Decimal("1.0")
     distance_fare = _round(_d(fare_info["per_km_rate"]) * _d(distance_km) * surge)
     time_fare = _round(_d(fare_info["per_minute_rate"]) * _d(duration_minutes) * surge)
     booking_fee = _d(fare_info.get("booking_fee", 2.0))

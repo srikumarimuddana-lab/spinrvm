@@ -99,7 +99,7 @@ class WalletPayRequest(BaseModel):
 
 class TransferRequest(BaseModel):
     recipient_phone: str = Field(..., pattern=r"^\+1\d{10}$")
-    amount: float = Field(..., gt=0, le=200)
+    amount: Decimal = Field(..., gt=0, le=200)
 
 
 # ── Endpoints ────────────────────────────────────────────────────────
@@ -148,7 +148,8 @@ async def top_up_wallet(
 
 
 @api_router.post("/pay")
-async def wallet_pay(req: WalletPayRequest, current_user: dict = Depends(get_current_user)):
+@idempotent_endpoint(scope="wallet_pay")
+async def wallet_pay(req: WalletPayRequest, request: Request, current_user: dict = Depends(get_current_user)):
     """Pay for a ride using wallet balance."""
     wallet = await get_or_create_wallet(current_user["id"])
 
@@ -162,10 +163,14 @@ async def wallet_pay(req: WalletPayRequest, current_user: dict = Depends(get_cur
         raise HTTPException(status_code=404, detail="Ride not found")
     if ride.get("rider_id") != current_user["id"]:
         raise HTTPException(status_code=403, detail="ERR_FORBIDDEN")
+    if ride.get("status") != "completed":
+        raise HTTPException(status_code=400, detail="Ride must be completed before payment")
     server_fare = _d(ride.get("total_fare", 0))
     debit_amount = _d(req.amount)
     if debit_amount > server_fare + _d("0.01"):
         raise HTTPException(status_code=400, detail="ERR_FARE_EXCEEDED")
+    if debit_amount < server_fare - _d("0.01"):
+        raise HTTPException(status_code=400, detail="ERR_FARE_UNDERPAID")
 
     try:
         new_balance = await wallet_pay_for_ride(wallet["id"], req.ride_id, debit_amount)
@@ -178,7 +183,7 @@ async def wallet_pay(req: WalletPayRequest, current_user: dict = Depends(get_cur
     await db.update_one(
         "rides",
         {"id": req.ride_id},
-        {"$set": {"payment_method": "wallet"}},
+        {"payment_method": "wallet"},
     )
 
     txn = await _record_transaction(
@@ -267,18 +272,20 @@ async def transfer_to_user(
     await _record_transaction(
         wallet_id=sender_wallet["id"],
         user_id=current_user["id"],
-        txn_type="fare_split_sent",
+        txn_type="wallet_transfer_sent",
         amount=-float(transfer_amount),
         balance_after=float(new_sender_balance),
-        description=f"Transfer to {req.recipient_phone}",
+        reference_id=recipient["id"],
+        description="Wallet transfer sent",
     )
     await _record_transaction(
         wallet_id=recipient_wallet["id"],
         user_id=recipient["id"],
-        txn_type="fare_split_received",
+        txn_type="wallet_transfer_received",
         amount=float(transfer_amount),
         balance_after=float(new_recipient_balance),
-        description=f"Received from {current_user.get('phone', 'user')}",
+        reference_id=current_user["id"],
+        description="Wallet transfer received",
     )
 
     return {"balance": float(new_sender_balance), "success": True}

@@ -76,37 +76,46 @@ async def create_fare_split(req: CreateFareSplitRequest, current_user: dict = De
     if existing:
         raise HTTPException(status_code=400, detail="Fare split already exists for this ride")
 
-    total_fare = float(ride.get("grand_total") or ride.get("total_fare", 0))
+    total_fare = _d(ride.get("grand_total") or ride.get("total_fare") or 0)
     split_count = len(req.participant_phones) + 1  # +1 for requester
-    share_amount = float(_d(total_fare / split_count))
+    share_amount = _d(total_fare / split_count)
 
     # Create the fare split record
     split_id = str(uuid.uuid4())
+    now_iso = datetime.now(timezone.utc).isoformat()
     split_data = {
         "id": split_id,
         "ride_id": req.ride_id,
         "requester_id": current_user["id"],
-        "total_fare": total_fare,
+        "total_fare": float(total_fare),
         "split_count": split_count,
         "status": "pending",
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": now_iso,
+        "updated_at": now_iso,
     }
     await db.insert_one("fare_splits", split_data)
 
+    # Batch-resolve participant phones → user IDs in a single query instead
+    # of one DB round-trip per phone (N+1 avoided).
+    phone_list = list(req.participant_phones)
+    existing_users = await db.get_rows(
+        "users",
+        {"phone": {"$in": phone_list}},
+        limit=len(phone_list) + 1,
+    )
+    phone_to_user_id = {u["phone"]: u["id"] for u in existing_users if u.get("phone")}
+
     # Create participant entries
     participants = []
-    for phone in req.participant_phones:
-        # Look up user by phone (may not exist yet)
-        user = await db.find_one("users", {"phone": phone})
+    for phone in phone_list:
         participant = {
             "id": str(uuid.uuid4()),
             "fare_split_id": split_id,
-            "user_id": user["id"] if user else None,
+            "user_id": phone_to_user_id.get(phone),
             "phone": phone,
-            "share_amount": share_amount,
+            "share_amount": float(share_amount),
             "status": "pending",
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": now_iso,
         }
         await db.insert_one("fare_split_participants", participant)
         participants.append(participant)
@@ -147,7 +156,7 @@ async def get_fare_split(split_id: str, current_user: dict = Depends(get_current
     if split["requester_id"] != user_id and not is_participant:
         raise HTTPException(status_code=403, detail="Not authorized to view this fare split")
 
-    share_amount = float(_d(split["total_fare"] / split["split_count"]))
+    share_amount = float(_d(Decimal(str(split["total_fare"])) / split["split_count"]))
 
     return {
         "id": split["id"],
@@ -190,7 +199,7 @@ async def get_fare_split_for_ride(ride_id: str, current_user: dict = Depends(get
     if not (is_owner or is_participant):
         raise HTTPException(status_code=403, detail="Access denied")
 
-    share_amount = float(_d(split["total_fare"] / split["split_count"]))
+    share_amount = float(_d(Decimal(str(split["total_fare"])) / split["split_count"]))
 
     return {
         "has_split": True,
@@ -233,7 +242,7 @@ async def respond_to_split(
     await db.update_one(
         "fare_split_participants",
         {"id": participant_id},
-        {"$set": {"status": new_status}},
+        {"status": new_status},
     )
 
     # If declined, update split status and recalculate shares
@@ -246,7 +255,7 @@ async def respond_to_split(
                 limit=10,
             )
             active_count = sum(1 for p in all_participants if p["status"] not in ("declined",)) + 1  # +1 requester
-            new_share = float(_d(split["total_fare"] / active_count))
+            new_share = float(_d(Decimal(str(split["total_fare"])) / active_count))
 
             # Update share amounts for remaining participants
             for p in all_participants:
@@ -254,7 +263,7 @@ async def respond_to_split(
                     await db.update_one(
                         "fare_split_participants",
                         {"id": p["id"]},
-                        {"$set": {"share_amount": new_share}},
+                        {"share_amount": new_share},
                     )
 
             await db.update_one(

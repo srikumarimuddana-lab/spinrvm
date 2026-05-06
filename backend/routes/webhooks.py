@@ -108,10 +108,20 @@ async def stripe_webhook(request: Request):
             except ImportError:
                 from services.corporate_wallet_service import apply_topup  # type: ignore
 
+            wallet_id = meta.get("wallet_id")
+            if not wallet_id:
+                logger.error(
+                    f"[WEBHOOK] corporate_topup event {event_id} missing wallet_id in metadata — skipping",
+                    extra={"event_id": event_id, "meta_keys": list(meta.keys())},
+                )
+                await mark_stripe_event_processed(event_id)
+                return {"received": True, "scope": "corporate_topup", "skipped": "missing_wallet_id"}
+            from decimal import Decimal as _D
+
             amount_cents = data_object.get("amount_received") or data_object.get("amount", 0)
-            amount_cad = amount_cents / 100
+            amount_cad = _D(str(amount_cents)) / _D("100")
             await apply_topup(
-                wallet_id=meta["wallet_id"],
+                wallet_id=wallet_id,
                 amount=amount_cad,
                 stripe_payment_intent_id=data_object["id"],
                 actor_user_id=meta.get("initiated_by"),
@@ -158,7 +168,7 @@ async def stripe_webhook(request: Request):
                     "payment_failure_reason": failure_message,
                 },
             )
-            logger.warning(f"Payment failed for ride {ride_id}: {failure_message}")
+            logger.error(f"Payment failed for ride {ride_id}: {failure_message}")
 
         if user_id:
             await send_push_notification(
@@ -191,7 +201,7 @@ async def stripe_webhook(request: Request):
                         },
                     )
             except Exception as notify_err:
-                logger.warning(f"Driver payment-failed notification error: {notify_err}")
+                logger.error(f"Driver payment-failed notification error: {notify_err}", exc_info=True)
 
     elif event_type == "checkout.session.completed":
         # ── Spinr Pass subscription payment confirmed ──────────

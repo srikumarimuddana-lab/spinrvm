@@ -151,7 +151,14 @@ async def confirm_payment(request: Dict[str, Any], current_user: dict = Depends(
     ride_id = request.get("ride_id")
 
     if payment_intent_id and payment_intent_id.startswith("pi_mock_"):
-        # Mock payment
+        # Mock payment — only permitted outside production to prevent free-ride fraud.
+        # In production a real PaymentIntent must be retrieved from Stripe.
+        try:
+            from core.config import settings as _cfg
+        except ImportError:
+            from ..core.config import settings as _cfg  # type: ignore
+        if _cfg.ENV.lower() == "production":
+            raise HTTPException(status_code=400, detail="Mock payment IDs are not accepted in production")
         if ride_id:
             await db_supabase.update_ride(ride_id, {"payment_status": "paid", "payment_intent_id": payment_intent_id})
         return {"status": "succeeded", "mock": True}
@@ -440,19 +447,35 @@ async def add_card(request: Request, current_user: dict = Depends(get_current_us
 @api_router.post("/cards/{card_id}/default")
 async def set_default_card(card_id: str, current_user: dict = Depends(get_current_user)):
     """Set card as default. Updates both our DB and Stripe customer."""
-    await db_supabase.update_one("users", {"id": current_user["id"]}, {"default_payment_method": card_id})
-
     settings = await get_app_settings()
     stripe_secret = settings.get("stripe_secret_key", "")
+
+    user = await db_supabase.get_user_by_id(current_user["id"])
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
     if stripe_secret:
+        stripe_customer_id = user.get("stripe_customer_id")
+        if not stripe_customer_id:
+            raise HTTPException(status_code=400, detail="No Stripe customer on file")
         try:
-            user = await db_supabase.get_user_by_id(current_user["id"])
-            cid = user.get("stripe_customer_id")
-            if cid:
-                stripe.Customer.modify(cid, invoice_settings={"default_payment_method": card_id}, api_key=stripe_secret)
+            pm = stripe.PaymentMethod.retrieve(card_id, api_key=stripe_secret)
+            if pm.get("customer") != stripe_customer_id:
+                logger.error(
+                    f"Card ownership mismatch: user={current_user['id']} tried to set card {card_id} "
+                    f"belonging to customer {pm.get('customer')}"
+                )
+                raise HTTPException(status_code=403, detail="Card does not belong to this account")
+            stripe.Customer.modify(
+                stripe_customer_id, invoice_settings={"default_payment_method": card_id}, api_key=stripe_secret
+            )
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Stripe set default failed for card {card_id}: {e}", exc_info=True)
+            raise HTTPException(status_code=502, detail="Stripe error updating default card") from e
 
+    await db_supabase.update_one("users", {"id": current_user["id"]}, {"default_payment_method": card_id})
     return {"success": True}
 
 
@@ -461,14 +484,31 @@ async def delete_card(card_id: str, current_user: dict = Depends(get_current_use
     """Detach card from Stripe and clear default if needed."""
     settings = await get_app_settings()
     stripe_secret = settings.get("stripe_secret_key", "")
-    if stripe_secret:
-        try:
-            stripe.PaymentMethod.detach(card_id, api_key=stripe_secret)
-        except Exception as e:
-            logger.error(f"Stripe detach failed for card {card_id}: {e}", exc_info=True)
 
     user = await db_supabase.get_user_by_id(current_user["id"])
-    if user and user.get("default_payment_method") == card_id:
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if stripe_secret:
+        stripe_customer_id = user.get("stripe_customer_id")
+        if not stripe_customer_id:
+            raise HTTPException(status_code=400, detail="No Stripe customer on file")
+        try:
+            pm = stripe.PaymentMethod.retrieve(card_id, api_key=stripe_secret)
+            if pm.get("customer") != stripe_customer_id:
+                logger.error(
+                    f"Card ownership mismatch: user={current_user['id']} tried to delete card {card_id} "
+                    f"belonging to customer {pm.get('customer')}"
+                )
+                raise HTTPException(status_code=403, detail="Card does not belong to this account")
+            stripe.PaymentMethod.detach(card_id, api_key=stripe_secret)
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Stripe detach failed for card {card_id}: {e}", exc_info=True)
+            raise HTTPException(status_code=502, detail="Stripe error removing card") from e
+
+    if user.get("default_payment_method") == card_id:
         await db_supabase.update_one("users", {"id": current_user["id"]}, {"default_payment_method": None})
 
     return {"success": True}

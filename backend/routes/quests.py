@@ -278,7 +278,23 @@ async def claim_quest_reward(progress_id: str, current_user: dict = Depends(get_
     if not quest:
         raise HTTPException(status_code=404, detail="Quest not found")
 
-    reward_amount = float(quest["reward_amount"])
+    reward_amount = _d(quest["reward_amount"])
+
+    # Atomic claim guard: flip status completed→claimed in a single conditional
+    # update. If another concurrent request already claimed this reward, the
+    # update matches 0 rows and we return 409 instead of paying twice.
+    now_iso = datetime.now(timezone.utc).isoformat()
+    claimed = await db.update_one(
+        "quest_progress",
+        {"id": progress_id, "status": "completed"},
+        {
+            "status": "claimed",
+            "claimed_at": now_iso,
+            "updated_at": now_iso,
+        },
+    )
+    if not claimed:
+        raise HTTPException(status_code=409, detail="Quest reward already claimed")
 
     # Pay reward to wallet
     if quest.get("reward_type", "wallet_credit") == "wallet_credit":
@@ -286,35 +302,22 @@ async def claim_quest_reward(progress_id: str, current_user: dict = Depends(get_
 
         wallet = await get_or_create_wallet(current_user["id"])
         old_balance = _d(wallet.get("balance", 0))
-        new_balance = old_balance + _d(reward_amount)
+        new_balance = old_balance + reward_amount
 
         await db.update_one(
             "wallets",
             {"id": wallet["id"]},
-            {"$set": {"balance": float(new_balance), "updated_at": datetime.now(timezone.utc).isoformat()}},
+            {"balance": float(new_balance), "updated_at": now_iso},
         )
         await _record_transaction(
             wallet_id=wallet["id"],
             user_id=current_user["id"],
             txn_type="quest_reward",
-            amount=reward_amount,
+            amount=float(reward_amount),
             balance_after=float(new_balance),
             reference_id=quest["id"],
             description=f"Quest reward: {quest['title']}",
         )
-
-    # Mark as claimed
-    await db.update_one(
-        "quest_progress",
-        {"id": progress_id},
-        {
-            "$set": {
-                "status": "claimed",
-                "claimed_at": datetime.now(timezone.utc).isoformat(),
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }
-        },
-    )
 
     return {
         "status": "claimed",

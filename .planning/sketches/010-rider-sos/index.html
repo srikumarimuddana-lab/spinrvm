@@ -1,0 +1,803 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>010 — Rider SOS</title>
+<link rel="stylesheet" href="../themes/default.css">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: var(--font); background: #0a0a0f; color: var(--mob-text); min-height: 100vh; }
+
+  .page-header { background: #12121a; border-bottom: 1px solid rgba(255,255,255,0.06); padding: 20px 32px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
+  .page-header h1 { font-size: 13px; font-weight: 500; color: rgba(255,255,255,0.4); letter-spacing: 0.08em; text-transform: uppercase; }
+  .sketch-label { font-size: 11px; color: rgba(255,255,255,0.25); font-family: var(--font-mono); }
+  .design-q { font-size: 12px; color: rgba(255,255,255,0.5); margin-top: 2px; font-style: italic; }
+
+  .variants-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 32px; padding: 36px; align-items: start; }
+  .variant-wrap  { display: flex; flex-direction: column; gap: 14px; align-items: center; }
+  .variant-label { display: flex; align-items: center; gap: 10px; align-self: stretch; }
+  .variant-letter { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; flex-shrink: 0; }
+  .la .variant-letter { background: rgba(66,153,225,0.2); color: #4299E1; }
+  .lb .variant-letter { background: rgba(56,161,105,0.2); color: #38A169; }
+  .lc .variant-letter { background: rgba(229,62,62,0.2); color: #E53E3E; }
+  .variant-name { font-size: 13px; font-weight: 600; color: rgba(255,255,255,0.8); }
+  .variant-desc { font-size: 11px; color: rgba(255,255,255,0.35); margin-top: 1px; }
+  .winner-badge { margin-left: auto; font-size: 10px; font-weight: 700; letter-spacing: 0.06em; padding: 3px 8px; border-radius: 4px; background: rgba(229,62,62,0.2); color: #E53E3E; }
+
+  /* ── Phone frame ── */
+  .phone-stage { position: relative; display: flex; gap: 16px; justify-content: center; }
+  .phone {
+    width: 220px;
+    height: 460px;
+    border-radius: 36px;
+    background: var(--mob-bg);
+    box-shadow: var(--shadow-phone);
+    overflow: hidden;
+    position: relative;
+    flex-shrink: 0;
+  }
+  .phone-label { font-size: 10px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: rgba(255,255,255,0.25); text-align: center; margin-top: 8px; }
+  .phone-arrow { position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%); font-size: 20px; color: rgba(255,255,255,0.15); pointer-events: none; }
+
+  /* ── Status bar ── */
+  .status-bar { padding: 12px 18px 4px; display: flex; justify-content: space-between; align-items: center; font-size: 11px; font-weight: 600; color: var(--mob-text); }
+  .sb-time { font-weight: 700; }
+  .sb-icons { display: flex; gap: 4px; font-size: 10px; }
+
+  /* ── Dark map background ── */
+  .map-bg {
+    position: absolute; inset: 0;
+    background: var(--map-base);
+    overflow: hidden;
+  }
+  .map-road-h { position: absolute; background: var(--map-road-main); height: 6px; left: 0; right: 0; }
+  .map-road-v { position: absolute; background: var(--map-road-main); width: 6px; top: 0; bottom: 0; }
+  .map-road-s { position: absolute; background: var(--map-road); }
+  .map-block  { position: absolute; background: rgba(255,255,255,0.02); border-radius: 4px; }
+
+  /* ── Active ride panel (bottom sheet) ── */
+  .ride-panel {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    background: var(--mob-surface);
+    border-radius: 20px 20px 0 0;
+    padding: 12px 16px 20px;
+  }
+  .rp-handle { width: 36px; height: 4px; background: rgba(255,255,255,0.15); border-radius: 2px; margin: 0 auto 12px; }
+  .rp-status { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--spinr-red); margin-bottom: 6px; }
+  .rp-driver { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .rp-avatar { width: 36px; height: 36px; border-radius: 50%; background: #2d3a52; display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 800; color: white; flex-shrink: 0; }
+  .rp-driver-info { flex: 1; }
+  .rp-driver-name { font-size: 13px; font-weight: 700; color: var(--mob-text); }
+  .rp-driver-sub  { font-size: 11px; color: var(--mob-text-muted); margin-top: 1px; }
+  .rp-eta { text-align: right; }
+  .rp-eta-val { font-size: 16px; font-weight: 800; color: var(--mob-text); }
+  .rp-eta-lbl { font-size: 10px; color: var(--mob-text-muted); }
+  .rp-actions { display: flex; gap: 8px; }
+  .rp-action-btn { flex: 1; padding: 10px 0; border-radius: 12px; font-size: 12px; font-weight: 700; border: none; background: var(--mob-surface-2); color: var(--mob-text); cursor: pointer; text-align: center; }
+
+  /* ── Analysis box ── */
+  .analysis-box { background: rgba(0,0,0,0.3); border-radius: 8px; padding: 14px 16px; align-self: stretch; }
+  .cf-label { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(255,255,255,0.3); margin-bottom: 8px; }
+  .cf-item { font-size: 12px; color: rgba(255,255,255,0.5); display: flex; align-items: flex-start; gap: 6px; margin-bottom: 4px; }
+  .cf-item::before { content: '·'; color: rgba(255,255,255,0.2); flex-shrink: 0; }
+  .cf-verdict { margin-top: 10px; font-size: 12px; font-weight: 700; }
+  .verdict-yes { color: #38A169; }
+  .verdict-no  { color: #E53E3E; }
+  .verdict-med { color: #ED8936; }
+
+  /* ══════════════════════════════════════════
+     VARIANT A — Floating SOS Button
+  ══════════════════════════════════════════ */
+
+  /* Floating SOS pill — persistent on map */
+  .sos-float {
+    position: absolute;
+    top: 52px; right: 12px;
+    width: 52px; height: 52px;
+    border-radius: 50%;
+    background: var(--spinr-red);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 900; color: white;
+    box-shadow: 0 0 0 3px rgba(229,62,62,0.3), 0 4px 12px rgba(229,62,62,0.5);
+    cursor: pointer;
+    transition: transform 0.1s;
+    z-index: 10;
+    letter-spacing: 0.02em;
+  }
+  .sos-float:hover { transform: scale(1.08); }
+  .sos-float:active { transform: scale(0.95); }
+
+  /* Full-screen SOS modal (variant A) */
+  .sos-modal-a {
+    position: absolute; inset: 0; z-index: 50;
+    background: rgba(0,0,0,0.95);
+    display: flex; flex-direction: column;
+    padding: 16px;
+    display: none;
+  }
+  .sos-modal-a.visible { display: flex; }
+  .sma-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; margin-top: 24px; }
+  .sma-title { font-size: 20px; font-weight: 900; color: var(--spinr-red); }
+  .sma-close { width: 32px; height: 32px; border-radius: 50%; background: rgba(255,255,255,0.1); display: flex; align-items: center; justify-content: center; font-size: 18px; color: rgba(255,255,255,0.6); cursor: pointer; flex-shrink: 0; }
+  .sma-loc { background: rgba(255,255,255,0.06); border-radius: 10px; padding: 10px 12px; margin-bottom: 16px; }
+  .sma-loc-label { font-size: 10px; color: rgba(255,255,255,0.4); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+  .sma-loc-val { font-size: 12px; color: rgba(255,255,255,0.8); margin-top: 3px; }
+  .sma-btn {
+    width: 100%; padding: 16px; border-radius: 14px; border: none;
+    font-size: 14px; font-weight: 800; cursor: pointer;
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 10px; text-align: left;
+    transition: all 0.15s;
+  }
+  .sma-911 { background: var(--spinr-red); color: white; font-size: 15px; }
+  .sma-911:hover { background: var(--spinr-red-dark); }
+  .sma-contacts { background: rgba(255,255,255,0.08); color: var(--mob-text); }
+  .sma-share  { background: rgba(255,255,255,0.08); color: var(--mob-text); }
+  .sma-btn-icon { font-size: 20px; flex-shrink: 0; }
+  .sma-btn-sub  { font-size: 10.5px; color: rgba(255,255,255,0.5); font-weight: 500; margin-top: 2px; }
+  .sma-safe { margin-top: auto; width: 100%; padding: 14px; border-radius: 14px; border: 1px solid rgba(255,255,255,0.1); background: transparent; color: rgba(255,255,255,0.5); font-size: 13px; font-weight: 700; cursor: pointer; }
+
+  /* ══════════════════════════════════════════
+     VARIANT B — Safety Drawer
+  ══════════════════════════════════════════ */
+
+  /* Safety chip in ride panel */
+  .safety-chip {
+    position: absolute; top: 52px; left: 12px;
+    background: rgba(229,62,62,0.12);
+    border: 1px solid rgba(229,62,62,0.25);
+    border-radius: 20px; padding: 6px 12px;
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11.5px; font-weight: 700; color: rgba(229,62,62,0.9);
+    cursor: pointer; z-index: 10;
+    transition: all 0.15s;
+  }
+  .safety-chip:hover { background: rgba(229,62,62,0.2); }
+
+  /* Bottom drawer */
+  .safety-drawer {
+    position: absolute; bottom: 0; left: 0; right: 0; z-index: 40;
+    background: var(--mob-surface);
+    border-radius: 20px 20px 0 0;
+    padding: 0 16px 24px;
+    transform: translateY(100%);
+    transition: transform 0.35s var(--ease-out);
+  }
+  .safety-drawer.open { transform: translateY(0); }
+  .sd-handle { width: 36px; height: 4px; background: rgba(255,255,255,0.15); border-radius: 2px; margin: 12px auto 16px; }
+  .sd-title { font-size: 16px; font-weight: 800; color: var(--mob-text); margin-bottom: 4px; }
+  .sd-sub   { font-size: 12px; color: var(--mob-text-muted); margin-bottom: 16px; }
+  .sd-loc   { background: rgba(255,255,255,0.06); border-radius: 10px; padding: 10px 12px; margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+  .sd-loc-icon { font-size: 14px; }
+  .sd-loc-text { font-size: 11.5px; color: rgba(255,255,255,0.7); }
+  .sd-options { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+  .sd-option { padding: 13px 14px; border-radius: 12px; border: none; display: flex; align-items: center; gap: 12px; cursor: pointer; text-align: left; transition: all 0.15s; }
+  .sdo-911      { background: var(--spinr-red); }
+  .sdo-911:hover { background: var(--spinr-red-dark); }
+  .sdo-alert    { background: rgba(237,137,54,0.15); }
+  .sdo-share    { background: rgba(255,255,255,0.07); }
+  .sd-opt-icon { font-size: 18px; flex-shrink: 0; }
+  .sd-opt-label { flex: 1; }
+  .sd-opt-title { font-size: 13px; font-weight: 700; color: var(--mob-text); }
+  .sd-opt-sub   { font-size: 10.5px; color: rgba(255,255,255,0.45); margin-top: 1px; }
+  .sd-dismiss { width: 100%; padding: 12px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.1); background: transparent; color: rgba(255,255,255,0.5); font-size: 13px; font-weight: 700; cursor: pointer; }
+
+  /* ══════════════════════════════════════════
+     VARIANT C — Shield Always + Hold Overlay (WINNER)
+  ══════════════════════════════════════════ */
+
+  /* Shield — subtle, always present, thumb-zone */
+  .shield-btn {
+    position: absolute; bottom: 200px; right: 14px; z-index: 10;
+    width: 44px; height: 44px;
+    border-radius: 50%;
+    background: rgba(15,15,20,0.75);
+    border: 1.5px solid rgba(229,62,62,0.4);
+    backdrop-filter: blur(8px);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; cursor: pointer;
+    transition: all 0.2s;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+  }
+  .shield-btn:hover { background: rgba(229,62,62,0.15); border-color: rgba(229,62,62,0.7); transform: scale(1.08); }
+
+  /* Safety overlay — fills screen, doesn't navigate away */
+  .safety-overlay {
+    position: absolute; inset: 0; z-index: 50;
+    background: rgba(5,5,10,0.97);
+    backdrop-filter: blur(4px);
+    display: flex; flex-direction: column;
+    padding: 0;
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.2s;
+  }
+  .safety-overlay.visible { opacity: 1; pointer-events: auto; }
+
+  /* Top bar */
+  .so-top { padding: 48px 20px 16px; display: flex; align-items: center; gap: 12px; }
+  .so-shield-big { font-size: 28px; }
+  .so-title { flex: 1; }
+  .so-title-main { font-size: 18px; font-weight: 900; color: white; }
+  .so-title-sub  { font-size: 11.5px; color: rgba(255,255,255,0.45); margin-top: 2px; }
+  .so-close { width: 36px; height: 36px; border-radius: 50%; background: rgba(255,255,255,0.08); display: flex; align-items: center; justify-content: center; font-size: 20px; color: rgba(255,255,255,0.5); cursor: pointer; border: none; flex-shrink: 0; }
+
+  /* Location bar */
+  .so-loc { margin: 0 16px 16px; background: rgba(255,255,255,0.05); border-radius: 12px; padding: 10px 14px; display: flex; align-items: center; gap: 8px; }
+  .so-loc-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--online-green); flex-shrink: 0; animation: locPulse 2s infinite; }
+  @keyframes locPulse { 0%,100%{opacity:1}50%{opacity:0.4} }
+  .so-loc-text { font-size: 11.5px; color: rgba(255,255,255,0.65); }
+  .so-loc-time { margin-left: auto; font-size: 10px; color: rgba(255,255,255,0.35); }
+
+  /* Action buttons */
+  .so-actions { flex: 1; padding: 0 16px; display: flex; flex-direction: column; gap: 10px; }
+
+  /* 911 — immediate tap, no hold needed */
+  .so-btn-911 {
+    padding: 20px 18px;
+    border-radius: 18px;
+    background: var(--spinr-red);
+    border: none; cursor: pointer;
+    display: flex; align-items: center; gap: 14px;
+    text-align: left;
+    box-shadow: 0 4px 20px rgba(229,62,62,0.4);
+    transition: all 0.15s;
+    position: relative; overflow: hidden;
+  }
+  .so-btn-911:hover { background: var(--spinr-red-dark); transform: translateY(-1px); }
+  .so-btn-911:active { transform: translateY(0); }
+  .so-btn-911-icon { font-size: 26px; flex-shrink: 0; }
+  .so-btn-911-text { flex: 1; }
+  .so-btn-911-label { font-size: 16px; font-weight: 900; color: white; }
+  .so-btn-911-sub   { font-size: 11px; color: rgba(255,255,255,0.65); margin-top: 3px; }
+  .so-btn-911-arrow { font-size: 18px; color: rgba(255,255,255,0.5); }
+
+  /* Alert contacts — hold to send */
+  .so-btn-hold {
+    padding: 16px 18px;
+    border-radius: 18px;
+    background: rgba(237,137,54,0.12);
+    border: 1.5px solid rgba(237,137,54,0.3);
+    cursor: pointer; position: relative; overflow: hidden;
+    display: flex; align-items: center; gap: 14px;
+    text-align: left;
+    transition: all 0.15s;
+    user-select: none; -webkit-user-select: none;
+  }
+  .so-btn-hold:hover { background: rgba(237,137,54,0.18); }
+  .so-btn-hold-icon { font-size: 22px; flex-shrink: 0; }
+  .so-btn-hold-text { flex: 1; }
+  .so-btn-hold-label { font-size: 14px; font-weight: 800; color: var(--mob-text); }
+  .so-btn-hold-sub   { font-size: 11px; color: rgba(255,255,255,0.45); margin-top: 2px; }
+  .hold-hint { font-size: 10px; color: rgba(237,137,54,0.8); font-weight: 700; margin-left: auto; white-space: nowrap; }
+
+  /* Hold progress bar */
+  .hold-progress {
+    position: absolute; bottom: 0; left: 0; height: 3px;
+    background: var(--warning-amber);
+    width: 0%; border-radius: 0 2px 2px 0;
+    transition: none;
+  }
+  .hold-progress.filling {
+    width: 100%;
+    transition: width 2s linear;
+  }
+
+  /* Share location */
+  .so-btn-share {
+    padding: 14px 18px;
+    border-radius: 18px;
+    background: rgba(66,153,225,0.1);
+    border: 1.5px solid rgba(66,153,225,0.2);
+    cursor: pointer;
+    display: flex; align-items: center; gap: 14px;
+    text-align: left;
+    transition: all 0.15s;
+  }
+  .so-btn-share:hover { background: rgba(66,153,225,0.15); }
+  .so-btn-share-icon { font-size: 20px; flex-shrink: 0; }
+  .so-btn-share-label { font-size: 13.5px; font-weight: 700; color: var(--mob-text); }
+  .so-btn-share-sub   { font-size: 11px; color: rgba(255,255,255,0.4); margin-top: 2px; }
+
+  /* I'm Safe dismiss */
+  .so-safe {
+    margin: 10px 16px 28px;
+    padding: 14px;
+    border-radius: 14px;
+    border: 1px solid rgba(255,255,255,0.08);
+    background: transparent;
+    color: rgba(255,255,255,0.45);
+    font-size: 13px; font-weight: 700; cursor: pointer;
+    transition: all 0.15s;
+  }
+  .so-safe:hover { background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.7); }
+
+  /* Sent confirmation state */
+  .sent-overlay {
+    position: absolute; inset: 0; z-index: 60;
+    background: rgba(5,5,10,0.97);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 32px;
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.3s;
+  }
+  .sent-overlay.visible { opacity: 1; pointer-events: auto; }
+  .sent-icon { font-size: 56px; margin-bottom: 16px; }
+  .sent-title { font-size: 20px; font-weight: 900; color: var(--mob-text); text-align: center; margin-bottom: 8px; }
+  .sent-sub   { font-size: 12.5px; color: rgba(255,255,255,0.5); text-align: center; line-height: 1.5; margin-bottom: 24px; }
+  .sent-contacts { background: rgba(255,255,255,0.06); border-radius: 10px; padding: 12px 16px; width: 100%; margin-bottom: 20px; }
+  .sent-contact { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
+  .sent-contact:not(:last-child) { border-bottom: 1px solid rgba(255,255,255,0.05); }
+  .sc-icon { font-size: 14px; }
+  .sc-name { font-size: 12px; color: rgba(255,255,255,0.75); }
+  .sc-sent { margin-left: auto; font-size: 10px; color: var(--online-green); font-weight: 700; }
+  .sent-dismiss { width: 100%; padding: 14px; border-radius: 14px; background: rgba(255,255,255,0.08); border: none; color: var(--mob-text); font-size: 13px; font-weight: 700; cursor: pointer; }
+
+  /* ── Summary bottom ── */
+  .summary-bar {
+    padding: 0 36px 40px;
+  }
+  .sum-inner { background: #12121a; border-radius: 12px; border: 1px solid rgba(255,255,255,0.06); padding: 24px; }
+  .sum-label { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(255,255,255,0.3); margin-bottom: 16px; }
+  .sum-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 24px; }
+  .sum-col-title { font-size: 13px; font-weight: 700; color: rgba(255,255,255,0.7); margin-bottom: 6px; }
+  .sum-col-body { font-size: 12px; color: rgba(255,255,255,0.4); line-height: 1.6; }
+  .sum-winner { color: #E53E3E; }
+
+  /* Tap indicators */
+  .tap-count {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.06em;
+    padding: 3px 8px; border-radius: 10px; display: inline-block; margin-bottom: 6px;
+  }
+  .taps-1 { background: rgba(56,161,105,0.2); color: #38A169; }
+  .taps-2 { background: rgba(214,158,46,0.2); color: #D69E2E; }
+  .taps-3 { background: rgba(229,62,62,0.2); color: #E53E3E; }
+</style>
+</head>
+<body>
+
+<div class="page-header">
+  <div>
+    <div class="sketch-label">010 / rider-sos</div>
+    <div class="design-q">"Can a rider trigger SOS without stopping mid-ride?"</div>
+  </div>
+  <h1>Spinr Sketch System</h1>
+</div>
+
+<div class="variants-grid">
+
+  <!-- ═══ VARIANT A — Floating SOS Button ═══ -->
+  <div class="variant-wrap">
+    <div class="variant-label la">
+      <div class="variant-letter">A</div>
+      <div>
+        <div class="variant-name">Floating SOS Button</div>
+        <div class="variant-desc">Persistent red pill on map, tap to open emergency modal</div>
+      </div>
+    </div>
+    <div class="tap-count taps-2">2 taps to SOS panel</div>
+    <!-- Two phone states: normal + modal open -->
+    <div class="phone-stage">
+      <div>
+        <div class="phone" id="phoneA">
+          <!-- Map -->
+          <div class="map-bg">
+            <div class="map-road-h" style="top:38%"></div>
+            <div class="map-road-h" style="top:62%"></div>
+            <div class="map-road-v" style="left:30%"></div>
+            <div class="map-road-v" style="left:65%"></div>
+            <div class="map-road-s" style="top:25%;left:0;right:0;height:3px;opacity:0.5"></div>
+            <div class="map-block" style="top:44%;left:10%;width:18%;height:16%"></div>
+            <div class="map-block" style="top:44%;left:34%;width:29%;height:16%"></div>
+            <div class="map-block" style="top:20%;left:34%;width:29%;height:12%"></div>
+            <!-- Car marker -->
+            <div style="position:absolute;top:42%;left:40%;font-size:18px;transform:rotate(45deg)">🚗</div>
+          </div>
+
+          <!-- Status bar -->
+          <div class="status-bar" style="position:relative;z-index:5">
+            <span class="sb-time">9:41</span>
+            <div class="sb-icons"><span>●●●</span><span>WiFi</span><span>🔋</span></div>
+          </div>
+
+          <!-- ★ Floating SOS button — always visible, but large + risky -->
+          <div class="sos-float" onclick="openModalA()" title="Tap to open SOS">SOS</div>
+
+          <!-- Active ride panel -->
+          <div class="ride-panel" style="position:absolute">
+            <div class="rp-handle"></div>
+            <div class="rp-status">IN PROGRESS · 8 min remaining</div>
+            <div class="rp-driver">
+              <div class="rp-avatar">MK</div>
+              <div class="rp-driver-info">
+                <div class="rp-driver-name">Marcus K.</div>
+                <div class="rp-driver-sub">Toyota Corolla · 7KSL 218</div>
+              </div>
+              <div class="rp-eta">
+                <div class="rp-eta-val">8</div>
+                <div class="rp-eta-lbl">min away</div>
+              </div>
+            </div>
+            <div class="rp-actions">
+              <div class="rp-action-btn">📞 Call</div>
+              <div class="rp-action-btn">💬 Message</div>
+              <div class="rp-action-btn">📤 Share</div>
+            </div>
+          </div>
+
+          <!-- SOS modal — hidden until tap -->
+          <div class="sos-modal-a" id="modalA">
+            <div class="sma-header">
+              <div class="sma-title">🛡 Emergency SOS</div>
+              <div class="sma-close" onclick="closeModalA()">✕</div>
+            </div>
+            <div class="sma-loc">
+              <div class="sma-loc-label">Your Location</div>
+              <div class="sma-loc-val">Victoria Ave & Albert St, Regina SK</div>
+            </div>
+            <button class="sma-btn sma-911" onclick="alert('Opens tel:911 — your phone\'s dialer.\nSOS never auto-dials.\nThis is a deliberate human action.')">
+              <span class="sma-btn-icon">📞</span>
+              <div><div>Call 911</div><div class="sma-btn-sub">Opens your phone's dialer</div></div>
+            </button>
+            <button class="sma-btn sma-contacts" onclick="alert('Sends your location + ride details to:\n• Mom (Sarah)\n• James T.\n\nAlso notifies Spinr Safety Team.')">
+              <span class="sma-btn-icon">🚨</span>
+              <div><div>Alert Emergency Contacts</div><div class="sma-btn-sub">Sends location to Mom, James T. + Spinr Safety</div></div>
+            </button>
+            <button class="sma-btn sma-share" onclick="alert('Copies live trip link to clipboard.\nYou can send it yourself to anyone.')">
+              <span class="sma-btn-icon">📤</span>
+              <div><div>Share Live Trip Link</div><div class="sma-btn-sub">Anyone with the link can track this ride</div></div>
+            </button>
+            <button class="sma-safe" onclick="closeModalA()">I'm Safe — Close</button>
+          </div>
+        </div>
+        <div class="phone-label">Normal State</div>
+      </div>
+    </div>
+
+    <div class="analysis-box">
+      <div class="cf-label">Analysis</div>
+      <div class="cf-item">SOS always visible — zero discovery problem</div>
+      <div class="cf-item">Large 52px target — easy to hit under stress</div>
+      <div class="cf-item">SOS button dominates map; feels alarming even when safe</div>
+      <div class="cf-item">No false-trigger protection — one accidental tap opens modal</div>
+      <div class="cf-item">Modal still requires reading to choose correct option</div>
+      <div class="cf-verdict verdict-med">~ Fast, but high false-trigger risk</div>
+    </div>
+  </div>
+
+  <!-- ═══ VARIANT B — Safety Drawer ═══ -->
+  <div class="variant-wrap">
+    <div class="variant-label lb">
+      <div class="variant-letter">B</div>
+      <div>
+        <div class="variant-name">Safety Drawer</div>
+        <div class="variant-desc">Subtle chip tap → full bottom sheet with options</div>
+      </div>
+    </div>
+    <div class="tap-count taps-2">2 taps to action</div>
+    <div class="phone-stage">
+      <div>
+        <div class="phone" id="phoneB">
+          <div class="map-bg">
+            <div class="map-road-h" style="top:38%"></div>
+            <div class="map-road-h" style="top:62%"></div>
+            <div class="map-road-v" style="left:30%"></div>
+            <div class="map-road-v" style="left:65%"></div>
+            <div class="map-road-s" style="top:25%;left:0;right:0;height:3px;opacity:0.5"></div>
+            <div class="map-block" style="top:44%;left:10%;width:18%;height:16%"></div>
+            <div class="map-block" style="top:44%;left:34%;width:29%;height:16%"></div>
+            <div class="map-block" style="top:20%;left:34%;width:29%;height:12%"></div>
+            <div style="position:absolute;top:42%;left:40%;font-size:18px;transform:rotate(45deg)">🚗</div>
+          </div>
+          <div class="status-bar" style="position:relative;z-index:5">
+            <span class="sb-time">9:41</span>
+            <div class="sb-icons"><span>●●●</span><span>WiFi</span><span>🔋</span></div>
+          </div>
+
+          <!-- Subtle safety chip -->
+          <div class="safety-chip" onclick="toggleDrawerB()" id="safetyChipB">🛡 Safety</div>
+
+          <!-- Ride panel -->
+          <div class="ride-panel">
+            <div class="rp-handle"></div>
+            <div class="rp-status">IN PROGRESS · 8 min remaining</div>
+            <div class="rp-driver">
+              <div class="rp-avatar">MK</div>
+              <div class="rp-driver-info">
+                <div class="rp-driver-name">Marcus K.</div>
+                <div class="rp-driver-sub">Toyota Corolla · 7KSL 218</div>
+              </div>
+              <div class="rp-eta">
+                <div class="rp-eta-val">8</div>
+                <div class="rp-eta-lbl">min away</div>
+              </div>
+            </div>
+            <div class="rp-actions">
+              <div class="rp-action-btn">📞 Call</div>
+              <div class="rp-action-btn">💬 Message</div>
+              <div class="rp-action-btn">📤 Share</div>
+            </div>
+          </div>
+
+          <!-- Safety drawer -->
+          <div class="safety-drawer" id="drawerB">
+            <div class="sd-handle"></div>
+            <div class="sd-title">🛡 Safety Options</div>
+            <div class="sd-sub">Your ride details are ready to share</div>
+            <div class="sd-loc">
+              <span class="sd-loc-icon">📍</span>
+              <span class="sd-loc-text">Victoria Ave & Albert St, Regina SK</span>
+            </div>
+            <div class="sd-options">
+              <button class="sd-option sdo-911" onclick="alert('Opens tel:911 — your phone\'s dialer.\nSOS never auto-dials.')">
+                <span class="sd-opt-icon">📞</span>
+                <div class="sd-opt-label">
+                  <div class="sd-opt-title" style="color:white">Call 911</div>
+                  <div class="sd-opt-sub">Opens your phone dialer</div>
+                </div>
+              </button>
+              <button class="sd-option sdo-alert" onclick="alert('Alert sent to:\n• Mom (Sarah)\n• James T.\n\nSpinr Safety Team also notified.')">
+                <span class="sd-opt-icon">🚨</span>
+                <div class="sd-opt-label">
+                  <div class="sd-opt-title">Alert My Contacts</div>
+                  <div class="sd-opt-sub" style="color:rgba(237,137,54,0.6)">Mom, James T. + Spinr Safety</div>
+                </div>
+              </button>
+              <button class="sd-option sdo-share" onclick="alert('Live trip link copied.\nPaste it anywhere to share.')">
+                <span class="sd-opt-icon">📤</span>
+                <div class="sd-opt-label">
+                  <div class="sd-opt-title">Share Live Trip Link</div>
+                  <div class="sd-opt-sub">Anyone with the link can track</div>
+                </div>
+              </button>
+            </div>
+            <button class="sd-dismiss" onclick="toggleDrawerB()">I'm Safe — Close</button>
+          </div>
+        </div>
+        <div class="phone-label">Tap "Safety" chip</div>
+      </div>
+    </div>
+
+    <div class="analysis-box">
+      <div class="cf-label">Analysis</div>
+      <div class="cf-item">Chip is subtle — won't alarm casual riders</div>
+      <div class="cf-item">Full bottom sheet provides ample touch targets</div>
+      <div class="cf-item">Chip label "Safety" requires reading — not instinctive in panic</div>
+      <div class="cf-item">Chip position (top-left) is not natural thumb-zone on most phones</div>
+      <div class="cf-item">No protection against accidental drawer open</div>
+      <div class="cf-verdict verdict-med">~ Good options layout, weak discoverability under stress</div>
+    </div>
+  </div>
+
+  <!-- ═══ VARIANT C — Shield Always + Hold Overlay (WINNER) ═══ -->
+  <div class="variant-wrap">
+    <div class="variant-label lc">
+      <div class="variant-letter">C</div>
+      <div>
+        <div class="variant-name">Shield + Hold Overlay</div>
+        <div class="variant-desc">Thumb-zone shield → full overlay, hold-to-alert, instant 911</div>
+      </div>
+      <div class="winner-badge">WINNER</div>
+    </div>
+    <div class="tap-count taps-1">1 tap to overlay · 1 tap for 911</div>
+    <div class="phone-stage">
+      <!-- State 1: Normal ride with shield -->
+      <div>
+        <div class="phone" id="phoneC-normal">
+          <div class="map-bg">
+            <div class="map-road-h" style="top:38%"></div>
+            <div class="map-road-h" style="top:62%"></div>
+            <div class="map-road-v" style="left:30%"></div>
+            <div class="map-road-v" style="left:65%"></div>
+            <div class="map-road-s" style="top:25%;left:0;right:0;height:3px;opacity:0.5"></div>
+            <div class="map-block" style="top:44%;left:10%;width:18%;height:16%"></div>
+            <div class="map-block" style="top:44%;left:34%;width:29%;height:16%"></div>
+            <div class="map-block" style="top:20%;left:34%;width:29%;height:12%"></div>
+            <div style="position:absolute;top:42%;left:40%;font-size:18px;transform:rotate(45deg)">🚗</div>
+          </div>
+          <div class="status-bar" style="position:relative;z-index:5">
+            <span class="sb-time">9:41</span>
+            <div class="sb-icons"><span>●●●</span><span>WiFi</span><span>🔋</span></div>
+          </div>
+
+          <!-- ★ Shield in thumb zone — subtle but always there -->
+          <div class="shield-btn" onclick="openOverlayC()" title="Safety — tap to open">🛡</div>
+
+          <!-- Ride panel -->
+          <div class="ride-panel">
+            <div class="rp-handle"></div>
+            <div class="rp-status">IN PROGRESS · 8 min remaining</div>
+            <div class="rp-driver">
+              <div class="rp-avatar">MK</div>
+              <div class="rp-driver-info">
+                <div class="rp-driver-name">Marcus K.</div>
+                <div class="rp-driver-sub">Toyota Corolla · 7KSL 218</div>
+              </div>
+              <div class="rp-eta">
+                <div class="rp-eta-val">8</div>
+                <div class="rp-eta-lbl">min away</div>
+              </div>
+            </div>
+            <div class="rp-actions">
+              <div class="rp-action-btn">📞 Call</div>
+              <div class="rp-action-btn">💬 Message</div>
+              <div class="rp-action-btn" onclick="openOverlayC()">🛡 Safety</div>
+            </div>
+          </div>
+
+          <!-- Safety overlay — fills screen without navigation -->
+          <div class="safety-overlay" id="overlayC">
+            <!-- Top -->
+            <div class="so-top">
+              <div class="so-shield-big">🛡</div>
+              <div class="so-title">
+                <div class="so-title-main">Safety</div>
+                <div class="so-title-sub">Your location is known. Ride is recorded.</div>
+              </div>
+              <button class="so-close" onclick="closeOverlayC()">✕</button>
+            </div>
+
+            <!-- Location -->
+            <div class="so-loc">
+              <div class="so-loc-dot"></div>
+              <div class="so-loc-text">Victoria Ave & Albert St, Regina SK</div>
+              <div class="so-loc-time">Live</div>
+            </div>
+
+            <!-- Actions -->
+            <div class="so-actions">
+
+              <!-- 911 — immediate, no hold -->
+              <button class="so-btn-911" onclick="alert('Opens tel:911.\n\nYour phone\'s dialer opens.\nSpinr never auto-calls 911 — you decide.\n\nOnce you hang up, you can return to the safety screen.')">
+                <span class="so-btn-911-icon">📞</span>
+                <div class="so-btn-911-text">
+                  <div class="so-btn-911-label">Call 911</div>
+                  <div class="so-btn-911-sub">Opens your phone's dialer — you decide</div>
+                </div>
+                <span class="so-btn-911-arrow">↗</span>
+              </button>
+
+              <!-- Alert contacts — hold 2s -->
+              <button class="so-btn-hold" id="holdBtnC"
+                onmousedown="startHold()" onmouseup="cancelHold()" onmouseleave="cancelHold()"
+                ontouchstart="startHold(event)" ontouchend="cancelHold()" ontouchcancel="cancelHold()">
+                <span class="so-btn-hold-icon">🚨</span>
+                <div class="so-btn-hold-text">
+                  <div class="so-btn-hold-label">Alert Emergency Contacts</div>
+                  <div class="so-btn-hold-sub">Mom, James T. + Spinr Safety Team</div>
+                </div>
+                <span class="hold-hint">Hold 2s</span>
+                <div class="hold-progress" id="holdProgress"></div>
+              </button>
+
+              <!-- Share -->
+              <button class="so-btn-share" onclick="alert('Live trip link copied to clipboard.\nPaste it in any app to share your ride.')">
+                <span class="so-btn-share-icon">📤</span>
+                <div>
+                  <div class="so-btn-share-label">Share Live Trip Link</div>
+                  <div class="so-btn-share-sub">Anyone with the link can track this ride</div>
+                </div>
+              </button>
+
+            </div>
+
+            <!-- I'm safe -->
+            <button class="so-safe" onclick="closeOverlayC()">I'm Safe — Close Safety Screen</button>
+
+            <!-- Sent confirmation -->
+            <div class="sent-overlay" id="sentOverlay">
+              <div class="sent-icon">✅</div>
+              <div class="sent-title">Contacts Alerted</div>
+              <div class="sent-sub">Your location and ride details were sent. Spinr Safety is monitoring your trip.</div>
+              <div class="sent-contacts">
+                <div class="sent-contact">
+                  <span class="sc-icon">👩</span>
+                  <span class="sc-name">Mom (Sarah)</span>
+                  <span class="sc-sent">✓ Sent</span>
+                </div>
+                <div class="sent-contact">
+                  <span class="sc-icon">👤</span>
+                  <span class="sc-name">James T.</span>
+                  <span class="sc-sent">✓ Sent</span>
+                </div>
+                <div class="sent-contact">
+                  <span class="sc-icon">🛡</span>
+                  <span class="sc-name">Spinr Safety Team</span>
+                  <span class="sc-sent">✓ Notified</span>
+                </div>
+              </div>
+              <button class="sent-dismiss" onclick="closeSent()">Continue Monitoring My Ride</button>
+            </div>
+          </div>
+        </div>
+        <div class="phone-label">Tap shield → overlay</div>
+      </div>
+    </div>
+
+    <div class="analysis-box">
+      <div class="cf-label">Analysis</div>
+      <div class="cf-item">Shield in ride panel thumb-zone — no search required</div>
+      <div class="cf-item">Overlay stays on same screen — ride continues, map live</div>
+      <div class="cf-item">911 is one tap, no hold — fastest path to emergency services</div>
+      <div class="cf-item">Contact alert hold (2s) prevents false panic-taps</div>
+      <div class="cf-item">Large targets + icon-first layout works with shaking hands</div>
+      <div class="cf-item">I'm Safe always visible — easy exit, no trapped feeling</div>
+      <div class="cf-verdict verdict-yes">✓ One tap to safety screen · one tap for 911</div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Summary -->
+<div class="summary-bar">
+  <div class="sum-inner">
+    <div class="sum-label">Design Decision Summary</div>
+    <div class="sum-grid">
+      <div>
+        <div class="sum-col-title">A — Floating SOS Button</div>
+        <div class="sum-col-body">Maximally discoverable — a persistent red SOS circle is hard to miss. But the constant red button on the map creates ambient anxiety during normal rides, and a single accidental tap opens the emergency modal. No protection against false triggers. Appropriate for a very high-risk use case (lone workers, medical transport) but too aggressive for a mainstream ride-share surface.</div>
+      </div>
+      <div>
+        <div class="sum-col-title">B — Safety Drawer</div>
+        <div class="sum-col-body">Calm and unobtrusive during normal rides. The bottom sheet layout provides excellent touch targets once open. The weakness is discoverability under stress — finding a small text chip labeled "Safety" while panicking is unreliable. Top-left placement is also out of the natural thumb zone on most phones. Good for secondary safety features, not the primary SOS path.</div>
+      </div>
+      <div>
+        <div class="sum-col-title sum-winner">C — Shield + Hold Overlay ← Winner</div>
+        <div class="sum-col-body">The shield icon sits in the ride panel's bottom action bar — thumb-zone, always visible during a ride. One tap opens a full-screen overlay (ride continues in background). 911 is a single deliberate tap. The "Alert Contacts" hold mechanism (2s) filters out accidental triggers without slowing down genuine emergencies. Icons lead every button so the layout works without reading. "I'm Safe — Close" is always prominent to eliminate trapped-screen anxiety.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  /* Variant A */
+  function openModalA()  { document.getElementById('modalA').classList.add('visible'); }
+  function closeModalA() { document.getElementById('modalA').classList.remove('visible'); }
+
+  /* Variant B */
+  function toggleDrawerB() {
+    document.getElementById('drawerB').classList.toggle('open');
+  }
+
+  /* Variant C */
+  function openOverlayC()  { document.getElementById('overlayC').classList.add('visible'); }
+  function closeOverlayC() {
+    document.getElementById('overlayC').classList.remove('visible');
+    document.getElementById('sentOverlay').classList.remove('visible');
+    cancelHold();
+  }
+  function closeSent() {
+    document.getElementById('sentOverlay').classList.remove('visible');
+  }
+
+  /* Hold-to-alert mechanism */
+  let holdTimer = null;
+  let holdAnimFrame = null;
+
+  function startHold(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    const bar = document.getElementById('holdProgress');
+    bar.style.transition = 'none';
+    bar.style.width = '0%';
+
+    /* force reflow so transition restart works */
+    void bar.offsetWidth;
+    bar.classList.add('filling');
+
+    holdTimer = setTimeout(() => {
+      bar.classList.remove('filling');
+      bar.style.width = '0%';
+      document.getElementById('sentOverlay').classList.add('visible');
+    }, 2000);
+  }
+
+  function cancelHold() {
+    if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+    const bar = document.getElementById('holdProgress');
+    bar.classList.remove('filling');
+    bar.style.transition = 'none';
+    bar.style.width = '0%';
+  }
+</script>
+</body>
+</html>

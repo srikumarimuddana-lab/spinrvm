@@ -257,7 +257,7 @@ async def _fares_for_location_impl(
 
     matching_area = await resolve_service_area_for_point(lat, lng, all_areas=all_areas)
     if not matching_area:
-        logger.info(f"Fares: No matching service area for ({lat}, {lng}), using defaults")
+        logger.info("Fares: No matching service area for requested location, using defaults")
         return _build_default_fares(vehicle_types)
 
     logger.info(f"Fares: Matched service area '{matching_area.get('name', matching_area['id'])}'")

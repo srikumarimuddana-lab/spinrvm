@@ -2485,6 +2485,12 @@ async def trigger_emergency(ride_id: str, request: EmergencyRequest, current_use
             )
     except Exception as e:
         logger.error(f"SOS emergency contact notification failed: {e}", exc_info=True)
+        return {
+            "success": True,
+            "incident_id": incident["id"],
+            "contacts_notified": 0,
+            "notification_warning": "Emergency contacts could not be reached — please call them directly.",
+        }
 
     return {
         "success": True,

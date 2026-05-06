@@ -11,6 +11,38 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from core.config import settings
 from utils.rate_limiter import default_limiter, rate_limit_exceeded_handler
 
+
+def get_real_ip(request: Request) -> str:
+    """Return the real client IP, stripping trusted proxy hops.
+
+    Railway (and most reverse-proxy setups) appends the client IP to the
+    ``X-Forwarded-For`` header before forwarding the request.  The header
+    may contain a comma-separated chain such as::
+
+        X-Forwarded-For: <client>, <proxy1>, <railway-edge>
+
+    ``TRUSTED_PROXY_COUNT`` (default 1) tells us how many rightmost entries
+    were added by trusted infrastructure.  We strip those hops and return the
+    next entry to the left, which is the outermost untrusted IP — i.e., the
+    real client.
+
+    If the header is absent, or the index arithmetic goes out of range (e.g.
+    a misconfigured ``TRUSTED_PROXY_COUNT``), we fall back to
+    ``request.client.host``.  The function never returns an empty string;
+    ``"unknown"`` is the final sentinel.
+    """
+    xff = request.headers.get("X-Forwarded-For", "")
+    if xff:
+        ips = [ip.strip() for ip in xff.split(",") if ip.strip()]
+        trusted = settings.TRUSTED_PROXY_COUNT
+        idx = len(ips) - trusted - 1
+        if 0 <= idx < len(ips):
+            return ips[idx]
+
+    host = (request.client.host if request.client else None) or "unknown"
+    return host or "unknown"
+
+
 # ── CSRF double-submit constants ─────────────────────────────────────
 _CSRF_COOKIE = "csrf_token"
 _CSRF_HEADER = "x-csrf-token"

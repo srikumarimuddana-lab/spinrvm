@@ -66,6 +66,11 @@ class Settings(BaseSettings):
 
     # Rate limiting
     RATE_LIMIT: str = "10/minute"
+    # Number of reverse proxy hops between the internet and this process.
+    # Set to 0 to trust request.client.host directly (no proxy).
+    # Railway adds one hop, so the default is 1. Increase if there are
+    # additional layers (e.g. Cloudflare in front of Railway).
+    TRUSTED_PROXY_COUNT: int = 1
     # Redis configuration
     # Generic base URL (e.g. redis://localhost:6379/0). If specialized URLs below
     # are unset, they fall back to this.

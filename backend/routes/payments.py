@@ -9,6 +9,7 @@ try:
     from ..dependencies import get_current_user
     from ..settings_loader import get_app_settings
     from ..utils.idempotency import idempotent_endpoint
+    from ..utils.money import dollars_to_cents
 except ImportError:
     import db_supabase
     from dependencies import get_current_user
@@ -88,7 +89,10 @@ async def create_payment_intent(
                     detail=(f"Payment amount {requested} does not match ride fare {ride_fare}"),
                 )
 
-        amount = int(body.amount * 100)  # Convert dollars → cents
+        # Decimal-safe dollars→cents (HALF_UP). ``int(body.amount * 100)``
+        # would undercharge by 1¢ on values like $0.29, $1.13, $17.81 due
+        # to binary-float drift. See backend/utils/money.py.
+        amount = dollars_to_cents(body.amount)
 
         # Get or create customer for saved payments
         stripe_customer_id = await get_or_create_stripe_customer(current_user["id"], stripe_secret)

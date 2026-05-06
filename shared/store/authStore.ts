@@ -6,6 +6,30 @@ import { PhoneAuthProvider, signInWithCredential, signOut, User as FirebaseUser 
 import api, { setCsrfToken, setInMemoryToken, setRefreshCallback } from '../api/client';
 import { appCache, CACHE_KEYS, CACHE_CONFIG } from '../cache';
 
+// Registry of callbacks that must run when the user logs out. Other stores
+// (rideStore, driverStore) register here on mount to wipe per-session state
+// so a subsequent login never sees ghost data from the previous user.
+// Using callbacks instead of direct imports avoids circular dependencies
+// between the shared package and app-specific stores.
+type LogoutCallback = () => void | Promise<void>;
+const _logoutCallbacks: Set<LogoutCallback> = new Set();
+
+export function registerLogoutCallback(cb: LogoutCallback): () => void {
+  _logoutCallbacks.add(cb);
+  // Return an unregister function so stores can clean up on unmount.
+  return () => _logoutCallbacks.delete(cb);
+}
+
+async function _runLogoutCallbacks(): Promise<void> {
+  for (const cb of _logoutCallbacks) {
+    try {
+      await cb();
+    } catch (e) {
+      if (__DEV__) console.log('[Auth] logoutCallback failed (non-fatal):', e);
+    }
+  }
+}
+
 // Narrows an unknown caught value to an Axios-style error shape so callers
 // can safely access `.response.status` and `.response.data.detail` without
 // casting to `any`.
@@ -562,6 +586,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // Clear user cache on logout
     await appCache.clearUserCache();
     set({ user: null, driver: null, token: null, refreshToken: null, tokenExpiresAt: null, isDriverMode: false });
+    // Reset all registered per-session stores (rideStore, driverStore) so a
+    // subsequent login never sees ghost data from the previous user.
+    await _runLogoutCallbacks();
   },
 
   // "Sign out of all devices" — closes B-P1-13. Backend bumps

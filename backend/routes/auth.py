@@ -372,8 +372,7 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
     try:
         await db_supabase.update_one("otp_records", {"id": otp_record["id"]}, {"verified": True})
     except Exception:
-        # Non-fatal: marking OTP as verified is best-effort; verification already succeeded
-        logger.warning("Failed to mark OTP record %s as verified", otp_record["id"], exc_info=True)
+        logger.error("auth: failed to mark OTP %s as verified — reuse risk", otp_record.get("id"), exc_info=True)
 
     # SEC-008: Clear failure counter + lockout on successful verification
     await _clear_otp_failures(phone)

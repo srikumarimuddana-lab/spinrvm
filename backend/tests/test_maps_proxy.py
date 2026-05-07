@@ -1,0 +1,259 @@
+"""Tests for the rider-facing Google Maps proxy.
+
+Covers the cost-control contracts that justify the proxy's existence:
+  - session-token aware billing (the May 2026 overage fix)
+  - reverse-geocode Redis cache (avoids paying for repeat lookups)
+  - daily-budget circuit breaker (defence in depth on top of GCP budget alerts)
+
+Network access is mocked at the httpx layer; tests run offline.
+"""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from fastapi import HTTPException
+from starlette.requests import Request
+
+
+def _fake_request() -> Request:
+    """Build a minimal real Request that slowapi's isinstance check accepts."""
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/api/v1/maps/test",
+        "headers": [],
+        "client": ("127.0.0.1", 0),
+        "query_string": b"",
+        "scheme": "http",
+        "server": ("test", 80),
+    }
+    return Request(scope)
+
+
+# ── maps_budget primitives ────────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_record_call_increments_per_sku_counter(mock_redis):
+    from utils import maps_budget
+
+    await maps_budget.record_call("autocomplete")
+    await maps_budget.record_call("autocomplete")
+    await maps_budget.record_call("geocode")
+
+    spent = await maps_budget.estimate_today_usd()
+    # 2 * 0.00283 + 1 * 0.005 ≈ 0.01066
+    assert 0.010 < spent < 0.012
+
+
+@pytest.mark.anyio
+async def test_check_budget_trips_over_threshold(mock_redis, monkeypatch):
+    from utils import maps_budget
+
+    monkeypatch.setattr(maps_budget, "_daily_budget_usd", lambda: 0.01)
+    # 4 unbatched autocomplete calls = 0.01132 > 0.01 threshold
+    for _ in range(4):
+        await maps_budget.record_call("autocomplete")
+
+    allowed, spent, budget = await maps_budget.check_budget()
+    assert allowed is False
+    assert spent > budget
+
+
+@pytest.mark.anyio
+async def test_check_budget_allows_under_threshold(mock_redis, monkeypatch):
+    from utils import maps_budget
+
+    monkeypatch.setattr(maps_budget, "_daily_budget_usd", lambda: 1.0)
+    await maps_budget.record_call("autocomplete_session")
+
+    allowed, _, _ = await maps_budget.check_budget()
+    assert allowed is True
+
+
+# ── route-level: session-token billing ────────────────────────────────────────
+
+
+def _mock_httpx_response(payload: dict) -> MagicMock:
+    """Build an httpx-like response object for unit testing."""
+    resp = MagicMock()
+    resp.json.return_value = payload
+    return resp
+
+
+@pytest.mark.anyio
+async def test_autocomplete_records_session_when_token_passed(mock_redis, monkeypatch):
+    from routes import maps_proxy
+    from utils import maps_budget
+
+    monkeypatch.setattr(maps_proxy, "_maps_key", AsyncMock(return_value="dummy_key"))
+
+    mock_client = MagicMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(
+        return_value=_mock_httpx_response({"status": "OK", "predictions": [{"description": "X"}]})
+    )
+
+    with patch("routes.maps_proxy.httpx.AsyncClient", return_value=mock_client):
+        result = await maps_proxy.places_autocomplete(
+            request=_fake_request(),
+            input="123 main",
+            session_token="abc-uuid",
+            current_user={"id": "rider_1"},
+        )
+
+    assert result == {"predictions": [{"description": "X"}]}
+    # Cost recorded against the session-priced bucket, not the per-call bucket.
+    spent = await maps_budget.estimate_today_usd()
+    assert spent == pytest.approx(0.017, rel=0.01)
+
+
+@pytest.mark.anyio
+async def test_autocomplete_records_per_call_without_token(mock_redis, monkeypatch):
+    from routes import maps_proxy
+    from utils import maps_budget
+
+    monkeypatch.setattr(maps_proxy, "_maps_key", AsyncMock(return_value="dummy_key"))
+
+    mock_client = MagicMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(
+        return_value=_mock_httpx_response({"status": "OK", "predictions": []})
+    )
+
+    with patch("routes.maps_proxy.httpx.AsyncClient", return_value=mock_client):
+        await maps_proxy.places_autocomplete(
+            request=_fake_request(),
+            input="abc",
+            session_token=None,
+            current_user={"id": "rider_1"},
+        )
+
+    spent = await maps_budget.estimate_today_usd()
+    # Per-call autocomplete is $0.00283; never $0.017.
+    assert spent == pytest.approx(0.00283, rel=0.01)
+
+
+@pytest.mark.anyio
+async def test_details_does_not_double_bill_when_session_token_used(mock_redis, monkeypatch):
+    from routes import maps_proxy
+    from utils import maps_budget
+
+    monkeypatch.setattr(maps_proxy, "_maps_key", AsyncMock(return_value="dummy_key"))
+
+    mock_client = MagicMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(
+        return_value=_mock_httpx_response(
+            {
+                "status": "OK",
+                "result": {
+                    "geometry": {"location": {"lat": 52.1, "lng": -106.6}},
+                    "formatted_address": "123 Main St",
+                },
+            }
+        )
+    )
+
+    with patch("routes.maps_proxy.httpx.AsyncClient", return_value=mock_client):
+        await maps_proxy.places_details(
+            request=_fake_request(),
+            place_id="ChIJ_123",
+            session_token="abc-uuid",
+            current_user={"id": "rider_1"},
+        )
+
+    # Session-bundled details are billed via the autocomplete_session line; this
+    # call must not record an additional `details` charge.
+    spent = await maps_budget.estimate_today_usd()
+    assert spent == 0.0
+
+
+# ── route-level: reverse-geocode caching ──────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_reverse_geocode_returns_cached_without_network(mock_redis, monkeypatch):
+    from routes import maps_proxy
+    from utils.redis_client import redis_set
+
+    cache_key = "maps:revgeo:52.1333:-106.6667"
+    await redis_set(cache_key, "Cached Address, Saskatoon", ttl=3600)
+
+    # If the route incorrectly hits the network the test will fail loudly:
+    # AsyncClient's get is wired to raise.
+    bad_client = MagicMock()
+    bad_client.__aenter__ = AsyncMock(return_value=bad_client)
+    bad_client.__aexit__ = AsyncMock(return_value=False)
+    bad_client.get = AsyncMock(side_effect=AssertionError("must not call Google on cache hit"))
+
+    with patch("routes.maps_proxy.httpx.AsyncClient", return_value=bad_client):
+        result = await maps_proxy.reverse_geocode(
+            request=_fake_request(),
+            lat=52.1333,
+            lng=-106.6667,
+            current_user={"id": "rider_1"},
+        )
+
+    assert result == {"formatted_address": "Cached Address, Saskatoon", "cached": True}
+
+
+@pytest.mark.anyio
+async def test_reverse_geocode_caches_on_miss(mock_redis, monkeypatch):
+    from routes import maps_proxy
+    from utils.redis_client import redis_get
+
+    monkeypatch.setattr(maps_proxy, "_maps_key", AsyncMock(return_value="dummy_key"))
+
+    mock_client = MagicMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.get = AsyncMock(
+        return_value=_mock_httpx_response(
+            {"status": "OK", "results": [{"formatted_address": "1 Main St"}]}
+        )
+    )
+
+    with patch("routes.maps_proxy.httpx.AsyncClient", return_value=mock_client):
+        result = await maps_proxy.reverse_geocode(
+            request=_fake_request(),
+            lat=52.1234,
+            lng=-106.5678,
+            current_user={"id": "rider_1"},
+        )
+
+    assert result["formatted_address"] == "1 Main St"
+    assert result["cached"] is False
+
+    cached = await redis_get("maps:revgeo:52.1234:-106.5678")
+    assert cached == "1 Main St"
+
+
+# ── route-level: budget breaker ───────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_autocomplete_503s_when_budget_exhausted(mock_redis, monkeypatch):
+    from routes import maps_proxy
+    from utils import maps_budget
+
+    # Pin budget tiny and pre-spend over it.
+    monkeypatch.setattr(maps_budget, "_daily_budget_usd", lambda: 0.001)
+    await maps_budget.record_call("autocomplete_session")  # 0.017 spent
+
+    monkeypatch.setattr(maps_proxy, "_maps_key", AsyncMock(return_value="dummy_key"))
+
+    with pytest.raises(HTTPException) as exc:
+        await maps_proxy.places_autocomplete(
+            request=_fake_request(),
+            input="abc",
+            session_token=None,
+            current_user={"id": "rider_1"},
+        )
+    assert exc.value.status_code == 503
+    assert "budget" in exc.value.detail.lower()

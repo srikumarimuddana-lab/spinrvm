@@ -279,8 +279,12 @@ async def test_confirm_payment_mock():
 
     with patch("backend.routes.payments.db_supabase") as mock_db:
         mock_db.update_ride = AsyncMock()
+        mock_db.get_ride = AsyncMock(
+            return_value={"id": "ride-1", "rider_id": _USER["id"], "payment_status": "pending"}
+        )
+        mock_db.claim_ride_payment_processing = AsyncMock(return_value=True)
         result = await confirm_payment(
-            request={"payment_intent_id": "pi_mock_test", "ride_id": "ride-1"},
+            body={"payment_intent_id": "pi_mock_test", "ride_id": "ride-1"},
             current_user=_USER,
         )
 
@@ -293,7 +297,7 @@ async def test_confirm_payment_mock_no_ride_id():
     from backend.routes.payments import confirm_payment
 
     result = await confirm_payment(
-        request={"payment_intent_id": "pi_mock_xyz"},
+        body={"payment_intent_id": "pi_mock_xyz"},
         current_user=_USER,
     )
     assert result["status"] == "succeeded"
@@ -305,7 +309,7 @@ async def test_confirm_payment_no_stripe_key():
 
     with patch("backend.routes.payments.get_app_settings", new_callable=AsyncMock, return_value=_settings(False)):
         result = await confirm_payment(
-            request={"payment_intent_id": "pi_real_001"},
+            body={"payment_intent_id": "pi_real_001"},
             current_user=_USER,
         )
     assert result["status"] == "unknown"
@@ -318,6 +322,7 @@ async def test_confirm_payment_real_stripe():
 
     mock_intent = MagicMock()
     mock_intent.status = "succeeded"
+    mock_intent.metadata = {"user_id": str(_USER["id"])}
 
     with (
         patch("backend.routes.payments.get_app_settings", new_callable=AsyncMock, return_value=_settings()),
@@ -325,8 +330,12 @@ async def test_confirm_payment_real_stripe():
         patch("backend.routes.payments.db_supabase") as mock_db,
     ):
         mock_db.update_ride = AsyncMock()
+        mock_db.get_ride = AsyncMock(
+            return_value={"id": "ride-1", "rider_id": _USER["id"], "payment_status": "pending"}
+        )
+        mock_db.claim_ride_payment_processing = AsyncMock(return_value=True)
         result = await confirm_payment(
-            request={"payment_intent_id": "pi_real_001", "ride_id": "ride-1"},
+            body={"payment_intent_id": "pi_real_001", "ride_id": "ride-1"},
             current_user=_USER,
         )
 
@@ -717,7 +726,7 @@ async def test_payment_sheet_ride_idempotency_key():
         patch("backend.routes.payments.stripe.EphemeralKey.create", return_value=mock_ephemeral),
         patch("backend.routes.payments.stripe.PaymentIntent.create", create_spy),
     ):
-        mock_db.get_ride = AsyncMock(return_value={"id": "ride-ps", "total_fare": "12.00"})
+        mock_db.get_ride = AsyncMock(return_value={"id": "ride-ps", "total_fare": "12.00", "rider_id": _USER["id"]})
         mock_db.get_user_by_id = AsyncMock(return_value=_USER)
         mock_db.update_one = AsyncMock()
 
@@ -808,7 +817,7 @@ async def test_confirm_payment_stripe_error():
     ):
         with pytest.raises(HTTPException) as exc:
             await confirm_payment(
-                request={"payment_intent_id": "pi_real_err"},
+                body={"payment_intent_id": "pi_real_err"},
                 current_user=_USER,
             )
     assert exc.value.status_code == 500

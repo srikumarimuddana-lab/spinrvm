@@ -168,7 +168,7 @@ async def test_estimate_ride_returns_estimates():
         mock_db.get_rows = AsyncMock(return_value=[])
 
         result = await estimate_ride(
-            request=RideEstimateRequest(pickup_lat=52.1, pickup_lng=-106.6, dropoff_lat=52.2, dropoff_lng=-106.7),
+            body=RideEstimateRequest(pickup_lat=52.1, pickup_lng=-106.6, dropoff_lat=52.2, dropoff_lng=-106.7),
             current_user=_USER,
         )
 
@@ -211,7 +211,7 @@ async def test_estimate_ride_includes_nearby_drivers():
         mock_db.get_rows = AsyncMock(return_value=[nearby_driver])
 
         result = await estimate_ride(
-            request=RideEstimateRequest(pickup_lat=52.1, pickup_lng=-106.6, dropoff_lat=52.2, dropoff_lng=-106.7),
+            body=RideEstimateRequest(pickup_lat=52.1, pickup_lng=-106.6, dropoff_lat=52.2, dropoff_lng=-106.7),
             current_user=_USER,
         )
 
@@ -289,8 +289,9 @@ async def test_get_ride_history_returns_completed_rides():
 
     with patch("backend.routes.rides.db_supabase") as mock_db:
         mock_db.get_rows = AsyncMock(return_value=completed)
+        mock_db.find_one = AsyncMock(return_value=None)
 
-        result = await get_ride_history(request=req, limit=3, current_user=_USER)
+        result = await get_ride_history(request=req, limit=3, before=None, current_user=_USER)
 
     assert len(result["rides"]) == 3
     assert result["next_cursor"] is not None
@@ -301,10 +302,13 @@ async def test_get_ride_history_cursor_pagination():
     from backend.routes.rides import get_ride_history
 
     req = _starlette_request()
-    rides = [{"id": f"r-{i}", "status": "completed", "driver_id": _DRIVER_ID} for i in range(5)]
+    # The DB layer applies the `created_at < cursor_ts` filter, so the mock
+    # simulates that by returning only rides older than the cursor.
+    rides_after_cursor = [{"id": f"r-{i}", "status": "completed", "driver_id": _DRIVER_ID} for i in range(2, 5)]
 
     with patch("backend.routes.rides.db_supabase") as mock_db:
-        mock_db.get_rows = AsyncMock(return_value=rides)
+        mock_db.get_rows = AsyncMock(return_value=rides_after_cursor)
+        mock_db.find_one = AsyncMock(return_value={"id": "r-1", "created_at": "2024-01-02T00:00:00Z"})
 
         result = await get_ride_history(request=req, limit=20, before="r-1", current_user=_USER)
 
@@ -327,8 +331,9 @@ async def test_get_ride_history_filters_cancelled_without_driver():
 
     with patch("backend.routes.rides.db_supabase") as mock_db:
         mock_db.get_rows = AsyncMock(return_value=rides)
+        mock_db.find_one = AsyncMock(return_value=None)
 
-        result = await get_ride_history(request=req, limit=20, current_user=_USER)
+        result = await get_ride_history(request=req, limit=20, before=None, current_user=_USER)
 
     ids = [r["id"] for r in result["rides"]]
     assert "r-1" not in ids
@@ -449,7 +454,7 @@ async def test_add_tip_success():
             )
 
     assert result["success"] is True
-    assert result["tip_amount"] == 2.00
+    assert Decimal(str(result["tip_amount"])) == Decimal("2.00")
 
 
 @pytest.mark.anyio
@@ -1891,7 +1896,7 @@ async def test_trigger_emergency_not_found():
         with pytest.raises(HTTPException) as exc:
             await trigger_emergency(
                 ride_id=_RIDE_ID,
-                request=EmergencyRequest(),
+                body=EmergencyRequest(),
                 current_user=_USER,
             )
     assert exc.value.status_code == 404
@@ -1910,7 +1915,7 @@ async def test_trigger_emergency_not_authorized():
         with pytest.raises(HTTPException) as exc:
             await trigger_emergency(
                 ride_id=_RIDE_ID,
-                request=EmergencyRequest(),
+                body=EmergencyRequest(),
                 current_user=_USER,
             )
     assert exc.value.status_code == 403
@@ -1939,7 +1944,7 @@ async def test_trigger_emergency_success():
         mock_manager.broadcast_to_admins = AsyncMock()
         result = await trigger_emergency(
             ride_id=_RIDE_ID,
-            request=EmergencyRequest(latitude=52.1, longitude=-106.6),
+            body=EmergencyRequest(latitude=52.1, longitude=-106.6),
             current_user=_USER,
         )
     assert result["success"] is True
@@ -2243,9 +2248,12 @@ async def test_get_ride_history_with_cursor():
     """Cursor pagination should skip rides up to and including the cursor id."""
     from backend.routes.rides import get_ride_history
 
-    rides = [_ride(status="completed", **{"id": f"r-{i}", "driver_id": _DRIVER_ID}) for i in range(5)]
+    # The DB layer applies the `created_at < cursor_ts` filter, so the mock
+    # simulates that by returning only rides older than the cursor.
+    rides_after_cursor = [_ride(status="completed", **{"id": f"r-{i}", "driver_id": _DRIVER_ID}) for i in range(2, 5)]
     with patch("backend.routes.rides.db_supabase") as mock_db:
-        mock_db.get_rows = AsyncMock(return_value=rides)
+        mock_db.get_rows = AsyncMock(return_value=rides_after_cursor)
+        mock_db.find_one = AsyncMock(return_value={"id": "r-1", "created_at": "2024-01-02T00:00:00Z"})
         result = await get_ride_history(
             request=_starlette_request(),
             limit=10,

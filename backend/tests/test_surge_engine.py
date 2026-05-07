@@ -426,12 +426,6 @@ async def test_recalculate_inserts_surge_pricing_history_row():
     assert table == "surge_pricing"
     assert payload["service_area_id"] == "a1"
     assert payload["source"] == "auto"
-    # The manual area was skipped → calculate_surge_for_area never called
-    mock_calc.assert_not_called()
-    # No DB update should have been written for the manual area
-    mock_db_update.assert_not_called()
-    # No results returned (nothing was auto-processed)
-    assert results == []
 
 
 @pytest.mark.anyio
@@ -484,6 +478,8 @@ def test_manual_override_value_above_auto_cap_is_valid() -> None:
     confirms that SURGE_CAP is a ceiling only for the auto tier function —
     a stored value of 3.0 returned directly (simulating a DB read) is valid.
     """
+    from utils.surge_engine import SURGE_CAP
+
     # Simulate what the admin dashboard would store and what the DB returns.
     # The auto function is bypassed for manual areas, so the stored value is
     # returned verbatim.

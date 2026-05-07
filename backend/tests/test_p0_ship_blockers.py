@@ -19,6 +19,7 @@ Run as:
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -644,7 +645,7 @@ class TestPaymentFailureAtComplete:
             result = await rides_mod.process_payment(ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID})
 
         assert result["success"] is True
-        assert result["charged_amount"] == 20.5  # 18.5 + 2.0 tip
+        assert Decimal(str(result["charged_amount"])) == Decimal("20.5")  # 18.5 + 2.0 tip
 
     async def test_wallet_rejects_insufficient_balance(self):
         """If the wallet can't cover fare + tip, payment returns 400 and

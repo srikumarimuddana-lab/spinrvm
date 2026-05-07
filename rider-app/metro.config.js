@@ -48,6 +48,14 @@ const WEB_STUBS = {
 const NATIVE_COMPONENT_STUB = path.resolve(__dirname, '__stubs__/emptyNativeComponent.js');
 
 config.resolver.resolveRequest = (context, moduleName, platform) => {
+  // Skip @types packages during bundling — these are TypeScript-only and
+  // cause module resolution issues (e.g., @types/react's broken main field).
+  // They're imported by transitive dependencies like @types/react-test-renderer
+  // but should never be bundled into the JavaScript bundle.
+  if (moduleName.startsWith('@types/')) {
+    return { type: 'empty' };
+  }
+
   if (platform === 'web') {
     // Stub file-based native-only packages (react-native-maps, etc.)
     if (WEB_STUBS[moduleName]) {

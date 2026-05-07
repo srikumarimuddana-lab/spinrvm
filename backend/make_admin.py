@@ -21,7 +21,8 @@ async def make_admin():
         print("Listing available users:")
         all_users = await db_supabase.get_rows("users", {}, limit=10)
         for u in all_users:
-            print(f" - {u['id']} ({redact_phone(u.get('phone'))})")
+            masked = redact_phone(u.get("phone"))
+            print(f" - {u['id']} ({masked})")
         return
 
     print(f"Current role: {user.get('role')}")

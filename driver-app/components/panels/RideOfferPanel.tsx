@@ -19,6 +19,7 @@ interface IncomingRide {
     duration_minutes?: number;
     rider_name?: string;
     rider_rating?: number;
+    requires_wav?: boolean;
 }
 
 interface RideOfferPanelProps {
@@ -48,6 +49,7 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
     const fareStr = `$${(incomingRide.fare || 0).toFixed(2)}`;
     const distStr = incomingRide.distance_km != null ? `${incomingRide.distance_km.toFixed(1)} km` : '';
     const panelLabel = [
+        incomingRide.requires_wav && 'Wheelchair-accessible vehicle required.',
         `New ride offer. Earnings: ${fareStr}`,
         distStr && `${distStr} to pickup`,
         incomingRide.pickup_address && `Pickup: ${incomingRide.pickup_address}`,
@@ -75,6 +77,17 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
 
                 {/* Ride Info */}
                 <View style={styles.rideOfferInfo}>
+                    {incomingRide.requires_wav && (
+                        <View
+                            style={styles.wavBanner}
+                            accessibilityRole="text"
+                            accessibilityLabel="Wheelchair-accessible vehicle required for this ride"
+                        >
+                            <Ionicons name="accessibility" size={18} color="#fff" />
+                            <Text style={styles.wavBannerText}>WAV REQUIRED</Text>
+                        </View>
+                    )}
+
                     <View style={styles.fareHighlight}>
                         <Text style={styles.fareLabel}>YOUR EARNINGS</Text>
                         <Text
@@ -161,7 +174,7 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                         disabled={isLoading}
                         accessibilityRole="button"
                         accessibilityLabel={`Accept ride — ${fareStr}`}
-                        accessibilityHint="Double-tap to accept this ride"
+                        accessibilityHint={incomingRide.requires_wav ? 'WAV required — double-tap to accept this wheelchair-accessible ride' : 'Double-tap to accept this ride'}
                         accessibilityState={{ disabled: isLoading, busy: isLoading }}
                     >
                         <LinearGradient
@@ -224,6 +237,23 @@ const styles = StyleSheet.create({
         backgroundColor: 'rgba(255,255,255,0.1)',
         borderRadius: 16,
         padding: 20,
+    },
+    wavBanner: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#2563EB',
+        borderRadius: 8,
+        paddingVertical: 8,
+        paddingHorizontal: 12,
+        marginBottom: 16,
+        gap: 8,
+    },
+    wavBannerText: {
+        fontSize: 13,
+        fontWeight: '700',
+        color: '#fff',
+        letterSpacing: 1,
     },
     fareHighlight: {
         alignItems: 'center',

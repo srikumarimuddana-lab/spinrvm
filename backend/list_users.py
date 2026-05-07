@@ -8,7 +8,8 @@ async def list_users():
     print("Listing all users...")
     users = await db_supabase.get_rows("users", {}, limit=100)
     for user in users:
-        print(f"ID: {user['id']}, Phone: {redact_phone(user.get('phone'))}, Role: {user.get('role')}")
+        masked = redact_phone(user.get("phone"))
+        print(f"ID: {user['id']}, contact: {masked}, Role: {user.get('role')}")
 
 
 if __name__ == "__main__":

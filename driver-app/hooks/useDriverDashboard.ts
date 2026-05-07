@@ -409,6 +409,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           duration_minutes: data.duration_minutes,
           rider_name: data.rider_name,
           rider_rating: data.rider_rating,
+          requires_wav: data.requires_wav === true,
         });
         break;
       case 'ride_cancelled':

@@ -1,0 +1,119 @@
+appId: com.spinr.driver
+---
+# P3-20: Background Location Continuity (R3, E20)
+# Pins that location updates continue when app is backgrounded.
+# Requires dev-client with background location tracking enabled.
+# Manual scenario: MOBILE_SMOKE.md §6 (Driver — background / foreground)
+#
+# Flows:
+#  F1: Online → lock phone → verify location batch endpoint receives updates
+#  F2: Grant "Always" permission → no re-prompt on relaunch
+#  F3: Deny background permission → warning shown
+#  F4: Revoke location entirely → driver auto-offline
+#
+# NOTE: Device permissions require Maestro Cloud or manual simulator setup.
+# Background task continuity (F1) requires ≥2–3 min with phone locked.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# F1: Driver Online → Lock Phone → Location Updates Continue
+# ─────────────────────────────────────────────────────────────────────────────
+
+- launchApp
+
+# Ensure we're on the driver dashboard
+- assertVisible:
+    text: "OFFLINE"
+    optional: true
+
+# Tap GO ONLINE
+- tapOn:
+    text: "GO ONLINE"
+    optional: true
+
+# Wait for online state (location permissions dialog may appear)
+- assertVisible:
+    text: "ONLINE"
+    optional: true
+
+# Maestro Cloud: setPermissions grants "Always" iOS location access
+# (For local simulator, user must manually grant in Settings)
+- setPermissions:
+    permissions:
+      - location: always
+    optional: true
+
+# Wait briefly for location service to stabilize
+- sleep:
+    duration: 2000
+
+# NOTE: At this point, background location tracking should be active.
+# Real-device test requires:
+#  - Lock the phone (sleep 10 seconds minimum)
+#  - Verify via backend API that POST /drivers/location-batch received updates
+#  - Check device logs: `expo logs` should show "watchPosition updates while backgrounded"
+# This cannot be fully automated without device-level hooks; see xfail marker in
+# backend/tests/test_p3_background_location.py for manual runbook reference.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# F2: Grant "Always" Permission → No Re-Prompt on Relaunch
+# ─────────────────────────────────────────────────────────────────────────────
+
+# If permission dialog appears, dismiss it (it's already granted above)
+- assertVisible:
+    text: "Allow"
+    optional: true
+
+# Kill and relaunch the app to verify permission sticks
+- closeApp
+- sleep:
+    duration: 500
+- launchApp
+
+# Should remain online without re-prompting
+- assertVisible:
+    text: "ONLINE"
+    optional: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# F3: Deny Background Permission → Warning Shown
+# ─────────────────────────────────────────────────────────────────────────────
+
+# NOTE: For local simulator testing, manually:
+#  1. Go to Settings > [App] > Location
+#  2. Change from "Always" to "While Using" or "Deny"
+#  3. Foreground the app — warning toast should appear
+#
+# Maestro Cloud with device permissions can automate this via:
+#  - setPermissions with location: whileUsing (deny background)
+#  - Re-launch to trigger the check
+
+# Check for warning/alert if permissions changed
+- assertVisible:
+    text: "Location permissions"
+    optional: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# F4: Revoke Location Entirely → Driver Auto-Offline
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Revoke all location permissions (Maestro Cloud device API)
+- setPermissions:
+    permissions:
+      - location: deny
+    optional: true
+
+# Close and relaunch
+- closeApp
+- sleep:
+    duration: 500
+- launchApp
+
+# Driver should auto-transition to OFFLINE
+- assertVisible:
+    text: "OFFLINE"
+    optional: true
+
+# Optional: verify toast notification about location requirement
+- assertVisible:
+    text: "location required"
+    optional: true

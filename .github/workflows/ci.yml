@@ -514,6 +514,61 @@ jobs:
           curl -f "$API_BASE_URL/api/v1/vehicle-types" || \
             curl -f "$API_FALLBACK_URL/api/v1/vehicle-types"
 
+  # Mobile E2E Tests (Maestro)
+  # P3-20: Background location continuity + general mobile flow coverage
+  # Requires: iOS simulator (macOS runner) or Maestro Cloud with device permissions API
+  # Status: Conditional — activate when simulator infrastructure is available
+  maestro-mobile-e2e:
+    name: Mobile E2E tests (Maestro)
+    runs-on: macos-latest
+    needs: [driver-app-test, rider-app-test]
+    if: false  # TODO: enable when simulator runner infrastructure is ready
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Cache Maestro
+        uses: actions/cache@v4
+        with:
+          path: ~/.maestro
+          key: ${{ runner.os }}-maestro-${{ github.sha }}
+
+      - name: Install Maestro CLI
+        run: curl -Ls "https://get.maestro.mobile.dev" | bash
+
+      - name: Set up Xcode simulator
+        run: |
+          xcrun simctl list
+          # Device creation/management happens via xcrun or simulator setup action
+
+      - name: Build driver app for testing
+        working-directory: driver-app
+        run: npx expo run:ios --device "iPhone 15 Simulator"
+
+      - name: Run driver app Maestro flows
+        run: |
+          ~/.maestro/maestro test .maestro/driver/
+
+      - name: Build rider app for testing
+        working-directory: rider-app
+        run: npx expo run:ios --device "iPhone 15 Simulator"
+
+      - name: Run rider app Maestro flows
+        run: |
+          ~/.maestro/maestro test .maestro/rider/
+
+      - name: Upload Maestro artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: maestro-logs
+          path: ~/.maestro/
+          retention-days: 7
+
   # Notify on failure
   notify-failure:
     runs-on: ubuntu-latest

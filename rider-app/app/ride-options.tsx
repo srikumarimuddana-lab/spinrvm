@@ -53,8 +53,6 @@ function RideOptionsScreenContent() {
     setRequiresWav,
     scheduledTime,
     setScheduledTime,
-    requiresWav,
-    setRequiresWav,
     quietMode,
     setQuietMode,
     riderNotes,

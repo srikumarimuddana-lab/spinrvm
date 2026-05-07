@@ -983,5 +983,763 @@ TASK 05 TALLY
 | TOTAL           |    23 |
 
 ================================================================================
-[AUDIT IN PROGRESS — TASKS 06–16 PENDING]
+TASK 06 — REAL-TIME FEATURES (WebSocket & GPS)
+================================================================================
+
+[06-1] MEDIUM | fetchRide Overwrites WS Driver Position on Lifecycle Event
+File: rider-app/hooks/useRiderSocket.ts:82–123; rider-app/store/rideStore.ts:355–371
+Finding: When a ride-state transition (driver_accepted, driver_arrived, ride_started,
+  ride_completed) arrives via WebSocket, useRiderSocket calls fetchRide(rideId) to
+  re-fetch the full ride data. The HTTP round-trip takes 100–500ms. During that time,
+  several driver_location_update WS messages may arrive and set currentDriver.lat/lng.
+  When fetchRide completes, it does `set({ currentDriver: driver })` where driver
+  includes lat/lng from the server's current position snapshot — which is likely
+  slightly stale (behind the most recent WS update). The more recent WS position
+  is overwritten. The marker briefly jumps backward, then forward again as the next
+  WS update arrives. This is cosmetic but noticeable on slow networks.
+Fix: After fetchRide, explicitly re-apply the latest cached WS driver position:
+  ```
+  set({ currentRide: ride, currentDriver: { ...driver, lat: cachedLat, lng: cachedLng } })
+  ```
+  Effort: 1 hour.
+
+[06-2] PASS | WebSocket Auth Message Sent First
+File: rider-app/hooks/useRiderSocket.ts:164–168
+Finding: ws.onopen immediately sends {type:'auth', token, client_type:'rider'}.
+  Backend rejects messages until auth is received. No auth bypass risk.
+
+[06-3] PASS | Exponential Backoff with Jitter
+File: rider-app/hooks/useRiderSocket.ts:36, 187–191
+Finding: RECONNECT_DELAYS = [1000, 2000, 5000, 10000, 30000] with
+  Math.random() * 1000 - 500 jitter (±500ms). Prevents thundering herd.
+
+[06-4] PASS | driver_timeout → fetchRide → Searching State
+File: rider-app/hooks/useRiderSocket.ts:113–115
+Finding: On driver_timeout, fetchRide(rideId) is called, which re-fetches the ride.
+  Backend sets status back to 'searching' on timeout. UI correctly shows searching.
+
+[06-5] PASS | Chat Delivered via WebSocket
+File: rider-app/hooks/useRiderSocket.ts:127–130; rider-app/app/chat-driver.tsx:39–52
+Finding: Chat messages arrive via WS (case 'chat_message' → addChatMessage). On mount,
+  chat-driver.tsx loads history once, then subsequent messages arrive live. No polling.
+
+[06-6] PASS | Foreground-Only GPS Permission
+File: rider-app/app/(tabs)/index.tsx:82–100
+Finding: requestForegroundPermissionsAsync() — correct for rider app. Background
+  location tracking not needed (driver app would require it). Foreground-only is
+  the correct permission model for rider.
+
+[06-7] PASS | WebSocket Cleanup on Ride End
+File: rider-app/hooks/useRiderSocket.ts:216–223
+Finding: useEffect(..., [user?.id, currentRide?.id, ...]) → disconnect() when either
+  becomes null (logout or ride complete). Socket properly closed.
+
+[06-8] PASS | Heartbeat Pong Reply
+File: rider-app/hooks/useRiderSocket.ts:62–66
+Finding: case 'ping': ws.send({type: 'pong'}). Keepalive mechanism working.
+
+[06-9] PASS | Reconnect on App Foreground
+File: rider-app/hooks/useRiderSocket.ts:226–246
+Finding: AppState.addEventListener('change') → if nextState === 'active' and WS is
+  closed, reconnect immediately with attempt counter reset.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 06 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     0 |
+| MEDIUM          |     1 |
+| LOW             |     0 |
+| PASS            |     8 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |     9 |
+
+================================================================================
+TASK 07 — STATE MACHINE & DISPATCH
+================================================================================
+
+[07-1] HIGH | No Double-Booking Guard (Client or Server)
+File: rider-app/store/rideStore.ts:319–353; backend/routes/rides.py:515–539
+Finding: POST /rides endpoint does not check if the rider already has an active
+  ride. A rider in state 'searching' can call createRide() again and spawn a second
+  active ride simultaneously. The client rideStore.createRide() also does not check
+  if currentRide is already set. The /rides/active endpoint returns only one active
+  ride; the second ride would be orphaned.
+Fix:
+  • Client: In rideStore.createRide(), check `if (get().currentRide) throw ...`
+  • Server: In create_ride endpoint, check GET /rides/active first; if active ride
+    exists, reject with 400 "Rider already has an active ride".
+  Effort: 2 hours.
+
+[07-2] MEDIUM | rider_start_ride Allows OTP Bypass
+File: backend/routes/rides.py:1876–1890
+Finding: POST /{ride_id}/start checks only `ride.get("status") in ["driver_arrived"]`
+  and `ride.get("rider_id") == current_user["id"]`. There is no OTP verification
+  gate. A rider can call /rides/{id}/start directly, bypassing the driver's OTP
+  confirmation flow. The OTP (shown to the rider, entered by the driver) is a
+  two-party verification — allowing the rider to start the ride unilaterally
+  defeats its purpose.
+Fix: Add OTP verification check: reject if pickup_otp_hash is not yet verified
+  (store a verified flag). Or restrict /start to driver-only (more correct).
+  Effort: 2 hours.
+
+[07-3] MEDIUM | hydrateActiveRide Has No Backend Validation
+File: rider-app/store/rideStore.ts:584–602
+Finding: On cold start, hydrateActiveRide() restores the stored ride from
+  AsyncStorage without verifying it against the server. The function checks
+  TERMINAL_STATUSES and clears stale terminal rides, but if the stored ride has
+  status 'driver_arrived' and the server has since marked it 'cancelled' (due to
+  driver timeout), the app shows a stale screen. The /rides/active endpoint is
+  called later (fetchActiveRide), but by then the app has already routed based on
+  the stale ride.
+Fix: In hydrateActiveRide(), optionally call await fetchActiveRide() (or a simpler
+  GET /rides/active) and compare: if server and storage differ and server is more
+  recent, trust server. If they match, use storage. If server says no active ride
+  but storage does, clear storage.
+  Effort: 2 hours.
+
+[07-4] PASS | Cancellation Fee Enforced After driver_arrived
+File: backend/routes/rides.py:1356–1358
+Finding: When cancelling after driver_arrived, a flat $5 fee is charged and
+  transferred to the driver's wallet. Backend enforces this; rider app displays
+  the fee via FreeCancelTimer component.
+
+[07-5] PASS | FreeCancelTimer Does Not Auto-Cancel
+File: rider-app/components/FreeCancelTimer.tsx:40–52
+Finding: Timer counts down and UI shows "Cancellation fee applies" at 0 seconds.
+  The component does not call cancelRide() automatically. Rider must explicitly
+  tap the cancel button. This is correct UX — auto-cancel would surprise users.
+
+[07-6] PASS | driver_timeout Re-Dispatch Shows Searching State
+File: rider-app/hooks/useRiderSocket.ts:113–115; backend/routes/rides.py:703–703
+Finding: On driver_timeout WS message, fetchRide(rideId) is called, which returns
+  the ride with status 'searching' (backend re-dispatches). UI transitions back
+  to the searching screen correctly.
+
+[07-7] PASS | Ride Status Machine Enforced Server-Side
+File: backend/routes/rides.py:1315–1890
+Finding: Every state-change endpoint checks current status before allowing transition
+  (e.g., cancel rejects if status not in ["searching", "driver_assigned", ...];
+  /start rejects if status ≠ "driver_arrived"). Prevents invalid transitions.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 07 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     1 |
+| MEDIUM          |     2 |
+| LOW             |     0 |
+| PASS            |     4 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |     7 |
+
+================================================================================
+TASK 08 — PAYMENTS & EARNINGS (PCI-DSS)
+================================================================================
+
+[08-1] MEDIUM | Tip Endpoint Accumulates Tips — No Idempotency Guard
+File: backend/routes/rides.py:945–969
+Finding: POST /{ride_id}/tip does:
+    new_tip = ride.get("tip_amount", 0) + tip_amount
+  If a rider submits a tip twice (client crash, app reload, double-tap, network
+  retry), the tip amounts ADD together. A rider can tip $10 + $10 = $20. The client
+  has tipSent state to prevent double-tap in ride-completed.tsx, but if the app
+  restarts, tipSent resets to false. There is no backend deduplication (idempotency
+  key, or check for "already tipped this ride").
+Fix: Add an idempotency key or a "tipped_at" timestamp. Reject second tips with
+  400 "Tip already submitted for this ride" or return the existing tip unchanged.
+  Effort: 1 hour.
+
+[08-2] PASS | Stripe Webhook Signature Verified
+File: backend/routes/webhooks.py:25–55
+Finding: stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
+  verifies the HMAC signature. Invalid signature → HTTPException 400. Event is
+  not processed if signature fails.
+
+[08-3] PASS | process-payment Idempotent
+File: backend/routes/rides.py:972–991
+Finding: If payment_status is already 'paid' or 'processing', the endpoint returns
+  success without charging again. Prevents duplicate charges on retry.
+
+[08-4] PASS | Wallet Payment Balance Checked Server-Side
+File: backend/routes/wallet.py:147–182
+Finding: wallet_pay checks `if old_balance < debit_amount` and rejects if
+  insufficient. Balance is rechecked server-side, not trusted from client.
+
+[08-5] PASS | No Raw Card Data Collected
+File: rider-app/app/manage-cards.tsx:88–104
+Finding: Stripe's <CardField> (native view) tokenizes the card on-device.
+  Backend receives only payment_method_id (pm_xxx). Raw PAN, CVC, expiry never
+  reach the app or server.
+
+[08-6] PASS | Double-Tap Guard on Book Button
+File: rider-app/app/payment-confirm.tsx:51–67
+Finding: isSubmitting ref prevents a second tap while the first POST /rides is in flight.
+
+[08-7] PASS | PaymentIntent Idempotency Key
+File: backend/routes/payments.py:107–115
+Finding: idempotency_key = f"ride-{body.ride_id}-{current_user['id']}"
+  prevents duplicate PaymentIntent creation on retry.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 08 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     0 |
+| MEDIUM          |     1 |
+| LOW             |     0 |
+| PASS            |     6 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |     7 |
+
+================================================================================
+TASK 09 — TEST COVERAGE
+================================================================================
+
+[09-1] MEDIUM | No Jest Coverage Threshold Configured
+File: rider-app/jest.config.js
+Finding: jest.config.js does not specify coverageThreshold. The project has unit
+  tests but no enforced minimum line/branch/function coverage. Tests can pass with
+  0% coverage of new code. No regression prevention.
+Fix: Add to jest.config.js:
+    module.exports = {
+      ...
+      collectCoverageFrom: ['store/**/*.ts', 'hooks/**/*.ts'],
+      coverageThreshold: {
+        global: { lines: 60, functions: 60, branches: 50, statements: 60 }
+      }
+    };
+  Effort: 1 hour.
+
+[09-2] MEDIUM | rideStore.test.ts Missing Critical Scenarios
+File: rider-app/store/__tests__/rideStore.test.ts
+Finding: Tests cover: createRide, cancelRide, startRide, completeRide. Missing:
+  1. Double-booking: createRide when currentRide already exists
+  2. Cancellation fee: cancelRide when status is 'driver_arrived'
+  3. Cold-start stale ride: hydrateActiveRide without /rides/active validation
+  4. OTP bypass: /start without OTP verification
+Effort: 4 hours to add these test cases.
+
+[09-3] MEDIUM | walletStore.test.ts Missing Tip Idempotency
+File: rider-app/store/__tests__/walletStore.test.ts
+Finding: Tests cover basic wallet operations but do NOT test: submitting tip twice
+  for the same ride. The tip accumulation bug (08-1) would have been caught.
+Effort: 2 hours.
+
+[09-4] MEDIUM | e2e Smoke Test Incomplete
+File: rider-app/e2e/ride-booking.spec.ts
+Finding: Tests ride-state transitions (searching → completed) but does NOT cover
+  the post-ride flow (rating, tip, payment). A regression in ride-completed.tsx
+  would not be caught.
+Effort: 2 hours.
+
+[09-5] MEDIUM | No Tests for Offline Queue, Scheduled Rides, Promo Validation
+File: rider-app/store/__tests__/
+Finding: Zero test coverage for:
+  1. syncOfflineRequests (create_ride queue retry logic)
+  2. Scheduled ride creation/cancellation
+  3. Promo code validation and discount application
+  4. Fare split creation and idempotency
+Effort: 8 hours to add comprehensive coverage.
+
+[09-6] PASS | All Tests Mock API (No Real HTTP)
+File: rider-app/store/__tests__/rideStore.test.ts:16–24
+Finding: mockApi correctly stubs all HTTP calls via jest.mock. No real requests hit
+  the backend during tests.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 09 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     0 |
+| MEDIUM          |     5 |
+| LOW             |     0 |
+| PASS            |     1 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |     6 |
+
+================================================================================
+TASK 10 — ERROR HANDLING & RESILIENCE
+================================================================================
+
+[10-1] HIGH | triggerEmergency Silently Swallows API Errors
+File: rider-app/store/rideStore.ts:442–453
+Finding: The emergency endpoint catches exceptions and does NOT throw:
+    ```
+    catch (error: any) {
+      console.error('Failed to trigger emergency:', error);
+      // Even if API fails, we don't throw to not block the local 911 UI flow
+    }
+    ```
+  If the backend API fails (network down, 500 error), the rider receives NO
+  notification. They see "Emergency services alerted" but nothing was sent.
+  The function intentionally doesn't throw "so the local 911 UI flow" can continue —
+  but the rider MUST be explicitly told "Could not reach emergency services.
+  Calling 911 directly."
+Fix: Show a warning/alert if the API fails. Never silently fail on emergency.
+  Effort: 1 hour.
+
+[10-2] MEDIUM | Offline Queue Only Handles create_ride
+File: rider-app/store/rideStore.ts:280–317
+Finding: syncOfflineRequests loops over queued requests but only processes
+  type === 'create_ride'. When offline, if a rider tries to: cancel a ride, submit
+  a rating, send a tip, or pay a wallet — these calls fail silently. No queue entry
+  is created; no error is shown; the user is left in a bad state.
+Fix: Queue ALL ride mutations: cancelRide, rateRide, add_tip, payWithWallet, etc.
+  Process them in order on reconnect with idempotency keys.
+  Effort: 6 hours.
+
+[10-3] MEDIUM | ErrorBoundary Only at Root Level
+File: rider-app/app/_layout.tsx:302
+Finding: <ErrorBoundary> wraps the entire app at root. No per-screen boundaries.
+  A crash in ride-in-progress.tsx (e.g., unhandled state mutation) crashes the
+  entire app. No graceful recovery.
+Fix: Add ErrorBoundary around major ride screens (driver-arriving, ride-in-progress,
+  ride-completed). Show "Something went wrong. Return to home?" with a retry button.
+  Effort: 3 hours.
+
+[10-4] PASS | createRide Failure Shows Error Alert
+File: rider-app/app/payment-confirm.tsx:63–64
+Finding: catch block sets alertState with error message. User sees "Error: …" and
+  can retry.
+
+[10-5] PASS | 401 During Active Ride Retries Silently
+File: shared/api/client.ts:158–163
+Finding: On 401, the client fetches a new token via refresh promise (singleton),
+  then retries the original request. No interruption to live ride UI.
+
+[10-6] PASS | Cold-Start Terminal Rides Cleared
+File: rider-app/store/rideStore.ts:589–591
+Finding: hydrateActiveRide checks if status in TERMINAL_STATUSES and removes the
+  AsyncStorage entry. Stale completed/cancelled rides don't resurface.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 10 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     1 |
+| MEDIUM          |     2 |
+| LOW             |     0 |
+| PASS            |     3 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |     6 |
+
+================================================================================
+TASK 11 — SECURITY HEADERS & CORS
+================================================================================
+
+[11-1] MEDIUM | spinr.app Rider Web Origin Not in CORS Allowlist
+File: backend/core/middleware.py:307–313
+Finding: CORS origins come from ALLOWED_ORIGINS env var + a hardcoded
+  always_allowed list: ["https://spinr-admin.vercel.app", "http://localhost:3000",
+  "http://localhost:3001"]. The spinr.app domain (rider web) is not hardcoded.
+  If spinr.app is not set in ALLOWED_ORIGINS, rider-web requests will fail CORS.
+Fix: Add "https://spinr.app" to the hardcoded always_allowed list if it's a first-party
+  origin. Or ensure ALLOWED_ORIGINS env var is set correctly in production.
+  Verify: curl -H "Origin: https://spinr.app" backend-url/api/...
+  Effort: 30 minutes (mostly testing/verification).
+
+[11-2] PASS | Wildcard Forbidden in Production
+File: backend/core/middleware.py:317–323
+Finding: If ALLOWED_ORIGINS contains "*" and ENV=production, the server fails to
+  start with RuntimeError. Prevents accidental wide-open CORS in prod.
+
+[11-3] PASS | Security Headers on All Responses
+File: backend/core/middleware.py:141–154
+Finding: SecurityHeadersMiddleware applies: X-Content-Type-Options, X-Frame-Options,
+  CSP, HSTS (prod only), Referrer-Policy, Permissions-Policy, COEP, CORP headers.
+  Applied after CORS so every response (2xx, 4xx, 5xx) carries headers.
+
+[11-4] PASS | CORS Headers on Error Responses
+File: backend/core/middleware.py:354–369
+Finding: Custom exception handler adds CORS headers to 4xx/5xx responses:
+    if origin and should_allow(origin):
+        response.headers["Access-Control-Allow-Origin"] = origin
+  Prevents "CORS error" masking the real HTTP error.
+
+[11-5] PASS | Rate Limiting on Ride Creation
+File: backend/routes/rides.py:516
+Finding: @ride_request_limit decorator (SlowAPI) on POST /rides. Prevents ride
+  spam. Limit enforced per user/IP.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 11 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     0 |
+| MEDIUM          |     1 |
+| LOW             |     0 |
+| PASS            |     4 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |     5 |
+
+================================================================================
+TASK 12 — COMPLIANCE: PII, PCI-DSS & PIPEDA
+================================================================================
+
+[12-1] (Carried from D01) HIGH | PIPEDA Data Export & Account Deletion Are Stubs
+File: rider-app/app/privacy-settings.tsx:104–107 (export), 29–47 (delete)
+Finding: (Already documented in Task 01, finding 01-2.)
+
+[12-2] MEDIUM | Location Consent: No Pre-Dialog Rationale
+File: rider-app/app/(tabs)/index.tsx:82
+Finding: requestForegroundPermissionsAsync() is called without a preceding explanation
+  dialog or text explaining WHY location is needed. The OS dialog ("Allow Spinr to
+  access your location?") is shown immediately. While not required by iOS/Android,
+  PIPEDA best practice (and AODA 2.0) recommend explaining data collection before
+  requesting permission.
+Fix: Show an AlertDialog first: "We need your location to find nearby drivers."
+  [Allow] [Deny]. Only call requestForegroundPermissionsAsync on [Allow].
+  Effort: 1 hour.
+
+[12-3] PASS | Rider Phone/Email NOT in Driver-Facing Ride Response
+File: backend/routes/rides.py:855–896
+Finding: The /rides/{id} endpoint is shared (both rider and driver can call it).
+  The ride row returned contains rider_id (UUID) but NOT rider_phone or rider_email.
+  Phone/email are stored in the users table, not the rides table. Driver cannot see
+  rider's personal contact info. They see only: pickup/dropoff addresses (required
+  for navigation), rider_id (for DB joins), and the cancellation fee if applicable.
+
+[12-4] PASS | Privacy Policy Accessible In-App
+File: rider-app/app/legal.tsx
+Finding: Fetches ToS and Privacy Policy from GET /settings/legal. Accessible from
+  Account → Legal. Rider can review policy in-app before accepting ToS.
+
+[12-5] PASS | Driver PII Excluded from Ride Response
+File: backend/routes/rides.py:891–895
+Finding: Explicitly excluded from driver object returned to rider: phone, license_number,
+  vehicle_vin, insurance_expiry, background_check_expiry, documents, fcm_token,
+  bank details. Only fields needed for ride identification (name, vehicle, rating,
+  plate, coordinates) are included.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 12 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     1 |
+| MEDIUM          |     1 |
+| LOW             |     0 |
+| PASS            |     3 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |     5 |
+
+================================================================================
+TASK 13 — NOTIFICATIONS, AI & FAQ
+================================================================================
+
+[13-1] MEDIUM | Deep Link from Killed-State Notification Does Not Route to Ride
+File: rider-app/app/_layout.tsx
+Finding: When a rider taps a push notification after the app is killed, the
+  notification contains type (e.g., "ride_update", "driver_arrived") but no deep
+  link. The app launches to the home tab (default route). The rider doesn't see
+  the active ride screen. They must manually navigate back to the ride. The
+  foreground FCM handler (line 266) refetches the ride when a message arrives
+  while the app is running, but the killed-state case is not handled.
+Fix: Extend the notification payload to include a deeplink field:
+    { type: "driver_arrived", ride_id: "r-123", deeplink: "/driver-arriving?rideId=r-123" }
+  On app launch, check for pendingNotification and navigate to the deeplink.
+  Effort: 2 hours.
+
+[13-2] PASS | setBackgroundMessageHandler Registered at Module Level
+File: rider-app/app/_layout.tsx:74–76
+Finding: setBackgroundMessageHandler is called outside React, before any component
+  mounts. The handler is active from startup. Messages arriving while the app is
+  backgrounded/killed wake the JS runtime and trigger the handler.
+
+[13-3] PASS | onTokenRefresh Listener Registered
+File: rider-app/app/_layout.tsx:233–244
+Finding: When Firebase rotates the FCM token, onTokenRefresh fires and re-registers
+  the new token with the backend. If the app is uninstalled and reinstalled, a
+  fresh token is obtained and registered.
+
+[13-4] PASS | Foreground FCM Handler Refetches Ride
+File: rider-app/app/_layout.tsx:266–274
+Finding: onForegroundMessage (line 266) calls fetchRide(currentRide.id) when a
+  message arrives while the app is in the foreground. The screen updates
+  immediately. This handles ride-state transitions arriving as push.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 13 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     0 |
+| MEDIUM          |     1 |
+| LOW             |     0 |
+| PASS            |     3 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |     4 |
+
+================================================================================
+TASK 14 — PERFORMANCE & SCALABILITY
+================================================================================
+
+[14-1] MEDIUM | activity.tsx FlatList Not Virtualised — All Rides Rendered
+File: rider-app/app/(tabs)/activity.tsx:47–64
+Finding: The activity.tsx screen uses a ScrollView with inline ride cards.
+  There is no FlatList with keyExtractor and getItemLayout. If a rider has 100+
+  completed rides, all 100 cards are rendered in the DOM simultaneously. This
+  causes:
+  1. Slow initial render on cold start
+  2. High memory usage (one component per ride)
+  3. Jank when scrolling (CPU reflow on 100 cards)
+  On slower devices (older iPhones, low-end Android), the screen becomes unusable.
+Fix: Replace ScrollView with FlatList:
+    <FlatList
+      data={rides}
+      renderItem={({item}) => <RideCard ride={item} />}
+      keyExtractor={r => r.id}
+      getItemLayout={(data, index) => ({length: 80, offset: 80*index, index})}
+      removeClippedSubviews={true}
+    />
+  Effort: 2 hours.
+
+[14-2] MEDIUM | Home Screen Fetches Multiple APIs Simultaneously on Mount
+File: rider-app/app/(tabs)/index.tsx:72–100
+Finding: useEffect on mount does:
+  1. Load cached location
+  2. Request foreground GPS permission
+  3. Get last known position
+  4. Get accurate position (fires in background)
+  5. (Not shown but implied) fetchSavedAddresses() via useRideStore
+  All 5 requests start at once. On a 3G network with 1 Mbps bandwidth, the
+  cumulative latency is high. The map remains blank for 2–3 seconds.
+Fix: Prioritize: 1) cache → 2) accurate GPS. Defer saved addresses fetch until
+  the home screen is interacted with (e.g., on first tap of "Where to?").
+  Effort: 1 hour.
+
+[14-3] PASS | FreeCancelTimer Cleanup on Unmount
+File: rider-app/components/FreeCancelTimer.tsx:40–52
+Finding: useEffect returns a cleanup function that clearInterval(interval) when the
+  component unmounts or when driverAcceptedAt/freeCancelWindowSeconds changes.
+  No interval leak.
+
+[14-4] PASS | Driver Photo Cached with expo-image
+File: rider-app/app/driver-arriving.tsx, rider-app/app/driver-arrived.tsx
+Finding: Driver profile_image_url is displayed (native Image component or expo-image
+  auto-caching). Expo's managed cache layer avoids re-downloading the same image
+  on every render.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 14 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     0 |
+| MEDIUM          |     2 |
+| LOW             |     0 |
+| PASS            |     2 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |     4 |
+
+================================================================================
+TASK 15 — ACCESSIBILITY (WCAG 2.1 / AODA)
+================================================================================
+
+[15-1] HIGH | Star Rating Buttons Missing accessibilityLabel
+File: rider-app/app/ride-completed.tsx:514–529 (starBtn style)
+Finding: The 5 star buttons in ride-completed.tsx have no accessibilityLabel,
+  accessibilityRole, or accessibilityHint. VoiceOver (iOS) and TalkBack (Android)
+  announce them as generic touch targets, not as "1 star", "2 stars", etc. A
+  screen reader user cannot distinguish which button to tap to rate 4 stars.
+Fix: Add to each star button:
+    <TouchableOpacity
+      accessibilityRole="button"
+      accessibilityLabel={`Rate ${i} star${i > 1 ? 's' : ''}`}
+      accessibilityHint="Double-tap to select"
+      onPress={() => setRating(i)}
+    >
+      <Ionicons name={...} />
+    </TouchableOpacity>
+  Effort: 1 hour.
+
+[15-2] MEDIUM | Tip Amount Buttons Missing accessibilityLabel
+File: rider-app/app/ride-completed.tsx:548–573
+Finding: The "$2", "$5", "$10" buttons and custom tip input have no accessibility
+  labels. Screen reader users hear only "Button" for each.
+Fix: Add accessibilityLabel="Tip $X" to each button; add
+  accessibilityLabel="Custom tip amount" and accessibilityHint="Enter amount in dollars"
+  to the TextInput.
+  Effort: 1 hour.
+
+[15-3] MEDIUM | FreeCancelTimer No accessibilityLiveRegion for Countdown
+File: rider-app/components/FreeCancelTimer.tsx:70–81
+Finding: The countdown timer text updates every second but has no
+  accessibilityLiveRegion="polite". A screen reader doesn't announce the changing
+  time. The user must manually re-read the timer every second.
+Fix: Add to the Text displaying the timer:
+    <Text accessibilityLiveRegion="polite">
+      {timerLabel} remaining
+    </Text>
+  Effort: 30 minutes.
+
+[15-4] MEDIUM | OTP Input Fields Have No Individual accessibilityLabel
+File: rider-app/app/otp.tsx
+Finding: The 4 OTP input boxes (via react-native-confirmation-code-field) have no
+  individual accessibility labels. Screen reader announces them as generic text inputs
+  ("Text input, empty, text input, empty..."). Focus order is unclear.
+Fix: Wrap the confirmation code field or add accessibilityLabel="OTP digit 1 of 4"
+  to each box. Ensure focus order is 1→2→3→4.
+  Effort: 1 hour.
+
+[15-5] PASS | Home Screen SOS Button Has Accessibility Labels
+File: rider-app/app/(tabs)/index.tsx:237–240
+Finding: accessibilityLabel="SOS emergency button", accessibilityRole="button",
+  accessibilityHint="Alerts emergency services". SOS is discoverable and described.
+
+[15-6] PASS | Login Screen CTA and Phone Input Have Labels
+File: rider-app/app/login.tsx:153–207
+Finding: Phone input: accessibilityLabel="Phone number",
+  accessibilityHint="Enter your 10-digit Canadian phone number", accessibilityRole="text".
+  Send CTA: accessibilityLabel="Send verification code", accessibilityRole="button".
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 15 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     1 |
+| MEDIUM          |     3 |
+| LOW             |     0 |
+| PASS            |     2 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |     6 |
+
+================================================================================
+TASK 16 — i18n / LOCALISATION (FRENCH REQUIRED)
+================================================================================
+
+[16-1] CRITICAL | No i18n Library Installed — All Strings Hardcoded in English
+File: rider-app/package.json (full manifest scanned)
+Finding: Zero i18n libraries detected in dependencies:
+  ✗ No i18next
+  ✗ No react-i18next
+  ✗ No expo-localization
+  ✗ No @formatjs/intl or lingui
+  ✗ No Intl.NumberFormat usage in the codebase
+
+  Every user-visible string is hardcoded in English in JSX:
+  - "Where to?" (search prompt)
+  - "Send verification code"
+  - "Book ride"
+  - "Ride in progress"
+  - All error messages, button labels, and confirmation dialogs
+
+  Canada's Official Languages Act requires federal/federally-regulated businesses
+  to provide services in BOTH English and French. Saskatchewan is the launch
+  market, but the statutory requirement applies nationwide. French Canada (QC,
+  NB) represents 23% of the Canadian population. Launching without French
+  translation:
+  1. Violates federal law (potential fines/compliance issues)
+  2. Excludes French speakers (accessibility + market exclusion)
+  3. Violates App Store Review Guideline 4.0 (localization requirement)
+
+Fix: BEFORE launch:
+  1. Install i18next and react-i18next (or expo-localization + Intl)
+  2. Extract all strings to localization files (en-CA.json, fr-CA.json)
+  3. Replace hardcoded strings with i18n.t('key') calls
+  4. Add a language setting in account.tsx to toggle en/fr
+  5. Hire a translator for Canadian French (not France French — spelling differs)
+  6. Test all screens in both languages
+  7. Update App Store metadata: French app name, description, screenshots
+
+  Effort: 40 hours (extraction, translation, testing, build/release)
+
+[16-2] CRITICAL | Currency Display Not Localized (No CAD Formatting for French)
+File: Entire codebase (all fare/price displays)
+Finding: Fares are displayed as "$X.XX" (English format). In French Canada,
+  currency is written as "X,XX $" (comma for decimal, dollar sign on right).
+  The entire fare-display layer needs to use Intl.NumberFormat:
+    new Intl.NumberFormat('fr-CA', {style: 'currency', currency: 'CAD'})
+  Currently NO localization is present.
+
+[16-3] CRITICAL | No French Language Setting in App
+File: rider-app/app/(tabs)/account.tsx
+Finding: Zero UI for language selection. System language is not checked
+  (navigator.locale). If a device is set to French, the Spinr app shows English.
+  Users cannot manually switch.
+Fix: Add a Language setting toggle. On selection, set a locale context/store and
+  re-render with i18n.changeLanguage('fr').
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 16 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     3 |
+| HIGH            |     0 |
+| MEDIUM          |     0 |
+| LOW             |     0 |
+| PASS            |     0 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |     3 |
+
+================================================================================
+FINAL AUDIT SUMMARY (ALL 16 DIMENSIONS)
+================================================================================
+
+| Dimension                          | CRITICAL | HIGH | MEDIUM | LOW | PASS | REC | TOTAL |
+|------------------------------------|----------|------|--------|-----|------|-----|-------|
+| D01 — Feature Completeness         |     0    |   3  |   2    |  1  |   5  |  1  |  12   |
+| D02 — Authentication               |     0    |   1  |   3    |  1  |  12  |  0  |  17   |
+| D03 — Encryption & Secrets         |     1    |   0  |   2    |  2  |  12  |  0  |  17   |
+| D04 — Input Validation             |     0    |   1  |   7    |  1  |  10  |  1  |  20   |
+| D05 — UI/UX (Android/iOS)          |     0    |   1  |   8    |  1  |  13  |  0  |  23   |
+| D06 — Real-Time (WebSocket/GPS)    |     0    |   0  |   1    |  0  |   8  |  0  |   9   |
+| D07 — State Machine & Dispatch     |     0    |   1  |   2    |  0  |   4  |  0  |   7   |
+| D08 — Payments & Earnings          |     0    |   0  |   1    |  0  |   6  |  0  |   7   |
+| D09 — Test Coverage                |     0    |   0  |   5    |  0  |   1  |  0  |   6   |
+| D10 — Error Handling               |     0    |   1  |   2    |  0  |   3  |  0  |   6   |
+| D11 — Security Headers / CORS      |     0    |   0  |   1    |  0  |   4  |  0  |   5   |
+| D12 — Compliance (PII/PIPEDA)      |     0    |   1  |   1    |  0  |   3  |  0  |   5   |
+| D13 — Notifications                |     0    |   0  |   1    |  0  |   3  |  0  |   4   |
+| D14 — Performance & Scalability    |     0    |   0  |   2    |  0  |   2  |  0  |   4   |
+| D15 — Accessibility (WCAG/AODA)    |     0    |   1  |   3    |  0  |   2  |  0  |   6   |
+| D16 — i18n / Localisation          |     3    |   0  |   0    |  0  |   0  |  0  |   3   |
+|-----------------------------------|----------|------|--------|-----|------|-----|-------|
+| **TOTAL**                          | **4**    | **9**| **41** | **6**|**88**| **2**|**150**|
+
+================================================================================
+CRITICAL FINDINGS (BLOCKERS BEFORE LAUNCH)
+================================================================================
+
+P0 — BLOCKING FEATURES:
+  03-1 · Supabase service-role key committed in .env.example
+  16-1 · No i18n library — French requirement violation
+  16-2 · Currency not localized (French CAD format missing)
+  16-3 · No language setting UI — French impossible to access
+
+P0 — BLOCKING SECURITY:
+  01-2 · PIPEDA data export/delete stubs (legal requirement)
+  10-1 · Emergency trigger silently fails — rider unaware
+  15-1 · Star rating buttons not accessible (AODA violation)
+
+P1 — LAUNCH BLOCKERS (if Canada/Ontario release):
+  01-1 · Home SOS button shows false "alert sent" — dangerous UX
+  01-3 · become-driver route doesn't exist — app crash
+  02-1 · OTP lockout bypassed when Redis down
+  07-1 · No double-booking guard — duplicate rides possible
+
+P2 — BEFORE BETA RELEASE:
+  (See P1/P2/P3/P4 sprint files for full distribution)
+
+================================================================================
+END OF AUDIT
 ================================================================================

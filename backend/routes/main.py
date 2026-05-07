@@ -3,8 +3,12 @@ Main router aggregator
 Import all route modules and combine them here
 """
 
+import logging
+
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
+
+logger = logging.getLogger(__name__)
 
 # Create the main API router (sub-routers are assembled in server.py)
 api_router = APIRouter()
@@ -35,7 +39,7 @@ async def health_check(request: Request = None):
         await db_supabase.ping()
         db_ok = True
     except Exception:  # noqa: S110
-        pass
+        logger.warning("health_check: db_supabase absolute import failed", exc_info=True)
     if not db_ok:
         try:
             from .. import db_supabase as _db  # noqa: PLC0415
@@ -63,9 +67,9 @@ async def health_check(request: Request = None):
 
             loop_status = _gls(None)
         except Exception:  # noqa: S110
-            pass  # loop_monitor unavailable (relative import path); loops field omitted
+            logger.warning("health_check: loop_monitor relative import failed; loops field omitted", exc_info=True)
     except Exception:  # noqa: S110
-        pass  # loop_monitor import failed entirely; health still reports DB status
+        logger.warning("health_check: loop_monitor import failed; health still reports DB status", exc_info=True)
 
     # ── Aggregate ────────────────────────────────────────────────────────────
     overall_healthy = db_ok and loop_status.get("healthy", True)

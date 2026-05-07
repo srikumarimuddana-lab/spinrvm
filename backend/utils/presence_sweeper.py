@@ -206,7 +206,7 @@ async def _sweep_once() -> int:
                     }
                 )
             except Exception:  # pragma: no cover - best effort  # noqa: S110
-                pass
+                logger.warning("presence_sweeper: admin broadcast failed for driver %s", d["id"], exc_info=True)
         except Exception as exc:
             logger.error(f"[presence_sweeper] flip failed for {d['id']}: {exc}", exc_info=True)
 

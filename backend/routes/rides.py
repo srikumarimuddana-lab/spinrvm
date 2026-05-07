@@ -209,16 +209,37 @@ def _reestimate_fare_for_stops(ride: dict, new_stops: list) -> dict:
     return {
         "distance_km": round(new_distance_km, 2),
         "duration_minutes": new_duration_minutes,
-        "distance_fare": _f(new_distance_fare),
-        "time_fare": _f(new_time_fare),
-        "estimated_fare": _f(new_total),
-        "total_fare": _f(new_total),
+        "distance_fare": _money_str(new_distance_fare),
+        "time_fare": _money_str(new_time_fare),
+        "estimated_fare": _money_str(new_total),
+        "total_fare": _money_str(new_total),
     }
 
 
 def _f(v: Decimal) -> float:
-    """Convert Decimal back to float for Pydantic / JSON serialisation."""
+    """Convert Decimal to float.
+
+    Reserved for legacy callers that genuinely need a float — Pydantic field
+    coercion (Ride model takes float for ``surge_multiplier``), signed-token
+    payloads (``sign_estimate_token`` / ``verify_estimate_token``), and
+    internal helpers like ``calculate_all_fees`` whose contract is float.
+
+    For JSON wire responses use ``_money_str`` instead — Audit-17 P0-1
+    mandates that money fields cross the wire as decimal strings, never
+    IEEE-754 floats. See CLAUDE.md § Critical Conventions ("Money arithmetic").
+    """
     return float(v)
+
+
+def _money_str(v: Decimal) -> str:
+    """Quantize ``v`` to 2 decimal places and emit as a JSON-safe string.
+
+    Use on every money-shaped value placed into a dict response or
+    WebSocket payload. Pydantic response models already route money through
+    ``DecimalStr``; this helper covers the remaining hand-built dict
+    responses where there is no schema between us and the wire.
+    """
+    return str(_round(_d(v)))
 
 
 def _is_corporate_paid(
@@ -741,12 +762,15 @@ async def estimate_ride(
                 "vehicle_type": fare_info["vehicle_type"],
                 "distance_km": round(distance_km, 2),
                 "duration_minutes": duration_minutes,
-                "base_fare": _f(_d(fare_info["base_fare"])),
-                "distance_fare": _f(distance_fare),
-                "time_fare": _f(time_fare),
-                "booking_fee": _f(booking_fee),
+                "base_fare": _money_str(_d(fare_info["base_fare"])),
+                "distance_fare": _money_str(distance_fare),
+                "time_fare": _money_str(time_fare),
+                "booking_fee": _money_str(booking_fee),
+                # surge_multiplier is a ratio, not money, but the Ride model
+                # types it as float — keep float on the wire so existing
+                # rider-app parsers don't trip on a string.
                 "surge_multiplier": _f(surge),
-                "total_fare": _f(total_fare),
+                "total_fare": _money_str(total_fare),
                 "available": is_available,
                 "eta_minutes": eta_minutes,
                 "driver_count": driver_count,
@@ -1071,7 +1095,9 @@ async def create_ride(body: CreateRideRequest, request: Request = None, current_
         admin_earnings=_f(admin_earnings),
         payment_method=body.payment_method,
         payment_method_id=body.payment_method_id,
-        requires_wav=body.requires_wav,
+        # NOTE: ``requires_wav`` was passed twice (once at line ~1090, again
+        # here) — Python 3.11+ raises SyntaxError, blocking module import
+        # and the entire test suite. Drop-in fix unblocks Audit-17 Phase 1c.
         status="searching",
         pickup_otp=hash_otp(pickup_otp_plain),
         ride_requested_at=datetime.now(timezone.utc),
@@ -1567,8 +1593,8 @@ async def add_tip(
         payload = {
             "type": "tip_received",
             "ride_id": str(ride_id),
-            "amount": _f(tip_amount),
-            "new_total": _f(new_tip),
+            "amount": _money_str(tip_amount),
+            "new_total": _money_str(new_tip),
             "rider_name": rider_name,
         }
         try:
@@ -1585,7 +1611,7 @@ async def add_tip(
         except Exception as exc:
             logger.error(f"[TIP] Push notify driver {driver_user_id} failed: {exc}", exc_info=True)
 
-    return {"success": True, "tip_amount": _f(new_tip)}
+    return {"success": True, "tip_amount": _money_str(new_tip)}
 
 
 async def _record_payment_event(
@@ -1652,7 +1678,7 @@ async def process_payment(
         logger.info(f"[PAYMENT] Ride {ride_id} already {ride['payment_status']} — skipping duplicate charge")
         return {
             "success": True,
-            "charged_amount": ride.get("total_fare", 0) + (ride.get("tip_amount", 0) or 0),
+            "charged_amount": _money_str(_d(ride.get("total_fare", 0) or 0) + _d(ride.get("tip_amount", 0) or 0)),
             "already_paid": True,
         }
 
@@ -1671,7 +1697,7 @@ async def process_payment(
         return {
             "success": True,
             "already_paid": True,
-            "charged_amount": _f(_round(_d(str(ride.get("total_fare", 0) or 0)))),
+            "charged_amount": _money_str(_d(ride.get("total_fare", 0) or 0)),
         }
 
     if tip_amount < 0:
@@ -1924,7 +1950,7 @@ async def process_payment(
                     detail=("Payment was captured but confirmation failed. Do not retry — our team has been notified."),
                 ) from db_err
             await manager.send_personal_message(
-                {"type": "payment_completed", "ride_id": ride_id, "charged_amount": _f(total_charge)},
+                {"type": "payment_completed", "ride_id": ride_id, "charged_amount": _money_str(total_charge)},
                 f"rider_{current_user['id']}",
             )
         elif outcome.status == "requires_action":
@@ -2031,7 +2057,7 @@ async def process_payment(
     except Exception as e:
         logger.error(f"Receipt email error: {e}", exc_info=True)
 
-    return {"success": True, "charged_amount": _f(total_charge), "email_sent": email_sent}
+    return {"success": True, "charged_amount": _money_str(total_charge), "email_sent": email_sent}
 
 
 # ============================================================

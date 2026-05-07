@@ -20,6 +20,7 @@
     "./store/locationStore": "./store/locationStore.ts",
     "./services/firebase": "./services/firebase.ts",
     "./utils/logger": "./utils/logger.ts",
+    "./utils/pii": "./utils/pii.ts",
     "./utils/responsive": "./utils/responsive.ts",
     "./cache": "./cache/index.ts",
     "./types": "./types/index.ts",

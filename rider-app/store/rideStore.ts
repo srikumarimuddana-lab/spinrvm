@@ -585,8 +585,11 @@ export const useRideStore = create<RideState>((set, get) => ({
     try {
       const response = await api.get<SavedAddress[]>('/addresses');
       set({ savedAddresses: response.data as SavedAddress[] });
-    } catch (error: unknown) {
-      console.log('Error fetching addresses:', isErrorLike(error) ? error.message : error);
+    } catch (err: unknown) {
+      // PIPEDA: never spread the raw error body into logs — backend error
+      // payloads can contain saved-address strings or user identifiers.
+      const e = err as { code?: unknown; status?: unknown } | undefined;
+      console.error('Error fetching addresses', { code: e?.code, status: e?.status });
     }
   },
 

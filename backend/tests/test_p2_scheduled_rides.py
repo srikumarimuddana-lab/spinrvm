@@ -5,17 +5,16 @@ Implemented endpoints:
   GET  /rides/scheduled          — upcoming scheduled rides for rider
   DELETE /rides/scheduled/{id}   — cancel a scheduled ride
 
-DST note: scheduled_time is stored as-received ISO string (UTC expected).
-The server currently does NOT validate that a requested local time falls
-inside a DST gap (e.g. 02:30 America/Toronto on spring-forward night).
-E14 is documented as xfail(strict=False) — living TODO.
+DST: `CreateRideRequest.validate_scheduled_time` (schemas.py) round-trips a
+naive local time through `zoneinfo` and rejects DST-gap times (e.g. 02:30
+America/Toronto on spring-forward night) before persistence. Pinned below.
 
 These tests pin:
   - get_scheduled_rides returns rides list (including the cursor-list path)
   - cancel_scheduled_ride updates status to "cancelled"; only-owner guard;
     non-scheduled ride → 404; already-cancelled → 400
   - DST boundary: UTC-stored scheduled_time round-trips correctly (E14 happy path)
-  - DST gap: booking a non-existent local time is NOT currently rejected (xfail)
+  - DST gap: booking a non-existent local time IS rejected by the validator
 
 Run:
     pytest backend/tests/test_p2_scheduled_rides.py -v

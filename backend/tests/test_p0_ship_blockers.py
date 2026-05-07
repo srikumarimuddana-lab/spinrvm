@@ -686,20 +686,23 @@ class TestPaymentFailureAtComplete:
     @pytest.mark.xfail(
         strict=False,
         reason=(
-            "Card payment path is a stub. See rides.py:1088: "
-            "'Card path is still a stub — Stripe charge to be wired separately'. "
-            "Complete-ride handler marks payment_status='completed' regardless "
-            "of actual charge outcome (drivers.py:1997). A real Stripe decline "
-            "today silently leaves the ride as 'paid' in our DB. Fix: wire "
-            "Stripe PaymentIntent.confirm(), map decline → payment_status="
-            "'failed', surface retry UX."
+            "Card decline at process_payment is implemented on branch "
+            "claude/p0-5-stripe-card-charge but not yet merged into main. "
+            "See backend/utils/stripe_charge.py::charge_ride() (returns a "
+            "ChargeOutcome with status=declined and surfaces the decline_code) "
+            "+ TestCardDecline in backend/tests/test_process_payment_card.py "
+            "for the pinned contract. On the current branch the card path in "
+            "rides.py is still a stub that hardcodes payment_status='paid', "
+            "so this xfail stays until P0-5 Phase E (manual Stripe staging "
+            "validation per docs/scoping/P0-5_PHASE_E_RUNBOOK.md) clears and "
+            "the branch is merged."
         ),
     )
     def test_card_decline_marks_payment_failed_and_allows_retry(self):
-        """DOCUMENTS THE GAP — will pass once card path is wired to Stripe.
+        """DOCUMENTS THE GAP — will pass once P0-5 branch is merged.
 
         Expectation: Stripe returns card_declined, rides.payment_status
         flips to 'failed', process_payment returns an error the client
         can retry with a different card.
         """
-        assert False, "card path is a stub; Stripe charge not yet wired"
+        assert False, "card path is a stub on this branch; merge P0-5"

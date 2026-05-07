@@ -181,7 +181,8 @@ class TestBackgroundPermissionCodePath:
         "P3-20 gap: verifying that location updates *continue* when the app is "
         "backgrounded requires a real iOS/Android device with a background task "
         "runner (Detox + device.setPermissions or Espresso). "
-        "Covered manually via docs/MOBILE_SMOKE.md §F step F-4."
+        "Covered manually via docs/runbooks/MOBILE_SMOKE.md §4.4 (Driver — "
+        "background / foreground)."
     ),
 )
 class TestBackgroundLocationContinuity:

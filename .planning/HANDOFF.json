@@ -1,99 +1,121 @@
 {
-  "paused_at": "2026-05-04T17:45:00-06:00",
-  "branch": "fix/rider-app-expo-sdk55",
-  "head_commit": "40f4ad42",
-  "commits_ahead_of_main": 21,
-  "phase": "Expo SDK 55 Build Fix + Admin Login Unblock + Dependabot Cleanup",
+  "version": "1.0",
+  "timestamp": "2026-05-07T18:15:00Z",
+  "session_date": "2026-05-07",
+  "active_branch": "fix/rider-app-expo-sdk55",
+  "head_commit": "e2007605",
+  "context": "EAS build readiness check and dependency version fix",
+  "status": "paused",
 
-  "completed_this_session": [
-    "Killed stale backend (PID 19424 port 8000) and admin dashboard (PID 16116 port 3000) processes",
-    "Diagnosed admin login failure: super-admin path was calling CookieManager on FastAPI response (port 8000) instead of returning token in JSON body for the Next.js BFF proxy (port 3000)",
-    "Fixed backend/routes/admin/auth.py: removed CookieManager calls, added token+refresh_token to super-admin return dict — consistent with staff member path",
-    "Verified admin login works end-to-end via Playwright: URL redirected to /dashboard, dashboard loaded with live data (24 rides, 17 users, 7 drivers)",
-    "Committed fix as 40f4ad42: all 5 pre-commit checks passed",
-    "Merged all 11 open Dependabot PRs (#407–#417): sentry-sdk, botocore, cachetools(6→7), s3transfer, pytz, @sentry/nextjs, @tailwindcss/postcss, tailwindcss, jsdom, shadcn, eslint(9→10)"
+  "session_work_completed": [
+    {
+      "task": "Merge origin/main with SDK 55 fixes",
+      "commit": "2405fd18",
+      "detail": "Synced reanimated 4.3.0 + worklets 0.8.1, resolved 10 merge conflicts, kept local .planning files"
+    },
+    {
+      "task": "Regenerate yarn.lock files",
+      "commit": "e91cc822",
+      "detail": "Both rider-app and driver-app lockfiles regenerated after merge"
+    },
+    {
+      "task": "Remove debug-env endpoint",
+      "commit": "f5870232",
+      "detail": "Removed /settings/debug-env from backend/routes/settings.py after validating Railway Redis"
+    },
+    {
+      "task": "Fix duplicate variable declarations",
+      "commit": "1842ea12",
+      "detail": "Removed duplicate requiresWav in ride-options.tsx (lines 56-57) and rideStore.ts (line 234)"
+    },
+    {
+      "task": "Fix @types/jest version mismatch",
+      "commit": "e2007605",
+      "detail": "Downgraded from 30.0.0 to ^29.5.14 per Expo SDK 55 requirement"
+    },
+    {
+      "task": "Trigger EAS builds",
+      "detail": "First build failed (expo doctor check on @types/jest). Second build triggered after version fix"
+    }
   ],
 
-  "completed_prior_sessions": [
-    "Gradle wrapper bumped 8.10.2 → 8.13 (cd4211d3)",
-    "Kotlin 2.0.21 → 2.1.20 in both app.config.ts (2b630634)",
-    "admin-dashboard/.env.local fixed to http://localhost:8000 (was Railway — gitignored)",
-    "Admin login rate limit made env-aware: dev 20/min + 2min lockout, prod 3/30min + 24h lockout (2cb7fb65)",
-    "Full runtime audit across all 4 surfaces",
-    "Expo SDK 55 migration: New Arch disabled, Gradle/Kotlin/compileSdk pinned, native deps aligned (21 commits total)"
+  "eas_build_history": [
+    {
+      "attempt": 1,
+      "build_id": "e8e968e8-bf21-4920-ba0c-b3debbff959f",
+      "status": "FAILED",
+      "platform": "android",
+      "profile": "preview",
+      "failure_reason": "expo doctor check failed: @types/jest version mismatch (expected 29.5.14, found 30.0.0)",
+      "resolution": "Downgraded @types/jest in package.json"
+    },
+    {
+      "attempt": 2,
+      "status": "IN_PROGRESS",
+      "platform": "android",
+      "profile": "preview",
+      "triggered_at": "2026-05-07 after @types/jest fix",
+      "monitor_url": "https://expo.dev/accounts/srikumarimuddana/projects/spinr-rider/builds"
+    }
   ],
 
   "remaining_work": [
     {
-      "id": "EAS-1",
-      "priority": "P0",
-      "task": "Check EAS build for commit 2b630634 on expo.dev",
-      "detail": "GitHub integration auto-triggers on push; check expo.dev/accounts/spinr/projects for build status of both rider-app and driver-app. Build should be the first with Kotlin 2.1.20 + Gradle 8.13.",
-      "blocked_by": null
+      "task": "Monitor EAS build completion",
+      "detail": "Check https://expo.dev/accounts/srikumarimuddana/projects/spinr-rider/builds for build status"
     },
     {
-      "id": "FIREBASE-1",
-      "priority": "P0",
-      "task": "Add FIREBASE_SERVICE_ACCOUNT_JSON to backend/.env",
-      "detail": "Download from Firebase console: project spinrapp-6e464 → Project Settings → Service Accounts → Generate new private key. Paste stringified JSON into backend/.env as FIREBASE_SERVICE_ACCOUNT_JSON. Also add FIREBASE_RIDER_APP_ID=1:879808882715:android:150f53e023204c47cb30be",
-      "blocked_by": "Firebase console access (human action)"
+      "task": "If build succeeds: verify both rider-app and driver-app",
+      "detail": "Smoke test the preview builds on Android devices"
     },
     {
-      "id": "DEVICE-1",
-      "priority": "P0",
-      "task": "Install EAS APK on physical device → test OTP login",
-      "detail": "Verifies the OTP screen freeze fix (New Architecture disabled). Download APK from EAS build for commit 2b630634, install on Android device, test OTP flow end-to-end.",
-      "blocked_by": "EAS-1 must be green first"
+      "task": "Trigger driver-app EAS build",
+      "detail": "Same process: eas build --platform android --profile preview from driver-app/"
     },
     {
-      "id": "UX-1",
-      "priority": "P1",
-      "task": "Admin login rate limit UX: show 'try again at HH:MM' instead of bare 'too many attempts'",
-      "detail": "In admin-dashboard/src/app/login/page.tsx handleLogin(), the 429 catch block shows a generic message. Should parse the Retry-After header or retryAfterSeconds from the RateLimitError and display a specific time. The api.ts RateLimitError already carries retryAfterSeconds.",
-      "blocked_by": null
-    },
-    {
-      "id": "A11Y-1",
-      "priority": "P1",
-      "task": "OI-001/OI-002: Admin dashboard accessibility — driver card role=button, close button aria-label",
-      "detail": "Pre-production accessibility findings. Need to locate driver card component and add role=button + keyboard handler. Find close/dismiss buttons missing aria-label.",
-      "blocked_by": null
-    },
-    {
-      "id": "SEC-1",
-      "priority": "P1",
-      "task": "OI-003 to OI-006: Flip security gates from warn to blocking in security-gates.yml",
-      "detail": "4 security gate checks currently use continue-on-error: true. Need to identify which ones and flip them to blocking as the project matures toward production.",
-      "blocked_by": null
-    },
-    {
-      "id": "PR-1",
-      "priority": "P1",
-      "task": "Create PR: fix/rider-app-expo-sdk55 → main",
-      "detail": "21 commits ahead of main. PR covers: Expo SDK 55 migration (New Arch disabled, dep alignment), Gradle 8.13, Kotlin 2.1.20, admin rate limit env-aware, admin .env.local fix (gitignored — don't include), admin login BFF fix (40f4ad42). Run /gsd-pr-branch or gh pr create.",
-      "blocked_by": "EAS-1 and DEVICE-1 ideally green before merge"
+      "task": "Merge to main when both builds pass",
+      "detail": "Create PR, merge fix/rider-app-expo-sdk55 → main"
     }
   ],
 
-  "human_actions_required": [
-    "Check expo.dev for EAS build status on commit 2b630634",
-    "Download Firebase service account JSON from Firebase console (project spinrapp-6e464) and add to backend/.env",
-    "Install EAS APK on physical Android device and test OTP login"
+  "blockers": [
+    {
+      "description": "@types/jest version mismatch preventing expo doctor check from passing",
+      "type": "technical",
+      "status": "RESOLVED",
+      "resolution": "Downgraded to ^29.5.14, regenerated yarn.lock, re-triggered build"
+    },
+    {
+      "description": "Bundle JavaScript error (yarn expo export:embed) in first build attempt",
+      "type": "technical",
+      "status": "PENDING_VERIFICATION",
+      "workaround": "Likely caused by @types/jest mismatch; should resolve with version fix"
+    }
+  ],
+
+  "human_actions_pending": [
+    {
+      "action": "Monitor EAS build dashboard",
+      "context": "Second build triggered after @types/jest fix; need to verify it completes successfully",
+      "blocking": true
+    }
   ],
 
   "key_decisions": [
-    "Super-admin login now returns token+refresh_token in JSON body (consistent with staff path) — Next.js BFF proxy handles HttpOnly cookie storage. CookieManager on FastAPI response (port 8000) was wrong pattern for BFF architecture.",
-    "Admin rate limit: dev 20/min + 2min lockout; prod 3/30min + 24h lockout — implemented via SlowAPI callable",
-    "Kotlin 2.1.20 source of truth: node_modules/@react-native/gradle-plugin/gradle/libs.versions.toml",
-    "All 11 Dependabot PRs merged including two major bumps: cachetools 6→7, eslint 9→10 (all CI passed)"
+    "Fixed @types/jest version constraint per Expo SDK 55 requirements (29.5.14)",
+    "Merged origin/main rather than rebasing to preserve both local fixes and upstream commits"
   ],
 
   "infra_state": {
-    "backend": "http://localhost:8000 — must be started fresh each session: python3 -m backend.server from repo root",
-    "admin_dashboard": "http://localhost:3000 — must be started fresh: npm run dev from admin-dashboard/",
-    "admin_login": "admin@spinr.ca / SpinrDev2026! — CONFIRMED WORKING as of this session",
-    "admin_env_local": "admin-dashboard/.env.local → NEXT_PUBLIC_API_URL=http://localhost:8000 (gitignored, already set)",
-    "rider_driver_env": "rider-app/.env and driver-app/.env point to Railway production backend",
-    "backend_env": "backend/.env complete for dev EXCEPT FIREBASE_SERVICE_ACCOUNT_JSON (missing)"
-  }
+    "active_branch": "fix/rider-app-expo-sdk55",
+    "commits_ahead_of_main": 29,
+    "last_push": "2026-05-07",
+    "eas_project_id_rider": "8f1e4f60-720e-46b0-9b71-33c13d3af043",
+    "eas_project_id_driver": "1ed02cf4-97cb-4678-b5a2-0881f89abaa8",
+    "railway_redis_status": "REDIS_URL and WS_REDIS_URL set; RATE_LIMIT_REDIS_URL NOT_SET (in-memory fallback)"
+  },
+
+  "typescript_status": "267 errors in tsc --noEmit (mostly in tests and shared library imports; not blocking EAS build)",
+
+  "next_action": "Monitor EAS build at https://expo.dev/accounts/srikumarimuddana/projects/spinr-rider/builds for completion; verify build succeeds with corrected @types/jest dependency"
 }

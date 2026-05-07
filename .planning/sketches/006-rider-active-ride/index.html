@@ -1,0 +1,863 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>006 — Rider Active Ride · Spinr Sketch</title>
+<link rel="stylesheet" href="../themes/default.css">
+<style>
+  /* ── Layout ─────────────────────────────────────── */
+  body { background: #0d0f14; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif; margin: 0; padding: 0; }
+  .page-header { text-align: center; padding: 28px 20px 12px; }
+  .page-header h1 { color: #fff; font-size: 22px; font-weight: 700; margin: 0 0 4px; letter-spacing: -0.5px; }
+  .page-header p { color: #666; font-size: 13px; margin: 0; }
+  .design-q { display: inline-block; background: #1a1e2d; color: #a0aec0; border: 1px solid #2d3748; border-radius: 20px; padding: 6px 16px; font-size: 12px; margin-top: 10px; }
+
+  .toolbar { display: flex; justify-content: center; gap: 0; padding: 16px 20px 0; }
+  .toolbar button { background: #1a1e2d; color: #666; border: 1px solid #2d3748; padding: 7px 18px; font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+  .toolbar button:first-child { border-radius: 8px 0 0 8px; }
+  .toolbar button:last-child { border-radius: 0 8px 8px 0; }
+  .toolbar button.active { background: #E53E3E; color: #fff; border-color: #E53E3E; }
+
+  .stage-bar { display: flex; justify-content: center; gap: 8px; padding: 12px 20px 0; }
+  .stage-bar button { background: #1a1e2d; color: #666; border: 1px solid #2d3748; border-radius: 20px; padding: 5px 14px; font-size: 11px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+  .stage-bar button.active { background: #2d3748; color: #fff; border-color: #4a5568; }
+
+  .phones-row { display: flex; justify-content: center; gap: 32px; padding: 24px 40px 32px; flex-wrap: wrap; }
+  .phone-wrap { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .variant-label { color: #666; font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; }
+  .variant-label span { color: #E53E3E; }
+  .phone { width: 375px; height: 812px; background: #111318; border-radius: 52px; border: 2px solid #2d3748; position: relative; overflow: hidden; box-shadow: 0 32px 80px rgba(0,0,0,0.6); }
+  .notch { position: absolute; top: 0; left: 50%; transform: translateX(-50%); width: 126px; height: 34px; background: #111318; border-radius: 0 0 20px 20px; z-index: 100; }
+  .home-indicator { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); width: 134px; height: 5px; background: rgba(255,255,255,0.25); border-radius: 3px; z-index: 100; }
+  .screen { position: absolute; inset: 0; overflow: hidden; }
+
+  .panel { display: none; position: absolute; inset: 0; flex-direction: column; }
+  .panel.visible { display: flex; }
+
+  /* ── Shared map base ────────────────────────────── */
+  .map-bg { position: absolute; inset: 0; }
+  .map-bg svg { width: 100%; height: 100%; }
+
+  /* ── Shared SOS Button ──────────────────────────── */
+  .sos-btn { position: absolute; top: 50px; right: 16px; width: 44px; height: 44px; border-radius: 50%; background: #742a2a; border: 2px solid #E53E3E; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 900; color: #fff; letter-spacing: -0.5px; cursor: pointer; z-index: 50; box-shadow: 0 4px 12px rgba(229,62,62,0.4); }
+
+  /* ═══════════════════════════════════════════════════
+     VARIANT A — Information-Dense
+  ══════════════════════════════════════════════════ */
+
+  /* A Stage 1: Driver En Route */
+  .a-enroute { background: #0f1117; }
+  .a-enroute .map-section { height: 340px; position: relative; flex-shrink: 0; }
+  .a-enroute .status-strip { background: #1a1e2d; padding: 10px 16px; display: flex; align-items: center; gap: 10px; }
+  .a-enroute .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #D69E2E; animation: blink 1.2s ease-in-out infinite; }
+  .a-enroute .status-text { font-size: 13px; color: #fff; font-weight: 600; }
+  .a-enroute .eta-badge { margin-left: auto; background: #D69E2E; color: #000; font-size: 13px; font-weight: 800; padding: 4px 12px; border-radius: 20px; }
+  .a-driver-info { background: #0f1117; padding: 12px 16px; border-top: 1px solid #1a1e2d; }
+  .a-driver-row { display: flex; align-items: center; gap: 12px; }
+  .a-driver-avatar { width: 48px; height: 48px; border-radius: 50%; background: linear-gradient(135deg, #742a2a, #C53030); display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: 700; color: #fff; flex-shrink: 0; }
+  .a-driver-meta { flex: 1; }
+  .a-driver-name { font-size: 16px; font-weight: 700; color: #fff; }
+  .a-driver-sub { font-size: 12px; color: #718096; margin-top: 2px; }
+  .a-driver-stars { color: #D69E2E; font-size: 12px; }
+  .a-contact-row { display: flex; gap: 8px; margin-top: 10px; }
+  .a-contact-btn { flex: 1; padding: 10px; background: #1a1e2d; border-radius: 12px; display: flex; align-items: center; justify-content: center; gap: 6px; color: #a0aec0; font-size: 12px; font-weight: 600; cursor: pointer; }
+  .a-progress-section { background: #0f1117; padding: 12px 16px; }
+  .a-progress-label { display: flex; justify-content: space-between; font-size: 11px; color: #718096; margin-bottom: 8px; }
+  .a-progress-bar { height: 6px; background: #1a1e2d; border-radius: 3px; overflow: hidden; }
+  .a-progress-fill { height: 100%; background: linear-gradient(90deg, #D69E2E, #F6E05E); border-radius: 3px; width: 40%; transition: width 0.3s; }
+  .a-route-steps { background: #0f1117; flex: 1; padding: 8px 16px; overflow-y: auto; }
+  .a-step { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #1a1e2d; font-size: 12px; color: #a0aec0; }
+  .a-step:last-child { border-bottom: none; }
+  .a-step .step-icon { font-size: 16px; width: 24px; text-align: center; }
+  .a-step .step-dist { margin-left: auto; color: #D69E2E; font-weight: 600; }
+
+  /* A Stage 2: In Trip */
+  .a-intrip { background: #0f1117; }
+  .a-intrip .map-section { height: 420px; position: relative; flex-shrink: 0; }
+  .a-fare-meter { background: #0f1117; padding: 12px 16px; border-top: 2px solid #D69E2E; display: flex; align-items: center; gap: 12px; }
+  .a-fare-meter .meter-dot { width: 10px; height: 10px; border-radius: 50%; background: #D69E2E; animation: blink 0.8s ease-in-out infinite; }
+  .a-fare-meter .meter-label { font-size: 12px; color: #718096; }
+  .a-fare-meter .meter-value { font-size: 28px; font-weight: 900; color: #D69E2E; letter-spacing: -1px; margin-left: auto; }
+  .a-fare-meter .meter-value sup { font-size: 14px; }
+  .a-trip-info { background: #0f1117; padding: 10px 16px; display: flex; justify-content: space-between; align-items: center; border-top: 1px solid #1a1e2d; }
+  .a-trip-info .ti-item { text-align: center; }
+  .a-trip-info .ti-val { font-size: 16px; font-weight: 700; color: #fff; }
+  .a-trip-info .ti-lbl { font-size: 10px; color: #718096; margin-top: 2px; }
+  .a-trip-info .divider-v { width: 1px; height: 32px; background: #2d3748; }
+  .a-turn-strip { background: #1a1e2d; padding: 12px 16px; display: flex; align-items: center; gap: 12px; }
+  .a-turn-strip .turn-arrow { font-size: 24px; }
+  .a-turn-strip .turn-text { font-size: 14px; font-weight: 700; color: #fff; }
+  .a-turn-strip .turn-dist { margin-left: auto; font-size: 13px; color: #a0aec0; font-weight: 600; }
+  .a-intrip-bottom { padding: 12px 16px; background: #0f1117; border-top: 1px solid #1a1e2d; display: flex; gap: 10px; }
+  .a-intrip-bottom .safe-btn { flex: 1; padding: 12px; background: #1a1e2d; border-radius: 12px; color: #a0aec0; font-size: 13px; font-weight: 600; text-align: center; cursor: pointer; }
+
+  /* A Stage 3: Complete */
+  .a-complete { background: #0f1117; }
+  .a-complete .top { padding: 48px 20px 20px; text-align: center; }
+  .a-complete .arrival-icon { width: 72px; height: 72px; border-radius: 50%; background: #0f2010; border: 2px solid #38A169; display: flex; align-items: center; justify-content: center; font-size: 32px; margin: 0 auto 12px; }
+  .a-complete .arr-title { font-size: 24px; font-weight: 800; color: #fff; }
+  .a-complete .arr-sub { font-size: 13px; color: #718096; margin-top: 4px; }
+  .a-receipt { padding: 0 16px; flex: 1; overflow-y: auto; }
+  .a-receipt-card { background: #1a1e2d; border-radius: 20px; padding: 18px; margin-bottom: 12px; }
+  .a-receipt-title { font-size: 11px; color: #4a5568; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 12px; }
+  .a-rec-row { display: flex; justify-content: space-between; font-size: 13px; color: #a0aec0; padding: 7px 0; border-bottom: 1px solid #2d3748; }
+  .a-rec-row:last-child { border-bottom: none; }
+  .a-rec-row .rv { color: #fff; font-weight: 600; }
+  .a-rec-row .rv.gold { color: #D69E2E; }
+  .a-rating-card { background: #1a1e2d; border-radius: 20px; padding: 18px; margin-bottom: 12px; text-align: center; }
+  .a-rating-card .r-title { font-size: 15px; font-weight: 700; color: #fff; margin-bottom: 12px; }
+  .a-stars { display: flex; justify-content: center; gap: 8px; }
+  .a-stars span { font-size: 32px; cursor: pointer; opacity: 0.4; transition: opacity 0.2s; }
+  .a-stars span.lit { opacity: 1; }
+
+  /* ═══════════════════════════════════════════════════
+     VARIANT B — Calm Minimal
+  ══════════════════════════════════════════════════ */
+
+  /* B Stage 1: Driver En Route */
+  .b-enroute { background: #0a0d14; }
+  .b-enroute .map-full { position: absolute; inset: 0; }
+  .b-float-card { position: absolute; bottom: 32px; left: 16px; right: 16px; background: rgba(15,17,23,0.94); backdrop-filter: blur(16px); border: 1px solid #2d3748; border-radius: 24px; padding: 18px 20px; }
+  .b-float-card .status-row { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+  .b-float-card .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #D69E2E; animation: blink 1.2s ease-in-out infinite; }
+  .b-float-card .status-msg { font-size: 16px; font-weight: 700; color: #fff; }
+  .b-float-card .eta-row { display: flex; align-items: center; gap: 16px; }
+  .b-float-card .eta-big { font-size: 42px; font-weight: 900; color: #D69E2E; letter-spacing: -2px; line-height: 1; }
+  .b-float-card .eta-unit { font-size: 16px; color: #718096; font-weight: 400; padding-bottom: 4px; }
+  .b-float-card .driver-mini { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  .b-float-card .d-mini-avatar { width: 38px; height: 38px; border-radius: 50%; background: linear-gradient(135deg, #742a2a, #C53030); display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 700; color: #fff; }
+  .b-float-card .d-mini-name { font-size: 13px; font-weight: 700; color: #fff; }
+  .b-float-card .d-mini-stars { font-size: 11px; color: #D69E2E; }
+  .b-float-card .d-mini-plate { font-size: 10px; color: #4a5568; margin-top: 1px; }
+  .b-expand-btn { text-align: center; padding-top: 14px; border-top: 1px solid #2d3748; margin-top: 14px; color: #4a5568; font-size: 12px; cursor: pointer; }
+  .b-expand-btn span { color: #a0aec0; }
+
+  /* B Stage 2: In Trip — ultra calm */
+  .b-intrip { background: #0a0d14; }
+  .b-intrip .map-full { position: absolute; inset: 0; }
+  .b-minimal-strip { position: absolute; bottom: 32px; left: 16px; right: 16px; background: rgba(15,17,23,0.88); backdrop-filter: blur(16px); border: 1px solid #2d3748; border-radius: 20px; padding: 16px 18px; }
+  .b-minimal-strip .dest-row { display: flex; align-items: center; gap: 10px; }
+  .b-minimal-strip .dest-dot { width: 8px; height: 8px; border-radius: 50%; background: #E53E3E; flex-shrink: 0; }
+  .b-minimal-strip .dest-name { font-size: 15px; font-weight: 700; color: #fff; }
+  .b-minimal-strip .eta-mini { margin-left: auto; font-size: 14px; font-weight: 800; color: #38A169; }
+  .b-minimal-strip .divider { height: 1px; background: #2d3748; margin: 12px 0; }
+  .b-minimal-strip .meta-row { display: flex; justify-content: space-between; align-items: center; }
+  .b-minimal-strip .meta-item { text-align: center; }
+  .b-minimal-strip .meta-val { font-size: 15px; font-weight: 700; color: #fff; }
+  .b-minimal-strip .meta-lbl { font-size: 10px; color: #4a5568; margin-top: 2px; }
+  .b-intrip .sos-float { position: absolute; top: 50px; right: 16px; }
+
+  /* B Stage 3: Complete — clean celebration */
+  .b-complete { background: #0a0d14; }
+  .b-complete .celebration { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 60px 32px 20px; }
+  .b-complete .c-ring { width: 120px; height: 120px; border-radius: 50%; background: linear-gradient(135deg, #0f2010, #1a3020); border: 3px solid #38A169; display: flex; align-items: center; justify-content: center; margin-bottom: 24px; box-shadow: 0 0 60px rgba(56,161,105,0.2); }
+  .b-complete .c-ring span { font-size: 52px; }
+  .b-complete .c-title { font-size: 28px; font-weight: 900; color: #fff; letter-spacing: -0.5px; }
+  .b-complete .c-sub { font-size: 15px; color: #718096; margin-top: 8px; text-align: center; }
+  .b-complete .fare-pill { background: #1a1400; border: 1px solid #744210; border-radius: 20px; padding: 8px 20px; margin-top: 20px; font-size: 18px; font-weight: 800; color: #D69E2E; }
+  .b-complete .b-rating-row { display: flex; justify-content: center; gap: 10px; margin-top: 24px; }
+  .b-complete .b-rating-row span { font-size: 38px; opacity: 0.35; cursor: pointer; }
+  .b-complete .b-rating-row span.lit { opacity: 1; }
+  .b-complete .rate-label { font-size: 13px; color: #4a5568; margin-top: 8px; }
+  .b-complete .b-bottom { padding: 20px 24px; background: #0a0d14; }
+  .b-complete .done-btn { width: 100%; padding: 16px; background: #38A169; color: #fff; border: none; border-radius: 16px; font-size: 16px; font-weight: 700; cursor: pointer; margin-bottom: 10px; }
+  .b-complete .receipt-link { text-align: center; font-size: 13px; color: #4a5568; cursor: pointer; }
+  .b-complete .receipt-link span { color: #a0aec0; text-decoration: underline; }
+
+  /* ═══════════════════════════════════════════════════
+     VARIANT C — State-Aware Narrative ★
+  ══════════════════════════════════════════════════ */
+
+  /* C Stage 1: Driver En Route — anxiety-aware */
+  .c-enroute { background: #0a0d14; }
+  .c-enroute .map-full { position: absolute; inset: 0; }
+
+  .c-top-card { position: absolute; top: 40px; left: 16px; right: 16px; background: rgba(10,13,20,0.92); backdrop-filter: blur(20px); border: 1px solid #2d3748; border-radius: 20px; padding: 14px 16px; z-index: 40; }
+  .c-top-card .state-badge { display: inline-flex; align-items: center; gap: 6px; background: #1a1400; border: 1px solid #744210; border-radius: 20px; padding: 3px 10px; font-size: 10px; font-weight: 700; color: #D69E2E; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 8px; }
+  .c-top-card .state-dot { width: 6px; height: 6px; border-radius: 50%; background: #D69E2E; animation: blink 1.2s ease-in-out infinite; }
+  .c-top-card .narrative { font-size: 17px; font-weight: 700; color: #fff; line-height: 1.3; }
+  .c-top-card .narrative .highlight { color: #D69E2E; }
+
+  .c-driver-band { position: absolute; bottom: 220px; left: 0; right: 0; background: rgba(10,13,20,0.88); backdrop-filter: blur(16px); border-top: 1px solid #2d3748; padding: 14px 16px; z-index: 40; }
+  .c-driver-band .d-row { display: flex; align-items: center; gap: 12px; }
+  .c-driver-band .d-avatar { width: 46px; height: 46px; border-radius: 50%; background: linear-gradient(135deg, #742a2a, #C53030); display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: 700; color: #fff; flex-shrink: 0; }
+  .c-driver-band .d-details { flex: 1; }
+  .c-driver-band .d-name { font-size: 16px; font-weight: 700; color: #fff; }
+  .c-driver-band .d-stars { font-size: 12px; color: #D69E2E; }
+  .c-driver-band .d-sub { font-size: 11px; color: #718096; margin-top: 2px; }
+  .c-driver-band .d-eta-chip { background: #D69E2E; color: #000; font-size: 14px; font-weight: 800; padding: 6px 14px; border-radius: 20px; }
+  .c-driver-band .c-actions { display: flex; gap: 8px; margin-top: 12px; }
+  .c-driver-band .c-act-btn { flex: 1; padding: 10px; background: #1a1e2d; border-radius: 12px; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 12px; color: #a0aec0; font-weight: 600; cursor: pointer; }
+
+  .c-safety-strip { position: absolute; bottom: 48px; left: 16px; right: 16px; background: rgba(26,10,10,0.9); backdrop-filter: blur(12px); border: 1px solid #742a2a; border-radius: 16px; padding: 12px 16px; z-index: 40; display: flex; align-items: center; gap: 12px; }
+  .c-safety-strip .s-icon { font-size: 18px; }
+  .c-safety-strip .s-txt { font-size: 12px; color: #fc8181; line-height: 1.4; }
+  .c-safety-strip .s-txt strong { color: #fff; }
+  .c-safety-strip .sos-chip { margin-left: auto; background: #E53E3E; color: #fff; font-size: 11px; font-weight: 900; padding: 6px 12px; border-radius: 20px; cursor: pointer; flex-shrink: 0; }
+
+  /* C Stage 2: In Trip — ambient calm with safety */
+  .c-intrip { background: #0a0d14; }
+  .c-intrip .map-full { position: absolute; inset: 0; }
+
+  .c-ambient-top { position: absolute; top: 40px; left: 16px; right: 16px; z-index: 40; }
+  .c-ambient-top .trip-badge { display: inline-flex; align-items: center; gap: 6px; background: rgba(15,32,16,0.9); border: 1px solid #276749; border-radius: 20px; padding: 5px 14px; font-size: 12px; font-weight: 700; color: #68D391; backdrop-filter: blur(12px); }
+  .c-ambient-top .trip-dot { width: 6px; height: 6px; border-radius: 50%; background: #38A169; animation: blink 1.5s ease-in-out infinite; }
+
+  .c-fare-float { position: absolute; top: 96px; right: 16px; background: rgba(26,20,0,0.92); backdrop-filter: blur(12px); border: 1px solid #744210; border-radius: 16px; padding: 10px 14px; z-index: 40; text-align: right; }
+  .c-fare-float .fare-lbl { font-size: 9px; color: #D69E2E; letter-spacing: 1px; text-transform: uppercase; }
+  .c-fare-float .fare-val { font-size: 22px; font-weight: 900; color: #D69E2E; letter-spacing: -1px; }
+  .c-fare-float .fare-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #D69E2E; animation: blink 0.8s ease-in-out infinite; margin-right: 4px; vertical-align: middle; }
+
+  .c-dest-bottom { position: absolute; bottom: 32px; left: 16px; right: 16px; background: rgba(10,13,20,0.92); backdrop-filter: blur(20px); border: 1px solid #2d3748; border-radius: 20px; padding: 16px; z-index: 40; }
+  .c-dest-bottom .dest-label { font-size: 10px; color: #4a5568; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 6px; }
+  .c-dest-bottom .dest-name { font-size: 16px; font-weight: 700; color: #fff; margin-bottom: 10px; }
+  .c-dest-bottom .progress-section { }
+  .c-dest-bottom .prog-row { display: flex; justify-content: space-between; font-size: 11px; color: #718096; margin-bottom: 6px; }
+  .c-dest-bottom .prog-bar { height: 4px; background: #1a1e2d; border-radius: 2px; overflow: hidden; }
+  .c-dest-bottom .prog-fill { height: 100%; width: 55%; background: linear-gradient(90deg, #38A169, #68D391); border-radius: 2px; }
+  .c-dest-bottom .c-meta-row { display: flex; justify-content: space-between; margin-top: 12px; padding-top: 12px; border-top: 1px solid #2d3748; }
+  .c-dest-bottom .c-meta-item { text-align: center; }
+  .c-dest-bottom .c-meta-val { font-size: 15px; font-weight: 700; color: #fff; }
+  .c-dest-bottom .c-meta-lbl { font-size: 10px; color: #4a5568; margin-top: 2px; }
+  .c-sos-inline { position: absolute; top: 52px; left: 16px; z-index: 41; }
+  .c-sos-inline .sos-pill { background: rgba(116,42,42,0.9); border: 1px solid #E53E3E; border-radius: 20px; padding: 5px 12px; font-size: 11px; font-weight: 900; color: #fff; cursor: pointer; backdrop-filter: blur(8px); }
+
+  /* C Stage 3: Complete — Monzo-style receipt + celebration */
+  .c-complete { background: #0a0d14; }
+  .c-complete .receipt-header { padding: 48px 20px 0; background: linear-gradient(180deg, #0f2010 0%, #0a0d14 60%); }
+  .c-complete .receipt-header .done-row { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+  .c-complete .receipt-header .done-check { width: 44px; height: 44px; border-radius: 50%; background: #38A169; display: flex; align-items: center; justify-content: center; font-size: 22px; flex-shrink: 0; }
+  .c-complete .receipt-header .done-text { }
+  .c-complete .receipt-header .done-title { font-size: 20px; font-weight: 800; color: #fff; }
+  .c-complete .receipt-header .done-sub { font-size: 12px; color: #68D391; margin-top: 2px; }
+  .c-complete .total-hero { margin-bottom: 16px; }
+  .c-complete .total-hero .t-label { font-size: 11px; color: #4a5568; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 4px; }
+  .c-complete .total-hero .t-val { font-size: 48px; font-weight: 900; color: #D69E2E; letter-spacing: -2px; }
+  .c-complete .total-hero .t-val sup { font-size: 22px; font-weight: 700; vertical-align: super; }
+
+  .c-receipt-body { flex: 1; overflow-y: auto; padding: 0 16px; }
+  .c-receipt-block { background: #13172a; border-radius: 20px; padding: 18px; margin-bottom: 10px; }
+  .c-receipt-block .block-title { font-size: 10px; color: #4a5568; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 12px; }
+  .c-rec-line { display: flex; justify-content: space-between; align-items: center; padding: 7px 0; border-bottom: 1px solid #1a1e2d; font-size: 13px; }
+  .c-rec-line:last-child { border-bottom: none; }
+  .c-rec-line .rl { color: #718096; }
+  .c-rec-line .rl small { display: block; font-size: 10px; color: #4a5568; }
+  .c-rec-line .rv { color: #fff; font-weight: 600; text-align: right; }
+  .c-rec-line .rv.green { color: #68D391; }
+  .c-rec-line .rv.gold { color: #D69E2E; }
+  .c-total-line { display: flex; justify-content: space-between; align-items: center; padding: 12px 0 0; margin-top: 8px; border-top: 2px solid #2d3748; font-size: 15px; font-weight: 700; color: #fff; }
+  .c-total-line .tv { font-size: 22px; color: #D69E2E; font-weight: 900; }
+
+  .c-rating-block { background: #13172a; border-radius: 20px; padding: 18px; margin-bottom: 10px; text-align: center; }
+  .c-rating-block .r-label { font-size: 14px; font-weight: 700; color: #fff; margin-bottom: 14px; }
+  .c-rating-block .c-stars { display: flex; justify-content: center; gap: 8px; }
+  .c-rating-block .c-stars span { font-size: 34px; opacity: 0.3; cursor: pointer; }
+  .c-rating-block .c-stars span.lit { opacity: 1; }
+  .c-rating-block .r-sub { font-size: 11px; color: #4a5568; margin-top: 8px; }
+
+  .c-complete .bottom-actions { padding: 12px 16px; background: #0a0d14; border-top: 1px solid #1a1e2d; display: flex; gap: 10px; }
+  .c-complete .bottom-actions .submit-btn { flex: 2; padding: 14px; background: #38A169; color: #fff; border: none; border-radius: 14px; font-size: 15px; font-weight: 700; cursor: pointer; }
+  .c-complete .bottom-actions .share-btn { flex: 1; padding: 14px; background: #1a1e2d; color: #a0aec0; border: none; border-radius: 14px; font-size: 13px; font-weight: 600; cursor: pointer; }
+
+  /* ── Animations ──────────────────────────────────── */
+  @keyframes blink { 0%,100%{opacity:1;} 50%{opacity:0.3;} }
+
+  /* ── Notes ───────────────────────────────────────── */
+  .notes-row { display: flex; justify-content: center; gap: 32px; padding: 0 40px 40px; flex-wrap: wrap; }
+  .note-card { width: 375px; background: #1a1e2d; border-radius: 16px; padding: 16px 20px; border: 1px solid #2d3748; }
+  .note-card h3 { font-size: 12px; font-weight: 700; color: #E53E3E; letter-spacing: 1px; text-transform: uppercase; margin: 0 0 10px; }
+  .note-card p { font-size: 12px; color: #718096; margin: 0 0 6px; line-height: 1.6; }
+  .note-card strong { color: #a0aec0; }
+</style>
+</head>
+<body>
+
+<div class="page-header">
+  <h1>006 — Rider Active Ride</h1>
+  <p>Spinr Sketch Series · Rider App Surface · 3 Variants</p>
+  <span class="design-q">"Right balance of info vs calm during a ride?"</span>
+</div>
+
+<div class="toolbar">
+  <button class="active" onclick="setVariant('a',this)">A — Information-Dense</button>
+  <button onclick="setVariant('b',this)">B — Calm Minimal</button>
+  <button onclick="setVariant('c',this)">C — State-Aware ★</button>
+</div>
+
+<div class="stage-bar">
+  <button class="active" id="stage-btn-1" onclick="setStage('1',this)">Driver En Route</button>
+  <button id="stage-btn-2" onclick="setStage('2',this)">In Trip</button>
+  <button id="stage-btn-3" onclick="setStage('3',this)">Complete</button>
+</div>
+
+<div class="phones-row">
+
+  <!-- ══ PHONE A ══════════════════════════════════ -->
+  <div class="phone-wrap">
+    <div class="variant-label"><span>A</span> — Information-Dense</div>
+    <div class="phone">
+      <div class="notch"></div>
+      <div class="screen">
+
+        <!-- A1: Driver En Route -->
+        <div class="panel a-enroute visible" id="a-stage-1">
+          <div class="map-section">
+            <div class="map-bg">
+              <svg viewBox="0 0 375 340" xmlns="http://www.w3.org/2000/svg">
+                <rect width="375" height="340" fill="#1a1e2d"/>
+                <line x1="0" y1="60" x2="375" y2="60" stroke="#252b3b" stroke-width="1"/>
+                <line x1="0" y1="120" x2="375" y2="120" stroke="#252b3b" stroke-width="1"/>
+                <line x1="0" y1="180" x2="375" y2="180" stroke="#252b3b" stroke-width="1"/>
+                <line x1="0" y1="240" x2="375" y2="240" stroke="#252b3b" stroke-width="1"/>
+                <line x1="0" y1="300" x2="375" y2="300" stroke="#252b3b" stroke-width="1"/>
+                <line x1="75" y1="0" x2="75" y2="340" stroke="#252b3b" stroke-width="1"/>
+                <line x1="150" y1="0" x2="150" y2="340" stroke="#252b3b" stroke-width="1"/>
+                <line x1="225" y1="0" x2="225" y2="340" stroke="#252b3b" stroke-width="1"/>
+                <line x1="300" y1="0" x2="300" y2="340" stroke="#252b3b" stroke-width="1"/>
+                <!-- Road network -->
+                <path d="M 0 180 L 375 180" stroke="#2d3748" stroke-width="8" fill="none"/>
+                <path d="M 150 0 L 150 340" stroke="#2d3748" stroke-width="8" fill="none"/>
+                <path d="M 0 120 L 375 120" stroke="#2d3748" stroke-width="5" fill="none"/>
+                <!-- Driver route to pickup -->
+                <path d="M 80 80 L 150 80 L 150 180 L 220 180" stroke="#D69E2E" stroke-width="3" fill="none" stroke-dasharray="8 4" stroke-linecap="round"/>
+                <!-- Driver car dot -->
+                <circle cx="80" cy="80" r="10" fill="#D69E2E"/>
+                <circle cx="80" cy="80" r="6" fill="#000"/>
+                <!-- Pickup pin -->
+                <circle cx="220" cy="180" r="8" fill="#fff"/>
+                <circle cx="220" cy="180" r="4" fill="#0f1117"/>
+                <!-- Direction arrow on driver -->
+                <path d="M 80 70 L 85 78 L 80 76 L 75 78 Z" fill="#fff"/>
+              </svg>
+            </div>
+            <div class="sos-btn">SOS</div>
+          </div>
+          <div class="status-strip">
+            <div class="status-dot"></div>
+            <div class="status-text">Alex J. is on the way</div>
+            <div class="eta-badge">3 min</div>
+          </div>
+          <div class="a-driver-info">
+            <div class="a-driver-row">
+              <div class="a-driver-avatar">A</div>
+              <div class="a-driver-meta">
+                <div class="a-driver-name">Alex Johnson</div>
+                <div class="a-driver-stars">★★★★★ 4.9 · 1,240 trips</div>
+                <div class="a-driver-sub">Toyota Camry 2022 · GXY 847-KRX</div>
+              </div>
+            </div>
+            <div class="a-contact-row">
+              <div class="a-contact-btn">📞 Call</div>
+              <div class="a-contact-btn">💬 Message</div>
+              <div class="a-contact-btn">📍 Share trip</div>
+            </div>
+          </div>
+          <div class="a-progress-section">
+            <div class="a-progress-label">
+              <span>Alex's location</span>
+              <span style="color:#D69E2E;">2.8 km away</span>
+            </div>
+            <div class="a-progress-bar"><div class="a-progress-fill"></div></div>
+          </div>
+          <div class="a-route-steps">
+            <div style="font-size:10px;color:#4a5568;font-weight:700;letter-spacing:1px;text-transform:uppercase;padding-bottom:6px;">Alex's route to you</div>
+            <div class="a-step"><div class="step-icon">↑</div><span>North on Oak St</span><span class="step-dist">0.6 km</span></div>
+            <div class="a-step"><div class="step-icon">→</div><span>Right on College Ave</span><span class="step-dist">1.4 km</span></div>
+            <div class="a-step"><div class="step-icon">●</div><span style="color:#D69E2E;">Your pickup</span><span class="step-dist">0.8 km</span></div>
+          </div>
+        </div>
+
+        <!-- A2: In Trip -->
+        <div class="panel a-intrip" id="a-stage-2">
+          <div class="map-section">
+            <div class="map-bg">
+              <svg viewBox="0 0 375 420" xmlns="http://www.w3.org/2000/svg">
+                <rect width="375" height="420" fill="#1a1e2d"/>
+                <line x1="0" y1="70" x2="375" y2="70" stroke="#252b3b" stroke-width="1"/>
+                <line x1="0" y1="140" x2="375" y2="140" stroke="#252b3b" stroke-width="1"/>
+                <line x1="0" y1="210" x2="375" y2="210" stroke="#252b3b" stroke-width="1"/>
+                <line x1="0" y1="280" x2="375" y2="280" stroke="#252b3b" stroke-width="1"/>
+                <line x1="0" y1="350" x2="375" y2="350" stroke="#252b3b" stroke-width="1"/>
+                <line x1="75" y1="0" x2="75" y2="420" stroke="#252b3b" stroke-width="1"/>
+                <line x1="150" y1="0" x2="150" y2="420" stroke="#252b3b" stroke-width="1"/>
+                <line x1="225" y1="0" x2="225" y2="420" stroke="#252b3b" stroke-width="1"/>
+                <line x1="300" y1="0" x2="300" y2="420" stroke="#252b3b" stroke-width="1"/>
+                <path d="M 0 210 L 375 210" stroke="#2d3748" stroke-width="8" fill="none"/>
+                <path d="M 150 0 L 150 420" stroke="#2d3748" stroke-width="8" fill="none"/>
+                <!-- Trip route — completed portion in green, ahead in red -->
+                <path d="M 50 350 L 50 210 L 150 210 L 150 140" stroke="#38A169" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M 150 140 L 150 70 L 310 70" stroke="#E53E3E" stroke-width="3" fill="none" stroke-dasharray="8 4" stroke-linecap="round"/>
+                <!-- Car (current position) -->
+                <circle cx="150" cy="140" r="10" fill="#E53E3E"/>
+                <circle cx="150" cy="140" r="5" fill="#fff"/>
+                <!-- Destination -->
+                <circle cx="310" cy="70" r="8" fill="#E53E3E"/>
+                <path d="M 310 60 L 315 68 L 310 66 L 305 68 Z" fill="#fff"/>
+              </svg>
+            </div>
+            <div class="sos-btn">SOS</div>
+          </div>
+          <div class="a-fare-meter">
+            <div class="meter-dot"></div>
+            <div class="meter-label">Running fare</div>
+            <div class="meter-value"><sup>$</sup>6.82</div>
+          </div>
+          <div class="a-trip-info">
+            <div class="a-trip-info ti-item">
+              <div class="ti-val">4 min</div>
+              <div class="ti-lbl">ETA</div>
+            </div>
+            <div class="a-trip-info divider-v"></div>
+            <div class="a-trip-info ti-item">
+              <div class="ti-val">1.8 km</div>
+              <div class="ti-lbl">Remaining</div>
+            </div>
+            <div class="a-trip-info divider-v"></div>
+            <div class="a-trip-info ti-item">
+              <div class="ti-val">3.1 km</div>
+              <div class="ti-lbl">Total trip</div>
+            </div>
+          </div>
+          <div class="a-turn-strip">
+            <div class="turn-arrow">↑</div>
+            <div class="turn-text">Continue on Victoria Ave</div>
+            <div class="turn-dist">in 400 m</div>
+          </div>
+          <div class="a-intrip-bottom">
+            <div class="a-intrip-bottom safe-btn">📞 Driver</div>
+            <div class="a-intrip-bottom safe-btn">📍 Share trip</div>
+            <div class="a-intrip-bottom safe-btn" style="color:#E53E3E;">⚠ Report</div>
+          </div>
+        </div>
+
+        <!-- A3: Complete -->
+        <div class="panel a-complete" id="a-stage-3">
+          <div class="top">
+            <div class="arrival-icon">📍</div>
+            <div class="arr-title">You've arrived!</div>
+            <div class="arr-sub">2476 Victoria Ave E · 9 min trip</div>
+          </div>
+          <div class="a-receipt">
+            <div class="a-receipt-card">
+              <div class="a-receipt-title">Trip receipt</div>
+              <div class="a-rec-row"><span>Base fare</span><span class="rv">$3.50</span></div>
+              <div class="a-rec-row"><span>Distance (3.1 km × $1.00)</span><span class="rv">$3.10</span></div>
+              <div class="a-rec-row"><span>Time (~9 min × $0.12)</span><span class="rv">$1.08</span></div>
+              <div class="a-rec-row"><span>Booking fee</span><span class="rv">$1.72</span></div>
+              <div class="a-rec-row"><span>Surge pricing</span><span class="rv" style="color:#38A169;">None ✓</span></div>
+              <div class="a-rec-row"><span>GST (5%)</span><span class="rv">$0.47</span></div>
+              <div class="a-rec-row"><span>PST (6%)</span><span class="rv">$0.56</span></div>
+              <div class="a-rec-row" style="border-top:2px solid #2d3748;padding-top:10px;"><strong style="color:#fff;">Total charged</strong><span class="rv gold">$12.40</span></div>
+            </div>
+            <div class="a-rating-card">
+              <div class="r-title">Rate Alex J.</div>
+              <div class="a-stars">
+                <span class="lit">★</span>
+                <span class="lit">★</span>
+                <span class="lit">★</span>
+                <span class="lit">★</span>
+                <span>★</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+      <div class="home-indicator"></div>
+    </div>
+  </div>
+
+  <!-- ══ PHONE B ══════════════════════════════════ -->
+  <div class="phone-wrap">
+    <div class="variant-label"><span>B</span> — Calm Minimal</div>
+    <div class="phone">
+      <div class="notch"></div>
+      <div class="screen">
+
+        <!-- B1: Driver En Route -->
+        <div class="panel b-enroute visible" id="b-stage-1">
+          <div class="map-full">
+            <svg viewBox="0 0 375 812" xmlns="http://www.w3.org/2000/svg">
+              <rect width="375" height="812" fill="#1a1e2d"/>
+              <line x1="0" y1="100" x2="375" y2="100" stroke="#252b3b" stroke-width="1"/>
+              <line x1="0" y1="200" x2="375" y2="200" stroke="#252b3b" stroke-width="1"/>
+              <line x1="0" y1="300" x2="375" y2="300" stroke="#252b3b" stroke-width="1"/>
+              <line x1="0" y1="400" x2="375" y2="400" stroke="#252b3b" stroke-width="1"/>
+              <line x1="0" y1="500" x2="375" y2="500" stroke="#252b3b" stroke-width="1"/>
+              <line x1="0" y1="600" x2="375" y2="600" stroke="#252b3b" stroke-width="1"/>
+              <line x1="0" y1="700" x2="375" y2="700" stroke="#252b3b" stroke-width="1"/>
+              <line x1="75" y1="0" x2="75" y2="812" stroke="#252b3b" stroke-width="1"/>
+              <line x1="150" y1="0" x2="150" y2="812" stroke="#252b3b" stroke-width="1"/>
+              <line x1="225" y1="0" x2="225" y2="812" stroke="#252b3b" stroke-width="1"/>
+              <line x1="300" y1="0" x2="300" y2="812" stroke="#252b3b" stroke-width="1"/>
+              <!-- Roads -->
+              <path d="M 0 400 L 375 400" stroke="#2d3748" stroke-width="10" fill="none"/>
+              <path d="M 150 0 L 150 812" stroke="#2d3748" stroke-width="10" fill="none"/>
+              <path d="M 0 300 L 375 300" stroke="#2d3748" stroke-width="5" fill="none"/>
+              <!-- Driver route -->
+              <path d="M 80 200 L 150 200 L 150 400 L 220 400" stroke="#D69E2E" stroke-width="3" fill="none" stroke-dasharray="10 5"/>
+              <!-- Driver -->
+              <circle cx="80" cy="200" r="14" fill="#D69E2E" opacity="0.3"/>
+              <circle cx="80" cy="200" r="9" fill="#D69E2E"/>
+              <circle cx="80" cy="200" r="4" fill="#000"/>
+              <!-- Pickup -->
+              <circle cx="220" cy="400" r="10" fill="#fff"/>
+              <circle cx="220" cy="400" r="5" fill="#1a1e2d"/>
+            </svg>
+          </div>
+          <div class="sos-btn" style="top:50px;z-index:50;">SOS</div>
+          <div class="b-float-card">
+            <div class="status-row">
+              <div class="status-dot"></div>
+              <div class="status-msg">Driver on the way</div>
+            </div>
+            <div class="eta-row">
+              <div class="eta-big">3</div>
+              <div class="eta-unit">min away</div>
+              <div class="driver-mini">
+                <div class="d-mini-avatar">A</div>
+                <div>
+                  <div class="d-mini-name">Alex J.</div>
+                  <div class="d-mini-stars">★★★★★ 4.9</div>
+                  <div class="d-mini-plate">GXY 847-KRX</div>
+                </div>
+              </div>
+            </div>
+            <div class="b-expand-btn">Tap for driver details · <span>contact ›</span></div>
+          </div>
+        </div>
+
+        <!-- B2: In Trip -->
+        <div class="panel b-intrip" id="b-stage-2">
+          <div class="map-full">
+            <svg viewBox="0 0 375 812" xmlns="http://www.w3.org/2000/svg">
+              <rect width="375" height="812" fill="#1a1e2d"/>
+              <line x1="0" y1="100" x2="375" y2="100" stroke="#252b3b" stroke-width="1"/>
+              <line x1="0" y1="200" x2="375" y2="200" stroke="#252b3b" stroke-width="1"/>
+              <line x1="0" y1="300" x2="375" y2="300" stroke="#252b3b" stroke-width="1"/>
+              <line x1="0" y1="400" x2="375" y2="400" stroke="#252b3b" stroke-width="1"/>
+              <line x1="0" y1="500" x2="375" y2="500" stroke="#252b3b" stroke-width="1"/>
+              <line x1="0" y1="600" x2="375" y2="600" stroke="#252b3b" stroke-width="1"/>
+              <line x1="0" y1="700" x2="375" y2="700" stroke="#252b3b" stroke-width="1"/>
+              <line x1="75" y1="0" x2="75" y2="812" stroke="#252b3b" stroke-width="1"/>
+              <line x1="150" y1="0" x2="150" y2="812" stroke="#252b3b" stroke-width="1"/>
+              <line x1="225" y1="0" x2="225" y2="812" stroke="#252b3b" stroke-width="1"/>
+              <line x1="300" y1="0" x2="300" y2="812" stroke="#252b3b" stroke-width="1"/>
+              <path d="M 0 400 L 375 400" stroke="#2d3748" stroke-width="10" fill="none"/>
+              <path d="M 150 0 L 150 812" stroke="#2d3748" stroke-width="10" fill="none"/>
+              <!-- Trip route -->
+              <path d="M 80 550 L 80 400 L 150 400 L 150 300 L 270 300" stroke="#38A169" stroke-width="3" fill="none" stroke-linecap="round" stroke-linejoin="round" opacity="0.5"/>
+              <path d="M 150 300 L 150 200 L 300 200" stroke="#E53E3E" stroke-width="3" fill="none" stroke-dasharray="10 5" stroke-linecap="round"/>
+              <!-- Car -->
+              <circle cx="150" cy="300" r="12" fill="#E53E3E" opacity="0.2"/>
+              <circle cx="150" cy="300" r="8" fill="#E53E3E"/>
+              <circle cx="150" cy="300" r="3" fill="#fff"/>
+              <!-- Dest -->
+              <circle cx="300" cy="200" r="8" fill="#E53E3E"/>
+            </svg>
+          </div>
+          <div class="b-intrip sos-float">
+            <div style="background:rgba(116,42,42,0.9);border:1px solid #E53E3E;border-radius:50%;width:44px;height:44px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:900;color:#fff;cursor:pointer;">SOS</div>
+          </div>
+          <div class="b-minimal-strip">
+            <div class="dest-row">
+              <div class="dest-dot"></div>
+              <div class="dest-name">2476 Victoria Ave E</div>
+              <div class="eta-mini">4 min</div>
+            </div>
+            <div class="divider"></div>
+            <div class="meta-row">
+              <div class="meta-item">
+                <div class="meta-val">1.8 km</div>
+                <div class="meta-lbl">remaining</div>
+              </div>
+              <div class="meta-item">
+                <div class="meta-val">3.1 km</div>
+                <div class="meta-lbl">total trip</div>
+              </div>
+              <div class="meta-item">
+                <div class="meta-val" style="color:#D69E2E;">~$12</div>
+                <div class="meta-lbl">est. fare</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- B3: Complete -->
+        <div class="panel b-complete" id="b-stage-3">
+          <div class="celebration">
+            <div class="c-ring"><span>✓</span></div>
+            <div class="c-title">You're here!</div>
+            <div class="c-sub">Arrived at Victoria Ave E<br>9 min · 3.1 km</div>
+            <div class="fare-pill">$12.40</div>
+            <div class="rate-label">How was Alex?</div>
+            <div class="b-rating-row">
+              <span class="lit">★</span>
+              <span class="lit">★</span>
+              <span class="lit">★</span>
+              <span class="lit">★</span>
+              <span>★</span>
+            </div>
+          </div>
+          <div class="b-bottom">
+            <button class="done-btn">Submit rating</button>
+            <div class="receipt-link">View full receipt <span>→</span></div>
+          </div>
+        </div>
+
+      </div>
+      <div class="home-indicator"></div>
+    </div>
+  </div>
+
+  <!-- ══ PHONE C ══════════════════════════════════ -->
+  <div class="phone-wrap">
+    <div class="variant-label"><span>C</span> — State-Aware Narrative <span style="color:#D69E2E;">★</span></div>
+    <div class="phone">
+      <div class="notch"></div>
+      <div class="screen">
+
+        <!-- C1: Driver En Route — narrative-first -->
+        <div class="panel c-enroute visible" id="c-stage-1">
+          <div class="map-full">
+            <svg viewBox="0 0 375 812" xmlns="http://www.w3.org/2000/svg">
+              <rect width="375" height="812" fill="#1a1e2d"/>
+              <line x1="0" y1="100" x2="375" y2="100" stroke="#252b3b" stroke-width="1"/>
+              <line x1="0" y1="200" x2="375" y2="200" stroke="#252b3b" stroke-width="1"/>
+              <line x1="0" y1="300" x2="375" y2="300" stroke="#252b3b" stroke-width="1"/>
+              <line x1="0" y1="400" x2="375" y2="400" stroke="#252b3b" stroke-width="1"/>
+              <line x1="0" y1="500" x2="375" y2="500" stroke="#252b3b" stroke-width="1"/>
+              <line x1="0" y1="600" x2="375" y2="600" stroke="#252b3b" stroke-width="1"/>
+              <line x1="0" y1="700" x2="375" y2="700" stroke="#252b3b" stroke-width="1"/>
+              <line x1="75" y1="0" x2="75" y2="812" stroke="#252b3b" stroke-width="1"/>
+              <line x1="150" y1="0" x2="150" y2="812" stroke="#252b3b" stroke-width="1"/>
+              <line x1="225" y1="0" x2="225" y2="812" stroke="#252b3b" stroke-width="1"/>
+              <line x1="300" y1="0" x2="300" y2="812" stroke="#252b3b" stroke-width="1"/>
+              <path d="M 0 400 L 375 400" stroke="#2d3748" stroke-width="10" fill="none"/>
+              <path d="M 150 0 L 150 812" stroke="#2d3748" stroke-width="10" fill="none"/>
+              <path d="M 0 300 L 375 300" stroke="#2d3748" stroke-width="5" fill="none"/>
+              <!-- driver route -->
+              <path d="M 90 250 L 150 250 L 150 400 L 225 400" stroke="#D69E2E" stroke-width="3" fill="none" stroke-dasharray="10 5" opacity="0.8"/>
+              <!-- animated driver glow -->
+              <circle cx="90" cy="250" r="22" fill="#D69E2E" opacity="0.08"/>
+              <circle cx="90" cy="250" r="14" fill="#D69E2E" opacity="0.15"/>
+              <circle cx="90" cy="250" r="9" fill="#D69E2E"/>
+              <circle cx="90" cy="250" r="4" fill="#000"/>
+              <path d="M 90 240 L 95 249 L 90 247 L 85 249 Z" fill="#fff"/>
+              <!-- pickup -->
+              <circle cx="225" cy="400" r="12" fill="#fff" opacity="0.2"/>
+              <circle cx="225" cy="400" r="8" fill="#fff"/>
+              <circle cx="225" cy="400" r="4" fill="#1a1e2d"/>
+            </svg>
+          </div>
+
+          <div class="c-top-card">
+            <div class="state-badge"><div class="state-dot"></div>DRIVER EN ROUTE</div>
+            <div class="narrative"><span class="highlight">Alex is 2 stops away</span> — heading south on Oak St now</div>
+          </div>
+
+          <div class="c-driver-band">
+            <div class="d-row">
+              <div class="d-avatar">A</div>
+              <div class="d-details">
+                <div class="d-name">Alex Johnson</div>
+                <div class="d-stars">★★★★★ 4.9 · 1,240 trips</div>
+                <div class="d-sub">Toyota Camry 2022 · Plate: GXY 847-KRX</div>
+              </div>
+              <div class="d-eta-chip">3 min</div>
+            </div>
+            <div class="c-actions">
+              <div class="c-act-btn">📞 Call Alex</div>
+              <div class="c-act-btn">💬 Message</div>
+              <div class="c-act-btn">📍 Share trip</div>
+            </div>
+          </div>
+
+          <div class="c-safety-strip">
+            <div class="s-icon">🛡</div>
+            <div class="s-txt"><strong>Trip protected.</strong> Your location is shared with your emergency contacts for this trip.</div>
+            <div class="sos-chip">SOS</div>
+          </div>
+        </div>
+
+        <!-- C2: In Trip — ambient calm -->
+        <div class="panel c-intrip" id="c-stage-2">
+          <div class="map-full">
+            <svg viewBox="0 0 375 812" xmlns="http://www.w3.org/2000/svg">
+              <rect width="375" height="812" fill="#1a1e2d"/>
+              <line x1="0" y1="100" x2="375" y2="100" stroke="#252b3b" stroke-width="1"/>
+              <line x1="0" y1="200" x2="375" y2="200" stroke="#252b3b" stroke-width="1"/>
+              <line x1="0" y1="300" x2="375" y2="300" stroke="#252b3b" stroke-width="1"/>
+              <line x1="0" y1="400" x2="375" y2="400" stroke="#252b3b" stroke-width="1"/>
+              <line x1="0" y1="500" x2="375" y2="500" stroke="#252b3b" stroke-width="1"/>
+              <line x1="0" y1="600" x2="375" y2="600" stroke="#252b3b" stroke-width="1"/>
+              <line x1="0" y1="700" x2="375" y2="700" stroke="#252b3b" stroke-width="1"/>
+              <line x1="75" y1="0" x2="75" y2="812" stroke="#252b3b" stroke-width="1"/>
+              <line x1="150" y1="0" x2="150" y2="812" stroke="#252b3b" stroke-width="1"/>
+              <line x1="225" y1="0" x2="225" y2="812" stroke="#252b3b" stroke-width="1"/>
+              <line x1="300" y1="0" x2="300" y2="812" stroke="#252b3b" stroke-width="1"/>
+              <path d="M 0 400 L 375 400" stroke="#2d3748" stroke-width="10" fill="none"/>
+              <path d="M 150 0 L 150 812" stroke="#2d3748" stroke-width="10" fill="none"/>
+              <!-- completed path faded -->
+              <path d="M 80 550 L 80 400 L 150 400 L 150 300" stroke="#38A169" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round" opacity="0.4"/>
+              <!-- remaining path -->
+              <path d="M 150 300 L 150 200 L 290 200" stroke="#E53E3E" stroke-width="4" fill="none" stroke-dasharray="12 6" stroke-linecap="round" opacity="0.8"/>
+              <!-- Car with glow -->
+              <circle cx="150" cy="300" r="18" fill="#E53E3E" opacity="0.1"/>
+              <circle cx="150" cy="300" r="11" fill="#E53E3E"/>
+              <circle cx="150" cy="300" r="5" fill="#fff"/>
+              <!-- Dest -->
+              <circle cx="290" cy="200" r="10" fill="#E53E3E"/>
+              <circle cx="290" cy="200" r="5" fill="#fff"/>
+            </svg>
+          </div>
+
+          <div class="c-sos-inline">
+            <div class="sos-pill">SOS</div>
+          </div>
+
+          <div class="c-ambient-top">
+            <div class="trip-badge"><div class="trip-dot"></div>IN TRIP · PROTECTED</div>
+          </div>
+
+          <div class="c-fare-float">
+            <div class="fare-lbl">Running fare</div>
+            <div class="fare-val"><span class="fare-dot"></span>$6.82</div>
+          </div>
+
+          <div class="c-dest-bottom">
+            <div class="dest-label">Your destination</div>
+            <div class="dest-name">2476 Victoria Ave E</div>
+            <div class="prog-row">
+              <span>1.3 km done</span>
+              <span>1.8 km left</span>
+            </div>
+            <div class="prog-bar"><div class="prog-fill"></div></div>
+            <div class="c-meta-row">
+              <div class="c-meta-item">
+                <div class="c-meta-val">4 min</div>
+                <div class="c-meta-lbl">ETA</div>
+              </div>
+              <div class="c-meta-item">
+                <div class="c-meta-val">3.1 km</div>
+                <div class="c-meta-lbl">total</div>
+              </div>
+              <div class="c-meta-item">
+                <div class="c-meta-val" style="color:#D69E2E;">~$12.40</div>
+                <div class="c-meta-lbl">est. total</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- C3: Complete — Monzo-style receipt -->
+        <div class="panel c-complete" id="c-stage-3">
+          <div class="receipt-header">
+            <div class="done-row">
+              <div class="done-check">✓</div>
+              <div class="done-text">
+                <div class="done-title">You've arrived!</div>
+                <div class="done-sub">0% commission · driver kept 100%</div>
+              </div>
+            </div>
+            <div class="total-hero">
+              <div class="t-label">Total charged</div>
+              <div class="t-val"><sup>$</sup>12.40</div>
+            </div>
+          </div>
+          <div class="c-receipt-body">
+            <div class="c-receipt-block">
+              <div class="block-title">Fare breakdown</div>
+              <div class="c-rec-line"><div class="rl">Base fare</div><div class="rv">$3.50</div></div>
+              <div class="c-rec-line"><div class="rl">Distance <small>3.1 km × $1.00/km</small></div><div class="rv">$3.10</div></div>
+              <div class="c-rec-line"><div class="rl">Time <small>~9 min × $0.12/min</small></div><div class="rv">$1.08</div></div>
+              <div class="c-rec-line"><div class="rl">Booking fee</div><div class="rv">$1.72</div></div>
+              <div class="c-rec-line"><div class="rl">Surge</div><div class="rv green">None ✓</div></div>
+              <div class="c-rec-line"><div class="rl">GST (5%) <small>Canada Revenue Agency</small></div><div class="rv">$0.47</div></div>
+              <div class="c-rec-line"><div class="rl">PST (6%) <small>SK Finance</small></div><div class="rv">$0.56</div></div>
+              <div class="c-total-line"><span>Total</span><span class="tv">$12.40</span></div>
+            </div>
+            <div class="c-receipt-block">
+              <div class="block-title">Trip details</div>
+              <div class="c-rec-line"><div class="rl">Driver</div><div class="rv">Alex Johnson ★4.9</div></div>
+              <div class="c-rec-line"><div class="rl">Vehicle</div><div class="rv">Toyota Camry 2022</div></div>
+              <div class="c-rec-line"><div class="rl">Duration</div><div class="rv">9 min · 3.1 km</div></div>
+              <div class="c-rec-line"><div class="rl">Payment</div><div class="rv">Visa ···4242</div></div>
+              <div class="c-rec-line"><div class="rl">Commission to Spinr</div><div class="rv green">$0.00 ✓</div></div>
+            </div>
+            <div class="c-rating-block">
+              <div class="r-label">How was your ride with Alex?</div>
+              <div class="c-stars">
+                <span class="lit">★</span>
+                <span class="lit">★</span>
+                <span class="lit">★</span>
+                <span class="lit">★</span>
+                <span>★</span>
+              </div>
+              <div class="r-sub">Your rating helps Alex grow their business</div>
+            </div>
+          </div>
+          <div class="bottom-actions">
+            <button class="submit-btn">Submit rating</button>
+            <button class="share-btn">Share receipt</button>
+          </div>
+        </div>
+
+      </div>
+      <div class="home-indicator"></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Notes -->
+<div class="notes-row">
+  <div class="note-card">
+    <h3>A — Information-Dense</h3>
+    <p><strong>Anxiety model:</strong> More data = more control. Shows driver route steps, running fare, turn-by-turn nav strip, all simultaneously.</p>
+    <p><strong>Risk:</strong> Information overload. Riders don't need turn-by-turn (driver drives); showing it may increase, not reduce, anxiety. Running fare meter can cause "watching the clock" stress.</p>
+    <p><strong>Best for:</strong> Power users who want to verify route correctness, track every cent.</p>
+  </div>
+  <div class="note-card">
+    <h3>B — Calm Minimal</h3>
+    <p><strong>Anxiety model:</strong> Reduce visible info → reduce stress. Giant ETA countdown during wait, near-empty map during trip, celebration screen on arrival.</p>
+    <p><strong>Risk:</strong> Under-serving riders with legitimate anxiety (safety, wrong route). No visible SOS entry point without tapping, no driver details surfaced proactively.</p>
+    <p><strong>Best for:</strong> Regular users on familiar routes who trust the system.</p>
+  </div>
+  <div class="note-card">
+    <h3>C — State-Aware Narrative ★</h3>
+    <p><strong>Anxiety model:</strong> Match information density to the anxiety curve. <strong>Wait state</strong> = high info (driver narrative card, contact, safety strip). <strong>In-trip state</strong> = ambient calm (fare in corner, ETA strip, progress bar). <strong>Complete</strong> = Monzo-style receipt, rating, "driver kept 100%".</p>
+    <p><strong>Key UX principle:</strong> The narrative card ("Alex is 2 stops away") addresses pick-up anxiety with human language, not just a countdown timer. It answers "where is Alex?" not "how many minutes?"</p>
+    <p><strong>Safety:</strong> SOS accessible on every state — inline pill in trip, chip in safety strip during wait, never buried.</p>
+    <p><strong>Saskatchewan compliance:</strong> Receipt shows GST (5%) + PST (6%) as separate labeled line items. "Commission to Spinr: $0.00 ✓" reinforces 0% model on every completed trip.</p>
+  </div>
+</div>
+
+<script>
+  var currentStage = '1';
+
+  function setVariant(v, btn) {
+    document.querySelectorAll('.toolbar button').forEach(function(b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    updatePanels();
+  }
+
+  function setStage(s, btn) {
+    currentStage = s;
+    document.querySelectorAll('.stage-bar button').forEach(function(b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    updatePanels();
+  }
+
+  function updatePanels() {
+    document.querySelectorAll('.panel').forEach(function(p) { p.classList.remove('visible'); });
+    ['a','b','c'].forEach(function(v) {
+      var el = document.getElementById(v + '-stage-' + currentStage);
+      if (el) el.classList.add('visible');
+    });
+  }
+</script>
+
+</body>
+</html>

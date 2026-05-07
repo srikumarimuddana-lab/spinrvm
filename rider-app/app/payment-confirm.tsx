@@ -82,7 +82,9 @@ function PaymentConfirmScreenContent() {
       setSavedCards(cards);
       const defaultCard = cards.find((c) => c.is_default) ?? cards[0];
       if (defaultCard) setSelectedCardId(defaultCard.id);
-    }).catch(() => {});
+    }).catch((e) => {
+      console.warn('[PaymentConfirm] Failed to load saved cards:', e?.message ?? e);
+    });
   }, []);
 
   // Keep corporate toggle in sync when work mode is toggled elsewhere
@@ -133,10 +135,10 @@ function PaymentConfirmScreenContent() {
     setPromoMessage('');
     try {
       const fare = parseFloat(selectedEstimate?.total_fare || '0');
-      const res = await api.post('/promo/validate', { code, ride_fare: fare });
-      setPromoDiscount(res.data.discount_amount);
+      const res = await api.post<{ discount_amount?: number }>('/promo/validate', { code, ride_fare: fare });
+      setPromoDiscount(res.data.discount_amount ?? 0);
       setPromoApplied(true);
-      setPromoMessage(`-$${res.data.discount_amount.toFixed(2)} discount applied!`);
+      setPromoMessage(`-$${(res.data.discount_amount ?? 0).toFixed(2)} discount applied!`);
     } catch (error: any) {
       const msg = error?.response?.data?.detail || 'Invalid promo code';
       setPromoMessage(msg);
@@ -147,7 +149,7 @@ function PaymentConfirmScreenContent() {
     }
   };
 
-  const totalFare = parseFloat(selectedEstimate?.total_fare || '0') - promoDiscount;
+  const totalFare = Math.max(0, parseFloat(selectedEstimate?.total_fare || '0') - promoDiscount);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>

@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   Platform,
   Image,
+  Alert,
   Linking,
   AppState,
 } from 'react-native';
@@ -67,7 +68,7 @@ export default function HomeScreen() {
     try {
       const AsyncStorage = require('@react-native-async-storage/async-storage').default;
       await AsyncStorage.setItem('spinr_last_location', JSON.stringify({ lat, lng }));
-    } catch {}
+    } catch (err) { console.error('[index]', err); }
   };
 
   const loadLastLocation = async () => {
@@ -75,7 +76,7 @@ export default function HomeScreen() {
       const AsyncStorage = require('@react-native-async-storage/async-storage').default;
       const saved = await AsyncStorage.getItem('spinr_last_location');
       if (saved) return JSON.parse(saved);
-    } catch {}
+    } catch (err) { console.error('[index]', err); }
     return null;
   };
 
@@ -92,8 +93,36 @@ export default function HomeScreen() {
       }
     }
 
+    // R-P2-45: Show a pre-prompt explanation on first launch before the system
+    // location dialog (PIPEDA data-minimization — user must understand why
+    // location is collected before consenting).
+    const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+    const prePromptShown = await AsyncStorage.getItem('spinr_location_preprompt_shown').catch(() => null);
+    if (!prePromptShown) {
+      await new Promise<void>(resolve => {
+        Alert.alert(
+          'Location Access',
+          'Spinr uses your location to show nearby drivers, calculate your pickup point, and provide accurate ETAs. ' +
+          'Your location is only used while the app is in use and is never sold or shared with advertisers.',
+          [{ text: 'Continue', style: 'default', onPress: () => resolve() }],
+          { cancelable: false },
+        );
+      });
+      await AsyncStorage.setItem('spinr_location_preprompt_shown', '1').catch(() => {});
+    }
+
     const { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== 'granted') return;
+    if (status !== 'granted') {
+      Alert.alert(
+        'Location Required',
+        'Spinr needs your location to show nearby drivers and confirm your pickup. Please enable location in Settings.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Open Settings', onPress: () => Linking.openSettings() },
+        ]
+      );
+      return;
+    }
 
     if (useCache) {
       try {
@@ -103,7 +132,7 @@ export default function HomeScreen() {
           setUserLocation({ latitude: lastKnown.coords.latitude, longitude: lastKnown.coords.longitude });
           saveLastLocation(lastKnown.coords.latitude, lastKnown.coords.longitude);
         }
-      } catch {}
+      } catch (err) { console.error('[index]', err); }
     }
 
     Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
@@ -131,7 +160,7 @@ export default function HomeScreen() {
     // R-P2-48: refresh unread notification badge count each time home mounts
     api.get('/notifications?limit=1').then((res: any) => {
       setUnreadNotifCount(res.data?.unread_count ?? 0);
-    }).catch(() => {});
+    }).catch((e) => console.warn('[Home] Notification badge fetch failed:', e?.message ?? e));
   }, [refreshLocation, fetchSavedAddresses]);
 
   useFocusEffect(
@@ -345,7 +374,17 @@ export default function HomeScreen() {
           onPress={async () => {
           if (!mapRef.current) return;
           const { status } = await Location.requestForegroundPermissionsAsync();
-          if (status !== 'granted') return;
+          if (status !== 'granted') {
+            Alert.alert(
+              'Location Required',
+              'Spinr needs your location to show nearby drivers and confirm your pickup. Please enable location in Settings.',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                { text: 'Open Settings', onPress: () => Linking.openSettings() },
+              ]
+            );
+            return;
+          }
           let loc: any;
           try {
             loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });

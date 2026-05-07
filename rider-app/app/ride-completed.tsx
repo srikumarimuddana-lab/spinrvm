@@ -19,6 +19,15 @@ import { useStripe } from '@stripe/stripe-react-native';
 import { attemptRidePayment, PaymentAlertButton } from '../utils/attemptRidePayment';
 import { useSpinrPaymentSheet } from '../hooks/useSpinrPaymentSheet';
 
+// PR #664 stringified Decimal money fields in API responses (e.g. total_fare,
+// base_fare, tip_amount). The receipt UI needs them as numbers for arithmetic
+// and as 2-dp display strings. These two helpers narrow `MoneyString | number
+// | undefined` cleanly without spreading parseFloat noise across the file.
+const toNum = (v: string | number | null | undefined): number =>
+  typeof v === 'number' ? v : v ? parseFloat(v) || 0 : 0;
+const fmt = (v: string | number | null | undefined): string =>
+  toNum(v).toFixed(2);
+
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 
@@ -56,13 +65,12 @@ function RideCompletedScreenContent() {
   const mapRef = React.useRef<MapView>(null);
 
   const tipOptions = [2, 5, 10];
-  const fare = parseFloat(currentRide?.total_fare || '0');
+  const fare = toNum(currentRide?.total_fare);
   const duration = currentRide?.duration_minutes || 0;
   const distance = currentRide?.distance_km || 0;
 
   useEffect(() => {
-    if (!rideId) { router.replace('/(tabs)' as any); return; }
-    fetchRide(rideId);
+    if (rideId) fetchRide(rideId);
   }, [rideId]);
 
   // Check if ride was already paid (e.g. coming back to this screen)
@@ -79,7 +87,7 @@ function RideCompletedScreenContent() {
   }, []);
 
   const buildReceiptText = () => {
-    const tipAmount = selectedTip !== null ? selectedTip : (customTip ? parseFloat(customTip) || 0 : 0);
+    const tipAmount = selectedTip || (customTip ? parseFloat(customTip) || 0 : 0);
     const total = fare + tipAmount;
     const rideDate = currentRide?.ride_completed_at
       ? new Date(currentRide.ride_completed_at).toLocaleString('en-CA', {
@@ -103,10 +111,10 @@ function RideCompletedScreenContent() {
       `▸ TO    ${currentRide?.dropoff_address || '—'}`,
       ``,
       `━━━━━━ FARE BREAKDOWN ━━━━━━`,
-      `Base fare:     $${parseFloat(currentRide?.base_fare || '0').toFixed(2)}`,
-      `Distance fare: $${parseFloat((currentRide as any)?.distance_fare || '0').toFixed(2)}  (${distance.toFixed(1)} km)`,
-      `Time fare:     $${parseFloat((currentRide as any)?.time_fare || '0').toFixed(2)}  (${duration} min)`,
-      `Booking fee:   $${parseFloat((currentRide as any)?.booking_fee || '0').toFixed(2)}`,
+      `Base fare:     $${fmt(currentRide?.base_fare)}`,
+      `Distance fare: $${fmt(currentRide?.distance_fare)}  (${distance.toFixed(1)} km)`,
+      `Time fare:     $${fmt(currentRide?.time_fare)}  (${duration} min)`,
+      `Booking fee:   $${fmt(currentRide?.booking_fee)}`,
       tipAmount > 0 ? `Tip:           $${tipAmount.toFixed(2)}` : null,
       `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
       `TOTAL:         $${total.toFixed(2)} CAD`,
@@ -167,7 +175,7 @@ function RideCompletedScreenContent() {
     if (isSubmitting) return; // prevent double tap
     setIsSubmitting(true);
     try {
-      const tipAmount = selectedTip !== null ? selectedTip : (customTip ? parseFloat(customTip) || 0 : 0);
+      const tipAmount = selectedTip || (customTip ? parseFloat(customTip) || 0 : 0);
 
       // 1. Rate the driver first — this is fire-and-forget because
       //    rating may fail if already rated (idempotent upstream).
@@ -182,7 +190,7 @@ function RideCompletedScreenContent() {
       if (!alreadyPaid) {
         const result = await attemptRidePayment({
           api,
-          stripe: confirmPayment ? { confirmPayment } : null,
+          stripe: { confirmPayment },
           rideId: rideId as string,
           tipAmount,
         });
@@ -199,11 +207,11 @@ function RideCompletedScreenContent() {
         return;
       }
 
-      const total = parseFloat(currentRide?.total_fare || '0') + (tipAmount || 0);
+      const total = toNum(currentRide?.total_fare) + toNum(tipAmount);
       Analytics.paymentCompleted({ method: 'default', amount: chargedAmount ?? total });
 
       Analytics.rideCompleted({
-        fare: parseFloat(currentRide?.total_fare || '0'),
+        fare: toNum(currentRide?.total_fare),
         distance_km: currentRide?.distance_km,
       });
 
@@ -227,10 +235,10 @@ function RideCompletedScreenContent() {
   // Android (Apple Pay uses the same sheet on iOS via handleSubmit in future).
   const handleGooglePay = async () => {
     if (isSubmitting || sheetLoading || alreadyPaid) return;
-    const tipAmount = selectedTip !== null ? selectedTip : (customTip ? parseFloat(customTip) || 0 : 0);
+    const tipAmount = selectedTip || (customTip ? parseFloat(customTip) || 0 : 0);
     const result = await presentSheet({
       rideId: rideId as string,
-      amount: parseFloat(currentRide?.total_fare || '0'),
+      amount: toNum(currentRide?.total_fare),
       tipAmount,
     });
     if (!result.ok) {
@@ -242,9 +250,9 @@ function RideCompletedScreenContent() {
     try {
       await rateRide(rideId as string, rating, comment || undefined, tipAmount > 0 ? tipAmount : undefined);
     } catch { /* already rated guard */ }
-    const total = parseFloat(currentRide?.total_fare || '0') + tipAmount;
+    const total = toNum(currentRide?.total_fare) + toNum(tipAmount);
     Analytics.paymentCompleted({ method: 'google_pay', amount: total });
-    Analytics.rideCompleted({ fare: parseFloat(currentRide?.total_fare || '0'), distance_km: currentRide?.distance_km });
+    Analytics.rideCompleted({ fare: toNum(currentRide?.total_fare), distance_km: currentRide?.distance_km });
     clearRide();
     router.replace('/(tabs)');
   };
@@ -301,6 +309,17 @@ function RideCompletedScreenContent() {
           >
             <Ionicons name="chatbubble-ellipses-outline" size={18} color="#3B82F6" />
             <Text style={styles.chatBtnText}>Message Driver</Text>
+            <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.viewReceiptBtn}
+            onPress={() => router.push(`/receipt/${rideId}` as any)}
+            accessibilityRole="button"
+            accessibilityLabel="View receipt"
+            accessibilityHint="Opens the detailed fare breakdown for this ride"
+          >
+            <Ionicons name="document-text-outline" size={18} color={colors.text} />
+            <Text style={styles.viewReceiptBtnText}>View Receipt</Text>
             <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
           </TouchableOpacity>
         </View>
@@ -627,6 +646,12 @@ function createStyles(colors: ThemeColors) {
       borderWidth: 1, borderColor: '#DBEAFE',
     },
     chatBtnText: { flex: 1, fontSize: 14, fontWeight: '600', color: '#3B82F6' },
+    viewReceiptBtn: {
+      flexDirection: 'row', alignItems: 'center', gap: 8, width: '100%',
+      backgroundColor: colors.surfaceLight, borderRadius: 14, padding: 14,
+      borderWidth: 1, borderColor: colors.border,
+    },
+    viewReceiptBtnText: { flex: 1, fontSize: 14, fontWeight: '600', color: colors.text },
 
     // Route Map
     mapCard: {

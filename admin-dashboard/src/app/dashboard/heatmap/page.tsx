@@ -43,7 +43,7 @@ export default function HeatMapPage() {
     const [endDate, setEndDate] = useState("");
     const [serviceAreaId, setServiceAreaId] = useState<string>("all");
     const [groupBy, setGroupBy] = useState<"pickup" | "dropoff" | "both">("both");
-    const [dateError, setDateError] = useState("");
+    const [dateError, setDateError] = useState<string | null>(null);
 
     // Display toggles
     const [showPickups, setShowPickups] = useState(true);
@@ -106,10 +106,9 @@ export default function HeatMapPage() {
     const fetchHeatMapData = useCallback(() => {
         if (startDate && endDate && startDate > endDate) {
             setDateError("Start date must be before end date.");
-            setLoading(false);
             return;
         }
-        setDateError("");
+        setDateError(null); // clear previous error when dates are valid
         setLoading(true);
         const { start_date, end_date } = getDateRange();
 

@@ -49,10 +49,10 @@ function RideOptionsScreenContent() {
     selectVehicle,
     isLoading,
     error: storeError,
-    scheduledTime,
-    setScheduledTime,
     requiresWav,
     setRequiresWav,
+    scheduledTime,
+    setScheduledTime,
     quietMode,
     setQuietMode,
     riderNotes,
@@ -103,7 +103,9 @@ function RideOptionsScreenContent() {
 
   useEffect(() => {
     if (pickup && dropoff) {
-      console.log('Platform:', Platform.OS, '| Fetching estimates & nearby drivers for:', pickup.address, 'to', dropoff.address);
+      // PIPEDA: never log raw pickup/dropoff addresses. Drop the address detail
+      // entirely — the log just signals the fetch is firing.
+      console.log('Platform:', Platform.OS, '| Fetching estimates & nearby drivers');
       // R-P2-51: run both fetches in parallel — they are independent requests.
       void Promise.all([handleFetchEstimates(), fetchNearbyDrivers()]);
 
@@ -132,8 +134,14 @@ function RideOptionsScreenContent() {
   }, [estimates]);
 
   useEffect(() => {
+    // Bug 1 guard: bail out early if estimates is empty to avoid estimates[0] crash
+    if (!estimates || estimates.length === 0) return;
+
+    // Bug 2 guard: clamp selectedIndex to valid range whenever estimates array changes
+    setSelectedIndex(prev => (prev >= estimates.length ? 0 : prev));
+
     // Auto-select first AVAILABLE vehicle
-    if (estimates.length > 0 && !selectedVehicle) {
+    if (!selectedVehicle) {
       const firstAvailableIndex = estimates.findIndex(e => e.available);
       if (firstAvailableIndex !== -1) {
         setSelectedIndex(firstAvailableIndex);
@@ -577,11 +585,11 @@ function RideOptionsScreenContent() {
 
                 {/* Price — with promo struck-through */}
                 <View style={[styles.optionPriceContainer, !isAvailable && { opacity: 0.4 }]}>
-                  {appliedPromo && appliedPromo.discount_amount > 0 && isSelected ? (
+                  {appliedPromo && appliedPromo.discount_value > 0 && isSelected ? (
                     <View style={{ alignItems: 'flex-end' }}>
                       <Text style={styles.optionPriceStruck} allowFontScaling={false}>${parseFloat(estimate.total_fare || '0').toFixed(2)}</Text>
                       <Text style={styles.optionPriceDiscounted} allowFontScaling={false}>
-                        ${Math.max(0, parseFloat(estimate.total_fare || '0') - appliedPromo.discount_amount).toFixed(2)}
+                        ${Math.max(0, parseFloat(estimate.total_fare || '0') - appliedPromo.discount_value).toFixed(2)}
                       </Text>
                     </View>
                   ) : (
@@ -615,6 +623,36 @@ function RideOptionsScreenContent() {
               thumbColor={isScheduling ? colors.primary : '#F3F4F6'}
             />
           </View>
+
+          {/* WAV Toggle — Saskatchewan Transportation Act s.22 */}
+          {(() => {
+            const wavCount = selectedEstimate?.wav_available ?? 0;
+            const wavDisabled = wavCount === 0;
+            return (
+              <View style={[styles.scheduleRow, wavDisabled && { opacity: 0.45 }]}>
+                <View style={styles.scheduleInfo}>
+                  <Ionicons name="accessibility-outline" size={20} color="#1A1A1A" />
+                  <View>
+                    <Text style={styles.scheduleLabel}>Wheelchair accessible</Text>
+                    {wavDisabled ? (
+                      <Text style={{ fontSize: 11, color: '#9CA3AF' }}>No WAV drivers nearby</Text>
+                    ) : (
+                      <Text style={{ fontSize: 11, color: '#6B7280' }}>{wavCount} WAV driver{wavCount !== 1 ? 's' : ''} available</Text>
+                    )}
+                  </View>
+                </View>
+                <Switch
+                  value={requiresWav}
+                  onValueChange={(v) => { if (!wavDisabled) setRequiresWav(v); }}
+                  disabled={wavDisabled}
+                  trackColor={{ false: '#D1D5DB', true: colors.primary + '60' }}
+                  thumbColor={requiresWav ? colors.primary : '#F3F4F6'}
+                  accessibilityLabel="Request wheelchair-accessible vehicle"
+                  accessibilityHint={wavDisabled ? 'No WAV drivers are available near your pickup' : undefined}
+                />
+              </View>
+            );
+          })()}
 
           {/* Scheduled Time Display */}
           {isScheduling && scheduledTime && (

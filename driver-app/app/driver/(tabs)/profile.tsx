@@ -22,7 +22,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
-import { useAuthStore } from '@shared/store/authStore';
+import { useAuthStore, type User, type Driver } from '@shared/store/authStore';
 import api from '@shared/api/client';
 import { useDriverMe } from '@shared/hooks/queries';
 import SpinrConfig from '@shared/config/spinr.config';
@@ -50,9 +50,9 @@ export default function ProfileScreen() {
   }>({});
 
   useEffect(() => {
-    api.get('/company-info')
+    api.get<{ name?: string; address?: string; phone?: string; email?: string; website?: string }>('/company-info')
       .then(res => setCompanyInfo(res?.data || {}))
-      .catch(() => {});
+      .catch((e) => console.warn('[DriverProfile] company-info fetch failed:', e?.message ?? e));
   }, []);
 
   // Edit modal state
@@ -90,7 +90,7 @@ export default function ProfileScreen() {
   // is kept in sync below for screens that still read from the store.
   const { data: driverFromQuery, refetch: refetchDriverMe } = useDriverMe();
   useEffect(() => {
-    if (driverFromQuery) useAuthStore.setState({ driver: driverFromQuery });
+    if (driverFromQuery) useAuthStore.setState({ driver: driverFromQuery as Driver });
   }, [driverFromQuery]);
 
   useFocusEffect(
@@ -100,7 +100,7 @@ export default function ProfileScreen() {
       const refreshProfile = async () => {
         setIsRefreshing(true);
         try {
-          const userRes = await api.get('/auth/me');
+          const userRes = await api.get<User>('/auth/me');
           if (!cancelled && userRes.data) useAuthStore.setState({ user: userRes.data });
 
           // Driver row refetch is delegated to TanStack Query — calling
@@ -108,12 +108,12 @@ export default function ProfileScreen() {
           refetchDriverMe();
 
           try {
-            const reqRes = await api.get('/drivers/requirements');
+            const reqRes = await api.get<Array<{id: string; name: string; description?: string}>>('/drivers/requirements');
             if (!cancelled && reqRes.data) setDocRequirements(reqRes.data);
           } catch (reqErr) {}
 
           try {
-            const docsRes = await api.get('/drivers/documents');
+            const docsRes = await api.get<any[]>('/drivers/documents');
             if (!cancelled && docsRes.data) setDriverDocs(docsRes.data);
           } catch (docsErr) {}
         } finally {
@@ -176,7 +176,7 @@ export default function ProfileScreen() {
     Keyboard.dismiss();
     setIsSaving(true);
     try {
-      const res = await api.post('/users/profile', {
+      const res = await api.post<User>('/users/profile', {
         first_name: editFirstName.trim(),
         last_name: editLastName.trim(),
         email: editEmail.trim().toLowerCase(),
@@ -347,12 +347,12 @@ export default function ProfileScreen() {
             </View>
             </View>
 
-            {driverData?.rejection_reason && !driverData.is_verified && (
+            {!!(driverData?.rejection_reason) && !driverData.is_verified && (
             <View style={styles.rejectionBox}>
                 <Ionicons name="alert-circle" size={24} color={'#EF4444'} />
                 <View style={{flex: 1}}>
                     <Text style={styles.rejectionTitle}>Application Rejected</Text>
-                    <Text style={styles.rejectionText}>{driverData.rejection_reason}</Text>
+                    <Text style={styles.rejectionText}>{driverData.rejection_reason as string}</Text>
                 </View>
             </View>
             )}
@@ -443,7 +443,7 @@ export default function ProfileScreen() {
                     );
                 const docStatus = matchedDoc?.status; // 'pending' | 'approved' | 'rejected' | undefined
 
-                const expiry = expiryKey ? driverData?.[expiryKey] : null;
+                const expiry = expiryKey ? (driverData?.[expiryKey] as string | null | undefined) : null;
                 const isExpired = expiry ? new Date(expiry) < new Date() : false;
                 const expiresIn = expiry ? Math.ceil((new Date(expiry).getTime() - Date.now()) / (1000 * 60 * 60 * 24)) : null;
                 const isValid = expiry && !isExpired;

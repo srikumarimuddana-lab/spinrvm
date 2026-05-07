@@ -9,15 +9,14 @@ from fastapi import APIRouter, Query
 
 try:
     from .. import db_supabase
-    from ..core.config import settings
     from ..geo_utils import get_service_area_polygon, point_in_polygon
     from ..utils.redis_client import redis_delete_pattern, redis_get, redis_set
     from ..utils.surge_engine import SURGE_CAP
 except ImportError:
     import db_supabase
-    from core.config import settings
     from geo_utils import get_service_area_polygon, point_in_polygon
     from utils.redis_client import redis_delete_pattern, redis_get, redis_set
+    from utils.surge_engine import SURGE_CAP
 
 db = db_supabase  # legacy alias
 logger = logging.getLogger(__name__)
@@ -27,9 +26,15 @@ api_router = APIRouter(tags=["Fares"])
 # WARNING: cached fares embed the surge multiplier at cache-fill time.
 # If surge changes within the TTL window the rider sees a stale estimate;
 # payments.py re-validates the fare at settlement and will reject a mismatch.
+# When surge is active the effective TTL is capped at 60 s to reduce staleness.
 # Set FARE_CACHE_TTL_SECONDS=60 in production to tighten the window during
 # surge events without fully disabling the cache.
 _FARE_CACHE_TTL = int(os.environ.get("FARE_CACHE_TTL_SECONDS", "300"))
+if _FARE_CACHE_TTL <= 0:
+    logger.warning(
+        "FARE_CACHE_TTL_SECONDS is %d — fare caching is effectively disabled",
+        _FARE_CACHE_TTL,
+    )
 
 # ── Decimal helpers (CQ-009) ──────────────────────────────────────────
 _TWO_PLACES = Decimal("0.01")
@@ -302,11 +307,13 @@ async def get_fares_for_location(
     # Compute fresh result
     result = await _fares_for_location_impl(lat, lng)
 
-    # Cache the computed result
+    # Cache the computed result.
+    # Cap TTL at 60 s when surge is active so stale multipliers expire quickly.
     try:
-        ttl = settings.FARE_CACHE_TTL_SECONDS
-        await redis_set(cache_key, json.dumps(result), ttl=ttl)
-        logger.debug(f"Fare cache SET for key {cache_key} (TTL={ttl}s)")
+        surge_multiplier = result[0].get("surge_multiplier", 1.0) if result else 1.0
+        effective_ttl = min(_FARE_CACHE_TTL, 60) if surge_multiplier > 1.0 else _FARE_CACHE_TTL
+        await redis_set(cache_key, json.dumps(result), ttl=effective_ttl)
+        logger.debug(f"Fare cache SET for key {cache_key} (TTL={effective_ttl}s, surge={surge_multiplier})")
     except Exception as e:
         logger.warning(f"Could not cache fare result: {e}")
 

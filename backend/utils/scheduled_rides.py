@@ -25,8 +25,7 @@ try:
     from ..db import db
     from ..features import send_push_notification
     from .datetime_utils import parse_iso_utc
-    from .metrics import inc as _metric_inc
-    from .metrics import set_gauge as _metric_gauge
+    from .redis_client import redis_set_nx
 except ImportError:
     from db import db
     from features import send_push_notification
@@ -80,7 +79,7 @@ async def _dispatch_scheduled_ride(ride: dict):
             )
 
     except Exception as e:
-        logger.error(f"Failed to dispatch scheduled ride {ride_id}: {e}")
+        logger.error(f"Failed to dispatch scheduled ride {ride_id}: {e}", exc_info=True)
 
 
 async def _send_reminder(ride: dict):
@@ -109,11 +108,17 @@ async def _send_reminder(ride: dict):
         logger.info(f"Sent reminder for scheduled ride {ride_id}")
 
     except Exception as e:
-        logger.error(f"Failed to send reminder for ride {ride_id}: {e}")
+        logger.error(f"Failed to send reminder for ride {ride_id}: {e}", exc_info=True)
 
 
 async def check_scheduled_rides():
     """Check for scheduled rides that need dispatching or reminders."""
+    try:
+        if not await redis_set_nx("spinr:scheduled_rides:lock", "1", ttl=90):
+            return
+    except Exception as _lock_err:
+        logger.warning(f"scheduled_rides: Redis leader lock unavailable ({_lock_err}), proceeding without lock")
+
     now = datetime.now(timezone.utc)
     ten_min_from_now = now + timedelta(minutes=10)
 
@@ -130,7 +135,7 @@ async def check_scheduled_rides():
         )
     except Exception as e:
         original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
-        logger.error(f"Failed to fetch scheduled rides: {e} | original={original}")
+        logger.error(f"Failed to fetch scheduled rides: {e} | original={original}", exc_info=True)
         return
 
     for ride in scheduled:
@@ -161,7 +166,7 @@ async def scheduled_ride_dispatcher_loop():
         try:
             await check_scheduled_rides()
         except Exception as e:
-            logger.error(f"Scheduled ride dispatcher error: {e}")
+            logger.error(f"Scheduled ride dispatcher error: {e}", exc_info=True)
         _record_heartbeat("scheduled_dispatcher (60s)")
         # B-P3-2: ±6 s jitter on the 60 s interval so replicas don't
         # contend for the same scheduled-ride row on every minute boundary.

@@ -16,6 +16,7 @@ jest.mock('@shared/api/client', () => ({
 }));
 
 jest.mock('@shared/store/authStore', () => ({
+  registerLogoutCallback: jest.fn(),
   useAuthStore: { getState: jest.fn(() => ({ user: { id: 'user-abc' } })) },
 }));
 
@@ -33,21 +34,21 @@ beforeEach(() => {
 
 describe('applyPromo', () => {
   it('sets appliedPromo to the supplied promo object', () => {
-    const promo = { id: 'promo-1', code: 'SAVE10', discount: 10 };
+    const promo = { id: 'promo-1', code: 'SAVE10', discount: 10, discount_type: 'percentage', discount_value: 10 };
     useRideStore.getState().applyPromo(promo);
     expect(useRideStore.getState().appliedPromo).toEqual(promo);
   });
 
   it('replaces a previously applied promo', () => {
-    const first = { id: 'p1', code: 'FIRST', discount: 5 };
-    const second = { id: 'p2', code: 'SECOND', discount: 15 };
+    const first = { id: 'p1', code: 'FIRST', discount: 5, discount_type: 'percentage', discount_value: 5 };
+    const second = { id: 'p2', code: 'SECOND', discount: 15, discount_type: 'percentage', discount_value: 15 };
     useRideStore.getState().applyPromo(first);
     useRideStore.getState().applyPromo(second);
     expect(useRideStore.getState().appliedPromo).toEqual(second);
   });
 
   it('clears appliedPromo when called with null', () => {
-    useRideStore.getState().applyPromo({ id: 'p1', code: 'X', discount: 1 });
+    useRideStore.getState().applyPromo({ id: 'p1', code: 'X', discount: 1, discount_type: 'fixed', discount_value: 1 });
     useRideStore.getState().applyPromo(null);
     expect(useRideStore.getState().appliedPromo).toBeNull();
   });

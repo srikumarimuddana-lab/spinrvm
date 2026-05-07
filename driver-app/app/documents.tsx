@@ -75,17 +75,12 @@ export default function DocumentsScreen() {
     const loadData = async () => {
         try {
             const [reqRes, docRes] = await Promise.all([
-                api.get('/drivers/requirements'),
-                api.get('/drivers/documents')
+                api.get<Requirement[]>('/drivers/requirements'),
+                api.get<DriverDocument[]>('/drivers/documents')
             ]);
-            setRequirements(reqRes.data);
-            setDocuments(docRes.data);
+            setRequirements(reqRes.data as Requirement[]);
+            setDocuments(docRes.data as DriverDocument[]);
         } catch (err: any) {
-            console.error("Documents load error:", err);
-            if (err.response) {
-                console.error("Error status:", err.response.status);
-                console.error("Error data:", err.response.data);
-            }
             showAlert('Error', `Failed to load documents: ${err.message}`, 'danger');
         } finally {
             setLoading(false);
@@ -207,7 +202,6 @@ export default function DocumentsScreen() {
                 err?.message ||
                 (typeof err === 'string' ? err : JSON.stringify(err)) ||
                 'Something went wrong';
-            console.log('Upload error:', err);
             showAlert('Upload Failed', String(detail), 'danger');
         } finally {
             setUploading(null);

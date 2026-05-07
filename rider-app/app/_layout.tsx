@@ -345,7 +345,7 @@ export default function RootLayout() {
               {
                 text: "I'm okay",
                 onPress: () => {
-                  api.post(`/rides/${checkinRideId}/safety-checkin`).catch(() => {});
+                  api.post(`/rides/${checkinRideId}/safety-checkin`).catch((e) => console.warn('[Layout] Safety checkin failed:', e?.message ?? e));
                 },
               },
             ],
@@ -358,7 +358,7 @@ export default function RootLayout() {
       // All other FCM types — refresh the active ride state
       const currentRide = useRideStore.getState().currentRide;
       if (currentRide?.id) {
-        useRideStore.getState().fetchRide(currentRide.id).catch(() => {});
+        useRideStore.getState().fetchRide(currentRide.id).catch((e) => console.warn('[Layout] fetchRide on foreground failed:', e?.message ?? e));
       }
     });
 
@@ -370,20 +370,29 @@ export default function RootLayout() {
   // R-P1-29: Killed-state deep linking — check if the app was opened by tapping
   // a notification while it was fully killed. expo-notifications.getInitialNotificationResponseAsync()
   // returns the tapped notification response in that case.
+  // The routing call is deferred 100ms to ensure the Expo Router Stack is fully
+  // mounted before navigation is attempted — calls fired before hydration are
+  // silently dropped.
   useEffect(() => {
+    // Only route from notification AFTER auth is initialized and app is ready
     if (!isAuthInitialized || !canUseNotifications || !Notifications) return;
+    let timer: ReturnType<typeof setTimeout>;
     (async () => {
       try {
         const response = await Notifications.getInitialNotificationResponseAsync?.();
         if (response?.notification?.request?.content?.data) {
           const data = response.notification.request.content.data as Record<string, string>;
           console.log('[Push] Killed-state notification tap — routing from data:', data);
-          routeFromNotificationData(data);
+          // Add a small defer to ensure Stack is mounted
+          timer = setTimeout(() => {
+            routeFromNotificationData(data);
+          }, 100);
         }
       } catch (e) {
         console.log('[Push] getInitialNotification failed:', e);
       }
     })();
+    return () => clearTimeout(timer);
   }, [isAuthInitialized]);
 
   // Clear ride session data when the user logs out so a subsequent login
@@ -433,7 +442,7 @@ export default function RootLayout() {
 
   return (
     <ThemeProvider>
-      <RootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} stripePublishableKey={stripePublishableKey} />
+      <RootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} stripePublishableKey={stripePublishableKey} wsState={wsState} />
     </ThemeProvider>
   );
 }
@@ -448,7 +457,7 @@ function MaybeStripeProvider({
   if (!publishableKey) return <>{children}</>;
   return (
     <StripeProvider publishableKey={publishableKey} merchantIdentifier="merchant.com.spinr.user">
-      {children}
+      {children as React.ReactElement}
     </StripeProvider>
   );
 }
@@ -457,15 +466,24 @@ function RootLayoutInner({
   isOffline,
   setIsOffline,
   stripePublishableKey,
+  wsState,
 }: {
   isOffline: boolean;
   setIsOffline: (v: boolean) => void;
   stripePublishableKey: string | null;
+  wsState: import('../hooks/useRiderSocket').RiderSocketState;
 }) {
   const { isDark } = useTheme();
   return (
     <ErrorBoundary>
       <OfflineBanner visible={isOffline} onVisibilityChange={setIsOffline} />
+      {wsState === 'reconnecting' && (
+        <View style={{ backgroundColor: '#F59E0B', paddingVertical: 4, alignItems: 'center' }}>
+          <Text style={{ color: '#fff', fontSize: 12, fontWeight: '600' }}>
+            Reconnecting to ride updates…
+          </Text>
+        </View>
+      )}
       <GestureHandlerRootView>
         <View style={{ flex: 1 }}>
           <SafeAreaProvider>

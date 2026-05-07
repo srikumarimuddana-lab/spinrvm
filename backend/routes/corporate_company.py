@@ -210,7 +210,7 @@ async def set_allowance(
             patch[k] = patch[k].isoformat()
     for money_key in ("amount", "auto_approve_topup_amount"):
         if patch.get(money_key) is not None:
-            patch[money_key] = float(Decimal(str(patch[money_key])).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+            patch[money_key] = str(Decimal(str(patch[money_key])).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
     return await upsert_member_allowance(member_id=member_id, patch=patch)
 
 
@@ -231,7 +231,7 @@ async def patch_allowance(
         return await get_member_allowance(member_id) or {}
     for money_key in ("amount", "auto_approve_topup_amount"):
         if money_key in patch and patch[money_key] is not None:
-            patch[money_key] = float(Decimal(str(patch[money_key])).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+            patch[money_key] = str(Decimal(str(patch[money_key])).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
     return await upsert_member_allowance(member_id=member_id, patch=patch)
 
 
@@ -416,6 +416,18 @@ def _d(v) -> Decimal:
     return Decimal(str(v or 0)).quantize(_TWO, rounding=ROUND_HALF_UP)
 
 
+def _money_str(v) -> str:
+    """Quantize ``v`` to 2dp and emit as a JSON-safe string.
+
+    Audit-17 P0-1 mandates that money fields cross the wire as decimal
+    strings (``"12.50"``), never IEEE-754 floats. Use this for every
+    money-shaped value placed into a dict response.
+    """
+    if isinstance(v, Decimal):
+        return str(v.quantize(_TWO, rounding=ROUND_HALF_UP))
+    return str(_d(v))
+
+
 def _aggregate_rows(rows: list[dict]) -> dict:
     allowance_total = _ZERO
     master_total = _ZERO
@@ -438,18 +450,18 @@ def _aggregate_rows(rows: list[dict]) -> dict:
     by_member_out = [
         {
             **v,
-            "allowance_total": float(v["allowance_total"].quantize(_TWO, rounding=ROUND_HALF_UP)),
-            "master_total": float(v["master_total"].quantize(_TWO, rounding=ROUND_HALF_UP)),
-            "total": float(v["total"].quantize(_TWO, rounding=ROUND_HALF_UP)),
+            "allowance_total": _money_str(v["allowance_total"]),
+            "master_total": _money_str(v["master_total"]),
+            "total": _money_str(v["total"]),
         }
         for v in sorted(by_member.values(), key=lambda m: m["total"], reverse=True)
     ]
     return {
         "ride_count": len(rows),
-        "allowance_total": float(allowance_total.quantize(_TWO, rounding=ROUND_HALF_UP)),
-        "master_total": float(master_total.quantize(_TWO, rounding=ROUND_HALF_UP)),
-        "total": float(total.quantize(_TWO, rounding=ROUND_HALF_UP)),
-        "avg_fare": float((total / len(rows)).quantize(_TWO, rounding=ROUND_HALF_UP)) if rows else 0.0,
+        "allowance_total": _money_str(allowance_total),
+        "master_total": _money_str(master_total),
+        "total": _money_str(total),
+        "avg_fare": _money_str(total / len(rows)) if rows else "0.00",
         "by_member": by_member_out,
     }
 
@@ -466,9 +478,10 @@ async def billing_summary(
     average fare, and per-member breakdown sorted by total desc.
     """
     from datetime import datetime as _dt
+    from datetime import timezone as _tz
 
     if month is None:
-        month = _dt.utcnow().strftime("%Y-%m")
+        month = _dt.now(_tz.utc).strftime("%Y-%m")
     from_iso, to_iso = _month_bounds(month)
 
     # Page through all rows so the summary is never silently truncated.
@@ -491,7 +504,7 @@ async def billing_summary(
     wallet = await get_corporate_wallet_by_company(company_id) or {}
     return {
         "month": month,
-        "wallet_balance": float(Decimal(str(wallet.get("balance") or "0")).quantize(_TWO, rounding=ROUND_HALF_UP)),
+        "wallet_balance": _money_str(wallet.get("balance") or "0"),
         "wallet_currency": wallet.get("currency") or "CAD",
         **_aggregate_rows(all_rows),
     }
@@ -566,7 +579,7 @@ async def billing_transactions(
     )
     return {
         "wallet_id": wallet["id"],
-        "balance": float(Decimal(str(wallet.get("balance") or "0")).quantize(_TWO, rounding=ROUND_HALF_UP)),
+        "balance": _money_str(wallet.get("balance") or "0"),
         "currency": wallet.get("currency") or "CAD",
         "transactions": txns,
     }

@@ -23,9 +23,9 @@
 const isDev = typeof __DEV__ !== 'undefined' ? __DEV__ : process.env.NODE_ENV !== 'production';
 
 export interface Logger {
-  info: (...args: any[]) => void;
-  warn: (...args: any[]) => void;
-  error: (...args: any[]) => void;
+  info: (...args: unknown[]) => void;
+  warn: (...args: unknown[]) => void;
+  error: (...args: unknown[]) => void;
 }
 
 export function createLogger(tag: string): Logger {
@@ -36,13 +36,13 @@ export function createLogger(tag: string): Logger {
     return {
       info: () => {},
       warn: () => {},
-      error: (...args: any[]) => console.error(prefix, ...args),
+      error: (...args: unknown[]) => console.error(prefix, ...args),
     };
   }
 
   return {
-    info: (...args: any[]) => console.log(prefix, ...args),
-    warn: (...args: any[]) => console.warn(prefix, ...args),
-    error: (...args: any[]) => console.error(prefix, ...args),
+    info: (...args: unknown[]) => console.log(prefix, ...args),
+    warn: (...args: unknown[]) => console.warn(prefix, ...args),
+    error: (...args: unknown[]) => console.error(prefix, ...args),
   };
 }

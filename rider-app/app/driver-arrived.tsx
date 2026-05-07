@@ -114,7 +114,7 @@ export default function DriverArrivedScreen() {
       `📍 Dropoff: ${currentRide?.dropoff_address || ''}`,
       `🔑 OTP: ${pickupOtp}`,
     ].join('\n');
-    try { await Share.share({ message: info }); } catch {}
+    try { await Share.share({ message: info }); } catch (err) { console.error('[driver-arrived]', err); }
   };
 
   const handleCopyOtp = async () => {
@@ -128,7 +128,7 @@ export default function DriverArrivedScreen() {
       {currentRide ? (
         <MapView
           ref={mapRef}
-          style={StyleSheet.absoluteFillObject}
+          style={StyleSheet.absoluteFill}
           provider={MAP_PROVIDER}
           initialRegion={{
             latitude: currentRide.pickup_lat,
@@ -395,7 +395,7 @@ function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: '#E8E8E8' },
     mapErrorContainer: {
-      ...StyleSheet.absoluteFillObject,
+      ...StyleSheet.absoluteFill,
       backgroundColor: '#D4E4D4',
       justifyContent: 'center',
       alignItems: 'center',

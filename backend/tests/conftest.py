@@ -21,12 +21,14 @@ if _project_root not in sys.path:
     sys.path.insert(1, _project_root)
 
 # Set env vars before importing any backend module so core/config.py sees them.
-os.environ.setdefault("SUPABASE_URL", "https://test.supabase.co")
-os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test_key")
-os.environ.setdefault("JWT_SECRET", "test-secret-key-for-ci-only-32chars!!")
-os.environ.setdefault("ADMIN_PASSWORD", "TestAdminPass123!")
-os.environ.setdefault("ADMIN_EMAIL", "admin@spinr.ca")
-os.environ.setdefault("ENV", "test")
+# Use `or` fallback instead of setdefault: GitHub Actions sets missing secrets to ""
+# (empty string), which setdefault treats as already-set and leaves unchanged.
+os.environ["SUPABASE_URL"] = os.environ.get("SUPABASE_URL") or "https://test.supabase.co"
+os.environ["SUPABASE_SERVICE_ROLE_KEY"] = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or "test_key"
+os.environ["JWT_SECRET"] = os.environ.get("JWT_SECRET") or "test-secret-key-for-ci-only-32chars!!"
+os.environ["ADMIN_PASSWORD"] = os.environ.get("ADMIN_PASSWORD") or "TestAdminPass123!"
+os.environ["ADMIN_EMAIL"] = os.environ.get("ADMIN_EMAIL") or "admin@spinr.ca"
+os.environ["ENV"] = os.environ.get("ENV") or "test"
 
 # Pre-import backend.server with REAL slowapi so all route module-level decorators
 # bind real types. rate_limiter.py does `from slowapi import Limiter` at module
@@ -400,6 +402,14 @@ def reset_db_circuit_breaker() -> None:
             continue
 
 
+def _reset_limiter_storage(limiter_obj) -> None:
+    """Reset MemoryStorage on a SlowAPI Limiter instance (if present)."""
+    inner = getattr(limiter_obj, "_limiter", None)
+    storage = getattr(inner, "storage", None) if inner is not None else None
+    if storage is not None and callable(getattr(storage, "reset", None)):
+        storage.reset()
+
+
 @pytest.fixture(autouse=True)
 def reset_rate_limiters() -> None:
     """Reset in-process rate-limiter storage before each test.
@@ -413,16 +423,25 @@ def reset_rate_limiters() -> None:
     """
     import importlib
 
+    # Disable and reset the shared default_limiter used by all pre-configured limits
+    # (payment_action_limit, ride_action_limit, ride_request_limit, etc.).
+    # Setting enabled=False makes SlowAPI skip the starlette.Request lookup entirely,
+    # which prevents IndexError / "request must be Request" errors when tests call
+    # route handlers directly without an HTTP request object.
+    for rl_mod_path in ("backend.utils.rate_limiter", "utils.rate_limiter"):
+        try:
+            rl_mod = importlib.import_module(rl_mod_path)
+            limiter = getattr(rl_mod, "default_limiter", None)
+            if limiter is not None:
+                limiter.enabled = False
+            _reset_limiter_storage(limiter)
+        except (ImportError, ModuleNotFoundError):
+            continue
+
     for mod_path in ("backend.routes.admin.auth", "routes.admin.auth"):
         try:
             mod = importlib.import_module(mod_path)
-            limiter = getattr(mod, "limiter", None)
-            if limiter is None:
-                continue
-            inner = getattr(limiter, "_limiter", None)
-            storage = getattr(inner, "storage", None) if inner is not None else None
-            if storage is not None and callable(getattr(storage, "reset", None)):
-                storage.reset()
+            _reset_limiter_storage(getattr(mod, "limiter", None))
         except (ImportError, ModuleNotFoundError):
             continue
 

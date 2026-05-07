@@ -2,28 +2,39 @@ from decimal import Decimal
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 try:
     from .. import db_supabase
     from ..dependencies import get_current_user
     from ..settings_loader import get_app_settings
+    from ..utils.audit_logger import log_user_action as _audit_log_user
     from ..utils.error_handling import (
+        ErrorCode,
         PaymentException,
         PaymentMethodInvalidException,
+        SpinrException,
     )
     from ..utils.error_keys import ErrorKeys
     from ..utils.idempotency import idempotent_endpoint
+    from ..utils.money import dollars_to_cents
+    from ..utils.rate_limiter import payment_action_limit
 except ImportError:
     import db_supabase
     from dependencies import get_current_user
     from settings_loader import get_app_settings
+    from utils.audit_logger import log_user_action as _audit_log_user
     from utils.error_handling import (
+        ErrorCode,
         PaymentException,
         PaymentMethodInvalidException,
+        SpinrException,
     )
     from utils.error_keys import ErrorKeys
     from utils.idempotency import idempotent_endpoint
+    from utils.money import dollars_to_cents
+    from utils.rate_limiter import payment_action_limit
 import logging
 
 import stripe
@@ -71,16 +82,19 @@ async def get_or_create_stripe_customer(user_id: str, stripe_secret: str):
         # Re-read to use the authoritative value in case a concurrent replica wrote first.
         # (The loser's Stripe customer is unused but harmless; deduplication can run offline.)
         fresh = await db_supabase.get_user_by_id(user_id)
-        stripe_customer_id = (fresh or {}).get("stripe_customer_id", stripe_customer_id)
+        if not fresh:
+            raise HTTPException(status_code=404, detail="User not found during Stripe customer creation")
+        stripe_customer_id = fresh["stripe_customer_id"]
 
     return stripe_customer_id
 
 
 @api_router.post("/create-intent")
+@payment_action_limit
 @idempotent_endpoint(scope="payment_intent")
 async def create_payment_intent(
     body: PaymentIntentRequest,
-    request: Request,
+    request: Request = None,
     current_user: dict = Depends(get_current_user),
 ):
     """Create a Stripe payment intent.
@@ -114,7 +128,10 @@ async def create_payment_intent(
                     action_hint="Refresh the fare estimate",
                 )
 
-        amount = int(Decimal(str(body.amount)).quantize(Decimal("0.01")) * 100)
+        # Decimal-safe dollars→cents (HALF_UP). ``int(body.amount * 100)``
+        # would undercharge by 1¢ on values like $0.29, $1.13, $17.81 due
+        # to binary-float drift. See backend/utils/money.py.
+        amount = dollars_to_cents(body.amount)
 
         # Get or create customer for saved payments
         stripe_customer_id = await get_or_create_stripe_customer(current_user["id"], stripe_secret)
@@ -152,21 +169,115 @@ async def create_payment_intent(
             idempotency_key=idempotency_key,
         )
 
+        # 3-D Secure / SCA happy-path: PaymentIntent succeeded at the API
+        # boundary but Stripe is asking the rider to complete an additional
+        # authentication step (3DS challenge). The mobile SDK reads
+        # `client_secret` + `next_action` to drive the flow. We surface this
+        # as a 402 with `code='action_required'` so the rider app branches
+        # into Stripe's handleNextAction() rather than treating it as
+        # success and confirming the payment server-side.
+        if getattr(intent, "status", None) == "requires_action":
+            return JSONResponse(
+                status_code=402,
+                content={
+                    "success": False,
+                    "detail": "Additional authentication required",
+                    "error": {
+                        "code": ErrorCode.PAYMENT_METHOD_INVALID.value,
+                        "message": "Additional authentication required",
+                        "message_key": ErrorKeys.PAYMENT_METHOD_INVALID,
+                        "details": {
+                            "code": "action_required",
+                            "client_secret": intent.client_secret,
+                            "payment_intent_id": intent.id,
+                            "next_action": getattr(intent, "next_action", None),
+                        },
+                    },
+                },
+            )
+
         return {"client_secret": intent.client_secret, "payment_intent_id": intent.id, "mock": False}
+    except stripe.error.CardError as e:
+        # Order matters: CardError must come BEFORE the generic StripeError
+        # branch (Python checks except clauses top-down, and CardError is a
+        # StripeError subclass). Card-decline / wrong-CVC / expired-card all
+        # land here and must surface as 402 so the rider SDK switches to
+        # the "try another card" UX. 3-D Secure challenges raised
+        # synchronously (rare; the success-path handler above is the common
+        # route) appear as code='authentication_required' and we forward
+        # that to the SDK as code='action_required'.
+        logger.error(f"Stripe CardError on create-intent: {e}", exc_info=True)
+        details: Dict[str, Any] = {}
+        if getattr(e, "code", None) == "authentication_required":
+            details["code"] = "action_required"
+        raise PaymentMethodInvalidException(
+            message=getattr(e, "user_message", None) or "Card declined",
+            message_key=ErrorKeys.PAYMENT_METHOD_INVALID,
+            status_code=402,
+            action_hint="Add a different card",
+            details=details or None,
+        ) from e
+    except stripe.error.RateLimitError as e:
+        # Stripe is throttling us. 429 with Retry-After lets the rider
+        # app's Axios interceptor back off rather than retrying instantly.
+        # We use SpinrException directly (not RateLimitExceededException)
+        # to keep the response shape identical to the OTP-lockout 429
+        # handler — same parser on the mobile side.
+        logger.error(f"Stripe RateLimitError on create-intent: {e}", exc_info=True)
+        raise SpinrException(
+            message="Payment provider is rate-limiting requests. Please try again shortly.",
+            error_code=ErrorCode.RATE_LIMIT_EXCEEDED,
+            status_code=429,
+            headers={"Retry-After": "30"},
+            action_hint="Try again in a moment",
+        ) from e
+    except stripe.error.StripeError as e:
+        logger.error(f"Stripe API error on create-intent: {e}", exc_info=True)
+        raise HTTPException(status_code=502, detail="Payment service unavailable. Please try again.") from e
     except Exception as e:
-        logger.error(f"Stripe error: {e}")
+        logger.error(f"Unexpected error on create-intent: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
 
 
 @api_router.post("/confirm")
-async def confirm_payment(request: Dict[str, Any], current_user: dict = Depends(get_current_user)):
+@payment_action_limit
+async def confirm_payment(
+    body: Dict[str, Any], request: Request = None, current_user: dict = Depends(get_current_user)
+):
     """Confirm payment was successful"""
-    payment_intent_id = request.get("payment_intent_id")
-    ride_id = request.get("ride_id")
+    payment_intent_id = body.get("payment_intent_id")
+    ride_id = body.get("ride_id")
+
+    if ride_id:
+        ride = await db_supabase.get_ride(ride_id)
+        if not ride:
+            raise HTTPException(status_code=404, detail="Ride not found")
+        if ride["rider_id"] != current_user["id"]:
+            raise HTTPException(status_code=403, detail="forbidden")
+
+        # C-3: Idempotency check — if a prior webhook already settled this payment,
+        # return early with a clear signal rather than re-entering the Stripe flow.
+        # This covers the case where the rider app retries confirm_payment after a
+        # network timeout when the webhook has already processed the payment.
+        # HTTP 200 (not 409) because the payment succeeded — this is not an error.
+        payment_status = ride.get("payment_status")
+        if payment_status in ("paid", "processing"):
+            logger.info(
+                "confirm_payment: ride %s already in payment_status=%s, returning early (C-3 idempotency)",
+                ride_id,
+                payment_status,
+            )
+            return {"status": "already_processed", "payment_status": payment_status}
+
+        claimed = await db_supabase.claim_ride_payment_processing(ride_id)
+        if not claimed:
+            raise HTTPException(status_code=409, detail="payment_already_processing")
 
     if payment_intent_id and payment_intent_id.startswith("pi_mock_"):
-        # Mock payment
         if ride_id:
+            _ride = await db_supabase.get_ride(ride_id)
+            if not _ride or _ride.get("rider_id") != current_user["id"]:
+                raise HTTPException(status_code=403, detail="Not authorized to confirm payment for this ride")
             await db_supabase.update_ride(ride_id, {"payment_status": "paid", "payment_intent_id": payment_intent_id})
         return {"status": "succeeded", "mock": True}
 
@@ -177,21 +288,28 @@ async def confirm_payment(request: Dict[str, Any], current_user: dict = Depends(
         try:
             intent = stripe.PaymentIntent.retrieve(payment_intent_id, api_key=stripe_secret)
 
+            if intent.metadata.get("user_id") != str(current_user["id"]):
+                raise HTTPException(status_code=403, detail="Not authorized to confirm this payment")
+
             if ride_id:
+                _ride = await db_supabase.get_ride(ride_id)
+                if not _ride or _ride.get("rider_id") != current_user["id"]:
+                    raise HTTPException(status_code=403, detail="Not authorized to confirm payment for this ride")
                 await db_supabase.update_ride(
                     ride_id, {"payment_status": intent.status, "payment_intent_id": payment_intent_id}
                 )
 
             return {"status": intent.status, "mock": False}
         except Exception as e:
-            logger.error(f"Stripe error: {e}")
+            logger.error(f"Stripe error: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
 
     return {"status": "unknown", "mock": True}
 
 
 @api_router.post("/setup-intent")
-async def create_setup_intent(current_user: dict = Depends(get_current_user)):
+@payment_action_limit
+async def create_setup_intent(request: Request = None, current_user: dict = Depends(get_current_user)):
     """Create a SetupIntent to save a new payment method"""
     settings = await get_app_settings()
     stripe_secret = settings.get("stripe_secret_key", "")
@@ -205,10 +323,13 @@ async def create_setup_intent(current_user: dict = Depends(get_current_user)):
         if not customer_id:
             raise HTTPException(status_code=400, detail="Could not create Stripe customer")
 
+        import time as _time
+
         setup_intent = stripe.SetupIntent.create(
             customer=customer_id,
             payment_method_types=["card"],
             api_key=stripe_secret,
+            idempotency_key=f"setup-intent-{current_user['id']}-{int(_time.time() // 3600)}",
         )
 
         return {
@@ -218,7 +339,7 @@ async def create_setup_intent(current_user: dict = Depends(get_current_user)):
             "mock": False,
         }
     except Exception as e:
-        logger.error(f"Stripe error: {e}")
+        logger.error(f"Stripe error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
 
 
@@ -258,7 +379,7 @@ async def get_payment_methods(current_user: dict = Depends(get_current_user)):
             "mock": False,
         }
     except Exception as e:
-        logger.error(f"Stripe error: {e}")
+        logger.error(f"Stripe error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
 
 
@@ -292,7 +413,7 @@ async def get_cards(current_user: dict = Depends(get_current_user)):
             for m in methods.data
         ]
     except Exception as e:
-        logger.error(f"Get cards error: {e}")
+        logger.error(f"Get cards error: {e}", exc_info=True)
         return []
 
 
@@ -334,7 +455,8 @@ _RAW_CARD_FIELDS = {
 
 
 @api_router.post("/cards")
-async def add_card(request: Request, current_user: dict = Depends(get_current_user)):
+@payment_action_limit
+async def add_card(request: Request = None, current_user: dict = Depends(get_current_user)):
     """Add a saved card. Requires client-side tokenization.
 
     Contract:
@@ -363,7 +485,7 @@ async def add_card(request: Request, current_user: dict = Depends(get_current_us
     if forbidden:
         # Log that a raw-card POST was attempted but DO NOT log the keys'
         # values. The client needs tokenization; tell them where to look.
-        logger.warning(
+        logger.error(
             f"Rejected raw-card POST to /payments/cards from user={current_user.get('id')}: {sorted(forbidden)} present"
         )
         raise HTTPException(
@@ -386,7 +508,7 @@ async def add_card(request: Request, current_user: dict = Depends(get_current_us
         # should reach clients via FastAPI's RequestValidationError
         # path normally; this except block is the fallback for the
         # ad-hoc dict-driven payload here.
-        logger.warning("AddCardRequest validation failed", exc_info=exc)
+        logger.error("AddCardRequest validation failed", exc_info=exc)
         raise HTTPException(
             status_code=400,
             detail="Invalid request payload.",
@@ -418,12 +540,15 @@ async def add_card(request: Request, current_user: dict = Depends(get_current_us
         pm = stripe.PaymentMethod.attach(payment_method_id, customer=customer_id, api_key=stripe_secret)
 
         # Confirm with SetupIntent — saves card for future off-session use.
+        import time as _time
+
         si = stripe.SetupIntent.create(
             customer=customer_id,
             payment_method=pm.id,
             confirm=True,
             automatic_payment_methods={"enabled": True, "allow_redirects": "never"},
             api_key=stripe_secret,
+            idempotency_key=f"setup-intent-{current_user['id']}-{int(_time.time() // 3600)}",
         )
 
         # Set as default if first card
@@ -450,13 +575,17 @@ async def add_card(request: Request, current_user: dict = Depends(get_current_us
             message_key=ErrorKeys.PAYMENT_METHOD_INVALID,
             action_hint="Add a different card",
         ) from e
+    except stripe.error.StripeError as e:
+        logger.error(f"Stripe API error on add-card: {e}", exc_info=True)
+        raise HTTPException(status_code=502, detail="Payment service unavailable. Please try again.") from e
     except Exception as e:
-        logger.error(f"Add card error: {e}")
+        logger.error(f"Unexpected error on add-card: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
 
 
 @api_router.post("/cards/{card_id}/default")
-async def set_default_card(card_id: str, current_user: dict = Depends(get_current_user)):
+@payment_action_limit
+async def set_default_card(card_id: str, request: Request = None, current_user: dict = Depends(get_current_user)):
     """Set card as default. Updates both our DB and Stripe customer."""
     await db_supabase.update_one("users", {"id": current_user["id"]}, {"default_payment_method": card_id})
 
@@ -471,11 +600,23 @@ async def set_default_card(card_id: str, current_user: dict = Depends(get_curren
         except Exception as e:
             logger.error(f"Stripe set default failed for card {card_id}: {e}", exc_info=True)
 
+    import asyncio
+
+    asyncio.create_task(
+        _audit_log_user(
+            current_user,
+            "default_payment_method_set",
+            "users",
+            current_user["id"],
+            {"card_id": card_id},
+        )
+    )
     return {"success": True}
 
 
 @api_router.delete("/cards/{card_id}")
-async def delete_card(card_id: str, current_user: dict = Depends(get_current_user)):
+@payment_action_limit
+async def delete_card(card_id: str, request: Request = None, current_user: dict = Depends(get_current_user)):
     """Detach card from Stripe and clear default if needed."""
     settings = await get_app_settings()
     stripe_secret = settings.get("stripe_secret_key", "")
@@ -493,8 +634,10 @@ async def delete_card(card_id: str, current_user: dict = Depends(get_current_use
 
 
 @api_router.post("/payment-sheet")
+@payment_action_limit
 async def create_payment_sheet(
     body: PaymentSheetRequest,
+    request: Request = None,
     current_user: dict = Depends(get_current_user),
 ):
     """Return the three secrets needed to initialise Stripe PaymentSheet.
@@ -526,6 +669,8 @@ async def create_payment_sheet(
         ride = await db_supabase.get_ride(body.ride_id)
         if not ride:
             raise HTTPException(status_code=404, detail="Ride not found")
+        if ride.get("rider_id") != current_user["id"]:
+            raise HTTPException(status_code=403, detail="Not authorized to pay for this ride")
         ride_fare = Decimal(str(ride.get("total_fare", 0)))
         requested = Decimal(str(body.amount))
         if requested != ride_fare:
@@ -540,10 +685,16 @@ async def create_payment_sheet(
         amount_cents = int(Decimal(str(body.amount)).quantize(Decimal("0.01")) * 100)
 
         # EphemeralKey lets the PaymentSheet modal manage the customer's
-        # saved cards. Must match the Stripe API version the SDK expects.
+        # saved cards. api_version must match the version configured on the
+        # Stripe webhook endpoint in the dashboard. We pin it to the version
+        # bundled with the installed SDK (stripe.api_version) so it stays in
+        # sync automatically on SDK upgrades.
+        # Current bundled version: 2026-04-22.dahlia (stripe==15.1.0)
+        # ACTION REQUIRED on SDK upgrade: verify the Stripe dashboard webhook
+        # endpoint API version matches stripe.api_version after upgrading.
         ephemeral_key = stripe.EphemeralKey.create(
             {"customer": customer_id},
-            api_version="2023-10-16",
+            api_version=stripe.api_version,
             api_key=stripe_secret,
         )
 

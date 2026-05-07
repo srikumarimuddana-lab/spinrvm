@@ -5,9 +5,17 @@ fake `current_user`. Guard behaviour is still exercised because the
 guard's `list_active_memberships_for_user` call is mocked per-test.
 """
 
+from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
 import pytest
+
+
+def _money(v):
+    """Compare API money values regardless of whether they are returned as
+    str (post Decimal-stringification) or float (legacy)."""
+    return Decimal(str(v))
+
 
 _FAKE_USER = {"id": "u_admin", "phone": "+15550001111"}
 
@@ -370,15 +378,15 @@ def test_billing_summary_aggregates_rows(test_client, rider_override):
     body = resp.json()
     assert body["month"] == "2026-04"
     assert body["ride_count"] == 3
-    assert body["allowance_total"] == 35.0
+    assert _money(body["allowance_total"]) == Decimal("35.0")
     # master_total: 5.0 + 0.0 + 45.0 = 50.0
-    assert body["master_total"] == 50.0
+    assert _money(body["master_total"]) == Decimal("50.0")
     # total: allowance + master = 35.0 + 50.0 = 85.0
-    assert body["total"] == 85.0
-    assert body["wallet_balance"] == 120.0
+    assert _money(body["total"]) == Decimal("85.0")
+    assert _money(body["wallet_balance"]) == Decimal("120.0")
     # by_member sorted by total desc — m2 (45.0) beats m1 (40.0) unambiguously
     assert body["by_member"][0]["member_id"] == "m2"
-    assert body["by_member"][0]["total"] == 45.0
+    assert _money(body["by_member"][0]["total"]) == Decimal("45.0")
     assert body["by_member"][1]["member_id"] == "m1"
     assert body["by_member"][1]["ride_count"] == 2
 
@@ -431,8 +439,8 @@ def test_billing_statement_returns_line_items(test_client, rider_override):
     body = resp.json()
     assert len(body["line_items"]) == 3
     # total: 35.0 (allowance) + 50.0 (master) = 85.0
-    assert body["summary"]["total"] == 85.0
-    assert body["summary"]["avg_fare"] == round(85.0 / 3, 2)
+    assert _money(body["summary"]["total"]) == Decimal("85.0")
+    assert _money(body["summary"]["avg_fare"]) == _money(round(85.0 / 3, 2))
 
 
 def test_billing_statement_rejects_bad_month(test_client, rider_override):
@@ -463,7 +471,7 @@ def test_billing_transactions_returns_paged_ledger(test_client, rider_override):
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["wallet_id"] == "w1"
-    assert body["balance"] == 250.0
+    assert _money(body["balance"]) == Decimal("250.0")
     assert len(body["transactions"]) == 1
     m_list.assert_awaited_once_with(wallet_id="w1", skip=0, limit=25)
 

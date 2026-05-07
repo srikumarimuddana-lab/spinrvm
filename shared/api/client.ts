@@ -87,7 +87,30 @@ export function setCsrfToken(token: string | null): void {
 // request is retried with the newly-stored in-memory token.
 type RefreshFn = () => Promise<boolean>;
 let _refreshCallback: RefreshFn | null = null;
+// _refreshPromise deduplicates concurrent refresh calls: every in-flight
+// request that hits 401 while a refresh is already running awaits the
+// same promise instead of firing N parallel /auth/refresh requests.
 let _refreshPromise: Promise<boolean> | null = null;
+// Subscriber queue: requests that arrived while a refresh was in progress
+// register here. When the refresh succeeds they are all retried with the
+// newly-stored token rather than racing to start a second refresh.
+let _refreshSubscribers: Array<(token: string) => void> = [];
+
+function _subscribeTokenRefresh(cb: (token: string) => void): void {
+  _refreshSubscribers.push(cb);
+}
+
+function _onRefreshed(token: string): void {
+  _refreshSubscribers.forEach(cb => cb(token));
+  _refreshSubscribers = [];
+}
+
+// Exposed so the auth store can sign the user out when the refresh token
+// is itself rejected — prevents the client from entering a limbo state.
+let _signOutCallback: (() => Promise<void>) | null = null;
+export function setSignOutCallback(fn: () => Promise<void>): void {
+  _signOutCallback = fn;
+}
 
 export function setRefreshCallback(fn: RefreshFn): void {
   _refreshCallback = fn;
@@ -168,6 +191,12 @@ export interface ApiErrorBody {
     code?: number;
     message_key?: string;
     action_hint?: string;
+    // SpinrException's `details` dict (route-supplied diagnostic payload).
+    // Stripe error specificity uses `details.code === 'action_required'`
+    // to flag 3-D Secure / SCA challenges that the rider SDK must drive
+    // through `handleNextAction()`. Routes that don't need it omit the
+    // field entirely.
+    details?: Record<string, unknown> | null;
   };
   retry_after?: number;
   limit?: number;
@@ -196,6 +225,20 @@ export interface ExtractedError {
   status?: number;
   /** For 429 only */
   retryAfterSeconds?: number;
+  /**
+   * String discriminator from `error.details.code`. The Stripe error
+   * specificity work uses this to flag 3-D Secure challenges as
+   * `'action_required'` so the payment screen can drive
+   * `handleNextAction()` instead of treating the 402 as a generic
+   * decline. Other routes may introduce additional discriminators
+   * (e.g. `'documents_pending'`, `'low_balance'`); callers branch on
+   * the literal value.
+   */
+  detailCode?: string;
+  /** Full `error.details` payload — surfaced verbatim for callers
+   * that need fields beyond `detailCode` (e.g. the 3-D Secure
+   * `client_secret` + `next_action` for `handleNextAction()`). */
+  details?: Record<string, unknown>;
 }
 
 /**
@@ -237,6 +280,14 @@ export const extractError = (
     if (data.error.message_key) result.messageKey = data.error.message_key;
     if (data.error.action_hint) result.actionHint = data.error.action_hint;
     if (data.error.request_id) result.requestId = data.error.request_id;
+    // Surface `error.details` for callers that need to branch on a
+    // string discriminator (e.g. `'action_required'` for 3-D Secure).
+    // Backend writes the dict via `SpinrException(details=...)`.
+    if (data.error.details && typeof data.error.details === 'object') {
+      result.details = data.error.details as Record<string, unknown>;
+      const detailCode = (data.error.details as { code?: unknown }).code;
+      if (typeof detailCode === 'string') result.detailCode = detailCode;
+    }
   }
 
   return result;
@@ -304,6 +355,17 @@ export class SpinrApiError extends Error {
   messageKey?: string;
   actionHint?: string;
   requestId?: string;
+  /**
+   * Backend `error.details.code` string discriminator. The payment
+   * screen reads this to detect 3-D Secure challenges
+   * (`'action_required'`) returned as 402 from POST
+   * /payments/create-intent. `undefined` for routes that don't set a
+   * detail-code, so unrelated callers can ignore it.
+   */
+  detailCode?: string;
+  /** Full `error.details` payload (e.g. 3DS `client_secret`,
+   * `next_action`). `undefined` when the backend didn't set details. */
+  details?: Record<string, unknown>;
   data: ApiErrorBody;
   // Mirror the pre-Phase-2B `error.response` shape so that callers
   // doing `error.response.data` / `error.response.status` keep working.
@@ -317,6 +379,8 @@ export class SpinrApiError extends Error {
     this.messageKey = extracted.messageKey;
     this.actionHint = extracted.actionHint;
     this.requestId = extracted.requestId;
+    this.detailCode = extracted.detailCode;
+    this.details = extracted.details;
     this.data = data;
     this.response = { data, status: this.status };
   }
@@ -442,22 +506,59 @@ const recordApiError = (entry: ApiErrorLogEntry) => {
   }
 };
 
-const handleApiError = async (response: Response, method: string, url: string, retryFn?: () => Promise<never>): Promise<never> => {
+const handleApiError = async (response: Response, method: string, url: string, retryFn?: () => Promise<unknown>): Promise<never> => {
+  // ── Guard: refresh endpoint itself returned 401 ──────────────────
+  // If the /auth/refresh call is rejected by the server the refresh token is
+  // expired or revoked. Sign the user out immediately to clear invalid state
+  // rather than letting every queued request spin and eventually time-out.
+  if (response.status === 401 && url.includes('/auth/refresh')) {
+    console.log('[API] Refresh token rejected (401) — signing out');
+    if (_signOutCallback) {
+      await _signOutCallback().catch(() => {});
+    } else {
+      // Fallback: clear in-process state directly if the callback was not
+      // registered yet (e.g. very early cold-start before authStore init).
+      setInMemoryToken(null);
+      try {
+        const { useAuthStore } = require('../store/authStore');
+        useAuthStore.getState().logout();
+      } catch { /* store not yet initialised */ }
+    }
+    _refreshSubscribers = [];
+    return Promise.reject(response) as Promise<never>;
+  }
+
+
   // On 401, attempt a single silent token refresh then retry the original request.
-  if (response.status === 401 && _refreshCallback && retryFn && url !== '/auth/refresh') {
+  if (response.status === 401 && _refreshCallback && retryFn) {
     try {
-      // Deduplicate concurrent refresh calls — only one in-flight at a time.
-      if (!_refreshPromise) {
-        _refreshPromise = _refreshCallback().finally(() => {
-          _refreshPromise = null;
+      if (_refreshPromise) {
+        // A refresh is already in-flight — queue this request and wait for
+        // the new token rather than firing a second /auth/refresh call.
+        const retried = await new Promise<unknown>((resolve, reject) => {
+          _subscribeTokenRefresh((_newToken) => {
+            retryFn().then(resolve).catch(reject);
+          });
         });
+        return retried as never;
       }
+
+      // First caller: start the refresh and notify all subscribers on completion.
+      _refreshPromise = _refreshCallback().finally(() => {
+        _refreshPromise = null;
+      });
       const refreshed = await _refreshPromise;
       if (refreshed) {
-        return retryFn(); // retry with the new token now in _inMemoryToken
+        const newToken = _inMemoryToken ?? '';
+        _onRefreshed(newToken);
+        return retryFn() as Promise<never>; // retry with the new token now in _inMemoryToken
       }
+      // Refresh returned false (transient failure) — flush subscribers with
+      // empty token so they fall through to throw their own 401 errors.
+      _onRefreshed('');
     } catch {
-      // refresh failed — fall through to throw the original 401
+      // refresh threw — flush subscribers and fall through to throw the original 401
+      _onRefreshed('');
     }
   }
 
@@ -471,7 +572,7 @@ const handleApiError = async (response: Response, method: string, url: string, r
   if (response.status === 503 && retryFn && url !== '/auth/refresh') {
     await new Promise(r => setTimeout(r, 1500));
     try {
-      return retryFn();
+      return retryFn() as Promise<never>;
     } catch {
       // retry threw — fall through to the original error surface below
     }
@@ -633,6 +734,7 @@ const client = {
     const headers: Record<string, string> = {
       ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
       'X-Request-ID': generateRequestId(),
+      ...deadlineHeader(),
       ...traceparentHeader(),
       ...config?.headers,
     };

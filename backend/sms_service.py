@@ -6,6 +6,11 @@ Credentials are read from DB settings (passed in by caller), not env vars.
 
 from loguru import logger
 
+try:
+    from .utils.pii import redact_phone
+except ImportError:
+    from utils.pii import redact_phone
+
 
 async def send_sms(
     to_phone: str, message: str, *, twilio_sid: str = "", twilio_token: str = "", twilio_from: str = ""
@@ -19,9 +24,10 @@ async def send_sms(
     Returns:
         dict with 'success' (bool), 'provider' (str), and optionally 'sid' or 'error'.
     """
+    masked = redact_phone(to_phone)
     if not all([twilio_sid, twilio_token, twilio_from]):
-        # Development fallback — log to console
-        logger.info(f"[DEV SMS] To: ***{to_phone[-4:]} | Message: {message}")
+        # Development fallback — log to console (PII-safe: phone redacted, message dropped)
+        logger.info(f"[DEV SMS] To: {masked} (Twilio not configured)")
         return {"success": True, "provider": "console", "message": "SMS logged to console (Twilio not configured)"}
 
     try:
@@ -29,10 +35,10 @@ async def send_sms(
 
         client = Client(twilio_sid, twilio_token)
         sms = client.messages.create(body=message, from_=twilio_from, to=to_phone)
-        logger.info(f"SMS sent to ***{to_phone[-4:]} via Twilio (SID: {sms.sid})")
+        logger.info(f"SMS sent to {masked} via Twilio (SID: {sms.sid})")
         return {"success": True, "provider": "twilio", "sid": sms.sid}
     except Exception as e:
-        logger.error(f"Failed to send SMS to ***{to_phone[-4:]}: {e}")
+        logger.error(f"Failed to send SMS to {masked}: {e}")
         return {"success": False, "provider": "twilio", "error": str(e)}
 
 

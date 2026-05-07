@@ -29,8 +29,10 @@ from typing import Any, Dict
 
 try:
     from .datetime_utils import parse_iso_utc
+    from .pii import redact_email
 except ImportError:
     from utils.datetime_utils import parse_iso_utc
+    from utils.pii import redact_email
 
 logger = logging.getLogger(__name__)
 
@@ -325,13 +327,13 @@ async def send_receipt_email(ride: dict, rider: dict, driver: dict = None, tip: 
                     "content": [{"type": "text/html", "value": html}],
                 },
             )
-            logger.info(f"[EMAIL] SendGrid receipt sent for ride {ride.get('id')} (status: {response.status_code})")
+            logger.info(f"[EMAIL] SendGrid receipt sent to {redact_email(email)} (status: {response.status_code})")
             return response.status_code in (200, 201, 202)
     except ImportError:
         pass
     except Exception as e:
         logger.warning(f"[EMAIL] SendGrid failed: {e}")
 
-    # Fallback: log only
-    logger.info(f"[EMAIL] Receipt for ride {ride.get('id')} | Total: ${total:.2f} (SendGrid not configured)")
+    # Fallback: log only (PII-safe: email + total amount redacted)
+    logger.info(f"[EMAIL] Receipt for ride {ride.get('id')} → {redact_email(email)} (SendGrid not configured)")
     return False

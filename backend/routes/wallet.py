@@ -114,7 +114,7 @@ class WalletPayRequest(BaseModel):
 
 class TransferRequest(BaseModel):
     recipient_phone: str = Field(..., pattern=r"^\+1\d{10}$")
-    amount: float = Field(..., gt=0, le=200)
+    amount: Decimal = Field(..., gt=0, le=200, description="Amount in CAD (max $200)")
 
 
 # ── Endpoints ────────────────────────────────────────────────────────

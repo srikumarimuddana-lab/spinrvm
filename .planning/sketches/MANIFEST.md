@@ -34,3 +34,4 @@
 | 009 | Admin | admin-corporate | Can finance see the health of all corporate accounts at a glance? | C (Financial Health Dashboard) | admin, corporate, billing |
 | 010 | Rider App | rider-sos | Can a rider trigger SOS without stopping mid-ride? | C (Shield + Hold Overlay) | rider, safety, sos |
 | 011 | Driver App | driver-sos | Can a driver call for help with one hand while driving? | C (Discreet Hold Shield) | driver, safety, sos |
+| 012 | Driver App | driver-nav-arrival | Does the driver know exactly where to stop without looking at the phone? | C (Arrival Zone UI) | driver, navigation, arrival, pickup |

@@ -191,6 +191,12 @@ export interface ApiErrorBody {
     code?: number;
     message_key?: string;
     action_hint?: string;
+    // SpinrException's `details` dict (route-supplied diagnostic payload).
+    // Stripe error specificity uses `details.code === 'action_required'`
+    // to flag 3-D Secure / SCA challenges that the rider SDK must drive
+    // through `handleNextAction()`. Routes that don't need it omit the
+    // field entirely.
+    details?: Record<string, unknown> | null;
   };
   retry_after?: number;
   limit?: number;
@@ -219,6 +225,20 @@ export interface ExtractedError {
   status?: number;
   /** For 429 only */
   retryAfterSeconds?: number;
+  /**
+   * String discriminator from `error.details.code`. The Stripe error
+   * specificity work uses this to flag 3-D Secure challenges as
+   * `'action_required'` so the payment screen can drive
+   * `handleNextAction()` instead of treating the 402 as a generic
+   * decline. Other routes may introduce additional discriminators
+   * (e.g. `'documents_pending'`, `'low_balance'`); callers branch on
+   * the literal value.
+   */
+  detailCode?: string;
+  /** Full `error.details` payload — surfaced verbatim for callers
+   * that need fields beyond `detailCode` (e.g. the 3-D Secure
+   * `client_secret` + `next_action` for `handleNextAction()`). */
+  details?: Record<string, unknown>;
 }
 
 /**
@@ -260,6 +280,14 @@ export const extractError = (
     if (data.error.message_key) result.messageKey = data.error.message_key;
     if (data.error.action_hint) result.actionHint = data.error.action_hint;
     if (data.error.request_id) result.requestId = data.error.request_id;
+    // Surface `error.details` for callers that need to branch on a
+    // string discriminator (e.g. `'action_required'` for 3-D Secure).
+    // Backend writes the dict via `SpinrException(details=...)`.
+    if (data.error.details && typeof data.error.details === 'object') {
+      result.details = data.error.details as Record<string, unknown>;
+      const detailCode = (data.error.details as { code?: unknown }).code;
+      if (typeof detailCode === 'string') result.detailCode = detailCode;
+    }
   }
 
   return result;
@@ -327,6 +355,17 @@ export class SpinrApiError extends Error {
   messageKey?: string;
   actionHint?: string;
   requestId?: string;
+  /**
+   * Backend `error.details.code` string discriminator. The payment
+   * screen reads this to detect 3-D Secure challenges
+   * (`'action_required'`) returned as 402 from POST
+   * /payments/create-intent. `undefined` for routes that don't set a
+   * detail-code, so unrelated callers can ignore it.
+   */
+  detailCode?: string;
+  /** Full `error.details` payload (e.g. 3DS `client_secret`,
+   * `next_action`). `undefined` when the backend didn't set details. */
+  details?: Record<string, unknown>;
   data: ApiErrorBody;
   // Mirror the pre-Phase-2B `error.response` shape so that callers
   // doing `error.response.data` / `error.response.status` keep working.
@@ -340,6 +379,8 @@ export class SpinrApiError extends Error {
     this.messageKey = extracted.messageKey;
     this.actionHint = extracted.actionHint;
     this.requestId = extracted.requestId;
+    this.detailCode = extracted.detailCode;
+    this.details = extracted.details;
     this.data = data;
     this.response = { data, status: this.status };
   }

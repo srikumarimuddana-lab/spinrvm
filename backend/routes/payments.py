@@ -2,6 +2,7 @@ from decimal import Decimal
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 try:
@@ -10,8 +11,10 @@ try:
     from ..settings_loader import get_app_settings
     from ..utils.audit_logger import log_user_action as _audit_log_user
     from ..utils.error_handling import (
+        ErrorCode,
         PaymentException,
         PaymentMethodInvalidException,
+        SpinrException,
     )
     from ..utils.error_keys import ErrorKeys
     from ..utils.idempotency import idempotent_endpoint
@@ -23,8 +26,10 @@ except ImportError:
     from settings_loader import get_app_settings
     from utils.audit_logger import log_user_action as _audit_log_user
     from utils.error_handling import (
+        ErrorCode,
         PaymentException,
         PaymentMethodInvalidException,
+        SpinrException,
     )
     from utils.error_keys import ErrorKeys
     from utils.idempotency import idempotent_endpoint
@@ -164,10 +169,68 @@ async def create_payment_intent(
             idempotency_key=idempotency_key,
         )
 
+        # 3-D Secure / SCA happy-path: PaymentIntent succeeded at the API
+        # boundary but Stripe is asking the rider to complete an additional
+        # authentication step (3DS challenge). The mobile SDK reads
+        # `client_secret` + `next_action` to drive the flow. We surface this
+        # as a 402 with `code='action_required'` so the rider app branches
+        # into Stripe's handleNextAction() rather than treating it as
+        # success and confirming the payment server-side.
+        if getattr(intent, "status", None) == "requires_action":
+            return JSONResponse(
+                status_code=402,
+                content={
+                    "success": False,
+                    "detail": "Additional authentication required",
+                    "error": {
+                        "code": ErrorCode.PAYMENT_METHOD_INVALID.value,
+                        "message": "Additional authentication required",
+                        "message_key": ErrorKeys.PAYMENT_METHOD_INVALID,
+                        "details": {
+                            "code": "action_required",
+                            "client_secret": intent.client_secret,
+                            "payment_intent_id": intent.id,
+                            "next_action": getattr(intent, "next_action", None),
+                        },
+                    },
+                },
+            )
+
         return {"client_secret": intent.client_secret, "payment_intent_id": intent.id, "mock": False}
     except stripe.error.CardError as e:
+        # Order matters: CardError must come BEFORE the generic StripeError
+        # branch (Python checks except clauses top-down, and CardError is a
+        # StripeError subclass). Card-decline / wrong-CVC / expired-card all
+        # land here and must surface as 402 so the rider SDK switches to
+        # the "try another card" UX. 3-D Secure challenges raised
+        # synchronously (rare; the success-path handler above is the common
+        # route) appear as code='authentication_required' and we forward
+        # that to the SDK as code='action_required'.
         logger.error(f"Stripe CardError on create-intent: {e}", exc_info=True)
-        raise HTTPException(status_code=402, detail=e.user_message or "Card declined") from e
+        details: Dict[str, Any] = {}
+        if getattr(e, "code", None) == "authentication_required":
+            details["code"] = "action_required"
+        raise PaymentMethodInvalidException(
+            message=getattr(e, "user_message", None) or "Card declined",
+            message_key=ErrorKeys.PAYMENT_METHOD_INVALID,
+            status_code=402,
+            action_hint="Add a different card",
+            details=details or None,
+        ) from e
+    except stripe.error.RateLimitError as e:
+        # Stripe is throttling us. 429 with Retry-After lets the rider
+        # app's Axios interceptor back off rather than retrying instantly.
+        # We use SpinrException directly (not RateLimitExceededException)
+        # to keep the response shape identical to the OTP-lockout 429
+        # handler — same parser on the mobile side.
+        logger.error(f"Stripe RateLimitError on create-intent: {e}", exc_info=True)
+        raise SpinrException(
+            message="Payment provider is rate-limiting requests. Please try again shortly.",
+            error_code=ErrorCode.RATE_LIMIT_EXCEEDED,
+            status_code=429,
+            headers={"Retry-After": "30"},
+            action_hint="Try again in a moment",
+        ) from e
     except stripe.error.StripeError as e:
         logger.error(f"Stripe API error on create-intent: {e}", exc_info=True)
         raise HTTPException(status_code=502, detail="Payment service unavailable. Please try again.") from e

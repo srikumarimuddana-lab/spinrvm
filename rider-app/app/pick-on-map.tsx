@@ -14,8 +14,8 @@ import MapView, { PROVIDER_GOOGLE, Region } from 'react-native-maps';
 import * as Location from 'expo-location';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import api from '@shared/api/client';
 
-const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 
 export default function PickOnMapScreen() {
@@ -56,18 +56,14 @@ export default function PickOnMapScreen() {
   }, []);
 
   const reverseGeocode = async (lat: number, lng: number) => {
-    if (!GOOGLE_MAPS_API_KEY) {
-      setAddress(`${lat.toFixed(5)}, ${lng.toFixed(5)}`);
-      return;
-    }
     setGeocoding(true);
     try {
-      const res = await fetch(
-        `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${GOOGLE_MAPS_API_KEY}`
+      const params = new URLSearchParams({ lat: String(lat), lng: String(lng) });
+      const { data } = await api.get<{ formatted_address: string }>(
+        `/maps/reverse-geocode?${params.toString()}`,
       );
-      const data = await res.json();
-      if (data.results?.[0]) {
-        setAddress(data.results[0].formatted_address);
+      if (data?.formatted_address) {
+        setAddress(data.formatted_address);
       } else {
         setAddress(`${lat.toFixed(5)}, ${lng.toFixed(5)}`);
       }

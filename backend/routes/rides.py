@@ -469,6 +469,7 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
             "duration_minutes": ride.get("duration_minutes"),
             "rider_name": rider_display_name,
             "rider_rating": (rider_user or {}).get("rating"),
+            "requires_wav": bool(ride.get("requires_wav")),
         }
 
         # Notify driver via WebSocket (only reaches the driver if they have
@@ -1070,6 +1071,7 @@ async def create_ride(body: CreateRideRequest, request: Request = None, current_
         admin_earnings=_f(admin_earnings),
         payment_method=body.payment_method,
         payment_method_id=body.payment_method_id,
+        requires_wav=body.requires_wav,
         status="searching",
         pickup_otp=hash_otp(pickup_otp_plain),
         ride_requested_at=datetime.now(timezone.utc),

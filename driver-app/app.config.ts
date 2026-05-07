@@ -13,8 +13,12 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     icon: './assets/images/icon.png',
     scheme: SCHEME,
     userInterfaceStyle: 'automatic',
+    // PROBE BRANCH — DO NOT MERGE. Flipped to true to validate that
+    // Reanimated 4 / LogRocket / gorhom-bottom-sheet / Firebase / expo-location
+    // background tracking all behave correctly under New Architecture before
+    // opening the production-targeted PR (#6). See PR description for matrix.
     // @ts-expect-error newArchEnabled is valid Expo config but not yet typed in ExpoConfig
-    newArchEnabled: false, // disabled: pre-launch stability over perf; re-enable post go-live as a planned migration
+    newArchEnabled: true,
     updates: {
         url: 'https://u.expo.dev/1ed02cf4-97cb-4678-b5a2-0881f89abaa8',
     },

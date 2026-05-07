@@ -13,7 +13,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     icon: './assets/images/icon.png',
     scheme: SCHEME,
     userInterfaceStyle: 'automatic',
-    newArchEnabled: false, // disabled: pre-launch stability over perf; re-enable post go-live as a planned migration
+    // PROBE BRANCH — DO NOT MERGE. Flipped to true to validate that
+    // Reanimated 4 / Stripe Payment Sheet / LogRocket / gorhom-bottom-sheet
+    // all behave correctly under New Architecture before opening the
+    // production-targeted PR (#6). See PR description for the validation matrix.
+    newArchEnabled: true,
     updates: {
         url: 'https://u.expo.dev/8f1e4f60-720e-46b0-9b71-33c13d3af043',
     },

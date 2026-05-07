@@ -367,7 +367,6 @@ function RootLayoutInner({
               <Stack.Screen name="driver-arrived" options={{ gestureEnabled: false }} />
               <Stack.Screen name="ride-in-progress" options={{ gestureEnabled: false }} />
               <Stack.Screen name="ride-completed" options={{ gestureEnabled: false }} />
-              <Stack.Screen name="rate-ride" />
               <Stack.Screen name="chat-driver" />
 
               {/* Account */}

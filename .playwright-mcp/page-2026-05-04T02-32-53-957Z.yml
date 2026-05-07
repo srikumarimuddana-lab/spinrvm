@@ -1,0 +1,358 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e5]:
+    - generic [ref=e8]:
+      - generic [ref=e10]:
+        - button "Navigate to home" [ref=e11] [cursor=pointer]:
+          - img "Expo home" [ref=e12]
+        - generic [ref=e14]:
+          - button "Notifications" [ref=e15] [cursor=pointer]:
+            - img [ref=e18]
+          - button "Search" [ref=e21] [cursor=pointer]:
+            - img [ref=e22]
+      - generic [ref=e25]:
+        - button "srikumarimuddana account icon srikumarimuddana" [ref=e27] [cursor=pointer]:
+          - generic [ref=e28]:
+            - img "srikumarimuddana account icon" [ref=e29]
+            - paragraph [ref=e30]: srikumarimuddana
+          - img [ref=e32]
+        - button "SpinrDriver" [ref=e207] [cursor=pointer]:
+          - generic [ref=e37]:
+            - figure [ref=e208]:
+              - generic [ref=e209]:
+                - generic [ref=e210]: S
+                - img [ref=e211]
+            - paragraph [ref=e40]: SpinrDriver
+          - img [ref=e42]
+      - generic [ref=e47]:
+        - link "Account" [ref=e50] [cursor=pointer]:
+          - /url: /accounts/srikumarimuddana
+          - generic [ref=e51]:
+            - img [ref=e52]
+            - paragraph [ref=e55]: Account
+        - generic [ref=e56]:
+          - paragraph [ref=e57]: Project
+          - link "Overview" [ref=e59] [cursor=pointer]:
+            - /url: /accounts/srikumarimuddana/projects/spinrdriver
+            - generic [ref=e60]:
+              - img [ref=e61]
+              - paragraph [ref=e68]: Overview
+          - link "Insights" [ref=e70] [cursor=pointer]:
+            - /url: /accounts/srikumarimuddana/projects/spinrdriver/insights
+            - generic [ref=e71]:
+              - img [ref=e72]
+              - paragraph [ref=e79]: Insights
+          - link "Usage" [ref=e81] [cursor=pointer]:
+            - /url: /accounts/srikumarimuddana/projects/spinrdriver/usage
+            - generic [ref=e82]:
+              - img [ref=e83]
+              - paragraph [ref=e86]: Usage
+        - generic [ref=e87]:
+          - paragraph [ref=e88]: Develop
+          - link "Workflows" [ref=e90] [cursor=pointer]:
+            - /url: /accounts/srikumarimuddana/projects/spinrdriver/workflows
+            - generic [ref=e91]:
+              - img [ref=e92]
+              - paragraph [ref=e95]: Workflows
+          - link "Development builds" [ref=e97] [cursor=pointer]:
+            - /url: /accounts/srikumarimuddana/projects/spinrdriver/development-builds
+            - generic [ref=e98]:
+              - img [ref=e99]
+              - paragraph [ref=e102]: Development builds
+        - generic [ref=e103]:
+          - paragraph [ref=e104]: Deploy
+          - link "Builds" [ref=e106] [cursor=pointer]:
+            - /url: /accounts/srikumarimuddana/projects/spinrdriver/builds
+            - generic [ref=e107]:
+              - img [ref=e108]
+              - paragraph [ref=e111]: Builds
+          - link "Submissions" [ref=e113] [cursor=pointer]:
+            - /url: /accounts/srikumarimuddana/projects/spinrdriver/submissions
+            - generic [ref=e114]:
+              - img [ref=e115]
+              - paragraph [ref=e123]: Submissions
+          - button "Over-the-air updates" [ref=e125] [cursor=pointer]:
+            - generic [ref=e126]:
+              - img [ref=e127]
+              - paragraph [ref=e130]: Over-the-air updates
+            - img [ref=e131]
+          - link "Hosting" [ref=e135] [cursor=pointer]:
+            - /url: /accounts/srikumarimuddana/projects/spinrdriver/hosting
+            - generic [ref=e136]:
+              - img [ref=e137]
+              - paragraph [ref=e140]: Hosting
+          - link "Push notifications" [ref=e142] [cursor=pointer]:
+            - /url: /accounts/srikumarimuddana/projects/spinrdriver/push-notifications
+            - generic [ref=e143]:
+              - img [ref=e144]
+              - paragraph [ref=e147]: Push notifications
+        - generic [ref=e148]:
+          - paragraph [ref=e149]: Entities
+          - link "Fingerprints" [ref=e151] [cursor=pointer]:
+            - /url: /accounts/srikumarimuddana/projects/spinrdriver/fingerprints
+            - paragraph [ref=e153]: Fingerprints
+        - generic [ref=e154]:
+          - paragraph [ref=e155]: Project settings
+          - link "General" [ref=e157] [cursor=pointer]:
+            - /url: /accounts/srikumarimuddana/projects/spinrdriver/settings
+            - paragraph [ref=e159]: General
+          - link "Credentials" [ref=e161] [cursor=pointer]:
+            - /url: /accounts/srikumarimuddana/projects/spinrdriver/credentials
+            - paragraph [ref=e163]: Credentials
+          - link "Environment variables" [ref=e165] [cursor=pointer]:
+            - /url: /accounts/srikumarimuddana/projects/spinrdriver/environment-variables
+            - paragraph [ref=e167]: Environment variables
+          - link "GitHub" [ref=e169] [cursor=pointer]:
+            - /url: /accounts/srikumarimuddana/projects/spinrdriver/github
+            - paragraph [ref=e171]: GitHub
+      - button "User menu srikumarimuddana" [ref=e174] [cursor=pointer]:
+        - generic [ref=e175]:
+          - img "User menu" [ref=e176]
+          - paragraph [ref=e177]: srikumarimuddana
+        - img [ref=e179]
+    - generic [ref=e188]:
+      - generic [ref=e189]:
+        - generic [ref=e190]:
+          - link "Builds" [ref=e191] [cursor=pointer]:
+            - /url: /accounts/srikumarimuddana/projects/spinrdriver/builds
+            - generic [ref=e192]:
+              - img [ref=e193]
+              - paragraph [ref=e196]: Builds
+          - img [ref=e197]
+          - paragraph [ref=e201]: 3e99d831
+        - generic [ref=e212]:
+          - button "Copy error as prompt" [ref=e214] [cursor=pointer]:
+            - img [ref=e215]
+            - generic [ref=e219]: Copy error as prompt
+          - button "Compare" [ref=e221] [cursor=pointer]:
+            - img [ref=e222]
+            - generic [ref=e228]: Compare
+      - generic [ref=e229]:
+        - generic [ref=e230]:
+          - generic [ref=e232]:
+            - generic [ref=e234]:
+              - generic [ref=e235]:
+                - img [ref=e236]
+                - heading "Android Play Store build" [level=3] [ref=e239]
+              - paragraph [ref=e240]: "3916585 · fix(android): pin Gradle wrapper to 8.10.2 via config plugin RN 0.85.2 ships with Gradle 9.0.0 by default. Gradle 9 removes APIs that pre-2023 native modules rely on (react-native-maps-directions 2019, @logrocket/react-native, etc.), causing 'Gradle build failed with unknown error' in all EAS builds after New Architecture was disabled. Pins both apps to Gradle 8.10.2 (stable, used by RN 0.76-0.78, fully compatible with compileSdkVersion 35 + AGP 8.x + Kotlin 2.x) via a withGradleWrapper config plugin. Also removes the deprecated edgeToEdgeEnabled config option (Android 16 makes edge-to-edge mandatory so the field has no effect and emits a prebuild warning)."
+            - button [ref=e243] [cursor=pointer]:
+              - img [ref=e244]
+          - generic [ref=e248]:
+            - generic [ref=e250]:
+              - paragraph [ref=e251]: Profile
+              - button [ref=e252]:
+                - img [ref=e253]
+            - paragraph [ref=e257]: Environment
+            - paragraph [ref=e259]: Deployment
+            - paragraph [ref=e261]: Version
+            - paragraph [ref=e263]: Fingerprint
+            - paragraph [ref=e265]: Commit
+            - paragraph [ref=e267]: Created by
+            - paragraph [ref=e270]: preview
+            - link "production" [ref=e271] [cursor=pointer]:
+              - /url: /accounts/srikumarimuddana/projects/spinrdriver/environment-variables?environment=production
+              - paragraph [ref=e273]: production
+            - link "1.0.0 preview" [ref=e274] [cursor=pointer]:
+              - /url: /accounts/srikumarimuddana/projects/spinrdriver/deployments/preview/1.0.0
+              - generic [ref=e276]:
+                - button "1.0.0" [ref=e277]:
+                  - paragraph [ref=e278]: 1.0.0
+                - button "preview" [ref=e279]:
+                  - img [ref=e280]
+                  - paragraph [ref=e283]: preview
+            - paragraph [ref=e285]:
+              - button "1.0.0 (2)" [ref=e286]
+            - link "ced6ece" [ref=e287] [cursor=pointer]:
+              - /url: /accounts/srikumarimuddana/projects/spinrdriver/fingerprints/ced6ece35bd9126a50f626237a22c2d9c65426d9
+              - generic [ref=e288]:
+                - img [ref=e289]
+                - paragraph [ref=e292]:
+                  - code [ref=e293]: ced6ece
+            - generic [ref=e295]:
+              - code [ref=e298]: 3916585*
+              - button [ref=e300] [cursor=pointer]:
+                - img [ref=e301]
+            - generic [ref=e305]:
+              - img "srikumarimuddana account icon" [ref=e306]
+              - paragraph [ref=e309]: srikumarimuddana
+        - generic [ref=e310]:
+          - generic [ref=e312]:
+            - generic [ref=e315]:
+              - img [ref=e316]
+              - heading "Build artifact" [level=4] [ref=e320]
+            - button [ref=e322] [cursor=pointer]:
+              - img [ref=e323]
+          - generic [ref=e330]:
+            - paragraph [ref=e332]: Status
+            - paragraph [ref=e334]: Start time
+            - paragraph [ref=e336]: Wait time
+            - generic [ref=e337]:
+              - paragraph [ref=e338]: Queue time
+              - button [ref=e339]:
+                - img [ref=e340]
+            - paragraph [ref=e344]: Build time
+            - paragraph [ref=e346]: Total time
+            - generic [ref=e347]:
+              - paragraph [ref=e348]: Availability
+              - button [ref=e349]:
+                - img [ref=e350]
+            - generic [ref=e354]:
+              - img "Errored" [ref=e357]
+              - paragraph [ref=e360]: Errored
+            - time [ref=e364]: May 3, 2026 2:04 PM
+            - paragraph [ref=e366]: 2m 55s
+            - paragraph [ref=e368]: 49s
+            - paragraph [ref=e370]: 3m 2s
+            - paragraph [ref=e372]: 6m 47s
+            - paragraph [ref=e374]: 29 days
+        - generic [ref=e375]:
+          - generic [ref=e377]:
+            - generic [ref=e380]:
+              - img [ref=e381]
+              - heading "Logs" [level=4] [ref=e384]
+            - button [ref=e386] [cursor=pointer]:
+              - img [ref=e387]
+          - generic [ref=e393]:
+            - button "Waiting to start 3m 1s" [ref=e395]:
+              - generic [ref=e396]:
+                - img [ref=e397]
+                - img [ref=e401]
+                - paragraph [ref=e405]: Waiting to start
+              - generic [ref=e406]:
+                - paragraph [ref=e407]: 3m 1s
+                - button [ref=e408] [cursor=pointer]:
+                  - img [ref=e409]
+            - button "Spin up build environment 43s" [ref=e413]:
+              - generic [ref=e414]:
+                - img [ref=e415]
+                - img [ref=e419]
+                - paragraph [ref=e423]: Spin up build environment
+              - generic [ref=e424]:
+                - paragraph [ref=e425]: 43s
+                - button [ref=e426] [cursor=pointer]:
+                  - img [ref=e427]
+            - button "Read eas.json 1ms" [ref=e431]:
+              - generic [ref=e432]:
+                - img [ref=e433]
+                - img [ref=e437]
+                - paragraph [ref=e441]: Read eas.json
+              - generic [ref=e442]:
+                - paragraph [ref=e443]: 1ms
+                - button [ref=e444] [cursor=pointer]:
+                  - img [ref=e445]
+            - button "Read package.json 0ms" [ref=e449]:
+              - generic [ref=e450]:
+                - img [ref=e451]
+                - img [ref=e455]
+                - paragraph [ref=e459]: Read package.json
+              - generic [ref=e460]:
+                - paragraph [ref=e461]: 0ms
+                - button [ref=e462] [cursor=pointer]:
+                  - img [ref=e463]
+            - button "Install dependencies 1m 2s" [ref=e467]:
+              - generic [ref=e468]:
+                - img [ref=e469]
+                - img [ref=e473]
+                - paragraph [ref=e477]: Install dependencies
+              - generic [ref=e478]:
+                - paragraph [ref=e479]: 1m 2s
+                - button [ref=e480] [cursor=pointer]:
+                  - img [ref=e481]
+            - button "Read app config 519ms" [ref=e485]:
+              - generic [ref=e486]:
+                - img [ref=e487]
+                - img [ref=e491]
+                - paragraph [ref=e495]: Read app config
+              - generic [ref=e496]:
+                - paragraph [ref=e497]: 519ms
+                - button [ref=e498] [cursor=pointer]:
+                  - img [ref=e499]
+            - button "Run expo doctor 6s" [ref=e503]:
+              - generic [ref=e504]:
+                - img [ref=e505]
+                - img [ref=e509]
+                - paragraph [ref=e513]: Run expo doctor
+              - generic [ref=e514]:
+                - paragraph [ref=e515]: 6s
+                - button [ref=e516] [cursor=pointer]:
+                  - img [ref=e517]
+            - button "Prebuild 7s" [ref=e521]:
+              - generic [ref=e522]:
+                - img [ref=e523]
+                - img [ref=e527]
+                - paragraph [ref=e531]: Prebuild
+              - generic [ref=e532]:
+                - paragraph [ref=e533]: 7s
+                - button [ref=e534] [cursor=pointer]:
+                  - img [ref=e535]
+            - button "Calculate expo-updates runtime version 388ms" [ref=e539]:
+              - generic [ref=e540]:
+                - img [ref=e541]
+                - img [ref=e545]
+                - paragraph [ref=e549]: Calculate expo-updates runtime version
+              - generic [ref=e550]:
+                - paragraph [ref=e551]: 388ms
+                - button [ref=e552] [cursor=pointer]:
+                  - img [ref=e553]
+            - button "Prepare credentials 5ms" [ref=e557]:
+              - generic [ref=e558]:
+                - img [ref=e559]
+                - img [ref=e563]
+                - paragraph [ref=e567]: Prepare credentials
+              - generic [ref=e568]:
+                - paragraph [ref=e569]: 5ms
+                - button [ref=e570] [cursor=pointer]:
+                  - img [ref=e571]
+            - button "Configure Android version 3ms" [ref=e575]:
+              - generic [ref=e576]:
+                - img [ref=e577]
+                - img [ref=e581]
+                - paragraph [ref=e585]: Configure Android version
+              - generic [ref=e586]:
+                - paragraph [ref=e587]: 3ms
+                - button [ref=e588] [cursor=pointer]:
+                  - img [ref=e589]
+            - button "Configure expo-updates 23ms" [ref=e593]:
+              - generic [ref=e594]:
+                - img [ref=e595]
+                - img [ref=e599]
+                - paragraph [ref=e603]: Configure expo-updates
+              - generic [ref=e604]:
+                - paragraph [ref=e605]: 23ms
+                - button [ref=e606] [cursor=pointer]:
+                  - img [ref=e607]
+            - button "Bundle JavaScript 20s" [ref=e611]:
+              - generic [ref=e612]:
+                - img [ref=e613]
+                - img [ref=e617]
+                - paragraph [ref=e621]: Bundle JavaScript
+              - generic [ref=e622]:
+                - paragraph [ref=e623]: 20s
+                - button [ref=e624] [cursor=pointer]:
+                  - img [ref=e625]
+            - button "Run gradlew 1 1m 16s" [ref=e629]:
+              - generic [ref=e630]:
+                - img [ref=e631]
+                - img [ref=e635]
+                - paragraph [ref=e639]: Run gradlew
+                - button "1" [ref=e641] [cursor=pointer]:
+                  - generic [ref=e644]:
+                    - img [ref=e645]
+                    - generic [ref=e648]: "1"
+              - generic [ref=e649]:
+                - paragraph [ref=e650]: 1m 16s
+                - button [ref=e651] [cursor=pointer]:
+                  - img [ref=e652]
+            - generic [ref=e655]:
+              - button "Fail job 2ms" [ref=e656]:
+                - generic [ref=e657]:
+                  - img [ref=e658]
+                  - img [ref=e662]
+                  - paragraph [ref=e666]: Fail job
+                - generic [ref=e667]:
+                  - paragraph [ref=e668]: 2ms
+                  - button [ref=e669] [cursor=pointer]:
+                    - img [ref=e670]
+              - generic [ref=e674]:
+                - generic [ref=e675]: "1"
+                - code [ref=e676]: "Build failed: Gradle build failed with unknown error. See logs for the \"Run gradlew\" phase for more information."
+  - alert [ref=e205]

@@ -1,0 +1,2151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sketch 002 — Driver Offer + Active Ride</title>
+<link rel="stylesheet" href="../themes/default.css">
+<style>
+  /* ── Reset & Layout ── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0d0d0f;
+    font-family: var(--font);
+    color: var(--mob-text);
+    min-height: 100vh;
+  }
+
+  /* ── Page Header ── */
+  .page-header {
+    background: rgba(255,255,255,0.03);
+    border-bottom: 1px solid rgba(255,255,255,0.07);
+    padding: var(--sp-5) var(--sp-8);
+    display: flex;
+    align-items: center;
+    gap: var(--sp-4);
+  }
+  .sketch-num {
+    background: var(--spinr-red);
+    color: #fff;
+    font-size: var(--text-xs);
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    padding: 3px 10px;
+    border-radius: var(--r-pill);
+  }
+  .page-title { font-size: var(--text-lg); font-weight: 600; }
+  .page-q {
+    margin-left: auto;
+    font-size: var(--text-sm);
+    color: var(--mob-text-muted);
+    font-style: italic;
+  }
+
+  /* ── Stage Selector ── */
+  .stage-bar {
+    display: flex;
+    gap: var(--sp-2);
+    padding: var(--sp-4) var(--sp-8);
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    overflow-x: auto;
+  }
+  .stage-btn {
+    flex-shrink: 0;
+    padding: 6px 16px;
+    border-radius: var(--r-pill);
+    border: 1px solid rgba(255,255,255,0.12);
+    background: transparent;
+    color: var(--mob-text-muted);
+    font-size: var(--text-sm);
+    cursor: pointer;
+    transition: all var(--dur-std) var(--ease-std);
+  }
+  .stage-btn.active, .stage-btn:hover {
+    background: rgba(229,62,62,0.15);
+    border-color: var(--spinr-red);
+    color: var(--mob-text);
+  }
+
+  /* ── Main Canvas ── */
+  .canvas {
+    display: flex;
+    gap: var(--sp-8);
+    padding: var(--sp-8);
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  /* ── Phone Frame ── */
+  .phone-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--sp-4);
+  }
+  .variant-label {
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--mob-text-muted);
+    text-align: center;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  .variant-label em {
+    display: block;
+    font-size: var(--text-xs);
+    font-weight: 400;
+    font-style: normal;
+    color: var(--mob-text-dim);
+    margin-top: 2px;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .phone {
+    width: 375px;
+    height: 812px;
+    background: var(--mob-bg);
+    border-radius: 52px;
+    box-shadow: var(--shadow-phone);
+    overflow: hidden;
+    position: relative;
+    flex-shrink: 0;
+  }
+  .notch {
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 120px;
+    height: 34px;
+    background: #000;
+    border-radius: 0 0 20px 20px;
+    z-index: 100;
+  }
+  .status-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 24px 0;
+    font-size: 12px;
+    font-weight: 600;
+    color: rgba(255,255,255,0.9);
+    position: relative;
+    z-index: 10;
+    height: 44px;
+  }
+  .sb-time { letter-spacing: -0.02em; }
+  .sb-icons { display: flex; gap: 6px; align-items: center; }
+  .home-indicator {
+    position: absolute;
+    bottom: 8px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 134px;
+    height: 5px;
+    background: rgba(255,255,255,0.3);
+    border-radius: 3px;
+    z-index: 100;
+  }
+
+  /* ── Screen Content Area ── */
+  .screen {
+    position: absolute;
+    inset: 44px 0 0;
+    overflow: hidden;
+  }
+
+  /* ── State Visibility ── */
+  .state-panel { display: none; width: 100%; height: 100%; }
+  .state-panel.visible { display: flex; flex-direction: column; }
+
+  /* ═══════════════════════════════════════════════
+     VARIANT A — Timer-Dominant (Urgency-First)
+  ═══════════════════════════════════════════════ */
+
+  /* A: Offer State */
+  .va-offer {
+    background: var(--mob-bg);
+    flex-direction: column;
+  }
+  /* Map backdrop */
+  .va-map-backdrop {
+    height: 260px;
+    position: relative;
+    background: linear-gradient(180deg, var(--map-base) 0%, #151929 100%);
+    flex-shrink: 0;
+    overflow: hidden;
+  }
+  .va-map-roads {
+    position: absolute;
+    inset: 0;
+  }
+  .va-road {
+    position: absolute;
+    background: var(--map-road-main);
+    border-radius: 2px;
+  }
+  .va-road.h1 { width: 100%; height: 3px; top: 50%; transform: translateY(-50%); }
+  .va-road.v1 { width: 3px; height: 100%; left: 30%; }
+  .va-road.v2 { width: 3px; height: 100%; left: 70%; }
+  .va-road.h2 { width: 100%; height: 2px; top: 35%; background: var(--map-road); }
+  .va-road.h3 { width: 100%; height: 2px; top: 65%; background: var(--map-road); }
+  /* Pickup point */
+  .va-pickup-pin {
+    position: absolute;
+    bottom: 40px;
+    left: 28%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+  }
+  .va-pin-dot {
+    width: 14px;
+    height: 14px;
+    background: var(--spinr-red);
+    border: 2.5px solid #fff;
+    border-radius: 50%;
+    box-shadow: 0 2px 8px rgba(229,62,62,0.6);
+  }
+  .va-pin-label {
+    background: rgba(0,0,0,0.7);
+    color: #fff;
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    white-space: nowrap;
+    backdrop-filter: blur(4px);
+  }
+  /* Driver pin */
+  .va-driver-pin {
+    position: absolute;
+    top: 50%;
+    left: 55%;
+    transform: translate(-50%, -50%);
+  }
+  .va-driver-dot {
+    width: 20px;
+    height: 20px;
+    background: var(--online-green);
+    border: 3px solid #fff;
+    border-radius: 50%;
+    box-shadow: 0 0 0 6px rgba(56,161,105,0.2);
+    animation: pulse-green 2s infinite;
+  }
+  @keyframes pulse-green {
+    0%,100% { box-shadow: 0 0 0 4px rgba(56,161,105,0.2); }
+    50%      { box-shadow: 0 0 0 10px rgba(56,161,105,0); }
+  }
+  /* Route line */
+  .va-route-svg {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+
+  /* Timer ring overlay */
+  .va-timer-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+  }
+  .va-timer-ring {
+    width: 96px;
+    height: 96px;
+    position: relative;
+    pointer-events: all;
+  }
+  .va-ring-svg {
+    width: 96px;
+    height: 96px;
+    transform: rotate(-90deg);
+  }
+  .va-ring-bg { fill: none; stroke: rgba(255,255,255,0.15); stroke-width: 5; }
+  .va-ring-progress {
+    fill: none;
+    stroke: var(--spinr-red);
+    stroke-width: 5;
+    stroke-linecap: round;
+    stroke-dasharray: 263;
+    stroke-dashoffset: 0;
+    transition: stroke-dashoffset 1s linear;
+  }
+  .va-ring-text {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+  }
+  .va-ring-count {
+    font-size: 22px;
+    font-weight: 800;
+    color: #fff;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  .va-ring-unit { font-size: 10px; color: rgba(255,255,255,0.6); margin-top: 1px; }
+
+  /* Offer card */
+  .va-offer-card {
+    flex: 1;
+    background: var(--mob-surface);
+    border-radius: 24px 24px 0 0;
+    padding: var(--sp-5) var(--sp-5) var(--sp-3);
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-4);
+    margin-top: -20px;
+    position: relative;
+    z-index: 5;
+  }
+  .oc-handle {
+    width: 36px;
+    height: 4px;
+    background: rgba(255,255,255,0.2);
+    border-radius: 2px;
+    margin: 0 auto var(--sp-2);
+  }
+  .oc-fare-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .oc-fare-big {
+    font-size: 40px;
+    font-weight: 800;
+    color: var(--earnings-gold);
+    letter-spacing: -0.03em;
+    line-height: 1;
+  }
+  .oc-surge-badge {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: rgba(214,158,46,0.2);
+    border: 1px solid rgba(214,158,46,0.4);
+    border-radius: var(--r-pill);
+    padding: 4px 10px;
+    font-size: var(--text-xs);
+    color: var(--earnings-gold);
+    font-weight: 700;
+  }
+  .oc-meta {
+    display: flex;
+    gap: var(--sp-4);
+  }
+  .oc-meta-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: var(--text-sm);
+    color: var(--mob-text-muted);
+  }
+  .oc-meta-icon { font-size: 15px; }
+  .oc-route {
+    background: var(--mob-surface-2);
+    border-radius: var(--r-lg);
+    padding: var(--sp-4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-3);
+  }
+  .oc-route-row {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+  }
+  .oc-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .oc-dot.pickup { background: var(--spinr-red); }
+  .oc-dot.dropoff { background: var(--info-blue); }
+  .oc-route-line {
+    width: 2px;
+    height: 16px;
+    background: rgba(255,255,255,0.15);
+    margin-left: 4px;
+  }
+  .oc-addr {
+    font-size: var(--text-sm);
+    font-weight: 500;
+    line-height: 1.3;
+  }
+  .oc-addr-sub {
+    font-size: var(--text-xs);
+    color: var(--mob-text-muted);
+  }
+  .oc-rider-row {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+  }
+  .oc-avatar {
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    font-weight: 700;
+    color: #fff;
+    flex-shrink: 0;
+  }
+  .oc-rider-name { font-size: var(--text-base); font-weight: 600; }
+  .oc-rider-rating {
+    font-size: var(--text-xs);
+    color: var(--mob-text-muted);
+    margin-top: 1px;
+  }
+  .oc-rider-badge {
+    margin-left: auto;
+    background: rgba(56,161,105,0.15);
+    border: 1px solid rgba(56,161,105,0.3);
+    color: var(--online-green);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    padding: 3px 9px;
+    border-radius: var(--r-pill);
+  }
+  .oc-actions {
+    display: flex;
+    gap: var(--sp-3);
+    margin-top: auto;
+  }
+  .btn-decline {
+    flex: 0 0 80px;
+    height: 56px;
+    border-radius: var(--r-xl);
+    border: 1.5px solid rgba(255,255,255,0.15);
+    background: var(--mob-surface-2);
+    color: var(--mob-text-muted);
+    font-size: var(--text-base);
+    font-weight: 600;
+    cursor: pointer;
+    transition: all var(--dur-fast);
+  }
+  .btn-decline:active { opacity: 0.7; }
+  .btn-accept {
+    flex: 1;
+    height: 56px;
+    border-radius: var(--r-xl);
+    border: none;
+    background: linear-gradient(135deg, #38A169, #276749);
+    color: #fff;
+    font-size: var(--text-md);
+    font-weight: 700;
+    cursor: pointer;
+    box-shadow: 0 4px 16px rgba(56,161,105,0.35);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--sp-2);
+    transition: all var(--dur-fast);
+  }
+  .btn-accept:active { transform: scale(0.98); box-shadow: none; }
+  .btn-accept-icon { font-size: 20px; }
+
+  /* ── A: Active Ride State ── */
+  .va-active {
+    background: var(--mob-bg);
+    position: relative;
+    overflow: hidden;
+  }
+  .va-active-map {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(180deg, var(--map-base) 0%, #0f1219 100%);
+  }
+  .va-active-roads {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+  .va-ar-road { position: absolute; background: var(--map-road-main); border-radius: 2px; }
+  .va-ar-road.h1 { width: 100%; height: 3px; top: 40%; }
+  .va-ar-road.v1 { width: 3px; height: 100%; left: 40%; }
+  .va-ar-road.h2 { width: 100%; height: 2px; top: 60%; background: var(--map-road); }
+  .va-ar-road.v2 { width: 3px; height: 100%; left: 70%; background: var(--map-road); }
+  /* Compact top bar during trip */
+  .va-active-topbar {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    padding: var(--sp-3) var(--sp-4);
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    z-index: 10;
+    background: linear-gradient(180deg, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0) 100%);
+  }
+  .va-nav-step {
+    background: var(--mob-surface);
+    border-radius: var(--r-md);
+    padding: var(--sp-2) var(--sp-3);
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    flex: 1;
+    backdrop-filter: blur(12px);
+  }
+  .va-nav-dir-icon { font-size: 22px; }
+  .va-nav-street { font-size: var(--text-sm); font-weight: 600; }
+  .va-nav-dist { font-size: var(--text-xs); color: var(--mob-text-muted); margin-top: 1px; }
+  .va-sos-btn {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: rgba(229,62,62,0.2);
+    border: 1.5px solid rgba(229,62,62,0.5);
+    color: var(--spinr-red);
+    font-size: 11px;
+    font-weight: 800;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    letter-spacing: 0.05em;
+    flex-shrink: 0;
+  }
+  /* Bottom trip panel */
+  .va-active-panel {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    background: var(--mob-surface);
+    border-radius: 24px 24px 0 0;
+    padding: var(--sp-5) var(--sp-5) var(--sp-8);
+    z-index: 10;
+  }
+  .va-ap-handle {
+    width: 36px;
+    height: 4px;
+    background: rgba(255,255,255,0.15);
+    border-radius: 2px;
+    margin: 0 auto var(--sp-4);
+  }
+  .va-ap-rider-row {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    margin-bottom: var(--sp-4);
+  }
+  .va-ap-avatar {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    font-weight: 700;
+    color: #fff;
+    flex-shrink: 0;
+  }
+  .va-ap-name { font-size: var(--text-base); font-weight: 600; }
+  .va-ap-status {
+    font-size: var(--text-xs);
+    color: var(--online-green);
+    font-weight: 600;
+    margin-top: 2px;
+  }
+  .va-ap-actions {
+    display: flex;
+    gap: var(--sp-2);
+    margin-left: auto;
+  }
+  .va-ap-action-btn {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: var(--mob-surface-2);
+    border: none;
+    color: var(--mob-text);
+    font-size: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+  }
+  .va-fare-meter {
+    background: var(--mob-surface-2);
+    border-radius: var(--r-lg);
+    padding: var(--sp-4);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--sp-3);
+  }
+  .va-meter-label { font-size: var(--text-xs); color: var(--mob-text-muted); text-transform: uppercase; letter-spacing: 0.08em; }
+  .va-meter-amount { font-size: 32px; font-weight: 800; color: var(--earnings-gold); letter-spacing: -0.03em; }
+  .va-meter-live {
+    font-size: var(--text-xs);
+    color: var(--online-green);
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 2px;
+  }
+  .va-live-dot {
+    width: 6px; height: 6px;
+    background: var(--online-green);
+    border-radius: 50%;
+    animation: blink 1.2s infinite;
+  }
+  @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .va-eta-row {
+    display: flex;
+    gap: var(--sp-3);
+  }
+  .va-eta-item {
+    flex: 1;
+    background: var(--mob-surface-2);
+    border-radius: var(--r-md);
+    padding: var(--sp-3);
+    text-align: center;
+  }
+  .va-eta-val { font-size: var(--text-lg); font-weight: 700; }
+  .va-eta-lbl { font-size: var(--text-xs); color: var(--mob-text-muted); margin-top: 2px; }
+
+  /* ═══════════════════════════════════════════════
+     VARIANT B — Information-First (Confidence → Accept)
+  ═══════════════════════════════════════════════ */
+
+  .vb-offer {
+    background: var(--mob-bg);
+    flex-direction: column;
+  }
+  /* Header urgency strip */
+  .vb-urgency-strip {
+    background: var(--spinr-red);
+    padding: var(--sp-3) var(--sp-4);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .vb-urgency-text { font-size: var(--text-sm); font-weight: 700; color: #fff; letter-spacing: 0.02em; }
+  .vb-urgency-timer {
+    font-size: var(--text-xl);
+    font-weight: 800;
+    color: #fff;
+    font-variant-numeric: tabular-nums;
+    min-width: 28px;
+    text-align: right;
+  }
+  .vb-urgency-progress {
+    height: 3px;
+    background: rgba(255,255,255,0.3);
+  }
+  .vb-urgency-bar {
+    height: 100%;
+    background: rgba(255,255,255,0.9);
+    width: 100%;
+    transition: width 1s linear;
+  }
+  /* Main scroll content */
+  .vb-scroll {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--sp-5) var(--sp-4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-4);
+    scrollbar-width: none;
+  }
+  .vb-scroll::-webkit-scrollbar { display: none; }
+
+  .vb-section-label {
+    font-size: var(--text-xs);
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--mob-text-muted);
+    margin-bottom: var(--sp-2);
+  }
+  /* Fare breakdown card */
+  .vb-fare-card {
+    background: var(--mob-surface);
+    border-radius: var(--r-xl);
+    padding: var(--sp-4);
+    border: 1px solid rgba(214,158,46,0.2);
+  }
+  .vb-fare-total-row {
+    display: flex;
+    align-items: baseline;
+    gap: var(--sp-2);
+    margin-bottom: var(--sp-3);
+  }
+  .vb-fare-total { font-size: 36px; font-weight: 800; color: var(--earnings-gold); letter-spacing: -0.03em; line-height: 1; }
+  .vb-fare-est { font-size: var(--text-sm); color: var(--mob-text-muted); }
+  .vb-fare-lines { display: flex; flex-direction: column; gap: var(--sp-2); }
+  .vb-fare-line {
+    display: flex;
+    justify-content: space-between;
+    font-size: var(--text-sm);
+  }
+  .vb-fare-line-label { color: var(--mob-text-muted); }
+  .vb-fare-line-val { font-weight: 500; }
+  .vb-fare-line.surge .vb-fare-line-label { color: var(--earnings-gold); }
+  .vb-fare-line.surge .vb-fare-line-val { color: var(--earnings-gold); font-weight: 700; }
+  .vb-fare-divider { height: 1px; background: var(--mob-border); margin: var(--sp-2) 0; }
+
+  /* Route card */
+  .vb-route-card {
+    background: var(--mob-surface);
+    border-radius: var(--r-xl);
+    overflow: hidden;
+  }
+  .vb-map-thumb {
+    height: 100px;
+    background: linear-gradient(135deg, var(--map-base), #1a1e2d);
+    position: relative;
+    overflow: hidden;
+  }
+  .vb-thumb-road { position: absolute; background: var(--map-road-main); }
+  .vb-thumb-road.h { width: 100%; height: 2px; top: 50%; }
+  .vb-thumb-road.v { width: 2px; height: 100%; left: 35%; }
+  .vb-thumb-pickup {
+    position: absolute;
+    left: 32%;
+    top: 30%;
+    width: 10px; height: 10px;
+    background: var(--spinr-red);
+    border: 2px solid #fff;
+    border-radius: 50%;
+    box-shadow: 0 0 8px rgba(229,62,62,0.5);
+  }
+  .vb-thumb-dropoff {
+    position: absolute;
+    right: 20%;
+    bottom: 25%;
+    width: 10px; height: 10px;
+    background: var(--info-blue);
+    border: 2px solid #fff;
+    border-radius: 50%;
+  }
+  .vb-map-route-svg { position: absolute; inset: 0; pointer-events: none; }
+  .vb-route-details { padding: var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-3); }
+  .vb-route-row { display: flex; align-items: flex-start; gap: var(--sp-3); }
+  .vb-route-icon { font-size: 16px; width: 20px; text-align: center; flex-shrink: 0; padding-top: 2px; }
+  .vb-route-text { font-size: var(--text-sm); font-weight: 500; }
+  .vb-route-sub { font-size: var(--text-xs); color: var(--mob-text-muted); margin-top: 1px; }
+  .vb-route-dots { display: flex; flex-direction: column; gap: 3px; padding: 6px 0 0 9px; }
+  .vb-route-dot { width: 4px; height: 4px; background: rgba(255,255,255,0.2); border-radius: 50%; }
+
+  /* Rider card */
+  .vb-rider-card {
+    background: var(--mob-surface);
+    border-radius: var(--r-xl);
+    padding: var(--sp-4);
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+  }
+  .vb-rider-avatar {
+    width: 44px; height: 44px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px; font-weight: 700; color: #fff;
+    flex-shrink: 0;
+  }
+  .vb-rider-name { font-size: var(--text-base); font-weight: 600; }
+  .vb-rider-rating { font-size: var(--text-xs); color: var(--mob-text-muted); margin-top: 2px; }
+  .vb-rider-rides {
+    margin-left: auto;
+    text-align: right;
+  }
+  .vb-rider-count { font-size: var(--text-xl); font-weight: 700; }
+  .vb-rider-count-lbl { font-size: var(--text-xs); color: var(--mob-text-muted); margin-top: 1px; }
+
+  /* Accept strip */
+  .vb-accept-strip {
+    padding: var(--sp-4) var(--sp-4) var(--sp-6);
+    background: var(--mob-bg);
+    display: flex;
+    gap: var(--sp-3);
+  }
+  .vb-btn-decline {
+    flex: 0 0 56px; height: 56px;
+    border-radius: var(--r-xl);
+    border: 1.5px solid rgba(255,255,255,0.15);
+    background: var(--mob-surface);
+    color: var(--mob-text-muted);
+    font-size: 22px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .vb-btn-accept {
+    flex: 1; height: 56px;
+    border-radius: var(--r-xl);
+    border: none;
+    background: linear-gradient(135deg, #38A169, #276749);
+    color: #fff;
+    font-size: var(--text-md); font-weight: 700;
+    cursor: pointer;
+    box-shadow: 0 4px 16px rgba(56,161,105,0.3);
+    display: flex; align-items: center; justify-content: center;
+    gap: var(--sp-2);
+  }
+
+  /* B: Active ride */
+  .vb-active {
+    background: var(--mob-bg);
+    flex-direction: column;
+  }
+  .vb-active-header {
+    background: var(--spinr-red);
+    padding: var(--sp-3) var(--sp-4);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .vb-ah-label { font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.1em; color: rgba(255,255,255,0.7); }
+  .vb-ah-status { font-size: var(--text-sm); font-weight: 700; color: #fff; margin-top: 2px; }
+  .vb-ah-sos {
+    background: rgba(0,0,0,0.25);
+    border: 1.5px solid rgba(255,255,255,0.4);
+    border-radius: var(--r-pill);
+    color: #fff;
+    font-size: var(--text-xs); font-weight: 800;
+    padding: 5px 12px;
+    letter-spacing: 0.08em;
+    cursor: pointer;
+  }
+  .vb-active-nav {
+    background: #1a1e2d;
+    padding: var(--sp-4);
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+  }
+  .vb-nav-roads {
+    position: absolute;
+    inset: 0;
+  }
+  .vb-nav-road { position: absolute; background: var(--map-road-main); }
+  .vb-nav-road.main { width: 100%; height: 32px; top: 45%; transform: translateY(-50%); background: var(--map-road-main); }
+  .vb-nav-road.side1 { width: 4px; height: 100%; left: 25%; background: var(--map-road); }
+  .vb-nav-road.side2 { width: 4px; height: 100%; left: 65%; background: var(--map-road); }
+  .vb-nav-turn {
+    position: absolute;
+    top: var(--sp-3);
+    left: var(--sp-4);
+    right: var(--sp-4);
+    background: var(--mob-surface);
+    border-radius: var(--r-lg);
+    padding: var(--sp-3) var(--sp-4);
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    backdrop-filter: blur(12px);
+    z-index: 10;
+  }
+  .vb-turn-arrow { font-size: 28px; }
+  .vb-turn-info { flex: 1; }
+  .vb-turn-dist { font-size: var(--text-xl); font-weight: 700; }
+  .vb-turn-street { font-size: var(--text-sm); color: var(--mob-text-muted); }
+  .vb-driver-car {
+    position: absolute;
+    bottom: 30%;
+    left: 25%;
+    font-size: 20px;
+    transform: rotate(0deg);
+    filter: drop-shadow(0 2px 6px rgba(0,0,0,0.8));
+    z-index: 5;
+  }
+  .vb-active-bottom {
+    background: var(--mob-surface);
+    border-radius: 24px 24px 0 0;
+    padding: var(--sp-4) var(--sp-4) var(--sp-6);
+    z-index: 20;
+  }
+  .vb-ab-handle {
+    width: 36px; height: 4px;
+    background: rgba(255,255,255,0.15);
+    border-radius: 2px;
+    margin: 0 auto var(--sp-3);
+  }
+  .vb-ab-row1 {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--sp-3);
+  }
+  .vb-ab-meter { font-size: 36px; font-weight: 800; color: var(--earnings-gold); letter-spacing: -0.03em; }
+  .vb-ab-right { text-align: right; }
+  .vb-ab-eta-val { font-size: var(--text-xl); font-weight: 700; }
+  .vb-ab-eta-lbl { font-size: var(--text-xs); color: var(--mob-text-muted); margin-top: 1px; }
+  .vb-ab-rider {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    background: var(--mob-surface-2);
+    border-radius: var(--r-md);
+    padding: var(--sp-3);
+  }
+  .vb-ab-rider-avatar {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px; font-weight: 700; color: #fff;
+    flex-shrink: 0;
+  }
+  .vb-ab-rider-name { font-size: var(--text-sm); font-weight: 600; flex: 1; }
+  .vb-ab-rider-dest { font-size: var(--text-xs); color: var(--mob-text-muted); margin-top: 1px; }
+  .vb-ab-actions { display: flex; gap: var(--sp-2); margin-left: auto; }
+  .vb-ab-action {
+    width: 36px; height: 36px;
+    background: var(--mob-surface-3);
+    border-radius: 50%;
+    border: none;
+    color: var(--mob-text);
+    font-size: 16px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+  }
+
+  /* ═══════════════════════════════════════════════
+     VARIANT C — Cinematic Full-Screen (Hero Reveal)
+  ═══════════════════════════════════════════════ */
+
+  .vc-offer {
+    background: var(--mob-bg);
+    flex-direction: column;
+    position: relative;
+    overflow: hidden;
+  }
+  /* Full-screen dramatic gradient */
+  .vc-bg-gradient {
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse at 50% 30%, rgba(56,161,105,0.15) 0%, rgba(0,0,0,0) 70%),
+                linear-gradient(180deg, #0a1a0f 0%, #000 60%);
+  }
+  /* Pulsing ring background */
+  .vc-pulse-rings {
+    position: absolute;
+    top: 28%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+  }
+  .vc-ring {
+    position: absolute;
+    border-radius: 50%;
+    border: 1px solid rgba(56,161,105,0.2);
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    animation: expand-ring 3s infinite;
+  }
+  .vc-ring:nth-child(1) { width: 80px; height: 80px; animation-delay: 0s; }
+  .vc-ring:nth-child(2) { width: 130px; height: 130px; animation-delay: 0.8s; }
+  .vc-ring:nth-child(3) { width: 180px; height: 180px; animation-delay: 1.6s; }
+  @keyframes expand-ring {
+    0%   { opacity: 0.5; }
+    100% { opacity: 0; transform: translate(-50%, -50%) scale(1.3); }
+  }
+  /* Center fare hero */
+  .vc-fare-hero {
+    position: absolute;
+    top: 12%;
+    left: 0; right: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    z-index: 5;
+  }
+  .vc-new-ride-label {
+    font-size: var(--text-xs);
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--online-green);
+    margin-bottom: var(--sp-3);
+  }
+  .vc-fare-amount {
+    font-size: 72px;
+    font-weight: 900;
+    color: #fff;
+    letter-spacing: -0.04em;
+    line-height: 1;
+    text-shadow: 0 0 40px rgba(56,161,105,0.3);
+  }
+  .vc-fare-est { font-size: var(--text-sm); color: rgba(255,255,255,0.5); margin-top: var(--sp-2); }
+  .vc-meta-pills {
+    display: flex;
+    gap: var(--sp-2);
+    margin-top: var(--sp-4);
+    justify-content: center;
+  }
+  .vc-meta-pill {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: var(--r-pill);
+    padding: 5px 12px;
+    font-size: var(--text-xs);
+    font-weight: 600;
+    color: rgba(255,255,255,0.7);
+    backdrop-filter: blur(8px);
+  }
+  .vc-meta-pill.surge {
+    background: rgba(214,158,46,0.15);
+    border-color: rgba(214,158,46,0.3);
+    color: var(--earnings-gold);
+  }
+  /* Slide-up info panel from bottom */
+  .vc-slide-panel {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    background: var(--mob-surface);
+    border-radius: 28px 28px 0 0;
+    padding: var(--sp-5) var(--sp-5) var(--sp-8);
+    z-index: 10;
+  }
+  .vc-sp-handle {
+    width: 36px; height: 4px;
+    background: rgba(255,255,255,0.15);
+    border-radius: 2px;
+    margin: 0 auto var(--sp-5);
+  }
+  .vc-sp-pickup {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    margin-bottom: var(--sp-3);
+  }
+  .vc-pickup-icon {
+    width: 36px; height: 36px;
+    background: rgba(229,62,62,0.15);
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px;
+    flex-shrink: 0;
+  }
+  .vc-pickup-addr { font-size: var(--text-base); font-weight: 600; }
+  .vc-pickup-dist {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: var(--text-xs);
+    color: var(--mob-text-muted);
+    margin-top: 2px;
+  }
+  .vc-pickup-dist-val { color: var(--spinr-red); font-weight: 700; }
+  .vc-sp-rider {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    background: var(--mob-surface-2);
+    border-radius: var(--r-lg);
+    padding: var(--sp-3);
+    margin-bottom: var(--sp-5);
+  }
+  .vc-rider-avatar {
+    width: 38px; height: 38px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px; font-weight: 700; color: #fff;
+    flex-shrink: 0;
+  }
+  .vc-rider-name { font-size: var(--text-sm); font-weight: 600; }
+  .vc-rider-rating { font-size: var(--text-xs); color: var(--mob-text-muted); margin-top: 2px; }
+  .vc-timer-linear {
+    height: 4px;
+    background: var(--mob-surface-3);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-bottom: var(--sp-4);
+  }
+  .vc-timer-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--online-green), var(--spinr-red));
+    width: 100%;
+    transition: width 1s linear;
+    border-radius: 2px;
+  }
+  .vc-actions {
+    display: flex;
+    gap: var(--sp-3);
+  }
+  .vc-btn-skip {
+    flex: 0 0 56px; height: 64px;
+    border-radius: var(--r-xl);
+    border: 1.5px solid rgba(255,255,255,0.1);
+    background: var(--mob-surface-2);
+    color: var(--mob-text-muted);
+    font-size: 20px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+  }
+  .vc-btn-accept {
+    flex: 1; height: 64px;
+    border-radius: var(--r-xl);
+    border: none;
+    background: linear-gradient(135deg, #38A169, #276749);
+    color: #fff;
+    font-size: var(--text-md); font-weight: 700;
+    cursor: pointer;
+    box-shadow: 0 8px 24px rgba(56,161,105,0.4);
+    display: flex; align-items: center; justify-content: center;
+    gap: var(--sp-2);
+    letter-spacing: 0.02em;
+  }
+
+  /* C: Active ride */
+  .vc-active {
+    background: var(--mob-bg);
+    flex-direction: column;
+  }
+  .vc-active-map {
+    flex: 1;
+    position: relative;
+    background: linear-gradient(180deg, var(--map-base) 0%, #0f1219 100%);
+    overflow: hidden;
+  }
+  .vc-active-roads { position: absolute; inset: 0; }
+  .vc-a-road { position: absolute; background: var(--map-road-main); }
+  .vc-a-road.h1 { width: 100%; height: 3px; top: 40%; }
+  .vc-a-road.v1 { width: 3px; height: 100%; left: 35%; }
+  .vc-a-road.h2 { width: 100%; height: 2px; top: 65%; background: var(--map-road); }
+  /* Active nav card floating */
+  .vc-floating-nav {
+    position: absolute;
+    top: var(--sp-3);
+    left: var(--sp-3);
+    right: var(--sp-3);
+    background: var(--mob-surface);
+    border-radius: var(--r-xl);
+    padding: var(--sp-3) var(--sp-4);
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    backdrop-filter: blur(16px);
+    z-index: 10;
+    box-shadow: var(--shadow-lg);
+  }
+  .vc-nav-arrow { font-size: 30px; }
+  .vc-nav-body { flex: 1; }
+  .vc-nav-dist { font-size: var(--text-xl); font-weight: 800; }
+  .vc-nav-street { font-size: var(--text-sm); color: var(--mob-text-muted); margin-top: 1px; }
+  .vc-sos-float {
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    background: rgba(229,62,62,0.15);
+    border: 1.5px solid rgba(229,62,62,0.4);
+    color: var(--spinr-red);
+    font-size: 10px; font-weight: 800;
+    display: flex; align-items: center; justify-content: center;
+    letter-spacing: 0.05em;
+  }
+  /* Car + dest on map */
+  .vc-car-marker {
+    position: absolute;
+    left: 35%;
+    top: 38%;
+    font-size: 22px;
+    z-index: 5;
+    filter: drop-shadow(0 2px 8px rgba(0,0,0,0.9));
+  }
+  .vc-dest-marker {
+    position: absolute;
+    right: 20%;
+    bottom: 35%;
+    z-index: 5;
+  }
+  .vc-dest-dot {
+    width: 16px; height: 16px;
+    background: var(--info-blue);
+    border: 2.5px solid #fff;
+    border-radius: 50%;
+    box-shadow: 0 0 12px rgba(66,153,225,0.6);
+    margin: 0 auto;
+  }
+  .vc-dest-label {
+    background: rgba(66,153,225,0.9);
+    color: #fff;
+    font-size: 9px;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-top: 3px;
+    white-space: nowrap;
+    backdrop-filter: blur(4px);
+  }
+  /* Route line */
+  .vc-active-svg { position: absolute; inset: 0; pointer-events: none; }
+  /* Bottom dock */
+  .vc-active-dock {
+    background: var(--mob-surface);
+    border-radius: 24px 24px 0 0;
+    padding: var(--sp-4) var(--sp-4) var(--sp-6);
+    z-index: 20;
+  }
+  .vc-dock-handle {
+    width: 36px; height: 4px;
+    background: rgba(255,255,255,0.15);
+    border-radius: 2px;
+    margin: 0 auto var(--sp-4);
+  }
+  .vc-dock-main {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: var(--sp-3);
+  }
+  .vc-dock-fare {
+    font-size: 40px; font-weight: 900;
+    color: var(--earnings-gold);
+    letter-spacing: -0.04em;
+    line-height: 1;
+  }
+  .vc-dock-fare-sub { font-size: var(--text-xs); color: var(--mob-text-muted); margin-top: 3px; }
+  .vc-dock-stats { text-align: right; }
+  .vc-dock-stat-primary { font-size: var(--text-xl); font-weight: 700; }
+  .vc-dock-stat-label { font-size: var(--text-xs); color: var(--mob-text-muted); margin-top: 1px; }
+  .vc-dock-stat-row { display: flex; gap: var(--sp-2); align-items: center; }
+  .vc-dock-stat-sep { color: var(--mob-text-dim); }
+  .vc-dock-rider {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    background: var(--mob-surface-2);
+    border-radius: var(--r-md);
+    padding: var(--sp-3) var(--sp-3);
+  }
+  .vc-dock-avatar {
+    width: 34px; height: 34px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 700; color: #fff;
+    flex-shrink: 0;
+  }
+  .vc-dock-name { font-size: var(--text-sm); font-weight: 600; flex: 1; }
+  .vc-dock-sub { font-size: var(--text-xs); color: var(--mob-text-muted); margin-top: 1px; }
+  .vc-dock-btn {
+    width: 34px; height: 34px;
+    border-radius: 50%;
+    background: var(--mob-surface-3);
+    border: none;
+    color: var(--mob-text);
+    font-size: 16px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+  }
+
+  /* ── Design Notes Panel ── */
+  .notes-panel {
+    width: 300px;
+    background: rgba(255,255,255,0.03);
+    border-radius: var(--r-xl);
+    border: 1px solid rgba(255,255,255,0.07);
+    padding: var(--sp-5);
+    align-self: flex-start;
+    flex-shrink: 0;
+  }
+  .notes-title {
+    font-size: var(--text-xs);
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--mob-text-dim);
+    margin-bottom: var(--sp-4);
+  }
+  .notes-section { margin-bottom: var(--sp-5); }
+  .notes-section-title {
+    font-size: var(--text-sm);
+    font-weight: 700;
+    color: var(--mob-text-muted);
+    margin-bottom: var(--sp-2);
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+  }
+  .notes-tag {
+    font-size: 10px;
+    padding: 2px 7px;
+    border-radius: var(--r-pill);
+    font-weight: 600;
+  }
+  .notes-tag.rec { background: rgba(56,161,105,0.2); color: var(--online-green); }
+  .notes-tag.warn { background: rgba(214,158,46,0.2); color: var(--earnings-gold); }
+  .notes-tag.info { background: rgba(66,153,225,0.15); color: var(--info-blue); }
+  .notes-body {
+    font-size: var(--text-xs);
+    color: var(--mob-text-dim);
+    line-height: 1.6;
+  }
+  .notes-body li { margin-bottom: 4px; list-style: none; padding-left: 1em; position: relative; }
+  .notes-body li::before { content: "→"; position: absolute; left: 0; color: var(--mob-text-dim); }
+  .notes-metric {
+    display: flex;
+    justify-content: space-between;
+    padding: 6px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    font-size: var(--text-xs);
+  }
+  .notes-metric:last-child { border-bottom: none; }
+  .notes-metric-key { color: var(--mob-text-muted); }
+  .notes-metric-val { font-weight: 600; color: var(--mob-text); }
+  .verdict-box {
+    background: rgba(56,161,105,0.08);
+    border: 1px solid rgba(56,161,105,0.2);
+    border-radius: var(--r-md);
+    padding: var(--sp-3);
+    margin-top: var(--sp-4);
+  }
+  .verdict-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--online-green);
+    margin-bottom: var(--sp-1);
+  }
+  .verdict-text { font-size: var(--text-xs); color: var(--mob-text-dim); line-height: 1.5; }
+
+  /* ── Toolbar ── */
+  .toolbar {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background: rgba(28,28,30,0.9);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: var(--r-xl);
+    padding: var(--sp-3) var(--sp-4);
+    backdrop-filter: blur(20px);
+    z-index: 9999;
+    box-shadow: var(--shadow-xl);
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+    font-size: var(--text-xs);
+  }
+  .toolbar-title {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--mob-text-dim);
+    margin-bottom: var(--sp-1);
+  }
+  .toolbar-row {
+    display: flex;
+    gap: var(--sp-2);
+    flex-wrap: wrap;
+  }
+  .tb-btn {
+    padding: 4px 10px;
+    border-radius: var(--r-pill);
+    border: 1px solid rgba(255,255,255,0.1);
+    background: transparent;
+    color: var(--mob-text-muted);
+    font-size: 11px;
+    cursor: pointer;
+    transition: all var(--dur-fast);
+  }
+  .tb-btn.active { background: var(--spinr-red); border-color: var(--spinr-red); color: #fff; }
+  .tb-btn:hover:not(.active) { border-color: rgba(255,255,255,0.25); color: var(--mob-text); }
+
+</style>
+</head>
+<body>
+
+<!-- ── Page Header ── -->
+<header class="page-header">
+  <span class="sketch-num">002</span>
+  <span class="page-title">Driver — Offer + Active Ride</span>
+  <span class="page-q">"How urgent should the offer feel?"</span>
+</header>
+
+<!-- ── Stage Bar ── -->
+<div class="stage-bar">
+  <button class="stage-btn active" onclick="setStage('offer')">⚡ Ride Offered</button>
+  <button class="stage-btn"        onclick="setStage('active')">🚗 In Trip</button>
+</div>
+
+<!-- ── Canvas ── -->
+<div class="canvas" id="main-canvas">
+
+  <!-- ========== VARIANT A ========== -->
+  <div class="phone-wrap">
+    <div class="variant-label">
+      A — Timer-Dominant
+      <em>Countdown is the hero. Urgency-first.</em>
+    </div>
+    <div class="phone" id="phone-a">
+      <div class="notch"></div>
+      <div class="status-bar">
+        <span class="sb-time">9:41</span>
+        <div class="sb-icons">
+          <span>●●●</span><span>WiFi</span><span>100%</span>
+        </div>
+      </div>
+
+      <div class="screen">
+        <!-- A: Offer State -->
+        <div class="state-panel va-offer visible" id="a-offer">
+          <!-- Map with route -->
+          <div class="va-map-backdrop">
+            <div class="va-map-roads">
+              <div class="va-road h1"></div>
+              <div class="va-road v1"></div>
+              <div class="va-road v2"></div>
+              <div class="va-road h2"></div>
+              <div class="va-road h3"></div>
+            </div>
+            <!-- Route SVG -->
+            <svg class="va-route-svg" viewBox="0 0 375 260">
+              <path d="M 210 130 Q 170 130 140 150" stroke="#38A169" stroke-width="3" fill="none" stroke-dasharray="6 3" opacity="0.7"/>
+            </svg>
+            <!-- Pickup pin -->
+            <div class="va-pickup-pin">
+              <div class="va-pin-dot"></div>
+              <div class="va-pin-label">1720 College Dr</div>
+            </div>
+            <!-- Driver pin -->
+            <div class="va-driver-pin">
+              <div class="va-driver-dot"></div>
+            </div>
+            <!-- Timer ring overlaid on map -->
+            <div class="va-timer-overlay">
+              <div class="va-timer-ring">
+                <svg class="va-ring-svg" viewBox="0 0 96 96">
+                  <circle class="va-ring-bg" cx="48" cy="48" r="42"/>
+                  <circle class="va-ring-progress" id="a-ring" cx="48" cy="48" r="42"/>
+                </svg>
+                <div class="va-ring-text">
+                  <span class="va-ring-count" id="a-count">15</span>
+                  <span class="va-ring-unit">sec</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <!-- Offer card -->
+          <div class="va-offer-card">
+            <div class="oc-handle"></div>
+            <div class="oc-fare-row">
+              <span class="oc-fare-big">$16.25</span>
+              <span class="oc-surge-badge">⚡ 1.5×</span>
+            </div>
+            <div class="oc-meta">
+              <span class="oc-meta-item"><span class="oc-meta-icon">📍</span> 6 min away</span>
+              <span class="oc-meta-item"><span class="oc-meta-icon">📏</span> 8.3 km</span>
+              <span class="oc-meta-item"><span class="oc-meta-icon">⏱</span> ~18 min</span>
+            </div>
+            <div class="oc-route">
+              <div class="oc-route-row">
+                <div class="oc-dot pickup"></div>
+                <div>
+                  <div class="oc-addr">1720 College Drive</div>
+                  <div class="oc-addr-sub">University of Regina area</div>
+                </div>
+              </div>
+              <div class="oc-route-line" style="margin-left:4px"></div>
+              <div class="oc-route-row">
+                <div class="oc-dot dropoff"></div>
+                <div>
+                  <div class="oc-addr">Midtown Plaza</div>
+                  <div class="oc-addr-sub">2002 11th Ave, Regina</div>
+                </div>
+              </div>
+            </div>
+            <div class="oc-rider-row">
+              <div class="oc-avatar">S</div>
+              <div>
+                <div class="oc-rider-name">Sarah M.</div>
+                <div class="oc-rider-rating">⭐ 4.9 · 63 rides</div>
+              </div>
+              <div class="oc-rider-badge">Verified</div>
+            </div>
+            <div class="oc-actions">
+              <button class="btn-decline">✕</button>
+              <button class="btn-accept" onclick="alert('Offer accepted!')">
+                <span class="btn-accept-icon">✓</span>
+                Accept Ride
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- A: Active Ride State -->
+        <div class="state-panel va-active" id="a-active">
+          <div class="va-active-map">
+            <div class="va-active-roads">
+              <div class="va-ar-road h1"></div>
+              <div class="va-ar-road v1"></div>
+              <div class="va-ar-road h2"></div>
+              <div class="va-ar-road v2"></div>
+            </div>
+            <svg style="position:absolute;inset:0;pointer-events:none;" viewBox="0 0 375 500">
+              <path d="M 150 280 Q 160 230 190 200 Q 220 180 250 160" stroke="#38A169" stroke-width="3" fill="none" opacity="0.8"/>
+              <circle cx="250" cy="160" r="8" fill="#4299E1" stroke="white" stroke-width="2"/>
+            </svg>
+          </div>
+          <div class="va-active-topbar">
+            <div class="va-nav-step">
+              <span class="va-nav-dir-icon">↱</span>
+              <div>
+                <div class="va-nav-street">Turn right on Albert St</div>
+                <div class="va-nav-dist">In 400 m</div>
+              </div>
+            </div>
+            <div class="va-sos-btn">SOS</div>
+          </div>
+          <div class="va-active-panel">
+            <div class="va-ap-handle"></div>
+            <div class="va-ap-rider-row">
+              <div class="va-ap-avatar">S</div>
+              <div>
+                <div class="va-ap-name">Sarah M.</div>
+                <div class="va-ap-status">● Passenger aboard</div>
+              </div>
+              <div class="va-ap-actions">
+                <button class="va-ap-action-btn">📞</button>
+                <button class="va-ap-action-btn">💬</button>
+              </div>
+            </div>
+            <div class="va-fare-meter">
+              <div>
+                <div class="va-meter-label">Current Fare</div>
+                <div class="va-meter-amount">$11.40</div>
+                <div class="va-meter-live">
+                  <div class="va-live-dot"></div>
+                  Running
+                </div>
+              </div>
+              <div style="text-align:right">
+                <div class="va-meter-label">Est. Total</div>
+                <div style="font-size:var(--text-xl);font-weight:700;color:var(--earnings-gold)">$16.25</div>
+              </div>
+            </div>
+            <div class="va-eta-row">
+              <div class="va-eta-item">
+                <div class="va-eta-val">7 min</div>
+                <div class="va-eta-lbl">to dropoff</div>
+              </div>
+              <div class="va-eta-item">
+                <div class="va-eta-val">4.1 km</div>
+                <div class="va-eta-lbl">remaining</div>
+              </div>
+              <div class="va-eta-item">
+                <div class="va-eta-val">8.3 km</div>
+                <div class="va-eta-lbl">total trip</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div><!-- /phone-a -->
+  </div><!-- /wrap-a -->
+
+  <!-- ========== VARIANT B ========== -->
+  <div class="phone-wrap">
+    <div class="variant-label">
+      B — Information-First
+      <em>Full fare breakdown upfront. Scroll to accept.</em>
+    </div>
+    <div class="phone" id="phone-b">
+      <div class="notch"></div>
+      <div class="status-bar">
+        <span class="sb-time">9:41</span>
+        <div class="sb-icons">
+          <span>●●●</span><span>WiFi</span><span>100%</span>
+        </div>
+      </div>
+
+      <div class="screen">
+        <!-- B: Offer State -->
+        <div class="state-panel vb-offer visible" id="b-offer">
+          <div class="vb-urgency-strip">
+            <div>
+              <div style="font-size:10px;color:rgba(255,255,255,0.7);text-transform:uppercase;letter-spacing:0.1em;margin-bottom:2px;">New Ride Request</div>
+              <div class="vb-urgency-text">Accept within</div>
+            </div>
+            <div class="vb-urgency-timer" id="b-count">15</div>
+          </div>
+          <div class="vb-urgency-progress">
+            <div class="vb-urgency-bar" id="b-bar"></div>
+          </div>
+          <div class="vb-scroll">
+            <div>
+              <div class="vb-section-label">Your Earnings</div>
+              <div class="vb-fare-card">
+                <div class="vb-fare-total-row">
+                  <span class="vb-fare-total">$16.25</span>
+                  <span class="vb-fare-est">estimated</span>
+                </div>
+                <div class="vb-fare-lines">
+                  <div class="vb-fare-line">
+                    <span class="vb-fare-line-label">Base fare</span>
+                    <span class="vb-fare-line-val">$3.50</span>
+                  </div>
+                  <div class="vb-fare-line">
+                    <span class="vb-fare-line-label">Distance (8.3 km × $1.00)</span>
+                    <span class="vb-fare-line-val">$8.30</span>
+                  </div>
+                  <div class="vb-fare-line">
+                    <span class="vb-fare-line-label">Time (~18 min × $0.12)</span>
+                    <span class="vb-fare-line-val">$2.20</span>
+                  </div>
+                  <div class="vb-fare-divider"></div>
+                  <div class="vb-fare-line surge">
+                    <span class="vb-fare-line-label">⚡ Surge 1.5×</span>
+                    <span class="vb-fare-line-val">+$2.75</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div>
+              <div class="vb-section-label">Route</div>
+              <div class="vb-route-card">
+                <div class="vb-map-thumb">
+                  <div class="vb-thumb-road h"></div>
+                  <div class="vb-thumb-road v"></div>
+                  <div class="vb-thumb-pickup"></div>
+                  <div class="vb-thumb-dropoff"></div>
+                  <svg class="vb-map-route-svg" viewBox="0 0 375 100">
+                    <path d="M 130 45 Q 200 45 280 72" stroke="#38A169" stroke-width="2.5" fill="none" stroke-dasharray="5 3" opacity="0.8"/>
+                  </svg>
+                </div>
+                <div class="vb-route-details">
+                  <div class="vb-route-row">
+                    <span class="vb-route-icon">🔴</span>
+                    <div>
+                      <div class="vb-route-text">1720 College Drive</div>
+                      <div class="vb-route-sub">6 min away · University area</div>
+                    </div>
+                  </div>
+                  <div style="display:flex;align-items:stretch;gap:var(--sp-3)">
+                    <div class="vb-route-dots">
+                      <div class="vb-route-dot"></div>
+                      <div class="vb-route-dot"></div>
+                      <div class="vb-route-dot"></div>
+                    </div>
+                    <div style="font-size:var(--text-xs);color:var(--mob-text-dim);padding-top:4px">8.3 km · ~18 min</div>
+                  </div>
+                  <div class="vb-route-row">
+                    <span class="vb-route-icon">🔵</span>
+                    <div>
+                      <div class="vb-route-text">Midtown Plaza</div>
+                      <div class="vb-route-sub">2002 11th Ave, Regina</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div>
+              <div class="vb-section-label">Rider</div>
+              <div class="vb-rider-card">
+                <div class="vb-rider-avatar">S</div>
+                <div>
+                  <div class="vb-rider-name">Sarah M.</div>
+                  <div class="vb-rider-rating">⭐ 4.9 · Verified rider</div>
+                </div>
+                <div class="vb-rider-rides">
+                  <div class="vb-rider-count">63</div>
+                  <div class="vb-rider-count-lbl">rides taken</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="vb-accept-strip">
+            <button class="vb-btn-decline">✕</button>
+            <button class="vb-btn-accept" onclick="alert('Offer accepted!')">
+              Accept · $16.25
+            </button>
+          </div>
+        </div>
+
+        <!-- B: Active Ride -->
+        <div class="state-panel vb-active" id="b-active">
+          <div class="vb-active-header">
+            <div>
+              <div class="vb-ah-label">Trip in Progress</div>
+              <div class="vb-ah-status">Heading to Midtown Plaza</div>
+            </div>
+            <button class="vb-ah-sos">SOS</button>
+          </div>
+          <div class="vb-active-nav">
+            <div class="vb-nav-roads">
+              <div class="vb-nav-road main"></div>
+              <div class="vb-nav-road side1"></div>
+              <div class="vb-nav-road side2"></div>
+            </div>
+            <div class="vb-nav-turn">
+              <span class="vb-turn-arrow">↱</span>
+              <div class="vb-turn-info">
+                <div class="vb-turn-dist">400 m</div>
+                <div class="vb-turn-street">Turn right on Albert Street</div>
+              </div>
+            </div>
+            <div class="vb-driver-car">🚗</div>
+            <svg style="position:absolute;inset:0;pointer-events:none;" viewBox="0 0 375 300">
+              <path d="M 93 225 Q 120 200 160 190 Q 200 175 240 160" stroke="#38A169" stroke-width="3" fill="none" opacity="0.7"/>
+            </svg>
+          </div>
+          <div class="vb-active-bottom">
+            <div class="vb-ab-handle"></div>
+            <div class="vb-ab-row1">
+              <div>
+                <div style="font-size:var(--text-xs);color:var(--mob-text-muted);text-transform:uppercase;letter-spacing:0.08em">Running fare</div>
+                <div class="vb-ab-meter">$11.40</div>
+              </div>
+              <div class="vb-ab-right">
+                <div class="vb-ab-eta-val">7 min</div>
+                <div class="vb-ab-eta-lbl">to dropoff</div>
+              </div>
+            </div>
+            <div class="vb-ab-rider">
+              <div class="vb-ab-rider-avatar">S</div>
+              <div>
+                <div class="vb-ab-rider-name">Sarah M.</div>
+                <div class="vb-ab-rider-dest">→ Midtown Plaza</div>
+              </div>
+              <div class="vb-ab-actions">
+                <button class="vb-ab-action">📞</button>
+                <button class="vb-ab-action">💬</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div><!-- /phone-b -->
+  </div><!-- /wrap-b -->
+
+  <!-- ========== VARIANT C ========== -->
+  <div class="phone-wrap">
+    <div class="variant-label">
+      C — Cinematic ★ Recommended
+      <em>Full-screen drama. Fare as hero. Calm active ride.</em>
+    </div>
+    <div class="phone" id="phone-c">
+      <div class="notch"></div>
+      <div class="status-bar" style="position:relative;z-index:20">
+        <span class="sb-time">9:41</span>
+        <div class="sb-icons">
+          <span>●●●</span><span>WiFi</span><span>100%</span>
+        </div>
+      </div>
+
+      <div class="screen">
+        <!-- C: Offer State -->
+        <div class="state-panel vc-offer visible" id="c-offer">
+          <div class="vc-bg-gradient"></div>
+          <!-- Pulse rings -->
+          <div class="vc-pulse-rings">
+            <div class="vc-ring"></div>
+            <div class="vc-ring"></div>
+            <div class="vc-ring"></div>
+          </div>
+          <!-- Fare hero -->
+          <div class="vc-fare-hero">
+            <div class="vc-new-ride-label">New Ride Request</div>
+            <div class="vc-fare-amount">$16.25</div>
+            <div class="vc-fare-est">Estimated earnings</div>
+            <div class="vc-meta-pills">
+              <div class="vc-meta-pill">📍 6 min</div>
+              <div class="vc-meta-pill">📏 8.3 km</div>
+              <div class="vc-meta-pill">⏱ 18 min</div>
+              <div class="vc-meta-pill surge">⚡ 1.5×</div>
+            </div>
+          </div>
+          <!-- Slide panel -->
+          <div class="vc-slide-panel">
+            <div class="vc-sp-handle"></div>
+            <div class="vc-sp-pickup">
+              <div class="vc-pickup-icon">📍</div>
+              <div>
+                <div class="vc-pickup-addr">1720 College Drive</div>
+                <div class="vc-pickup-dist">
+                  <span class="vc-pickup-dist-val">6 min</span>
+                  <span>from your location · University area</span>
+                </div>
+              </div>
+            </div>
+            <div class="vc-sp-rider">
+              <div class="vc-rider-avatar">S</div>
+              <div>
+                <div class="vc-rider-name">Sarah M.</div>
+                <div class="vc-rider-rating">⭐ 4.9 · 63 rides · Verified</div>
+              </div>
+            </div>
+            <div class="vc-timer-linear">
+              <div class="vc-timer-fill" id="c-fill"></div>
+            </div>
+            <div style="text-align:center;font-size:var(--text-xs);color:var(--mob-text-muted);margin-top:-10px;margin-bottom:var(--sp-4)">
+              <span id="c-count">15</span> seconds remaining
+            </div>
+            <div class="vc-actions">
+              <button class="vc-btn-skip">✕</button>
+              <button class="vc-btn-accept" onclick="alert('Offer accepted!')">
+                Accept Ride
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- C: Active Ride -->
+        <div class="state-panel vc-active" id="c-active">
+          <div class="vc-active-map">
+            <div class="vc-active-roads">
+              <div class="vc-a-road h1"></div>
+              <div class="vc-a-road v1"></div>
+              <div class="vc-a-road h2"></div>
+            </div>
+            <svg class="vc-active-svg" viewBox="0 0 375 460">
+              <path d="M 131 310 Q 155 270 190 240 Q 220 210 250 185" stroke="#38A169" stroke-width="3" fill="none" opacity="0.8"/>
+            </svg>
+            <div class="vc-floating-nav">
+              <span class="vc-nav-arrow">↱</span>
+              <div class="vc-nav-body">
+                <div class="vc-nav-dist">In 400 m</div>
+                <div class="vc-nav-street">Turn right · Albert Street</div>
+              </div>
+              <div class="vc-sos-float">SOS</div>
+            </div>
+            <div class="vc-car-marker">🚗</div>
+            <div class="vc-dest-marker">
+              <div class="vc-dest-dot"></div>
+              <div class="vc-dest-label">Midtown Plaza</div>
+            </div>
+          </div>
+          <div class="vc-active-dock">
+            <div class="vc-dock-handle"></div>
+            <div class="vc-dock-main">
+              <div>
+                <div class="vc-dock-fare">$11.40</div>
+                <div class="vc-dock-fare-sub">Running · est. $16.25</div>
+              </div>
+              <div class="vc-dock-stats">
+                <div class="vc-dock-stat-row">
+                  <div>
+                    <div class="vc-dock-stat-primary">7 min</div>
+                    <div class="vc-dock-stat-label">to dropoff</div>
+                  </div>
+                  <div class="vc-dock-stat-sep">·</div>
+                  <div>
+                    <div class="vc-dock-stat-primary">4.1 km</div>
+                    <div class="vc-dock-stat-label">remaining</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="vc-dock-rider">
+              <div class="vc-dock-avatar">S</div>
+              <div>
+                <div class="vc-dock-name">Sarah M.</div>
+                <div class="vc-dock-sub">→ Midtown Plaza</div>
+              </div>
+              <button class="vc-dock-btn">📞</button>
+              <button class="vc-dock-btn">💬</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div><!-- /phone-c -->
+  </div><!-- /wrap-c -->
+
+  <!-- ========== NOTES PANEL ========== -->
+  <div class="notes-panel" id="notes-panel">
+    <div class="notes-title">Design Notes</div>
+
+    <div class="notes-section" id="notes-offer" style="display:block">
+      <div class="notes-section-title">
+        Offer Moment Psychology
+        <span class="notes-tag info">context</span>
+      </div>
+      <div class="notes-body">
+        <ul>
+          <li>Driver has ~15 seconds — a cognitive peak of urgency</li>
+          <li>Anxiety reduces decision quality; calm confidence improves it</li>
+          <li>Fare shown first anchors the decision positively</li>
+          <li>Too much urgency → panic declines → lower accept rate</li>
+        </ul>
+      </div>
+
+      <div class="notes-section-title" style="margin-top:16px">
+        A — Timer-Dominant
+        <span class="notes-tag warn">caution</span>
+      </div>
+      <div class="notes-body">
+        <ul>
+          <li>Ring is visually dominant; fare is secondary</li>
+          <li>Stress-induces fast response but increases regret declines</li>
+          <li>Good for high-volume, low-value trips</li>
+          <li>Risk: timer anxiety with partial info → irrational declines</li>
+        </ul>
+      </div>
+
+      <div class="notes-section-title" style="margin-top:16px">
+        B — Information-First
+        <span class="notes-tag info">measured</span>
+      </div>
+      <div class="notes-body">
+        <ul>
+          <li>Full transparency reduces post-accept regret</li>
+          <li>Fare breakdown mirrors Monzo's "radical transparency"</li>
+          <li>Scroll required → risk of missing timer expiry while reading</li>
+          <li>Best for experienced drivers who want full context</li>
+        </ul>
+      </div>
+
+      <div class="notes-section-title" style="margin-top:16px">
+        C — Cinematic ★
+        <span class="notes-tag rec">recommended</span>
+      </div>
+      <div class="notes-body">
+        <ul>
+          <li>Large fare number creates immediate positive anchor</li>
+          <li>Pulsing rings convey urgency without stress typography</li>
+          <li>Key info (pickup dist, rider rating) in slide panel</li>
+          <li>Linear timer progress bar is calmer than a countdown ring</li>
+          <li>All action within thumb reach at bottom</li>
+        </ul>
+      </div>
+
+      <div class="verdict-box">
+        <div class="verdict-label">Recommendation</div>
+        <div class="verdict-text">
+          Variant C creates confident urgency — the fare is the protagonist,
+          not the timer. Drivers feel motivated by the earnings opportunity
+          rather than pressured by a shrinking clock. This aligns with
+          Spinr's "driver dignity" principle.
+        </div>
+      </div>
+    </div>
+
+    <div class="notes-section" id="notes-active" style="display:none">
+      <div class="notes-section-title">
+        In-Trip UX Priorities
+        <span class="notes-tag info">context</span>
+      </div>
+      <div class="notes-body">
+        <ul>
+          <li>Driver attention must stay on the road — minimal UI</li>
+          <li>Navigation is primary; fare is secondary</li>
+          <li>Rider contact must be 1 tap away (safety)</li>
+          <li>SOS must be visually present but not alarming</li>
+        </ul>
+      </div>
+
+      <div class="notes-section-title" style="margin-top:16px">
+        A — Nav-dominant topbar
+        <span class="notes-tag warn">caution</span>
+      </div>
+      <div class="notes-body">
+        <ul>
+          <li>Floating nav card competes with map for attention</li>
+          <li>Panel at bottom is good but compressed</li>
+          <li>SOS in topbar: easy to reach but small tap target</li>
+        </ul>
+      </div>
+
+      <div class="notes-section-title" style="margin-top:16px">
+        B — Header status + map
+        <span class="notes-tag warn">caution</span>
+      </div>
+      <div class="notes-body">
+        <ul>
+          <li>Red header is high-distraction — unnecessary</li>
+          <li>Visible SOS in header is a pro</li>
+          <li>Map area is constrained by fixed header</li>
+        </ul>
+      </div>
+
+      <div class="notes-section-title" style="margin-top:16px">
+        C — Map-dominant + minimal dock ★
+        <span class="notes-tag rec">recommended</span>
+      </div>
+      <div class="notes-body">
+        <ul>
+          <li>Floating nav preserves full map visibility</li>
+          <li>Bottom dock is compact: fare + ETA + rider in one card</li>
+          <li>SOS stays accessible without dominating the screen</li>
+          <li>Single-glance design reduces cognitive load while driving</li>
+        </ul>
+      </div>
+
+      <div class="verdict-box">
+        <div class="verdict-label">Key Insight</div>
+        <div class="verdict-text">
+          In-trip, less is more. The driver knows the context;
+          they don't need it restated. The only new information
+          is turn directions and running fare. Everything else
+          should stay out of the way.
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:16px;border-top:1px solid rgba(255,255,255,0.06);padding-top:16px">
+      <div class="notes-title">KPI Impact</div>
+      <div class="notes-metric">
+        <span class="notes-metric-key">Accept rate target</span>
+        <span class="notes-metric-val">≥ 72%</span>
+      </div>
+      <div class="notes-metric">
+        <span class="notes-metric-key">Driver cancel rate target</span>
+        <span class="notes-metric-val">≤ 3%</span>
+      </div>
+      <div class="notes-metric">
+        <span class="notes-metric-key">Dispatch latency target</span>
+        <span class="notes-metric-val">&lt; 2 s P95</span>
+      </div>
+      <div class="notes-metric">
+        <span class="notes-metric-key">Offer timer duration</span>
+        <span class="notes-metric-val">15 s</span>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /canvas -->
+
+<!-- ── Toolbar ── -->
+<div class="toolbar">
+  <div class="toolbar-title">Sketch 002</div>
+  <div class="toolbar-row">
+    <button class="tb-btn active" onclick="setStageToolbar('offer', this)">Offer</button>
+    <button class="tb-btn"        onclick="setStageToolbar('active', this)">Active</button>
+  </div>
+</div>
+
+<script>
+  // ── Timer state ──
+  let timerA, timerB, timerC;
+  let countA = 15, countB = 15, countC = 15;
+  const TOTAL_DASH = 263; // circumference r=42
+
+  function startTimers() {
+    clearInterval(timerA);
+    clearInterval(timerB);
+    clearInterval(timerC);
+    countA = 15; countB = 15; countC = 15;
+
+    const ringEl   = document.getElementById('a-ring');
+    const countAEl = document.getElementById('a-count');
+    const countBEl = document.getElementById('b-count');
+    const barBEl   = document.getElementById('b-bar');
+    const countCEl = document.getElementById('c-count');
+    const fillCEl  = document.getElementById('c-fill');
+
+    // Init states
+    if (ringEl)   ringEl.style.strokeDashoffset = '0';
+    if (barBEl)   barBEl.style.width = '100%';
+    if (fillCEl)  fillCEl.style.width = '100%';
+    if (countAEl) countAEl.textContent = '15';
+    if (countBEl) countBEl.textContent = '15';
+    if (countCEl) countCEl.textContent = '15';
+
+    timerA = setInterval(() => {
+      countA--;
+      if (!countAEl) return;
+      countAEl.textContent = countA;
+      if (ringEl) {
+        const offset = TOTAL_DASH * (1 - countA / 15);
+        ringEl.style.strokeDashoffset = offset;
+        // Turn ring red as time runs out
+        if (countA <= 5) ringEl.style.stroke = '#E53E3E';
+        else ringEl.style.stroke = '#38A169';
+      }
+      if (countA <= 0) {
+        clearInterval(timerA);
+        countAEl.textContent = '0';
+      }
+    }, 1000);
+
+    timerB = setInterval(() => {
+      countB--;
+      if (!countBEl) return;
+      countBEl.textContent = countB;
+      if (barBEl) barBEl.style.width = `${(countB / 15) * 100}%`;
+      if (countB <= 0) {
+        clearInterval(timerB);
+        countBEl.textContent = '0';
+        if (barBEl) barBEl.style.width = '0%';
+      }
+    }, 1000);
+
+    timerC = setInterval(() => {
+      countC--;
+      if (!countCEl) return;
+      countCEl.textContent = countC;
+      if (fillCEl) fillCEl.style.width = `${(countC / 15) * 100}%`;
+      if (countC <= 0) {
+        clearInterval(timerC);
+        countCEl.textContent = '0';
+        if (fillCEl) fillCEl.style.width = '0%';
+      }
+    }, 1000);
+  }
+
+  // ── Stage switching ──
+  let currentStage = 'offer';
+
+  function setStage(stage) {
+    currentStage = stage;
+
+    // Update stage bar
+    document.querySelectorAll('.stage-btn').forEach((b, i) => {
+      b.classList.toggle('active', (stage === 'offer' && i === 0) || (stage === 'active' && i === 1));
+    });
+
+    // Show/hide state panels
+    const show = s => s.classList.add('visible');
+    const hide = s => s.classList.remove('visible');
+
+    ['a','b','c'].forEach(v => {
+      const offerEl  = document.getElementById(`${v}-offer`);
+      const activeEl = document.getElementById(`${v}-active`);
+      if (!offerEl || !activeEl) return;
+      if (stage === 'offer') { show(offerEl); hide(activeEl); }
+      else                   { hide(offerEl); show(activeEl); }
+    });
+
+    // Toggle notes sections
+    const notesOffer  = document.getElementById('notes-offer');
+    const notesActive = document.getElementById('notes-active');
+    if (notesOffer)  notesOffer.style.display  = stage === 'offer'  ? 'block' : 'none';
+    if (notesActive) notesActive.style.display = stage === 'active' ? 'block' : 'none';
+
+    // Restart timers when entering offer
+    if (stage === 'offer') startTimers();
+    else {
+      clearInterval(timerA); clearInterval(timerB); clearInterval(timerC);
+    }
+  }
+
+  function setStageToolbar(stage, btn) {
+    document.querySelectorAll('.toolbar .tb-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    setStage(stage);
+  }
+
+  // Init
+  startTimers();
+</script>
+</body>
+</html>

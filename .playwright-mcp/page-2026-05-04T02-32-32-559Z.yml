@@ -1,0 +1,117 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e5]:
+    - generic [ref=e8]:
+      - generic [ref=e10]:
+        - button "Navigate to home" [ref=e11] [cursor=pointer]:
+          - img "Expo home" [ref=e12]
+        - generic [ref=e14]:
+          - button "Notifications" [ref=e15] [cursor=pointer]:
+            - img [ref=e18]
+          - button "Search" [ref=e21] [cursor=pointer]:
+            - img [ref=e22]
+      - generic [ref=e25]:
+        - button "srikumarimuddana account icon srikumarimuddana" [ref=e27] [cursor=pointer]:
+          - generic [ref=e28]:
+            - img "srikumarimuddana account icon" [ref=e29]
+            - paragraph [ref=e30]: srikumarimuddana
+          - img [ref=e32]
+        - button "spinrdriver" [ref=e36] [cursor=pointer]:
+          - paragraph [ref=e40]: spinrdriver
+          - img [ref=e42]
+      - generic [ref=e47]:
+        - link "Account" [ref=e50] [cursor=pointer]:
+          - /url: /accounts/srikumarimuddana
+          - generic [ref=e51]:
+            - img [ref=e52]
+            - paragraph [ref=e55]: Account
+        - generic [ref=e56]:
+          - paragraph [ref=e57]: Project
+          - link "Overview" [ref=e59] [cursor=pointer]:
+            - /url: /accounts/srikumarimuddana/projects/spinrdriver
+            - generic [ref=e60]:
+              - img [ref=e61]
+              - paragraph [ref=e68]: Overview
+          - link "Insights" [ref=e70] [cursor=pointer]:
+            - /url: /accounts/srikumarimuddana/projects/spinrdriver/insights
+            - generic [ref=e71]:
+              - img [ref=e72]
+              - paragraph [ref=e79]: Insights
+          - link "Usage" [ref=e81] [cursor=pointer]:
+            - /url: /accounts/srikumarimuddana/projects/spinrdriver/usage
+            - generic [ref=e82]:
+              - img [ref=e83]
+              - paragraph [ref=e86]: Usage
+        - generic [ref=e87]:
+          - paragraph [ref=e88]: Develop
+          - link "Workflows" [ref=e90] [cursor=pointer]:
+            - /url: /accounts/srikumarimuddana/projects/spinrdriver/workflows
+            - generic [ref=e91]:
+              - img [ref=e92]
+              - paragraph [ref=e95]: Workflows
+          - link "Development builds" [ref=e97] [cursor=pointer]:
+            - /url: /accounts/srikumarimuddana/projects/spinrdriver/development-builds
+            - generic [ref=e98]:
+              - img [ref=e99]
+              - paragraph [ref=e102]: Development builds
+        - generic [ref=e103]:
+          - paragraph [ref=e104]: Deploy
+          - link "Builds" [ref=e106] [cursor=pointer]:
+            - /url: /accounts/srikumarimuddana/projects/spinrdriver/builds
+            - generic [ref=e107]:
+              - img [ref=e108]
+              - paragraph [ref=e111]: Builds
+          - link "Submissions" [ref=e113] [cursor=pointer]:
+            - /url: /accounts/srikumarimuddana/projects/spinrdriver/submissions
+            - generic [ref=e114]:
+              - img [ref=e115]
+              - paragraph [ref=e123]: Submissions
+          - button "Over-the-air updates" [ref=e125] [cursor=pointer]:
+            - generic [ref=e126]:
+              - img [ref=e127]
+              - paragraph [ref=e130]: Over-the-air updates
+            - img [ref=e131]
+          - link "Hosting" [ref=e135] [cursor=pointer]:
+            - /url: /accounts/srikumarimuddana/projects/spinrdriver/hosting
+            - generic [ref=e136]:
+              - img [ref=e137]
+              - paragraph [ref=e140]: Hosting
+          - link "Push notifications" [ref=e142] [cursor=pointer]:
+            - /url: /accounts/srikumarimuddana/projects/spinrdriver/push-notifications
+            - generic [ref=e143]:
+              - img [ref=e144]
+              - paragraph [ref=e147]: Push notifications
+        - generic [ref=e148]:
+          - paragraph [ref=e149]: Entities
+          - link "Fingerprints" [ref=e151] [cursor=pointer]:
+            - /url: /accounts/srikumarimuddana/projects/spinrdriver/fingerprints
+            - paragraph [ref=e153]: Fingerprints
+        - generic [ref=e154]:
+          - paragraph [ref=e155]: Project settings
+          - link "General" [ref=e157] [cursor=pointer]:
+            - /url: /accounts/srikumarimuddana/projects/spinrdriver/settings
+            - paragraph [ref=e159]: General
+          - link "Credentials" [ref=e161] [cursor=pointer]:
+            - /url: /accounts/srikumarimuddana/projects/spinrdriver/credentials
+            - paragraph [ref=e163]: Credentials
+          - link "Environment variables" [ref=e165] [cursor=pointer]:
+            - /url: /accounts/srikumarimuddana/projects/spinrdriver/environment-variables
+            - paragraph [ref=e167]: Environment variables
+          - link "GitHub" [ref=e169] [cursor=pointer]:
+            - /url: /accounts/srikumarimuddana/projects/spinrdriver/github
+            - paragraph [ref=e171]: GitHub
+      - button "User menu srikumarimuddana" [ref=e174] [cursor=pointer]:
+        - generic [ref=e175]:
+          - img "User menu" [ref=e176]
+          - paragraph [ref=e177]: srikumarimuddana
+        - img [ref=e179]
+    - generic [ref=e188]:
+      - generic [ref=e190]:
+        - link "Builds" [ref=e191] [cursor=pointer]:
+          - /url: /accounts/srikumarimuddana/projects/spinrdriver/builds
+          - generic [ref=e192]:
+            - img [ref=e193]
+            - paragraph [ref=e196]: Builds
+        - img [ref=e197]
+        - paragraph [ref=e201]: 3e99d831
+      - progressbar [ref=e204]
+  - alert [ref=e205]

@@ -1,0 +1,1300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sketch 004 — Rider Home</title>
+<link rel="stylesheet" href="../themes/default.css">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0d0d0f; font-family: var(--font); color: var(--mob-text); min-height: 100vh; }
+
+  /* ── Page Header ── */
+  .page-header {
+    background: rgba(255,255,255,0.03);
+    border-bottom: 1px solid rgba(255,255,255,0.07);
+    padding: var(--sp-5) var(--sp-8);
+    display: flex; align-items: center; gap: var(--sp-4);
+  }
+  .sketch-num { background: var(--spinr-red); color: #fff; font-size: var(--text-xs); font-weight: 700; letter-spacing: 0.12em; padding: 3px 10px; border-radius: var(--r-pill); }
+  .page-title { font-size: var(--text-lg); font-weight: 600; }
+  .page-q { margin-left: auto; font-size: var(--text-sm); color: var(--mob-text-muted); font-style: italic; }
+
+  /* ── Stage Bar ── */
+  .stage-bar { display: flex; gap: var(--sp-2); padding: var(--sp-4) var(--sp-8); border-bottom: 1px solid rgba(255,255,255,0.06); }
+  .stage-btn { padding: 6px 18px; border-radius: var(--r-pill); border: 1px solid rgba(255,255,255,0.12); background: transparent; color: var(--mob-text-muted); font-size: var(--text-sm); cursor: pointer; transition: all 200ms; }
+  .stage-btn.active, .stage-btn:hover { background: rgba(229,62,62,0.15); border-color: var(--spinr-red); color: var(--mob-text); }
+
+  /* ── Canvas ── */
+  .canvas { display: flex; gap: var(--sp-8); padding: var(--sp-8); justify-content: center; flex-wrap: wrap; align-items: flex-start; }
+
+  /* ── Phone ── */
+  .phone-wrap { display: flex; flex-direction: column; align-items: center; gap: var(--sp-4); }
+  .variant-label { font-size: var(--text-sm); font-weight: 600; color: var(--mob-text-muted); text-align: center; letter-spacing: 0.05em; text-transform: uppercase; }
+  .variant-label em { display: block; font-size: var(--text-xs); font-weight: 400; font-style: normal; color: var(--mob-text-dim); margin-top: 2px; text-transform: none; letter-spacing: 0; }
+  .phone { width: 375px; height: 812px; background: var(--mob-bg); border-radius: 52px; box-shadow: var(--shadow-phone); overflow: hidden; position: relative; flex-shrink: 0; }
+  .notch { position: absolute; top: 0; left: 50%; transform: translateX(-50%); width: 120px; height: 34px; background: #000; border-radius: 0 0 20px 20px; z-index: 100; }
+  .status-bar { display: flex; justify-content: space-between; align-items: center; padding: 14px 24px 0; font-size: 12px; font-weight: 600; color: rgba(255,255,255,0.9); height: 44px; position: relative; z-index: 20; }
+  .home-indicator { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); width: 134px; height: 5px; background: rgba(255,255,255,0.3); border-radius: 3px; z-index: 100; }
+  .screen { position: absolute; inset: 44px 0 0; overflow: hidden; }
+  .state-panel { display: none; width: 100%; height: 100%; }
+  .state-panel.visible { display: block; }
+
+  /* ── Shared Map Base ── */
+  .map-base {
+    position: absolute; inset: 0;
+    background: linear-gradient(160deg, var(--map-base) 0%, #111622 100%);
+    overflow: hidden;
+  }
+  .map-grid {
+    position: absolute; inset: 0;
+  }
+  .mg-h { position: absolute; width: 100%; height: 2px; background: var(--map-road); }
+  .mg-v { position: absolute; width: 2px; height: 100%; background: var(--map-road); }
+  .mg-main-h { background: var(--map-road-main); height: 3px; }
+  .mg-main-v { background: var(--map-road-main); width: 3px; }
+  .map-park { position: absolute; background: var(--map-park); border-radius: 6px; }
+  .map-water { position: absolute; background: var(--map-water); border-radius: 4px; }
+  /* Driver dots (nearby supply) */
+  .driver-dot {
+    position: absolute;
+    width: 8px; height: 8px;
+    background: rgba(56,161,105,0.7);
+    border-radius: 50%;
+    border: 1.5px solid rgba(56,161,105,0.5);
+  }
+  /* User pin */
+  .user-pin {
+    position: absolute;
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+  }
+  .user-ring {
+    width: 52px; height: 52px;
+    border-radius: 50%;
+    background: rgba(229,62,62,0.12);
+    border: 1.5px solid rgba(229,62,62,0.3);
+    display: flex; align-items: center; justify-content: center;
+    animation: user-pulse 2.5s infinite;
+  }
+  @keyframes user-pulse {
+    0%,100% { box-shadow: 0 0 0 0 rgba(229,62,62,0.15); }
+    50%      { box-shadow: 0 0 0 12px rgba(229,62,62,0); }
+  }
+  .user-dot { width: 16px; height: 16px; background: var(--spinr-red); border-radius: 50%; border: 3px solid #fff; box-shadow: 0 2px 8px rgba(229,62,62,0.5); }
+  /* Route preview line */
+  .route-svg { position: absolute; inset: 0; pointer-events: none; }
+
+  /* ══════════════════════════════════════════════
+     VARIANT A — Map-First (Familiar / Discovery)
+  ══════════════════════════════════════════════ */
+
+  /* A: Home state */
+  .va-home {
+    position: relative; height: 100%;
+  }
+  /* Floating top bar with avatar */
+  .va-topbar {
+    position: absolute; top: 0; left: 0; right: 0;
+    padding: var(--sp-3) var(--sp-4);
+    display: flex; align-items: center; justify-content: space-between;
+    z-index: 10;
+    background: linear-gradient(180deg, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0) 100%);
+  }
+  .va-greeting { font-size: var(--text-sm); font-weight: 600; color: #fff; text-shadow: 0 1px 4px rgba(0,0,0,0.6); }
+  .va-avatar {
+    width: 36px; height: 36px; border-radius: 50%;
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px; font-weight: 700; color: #fff;
+    border: 2px solid rgba(255,255,255,0.3);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+    flex-shrink: 0;
+  }
+  /* Bottom sheet */
+  .va-sheet {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    background: var(--mob-surface);
+    border-radius: 24px 24px 0 0;
+    padding: var(--sp-4) var(--sp-4) var(--sp-8);
+    z-index: 10;
+    box-shadow: 0 -8px 32px rgba(0,0,0,0.5);
+  }
+  .va-sheet-handle { width: 36px; height: 4px; background: rgba(255,255,255,0.15); border-radius: 2px; margin: 0 auto var(--sp-4); }
+  /* Search bar */
+  .va-search {
+    display: flex; align-items: center; gap: var(--sp-3);
+    background: var(--mob-surface-2);
+    border-radius: var(--r-xl);
+    padding: var(--sp-3) var(--sp-4);
+    margin-bottom: var(--sp-4);
+    cursor: pointer;
+    border: 1.5px solid transparent;
+    transition: border-color 200ms;
+  }
+  .va-search:hover { border-color: rgba(229,62,62,0.3); }
+  .va-search-icon { font-size: 18px; color: var(--spinr-red); flex-shrink: 0; }
+  .va-search-text { font-size: var(--text-base); color: var(--mob-text-muted); }
+  /* Quick places */
+  .va-places-row { display: flex; gap: var(--sp-3); margin-bottom: var(--sp-4); }
+  .va-place {
+    flex: 1; background: var(--mob-surface-2); border-radius: var(--r-lg);
+    padding: var(--sp-3); display: flex; align-items: center; gap: var(--sp-2);
+    cursor: pointer; transition: background 150ms;
+  }
+  .va-place:hover { background: var(--mob-surface-3); }
+  .va-place-icon { font-size: 18px; }
+  .va-place-name { font-size: var(--text-sm); font-weight: 600; }
+  .va-place-dist { font-size: 11px; color: var(--mob-text-muted); margin-top: 1px; }
+  /* Recent section */
+  .va-recent-label { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--mob-text-dim); margin-bottom: var(--sp-3); }
+  .va-recent-list { display: flex; flex-direction: column; gap: 2px; }
+  .va-recent-item { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-2) var(--sp-1); border-radius: var(--r-md); cursor: pointer; transition: background 150ms; }
+  .va-recent-item:hover { background: var(--mob-surface-2); }
+  .va-recent-dot { width: 32px; height: 32px; background: var(--mob-surface-2); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0; }
+  .va-recent-name { font-size: var(--text-sm); font-weight: 500; }
+  .va-recent-sub  { font-size: 11px; color: var(--mob-text-muted); margin-top: 1px; }
+  /* Driver count pill */
+  .va-driver-pill {
+    position: absolute; top: var(--sp-4); right: var(--sp-4);
+    background: rgba(56,161,105,0.2); border: 1px solid rgba(56,161,105,0.35);
+    border-radius: var(--r-pill); padding: 5px 11px;
+    font-size: 11px; font-weight: 700; color: var(--online-green);
+    display: flex; align-items: center; gap: 5px;
+    backdrop-filter: blur(8px); z-index: 5;
+  }
+  .va-driver-live { width: 6px; height: 6px; background: var(--online-green); border-radius: 50%; animation: blink 1.2s infinite; }
+  @keyframes blink { 0%,100% { opacity:1; } 50% { opacity:0.3; } }
+
+  /* A: Search state */
+  .va-search-state { height: 100%; background: var(--mob-bg); display: flex; flex-direction: column; }
+  .va-ss-header { padding: var(--sp-4) var(--sp-4) var(--sp-3); flex-shrink: 0; }
+  .va-ss-back { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: var(--sp-3); cursor: pointer; }
+  .va-ss-back-icon { font-size: 20px; color: var(--mob-text-muted); }
+  .va-ss-back-label { font-size: var(--text-sm); color: var(--mob-text-muted); }
+  .va-ss-inputs { display: flex; flex-direction: column; gap: var(--sp-2); }
+  .va-ss-input-row { display: flex; align-items: center; gap: var(--sp-3); background: var(--mob-surface); border-radius: var(--r-lg); padding: var(--sp-3) var(--sp-4); }
+  .va-ss-input-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .va-ss-input-dot.origin { background: var(--online-green); }
+  .va-ss-input-dot.dest   { background: var(--spinr-red); }
+  .va-ss-input-connector { width: 2px; height: 14px; background: rgba(255,255,255,0.15); margin-left: 4px; }
+  .va-ss-input-text { font-size: var(--text-sm); font-weight: 500; }
+  .va-ss-input-text.placeholder { color: var(--mob-text-muted); }
+  .va-ss-input-cursor { display: inline-block; width: 2px; height: 16px; background: var(--spinr-red); margin-left: 1px; animation: cursor-blink 1s infinite; vertical-align: middle; }
+  @keyframes cursor-blink { 0%,50% { opacity:1; } 51%,100% { opacity:0; } }
+  .va-ss-divider { height: 1px; background: var(--mob-border); margin: var(--sp-3) 0; flex-shrink: 0; }
+  .va-ss-suggestions { flex: 1; overflow-y: auto; scrollbar-width: none; }
+  .va-ss-suggestions::-webkit-scrollbar { display: none; }
+  .va-ss-section-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--mob-text-dim); padding: var(--sp-2) var(--sp-4); }
+  .va-suggestion-item { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3) var(--sp-4); cursor: pointer; border-radius: var(--r-md); transition: background 150ms; margin: 0 var(--sp-2); }
+  .va-suggestion-item:hover { background: var(--mob-surface); }
+  .va-sug-icon { width: 36px; height: 36px; background: var(--mob-surface-2); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 15px; flex-shrink: 0; }
+  .va-sug-name { font-size: var(--text-sm); font-weight: 600; }
+  .va-sug-sub  { font-size: 11px; color: var(--mob-text-muted); margin-top: 1px; }
+  /* Simulated keyboard */
+  .va-keyboard { height: 260px; background: #1c1c1e; flex-shrink: 0; border-top: 1px solid rgba(255,255,255,0.08); display: grid; grid-template-rows: repeat(4,1fr); gap: 1px; padding: var(--sp-2) var(--sp-2) var(--sp-3); }
+  .va-kb-row { display: flex; gap: 1px; }
+  .va-kb-key { flex: 1; background: var(--mob-surface-2); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: var(--text-sm); font-weight: 500; color: var(--mob-text); cursor: pointer; }
+  .va-kb-key.dark { background: var(--mob-surface-3); color: var(--mob-text-muted); font-size: var(--text-xs); }
+  .va-kb-key.space { flex: 5; }
+  .va-kb-key.action { background: var(--spinr-red); color: #fff; font-weight: 700; font-size: var(--text-xs); flex: 2; }
+
+  /* A: Route preview state */
+  .va-route-preview { position: relative; height: 100%; }
+  .va-rp-topbar {
+    position: absolute; top: 0; left: 0; right: 0;
+    padding: var(--sp-3) var(--sp-4);
+    z-index: 10;
+    background: linear-gradient(180deg, rgba(0,0,0,0.6) 0%, transparent 100%);
+    display: flex; align-items: center; gap: var(--sp-3);
+  }
+  .va-rp-back { width: 36px; height: 36px; background: rgba(0,0,0,0.4); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 18px; cursor: pointer; backdrop-filter: blur(8px); }
+  .va-rp-dest { flex: 1; }
+  .va-rp-dest-label { font-size: 11px; color: rgba(255,255,255,0.6); }
+  .va-rp-dest-name { font-size: var(--text-base); font-weight: 700; color: #fff; }
+  .va-rp-sheet {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    background: var(--mob-surface);
+    border-radius: 24px 24px 0 0;
+    padding: var(--sp-4) var(--sp-4) var(--sp-8);
+    z-index: 10;
+  }
+  .va-rp-handle { width: 36px; height: 4px; background: rgba(255,255,255,0.15); border-radius: 2px; margin: 0 auto var(--sp-4); }
+  .va-rp-info-row { display: flex; gap: var(--sp-3); margin-bottom: var(--sp-4); }
+  .va-rp-stat { flex: 1; text-align: center; }
+  .va-rp-stat-val { font-size: var(--text-xl); font-weight: 700; }
+  .va-rp-stat-lbl { font-size: 11px; color: var(--mob-text-muted); margin-top: 2px; }
+  .va-rp-fare-card {
+    background: var(--mob-surface-2); border-radius: var(--r-xl);
+    padding: var(--sp-4); margin-bottom: var(--sp-4);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .va-rp-fare-amount { font-size: 32px; font-weight: 800; color: var(--mob-text); letter-spacing: -0.03em; }
+  .va-rp-fare-sub { font-size: var(--text-xs); color: var(--mob-text-muted); margin-top: 3px; }
+  .va-rp-vehicle-row { display: flex; align-items: center; gap: var(--sp-2); }
+  .va-rp-vehicle-icon { font-size: 24px; }
+  .va-rp-vehicle-name { font-size: var(--text-sm); font-weight: 600; }
+  .va-rp-vehicle-sub { font-size: 11px; color: var(--mob-text-muted); margin-top: 1px; }
+  .va-rp-cta {
+    width: 100%; padding: 16px;
+    background: linear-gradient(135deg, var(--spinr-red), var(--spinr-red-dark));
+    color: #fff; border: none; border-radius: var(--r-xl);
+    font-size: var(--text-md); font-weight: 700; cursor: pointer;
+    box-shadow: 0 4px 16px rgba(229,62,62,0.35);
+  }
+
+  /* ══════════════════════════════════════════════
+     VARIANT B — Search-First (Speed-Optimized)
+  ══════════════════════════════════════════════ */
+
+  .vb-home { height: 100%; display: flex; flex-direction: column; }
+  /* Top search panel */
+  .vb-top {
+    background: var(--mob-surface);
+    padding: var(--sp-4) var(--sp-4) var(--sp-3);
+    flex-shrink: 0;
+    z-index: 10;
+  }
+  .vb-header-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--sp-3); }
+  .vb-hello { font-size: var(--text-base); font-weight: 700; }
+  .vb-avatar { width: 34px; height: 34px; border-radius: 50%; background: linear-gradient(135deg, #6366f1, #8b5cf6); display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; color: #fff; }
+  /* Big search bar */
+  .vb-search-bar {
+    display: flex; align-items: center; gap: var(--sp-3);
+    background: var(--mob-surface-2); border-radius: var(--r-xl);
+    padding: var(--sp-4) var(--sp-4);
+    border: 1.5px solid rgba(229,62,62,0.25);
+    cursor: pointer;
+  }
+  .vb-search-magnify { font-size: 20px; color: var(--spinr-red); }
+  .vb-search-label { font-size: var(--text-base); font-weight: 500; color: var(--mob-text-muted); }
+  /* Map section */
+  .vb-map-section { flex: 1; position: relative; overflow: hidden; }
+  /* Bottom quick actions */
+  .vb-bottom {
+    background: var(--mob-surface);
+    border-top: 1px solid var(--mob-border);
+    padding: var(--sp-4) var(--sp-4) var(--sp-6);
+    flex-shrink: 0;
+  }
+  .vb-shortcuts-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--mob-text-dim); margin-bottom: var(--sp-3); }
+  .vb-shortcuts { display: flex; gap: var(--sp-3); margin-bottom: var(--sp-3); }
+  .vb-shortcut {
+    flex: 1; background: var(--mob-surface-2); border-radius: var(--r-lg);
+    padding: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-1);
+    cursor: pointer; align-items: center; text-align: center;
+  }
+  .vb-sc-icon { font-size: 22px; }
+  .vb-sc-name { font-size: var(--text-xs); font-weight: 700; }
+  .vb-sc-eta  { font-size: 10px; color: var(--mob-text-muted); }
+  .vb-recents-row { display: flex; gap: var(--sp-2); overflow-x: auto; scrollbar-width: none; }
+  .vb-recents-row::-webkit-scrollbar { display: none; }
+  .vb-recent-chip {
+    flex-shrink: 0; background: var(--mob-surface-2);
+    border: 1px solid var(--mob-border);
+    border-radius: var(--r-pill); padding: 6px 12px;
+    font-size: var(--text-xs); font-weight: 600; color: var(--mob-text-muted);
+    cursor: pointer; white-space: nowrap;
+    display: flex; align-items: center; gap: 5px;
+    transition: all 150ms;
+  }
+  .vb-recent-chip:hover { border-color: rgba(229,62,62,0.3); color: var(--mob-text); }
+
+  /* B: Active search state */
+  .vb-search-active { height: 100%; background: var(--mob-bg); display: flex; flex-direction: column; }
+  .vb-sa-header { padding: var(--sp-4) var(--sp-4) var(--sp-3); flex-shrink: 0; }
+  .vb-sa-input-wrap { display: flex; gap: var(--sp-3); align-items: flex-start; }
+  .vb-sa-dots { display: flex; flex-direction: column; align-items: center; gap: 3px; padding-top: 14px; }
+  .vb-sa-dot-green { width: 10px; height: 10px; background: var(--online-green); border-radius: 50%; }
+  .vb-sa-dot-line  { width: 2px; height: 18px; background: rgba(255,255,255,0.15); }
+  .vb-sa-dot-red   { width: 10px; height: 10px; background: var(--spinr-red); border-radius: 50%; }
+  .vb-sa-inputs { flex: 1; display: flex; flex-direction: column; gap: var(--sp-2); }
+  .vb-sa-input { background: var(--mob-surface); border-radius: var(--r-md); padding: var(--sp-3) var(--sp-3); font-size: var(--text-sm); color: var(--mob-text-muted); position: relative; }
+  .vb-sa-input.active { border: 1px solid rgba(229,62,62,0.4); color: var(--mob-text); }
+  .vb-sa-typed { color: var(--mob-text); font-weight: 500; }
+  .vb-cursor { display: inline-block; width: 2px; height: 15px; background: var(--spinr-red); margin-left: 1px; animation: cursor-blink 1s infinite; vertical-align: middle; }
+  .vb-sa-results { flex: 1; overflow-y: auto; scrollbar-width: none; padding: 0 var(--sp-4); }
+  .vb-sa-results::-webkit-scrollbar { display: none; }
+  .vb-result-item { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3) 0; border-bottom: 1px solid rgba(255,255,255,0.04); cursor: pointer; }
+  .vb-result-icon { width: 38px; height: 38px; background: var(--mob-surface); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; }
+  .vb-result-name { font-size: var(--text-sm); font-weight: 600; }
+  .vb-result-sub  { font-size: 11px; color: var(--mob-text-muted); margin-top: 2px; }
+  .vb-result-dist { font-size: 11px; color: var(--mob-text-dim); margin-left: auto; flex-shrink: 0; }
+  .vb-divider-line { height: 1px; background: var(--mob-border); margin: var(--sp-3) 0; }
+
+  /* B: Route preview */
+  .vb-route-preview { position: relative; height: 100%; }
+  .vb-rp-header {
+    position: absolute; top: 0; left: 0; right: 0;
+    background: var(--mob-surface); z-index: 10;
+    padding: var(--sp-3) var(--sp-4);
+  }
+  .vb-rp-route { display: flex; align-items: center; gap: var(--sp-3); }
+  .vb-rp-route-dots { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+  .vb-rp-dot-g { width: 8px; height: 8px; background: var(--online-green); border-radius: 50%; }
+  .vb-rp-dot-line { width: 2px; height: 12px; background: rgba(255,255,255,0.2); }
+  .vb-rp-dot-r { width: 8px; height: 8px; background: var(--spinr-red); border-radius: 50%; }
+  .vb-rp-route-text { flex: 1; }
+  .vb-rp-origin { font-size: 11px; color: var(--mob-text-muted); }
+  .vb-rp-destination { font-size: var(--text-sm); font-weight: 700; margin-top: 3px; }
+  .vb-rp-map { position: absolute; inset: 100px 0 220px; }
+  .vb-rp-bottom {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    background: var(--mob-surface);
+    border-radius: 24px 24px 0 0;
+    padding: var(--sp-4) var(--sp-4) var(--sp-8);
+    z-index: 10;
+  }
+  .vb-rp-b-handle { width: 36px; height: 4px; background: rgba(255,255,255,0.15); border-radius: 2px; margin: 0 auto var(--sp-4); }
+  .vb-fare-row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: var(--sp-3); }
+  .vb-fare-amount { font-size: 36px; font-weight: 800; letter-spacing: -0.03em; }
+  .vb-fare-meta { text-align: right; font-size: var(--text-xs); color: var(--mob-text-muted); }
+  .vb-fare-meta-val { font-weight: 600; color: var(--mob-text); }
+  .vb-cta-btn { width: 100%; padding: 16px; background: linear-gradient(135deg, var(--spinr-red), var(--spinr-red-dark)); color: #fff; border: none; border-radius: var(--r-xl); font-size: var(--text-md); font-weight: 700; cursor: pointer; box-shadow: 0 4px 16px rgba(229,62,62,0.35); }
+
+  /* ══════════════════════════════════════════════
+     VARIANT C — Smart-Predictive ★ (Recommended)
+     Context-aware cards, zero typing for habits
+  ══════════════════════════════════════════════ */
+
+  .vc-home { position: relative; height: 100%; }
+  /* Top gradient overlay */
+  .vc-top-overlay {
+    position: absolute; top: 0; left: 0; right: 0;
+    height: 200px;
+    background: linear-gradient(180deg, rgba(0,0,0,0.7) 0%, rgba(0,0,0,0) 100%);
+    z-index: 5;
+    pointer-events: none;
+  }
+  /* Floating header */
+  .vc-header {
+    position: absolute; top: 0; left: 0; right: 0;
+    padding: var(--sp-3) var(--sp-4);
+    z-index: 10;
+    display: flex; align-items: center; gap: var(--sp-3);
+  }
+  .vc-location-pill {
+    flex: 1; background: rgba(0,0,0,0.45); border: 1px solid rgba(255,255,255,0.15);
+    border-radius: var(--r-pill); padding: 7px 14px;
+    backdrop-filter: blur(12px);
+    display: flex; align-items: center; gap: var(--sp-2);
+    cursor: pointer;
+  }
+  .vc-loc-dot { width: 8px; height: 8px; background: var(--online-green); border-radius: 50%; flex-shrink: 0; animation: blink 2s infinite; }
+  .vc-loc-text { font-size: var(--text-xs); font-weight: 600; color: rgba(255,255,255,0.85); }
+  .vc-loc-chevron { margin-left: auto; font-size: 10px; color: rgba(255,255,255,0.4); }
+  .vc-avatar-btn { width: 36px; height: 36px; border-radius: 50%; background: linear-gradient(135deg, #6366f1, #8b5cf6); display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 700; color: #fff; border: 2px solid rgba(255,255,255,0.25); flex-shrink: 0; cursor: pointer; }
+  /* Bottom smart sheet */
+  .vc-smart-sheet {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    background: var(--mob-surface);
+    border-radius: 28px 28px 0 0;
+    z-index: 10;
+    padding-bottom: var(--sp-6);
+  }
+  .vc-ss-handle { width: 36px; height: 4px; background: rgba(255,255,255,0.15); border-radius: 2px; margin: var(--sp-4) auto var(--sp-3); }
+  /* Context suggestion card */
+  .vc-context-card {
+    margin: 0 var(--sp-4) var(--sp-3);
+    background: linear-gradient(135deg, rgba(229,62,62,0.12), rgba(183,28,28,0.06));
+    border: 1px solid rgba(229,62,62,0.2);
+    border-radius: var(--r-xl);
+    padding: var(--sp-4);
+    display: flex; align-items: center; gap: var(--sp-3);
+    cursor: pointer;
+  }
+  .vc-ctx-icon { font-size: 28px; }
+  .vc-ctx-text { flex: 1; }
+  .vc-ctx-label { font-size: 11px; color: rgba(229,62,62,0.7); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 3px; }
+  .vc-ctx-dest  { font-size: var(--text-base); font-weight: 700; }
+  .vc-ctx-meta  { font-size: 11px; color: var(--mob-text-muted); margin-top: 2px; }
+  .vc-ctx-arrow { font-size: 20px; color: var(--spinr-red); }
+  /* Search bar */
+  .vc-search-row {
+    margin: 0 var(--sp-4) var(--sp-3);
+    display: flex; align-items: center; gap: var(--sp-3);
+    background: var(--mob-surface-2); border-radius: var(--r-xl);
+    padding: var(--sp-3) var(--sp-4); cursor: pointer;
+  }
+  .vc-search-icon { font-size: 18px; color: var(--spinr-red); }
+  .vc-search-text { font-size: var(--text-base); color: var(--mob-text-muted); }
+  /* Saved places */
+  .vc-places-row { display: flex; gap: var(--sp-3); margin: 0 var(--sp-4) var(--sp-3); }
+  .vc-place {
+    flex: 1; background: var(--mob-surface-2); border-radius: var(--r-xl);
+    padding: var(--sp-3) var(--sp-3); display: flex; align-items: center; gap: var(--sp-2);
+    cursor: pointer; transition: background 150ms;
+  }
+  .vc-place:hover { background: var(--mob-surface-3); }
+  .vc-place-icon { font-size: 18px; }
+  .vc-place-body { }
+  .vc-place-name { font-size: var(--text-xs); font-weight: 700; }
+  .vc-place-eta  { font-size: 10px; color: var(--mob-text-muted); margin-top: 1px; }
+  /* Recent chips */
+  .vc-recent-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--mob-text-dim); padding: 0 var(--sp-4); margin-bottom: var(--sp-2); }
+  .vc-recents-scroll { display: flex; gap: var(--sp-2); padding: 0 var(--sp-4); overflow-x: auto; scrollbar-width: none; }
+  .vc-recents-scroll::-webkit-scrollbar { display: none; }
+  .vc-recent-chip {
+    flex-shrink: 0; background: var(--mob-surface-2);
+    border: 1px solid var(--mob-border); border-radius: var(--r-pill);
+    padding: 6px 12px; font-size: var(--text-xs); font-weight: 600;
+    color: var(--mob-text-muted); cursor: pointer; white-space: nowrap;
+    display: flex; align-items: center; gap: 5px;
+  }
+  /* Driver supply indicator */
+  .vc-supply-bar {
+    margin: var(--sp-3) var(--sp-4) 0;
+    background: var(--mob-surface-2);
+    border-radius: var(--r-lg); padding: var(--sp-3);
+    display: flex; align-items: center; gap: var(--sp-3);
+  }
+  .vc-supply-icon { font-size: 18px; }
+  .vc-supply-text { flex: 1; }
+  .vc-supply-label { font-size: var(--text-xs); font-weight: 700; color: var(--online-green); }
+  .vc-supply-sub { font-size: 11px; color: var(--mob-text-muted); margin-top: 1px; }
+  .vc-supply-dots { display: flex; gap: 3px; }
+  .vc-supply-dot { width: 8px; height: 8px; background: var(--online-green); border-radius: 50%; opacity: 0.8; }
+  .vc-supply-dot.dim { opacity: 0.2; }
+
+  /* C: Smart search state — predictive with no typing needed */
+  .vc-search-state { height: 100%; background: var(--mob-bg); display: flex; flex-direction: column; }
+  .vc-ss-bar {
+    padding: var(--sp-4) var(--sp-4) var(--sp-3); flex-shrink: 0;
+    display: flex; align-items: center; gap: var(--sp-3);
+  }
+  .vc-ss-back { width: 36px; height: 36px; background: var(--mob-surface); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 18px; cursor: pointer; flex-shrink: 0; }
+  .vc-ss-input {
+    flex: 1; background: var(--mob-surface); border-radius: var(--r-xl);
+    padding: var(--sp-3) var(--sp-4); border: 1.5px solid rgba(229,62,62,0.35);
+    display: flex; align-items: center; gap: var(--sp-2);
+  }
+  .vc-ss-input-icon { font-size: 16px; color: var(--spinr-red); }
+  .vc-ss-input-cursor { display: inline-block; width: 2px; height: 16px; background: var(--spinr-red); animation: cursor-blink 1s infinite; }
+  .vc-ss-input-placeholder { font-size: var(--text-sm); color: var(--mob-text-muted); }
+  /* AI suggestion strip */
+  .vc-ai-strip {
+    margin: 0 var(--sp-4) var(--sp-3); flex-shrink: 0;
+    background: rgba(56,161,105,0.08); border: 1px solid rgba(56,161,105,0.2);
+    border-radius: var(--r-lg); padding: var(--sp-3);
+    display: flex; align-items: center; gap: var(--sp-2);
+  }
+  .vc-ai-icon { font-size: 16px; }
+  .vc-ai-text { font-size: var(--text-xs); color: var(--mob-text-muted); flex: 1; }
+  .vc-ai-text strong { color: var(--online-green); }
+  /* Suggestion list */
+  .vc-sug-list { flex: 1; overflow-y: auto; scrollbar-width: none; padding: 0 var(--sp-4); }
+  .vc-sug-list::-webkit-scrollbar { display: none; }
+  .vc-sug-section { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--mob-text-dim); padding: var(--sp-3) 0 var(--sp-2); }
+  .vc-sug-item { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3) 0; border-bottom: 1px solid rgba(255,255,255,0.04); cursor: pointer; }
+  .vc-sug-icon { width: 40px; height: 40px; background: var(--mob-surface); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; }
+  .vc-sug-icon.highlight { background: rgba(229,62,62,0.12); }
+  .vc-sug-name { font-size: var(--text-sm); font-weight: 600; }
+  .vc-sug-sub  { font-size: 11px; color: var(--mob-text-muted); margin-top: 2px; }
+  .vc-sug-eta  { font-size: var(--text-xs); color: var(--mob-text-muted); margin-left: auto; flex-shrink: 0; }
+  /* One-tap confirm panel */
+  .vc-one-tap {
+    flex-shrink: 0;
+    padding: var(--sp-4);
+    background: var(--mob-surface);
+    border-top: 1px solid var(--mob-border);
+  }
+  .vc-ot-label { font-size: 11px; color: var(--mob-text-muted); margin-bottom: var(--sp-2); }
+  .vc-ot-btn {
+    width: 100%; padding: 14px;
+    background: linear-gradient(135deg, var(--spinr-red), var(--spinr-red-dark));
+    color: #fff; border: none; border-radius: var(--r-xl);
+    font-size: var(--text-sm); font-weight: 700; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; gap: var(--sp-3);
+    box-shadow: 0 4px 14px rgba(229,62,62,0.3);
+  }
+  .vc-ot-dest { text-align: left; flex: 1; }
+  .vc-ot-dest-name { font-size: var(--text-sm); font-weight: 700; }
+  .vc-ot-dest-meta { font-size: 11px; opacity: 0.7; margin-top: 1px; }
+  .vc-ot-fare { font-size: var(--text-xl); font-weight: 800; letter-spacing: -0.02em; }
+
+  /* C: Route Preview */
+  .vc-route-preview { position: relative; height: 100%; }
+  .vc-rp-header {
+    position: absolute; top: 0; left: 0; right: 0;
+    padding: var(--sp-3) var(--sp-4); z-index: 10;
+    background: linear-gradient(180deg, rgba(0,0,0,0.65) 0%, transparent 100%);
+    display: flex; align-items: center; gap: var(--sp-3);
+  }
+  .vc-rp-back { width: 36px; height: 36px; background: rgba(0,0,0,0.4); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 18px; backdrop-filter: blur(8px); cursor: pointer; }
+  .vc-rp-route-display { flex: 1; }
+  .vc-rp-origin { font-size: 11px; color: rgba(255,255,255,0.55); }
+  .vc-rp-dest-name { font-size: var(--text-base); font-weight: 700; color: #fff; margin-top: 2px; }
+  .vc-rp-sheet {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    background: var(--mob-surface); border-radius: 28px 28px 0 0;
+    padding: var(--sp-4) var(--sp-4) var(--sp-8); z-index: 10;
+  }
+  .vc-rp-sh-handle { width: 36px; height: 4px; background: rgba(255,255,255,0.15); border-radius: 2px; margin: 0 auto var(--sp-4); }
+  .vc-rp-stats { display: flex; gap: var(--sp-3); margin-bottom: var(--sp-4); }
+  .vc-rp-stat { flex: 1; background: var(--mob-surface-2); border-radius: var(--r-md); padding: var(--sp-3); text-align: center; }
+  .vc-rp-stat-val { font-size: var(--text-lg); font-weight: 700; }
+  .vc-rp-stat-lbl { font-size: 10px; color: var(--mob-text-muted); margin-top: 2px; }
+  /* Fare transparency preview */
+  .vc-fare-preview {
+    background: var(--mob-surface-2); border-radius: var(--r-xl);
+    padding: var(--sp-4); margin-bottom: var(--sp-4);
+  }
+  .vc-fp-row { display: flex; justify-content: space-between; font-size: var(--text-xs); padding: 4px 0; }
+  .vc-fp-row-key { color: var(--mob-text-muted); }
+  .vc-fp-row-val { font-weight: 600; }
+  .vc-fp-divider { height: 1px; background: var(--mob-border); margin: var(--sp-2) 0; }
+  .vc-fp-total { display: flex; justify-content: space-between; font-size: var(--text-base); font-weight: 700; }
+  .vc-fp-total-val { color: var(--mob-text); }
+  .vc-rp-cta { width: 100%; padding: 16px; background: linear-gradient(135deg, var(--spinr-red), var(--spinr-red-dark)); color: #fff; border: none; border-radius: var(--r-xl); font-size: var(--text-md); font-weight: 700; cursor: pointer; box-shadow: 0 4px 16px rgba(229,62,62,0.35); }
+
+  /* ── Notes Panel ── */
+  .notes-panel { width: 290px; background: rgba(255,255,255,0.03); border-radius: var(--r-xl); border: 1px solid rgba(255,255,255,0.07); padding: var(--sp-5); align-self: flex-start; flex-shrink: 0; }
+  .notes-title { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--mob-text-dim); margin-bottom: var(--sp-4); }
+  .notes-section { margin-bottom: var(--sp-5); }
+  .ns-title { font-size: var(--text-sm); font-weight: 700; color: var(--mob-text-muted); margin-bottom: var(--sp-2); display: flex; align-items: center; gap: var(--sp-2); }
+  .ntag { font-size: 10px; padding: 2px 7px; border-radius: var(--r-pill); font-weight: 600; }
+  .ntag.rec  { background: rgba(56,161,105,0.2);  color: var(--online-green); }
+  .ntag.warn { background: rgba(214,158,46,0.2);  color: var(--earnings-gold); }
+  .ntag.info { background: rgba(66,153,225,0.15); color: var(--info-blue); }
+  .notes-body { font-size: 12px; color: var(--mob-text-dim); line-height: 1.6; }
+  .notes-body li { list-style: none; padding-left: 1.2em; position: relative; margin-bottom: 4px; }
+  .notes-body li::before { content: "→"; position: absolute; left: 0; color: var(--mob-text-dim); }
+  .verdict-box { background: rgba(56,161,105,0.08); border: 1px solid rgba(56,161,105,0.2); border-radius: var(--r-md); padding: var(--sp-3); margin-top: var(--sp-3); }
+  .verdict-label { font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--online-green); margin-bottom: var(--sp-1); }
+  .verdict-text { font-size: 12px; color: var(--mob-text-dim); line-height: 1.5; }
+  .notes-metric { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 12px; }
+  .notes-metric:last-child { border-bottom: none; }
+  .nm-key { color: var(--mob-text-muted); } .nm-val { font-weight: 600; }
+
+  /* ── Toolbar ── */
+  .toolbar { position: fixed; bottom: 20px; right: 20px; background: rgba(28,28,30,0.92); border: 1px solid rgba(255,255,255,0.12); border-radius: var(--r-xl); padding: var(--sp-3) var(--sp-4); backdrop-filter: blur(20px); z-index: 9999; box-shadow: var(--shadow-xl); }
+  .tb-title { font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--mob-text-dim); margin-bottom: var(--sp-2); }
+  .tb-row { display: flex; gap: var(--sp-2); }
+  .tb-btn { padding: 4px 10px; border-radius: var(--r-pill); border: 1px solid rgba(255,255,255,0.1); background: transparent; color: var(--mob-text-muted); font-size: 11px; cursor: pointer; transition: all 150ms; }
+  .tb-btn.active { background: var(--spinr-red); border-color: var(--spinr-red); color: #fff; font-weight: 700; }
+  .tb-btn:hover:not(.active) { border-color: rgba(255,255,255,0.25); color: var(--mob-text); }
+</style>
+</head>
+<body>
+
+<header class="page-header">
+  <span class="sketch-num">004</span>
+  <span class="page-title">Rider Home</span>
+  <span class="page-q">"How fast can a rider start a booking from zero?"</span>
+</header>
+
+<div class="stage-bar">
+  <button class="stage-btn active" onclick="setStage('home',   this)">🏠 Home</button>
+  <button class="stage-btn"        onclick="setStage('search', this)">🔍 Destination Search</button>
+  <button class="stage-btn"        onclick="setStage('route',  this)">🗺 Route Preview</button>
+</div>
+
+<div class="canvas">
+
+  <!-- ═══════════════════ VARIANT A — Map-First ═══════════════════ -->
+  <div class="phone-wrap">
+    <div class="variant-label">A — Map-First<em>Spatial orientation before action.</em></div>
+    <div class="phone">
+      <div class="notch"></div>
+      <div class="status-bar"><span>8:23</span><div style="display:flex;gap:6px;font-size:11px"><span>●●●</span><span>WiFi</span><span>87%</span></div></div>
+      <div class="screen">
+
+        <!-- A Home -->
+        <div class="state-panel visible" id="a-home">
+          <div class="va-home">
+            <!-- Map -->
+            <div class="map-base">
+              <div class="map-grid">
+                <div class="mg-h" style="top:25%"></div>
+                <div class="mg-h mg-main-h" style="top:40%"></div>
+                <div class="mg-h" style="top:55%"></div>
+                <div class="mg-h mg-main-h" style="top:70%"></div>
+                <div class="mg-v" style="left:20%"></div>
+                <div class="mg-v mg-main-v" style="left:38%"></div>
+                <div class="mg-v" style="left:58%"></div>
+                <div class="mg-v mg-main-v" style="left:75%"></div>
+              </div>
+              <div class="map-park" style="width:80px;height:50px;top:28%;left:42%"></div>
+              <div class="map-water" style="width:60px;height:30px;bottom:30%;right:15%"></div>
+              <!-- Driver dots -->
+              <div class="driver-dot" style="top:35%;left:30%"></div>
+              <div class="driver-dot" style="top:22%;left:55%"></div>
+              <div class="driver-dot" style="top:48%;left:68%"></div>
+              <!-- User pin -->
+              <div class="user-pin" style="top:42%;left:36%;transform:translate(-50%,-50%)">
+                <div class="user-ring"><div class="user-dot"></div></div>
+              </div>
+              <!-- Driver supply overlay -->
+              <div class="va-driver-pill" style="top:60px">
+                <div class="va-driver-live"></div>
+                3 nearby · ~3 min
+              </div>
+            </div>
+            <!-- Top bar -->
+            <div class="va-topbar">
+              <span class="va-greeting">Good morning, Alex</span>
+              <div class="va-avatar">A</div>
+            </div>
+            <!-- Bottom sheet -->
+            <div class="va-sheet">
+              <div class="va-sheet-handle"></div>
+              <div class="va-search" onclick="setStageBtn('search')">
+                <span class="va-search-icon">🔍</span>
+                <span class="va-search-text">Where to?</span>
+              </div>
+              <div class="va-places-row">
+                <div class="va-place">
+                  <span class="va-place-icon">🏠</span>
+                  <div>
+                    <div class="va-place-name">Home</div>
+                    <div class="va-place-dist">842 Oak St · 9 min</div>
+                  </div>
+                </div>
+                <div class="va-place">
+                  <span class="va-place-icon">💼</span>
+                  <div>
+                    <div class="va-place-name">Work</div>
+                    <div class="va-place-dist">2476 Victoria · 9 min</div>
+                  </div>
+                </div>
+              </div>
+              <div class="va-recent-label">Recent</div>
+              <div class="va-recent-list">
+                <div class="va-recent-item">
+                  <div class="va-recent-dot">🏬</div>
+                  <div><div class="va-recent-name">Midtown Plaza</div><div class="va-recent-sub">2002 11th Ave · last Tuesday</div></div>
+                </div>
+                <div class="va-recent-item">
+                  <div class="va-recent-dot">✈️</div>
+                  <div><div class="va-recent-name">Regina Airport</div><div class="va-recent-sub">5500 Airport Rd · last week</div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- A Search -->
+        <div class="state-panel" id="a-search">
+          <div class="va-search-state">
+            <div class="va-ss-header">
+              <div class="va-ss-back" onclick="setStageBtn('home')">
+                <span class="va-ss-back-icon">←</span>
+                <span class="va-ss-back-label">Back</span>
+              </div>
+              <div class="va-ss-inputs">
+                <div class="va-ss-input-row">
+                  <div class="va-ss-input-dot origin"></div>
+                  <span class="va-ss-input-text">Current location</span>
+                </div>
+                <div class="va-ss-input-connector"></div>
+                <div class="va-ss-input-row" style="border:1px solid rgba(229,62,62,0.3)">
+                  <div class="va-ss-input-dot dest"></div>
+                  <span class="va-ss-input-text">Vic<span class="va-ss-input-cursor"></span></span>
+                </div>
+              </div>
+            </div>
+            <div class="va-ss-divider"></div>
+            <div class="va-ss-suggestions">
+              <div class="va-ss-section-label" style="padding:var(--sp-1) var(--sp-4)">Results for "Vic"</div>
+              <div class="va-suggestion-item">
+                <div class="va-sug-icon">🏪</div>
+                <div><div class="va-sug-name">Victoria Ave E & Albert St</div><div class="va-sug-sub">Intersection · 2.4 km</div></div>
+              </div>
+              <div class="va-suggestion-item">
+                <div class="va-sug-icon">💼</div>
+                <div><div class="va-sug-name">2476 Victoria Ave E</div><div class="va-sug-sub">Your workplace · 3.1 km</div></div>
+              </div>
+              <div class="va-suggestion-item">
+                <div class="va-sug-icon">🏨</div>
+                <div><div class="va-sug-name">Victoria Inn Regina</div><div class="va-sug-sub">1717 Victoria Ave · 4.0 km</div></div>
+              </div>
+              <div class="va-suggestion-item">
+                <div class="va-sug-icon">🏥</div>
+                <div><div class="va-sug-name">Victoria Hospital</div><div class="va-sug-sub">4101 Dewdney Ave · 5.2 km</div></div>
+              </div>
+            </div>
+            <!-- Simulated keyboard -->
+            <div class="va-keyboard">
+              <div class="va-kb-row">
+                <div class="va-kb-key">q</div><div class="va-kb-key">w</div><div class="va-kb-key">e</div><div class="va-kb-key">r</div><div class="va-kb-key">t</div><div class="va-kb-key">y</div><div class="va-kb-key">u</div><div class="va-kb-key">i</div><div class="va-kb-key">o</div><div class="va-kb-key">p</div>
+              </div>
+              <div class="va-kb-row">
+                <div class="va-kb-key">a</div><div class="va-kb-key">s</div><div class="va-kb-key">d</div><div class="va-kb-key">f</div><div class="va-kb-key">g</div><div class="va-kb-key">h</div><div class="va-kb-key">j</div><div class="va-kb-key">k</div><div class="va-kb-key">l</div>
+              </div>
+              <div class="va-kb-row">
+                <div class="va-kb-key dark">⇧</div><div class="va-kb-key">z</div><div class="va-kb-key">x</div><div class="va-kb-key">c</div><div class="va-kb-key">v</div><div class="va-kb-key">b</div><div class="va-kb-key">n</div><div class="va-kb-key">m</div><div class="va-kb-key dark">⌫</div>
+              </div>
+              <div class="va-kb-row">
+                <div class="va-kb-key dark" style="flex:1.5">123</div>
+                <div class="va-kb-key dark" style="flex:1.2">🌐</div>
+                <div class="va-kb-key space">space</div>
+                <div class="va-kb-key action">Go</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- A Route Preview -->
+        <div class="state-panel" id="a-route">
+          <div class="va-route-preview">
+            <div class="map-base">
+              <div class="map-grid">
+                <div class="mg-h mg-main-h" style="top:45%"></div>
+                <div class="mg-v mg-main-v" style="left:38%"></div>
+                <div class="mg-v" style="left:65%"></div>
+                <div class="mg-h" style="top:65%"></div>
+              </div>
+              <!-- Route line -->
+              <svg class="route-svg" viewBox="0 0 375 480">
+                <path d="M 143 290 Q 143 240 160 200 Q 178 165 220 150" stroke="var(--spinr-red)" stroke-width="4" fill="none" stroke-linecap="round" opacity="0.85"/>
+                <circle cx="143" cy="290" r="7" fill="var(--online-green)" stroke="white" stroke-width="2"/>
+                <circle cx="220" cy="150" r="8" fill="var(--spinr-red)" stroke="white" stroke-width="2.5"/>
+              </svg>
+            </div>
+            <div class="va-rp-topbar">
+              <div class="va-rp-back" onclick="setStageBtn('search')">←</div>
+              <div class="va-rp-dest">
+                <div class="va-rp-dest-label">Dropping off at</div>
+                <div class="va-rp-dest-name">2476 Victoria Ave E</div>
+              </div>
+            </div>
+            <div class="va-rp-sheet">
+              <div class="va-rp-handle"></div>
+              <div class="va-rp-info-row">
+                <div class="va-rp-stat"><div class="va-rp-stat-val">9 min</div><div class="va-rp-stat-lbl">ETA</div></div>
+                <div class="va-rp-stat"><div class="va-rp-stat-val">3.1 km</div><div class="va-rp-stat-lbl">Distance</div></div>
+                <div class="va-rp-stat"><div class="va-rp-stat-val">~3 min</div><div class="va-rp-stat-lbl">Driver ETA</div></div>
+              </div>
+              <div class="va-rp-fare-card">
+                <div>
+                  <div class="va-rp-fare-amount">$12.40</div>
+                  <div class="va-rp-fare-sub">Estimated fare · no surge</div>
+                </div>
+                <div class="va-rp-vehicle-row">
+                  <span class="va-rp-vehicle-icon">🚗</span>
+                  <div>
+                    <div class="va-rp-vehicle-name">Spinr</div>
+                    <div class="va-rp-vehicle-sub">1–4 passengers</div>
+                  </div>
+                </div>
+              </div>
+              <button class="va-rp-cta">Request Spinr →</button>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- /screen -->
+      <div class="home-indicator"></div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════ VARIANT B — Search-First ═══════════════════ -->
+  <div class="phone-wrap">
+    <div class="variant-label">B — Search-First<em>Speed-optimized, keyboard-forward.</em></div>
+    <div class="phone">
+      <div class="notch"></div>
+      <div class="status-bar"><span>8:23</span><div style="display:flex;gap:6px;font-size:11px"><span>●●●</span><span>WiFi</span><span>87%</span></div></div>
+      <div class="screen">
+
+        <!-- B Home -->
+        <div class="state-panel visible" id="b-home">
+          <div class="vb-home">
+            <div class="vb-top">
+              <div class="vb-header-row">
+                <span class="vb-hello">Good morning, Alex 👋</span>
+                <div class="vb-avatar">A</div>
+              </div>
+              <div class="vb-search-bar" onclick="setStageBtn('search')">
+                <span class="vb-search-magnify">🔍</span>
+                <span class="vb-search-label">Where do you want to go?</span>
+              </div>
+            </div>
+            <!-- Map takes remaining space -->
+            <div class="vb-map-section">
+              <div class="map-base" style="position:absolute;inset:0">
+                <div class="map-grid">
+                  <div class="mg-h" style="top:30%"></div>
+                  <div class="mg-h mg-main-h" style="top:50%"></div>
+                  <div class="mg-v mg-main-v" style="left:40%"></div>
+                  <div class="mg-v" style="left:65%"></div>
+                </div>
+                <div class="map-park" style="width:70px;height:45px;top:25%;left:45%"></div>
+                <div class="driver-dot" style="top:40%;left:25%"></div>
+                <div class="driver-dot" style="top:20%;left:60%"></div>
+                <div class="driver-dot" style="top:55%;left:70%"></div>
+                <div class="user-pin" style="top:48%;left:38%;transform:translate(-50%,-50%)">
+                  <div class="user-ring"><div class="user-dot"></div></div>
+                </div>
+              </div>
+            </div>
+            <div class="vb-bottom">
+              <div class="vb-shortcuts-label">Quick destinations</div>
+              <div class="vb-shortcuts">
+                <div class="vb-shortcut">
+                  <span class="vb-sc-icon">🏠</span>
+                  <span class="vb-sc-name">Home</span>
+                  <span class="vb-sc-eta">9 min · $12.40</span>
+                </div>
+                <div class="vb-shortcut">
+                  <span class="vb-sc-icon">💼</span>
+                  <span class="vb-sc-name">Work</span>
+                  <span class="vb-sc-eta">9 min · $12.40</span>
+                </div>
+                <div class="vb-shortcut">
+                  <span class="vb-sc-icon">✈️</span>
+                  <span class="vb-sc-name">Airport</span>
+                  <span class="vb-sc-eta">22 min · $34.50</span>
+                </div>
+              </div>
+              <div class="vb-recents-row">
+                <div class="vb-recent-chip">⏱ Midtown Plaza</div>
+                <div class="vb-recent-chip">⏱ U of R</div>
+                <div class="vb-recent-chip">⏱ General Hospital</div>
+                <div class="vb-recent-chip">⏱ Tim Hortons</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- B Search Active -->
+        <div class="state-panel" id="b-search">
+          <div class="vb-search-active">
+            <div class="vb-sa-header">
+              <div class="vb-sa-input-wrap">
+                <div class="vb-sa-dots">
+                  <div class="vb-sa-dot-green"></div>
+                  <div class="vb-sa-dot-line"></div>
+                  <div class="vb-sa-dot-red"></div>
+                </div>
+                <div class="vb-sa-inputs">
+                  <div class="vb-sa-input" style="color:var(--mob-text-muted);font-size:var(--text-xs)">Current location</div>
+                  <div class="vb-sa-input active"><span class="vb-sa-typed">Victoria Ave</span><span class="vb-cursor"></span></div>
+                </div>
+              </div>
+            </div>
+            <div class="vb-divider-line" style="margin:0 var(--sp-4)"></div>
+            <div class="vb-sa-results">
+              <div class="vb-sa-section-label" style="padding:var(--sp-3) 0 var(--sp-1)">Matching places</div>
+              <div class="vb-result-item">
+                <div class="vb-result-icon">💼</div>
+                <div><div class="vb-result-name">2476 Victoria Ave E</div><div class="vb-result-sub">Your workplace</div></div>
+                <span class="vb-result-dist">3.1 km</span>
+              </div>
+              <div class="vb-result-item">
+                <div class="vb-result-icon">🏨</div>
+                <div><div class="vb-result-name">Victoria Inn Regina</div><div class="vb-result-sub">1717 Victoria Ave E</div></div>
+                <span class="vb-result-dist">4.0 km</span>
+              </div>
+              <div class="vb-result-item">
+                <div class="vb-result-icon">🏥</div>
+                <div><div class="vb-result-name">Victoria Hospital</div><div class="vb-result-sub">4101 Dewdney Ave</div></div>
+                <span class="vb-result-dist">5.2 km</span>
+              </div>
+              <div class="vb-sa-section-label" style="padding:var(--sp-3) 0 var(--sp-1)">Recent places</div>
+              <div class="vb-result-item">
+                <div class="vb-result-icon">🏬</div>
+                <div><div class="vb-result-name">Midtown Plaza</div><div class="vb-result-sub">2002 11th Ave · last Tuesday</div></div>
+                <span class="vb-result-dist">4.8 km</span>
+              </div>
+              <div class="vb-result-item">
+                <div class="vb-result-icon">✈️</div>
+                <div><div class="vb-result-name">Regina Airport</div><div class="vb-result-sub">5500 Airport Rd</div></div>
+                <span class="vb-result-dist">18.2 km</span>
+              </div>
+            </div>
+            <!-- Simulated keyboard -->
+            <div class="va-keyboard">
+              <div class="va-kb-row"><div class="va-kb-key">q</div><div class="va-kb-key">w</div><div class="va-kb-key">e</div><div class="va-kb-key">r</div><div class="va-kb-key">t</div><div class="va-kb-key">y</div><div class="va-kb-key">u</div><div class="va-kb-key">i</div><div class="va-kb-key">o</div><div class="va-kb-key">p</div></div>
+              <div class="va-kb-row"><div class="va-kb-key">a</div><div class="va-kb-key">s</div><div class="va-kb-key">d</div><div class="va-kb-key">f</div><div class="va-kb-key">g</div><div class="va-kb-key">h</div><div class="va-kb-key">j</div><div class="va-kb-key">k</div><div class="va-kb-key">l</div></div>
+              <div class="va-kb-row"><div class="va-kb-key dark">⇧</div><div class="va-kb-key">z</div><div class="va-kb-key">x</div><div class="va-kb-key">c</div><div class="va-kb-key">v</div><div class="va-kb-key">b</div><div class="va-kb-key">n</div><div class="va-kb-key">m</div><div class="va-kb-key dark">⌫</div></div>
+              <div class="va-kb-row"><div class="va-kb-key dark" style="flex:1.5">123</div><div class="va-kb-key dark" style="flex:1.2">🌐</div><div class="va-kb-key space">space</div><div class="va-kb-key action">Go</div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- B Route Preview -->
+        <div class="state-panel" id="b-route">
+          <div class="vb-route-preview">
+            <div class="vb-rp-header">
+              <div class="vb-rp-route">
+                <div class="vb-rp-route-dots">
+                  <div class="vb-rp-dot-g"></div>
+                  <div class="vb-rp-dot-line"></div>
+                  <div class="vb-rp-dot-r"></div>
+                </div>
+                <div class="vb-rp-route-text">
+                  <div class="vb-rp-origin">From current location</div>
+                  <div class="vb-rp-destination">2476 Victoria Ave E</div>
+                </div>
+              </div>
+            </div>
+            <div class="vb-rp-map">
+              <div class="map-base" style="position:absolute;inset:0">
+                <div class="map-grid">
+                  <div class="mg-h mg-main-h" style="top:45%"></div>
+                  <div class="mg-v mg-main-v" style="left:40%"></div>
+                  <div class="mg-h" style="top:70%"></div>
+                </div>
+                <svg class="route-svg" viewBox="0 0 375 350">
+                  <path d="M 150 280 Q 150 230 175 190 Q 200 155 235 130" stroke="var(--spinr-red)" stroke-width="4" fill="none" stroke-linecap="round" opacity="0.85"/>
+                  <circle cx="150" cy="280" r="7" fill="var(--online-green)" stroke="white" stroke-width="2"/>
+                  <circle cx="235" cy="130" r="8" fill="var(--spinr-red)" stroke="white" stroke-width="2.5"/>
+                </svg>
+              </div>
+            </div>
+            <div class="vb-rp-bottom">
+              <div class="vb-rp-b-handle"></div>
+              <div class="vb-fare-row">
+                <div><div class="vb-fare-amount">$12.40</div><div style="font-size:11px;color:var(--mob-text-muted);margin-top:3px">Estimated · no surge active</div></div>
+                <div class="vb-fare-meta">
+                  <div class="vb-fare-meta-val">9 min</div>
+                  <div>ETA</div>
+                  <div style="margin-top:4px" class="vb-fare-meta-val">~3 min</div>
+                  <div>driver away</div>
+                </div>
+              </div>
+              <button class="vb-cta-btn">Request Ride · $12.40 →</button>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- /screen -->
+      <div class="home-indicator"></div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════ VARIANT C — Smart-Predictive ★ ═══════════════════ -->
+  <div class="phone-wrap">
+    <div class="variant-label">C — Smart-Predictive ★ Recommended<em>Context-aware. Zero typing for common trips.</em></div>
+    <div class="phone">
+      <div class="notch"></div>
+      <div class="status-bar" style="position:relative;z-index:20;background:transparent"><span>8:23</span><div style="display:flex;gap:6px;font-size:11px"><span>●●●</span><span>WiFi</span><span>87%</span></div></div>
+      <div class="screen">
+
+        <!-- C Home -->
+        <div class="state-panel visible" id="c-home">
+          <div class="vc-home">
+            <!-- Map -->
+            <div class="map-base">
+              <div class="map-grid">
+                <div class="mg-h" style="top:22%"></div>
+                <div class="mg-h mg-main-h" style="top:38%"></div>
+                <div class="mg-h" style="top:55%"></div>
+                <div class="mg-v mg-main-v" style="left:35%"></div>
+                <div class="mg-v" style="left:58%"></div>
+                <div class="mg-v mg-main-v" style="left:75%"></div>
+              </div>
+              <div class="map-park" style="width:90px;height:55px;top:23%;left:40%"></div>
+              <div class="map-water" style="width:55px;height:28px;bottom:35%;right:12%"></div>
+              <div class="driver-dot" style="top:32%;left:28%"></div>
+              <div class="driver-dot" style="top:18%;left:52%"></div>
+              <div class="driver-dot" style="top:46%;left:66%"></div>
+              <div class="user-pin" style="top:40%;left:33%;transform:translate(-50%,-50%)">
+                <div class="user-ring"><div class="user-dot"></div></div>
+              </div>
+            </div>
+            <div class="vc-top-overlay"></div>
+            <!-- Floating header -->
+            <div class="vc-header">
+              <div class="vc-location-pill">
+                <div class="vc-loc-dot"></div>
+                <span class="vc-loc-text">842 Oak Street, Regina</span>
+                <span class="vc-loc-chevron">▾</span>
+              </div>
+              <div class="vc-avatar-btn">A</div>
+            </div>
+            <!-- Smart bottom sheet -->
+            <div class="vc-smart-sheet">
+              <div class="vc-ss-handle"></div>
+              <!-- Context-aware suggestion (8:23 AM Tuesday = morning commute) -->
+              <div class="vc-context-card" onclick="setStageBtn('route')">
+                <span class="vc-ctx-icon">💼</span>
+                <div class="vc-ctx-text">
+                  <div class="vc-ctx-label">Morning commute</div>
+                  <div class="vc-ctx-dest">Head to Work?</div>
+                  <div class="vc-ctx-meta">2476 Victoria Ave E · 9 min · ~$12.40</div>
+                </div>
+                <span class="vc-ctx-arrow">→</span>
+              </div>
+              <!-- Search bar -->
+              <div class="vc-search-row" onclick="setStageBtn('search')">
+                <span class="vc-search-icon">🔍</span>
+                <span class="vc-search-text">Search any destination…</span>
+              </div>
+              <!-- Saved places -->
+              <div class="vc-places-row">
+                <div class="vc-place">
+                  <span class="vc-place-icon">🏠</span>
+                  <div class="vc-place-body">
+                    <div class="vc-place-name">Home</div>
+                    <div class="vc-place-eta">9 min · $12.40</div>
+                  </div>
+                </div>
+                <div class="vc-place">
+                  <span class="vc-place-icon">💼</span>
+                  <div class="vc-place-body">
+                    <div class="vc-place-name">Work</div>
+                    <div class="vc-place-eta">9 min · $12.40</div>
+                  </div>
+                </div>
+                <div class="vc-place">
+                  <span class="vc-place-icon">✈️</span>
+                  <div class="vc-place-body">
+                    <div class="vc-place-name">Airport</div>
+                    <div class="vc-place-eta">22 min · $34.50</div>
+                  </div>
+                </div>
+              </div>
+              <!-- Recent chips -->
+              <div class="vc-recent-label">Recent</div>
+              <div class="vc-recents-scroll">
+                <div class="vc-recent-chip">🏬 Midtown Plaza</div>
+                <div class="vc-recent-chip">🎓 U of R</div>
+                <div class="vc-recent-chip">🏥 General Hospital</div>
+                <div class="vc-recent-chip">☕ Tim Hortons</div>
+              </div>
+              <!-- Supply indicator -->
+              <div class="vc-supply-bar">
+                <span class="vc-supply-icon">🚗</span>
+                <div class="vc-supply-text">
+                  <div class="vc-supply-label">Drivers nearby — low wait</div>
+                  <div class="vc-supply-sub">3 available · avg 3 min pickup</div>
+                </div>
+                <div class="vc-supply-dots">
+                  <div class="vc-supply-dot"></div>
+                  <div class="vc-supply-dot"></div>
+                  <div class="vc-supply-dot"></div>
+                  <div class="vc-supply-dot dim"></div>
+                  <div class="vc-supply-dot dim"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- C Search — predictive, no typing needed -->
+        <div class="state-panel" id="c-search">
+          <div class="vc-search-state">
+            <div class="vc-ss-bar">
+              <div class="vc-ss-back" onclick="setStageBtn('home')">←</div>
+              <div class="vc-ss-input">
+                <span class="vc-ss-input-icon">🔍</span>
+                <span class="vc-ss-input-cursor"></span>
+                <span class="vc-ss-input-placeholder"> destination…</span>
+              </div>
+            </div>
+            <!-- AI context hint -->
+            <div class="vc-ai-strip">
+              <span class="vc-ai-icon">✨</span>
+              <span class="vc-ai-text">Based on your Tuesday morning pattern: <strong>heading to work?</strong></span>
+            </div>
+            <div class="vc-sug-list">
+              <div class="vc-sug-section">Suggested for you</div>
+              <div class="vc-sug-item" onclick="setStageBtn('route')">
+                <div class="vc-sug-icon highlight">💼</div>
+                <div><div class="vc-sug-name">2476 Victoria Ave E</div><div class="vc-sug-sub">Work · every weekday morning</div></div>
+                <span class="vc-sug-eta">9 min</span>
+              </div>
+              <div class="vc-sug-item">
+                <div class="vc-sug-icon highlight">🏠</div>
+                <div><div class="vc-sug-name">842 Oak Street</div><div class="vc-sug-sub">Home</div></div>
+                <span class="vc-sug-eta">9 min</span>
+              </div>
+              <div class="vc-sug-section">Recent</div>
+              <div class="vc-sug-item">
+                <div class="vc-sug-icon">🏬</div>
+                <div><div class="vc-sug-name">Midtown Plaza</div><div class="vc-sug-sub">2002 11th Ave · last Tue</div></div>
+                <span class="vc-sug-eta">14 min</span>
+              </div>
+              <div class="vc-sug-item">
+                <div class="vc-sug-icon">✈️</div>
+                <div><div class="vc-sug-name">Regina Airport</div><div class="vc-sug-sub">5500 Airport Rd · last week</div></div>
+                <span class="vc-sug-eta">22 min</span>
+              </div>
+              <div class="vc-sug-item">
+                <div class="vc-sug-icon">🎓</div>
+                <div><div class="vc-sug-name">University of Regina</div><div class="vc-sug-sub">3737 Wascana Pkwy</div></div>
+                <span class="vc-sug-eta">11 min</span>
+              </div>
+            </div>
+            <!-- One-tap confirm strip (pre-populated from prediction) -->
+            <div class="vc-one-tap">
+              <div class="vc-ot-label">Predicted destination:</div>
+              <button class="vc-ot-btn" onclick="setStageBtn('route')">
+                <div class="vc-ot-dest">
+                  <div class="vc-ot-dest-name">2476 Victoria Ave E</div>
+                  <div class="vc-ot-dest-meta">Work · 9 min · ~$12.40</div>
+                </div>
+                <div class="vc-ot-fare">Go →</div>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- C Route Preview -->
+        <div class="state-panel" id="c-route">
+          <div class="vc-route-preview">
+            <div class="map-base">
+              <div class="map-grid">
+                <div class="mg-h mg-main-h" style="top:42%"></div>
+                <div class="mg-v mg-main-v" style="left:36%"></div>
+                <div class="mg-h" style="top:62%"></div>
+                <div class="mg-v" style="left:62%"></div>
+              </div>
+              <svg class="route-svg" viewBox="0 0 375 460">
+                <path d="M 135 300 Q 135 250 155 210 Q 175 175 215 150" stroke="var(--spinr-red)" stroke-width="4.5" fill="none" stroke-linecap="round" opacity="0.9"/>
+                <circle cx="135" cy="300" r="8" fill="var(--online-green)" stroke="white" stroke-width="2.5"/>
+                <circle cx="215" cy="150" r="9" fill="var(--spinr-red)" stroke="white" stroke-width="3"/>
+              </svg>
+            </div>
+            <div class="vc-rp-header">
+              <div class="vc-rp-back" onclick="setStageBtn('search')">←</div>
+              <div class="vc-rp-route-display">
+                <div class="vc-rp-origin">From current location</div>
+                <div class="vc-rp-dest-name">2476 Victoria Ave E — Work</div>
+              </div>
+            </div>
+            <div class="vc-rp-sheet">
+              <div class="vc-rp-sh-handle"></div>
+              <div class="vc-rp-stats">
+                <div class="vc-rp-stat"><div class="vc-rp-stat-val">9 min</div><div class="vc-rp-stat-lbl">ETA</div></div>
+                <div class="vc-rp-stat"><div class="vc-rp-stat-val">3.1 km</div><div class="vc-rp-stat-lbl">Distance</div></div>
+                <div class="vc-rp-stat"><div class="vc-rp-stat-val">~3 min</div><div class="vc-rp-stat-lbl">Pickup</div></div>
+              </div>
+              <!-- Fare transparency preview (full breakdown) -->
+              <div class="vc-fare-preview">
+                <div class="vc-fp-row"><span class="vc-fp-row-key">Base fare</span><span class="vc-fp-row-val">$3.50</span></div>
+                <div class="vc-fp-row"><span class="vc-fp-row-key">Distance (3.1 km × $1.00)</span><span class="vc-fp-row-val">$3.10</span></div>
+                <div class="vc-fp-row"><span class="vc-fp-row-key">Time (~9 min × $0.12)</span><span class="vc-fp-row-val">$1.08</span></div>
+                <div class="vc-fp-row"><span class="vc-fp-row-key">Booking fee</span><span class="vc-fp-row-val">$1.72</span></div>
+                <div class="vc-fp-row"><span class="vc-fp-row-key">Surge</span><span class="vc-fp-row-val" style="color:var(--online-green)">None ✓</span></div>
+                <div class="vc-fp-divider"></div>
+                <div class="vc-fp-total"><span>Estimated total</span><span class="vc-fp-total-val">$12.40</span></div>
+              </div>
+              <button class="vc-rp-cta">Request Spinr · $12.40 →</button>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- /screen -->
+      <div class="home-indicator"></div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════ NOTES ═══════════════════ -->
+  <div class="notes-panel">
+    <div class="notes-title">Design Notes</div>
+
+    <div class="notes-section">
+      <div class="ns-title">Booking Friction Analysis <span class="ntag info">context</span></div>
+      <div class="notes-body">
+        <ul>
+          <li>Rider cancel rate target ≤ 8% — friction before confirm is the leak</li>
+          <li>Every extra tap = ~12% drop-off (industry research)</li>
+          <li>Common trips (home/work) = 60–70% of all rides for weekly users</li>
+          <li>First-time users need map orientation; regulars need speed</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="notes-section">
+      <div class="ns-title">A — Map-First <span class="ntag warn">familiar</span></div>
+      <div class="notes-body">
+        <ul>
+          <li>Lowest learning curve — matches Uber/Lyft muscle memory</li>
+          <li>Bottom sheet is discoverable but adds 1 extra tap</li>
+          <li>Driver dots give supply context before searching</li>
+          <li>Risk: sheet height competes with map — users may miss saved places</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="notes-section">
+      <div class="ns-title">B — Search-First <span class="ntag warn">efficient</span></div>
+      <div class="notes-body">
+        <ul>
+          <li>Large search bar is immediately actionable — clearest affordance</li>
+          <li>Shortcuts grid makes common trips 1-tap from home screen</li>
+          <li>Map is auxiliary — reduces spatial disorientation risk</li>
+          <li>Risk: newcomers may miss map context; feels functional not warm</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="notes-section">
+      <div class="ns-title">C — Smart-Predictive ★ <span class="ntag rec">recommended</span></div>
+      <div class="notes-body">
+        <ul>
+          <li>Context card ("Heading to Work?") is 1 tap → route preview</li>
+          <li>Prediction handles 60–70% of trips with zero typing</li>
+          <li>Search still available for new destinations</li>
+          <li>Supply indicator reduces anxiety ("are there cars nearby?")</li>
+          <li>Fare shown in saved place tiles → no surprise at confirm</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="verdict-box">
+      <div class="verdict-label">Recommendation</div>
+      <div class="verdict-text">
+        Variant C wins on speed for habitual users — the most valuable segment.
+        The context card removes the biggest friction: thinking about where you're going.
+        For first-time users, the search and map are still present but not forced.
+        The fare transparency in route preview (full line-item breakdown) is unique
+        to Spinr and must be present before every booking.
+      </div>
+    </div>
+
+    <div style="margin-top:var(--sp-4);border-top:1px solid rgba(255,255,255,0.06);padding-top:var(--sp-4)">
+      <div class="notes-title">Booking Funnel KPIs</div>
+      <div class="notes-metric"><span class="nm-key">Cancel rate target</span><span class="nm-val">≤ 8%</span></div>
+      <div class="notes-metric"><span class="nm-key">Taps to confirm (A)</span><span class="nm-val">4 taps</span></div>
+      <div class="notes-metric"><span class="nm-key">Taps to confirm (B)</span><span class="nm-val">3 taps</span></div>
+      <div class="notes-metric"><span class="nm-key">Taps to confirm (C)</span><span class="nm-val">2 taps ★</span></div>
+      <div class="notes-metric"><span class="nm-key">Surge visibility</span><span class="nm-val">Before confirm ✓</span></div>
+      <div class="notes-metric"><span class="nm-key">Fare breakdown</span><span class="nm-val">Pre-confirm ✓</span></div>
+    </div>
+  </div>
+
+</div><!-- /canvas -->
+
+<div class="toolbar">
+  <div class="tb-title">Sketch 004</div>
+  <div class="tb-row">
+    <button class="tb-btn active" onclick="setStageBtn('home',   this)">Home</button>
+    <button class="tb-btn"        onclick="setStageBtn('search', this)">Search</button>
+    <button class="tb-btn"        onclick="setStageBtn('route',  this)">Route</button>
+  </div>
+</div>
+
+<script>
+  let currentStage = 'home';
+
+  function setStage(stage, btn) {
+    currentStage = stage;
+    // Stage bar
+    document.querySelectorAll('.stage-bar .stage-btn').forEach(b => b.classList.remove('active'));
+    if (btn) btn.classList.add('active');
+    // Toolbar
+    document.querySelectorAll('.toolbar .tb-btn').forEach(b => {
+      const oc = b.getAttribute('onclick') || '';
+      b.classList.toggle('active', oc.includes("'"+stage+"'"));
+    });
+    // Show panels
+    ['a','b','c'].forEach(v => {
+      ['home','search','route'].forEach(s => {
+        const el = document.getElementById(`${v}-${s}`);
+        if (el) el.classList.toggle('visible', s === stage);
+      });
+    });
+  }
+
+  function setStageBtn(stage, btn) {
+    const stageBtns = document.querySelectorAll('.stage-bar .stage-btn');
+    const stageMap = { home: 0, search: 1, route: 2 };
+    stageBtns[stageMap[stage]]?.classList.add('active');
+    stageBtns.forEach((b, i) => b.classList.toggle('active', i === stageMap[stage]));
+    setStage(stage);
+  }
+</script>
+</body>
+</html>

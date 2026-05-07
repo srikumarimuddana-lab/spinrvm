@@ -1,0 +1,1636 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sketch 003 — Driver Earnings Dashboard</title>
+<link rel="stylesheet" href="../themes/default.css">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #0d0d0f;
+    font-family: var(--font);
+    color: var(--mob-text);
+    min-height: 100vh;
+  }
+
+  /* ── Page Header ── */
+  .page-header {
+    background: rgba(255,255,255,0.03);
+    border-bottom: 1px solid rgba(255,255,255,0.07);
+    padding: var(--sp-5) var(--sp-8);
+    display: flex;
+    align-items: center;
+    gap: var(--sp-4);
+  }
+  .sketch-num {
+    background: var(--spinr-red);
+    color: #fff;
+    font-size: var(--text-xs);
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    padding: 3px 10px;
+    border-radius: var(--r-pill);
+  }
+  .page-title { font-size: var(--text-lg); font-weight: 600; }
+  .page-q { margin-left: auto; font-size: var(--text-sm); color: var(--mob-text-muted); font-style: italic; }
+
+  /* ── Period Bar ── */
+  .period-bar {
+    display: flex;
+    gap: var(--sp-2);
+    padding: var(--sp-4) var(--sp-8);
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    overflow-x: auto;
+  }
+  .period-btn {
+    flex-shrink: 0;
+    padding: 6px 18px;
+    border-radius: var(--r-pill);
+    border: 1px solid rgba(255,255,255,0.12);
+    background: transparent;
+    color: var(--mob-text-muted);
+    font-size: var(--text-sm);
+    cursor: pointer;
+    transition: all 200ms ease;
+  }
+  .period-btn.active, .period-btn:hover {
+    background: rgba(214,158,46,0.15);
+    border-color: var(--earnings-gold);
+    color: var(--earnings-gold);
+  }
+
+  /* ── Canvas ── */
+  .canvas {
+    display: flex;
+    gap: var(--sp-8);
+    padding: var(--sp-8);
+    justify-content: center;
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  /* ── Phone ── */
+  .phone-wrap { display: flex; flex-direction: column; align-items: center; gap: var(--sp-4); }
+  .variant-label {
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: var(--mob-text-muted);
+    text-align: center;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  .variant-label em {
+    display: block;
+    font-size: var(--text-xs);
+    font-weight: 400;
+    font-style: normal;
+    color: var(--mob-text-dim);
+    margin-top: 2px;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .phone {
+    width: 375px;
+    height: 812px;
+    background: var(--mob-bg);
+    border-radius: 52px;
+    box-shadow: var(--shadow-phone);
+    overflow: hidden;
+    position: relative;
+    flex-shrink: 0;
+  }
+  .notch {
+    position: absolute;
+    top: 0; left: 50%;
+    transform: translateX(-50%);
+    width: 120px; height: 34px;
+    background: #000;
+    border-radius: 0 0 20px 20px;
+    z-index: 100;
+  }
+  .status-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 14px 24px 0;
+    font-size: 12px;
+    font-weight: 600;
+    color: rgba(255,255,255,0.9);
+    position: relative;
+    z-index: 10;
+    height: 44px;
+  }
+  .home-indicator {
+    position: absolute;
+    bottom: 8px; left: 50%;
+    transform: translateX(-50%);
+    width: 134px; height: 5px;
+    background: rgba(255,255,255,0.3);
+    border-radius: 3px;
+    z-index: 100;
+  }
+  .screen {
+    position: absolute;
+    inset: 44px 0 0;
+    overflow: hidden;
+  }
+  .period-panel { display: none; }
+  .period-panel.visible { display: flex; flex-direction: column; height: 100%; }
+
+  /* ── Shared scroll wrapper ── */
+  .scroll-body {
+    flex: 1;
+    overflow-y: auto;
+    scrollbar-width: none;
+  }
+  .scroll-body::-webkit-scrollbar { display: none; }
+
+  /* ── Bottom tab bar ── */
+  .tab-bar {
+    height: 56px;
+    background: var(--mob-surface);
+    border-top: 1px solid var(--mob-border);
+    display: flex;
+    align-items: center;
+    justify-content: space-around;
+    padding: 0 var(--sp-2);
+    flex-shrink: 0;
+  }
+  .tab-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    flex: 1;
+    font-size: 10px;
+    color: var(--mob-text-dim);
+    padding: var(--sp-1) 0;
+  }
+  .tab-item.active { color: var(--earnings-gold); }
+  .tab-icon { font-size: 20px; }
+
+  /* ─────────────────────────────────────────
+     VARIANT A — Chart-First
+     ───────────────────────────────────────── */
+
+  /* A: Top nav */
+  .va-nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--sp-3) var(--sp-4) var(--sp-2);
+    flex-shrink: 0;
+  }
+  .va-nav-title { font-size: var(--text-lg); font-weight: 700; }
+  .va-nav-right { display: flex; align-items: center; gap: var(--sp-2); }
+  .va-period-chip {
+    background: var(--mob-surface-2);
+    border-radius: var(--r-pill);
+    padding: 5px 12px;
+    font-size: var(--text-xs);
+    font-weight: 600;
+    color: var(--mob-text-muted);
+    display: flex;
+    gap: 5px;
+  }
+  .va-period-chip span { color: var(--earnings-gold); }
+
+  /* A: Chart area */
+  .va-chart-area {
+    padding: 0 var(--sp-4) var(--sp-4);
+    flex-shrink: 0;
+  }
+  .va-chart-header {
+    margin-bottom: var(--sp-3);
+  }
+  .va-chart-total { font-size: 38px; font-weight: 800; color: var(--earnings-gold); letter-spacing: -0.04em; line-height: 1; }
+  .va-chart-sub { font-size: var(--text-xs); color: var(--mob-text-muted); margin-top: 3px; }
+  /* SVG bar chart */
+  .va-chart-svg-wrap {
+    background: var(--mob-surface);
+    border-radius: var(--r-xl);
+    padding: var(--sp-4) var(--sp-4) var(--sp-3);
+    position: relative;
+    overflow: hidden;
+  }
+  .va-chart-svg { width: 100%; overflow: visible; }
+  .va-bar { transition: opacity 200ms; cursor: pointer; }
+  .va-bar:hover { opacity: 0.8; }
+  .va-bar-today { fill: var(--earnings-gold); }
+  .va-bar-past  { fill: rgba(214,158,46,0.35); }
+  .va-bar-future{ fill: var(--mob-surface-3); }
+  .va-day-label { font-size: 10px; fill: rgba(255,255,255,0.4); font-family: -apple-system, sans-serif; }
+  .va-day-today { fill: var(--earnings-gold) !important; font-weight: 700; }
+  .va-amount-label { font-size: 9px; fill: rgba(255,255,255,0.5); font-family: -apple-system, sans-serif; }
+  .va-tooltip {
+    position: absolute;
+    top: 16px; left: 50%;
+    transform: translateX(-50%);
+    background: rgba(214,158,46,0.9);
+    color: #000;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 3px 9px;
+    border-radius: var(--r-pill);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 200ms;
+    white-space: nowrap;
+  }
+
+  /* A: KPI strip */
+  .va-kpi-strip {
+    display: flex;
+    gap: var(--sp-3);
+    padding: 0 var(--sp-4) var(--sp-4);
+    flex-shrink: 0;
+  }
+  .va-kpi {
+    flex: 1;
+    background: var(--mob-surface);
+    border-radius: var(--r-lg);
+    padding: var(--sp-3);
+    text-align: center;
+  }
+  .va-kpi-val { font-size: var(--text-xl); font-weight: 700; }
+  .va-kpi-lbl { font-size: 10px; color: var(--mob-text-muted); margin-top: 2px; }
+  .va-kpi-val.gold { color: var(--earnings-gold); }
+  .va-kpi-val.green { color: var(--online-green); }
+
+  /* A: Trip list */
+  .va-list-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 var(--sp-4) var(--sp-3);
+    flex-shrink: 0;
+  }
+  .va-list-title { font-size: var(--text-sm); font-weight: 700; color: var(--mob-text-muted); text-transform: uppercase; letter-spacing: 0.08em; }
+  .va-list-link { font-size: var(--text-xs); color: var(--spinr-red); font-weight: 600; }
+  .va-trip {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    padding: var(--sp-3) var(--sp-4);
+    border-bottom: 1px solid var(--mob-border);
+  }
+  .va-trip:last-child { border-bottom: none; }
+  .va-trip-icon {
+    width: 36px; height: 36px;
+    background: var(--mob-surface-2);
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px;
+    flex-shrink: 0;
+  }
+  .va-trip-route { flex: 1; min-width: 0; }
+  .va-trip-addrs { font-size: var(--text-xs); color: var(--mob-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .va-trip-time  { font-size: 11px; color: var(--mob-text-dim); margin-top: 2px; }
+  .va-trip-right { text-align: right; flex-shrink: 0; }
+  .va-trip-fare  { font-size: var(--text-base); font-weight: 700; color: var(--earnings-gold); }
+  .va-surge-badge {
+    font-size: 10px;
+    background: rgba(214,158,46,0.15);
+    border: 1px solid rgba(214,158,46,0.3);
+    color: var(--earnings-gold);
+    padding: 1px 6px;
+    border-radius: var(--r-pill);
+    margin-top: 2px;
+    display: inline-block;
+  }
+
+  /* ─────────────────────────────────────────
+     VARIANT B — Breakdown-First
+     ───────────────────────────────────────── */
+
+  .vb-nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--sp-3) var(--sp-4) 0;
+    flex-shrink: 0;
+  }
+  .vb-nav-title { font-size: var(--text-lg); font-weight: 700; }
+  .vb-export-btn {
+    background: var(--mob-surface-2);
+    border: 1px solid var(--mob-border);
+    border-radius: var(--r-pill);
+    color: var(--mob-text-muted);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    padding: 5px 12px;
+    cursor: pointer;
+    display: flex; align-items: center; gap: 5px;
+  }
+
+  /* Period chips row */
+  .vb-period-row {
+    display: flex;
+    gap: var(--sp-2);
+    padding: var(--sp-3) var(--sp-4);
+    flex-shrink: 0;
+  }
+  .vb-period-chip {
+    flex: 1;
+    text-align: center;
+    padding: 8px 0;
+    border-radius: var(--r-lg);
+    background: var(--mob-surface-2);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    color: var(--mob-text-muted);
+    cursor: pointer;
+    transition: all 200ms;
+  }
+  .vb-period-chip.active {
+    background: rgba(214,158,46,0.2);
+    color: var(--earnings-gold);
+    border: 1px solid rgba(214,158,46,0.3);
+  }
+
+  /* Hero total */
+  .vb-hero {
+    margin: 0 var(--sp-4) var(--sp-4);
+    background: linear-gradient(135deg, rgba(214,158,46,0.15), rgba(183,121,31,0.08));
+    border: 1px solid rgba(214,158,46,0.25);
+    border-radius: var(--r-2xl);
+    padding: var(--sp-5);
+    flex-shrink: 0;
+  }
+  .vb-hero-label { font-size: var(--text-xs); color: rgba(214,158,46,0.7); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: var(--sp-2); }
+  .vb-hero-amount { font-size: 44px; font-weight: 900; color: var(--earnings-gold); letter-spacing: -0.04em; line-height: 1; }
+  .vb-hero-sub { font-size: var(--text-xs); color: var(--mob-text-muted); margin-top: var(--sp-2); }
+  .vb-hero-pills { display: flex; gap: var(--sp-2); margin-top: var(--sp-3); flex-wrap: wrap; }
+  .vb-pill {
+    background: rgba(255,255,255,0.06);
+    border-radius: var(--r-pill);
+    padding: 4px 10px;
+    font-size: 11px;
+    color: var(--mob-text-muted);
+    font-weight: 600;
+  }
+  .vb-pill.surge { background: rgba(214,158,46,0.12); color: var(--earnings-gold); }
+  .vb-pill.green { background: rgba(56,161,105,0.12); color: var(--online-green); }
+
+  /* Breakdown by time slot */
+  .vb-section-label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--mob-text-dim);
+    padding: 0 var(--sp-4) var(--sp-2);
+    flex-shrink: 0;
+  }
+  .vb-slot {
+    margin: 0 var(--sp-4) var(--sp-3);
+    background: var(--mob-surface);
+    border-radius: var(--r-xl);
+    overflow: hidden;
+  }
+  .vb-slot-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--sp-3) var(--sp-4);
+    border-bottom: 1px solid var(--mob-border);
+    cursor: pointer;
+  }
+  .vb-slot-left { display: flex; align-items: center; gap: var(--sp-3); }
+  .vb-slot-icon {
+    width: 32px; height: 32px;
+    background: var(--mob-surface-2);
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px;
+  }
+  .vb-slot-name { font-size: var(--text-sm); font-weight: 600; }
+  .vb-slot-trips { font-size: 11px; color: var(--mob-text-muted); margin-top: 1px; }
+  .vb-slot-amount { font-size: var(--text-lg); font-weight: 700; color: var(--earnings-gold); }
+  .vb-slot-bar {
+    height: 3px;
+    background: var(--mob-surface-3);
+    overflow: hidden;
+  }
+  .vb-slot-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--earnings-gold-dark), var(--earnings-gold));
+    border-radius: 0 2px 2px 0;
+  }
+
+  /* Surge callout */
+  .vb-surge-card {
+    margin: 0 var(--sp-4) var(--sp-3);
+    background: rgba(214,158,46,0.08);
+    border: 1px solid rgba(214,158,46,0.2);
+    border-radius: var(--r-xl);
+    padding: var(--sp-4);
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+  }
+  .vb-surge-icon { font-size: 28px; }
+  .vb-surge-text {}
+  .vb-surge-label { font-size: var(--text-xs); color: rgba(214,158,46,0.7); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 2px; }
+  .vb-surge-amount { font-size: var(--text-2xl); font-weight: 800; color: var(--earnings-gold); }
+  .vb-surge-sub { font-size: 11px; color: var(--mob-text-muted); margin-top: 1px; }
+
+  /* Mini chart for B */
+  .vb-chart-area { margin: 0 var(--sp-4) var(--sp-3); }
+  .vb-chart-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: var(--sp-2); }
+  .vb-chart-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--mob-text-dim); }
+  .vb-chart-week { font-size: var(--text-xs); color: var(--mob-text-muted); }
+  .vb-mini-chart {
+    background: var(--mob-surface);
+    border-radius: var(--r-lg);
+    padding: var(--sp-3) var(--sp-3) var(--sp-2);
+  }
+
+  /* T4A prompt */
+  .vb-t4a-card {
+    margin: 0 var(--sp-4) var(--sp-3);
+    background: rgba(66,153,225,0.08);
+    border: 1px solid rgba(66,153,225,0.2);
+    border-radius: var(--r-xl);
+    padding: var(--sp-4);
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+  }
+  .vb-t4a-icon {
+    width: 40px; height: 40px;
+    background: rgba(66,153,225,0.15);
+    border-radius: var(--r-md);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px;
+    flex-shrink: 0;
+  }
+  .vb-t4a-title { font-size: var(--text-sm); font-weight: 700; }
+  .vb-t4a-sub { font-size: 11px; color: var(--mob-text-muted); margin-top: 2px; }
+  .vb-t4a-btn {
+    margin-left: auto;
+    background: var(--info-blue);
+    color: #fff;
+    border: none;
+    border-radius: var(--r-pill);
+    font-size: 11px;
+    font-weight: 700;
+    padding: 6px 12px;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  /* ─────────────────────────────────────────
+     VARIANT C — Balance-First (Recommended)
+     Monzo-inspired: "This is your money"
+     ───────────────────────────────────────── */
+
+  /* Top section: dark card with earnings */
+  .vc-top {
+    background: linear-gradient(160deg, #0f1f0f 0%, #0a0a0a 50%);
+    padding: var(--sp-3) var(--sp-4) var(--sp-5);
+    flex-shrink: 0;
+    position: relative;
+    overflow: hidden;
+  }
+  .vc-top::before {
+    content: '';
+    position: absolute;
+    top: -40px; right: -40px;
+    width: 200px; height: 200px;
+    background: radial-gradient(circle, rgba(56,161,105,0.12) 0%, transparent 70%);
+    pointer-events: none;
+  }
+  .vc-top-nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: var(--sp-4);
+    position: relative;
+    z-index: 2;
+  }
+  .vc-top-title { font-size: var(--text-lg); font-weight: 700; }
+  .vc-settings-btn {
+    width: 36px; height: 36px;
+    background: rgba(255,255,255,0.06);
+    border-radius: 50%;
+    border: none;
+    color: var(--mob-text-muted);
+    font-size: 18px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+  }
+  /* Period pill switcher */
+  .vc-period-switcher {
+    display: flex;
+    background: rgba(255,255,255,0.06);
+    border-radius: var(--r-pill);
+    padding: 3px;
+    gap: 2px;
+    margin-bottom: var(--sp-4);
+    position: relative;
+    z-index: 2;
+    width: fit-content;
+  }
+  .vc-ps-btn {
+    padding: 5px 16px;
+    border-radius: var(--r-pill);
+    border: none;
+    background: transparent;
+    color: var(--mob-text-muted);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 200ms;
+  }
+  .vc-ps-btn.active {
+    background: var(--mob-surface);
+    color: var(--earnings-gold);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+  }
+  /* Big balance */
+  .vc-balance {
+    position: relative;
+    z-index: 2;
+    margin-bottom: var(--sp-4);
+  }
+  .vc-balance-label { font-size: 11px; color: rgba(255,255,255,0.4); text-transform: uppercase; letter-spacing: 0.12em; margin-bottom: var(--sp-1); }
+  .vc-balance-amount { font-size: 52px; font-weight: 900; color: #fff; letter-spacing: -0.04em; line-height: 1; }
+  .vc-balance-amount sup { font-size: 24px; font-weight: 700; vertical-align: super; }
+  .vc-balance-sub { font-size: var(--text-xs); color: rgba(255,255,255,0.4); margin-top: var(--sp-2); }
+  .vc-balance-sub span { color: var(--online-green); font-weight: 600; }
+  /* Sparkline + stats row */
+  .vc-stats-row {
+    display: flex;
+    gap: var(--sp-3);
+    position: relative;
+    z-index: 2;
+  }
+  .vc-stat {
+    flex: 1;
+    background: rgba(255,255,255,0.05);
+    border-radius: var(--r-md);
+    padding: var(--sp-3);
+    text-align: center;
+  }
+  .vc-stat-val { font-size: var(--text-md); font-weight: 700; }
+  .vc-stat-lbl { font-size: 10px; color: rgba(255,255,255,0.35); margin-top: 2px; }
+  .vc-stat-val.green { color: var(--online-green); }
+  .vc-stat-val.gold  { color: var(--earnings-gold); }
+
+  /* Scroll content */
+  .vc-body { flex: 1; overflow-y: auto; scrollbar-width: none; background: var(--mob-bg); }
+  .vc-body::-webkit-scrollbar { display: none; }
+
+  /* Inline bar chart */
+  .vc-chart-section { padding: var(--sp-4) var(--sp-4) 0; }
+  .vc-chart-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-3); }
+  .vc-chart-title { font-size: var(--text-sm); font-weight: 700; }
+  .vc-chart-range { font-size: 11px; color: var(--mob-text-muted); }
+  .vc-chart-card {
+    background: var(--mob-surface);
+    border-radius: var(--r-xl);
+    padding: var(--sp-4) var(--sp-4) var(--sp-3);
+  }
+
+  /* Trip list section */
+  .vc-trips-section { padding: var(--sp-4) var(--sp-4) 0; }
+  .vc-trips-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--sp-3); }
+  .vc-trips-title { font-size: var(--text-sm); font-weight: 700; }
+  .vc-trips-see-all { font-size: var(--text-xs); color: var(--spinr-red); font-weight: 600; }
+  .vc-trip {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--sp-3);
+    padding: var(--sp-3) 0;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+  }
+  .vc-trip:last-child { border-bottom: none; padding-bottom: var(--sp-2); }
+  .vc-trip-avatar {
+    width: 38px; height: 38px;
+    border-radius: 50%;
+    background: var(--mob-surface-2);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; font-weight: 700; color: var(--mob-text-muted);
+    flex-shrink: 0;
+  }
+  .vc-trip-body { flex: 1; min-width: 0; }
+  .vc-trip-name { font-size: var(--text-sm); font-weight: 600; }
+  .vc-trip-route { font-size: 11px; color: var(--mob-text-muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .vc-trip-time { font-size: 11px; color: var(--mob-text-dim); margin-top: 1px; }
+  .vc-trip-right { text-align: right; flex-shrink: 0; }
+  .vc-trip-fare { font-size: var(--text-base); font-weight: 700; color: var(--earnings-gold); }
+  .vc-trip-badges { display: flex; gap: 4px; justify-content: flex-end; margin-top: 3px; }
+  .vc-badge {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: var(--r-pill);
+    font-weight: 600;
+  }
+  .vc-badge.surge { background: rgba(214,158,46,0.15); border: 1px solid rgba(214,158,46,0.25); color: var(--earnings-gold); }
+  .vc-badge.tip   { background: rgba(56,161,105,0.15); border: 1px solid rgba(56,161,105,0.25); color: var(--online-green); }
+
+  /* Tax section */
+  .vc-tax-section { padding: var(--sp-4); }
+  .vc-tax-card {
+    background: var(--mob-surface);
+    border-radius: var(--r-xl);
+    padding: var(--sp-4);
+  }
+  .vc-tax-top { display: flex; align-items: center; gap: var(--sp-3); margin-bottom: var(--sp-3); }
+  .vc-tax-icon {
+    width: 40px; height: 40px;
+    background: rgba(66,153,225,0.12);
+    border-radius: var(--r-md);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; flex-shrink: 0;
+  }
+  .vc-tax-title { font-size: var(--text-sm); font-weight: 700; }
+  .vc-tax-sub { font-size: 11px; color: var(--mob-text-muted); margin-top: 1px; }
+  .vc-tax-rows { display: flex; flex-direction: column; gap: var(--sp-2); margin-bottom: var(--sp-3); }
+  .vc-tax-row { display: flex; justify-content: space-between; font-size: var(--text-xs); }
+  .vc-tax-key { color: var(--mob-text-muted); }
+  .vc-tax-val { font-weight: 600; }
+  .vc-tax-divider { height: 1px; background: var(--mob-border); margin: var(--sp-2) 0; }
+  .vc-tax-total-row { display: flex; justify-content: space-between; font-size: var(--text-sm); }
+  .vc-tax-total-key { font-weight: 600; }
+  .vc-tax-total-val { font-weight: 800; color: var(--earnings-gold); }
+  .vc-export-btn {
+    width: 100%;
+    padding: 13px;
+    border-radius: var(--r-lg);
+    border: none;
+    background: linear-gradient(135deg, #4299E1, #3182CE);
+    color: #fff;
+    font-size: var(--text-sm);
+    font-weight: 700;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center; gap: var(--sp-2);
+    box-shadow: 0 4px 12px rgba(66,153,225,0.3);
+  }
+  .vc-commission-note {
+    margin-top: var(--sp-3);
+    text-align: center;
+    font-size: 11px;
+    color: var(--online-green);
+    font-weight: 600;
+  }
+
+  /* ── Notes Panel ── */
+  .notes-panel {
+    width: 290px;
+    background: rgba(255,255,255,0.03);
+    border-radius: var(--r-xl);
+    border: 1px solid rgba(255,255,255,0.07);
+    padding: var(--sp-5);
+    align-self: flex-start;
+    flex-shrink: 0;
+  }
+  .notes-title { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--mob-text-dim); margin-bottom: var(--sp-4); }
+  .notes-section { margin-bottom: var(--sp-5); }
+  .notes-s-title {
+    font-size: var(--text-sm);
+    font-weight: 700;
+    color: var(--mob-text-muted);
+    margin-bottom: var(--sp-2);
+    display: flex; align-items: center; gap: var(--sp-2);
+  }
+  .ntag { font-size: 10px; padding: 2px 7px; border-radius: var(--r-pill); font-weight: 600; }
+  .ntag.rec  { background: rgba(56,161,105,0.2);  color: var(--online-green); }
+  .ntag.warn { background: rgba(214,158,46,0.2);  color: var(--earnings-gold); }
+  .ntag.info { background: rgba(66,153,225,0.15); color: var(--info-blue); }
+  .notes-body { font-size: 12px; color: var(--mob-text-dim); line-height: 1.6; }
+  .notes-body li { list-style: none; padding-left: 1.2em; position: relative; margin-bottom: 4px; }
+  .notes-body li::before { content: "→"; position: absolute; left: 0; color: var(--mob-text-dim); }
+  .verdict-box {
+    background: rgba(56,161,105,0.08);
+    border: 1px solid rgba(56,161,105,0.2);
+    border-radius: var(--r-md);
+    padding: var(--sp-3);
+    margin-top: var(--sp-3);
+  }
+  .verdict-label { font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--online-green); margin-bottom: var(--sp-1); }
+  .verdict-text { font-size: 12px; color: var(--mob-text-dim); line-height: 1.5; }
+
+  .notes-metric { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 12px; }
+  .notes-metric:last-child { border-bottom: none; }
+  .nm-key { color: var(--mob-text-muted); }
+  .nm-val { font-weight: 600; color: var(--mob-text); }
+
+  /* ── Toolbar ── */
+  .toolbar {
+    position: fixed;
+    bottom: 20px; right: 20px;
+    background: rgba(28,28,30,0.92);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: var(--r-xl);
+    padding: var(--sp-3) var(--sp-4);
+    backdrop-filter: blur(20px);
+    z-index: 9999;
+    box-shadow: var(--shadow-xl);
+    font-size: var(--text-xs);
+  }
+  .tb-title { font-size: 10px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--mob-text-dim); margin-bottom: var(--sp-2); }
+  .tb-row { display: flex; gap: var(--sp-2); }
+  .tb-btn { padding: 4px 10px; border-radius: var(--r-pill); border: 1px solid rgba(255,255,255,0.1); background: transparent; color: var(--mob-text-muted); font-size: 11px; cursor: pointer; transition: all 150ms; }
+  .tb-btn.active { background: var(--earnings-gold); border-color: var(--earnings-gold); color: #000; font-weight: 700; }
+  .tb-btn:hover:not(.active) { border-color: rgba(255,255,255,0.25); color: var(--mob-text); }
+</style>
+</head>
+<body>
+
+<header class="page-header">
+  <span class="sketch-num">003</span>
+  <span class="page-title">Driver Earnings Dashboard</span>
+  <span class="page-q">"Chart-first vs breakdown-first earnings layout"</span>
+</header>
+
+<!-- Period bar (page-level context) -->
+<div class="period-bar">
+  <button class="period-btn active" onclick="setPeriod('today', this)">Today · $127.40</button>
+  <button class="period-btn"        onclick="setPeriod('week',  this)">This Week · $643.20</button>
+  <button class="period-btn"        onclick="setPeriod('month', this)">April · $2,847.60</button>
+</div>
+
+<div class="canvas">
+
+  <!-- ══════════════ VARIANT A — Chart-First ══════════════ -->
+  <div class="phone-wrap">
+    <div class="variant-label">A — Chart-First<em>Visual first, data second.</em></div>
+    <div class="phone">
+      <div class="notch"></div>
+      <div class="status-bar">
+        <span>9:41</span>
+        <div style="display:flex;gap:6px;font-size:11px;align-items:center"><span>●●●</span><span>WiFi</span><span>100%</span></div>
+      </div>
+
+      <div class="screen" style="display:flex;flex-direction:column;">
+
+        <!-- Today -->
+        <div class="period-panel visible" id="a-today" style="flex-direction:column;height:100%;">
+          <div class="va-nav">
+            <span class="va-nav-title">Earnings</span>
+            <div class="va-nav-right">
+              <span class="va-period-chip">Tue <span>May 6</span></span>
+            </div>
+          </div>
+          <!-- Chart -->
+          <div class="va-chart-area">
+            <div class="va-chart-header">
+              <div class="va-chart-total">$127.40</div>
+              <div class="va-chart-sub">Today · 8 trips · 6h 20m online</div>
+            </div>
+            <div class="va-chart-svg-wrap" id="a-tooltip-wrap">
+              <div class="va-tooltip" id="a-tooltip"></div>
+              <!-- Bar chart: Mon Tue(today) Wed Thu Fri Sat Sun — week context -->
+              <svg class="va-chart-svg" viewBox="0 0 315 110" height="110">
+                <!-- Guide lines -->
+                <line x1="0" y1="20"  x2="315" y2="20"  stroke="rgba(255,255,255,0.04)" stroke-width="1"/>
+                <line x1="0" y1="50"  x2="315" y2="50"  stroke="rgba(255,255,255,0.04)" stroke-width="1"/>
+                <line x1="0" y1="80"  x2="315" y2="80"  stroke="rgba(255,255,255,0.04)" stroke-width="1"/>
+                <!-- Bars: each 36px wide, 9px gap -->
+                <!-- Mon $89.20 → 44px tall -->
+                <rect class="va-bar va-bar-past"   x="0"   y="56"  width="36" height="44" rx="5"
+                      onmouseenter="showTip(event,'Mon · $89.20')" onmouseleave="hideTip()"/>
+                <!-- Tue $127.40 → today → 63px -->
+                <rect class="va-bar va-bar-today"  x="45"  y="37"  width="36" height="63" rx="5"
+                      onmouseenter="showTip(event,'Today · $127.40')" onmouseleave="hideTip()"/>
+                <!-- Wed future -->
+                <rect class="va-bar va-bar-future" x="90"  y="85"  width="36" height="15" rx="5"
+                      onmouseenter="showTip(event,'Wed · Upcoming')" onmouseleave="hideTip()"/>
+                <!-- Thu future -->
+                <rect class="va-bar va-bar-future" x="135" y="85"  width="36" height="15" rx="5"/>
+                <!-- Fri $156.80 → 78px -->
+                <rect class="va-bar va-bar-past"   x="180" y="22"  width="36" height="78" rx="5"
+                      onmouseenter="showTip(event,'Fri · $156.80')" onmouseleave="hideTip()"/>
+                <!-- Sat $203.40 → 100px -->
+                <rect class="va-bar va-bar-past"   x="225" y="0"   width="36" height="100" rx="5"
+                      onmouseenter="showTip(event,'Sat · $203.40')" onmouseleave="hideTip()"/>
+                <!-- Sun $66.40 → 33px -->
+                <rect class="va-bar va-bar-past"   x="270" y="67"  width="36" height="33" rx="5"
+                      onmouseenter="showTip(event,'Sun · $66.40')" onmouseleave="hideTip()"/>
+                <!-- Day labels -->
+                <text class="va-day-label" x="18"  y="106" text-anchor="middle">Mon</text>
+                <text class="va-day-label va-day-today" x="63"  y="106" text-anchor="middle">Tue</text>
+                <text class="va-day-label" x="108" y="106" text-anchor="middle">Wed</text>
+                <text class="va-day-label" x="153" y="106" text-anchor="middle">Thu</text>
+                <text class="va-day-label" x="198" y="106" text-anchor="middle">Fri</text>
+                <text class="va-day-label" x="243" y="106" text-anchor="middle">Sat</text>
+                <text class="va-day-label" x="288" y="106" text-anchor="middle">Sun</text>
+              </svg>
+            </div>
+          </div>
+          <!-- KPIs -->
+          <div class="va-kpi-strip">
+            <div class="va-kpi">
+              <div class="va-kpi-val gold">8</div>
+              <div class="va-kpi-lbl">Trips</div>
+            </div>
+            <div class="va-kpi">
+              <div class="va-kpi-val">6h 20m</div>
+              <div class="va-kpi-lbl">Online</div>
+            </div>
+            <div class="va-kpi">
+              <div class="va-kpi-val green">$23.75</div>
+              <div class="va-kpi-lbl">Surge bonus</div>
+            </div>
+          </div>
+          <!-- Trip list -->
+          <div class="va-list-header">
+            <span class="va-list-title">Today's Trips</span>
+            <span class="va-list-link">See all</span>
+          </div>
+          <div class="scroll-body">
+            <div class="va-trip">
+              <div class="va-trip-icon">👤</div>
+              <div class="va-trip-route">
+                <div class="va-trip-addrs">College Dr → Midtown Plaza</div>
+                <div class="va-trip-time">9:41 AM · 8.3 km</div>
+              </div>
+              <div class="va-trip-right">
+                <div class="va-trip-fare">$16.25</div>
+                <div class="va-surge-badge">⚡ 1.5×</div>
+              </div>
+            </div>
+            <div class="va-trip">
+              <div class="va-trip-icon">👤</div>
+              <div class="va-trip-route">
+                <div class="va-trip-addrs">Downtown → Regina Airport</div>
+                <div class="va-trip-time">11:15 AM · 19.4 km</div>
+              </div>
+              <div class="va-trip-right">
+                <div class="va-trip-fare">$34.50</div>
+              </div>
+            </div>
+            <div class="va-trip">
+              <div class="va-trip-icon">👤</div>
+              <div class="va-trip-route">
+                <div class="va-trip-addrs">Southland Mall → Wascana</div>
+                <div class="va-trip-time">1:30 PM · 5.2 km</div>
+              </div>
+              <div class="va-trip-right">
+                <div class="va-trip-fare">$12.80</div>
+              </div>
+            </div>
+            <div class="va-trip">
+              <div class="va-trip-icon">👤</div>
+              <div class="va-trip-route">
+                <div class="va-trip-addrs">U of R → General Hospital</div>
+                <div class="va-trip-time">3:45 PM · 9.1 km</div>
+              </div>
+              <div class="va-trip-right">
+                <div class="va-trip-fare">$18.40</div>
+                <div class="va-surge-badge">⚡ 1.5×</div>
+              </div>
+            </div>
+            <div class="va-trip">
+              <div class="va-trip-icon">👤</div>
+              <div class="va-trip-route">
+                <div class="va-trip-addrs">Victoria Ave → Broad St</div>
+                <div class="va-trip-time">4:55 PM · 3.8 km</div>
+              </div>
+              <div class="va-trip-right">
+                <div class="va-trip-fare">$9.20</div>
+              </div>
+            </div>
+          </div>
+          <div class="tab-bar">
+            <div class="tab-item"><span class="tab-icon">🗺️</span>Map</div>
+            <div class="tab-item active"><span class="tab-icon">💰</span>Earnings</div>
+            <div class="tab-item"><span class="tab-icon">👤</span>Profile</div>
+          </div>
+        </div>
+
+        <!-- Week -->
+        <div class="period-panel" id="a-week" style="flex-direction:column;height:100%;">
+          <div class="va-nav">
+            <span class="va-nav-title">Earnings</span>
+            <span class="va-period-chip">Apr 29 – <span>May 5</span></span>
+          </div>
+          <div class="va-chart-area">
+            <div class="va-chart-header">
+              <div class="va-chart-total">$643.20</div>
+              <div class="va-chart-sub">This week · 38 trips · 32h 10m</div>
+            </div>
+            <div class="va-chart-svg-wrap">
+              <svg class="va-chart-svg" viewBox="0 0 315 110" height="110">
+                <line x1="0" y1="20" x2="315" y2="20" stroke="rgba(255,255,255,0.04)" stroke-width="1"/>
+                <line x1="0" y1="55" x2="315" y2="55" stroke="rgba(255,255,255,0.04)" stroke-width="1"/>
+                <line x1="0" y1="85" x2="315" y2="85" stroke="rgba(255,255,255,0.04)" stroke-width="1"/>
+                <rect class="va-bar va-bar-past"  x="0"   y="56" width="36" height="44" rx="5"/>
+                <rect class="va-bar va-bar-today" x="45"  y="37" width="36" height="63" rx="5"/>
+                <rect class="va-bar va-bar-past"  x="90"  y="24" width="36" height="76" rx="5"/>
+                <rect class="va-bar va-bar-past"  x="135" y="35" width="36" height="65" rx="5"/>
+                <rect class="va-bar va-bar-past"  x="180" y="22" width="36" height="78" rx="5"/>
+                <rect class="va-bar va-bar-past"  x="225" y="0"  width="36" height="100" rx="5"/>
+                <rect class="va-bar va-bar-past"  x="270" y="67" width="36" height="33" rx="5"/>
+                <text class="va-day-label" x="18"  y="106" text-anchor="middle">Mon</text>
+                <text class="va-day-label va-day-today" x="63" y="106" text-anchor="middle">Tue</text>
+                <text class="va-day-label" x="108" y="106" text-anchor="middle">Wed</text>
+                <text class="va-day-label" x="153" y="106" text-anchor="middle">Thu</text>
+                <text class="va-day-label" x="198" y="106" text-anchor="middle">Fri</text>
+                <text class="va-day-label" x="243" y="106" text-anchor="middle">Sat</text>
+                <text class="va-day-label" x="288" y="106" text-anchor="middle">Sun</text>
+              </svg>
+            </div>
+          </div>
+          <div class="va-kpi-strip">
+            <div class="va-kpi"><div class="va-kpi-val gold">38</div><div class="va-kpi-lbl">Trips</div></div>
+            <div class="va-kpi"><div class="va-kpi-val">32h 10m</div><div class="va-kpi-lbl">Online</div></div>
+            <div class="va-kpi"><div class="va-kpi-val green">$89.50</div><div class="va-kpi-lbl">Surge</div></div>
+          </div>
+          <div class="va-list-header">
+            <span class="va-list-title">Best day</span>
+          </div>
+          <div class="scroll-body" style="padding:0 var(--sp-4)">
+            <div style="background:var(--mob-surface);border-radius:var(--r-xl);padding:var(--sp-4);margin-bottom:var(--sp-3)">
+              <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:var(--sp-2)">
+                <span style="font-weight:700">Saturday May 3</span>
+                <span style="font-size:var(--text-xl);font-weight:800;color:var(--earnings-gold)">$203.40</span>
+              </div>
+              <div style="font-size:var(--text-xs);color:var(--mob-text-muted)">12 trips · 9h online · $34.10 surge bonus</div>
+              <div style="height:4px;background:var(--mob-surface-3);border-radius:2px;margin-top:var(--sp-3);overflow:hidden">
+                <div style="height:100%;width:82%;background:var(--earnings-gold);border-radius:2px"></div>
+              </div>
+            </div>
+          </div>
+          <div class="tab-bar">
+            <div class="tab-item"><span class="tab-icon">🗺️</span>Map</div>
+            <div class="tab-item active"><span class="tab-icon">💰</span>Earnings</div>
+            <div class="tab-item"><span class="tab-icon">👤</span>Profile</div>
+          </div>
+        </div>
+
+        <!-- Month -->
+        <div class="period-panel" id="a-month" style="flex-direction:column;height:100%;">
+          <div class="va-nav">
+            <span class="va-nav-title">Earnings</span>
+            <span class="va-period-chip">April <span>2025</span></span>
+          </div>
+          <div class="va-chart-area">
+            <div class="va-chart-header">
+              <div class="va-chart-total">$2,847.60</div>
+              <div class="va-chart-sub">April · 94 trips · 127h 40m</div>
+            </div>
+            <div class="va-chart-svg-wrap">
+              <!-- Monthly week-by-week bars -->
+              <svg class="va-chart-svg" viewBox="0 0 315 110" height="110">
+                <line x1="0" y1="20" x2="315" y2="20" stroke="rgba(255,255,255,0.04)" stroke-width="1"/>
+                <line x1="0" y1="55" x2="315" y2="55" stroke="rgba(255,255,255,0.04)" stroke-width="1"/>
+                <rect class="va-bar va-bar-past"  x="20"  y="15" width="60" height="85" rx="6"/>
+                <rect class="va-bar va-bar-past"  x="95"  y="28" width="60" height="72" rx="6"/>
+                <rect class="va-bar va-bar-past"  x="170" y="0"  width="60" height="100" rx="6"/>
+                <rect class="va-bar va-bar-past"  x="245" y="38" width="60" height="62" rx="6"/>
+                <text class="va-day-label" x="50"  y="108" text-anchor="middle">Week 1</text>
+                <text class="va-day-label" x="125" y="108" text-anchor="middle">Week 2</text>
+                <text class="va-day-label" x="200" y="108" text-anchor="middle">Week 3</text>
+                <text class="va-day-label" x="275" y="108" text-anchor="middle">Week 4</text>
+              </svg>
+            </div>
+          </div>
+          <div class="va-kpi-strip">
+            <div class="va-kpi"><div class="va-kpi-val gold">94</div><div class="va-kpi-lbl">Trips</div></div>
+            <div class="va-kpi"><div class="va-kpi-val">127h</div><div class="va-kpi-lbl">Online</div></div>
+            <div class="va-kpi"><div class="va-kpi-val green">$341.70</div><div class="va-kpi-lbl">Surge</div></div>
+          </div>
+          <div class="va-list-header">
+            <span class="va-list-title">Tax Summary</span>
+            <span class="va-list-link">Export T4A</span>
+          </div>
+          <div class="scroll-body" style="padding: 0 var(--sp-4)">
+            <div style="background:var(--mob-surface);border-radius:var(--r-xl);padding:var(--sp-4)">
+              <div style="display:flex;justify-content:space-between;font-size:var(--text-xs);padding:6px 0;border-bottom:1px solid var(--mob-border)"><span style="color:var(--mob-text-muted)">Gross earnings</span><span style="font-weight:600">$2,847.60</span></div>
+              <div style="display:flex;justify-content:space-between;font-size:var(--text-xs);padding:6px 0;border-bottom:1px solid var(--mob-border)"><span style="color:var(--mob-text-muted)">Spinr commission</span><span style="color:var(--online-green);font-weight:700">$0.00 (0%)</span></div>
+              <div style="display:flex;justify-content:space-between;font-size:var(--text-xs);padding:6px 0;border-bottom:1px solid var(--mob-border)"><span style="color:var(--mob-text-muted)">GST collected</span><span style="font-weight:600">$134.65</span></div>
+              <div style="display:flex;justify-content:space-between;font-size:var(--text-sm);padding:8px 0 0;font-weight:700"><span>Net to you</span><span style="color:var(--earnings-gold)">$2,847.60</span></div>
+            </div>
+          </div>
+          <div class="tab-bar">
+            <div class="tab-item"><span class="tab-icon">🗺️</span>Map</div>
+            <div class="tab-item active"><span class="tab-icon">💰</span>Earnings</div>
+            <div class="tab-item"><span class="tab-icon">👤</span>Profile</div>
+          </div>
+        </div>
+
+      </div><!-- /screen -->
+      <div class="home-indicator"></div>
+    </div><!-- /phone -->
+  </div><!-- /wrap-a -->
+
+  <!-- ══════════════ VARIANT B — Breakdown-First ══════════════ -->
+  <div class="phone-wrap">
+    <div class="variant-label">B — Breakdown-First<em>Time-slot analysis, transparency-led.</em></div>
+    <div class="phone">
+      <div class="notch"></div>
+      <div class="status-bar">
+        <span>9:41</span>
+        <div style="display:flex;gap:6px;font-size:11px;align-items:center"><span>●●●</span><span>WiFi</span><span>100%</span></div>
+      </div>
+
+      <div class="screen" style="display:flex;flex-direction:column;">
+
+        <!-- Today -->
+        <div class="period-panel visible" id="b-today" style="flex-direction:column;height:100%;">
+          <div class="vb-nav">
+            <span class="vb-nav-title">My Earnings</span>
+            <button class="vb-export-btn">📄 Export</button>
+          </div>
+          <div class="vb-period-row">
+            <div class="vb-period-chip active">Today</div>
+            <div class="vb-period-chip">Week</div>
+            <div class="vb-period-chip">Month</div>
+          </div>
+          <div class="vb-hero">
+            <div class="vb-hero-label">Total Earned</div>
+            <div class="vb-hero-amount">$127.40</div>
+            <div class="vb-hero-sub">Tuesday, May 6 · 8 trips completed</div>
+            <div class="vb-hero-pills">
+              <span class="vb-pill">⏱ 6h 20m online</span>
+              <span class="vb-pill surge">⚡ $23.75 surge</span>
+              <span class="vb-pill green">★ $8.00 tips</span>
+            </div>
+          </div>
+          <div class="scroll-body">
+            <div class="vb-section-label">Earnings by time slot</div>
+            <!-- Morning -->
+            <div class="vb-slot">
+              <div class="vb-slot-header">
+                <div class="vb-slot-left">
+                  <div class="vb-slot-icon">🌅</div>
+                  <div>
+                    <div class="vb-slot-name">Morning</div>
+                    <div class="vb-slot-trips">3 trips · 6:00 – 12:00</div>
+                  </div>
+                </div>
+                <div class="vb-slot-amount">$55.20</div>
+              </div>
+              <div class="vb-slot-bar"><div class="vb-slot-fill" style="width:43%"></div></div>
+            </div>
+            <!-- Afternoon -->
+            <div class="vb-slot">
+              <div class="vb-slot-header">
+                <div class="vb-slot-left">
+                  <div class="vb-slot-icon">☀️</div>
+                  <div>
+                    <div class="vb-slot-name">Afternoon</div>
+                    <div class="vb-slot-trips">3 trips · 12:00 – 18:00</div>
+                  </div>
+                </div>
+                <div class="vb-slot-amount">$48.30</div>
+              </div>
+              <div class="vb-slot-bar"><div class="vb-slot-fill" style="width:38%"></div></div>
+            </div>
+            <!-- Evening -->
+            <div class="vb-slot">
+              <div class="vb-slot-header">
+                <div class="vb-slot-left">
+                  <div class="vb-slot-icon">🌆</div>
+                  <div>
+                    <div class="vb-slot-name">Evening</div>
+                    <div class="vb-slot-trips">2 trips · 18:00 – 24:00</div>
+                  </div>
+                </div>
+                <div class="vb-slot-amount">$23.90</div>
+              </div>
+              <div class="vb-slot-bar"><div class="vb-slot-fill" style="width:19%"></div></div>
+            </div>
+            <!-- Surge callout -->
+            <div class="vb-surge-card">
+              <div class="vb-surge-icon">⚡</div>
+              <div class="vb-surge-text">
+                <div class="vb-surge-label">Surge Bonus Today</div>
+                <div class="vb-surge-amount">$23.75</div>
+                <div class="vb-surge-sub">On 3 trips · ×1.5 multiplier active</div>
+              </div>
+            </div>
+            <!-- Mini chart -->
+            <div class="vb-chart-area">
+              <div class="vb-chart-header">
+                <span class="vb-chart-title">This week</span>
+                <span class="vb-chart-week">$643.20 so far</span>
+              </div>
+              <div class="vb-mini-chart">
+                <svg viewBox="0 0 295 60" width="100%" height="60">
+                  <rect x="0"   y="28" width="30" height="32" rx="4" fill="rgba(214,158,46,0.3)"/>
+                  <rect x="38"  y="13" width="30" height="47" rx="4" fill="var(--earnings-gold)"/>
+                  <rect x="76"  y="40" width="30" height="20" rx="4" fill="rgba(255,255,255,0.08)"/>
+                  <rect x="114" y="40" width="30" height="20" rx="4" fill="rgba(255,255,255,0.08)"/>
+                  <rect x="152" y="5"  width="30" height="55" rx="4" fill="rgba(214,158,46,0.3)"/>
+                  <rect x="190" y="0"  width="30" height="60" rx="4" fill="rgba(214,158,46,0.3)"/>
+                  <rect x="228" y="38" width="30" height="22" rx="4" fill="rgba(214,158,46,0.3)"/>
+                  <text x="15"  y="58" text-anchor="middle" font-size="8" fill="rgba(255,255,255,0.3)" font-family="sans-serif">M</text>
+                  <text x="53"  y="58" text-anchor="middle" font-size="8" fill="var(--earnings-gold)" font-family="sans-serif">T</text>
+                  <text x="91"  y="58" text-anchor="middle" font-size="8" fill="rgba(255,255,255,0.3)" font-family="sans-serif">W</text>
+                  <text x="129" y="58" text-anchor="middle" font-size="8" fill="rgba(255,255,255,0.3)" font-family="sans-serif">T</text>
+                  <text x="167" y="58" text-anchor="middle" font-size="8" fill="rgba(255,255,255,0.3)" font-family="sans-serif">F</text>
+                  <text x="205" y="58" text-anchor="middle" font-size="8" fill="rgba(255,255,255,0.3)" font-family="sans-serif">S</text>
+                  <text x="243" y="58" text-anchor="middle" font-size="8" fill="rgba(255,255,255,0.3)" font-family="sans-serif">S</text>
+                </svg>
+              </div>
+            </div>
+            <!-- T4A card -->
+            <div class="vb-t4a-card">
+              <div class="vb-t4a-icon">📋</div>
+              <div>
+                <div class="vb-t4a-title">Tax Summary (T4A)</div>
+                <div class="vb-t4a-sub">April 2025 · Ready to export</div>
+              </div>
+              <button class="vb-t4a-btn">View →</button>
+            </div>
+            <div style="height:var(--sp-6)"></div>
+          </div>
+          <div class="tab-bar">
+            <div class="tab-item"><span class="tab-icon">🗺️</span>Map</div>
+            <div class="tab-item active"><span class="tab-icon">💰</span>Earnings</div>
+            <div class="tab-item"><span class="tab-icon">👤</span>Profile</div>
+          </div>
+        </div>
+
+        <!-- B Week/Month: simplified -->
+        <div class="period-panel" id="b-week" style="flex-direction:column;height:100%;">
+          <div class="vb-nav"><span class="vb-nav-title">My Earnings</span><button class="vb-export-btn">📄 Export</button></div>
+          <div class="vb-period-row">
+            <div class="vb-period-chip">Today</div>
+            <div class="vb-period-chip active">Week</div>
+            <div class="vb-period-chip">Month</div>
+          </div>
+          <div class="vb-hero">
+            <div class="vb-hero-label">Week to Date</div>
+            <div class="vb-hero-amount">$643.20</div>
+            <div class="vb-hero-sub">Apr 29 – May 5 · 38 trips</div>
+            <div class="vb-hero-pills">
+              <span class="vb-pill">⏱ 32h 10m</span>
+              <span class="vb-pill surge">⚡ $89.50 surge</span>
+              <span class="vb-pill green">★ $31.20 tips</span>
+            </div>
+          </div>
+          <div class="scroll-body" style="padding:0 var(--sp-4)">
+            <div class="vb-section-label" style="padding:var(--sp-3) 0 var(--sp-2)">Daily breakdown</div>
+            <div style="background:var(--mob-surface);border-radius:var(--r-xl);overflow:hidden">
+              <div style="display:flex;justify-content:space-between;padding:var(--sp-3) var(--sp-4);border-bottom:1px solid var(--mob-border)"><span style="font-weight:600">Monday</span><span style="color:var(--earnings-gold);font-weight:700">$89.20</span></div>
+              <div style="display:flex;justify-content:space-between;padding:var(--sp-3) var(--sp-4);border-bottom:1px solid var(--mob-border);background:rgba(214,158,46,0.05)"><span style="font-weight:700;color:var(--earnings-gold)">Tuesday ★</span><span style="color:var(--earnings-gold);font-weight:800">$127.40</span></div>
+              <div style="display:flex;justify-content:space-between;padding:var(--sp-3) var(--sp-4);border-bottom:1px solid var(--mob-border)"><span style="font-weight:600">Friday</span><span style="color:var(--earnings-gold);font-weight:700">$156.80</span></div>
+              <div style="display:flex;justify-content:space-between;padding:var(--sp-3) var(--sp-4);border-bottom:1px solid var(--mob-border)"><span style="font-weight:600">Saturday</span><span style="color:var(--earnings-gold);font-weight:700">$203.40</span></div>
+              <div style="display:flex;justify-content:space-between;padding:var(--sp-3) var(--sp-4)"><span style="font-weight:600">Sunday</span><span style="color:var(--earnings-gold);font-weight:700">$66.40</span></div>
+            </div>
+          </div>
+          <div class="tab-bar">
+            <div class="tab-item"><span class="tab-icon">🗺️</span>Map</div>
+            <div class="tab-item active"><span class="tab-icon">💰</span>Earnings</div>
+            <div class="tab-item"><span class="tab-icon">👤</span>Profile</div>
+          </div>
+        </div>
+
+        <div class="period-panel" id="b-month" style="flex-direction:column;height:100%;">
+          <div class="vb-nav"><span class="vb-nav-title">My Earnings</span><button class="vb-export-btn">📄 Export</button></div>
+          <div class="vb-period-row">
+            <div class="vb-period-chip">Today</div>
+            <div class="vb-period-chip">Week</div>
+            <div class="vb-period-chip active">Month</div>
+          </div>
+          <div class="vb-hero">
+            <div class="vb-hero-label">April 2025</div>
+            <div class="vb-hero-amount">$2,847.60</div>
+            <div class="vb-hero-sub">94 trips · 127h 40m online</div>
+            <div class="vb-hero-pills">
+              <span class="vb-pill surge">⚡ $341.70 surge</span>
+              <span class="vb-pill green">★ $0 commission</span>
+            </div>
+          </div>
+          <div class="scroll-body">
+            <div class="vb-t4a-card" style="margin:0 var(--sp-4) var(--sp-3)">
+              <div class="vb-t4a-icon">📋</div>
+              <div>
+                <div class="vb-t4a-title">T4A Summary Ready</div>
+                <div class="vb-t4a-sub">Saskatchewan · April 2025</div>
+              </div>
+              <button class="vb-t4a-btn">Export</button>
+            </div>
+            <div style="margin:0 var(--sp-4) var(--sp-3);background:var(--mob-surface);border-radius:var(--r-xl);padding:var(--sp-4)">
+              <div style="display:flex;justify-content:space-between;font-size:var(--text-xs);padding:5px 0;border-bottom:1px solid var(--mob-border)"><span style="color:var(--mob-text-muted)">Gross income</span><span style="font-weight:600">$2,847.60</span></div>
+              <div style="display:flex;justify-content:space-between;font-size:var(--text-xs);padding:5px 0;border-bottom:1px solid var(--mob-border)"><span style="color:var(--mob-text-muted)">Spinr commission</span><span style="color:var(--online-green);font-weight:700">$0.00</span></div>
+              <div style="display:flex;justify-content:space-between;font-size:var(--text-xs);padding:5px 0;border-bottom:1px solid var(--mob-border)"><span style="color:var(--mob-text-muted)">GST (5%)</span><span style="font-weight:600">$134.65</span></div>
+              <div style="display:flex;justify-content:space-between;font-size:var(--text-xs);padding:5px 0"><span style="color:var(--mob-text-muted)">PST (6%)</span><span style="font-weight:600">$161.58</span></div>
+              <div style="height:1px;background:var(--mob-border);margin:var(--sp-2) 0"></div>
+              <div style="display:flex;justify-content:space-between;font-size:var(--text-sm);font-weight:700;padding:4px 0"><span>Contractor earnings</span><span style="color:var(--earnings-gold)">$2,847.60</span></div>
+            </div>
+          </div>
+          <div class="tab-bar">
+            <div class="tab-item"><span class="tab-icon">🗺️</span>Map</div>
+            <div class="tab-item active"><span class="tab-icon">💰</span>Earnings</div>
+            <div class="tab-item"><span class="tab-icon">👤</span>Profile</div>
+          </div>
+        </div>
+
+      </div><!-- /screen -->
+      <div class="home-indicator"></div>
+    </div>
+  </div><!-- /wrap-b -->
+
+  <!-- ══════════════ VARIANT C — Balance-First ★ ══════════════ -->
+  <div class="phone-wrap">
+    <div class="variant-label">C — Balance-First ★ Recommended<em>Monzo-style. Earnings as a running total.</em></div>
+    <div class="phone">
+      <div class="notch"></div>
+      <div class="status-bar" style="position:relative;z-index:20;background:transparent">
+        <span>9:41</span>
+        <div style="display:flex;gap:6px;font-size:11px;align-items:center"><span>●●●</span><span>WiFi</span><span>100%</span></div>
+      </div>
+
+      <div class="screen" style="display:flex;flex-direction:column;">
+
+        <!-- Today -->
+        <div class="period-panel visible" id="c-today" style="flex-direction:column;height:100%;">
+          <!-- Dark hero top -->
+          <div class="vc-top">
+            <div class="vc-top-nav">
+              <span class="vc-top-title">Earnings</span>
+              <button class="vc-settings-btn">⚙</button>
+            </div>
+            <div class="vc-period-switcher">
+              <button class="vc-ps-btn active">Today</button>
+              <button class="vc-ps-btn">Week</button>
+              <button class="vc-ps-btn">Month</button>
+            </div>
+            <div class="vc-balance">
+              <div class="vc-balance-label">You've earned</div>
+              <div class="vc-balance-amount"><sup>$</sup>127.40</div>
+              <div class="vc-balance-sub">Tuesday May 6 · <span>0% commission kept</span></div>
+            </div>
+            <div class="vc-stats-row">
+              <div class="vc-stat">
+                <div class="vc-stat-val">8</div>
+                <div class="vc-stat-lbl">Trips</div>
+              </div>
+              <div class="vc-stat">
+                <div class="vc-stat-val">6h 20m</div>
+                <div class="vc-stat-lbl">Online</div>
+              </div>
+              <div class="vc-stat">
+                <div class="vc-stat-val gold">$23.75</div>
+                <div class="vc-stat-lbl">Surge bonus</div>
+              </div>
+              <div class="vc-stat">
+                <div class="vc-stat-val green">$15.93</div>
+                <div class="vc-stat-lbl">Avg fare</div>
+              </div>
+            </div>
+          </div>
+          <!-- Scrollable body -->
+          <div class="vc-body">
+            <!-- Mini bar chart -->
+            <div class="vc-chart-section">
+              <div class="vc-chart-header">
+                <span class="vc-chart-title">This week</span>
+                <span class="vc-chart-range">$643.20 total</span>
+              </div>
+              <div class="vc-chart-card">
+                <svg viewBox="0 0 303 72" width="100%" height="72">
+                  <rect x="0"   y="36" width="34" height="36" rx="5" fill="rgba(214,158,46,0.3)"/>
+                  <rect x="40"  y="18" width="34" height="54" rx="5" fill="var(--earnings-gold)"/>
+                  <rect x="80"  y="60" width="34" height="12" rx="5" fill="rgba(255,255,255,0.08)"/>
+                  <rect x="120" y="60" width="34" height="12" rx="5" fill="rgba(255,255,255,0.08)"/>
+                  <rect x="160" y="9"  width="34" height="63" rx="5" fill="rgba(214,158,46,0.3)"/>
+                  <rect x="200" y="0"  width="34" height="72" rx="5" fill="rgba(214,158,46,0.3)"/>
+                  <rect x="240" y="48" width="34" height="24" rx="5" fill="rgba(214,158,46,0.3)"/>
+                  <text x="17"  y="70" text-anchor="middle" font-size="9" fill="rgba(255,255,255,0.3)" font-family="sans-serif">Mon</text>
+                  <text x="57"  y="70" text-anchor="middle" font-size="9" fill="var(--earnings-gold)" font-family="sans-serif" font-weight="700">Tue</text>
+                  <text x="97"  y="70" text-anchor="middle" font-size="9" fill="rgba(255,255,255,0.2)" font-family="sans-serif">Wed</text>
+                  <text x="137" y="70" text-anchor="middle" font-size="9" fill="rgba(255,255,255,0.2)" font-family="sans-serif">Thu</text>
+                  <text x="177" y="70" text-anchor="middle" font-size="9" fill="rgba(255,255,255,0.3)" font-family="sans-serif">Fri</text>
+                  <text x="217" y="70" text-anchor="middle" font-size="9" fill="rgba(255,255,255,0.3)" font-family="sans-serif">Sat</text>
+                  <text x="257" y="70" text-anchor="middle" font-size="9" fill="rgba(255,255,255,0.3)" font-family="sans-serif">Sun</text>
+                </svg>
+              </div>
+            </div>
+            <!-- Trips list -->
+            <div class="vc-trips-section">
+              <div class="vc-trips-header">
+                <span class="vc-trips-title">Today's trips</span>
+                <span class="vc-trips-see-all">See all</span>
+              </div>
+              <div class="vc-trip">
+                <div class="vc-trip-avatar">S</div>
+                <div class="vc-trip-body">
+                  <div class="vc-trip-name">Sarah M.</div>
+                  <div class="vc-trip-route">College Dr → Midtown Plaza</div>
+                  <div class="vc-trip-time">9:41 AM · 8.3 km · 18 min</div>
+                </div>
+                <div class="vc-trip-right">
+                  <div class="vc-trip-fare">$16.25</div>
+                  <div class="vc-trip-badges"><span class="vc-badge surge">⚡1.5×</span></div>
+                </div>
+              </div>
+              <div class="vc-trip">
+                <div class="vc-trip-avatar">J</div>
+                <div class="vc-trip-body">
+                  <div class="vc-trip-name">James K.</div>
+                  <div class="vc-trip-route">Downtown → Regina Airport</div>
+                  <div class="vc-trip-time">11:15 AM · 19.4 km · 22 min</div>
+                </div>
+                <div class="vc-trip-right">
+                  <div class="vc-trip-fare">$34.50</div>
+                  <div class="vc-trip-badges"><span class="vc-badge tip">+$5 tip</span></div>
+                </div>
+              </div>
+              <div class="vc-trip">
+                <div class="vc-trip-avatar">M</div>
+                <div class="vc-trip-body">
+                  <div class="vc-trip-name">Maria T.</div>
+                  <div class="vc-trip-route">Southland Mall → Wascana</div>
+                  <div class="vc-trip-time">1:30 PM · 5.2 km · 11 min</div>
+                </div>
+                <div class="vc-trip-right">
+                  <div class="vc-trip-fare">$12.80</div>
+                </div>
+              </div>
+              <div class="vc-trip">
+                <div class="vc-trip-avatar">R</div>
+                <div class="vc-trip-body">
+                  <div class="vc-trip-name">Robert C.</div>
+                  <div class="vc-trip-route">U of R → General Hospital</div>
+                  <div class="vc-trip-time">3:45 PM · 9.1 km · 16 min</div>
+                </div>
+                <div class="vc-trip-right">
+                  <div class="vc-trip-fare">$18.40</div>
+                  <div class="vc-trip-badges"><span class="vc-badge surge">⚡1.5×</span><span class="vc-badge tip">+$3</span></div>
+                </div>
+              </div>
+            </div>
+            <!-- Tax card -->
+            <div class="vc-tax-section">
+              <div class="vc-tax-card">
+                <div class="vc-tax-top">
+                  <div class="vc-tax-icon">📋</div>
+                  <div>
+                    <div class="vc-tax-title">April T4A Summary</div>
+                    <div class="vc-tax-sub">Saskatchewan · Ready to export</div>
+                  </div>
+                </div>
+                <div class="vc-tax-rows">
+                  <div class="vc-tax-row"><span class="vc-tax-key">Gross income</span><span class="vc-tax-val">$2,847.60</span></div>
+                  <div class="vc-tax-row"><span class="vc-tax-key">Spinr commission</span><span class="vc-tax-val" style="color:var(--online-green)">$0.00 (0%)</span></div>
+                  <div class="vc-tax-row"><span class="vc-tax-key">GST collected (5%)</span><span class="vc-tax-val">$134.65</span></div>
+                  <div class="vc-tax-row"><span class="vc-tax-key">PST collected (6%)</span><span class="vc-tax-val">$161.58</span></div>
+                </div>
+                <div class="vc-tax-divider"></div>
+                <div class="vc-tax-total-row">
+                  <span class="vc-tax-total-key">Net contractor income</span>
+                  <span class="vc-tax-total-val">$2,847.60</span>
+                </div>
+                <div style="margin-top:var(--sp-4)">
+                  <button class="vc-export-btn">📄 Export T4A · April 2025</button>
+                </div>
+                <div class="vc-commission-note">✓ 100% of fares go directly to you</div>
+              </div>
+            </div>
+            <div style="height:var(--sp-6)"></div>
+          </div>
+          <div class="tab-bar">
+            <div class="tab-item"><span class="tab-icon">🗺️</span>Map</div>
+            <div class="tab-item active"><span class="tab-icon">💰</span>Earnings</div>
+            <div class="tab-item"><span class="tab-icon">👤</span>Profile</div>
+          </div>
+        </div>
+
+        <!-- C Week -->
+        <div class="period-panel" id="c-week" style="flex-direction:column;height:100%;">
+          <div class="vc-top">
+            <div class="vc-top-nav"><span class="vc-top-title">Earnings</span><button class="vc-settings-btn">⚙</button></div>
+            <div class="vc-period-switcher">
+              <button class="vc-ps-btn">Today</button>
+              <button class="vc-ps-btn active">Week</button>
+              <button class="vc-ps-btn">Month</button>
+            </div>
+            <div class="vc-balance">
+              <div class="vc-balance-label">You've earned this week</div>
+              <div class="vc-balance-amount"><sup>$</sup>643.20</div>
+              <div class="vc-balance-sub">Apr 29 – May 5 · <span>0% commission kept</span></div>
+            </div>
+            <div class="vc-stats-row">
+              <div class="vc-stat"><div class="vc-stat-val">38</div><div class="vc-stat-lbl">Trips</div></div>
+              <div class="vc-stat"><div class="vc-stat-val">32h</div><div class="vc-stat-lbl">Online</div></div>
+              <div class="vc-stat"><div class="vc-stat-val gold">$89.50</div><div class="vc-stat-lbl">Surge</div></div>
+              <div class="vc-stat"><div class="vc-stat-val green">$16.93</div><div class="vc-stat-lbl">Avg fare</div></div>
+            </div>
+          </div>
+          <div class="vc-body" style="padding:var(--sp-4)">
+            <div style="background:var(--mob-surface);border-radius:var(--r-xl);overflow:hidden;margin-bottom:var(--sp-3)">
+              <div style="padding:var(--sp-3) var(--sp-4);border-bottom:1px solid var(--mob-border);display:flex;justify-content:space-between;align-items:center"><span style="font-weight:600;font-size:var(--text-sm)">Monday</span><div style="text-align:right"><div style="font-weight:700;color:var(--earnings-gold)">$89.20</div><div style="font-size:10px;color:var(--mob-text-dim)">5 trips · 4h 10m</div></div></div>
+              <div style="padding:var(--sp-3) var(--sp-4);border-bottom:1px solid var(--mob-border);background:rgba(214,158,46,0.04);display:flex;justify-content:space-between;align-items:center"><span style="font-weight:700;color:var(--earnings-gold);font-size:var(--text-sm)">Tuesday ★ today</span><div style="text-align:right"><div style="font-weight:800;color:var(--earnings-gold)">$127.40</div><div style="font-size:10px;color:var(--mob-text-dim)">8 trips · 6h 20m</div></div></div>
+              <div style="padding:var(--sp-3) var(--sp-4);border-bottom:1px solid var(--mob-border);display:flex;justify-content:space-between;align-items:center"><span style="font-weight:600;font-size:var(--text-sm)">Friday</span><div style="text-align:right"><div style="font-weight:700;color:var(--earnings-gold)">$156.80</div><div style="font-size:10px;color:var(--mob-text-dim)">10 trips · 7h 50m</div></div></div>
+              <div style="padding:var(--sp-3) var(--sp-4);border-bottom:1px solid var(--mob-border);display:flex;justify-content:space-between;align-items:center"><span style="font-weight:600;font-size:var(--text-sm)">Saturday</span><div style="text-align:right"><div style="font-weight:700;color:var(--earnings-gold)">$203.40</div><div style="font-size:10px;color:var(--mob-text-dim)">12 trips · 9h online</div></div></div>
+              <div style="padding:var(--sp-3) var(--sp-4);display:flex;justify-content:space-between;align-items:center"><span style="font-weight:600;font-size:var(--text-sm)">Sunday</span><div style="text-align:right"><div style="font-weight:700;color:var(--earnings-gold)">$66.40</div><div style="font-size:10px;color:var(--mob-text-dim)">3 trips · 2h 50m</div></div></div>
+            </div>
+          </div>
+          <div class="tab-bar">
+            <div class="tab-item"><span class="tab-icon">🗺️</span>Map</div>
+            <div class="tab-item active"><span class="tab-icon">💰</span>Earnings</div>
+            <div class="tab-item"><span class="tab-icon">👤</span>Profile</div>
+          </div>
+        </div>
+
+        <!-- C Month -->
+        <div class="period-panel" id="c-month" style="flex-direction:column;height:100%;">
+          <div class="vc-top">
+            <div class="vc-top-nav"><span class="vc-top-title">Earnings</span><button class="vc-settings-btn">⚙</button></div>
+            <div class="vc-period-switcher">
+              <button class="vc-ps-btn">Today</button>
+              <button class="vc-ps-btn">Week</button>
+              <button class="vc-ps-btn active">Month</button>
+            </div>
+            <div class="vc-balance">
+              <div class="vc-balance-label">You earned in April</div>
+              <div class="vc-balance-amount"><sup>$</sup>2,847.60</div>
+              <div class="vc-balance-sub">94 trips · 127h · <span>$341.70 in surge</span></div>
+            </div>
+            <div class="vc-stats-row">
+              <div class="vc-stat"><div class="vc-stat-val">94</div><div class="vc-stat-lbl">Trips</div></div>
+              <div class="vc-stat"><div class="vc-stat-val">127h</div><div class="vc-stat-lbl">Online</div></div>
+              <div class="vc-stat"><div class="vc-stat-val gold">59%</div><div class="vc-stat-lbl">Utilization</div></div>
+              <div class="vc-stat"><div class="vc-stat-val green">$0</div><div class="vc-stat-lbl">Commission</div></div>
+            </div>
+          </div>
+          <div class="vc-body">
+            <div class="vc-tax-section">
+              <div class="vc-tax-card">
+                <div class="vc-tax-top">
+                  <div class="vc-tax-icon">📋</div>
+                  <div>
+                    <div class="vc-tax-title">T4A Income Statement</div>
+                    <div class="vc-tax-sub">April 2025 · Saskatchewan</div>
+                  </div>
+                </div>
+                <div class="vc-tax-rows">
+                  <div class="vc-tax-row"><span class="vc-tax-key">Gross earnings</span><span class="vc-tax-val">$2,847.60</span></div>
+                  <div class="vc-tax-row"><span class="vc-tax-key">Platform commission</span><span class="vc-tax-val" style="color:var(--online-green)">$0.00 (0%)</span></div>
+                  <div class="vc-tax-row"><span class="vc-tax-key">GST collected (5%)</span><span class="vc-tax-val">$134.65</span></div>
+                  <div class="vc-tax-row"><span class="vc-tax-key">PST collected (6%)</span><span class="vc-tax-val">$161.58</span></div>
+                  <div class="vc-tax-row"><span class="vc-tax-key">Surge bonuses</span><span class="vc-tax-val">$341.70</span></div>
+                  <div class="vc-tax-row"><span class="vc-tax-key">Tips received</span><span class="vc-tax-val">$124.40</span></div>
+                </div>
+                <div class="vc-tax-divider"></div>
+                <div class="vc-tax-total-row">
+                  <span class="vc-tax-total-key">Net contractor income</span>
+                  <span class="vc-tax-total-val">$2,847.60</span>
+                </div>
+                <div style="margin-top:var(--sp-4)">
+                  <button class="vc-export-btn">📄 Export T4A · April 2025</button>
+                </div>
+                <div class="vc-commission-note">✓ You keep 100% — Spinr earns nothing from your fares</div>
+              </div>
+            </div>
+          </div>
+          <div class="tab-bar">
+            <div class="tab-item"><span class="tab-icon">🗺️</span>Map</div>
+            <div class="tab-item active"><span class="tab-icon">💰</span>Earnings</div>
+            <div class="tab-item"><span class="tab-icon">👤</span>Profile</div>
+          </div>
+        </div>
+
+      </div><!-- /screen -->
+      <div class="home-indicator"></div>
+    </div>
+  </div><!-- /wrap-c -->
+
+  <!-- ══════════════ NOTES ══════════════ -->
+  <div class="notes-panel">
+    <div class="notes-title">Design Notes</div>
+
+    <div class="notes-section">
+      <div class="notes-s-title">Retention Psychology <span class="ntag info">context</span></div>
+      <div class="notes-body">
+        <ul>
+          <li>Earnings visibility is Spinr's biggest driver retention lever</li>
+          <li>Seeing 0% commission on every screen reinforces the brand promise</li>
+          <li>Surge bonus visibility motivates peak-hour availability</li>
+          <li>T4A access reduces friction at tax time → trust in platform</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="notes-section">
+      <div class="notes-s-title">A — Chart-First <span class="ntag warn">visual</span></div>
+      <div class="notes-body">
+        <ul>
+          <li>Great for "how am I doing this week?" at a glance</li>
+          <li>Bar chart context helps drivers plan their schedule</li>
+          <li>Risk: chart takes real estate before showing the total</li>
+          <li>Trip list is buried — less emotional connection to each fare</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="notes-section">
+      <div class="notes-s-title">B — Breakdown-First <span class="ntag info">analytical</span></div>
+      <div class="notes-body">
+        <ul>
+          <li>Time-slot analysis helps optimize working hours</li>
+          <li>Surge callout card is motivating and clear</li>
+          <li>Risk: dense information on open — less emotional hook</li>
+          <li>Export button prominent = good for tax-conscious drivers</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="notes-section">
+      <div class="notes-s-title">C — Balance-First ★ <span class="ntag rec">recommended</span></div>
+      <div class="notes-body">
+        <ul>
+          <li>Large "$127.40" as hero creates immediate pride / reward loop</li>
+          <li>Green "0% commission" sub-line reinforces Spinr's value prop</li>
+          <li>Per-trip transparency builds long-term trust (Monzo principle)</li>
+          <li>T4A integrated naturally in month view, not buried</li>
+          <li>Surge shown as bonus per trip, not abstracted away</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="verdict-box">
+      <div class="verdict-label">Recommendation</div>
+      <div class="verdict-text">
+        Variant C wins because it leads with the emotional hook (your money, earned by you,
+        100% kept) before analysis. The Monzo comparison holds: when you see your balance
+        first, you feel in control. When you see charts first, you feel like a data point.
+      </div>
+    </div>
+
+    <div style="margin-top:var(--sp-4);border-top:1px solid rgba(255,255,255,0.06);padding-top:var(--sp-4)">
+      <div class="notes-title">Regulatory (Saskatchewan)</div>
+      <div class="notes-metric"><span class="nm-key">T4A threshold</span><span class="nm-val">≥ $500/year</span></div>
+      <div class="notes-metric"><span class="nm-key">GST/HST registration</span><span class="nm-val">≥ $30k/year</span></div>
+      <div class="notes-metric"><span class="nm-key">Tax line items</span><span class="nm-val">GST 5% + PST 6%</span></div>
+      <div class="notes-metric"><span class="nm-key">Commission shown</span><span class="nm-val">$0.00 (0%)</span></div>
+      <div class="notes-metric"><span class="nm-key">Retention target</span><span class="nm-val">≥ 80% WoW</span></div>
+    </div>
+  </div>
+
+</div><!-- /canvas -->
+
+<!-- ── Toolbar ── -->
+<div class="toolbar">
+  <div class="tb-title">Sketch 003</div>
+  <div class="tb-row">
+    <button class="tb-btn active" onclick="setPeriodToolbar('today', this)">Today</button>
+    <button class="tb-btn"        onclick="setPeriodToolbar('week',  this)">Week</button>
+    <button class="tb-btn"        onclick="setPeriodToolbar('month', this)">Month</button>
+  </div>
+</div>
+
+<script>
+  let currentPeriod = 'today';
+
+  function setPeriod(p, btn) {
+    currentPeriod = p;
+    // page bar buttons
+    document.querySelectorAll('.period-bar .period-btn').forEach((b,i) => {
+      b.classList.toggle('active', b === btn);
+    });
+    // toolbar sync
+    document.querySelectorAll('.toolbar .tb-btn').forEach((b) => {
+      b.classList.toggle('active', b.getAttribute('onclick') && b.getAttribute('onclick').includes("'"+p+"'"));
+    });
+    showPeriodPanels(p);
+  }
+
+  function setPeriodToolbar(p, btn) {
+    currentPeriod = p;
+    document.querySelectorAll('.toolbar .tb-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    // page bar sync
+    document.querySelectorAll('.period-bar .period-btn').forEach((b, i) => {
+      const periods = ['today','week','month'];
+      b.classList.toggle('active', periods[i] === p);
+    });
+    showPeriodPanels(p);
+  }
+
+  function showPeriodPanels(p) {
+    ['a','b','c'].forEach(v => {
+      ['today','week','month'].forEach(period => {
+        const el = document.getElementById(`${v}-${period}`);
+        if (el) {
+          el.classList.toggle('visible', period === p);
+          el.style.display = period === p ? 'flex' : 'none';
+        }
+      });
+    });
+  }
+
+  // Tooltip for variant A chart
+  function showTip(e, text) {
+    const tip = document.getElementById('a-tooltip');
+    if (tip) { tip.textContent = text; tip.style.opacity = '1'; }
+  }
+  function hideTip() {
+    const tip = document.getElementById('a-tooltip');
+    if (tip) tip.style.opacity = '0';
+  }
+
+  // Init: ensure today is visible and others hidden
+  showPeriodPanels('today');
+</script>
+</body>
+</html>

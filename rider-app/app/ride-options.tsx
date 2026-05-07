@@ -49,6 +49,8 @@ function RideOptionsScreenContent() {
     selectVehicle,
     isLoading,
     error: storeError,
+    requiresWav,
+    setRequiresWav,
     scheduledTime,
     setScheduledTime,
     requiresWav,
@@ -181,13 +183,16 @@ function RideOptionsScreenContent() {
   };
 
   const handleSelect = (index: number) => {
-    if (!estimates[index].available) return;
+    if (!estimates[index]?.available) {
+      setAlertState({ visible: true, title: 'Unavailable', message: 'This vehicle type is not available right now. Please choose another.', variant: 'warning' });
+      return;
+    }
     setSelectedIndex(index);
     selectVehicle(estimates[index].vehicle_type);
     // Re-fetch nearby drivers filtered by this vehicle type
     setTimeout(() => fetchNearbyDrivers(), 100);
     // Re-calculate promo discount for new fare
-    fetchAvailablePromos(parseFloat(estimates[index].total_fare));
+    fetchAvailablePromos(parseFloat(estimates[index].total_fare || '0'));
   };
 
   const handleConfirm = () => {
@@ -198,7 +203,7 @@ function RideOptionsScreenContent() {
     }
     if (workModeEnabled && activeCompanyId && selectedEstimate) {
       const when = isScheduling && scheduledTime ? scheduledTime : undefined;
-      const check = checkRide(parseFloat(selectedEstimate.total_fare), when);
+      const check = checkRide(parseFloat(selectedEstimate.total_fare || '0'), when);
       if (!check.ok) {
         setAlertState({
           visible: true,
@@ -576,13 +581,13 @@ function RideOptionsScreenContent() {
                 <View style={[styles.optionPriceContainer, !isAvailable && { opacity: 0.4 }]}>
                   {appliedPromo && appliedPromo.discount_amount > 0 && isSelected ? (
                     <View style={{ alignItems: 'flex-end' }}>
-                      <Text style={styles.optionPriceStruck} allowFontScaling={false}>${parseFloat(estimate.total_fare).toFixed(2)}</Text>
+                      <Text style={styles.optionPriceStruck} allowFontScaling={false}>${parseFloat(estimate.total_fare || '0').toFixed(2)}</Text>
                       <Text style={styles.optionPriceDiscounted} allowFontScaling={false}>
-                        ${Math.max(0, parseFloat(estimate.total_fare) - appliedPromo.discount_amount).toFixed(2)}
+                        ${Math.max(0, parseFloat(estimate.total_fare || '0') - appliedPromo.discount_amount).toFixed(2)}
                       </Text>
                     </View>
                   ) : (
-                    <Text style={styles.optionPrice} allowFontScaling={false}>${parseFloat(estimate.total_fare).toFixed(2)}</Text>
+                    <Text style={styles.optionPrice} allowFontScaling={false}>${parseFloat(estimate.total_fare || '0').toFixed(2)}</Text>
                   )}
                   {isSelected && isAvailable && (
                     <View style={styles.selectedCheck}>
@@ -612,6 +617,36 @@ function RideOptionsScreenContent() {
               thumbColor={isScheduling ? colors.primary : '#F3F4F6'}
             />
           </View>
+
+          {/* WAV Toggle — Saskatchewan Transportation Act s.22 */}
+          {(() => {
+            const wavCount = selectedEstimate?.wav_available ?? 0;
+            const wavDisabled = wavCount === 0;
+            return (
+              <View style={[styles.scheduleRow, wavDisabled && { opacity: 0.45 }]}>
+                <View style={styles.scheduleInfo}>
+                  <Ionicons name="accessibility-outline" size={20} color="#1A1A1A" />
+                  <View>
+                    <Text style={styles.scheduleLabel}>Wheelchair accessible</Text>
+                    {wavDisabled ? (
+                      <Text style={{ fontSize: 11, color: '#9CA3AF' }}>No WAV drivers nearby</Text>
+                    ) : (
+                      <Text style={{ fontSize: 11, color: '#6B7280' }}>{wavCount} WAV driver{wavCount !== 1 ? 's' : ''} available</Text>
+                    )}
+                  </View>
+                </View>
+                <Switch
+                  value={requiresWav}
+                  onValueChange={(v) => !wavDisabled && setRequiresWav(v)}
+                  disabled={wavDisabled}
+                  trackColor={{ false: '#D1D5DB', true: colors.primary + '60' }}
+                  thumbColor={requiresWav ? colors.primary : '#F3F4F6'}
+                  accessibilityLabel="Request wheelchair-accessible vehicle"
+                  accessibilityHint={wavDisabled ? 'No WAV drivers are available near your pickup' : undefined}
+                />
+              </View>
+            );
+          })()}
 
           {/* Scheduled Time Display */}
           {isScheduling && scheduledTime && (

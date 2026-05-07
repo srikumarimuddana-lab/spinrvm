@@ -29,6 +29,7 @@ try:
         TokenExpiredException,
     )
     from ..utils.error_keys import ErrorKeys
+    from ..utils.audit_logger import log_user_action as _audit_log_user
     from ..utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set
     from ..utils.refresh_tokens import (
         issue_refresh_token,
@@ -57,6 +58,7 @@ except ImportError:
         TokenExpiredException,
     )
     from utils.error_keys import ErrorKeys
+    from utils.audit_logger import log_user_action as _audit_log_user
     from utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set
     from utils.refresh_tokens import (
         issue_refresh_token,
@@ -125,6 +127,19 @@ async def _record_otp_failure(phone: str) -> None:
                 settings.OTP_LOCKOUT_DURATION_SECONDS,
             )
             logger.warning(f"OTP_LOCKOUT_TRIGGERED phone=...{phone[-4:]} after {count} failures")
+            try:
+                import asyncio
+                asyncio.create_task(
+                    _audit_log_user(
+                        {"id": f"phone:{phone[-4:]}", "role": "anonymous"},
+                        "otp_lockout_triggered",
+                        "users",
+                        phone[-4:],
+                        {"failures": count, "phone_last4": phone[-4:]},
+                    )
+                )
+            except Exception:
+                pass
     except Exception as e:
         logger.error(f"_record_otp_failure: {e}", exc_info=True)
 
@@ -322,8 +337,9 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
     if datetime.now(timezone.utc) > expires_at:
         try:
             await db_supabase.delete_otp_record(otp_record["id"])
-        except Exception:  # noqa: S110
-            pass
+        except Exception:
+            # Non-fatal: OTP expiry cleanup failure does not block the error response
+            logger.warning("Failed to delete expired OTP record %s", otp_record["id"], exc_info=True)
         raise SpinrException(
             message="ERR_OTP_EXPIRED",
             error_code=ErrorCode.AUTH_OTP_EXPIRED,
@@ -334,8 +350,9 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
 
     try:
         await db_supabase.update_one("otp_records", {"id": otp_record["id"]}, {"verified": True})
-    except Exception:  # noqa: S110
-        pass
+    except Exception:
+        # Non-fatal: marking OTP as verified is best-effort; verification already succeeded
+        logger.warning("Failed to mark OTP record %s as verified", otp_record["id"], exc_info=True)
 
     # SEC-008: Clear failure counter + lockout on successful verification
     await _clear_otp_failures(phone)
@@ -827,7 +844,10 @@ async def refresh_access_token(request: Request, response: Response, body: Optio
 @api_router.post("/logout")
 @limiter.limit("3/minute")
 async def logout(
-    request: Request, response: Response, body: Optional[LogoutRequest] = None, current_user: dict = Depends(get_current_user)
+    request: Request,
+    response: Response,
+    body: Optional[LogoutRequest] = None,
+    current_user: dict = Depends(get_current_user),
 ):
     """Revoke the presented refresh token.
 
@@ -857,6 +877,18 @@ async def logout(
     # to all replicas rather than waiting for the access-token TTL.
     if current_user:
         await redis_delete(f"session:{current_user['id']}")
+        try:
+            import asyncio
+            asyncio.create_task(
+                _audit_log_user(
+                    current_user,
+                    "user_logged_out",
+                    "users",
+                    current_user["id"],
+                )
+            )
+        except Exception:
+            pass
     clear_csrf_cookie(response)
     return {"success": True}
 

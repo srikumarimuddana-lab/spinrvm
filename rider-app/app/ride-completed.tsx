@@ -61,7 +61,8 @@ function RideCompletedScreenContent() {
   const distance = currentRide?.distance_km || 0;
 
   useEffect(() => {
-    if (rideId) fetchRide(rideId);
+    if (!rideId) { router.replace('/(tabs)' as any); return; }
+    fetchRide(rideId);
   }, [rideId]);
 
   // Check if ride was already paid (e.g. coming back to this screen)
@@ -78,7 +79,7 @@ function RideCompletedScreenContent() {
   }, []);
 
   const buildReceiptText = () => {
-    const tipAmount = selectedTip || (customTip ? parseFloat(customTip) || 0 : 0);
+    const tipAmount = selectedTip !== null ? selectedTip : (customTip ? parseFloat(customTip) || 0 : 0);
     const total = fare + tipAmount;
     const rideDate = currentRide?.ride_completed_at
       ? new Date(currentRide.ride_completed_at).toLocaleString('en-CA', {
@@ -126,7 +127,7 @@ function RideCompletedScreenContent() {
   const handleShareInvoice = async () => {
     try {
       await Share.share({ message: buildReceiptText(), title: 'Spinr Ride Receipt' });
-    } catch {}
+    } catch (err) { console.error('[ride-completed]', err); }
   };
 
   // Payment is processed when rider taps "Done" — includes tip amount
@@ -166,7 +167,7 @@ function RideCompletedScreenContent() {
     if (isSubmitting) return; // prevent double tap
     setIsSubmitting(true);
     try {
-      const tipAmount = selectedTip || (customTip ? parseFloat(customTip) : 0);
+      const tipAmount = selectedTip !== null ? selectedTip : (customTip ? parseFloat(customTip) || 0 : 0);
 
       // 1. Rate the driver first — this is fire-and-forget because
       //    rating may fail if already rated (idempotent upstream).
@@ -181,7 +182,7 @@ function RideCompletedScreenContent() {
       if (!alreadyPaid) {
         const result = await attemptRidePayment({
           api,
-          stripe: confirmPayment ? { confirmPayment } : null,
+          stripe: { confirmPayment },
           rideId: rideId as string,
           tipAmount,
         });
@@ -226,7 +227,7 @@ function RideCompletedScreenContent() {
   // Android (Apple Pay uses the same sheet on iOS via handleSubmit in future).
   const handleGooglePay = async () => {
     if (isSubmitting || sheetLoading || alreadyPaid) return;
-    const tipAmount = selectedTip || (customTip ? parseFloat(customTip) : 0);
+    const tipAmount = selectedTip !== null ? selectedTip : (customTip ? parseFloat(customTip) || 0 : 0);
     const result = await presentSheet({
       rideId: rideId as string,
       amount: parseFloat(currentRide?.total_fare || '0'),

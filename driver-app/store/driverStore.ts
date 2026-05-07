@@ -4,12 +4,16 @@ import SpinrConfig from '@shared/config/spinr.config';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { recordNonFatal } from '../utils/crashlytics';
 
+function isAxiosError(e: unknown): e is { response?: { status?: number; data?: { detail?: string } }; message?: string } {
+  return typeof e === 'object' && e !== null;
+}
+
 const DRIVER_RIDE_KEY = '@spinr:driver_active_ride';
 const DRIVER_TERMINAL_STATES = new Set<string>(['idle', 'trip_completed']);
 
 // Write activeRide + rideState to AsyncStorage so the driver can resume
 // after an app restart mid-trip. Clears the key when the ride is over.
-const _persistDriverState = (rideState: string, activeRide: any) => {
+const _persistDriverState = (rideState: string, activeRide: ActiveRide | null) => {
   if (!activeRide || DRIVER_TERMINAL_STATES.has(rideState)) {
     AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
   } else {
@@ -102,6 +106,36 @@ export interface ActiveRide {
     vehicle_type: VehicleTypeInfo;
 }
 
+export interface CompletedRideData {
+    id?: string;
+    base_fare?: number;
+    distance_fare?: number;
+    time_fare?: number;
+    booking_fee?: number;
+    tip_amount?: number;
+    total_fare?: number;
+    driver_earnings?: number;
+    distance_km?: number;
+    duration_minutes?: number;
+    pickup_address?: string;
+    dropoff_address?: string;
+    ride_completed_at?: string;
+}
+
+export interface RideHistoryItem {
+    id?: string;
+    status?: string;
+    created_at?: string;
+    ride_completed_at?: string;
+    cancelled_at?: string;
+    pickup_address?: string;
+    dropoff_address?: string;
+    total_fare?: string;
+    distance_km?: number;
+    duration_minutes?: number;
+    [key: string]: unknown;
+}
+
 export interface EarningsSummary {
     period: string;
     total_earnings: string; // MoneyString
@@ -133,6 +167,7 @@ export interface TripEarning {
     tip_amount: string; // MoneyString
     rider_rating: number | null;
     completed_at: string;
+    ride_code?: string;
 }
 
 export interface BankAccount {
@@ -227,7 +262,7 @@ interface DriverState {
     rideState: RideState;
     incomingRide: IncomingRide | null;
     activeRide: ActiveRide | null;
-    completedRide: any | null;
+    completedRide: CompletedRideData | null;
     countdownSeconds: number;
 
     // Server-driven operational config (populated by applyDriverConfig on mount).
@@ -255,7 +290,7 @@ interface DriverState {
     selectedYear: number | null;
 
     // Ride history
-    rideHistory: any[];
+    rideHistory: RideHistoryItem[];
     historyTotal: number;
 
     // In-ride chat (real-time via WS, seeded from REST on screen mount)
@@ -263,6 +298,7 @@ interface DriverState {
 
     // Loading states
     isLoading: boolean;
+    isCancellingRide: boolean;
     error: string | null;
 
     // Actions - Ride lifecycle
@@ -344,6 +380,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
     // Chat messages for the active ride (seeded via REST, kept live by WS)
     chatMessages: [],
     isLoading: false,
+    isCancellingRide: false,
     error: null,
 
     setIncomingRide: (ride) => {
@@ -390,9 +427,9 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             // Fetch the full active ride data
             await get().fetchActiveRide();
             _persistDriverState('navigating_to_pickup', get().activeRide);
-        } catch (err: any) {
-            const status = err?.response?.status;
-            const detail: string = err?.response?.data?.detail || '';
+        } catch (err: unknown) {
+            const status = isAxiosError(err) ? err.response?.status : undefined;
+            const detail: string = isAxiosError(err) ? (err.response?.data?.detail || '') : '';
 
             // Race-condition handling: another driver beat us to the ride, or
             // the rider cancelled between dispatch and accept. Backend returns
@@ -459,9 +496,10 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             await get().fetchActiveRide();
             _persistDriverState('arrived_at_pickup', get().activeRide);
             return { success: true };
-        } catch (err: any) {
-            set({ error: err.response?.data?.detail || 'Failed to mark arrival' });
-            return { success: false, error: err.response?.data?.detail || 'Failed to mark arrival' };
+        } catch (err: unknown) {
+            const detail = isAxiosError(err) ? (err.response?.data?.detail || 'Failed to mark arrival') : 'Failed to mark arrival';
+            set({ error: detail });
+            return { success: false, error: detail };
         } finally {
             set({ isLoading: false });
         }
@@ -475,8 +513,8 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             await get().fetchActiveRide();
             _persistDriverState('trip_in_progress', get().activeRide);
             return true;
-        } catch (err: any) {
-            set({ error: err.response?.data?.detail || 'Invalid OTP' });
+        } catch (err: unknown) {
+            set({ error: isAxiosError(err) ? (err.response?.data?.detail || 'Invalid OTP') : 'Invalid OTP' });
             return false;
         } finally {
             set({ isLoading: false });
@@ -490,8 +528,8 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             set({ rideState: 'trip_in_progress' });
             await get().fetchActiveRide();
             _persistDriverState('trip_in_progress', get().activeRide);
-        } catch (err: any) {
-            set({ error: err.response?.data?.detail || 'Failed to start ride' });
+        } catch (err: unknown) {
+            set({ error: isAxiosError(err) ? (err.response?.data?.detail || 'Failed to start ride') : 'Failed to start ride' });
         } finally {
             set({ isLoading: false });
         }
@@ -500,34 +538,34 @@ export const useDriverStore = create<DriverState>((set, get) => ({
     completeRide: async (rideId: string) => {
         set({ isLoading: true, error: null });
         try {
-            const res = await api.post(`/drivers/rides/${rideId}/complete`);
+            const res = await api.post<CompletedRideData>(`/drivers/rides/${rideId}/complete`);
             set({ rideState: 'trip_completed', completedRide: res.data, activeRide: null });
             AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
-        } catch (err: any) {
+        } catch (err: unknown) {
             recordNonFatal(err, { store: 'driverStore', action: 'completeRide' });
-            set({ error: err.response?.data?.detail || 'Failed to complete ride' });
+            set({ error: isAxiosError(err) ? (err.response?.data?.detail || 'Failed to complete ride') : 'Failed to complete ride' });
         } finally {
             set({ isLoading: false });
         }
     },
 
     cancelRide: async (rideId: string, reason?: string) => {
-        set({ isLoading: true, error: null });
+        set({ isLoading: true, isCancellingRide: true, error: null });
         try {
             await api.post(`/drivers/rides/${rideId}/cancel?reason=${encodeURIComponent(reason || '')}`);
             set({ rideState: 'idle', activeRide: null, incomingRide: null });
             AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
-        } catch (err: any) {
+        } catch (err: unknown) {
             recordNonFatal(err, { store: 'driverStore', action: 'cancelRide' });
-            set({ error: err.response?.data?.detail || 'Failed to cancel ride' });
+            set({ error: isAxiosError(err) ? (err.response?.data?.detail || 'Failed to cancel ride') : 'Failed to cancel ride' });
         } finally {
-            set({ isLoading: false });
+            set({ isLoading: false, isCancellingRide: false });
         }
     },
 
     fetchActiveRide: async () => {
         try {
-            const res = await api.get('/drivers/rides/active');
+            const res = await api.get<ActiveRide | null>('/drivers/rides/active');
             if (res.data && res.data.ride) {
                 const ride = res.data.ride;
                 const rider = res.data.rider;
@@ -555,10 +593,10 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                             pickup_lng: ride.pickup_lng,
                             dropoff_lat: ride.dropoff_lat,
                             dropoff_lng: ride.dropoff_lng,
-                            fare: ride.driver_earnings ?? ride.fare,
+                            fare: (ride.driver_earnings ?? ride.fare) as string,
                             distance_km: ride.distance_km,
                             duration_minutes: ride.duration_minutes,
-                            rider_name: riderName,
+                            rider_name: riderName as string | undefined,
                             rider_rating: riderRating,
                         },
                         countdownSeconds: countdown,
@@ -600,7 +638,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
 
     fetchRideHistory: async (limit = 20, offset = 0) => {
         try {
-            const res = await api.get(`/drivers/rides/history?limit=${limit}&offset=${offset}`);
+            const res = await api.get<{ rides: RideHistoryItem[]; total: number }>(`/drivers/rides/history?limit=${limit}&offset=${offset}`);
             set({ rideHistory: res.data.rides || [], historyTotal: res.data.total || 0 });
         } catch (err) {
             console.log('Fetch history error:', err);
@@ -609,7 +647,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
 
     fetchEarnings: async (period = 'day') => {
         try {
-            const res = await api.get(`/drivers/earnings?period=${period}`);
+            const res = await api.get<EarningsSummary>(`/drivers/earnings?period=${period}`);
             set({ earnings: res.data });
         } catch (err) {
             throw err;
@@ -618,7 +656,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
 
     fetchDailyEarnings: async (days = 7) => {
         try {
-            const res = await api.get(`/drivers/earnings/daily?days=${days}`);
+            const res = await api.get<DailyEarning[]>(`/drivers/earnings/daily?days=${days}`);
             set({ dailyEarnings: res.data || [] });
         } catch (err) {
             throw err;
@@ -627,7 +665,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
 
     fetchWeeklyEarnings: async (weeks = 4) => {
         try {
-            const res = await api.get(`/drivers/earnings/weekly?weeks=${weeks}`);
+            const res = await api.get<WeeklyEarning[]>(`/drivers/earnings/weekly?weeks=${weeks}`);
             set({ weeklyEarnings: res.data || [] });
         } catch (err) {
             throw err;
@@ -636,7 +674,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
 
     fetchMonthlyEarnings: async (months = 6) => {
         try {
-            const res = await api.get(`/drivers/earnings/monthly?months=${months}`);
+            const res = await api.get<MonthlyEarning[]>(`/drivers/earnings/monthly?months=${months}`);
             set({ monthlyEarnings: res.data || [] });
         } catch (err) {
             throw err;
@@ -645,7 +683,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
 
     fetchEarningsComparison: async (period = 'week') => {
         try {
-            const res = await api.get(`/drivers/earnings/comparison?period=${period}`);
+            const res = await api.get<EarningsComparison>(`/drivers/earnings/comparison?period=${period}`);
             set({ earningsComparison: res.data || null });
         } catch (err) {
             throw err;
@@ -654,7 +692,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
 
     fetchTripEarnings: async (limit = 20, offset = 0) => {
         try {
-            const res = await api.get(`/drivers/earnings/trips?limit=${limit}&offset=${offset}`);
+            const res = await api.get<{ trips: TripEarning[]; limit: number; offset: number }>(`/drivers/earnings/trips?limit=${limit}&offset=${offset}`);
             // Backend returns { trips, limit, offset } — pull out the array.
             // Previously set res.data directly, which left the store holding
             // an object; earnings.tsx then called .map() on it and threw
@@ -717,15 +755,15 @@ export const useDriverStore = create<DriverState>((set, get) => ({
     rateRider: async (rideId: string, rating: number, comment?: string) => {
         try {
             await api.post(`/drivers/rides/${rideId}/rate-rider`, { rating, comment: comment || '' });
-        } catch (err: any) {
-            set({ error: err.response?.data?.detail || 'Failed to rate rider' });
+        } catch (err: unknown) {
+            set({ error: isAxiosError(err) ? (err.response?.data?.detail || 'Failed to rate rider') : 'Failed to rate rider' });
         }
     },
 
     // ============ Payout Actions ============
     fetchBankAccount: async () => {
         try {
-            const res = await api.get('/drivers/bank-account');
+            const res = await api.get<{ has_bank_account: boolean; bank_account: BankAccount | null }>('/drivers/bank-account');
             set({
                 hasBankAccount: res.data.has_bank_account || false,
                 bankAccount: res.data.bank_account || null
@@ -742,8 +780,8 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             await api.post('/drivers/bank-account', account);
             await get().fetchBankAccount();
             return true;
-        } catch (err: any) {
-            set({ error: err.response?.data?.detail || 'Failed to save bank account' });
+        } catch (err: unknown) {
+            set({ error: isAxiosError(err) ? (err.response?.data?.detail || 'Failed to save bank account') : 'Failed to save bank account' });
             return false;
         } finally {
             set({ isLoading: false });
@@ -756,8 +794,8 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             await api.delete('/drivers/bank-account');
             set({ hasBankAccount: false, bankAccount: null });
             return true;
-        } catch (err: any) {
-            set({ error: err.response?.data?.detail || 'Failed to delete bank account' });
+        } catch (err: unknown) {
+            set({ error: isAxiosError(err) ? (err.response?.data?.detail || 'Failed to delete bank account') : 'Failed to delete bank account' });
             return false;
         } finally {
             set({ isLoading: false });
@@ -766,7 +804,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
 
     fetchDriverBalance: async () => {
         try {
-            const res = await api.get('/drivers/balance');
+            const res = await api.get<DriverBalance>('/drivers/balance');
             set({ driverBalance: res.data });
         } catch (err) {
             throw err;
@@ -780,8 +818,8 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             await get().fetchDriverBalance();
             await get().fetchPayoutHistory();
             return { success: true };
-        } catch (err: any) {
-            const error = err.response?.data?.detail || 'Failed to request payout';
+        } catch (err: unknown) {
+            const error = isAxiosError(err) ? (err.response?.data?.detail || 'Failed to request payout') : 'Failed to request payout';
             set({ error });
             return { success: false, error };
         } finally {
@@ -791,7 +829,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
 
     fetchPayoutHistory: async (limit = 20, offset = 0) => {
         try {
-            const res = await api.get(`/drivers/payouts?limit=${limit}&offset=${offset}`);
+            const res = await api.get<{ payouts: Payout[] }>(`/drivers/payouts?limit=${limit}&offset=${offset}`);
             set({ payoutHistory: res.data.payouts || [] });
         } catch (err) {
             console.log('Fetch payout history error:', err);
@@ -800,7 +838,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
 
     exportEarnings: async (year?: number): Promise<{ data: string; filename: string } | null> => {
         try {
-            const res = await api.get(`/drivers/earnings/export?year=${year || new Date().getFullYear()}`);
+            const res = await api.get<{ data: string; filename: string }>(`/drivers/earnings/export?year=${year || new Date().getFullYear()}`);
             return { data: res.data.data, filename: res.data.filename };
         } catch (err) {
             console.log('Export earnings error:', err);
@@ -816,7 +854,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             set({ availableYears: years });
 
             const promises = years.map(year =>
-                api.get(`/drivers/t4a/${year}`).then(res => res.data).catch(() => null)
+                api.get<T4ASummary>(`/drivers/t4a/${year}`).then(res => res.data).catch(() => null)
             );
             const results = await Promise.all(promises);
             const summaries = results.filter((r): r is T4ASummary => r !== null);
@@ -829,7 +867,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
     fetchT4ADetails: async (year: number) => {
         try {
             set({ selectedYear: year, isLoading: true });
-            const res = await api.get(`/drivers/t4a/${year}`);
+            const res = await api.get<T4ASummary>(`/drivers/t4a/${year}`);
             set({
                 t4aSummaries: get().t4aSummaries.map(s =>
                     s.year === year ? res.data : s

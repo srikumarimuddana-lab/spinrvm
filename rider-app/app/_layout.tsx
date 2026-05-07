@@ -386,6 +386,16 @@ export default function RootLayout() {
     })();
   }, [isAuthInitialized]);
 
+  // Clear ride session data when the user logs out so a subsequent login
+  // doesn't show the previous session's ride, driver, or chat state.
+  const prevAuthTokenRef = useRef(authToken);
+  useEffect(() => {
+    if (prevAuthTokenRef.current && !authToken) {
+      useRideStore.getState().clearRide();
+    }
+    prevAuthTokenRef.current = authToken;
+  }, [authToken]);
+
   // ── Network connectivity monitoring for offline sync ──
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener(state => {
@@ -423,7 +433,7 @@ export default function RootLayout() {
 
   return (
     <ThemeProvider>
-      <RootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} stripePublishableKey={stripePublishableKey} />
+      <RootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} stripePublishableKey={stripePublishableKey} wsState={wsState} />
     </ThemeProvider>
   );
 }
@@ -438,7 +448,7 @@ function MaybeStripeProvider({
   if (!publishableKey) return <>{children}</>;
   return (
     <StripeProvider publishableKey={publishableKey} merchantIdentifier="merchant.com.spinr.user">
-      {children}
+      {children as React.ReactElement}
     </StripeProvider>
   );
 }
@@ -447,15 +457,24 @@ function RootLayoutInner({
   isOffline,
   setIsOffline,
   stripePublishableKey,
+  wsState,
 }: {
   isOffline: boolean;
   setIsOffline: (v: boolean) => void;
   stripePublishableKey: string | null;
+  wsState: import('../hooks/useRiderSocket').RiderSocketState;
 }) {
   const { isDark } = useTheme();
   return (
     <ErrorBoundary>
       <OfflineBanner visible={isOffline} onVisibilityChange={setIsOffline} />
+      {(wsState === 'reconnecting' || wsState === 'connecting') && (
+        <View style={{ backgroundColor: '#F59E0B', paddingVertical: 4, alignItems: 'center' }}>
+          <Text style={{ color: '#fff', fontSize: 12, fontWeight: '600' }}>
+            Reconnecting to ride updates…
+          </Text>
+        </View>
+      )}
       <GestureHandlerRootView>
         <View style={{ flex: 1 }}>
           <SafeAreaProvider>

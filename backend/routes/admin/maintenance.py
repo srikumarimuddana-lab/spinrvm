@@ -1,6 +1,7 @@
 import logging
 import re
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Query
@@ -198,8 +199,10 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
         # Ride counts and earnings
         rides_completed = sum(1 for r in rides if r.get("status") == "completed")
         rides_cancelled = sum(1 for r in rides if r.get("status") == "cancelled")
-        total_earnings = sum(float(r.get("driver_earnings") or 0) for r in rides if r.get("status") == "completed")
-        total_tips = sum(float(r.get("tip_amount") or 0) for r in rides if r.get("status") == "completed")
+        total_earnings = float(
+            sum(Decimal(str(r.get("driver_earnings") or 0)) for r in rides if r.get("status") == "completed")
+        )
+        total_tips = float(sum(Decimal(str(r.get("tip_amount") or 0)) for r in rides if r.get("status") == "completed"))
 
         # Determine service area from driver profile
         drv = await db_supabase.get_driver_by_id(driver_id)

@@ -72,6 +72,11 @@ class ConnectionManager:
         user_id = self._user_id_from_key(client_id)
         if user_id is not None:
             self._maybe_drop_user_bucket(user_id)
+        # driver_locations is keyed by raw user_id (without "driver_" prefix).
+        # Remove the entry on disconnect so the dict doesn't grow unbounded as
+        # drivers cycle through online/offline sessions.
+        if client_id.startswith("driver_"):
+            self.driver_locations.pop(user_id, None)
 
     @staticmethod
     def _user_id_from_key(client_id: str) -> Optional[str]:
@@ -178,6 +183,10 @@ class ConnectionManager:
             # and a stale entry would let send_personal_message try to
             # write to a dead handle.
             self.active_connections.pop(key, None)
+            # driver_locations is keyed by raw user_id. Remove on eviction
+            # so the dict doesn't grow unbounded across driver sessions.
+            if client_type == "driver":
+                self.driver_locations.pop(user_id, None)
             closed += 1
         if closed:
             logger.info(f"disconnect_user: kicked {closed} local socket(s) for user_id={user_id} reason={reason}")

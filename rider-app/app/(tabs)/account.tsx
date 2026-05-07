@@ -7,6 +7,7 @@ import {
   ScrollView,
   ActivityIndicator,
   StatusBar,
+  Linking,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -15,7 +16,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
-import { useAuthStore } from '@shared/store/authStore';
+import { useAuthStore, type User } from '@shared/store/authStore';
 import api from '@shared/api/client';
 import CustomAlert from '@shared/components/CustomAlert';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -40,6 +41,10 @@ export default function AccountScreen() {
 
   const [showLogoutAlert, setShowLogoutAlert] = useState(false);
   const [showPhotoPickerAlert, setShowPhotoPickerAlert] = useState(false);
+  const [showDeleteAccountAlert, setShowDeleteAccountAlert] = useState(false);
+  const [showDeleteConfirmAlert, setShowDeleteConfirmAlert] = useState(false);
+  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
+  const [showDsarAlert, setShowDsarAlert] = useState(false);
   const [feedbackAlert, setFeedbackAlert] = useState<{
     visible: boolean; title: string; message?: string;
     variant: 'info' | 'success' | 'danger' | 'warning';
@@ -65,7 +70,7 @@ export default function AccountScreen() {
       (async () => {
         setIsRefreshing(true);
         try {
-          const userRes = await api.get('/auth/me');
+          const userRes = await api.get<User>('/auth/me');
           if (!cancelled && userRes.data) useAuthStore.setState({ user: userRes.data });
         } catch {}
         finally { if (!cancelled) setIsRefreshing(false); }
@@ -101,6 +106,32 @@ export default function AccountScreen() {
       showFeedback('Upload Failed', err.message || 'Failed to upload', 'danger');
     } finally {
       setIsUploadingPhoto(false);
+    }
+  };
+
+  const handleDeleteAccountConfirmed = async () => {
+    setIsDeletingAccount(true);
+    try {
+      await api.delete('/users/account');
+      await logout();
+      router.replace('/login' as any);
+    } catch (err: any) {
+      showFeedback('Deletion Failed', err?.response?.data?.detail || 'Could not schedule account deletion. Please contact support.', 'danger');
+    } finally {
+      setIsDeletingAccount(false);
+    }
+  };
+
+  const handleRequestDataExport = async () => {
+    try {
+      await api.post('/users/data-export');
+      showFeedback(
+        'Data Export Requested',
+        'Your data export request has been received. We will respond within 30 days as required by PIPEDA.',
+        'success',
+      );
+    } catch (err: any) {
+      showFeedback('Request Failed', err?.response?.data?.detail || 'Could not submit data export request. Please try again.', 'danger');
     }
   };
 
@@ -397,6 +428,45 @@ export default function AccountScreen() {
                 onPress={() => router.push('/legal?type=tos' as any)}
               />
               <View style={styles.cardDivider} />
+              {/* R-P2-44: Privacy policy link (PIPEDA) */}
+              <TouchableOpacity
+                style={styles.actionRow}
+                activeOpacity={0.7}
+                onPress={() => Linking.openURL('https://spinr.ca/privacy')}
+              >
+                <View style={[styles.iconBox, { backgroundColor: 'rgba(99, 102, 241, 0.1)' }]}>
+                  <Ionicons name="shield" size={18} color="#6366F1" />
+                </View>
+                <Text style={styles.actionText}>Privacy Policy</Text>
+                <Ionicons name="open-outline" size={16} color="#D1D5DB" />
+              </TouchableOpacity>
+              <View style={styles.cardDivider} />
+              {/* R-P2-43: DSAR — Request my data (PIPEDA) */}
+              <TouchableOpacity
+                style={styles.actionRow}
+                activeOpacity={0.7}
+                onPress={() => setShowDsarAlert(true)}
+              >
+                <View style={[styles.iconBox, { backgroundColor: 'rgba(16, 185, 129, 0.1)' }]}>
+                  <Ionicons name="download" size={18} color="#10B981" />
+                </View>
+                <Text style={styles.actionText}>Request My Data</Text>
+                <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
+              </TouchableOpacity>
+              <View style={styles.cardDivider} />
+              {/* R-P2-43: Delete Account (PIPEDA right to erasure) */}
+              <TouchableOpacity
+                style={styles.actionRow}
+                activeOpacity={0.7}
+                onPress={() => setShowDeleteAccountAlert(true)}
+              >
+                <View style={[styles.iconBox, { backgroundColor: 'rgba(239, 68, 68, 0.05)' }]}>
+                  <Ionicons name="trash" size={18} color="#EF4444" />
+                </View>
+                <Text style={[styles.actionText, { color: '#EF4444' }]}>Delete Account</Text>
+                <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
+              </TouchableOpacity>
+              <View style={styles.cardDivider} />
               <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => setShowLogoutAlert(true)}>
                 <View style={[styles.iconBox, { backgroundColor: 'rgba(239, 68, 68, 0.05)' }]}>
                   <Ionicons name="log-out" size={18} color="#EF4444" />
@@ -444,6 +514,72 @@ export default function AccountScreen() {
           { text: 'Cancel', style: 'cancel' },
         ]}
         onClose={() => setShowPhotoPickerAlert(false)}
+      />
+      {/* R-P2-43: Delete Account — regulatory retention warning (PIPEDA + SK Transportation Act) */}
+      <CustomAlert
+        visible={showDeleteAccountAlert}
+        title="Delete Account"
+        message={
+          'Before deleting your account, please note:\n\n' +
+          '• Ride records (dates, distances, fares) are retained for 7 years as required by Saskatchewan transportation regulations.\n' +
+          '• Your personal identifiers (name, phone, address) will be removed from those records immediately.\n' +
+          '• Your account will enter a 30-day grace period before permanent deletion.\n\n' +
+          'Are you sure you want to proceed?'
+        }
+        variant="danger"
+        icon="trash-outline"
+        buttons={[
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Continue',
+            style: 'destructive',
+            onPress: () => {
+              setShowDeleteAccountAlert(false);
+              setShowDeleteConfirmAlert(true);
+            },
+          },
+        ]}
+        onClose={() => setShowDeleteAccountAlert(false)}
+      />
+      {/* Second confirmation to prevent accidental deletion */}
+      <CustomAlert
+        visible={showDeleteConfirmAlert}
+        title="Confirm Deletion"
+        message="This will schedule your account for permanent deletion. You have 30 days to cancel by contacting support."
+        variant="danger"
+        icon="warning-outline"
+        buttons={[
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: isDeletingAccount ? 'Deleting…' : 'Delete My Account',
+            style: 'destructive',
+            onPress: handleDeleteAccountConfirmed,
+          },
+        ]}
+        onClose={() => setShowDeleteConfirmAlert(false)}
+      />
+      {/* R-P2-43: DSAR — Request my data */}
+      <CustomAlert
+        visible={showDsarAlert}
+        title="Request My Data"
+        message={
+          'Under PIPEDA you have the right to request a copy of your personal data held by Spinr.\n\n' +
+          'We will prepare and deliver your data export within 30 days of this request.'
+        }
+        variant="info"
+        icon="download-outline"
+        buttons={[
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Submit Request',
+            style: 'default',
+            onPress: async () => {
+              setShowDsarAlert(false);
+              await handleRequestDataExport();
+            },
+          },
+        ]}
+        onClose={() => setShowDsarAlert(false)}
       />
       <CustomAlert
         visible={feedbackAlert.visible}

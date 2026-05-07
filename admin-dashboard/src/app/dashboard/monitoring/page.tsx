@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Radio, X } from "lucide-react";
 import { useAuthStore } from "@/store/authStore";
+import { useToast } from "@/components/ui/use-toast";
 
 import { adminCancelRide, getFareConfigs, getMonitoringDrivers, getMonitoringRides, getServiceAreas, getVehicleTypes } from "@/lib/api";
 import { useMonitoringSocket } from "@/hooks/use-monitoring-socket";
@@ -27,6 +28,7 @@ const POLL_INTERVAL_MS = 15_000;
 
 export default function MonitoringPage() {
   const { allowed } = useRequireModule("rides");
+  const { toast } = useToast();
   // ── Refs: source-of-truth maps (never trigger re-renders) ──────────
   const driversMapRef = useRef<Map<string, MonitoringDriver>>(new Map());
   const ridesMapRef = useRef<Map<string, MonitoringRide>>(new Map());
@@ -458,6 +460,16 @@ export default function MonitoringPage() {
         wsStatus={wsStatus}
       />
 
+      {/* Stale-data warning banner — visible whenever live feed is interrupted */}
+      {wsStatus !== "connected" && (
+        <div className="flex items-center gap-2 bg-yellow-50 border-b border-yellow-200 px-4 py-2 text-sm text-yellow-800 dark:bg-yellow-900/20 dark:border-yellow-800 dark:text-yellow-300">
+          <span className="font-medium">Live data paused</span>
+          <span className="text-yellow-700 dark:text-yellow-400">
+            — map and ride list may be stale ({wsStatus === "connecting" ? "reconnecting…" : "connection lost"})
+          </span>
+        </div>
+      )}
+
       {/* Main 3-column layout */}
       <div className="flex flex-1 overflow-hidden">
         {/* ── Left: Ride list ─────────────────────────────────────── */}
@@ -562,8 +574,9 @@ export default function MonitoringPage() {
               <button
                 onClick={() => { setSelected(null); setSelectedDriver(null); }}
                 className="absolute right-2 top-2 z-10 rounded-full p-1 hover:bg-muted"
+                aria-label="Close driver panel"
               >
-                <X className="h-3.5 w-3.5" />
+                <X className="h-3.5 w-3.5" aria-hidden="true" />
               </button>
               <DriverPanel
                 driver={selectedDriver}
@@ -575,8 +588,9 @@ export default function MonitoringPage() {
               <button
                 onClick={() => { setSelected(null); setSelectedRide(null); }}
                 className="absolute right-2 top-2 z-10 rounded-full p-1 hover:bg-muted"
+                aria-label="Close ride panel"
               >
-                <X className="h-3.5 w-3.5" />
+                <X className="h-3.5 w-3.5" aria-hidden="true" />
               </button>
               <RidePanel
                 ride={selectedRide}
@@ -595,9 +609,7 @@ export default function MonitoringPage() {
                     setSelected(null);
                     setSelectedRide(null);
                   } catch (err: any) {
-                    window.alert(
-                      `Failed to cancel ride: ${err?.message ?? "unknown error"}`,
-                    );
+                    toast({ title: "Failed to cancel ride", description: err?.message ?? "Unknown error", variant: "destructive" });
                   }
                 }}
                 onCompleteRide={async (id) => {

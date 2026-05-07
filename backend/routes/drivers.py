@@ -1,6 +1,8 @@
 import asyncio
 import hmac
 import logging
+import os
+import socket
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Union
@@ -30,6 +32,7 @@ try:
     from ..utils.error_keys import ErrorKeys
     from ..utils.idempotency import idempotent_endpoint
     from ..utils.insurance_periods import record_period_transition
+    from ..utils.t4a_pdf import generate_t4a_pdf
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user, get_current_user
@@ -51,6 +54,7 @@ except ImportError:
     from utils.error_keys import ErrorKeys
     from utils.idempotency import idempotent_endpoint
     from utils.insurance_periods import record_period_transition  # type: ignore[assignment]
+    from utils.t4a_pdf import generate_t4a_pdf  # noqa: F401 – used in download_t4a_pdf
 
 db = db_supabase  # legacy alias
 
@@ -1665,6 +1669,7 @@ async def get_t4a_summary(year: int, current_user: dict = Depends(get_current_us
 
     total_earnings = _money_str(sum(Decimal(str(r.get("driver_earnings") or 0)) for r in rides))
 
+    driver_name = f"{current_user.get('first_name', '')} {current_user.get('last_name', '')}".strip() or None
     return {
         "year": year,
         "total_earnings": total_earnings,
@@ -1674,7 +1679,24 @@ async def get_t4a_summary(year: int, current_user: dict = Depends(get_current_us
         "gst_registered": driver.get("gst_registered", False),
         "gst_bn": driver.get("gst_bn") or "",
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "pdf_url": f"/api/v1/drivers/t4a/{year}/pdf",
+        "driver_name": driver_name,
     }
+
+
+@api_router.get("/t4a/{year}/pdf")
+async def download_t4a_pdf(year: int, current_user: dict = Depends(get_current_user)):
+    from fastapi.responses import Response as _Response
+
+    summary = await get_t4a_summary(year, current_user)
+    summary["driver_name"] = f"{current_user.get('first_name', '')} {current_user.get('last_name', '')}".strip() or None
+    pdf_bytes = generate_t4a_pdf(summary)
+    filename = f"T4A_{year}_{current_user['id'][:8]}.pdf"
+    return _Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @api_router.get("/earnings/export")
@@ -1781,7 +1803,11 @@ async def _build_and_email_data_export(user_id: str, email: str) -> None:
         )
 
         await send_email(to=email, subject=subject, body=body)
-        logger.info("Data export emailed to %s for user %s", email, user_id)
+        logger.info("Data export emailed for user %s", user_id)
+        logger.info(
+            "dsar_export_completed",
+            extra={"user_id": user_id, "domain": "privacy", "metric": "dsar_export_completed"},
+        )
 
     except Exception as exc:
         logger.error("Data export failed for user %s: %s", user_id, exc)
@@ -1972,7 +1998,10 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
         },
     )
 
-    if hasattr(guard, "modified_count") and guard.modified_count == 0:
+    # update_one returns None when no rows matched the filter (race lost).
+    # The old `hasattr(guard, "modified_count")` check was never true for
+    # Supabase responses, so the double-accept guard was silently disabled.
+    if guard is None:
         diag_logger.info(
             f"[ACCEPT] claim rejected ride_id={ride_id} "
             f"current_status={ride.get('status')} current_driver_id={ride.get('driver_id')}"
@@ -2020,13 +2049,27 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    # If assigned, unassign. If searching, just ignore/record decline.
-    await db_supabase.update_ride(
-        ride_id, {"driver_id": None, "status": "searching", "updated_at": datetime.now(timezone.utc)}
+    # Conditional reset: only unassign if this driver is still the assigned one.
+    # An unconditional update_ride() would overwrite a concurrent accept_ride() that
+    # already moved the ride to driver_accepted with a different driver.
+    declined = await db_supabase.update_one(
+        "rides",
+        {"id": ride_id, "driver_id": driver["id"], "status": {"$in": ["searching", "driver_assigned"]}},
+        {
+            "$set": {
+                "driver_id": None,
+                "status": "searching",
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        },
     )
-    # M-5: SGI insurance period audit — decline releases the driver from
-    # period 2 back to period 1.
-    await record_period_transition(driver["id"], 1)
+    if declined is None:
+        # Race lost — another driver already accepted; our decline is a no-op.
+        logger.info(f"[DECLINE] ride {ride_id} already claimed by another driver; decline ignored")
+    else:
+        # M-5: SGI insurance period audit — decline releases the driver from
+        # period 2 back to period 1 only when the decline actually took effect.
+        await record_period_transition(driver["id"], 1)
 
     # Record the decline in audit_logs so daily stats can count it
     try:
@@ -2092,22 +2135,29 @@ async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_curren
                 f"Please move within 200m of the pickup location to mark arrival.",
             )
 
-    await db_supabase.update_ride(
-        ride_id,
+    guard = await db.update_one(
+        "rides",
+        {"id": ride_id, "driver_id": driver["id"], "status": "driver_accepted"},
         {
-            "status": "driver_arrived",
-            "driver_arrived_at": datetime.now(timezone.utc),
-            "updated_at": datetime.now(timezone.utc),
+            "$set": {
+                "status": "driver_arrived",
+                "driver_arrived_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
+            }
         },
     )
+    if guard is None:
+        raise HTTPException(status_code=409, detail="Ride is not in driver_accepted state")
 
     if ride.get("rider_id"):
         await manager.send_personal_message({"type": "driver_arrived", "ride_id": ride_id}, f"rider_{ride['rider_id']}")
-        await send_push_notification(
-            ride["rider_id"],
-            "Driver Arrived! 📍",
-            "Your driver has arrived at the pickup location.",
-            data={"type": "driver_arrived", "ride_id": str(ride_id)},
+        asyncio.create_task(
+            send_push_notification(
+                ride["rider_id"],
+                "Driver Arrived! 📍",
+                "Your driver has arrived at the pickup location.",
+                data={"type": "driver_arrived", "ride_id": str(ride_id)},
+            )
         )
     await manager.broadcast_ride_status(ride_id, "driver_arrived", rider_id=ride.get("rider_id"))
 
@@ -2131,26 +2181,33 @@ async def verify_pickup_otp(ride_id: str, request: RideOTPRequest, current_user:
     if not hmac.compare_digest(ride.get("pickup_otp", ""), hash_otp(request.otp)):
         raise HTTPException(status_code=400, detail="Invalid OTP")
 
-    # OTP correct, start ride
-    await db_supabase.update_ride(
-        ride_id,
+    # OTP correct — atomic transition guards against duplicate taps/retries
+    guard = await db.update_one(
+        "rides",
+        {"id": ride_id, "driver_id": driver["id"], "status": "driver_arrived"},
         {
-            "status": "in_progress",
-            "ride_started_at": datetime.now(timezone.utc),
-            "updated_at": datetime.now(timezone.utc),
+            "$set": {
+                "status": "in_progress",
+                "ride_started_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
+            }
         },
     )
+    if guard is None:
+        raise HTTPException(status_code=409, detail="Ride is not in driver_arrived state")
     # M-5: SGI insurance period audit — in_progress = period 3 (passenger
-    # aboard, full TNC commercial coverage).
+    # aboard, full TNC commercial coverage). Only record when transition took effect.
     await record_period_transition(driver["id"], 3, ride_id=ride_id)
 
     if ride.get("rider_id"):
         await manager.send_personal_message({"type": "ride_started", "ride_id": ride_id}, f"rider_{ride['rider_id']}")
-        await send_push_notification(
-            ride["rider_id"],
-            "Ride Started! ▶️",
-            "Your ride has started. Have a safe trip!",
-            data={"type": "ride_started", "ride_id": str(ride_id)},
+        asyncio.create_task(
+            send_push_notification(
+                ride["rider_id"],
+                "Ride Started! ▶️",
+                "Your ride has started. Have a safe trip!",
+                data={"type": "ride_started", "ride_id": str(ride_id)},
+            )
         )
     await manager.broadcast_ride_status(ride_id, "in_progress", rider_id=ride.get("rider_id"))
 
@@ -2160,35 +2217,46 @@ async def verify_pickup_otp(ride_id: str, request: RideOTPRequest, current_user:
 @api_router.post("/rides/{ride_id}/start")
 async def start_ride(ride_id: str, current_user: dict = Depends(get_current_user)):
     """Start ride without OTP (if configured) or fallback."""
-    # Logic similar to verify_otp but without check
     driver = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
     )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    await db_supabase.update_ride(
-        ride_id,
+    ride = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("rides", {"id": ride_id, "driver_id": driver["id"]}, limit=1)
+    )
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+
+    guard = await db.update_one(
+        "rides",
+        {"id": ride_id, "driver_id": driver["id"], "status": "driver_arrived"},
         {
-            "status": "in_progress",
-            "ride_started_at": datetime.now(timezone.utc),
-            "updated_at": datetime.now(timezone.utc),
+            "$set": {
+                "status": "in_progress",
+                "ride_started_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
+            }
         },
     )
+    if guard is None:
+        raise HTTPException(status_code=409, detail="Ride is not in driver_arrived state")
     # M-5: SGI insurance period audit — in_progress = period 3 (passenger
-    # aboard, full TNC commercial coverage).
+    # aboard, full TNC commercial coverage). Only record when transition took effect.
     await record_period_transition(driver["id"], 3, ride_id=ride_id)
 
-    ride = await db_supabase.get_ride(ride_id)
-    if ride and ride.get("rider_id"):
+    if ride.get("rider_id"):
         await manager.send_personal_message({"type": "ride_started", "ride_id": ride_id}, f"rider_{ride['rider_id']}")
-        await send_push_notification(
-            ride["rider_id"],
-            "Ride Started! ▶️",
-            "Your ride has started. Have a safe trip!",
-            data={"type": "ride_started", "ride_id": str(ride_id)},
+        asyncio.create_task(
+            send_push_notification(
+                ride["rider_id"],
+                "Ride Started! ▶️",
+                "Your ride has started. Have a safe trip!",
+                data={"type": "ride_started", "ride_id": str(ride_id)},
+            )
         )
-    await manager.broadcast_ride_status(ride_id, "in_progress", rider_id=(ride or {}).get("rider_id"))
+    await manager.broadcast_ride_status(ride_id, "in_progress", rider_id=ride.get("rider_id"))
     return {"success": True}
 
 
@@ -2375,7 +2443,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     # Post-ride receipt notification stub
     rider = await db_supabase.get_user_by_id(ride.get("rider_id"))
     if rider and rider.get("email"):
-        logger.info(f"Sending email receipt for ride {ride_id} to {rider['email']}")
+        logger.info(f"Sending email receipt for ride {ride_id} to user {rider['id']}")
 
     # Fire-and-forget: render the route PNG from phase_polylines and
     # upload to Cloudinary so the admin drawer + email receipt can
@@ -2399,9 +2467,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     # ride has just transitioned to `completed`, and the driver's row already
     # has is_online=True (a driver cannot be on an active trip while offline).
     # See update_driver_status docstring for the is_online/is_available invariant.
-    await db_supabase.update_one(
-        "drivers", {"id": driver["id"]}, {"$inc": {"total_rides": 1}, "$set": {"is_available": True}}
-    )
+    await db_supabase.set_driver_available(driver["id"], available=True, total_rides_inc=1)
     # M-5: SGI insurance period audit — ride completed, driver returns to
     # period 1 (still online, no ride). No ride_id on period 1.
     await record_period_transition(driver["id"], 1)
@@ -3566,7 +3632,29 @@ async def check_expiring_subscriptions():
     except ImportError:
         from settings_loader import get_app_settings  # type: ignore
 
+    try:
+        from ..utils.redis_client import redis_set_nx as _redis_set_nx  # type: ignore
+    except ImportError:
+        try:
+            from utils.redis_client import redis_set_nx as _redis_set_nx  # type: ignore
+        except ImportError:
+            _redis_set_nx = None  # type: ignore
+
     while True:
+        # Single-replica enforcement: only the pod that wins the lock runs
+        # the expiry check per 6-hour window. Prevents N offline-kick push
+        # notifications being sent to the same driver on multi-replica deploys.
+        if _redis_set_nx is not None:
+            lock_acquired = await _redis_set_nx(
+                "spinr:subscription:expiry:lock",
+                f"{socket.gethostname()}:{os.getpid()}",
+                6 * 3600 + 300,  # 6h + 5 min grace
+            )
+        else:
+            lock_acquired = True  # no Redis in dev → run on all replicas
+        if not lock_acquired:
+            await asyncio.sleep(6 * 3600)
+            continue
         try:
             now = datetime.now(timezone.utc)
             window = now + timedelta(hours=24)

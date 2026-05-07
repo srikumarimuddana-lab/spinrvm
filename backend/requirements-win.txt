@@ -9,9 +9,9 @@ attrs==26.1.0             # via aiohttp
 bcrypt==5.0.0             # via -r requirements.in
 black==26.3.1             # via -r requirements.in
 boto3==1.42.96            # via -r requirements.in
-botocore==1.42.96         # via boto3, s3transfer
+botocore==1.43.2         # via boto3, s3transfer
 cachecontrol==0.14.4      # via firebase-admin
-cachetools==6.2.6         # via pyiceberg
+cachetools==7.1.1         # via pyiceberg
 certifi==2026.4.22        # via -r requirements.in, cloudinary, httpcore, httpx, requests, sentry-sdk
 cffi==2.0.0               # via cryptography
 charset-normalizer==3.4.7  # via -r requirements.in, requests
@@ -97,14 +97,14 @@ python-dateutil==2.9.0.post0  # via -r requirements.in, botocore, pandas, strict
 python-dotenv==1.2.2      # via -r requirements.in, pydantic-settings, pytest-env, uvicorn
 python-multipart==0.0.27  # via -r requirements.in
 pytokens==0.4.1           # via black
-pytz==2026.1.post1        # via -r requirements.in
+pytz==2026.2        # via -r requirements.in
 pyyaml==6.0.3             # via -r requirements.in, uvicorn
 realtime==2.29.0          # via -r requirements.in, supabase
 redis==7.4.0              # via -r requirements.in
 requests==2.33.1          # via -r requirements.in, cachecontrol, google-api-core, google-cloud-storage, pyiceberg, staticmap, stripe, twilio
 rich==14.3.4              # via -r requirements.in, pyiceberg, typer
-s3transfer==0.16.1        # via boto3
-sentry-sdk==2.58.0        # via -r requirements.in
+s3transfer==0.17.0        # via boto3
+sentry-sdk==2.59.0        # via -r requirements.in
 shellingham==1.5.4        # via typer
 six==1.17.0               # via cloudinary, python-dateutil
 slowapi==0.1.9            # via -r requirements.in

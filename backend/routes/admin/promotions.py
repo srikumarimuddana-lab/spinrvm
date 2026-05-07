@@ -1,6 +1,7 @@
 import logging
 import re
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -157,6 +158,11 @@ async def admin_create_promotion(promotion: PromotionCreateRequest, admin: dict 
     # Reject negative discount values — a negative discount is a charge (F-30).
     if promotion.discount_value < 0:
         raise HTTPException(status_code=400, detail="discount_value cannot be negative")
+    # TASK-4-1: enforce upper bound so a typo can't grant 9999% off.
+    if promotion.discount_type == "percentage" and promotion.discount_value > 100:
+        raise HTTPException(status_code=400, detail="discount_value cannot exceed 100 for percentage discounts")
+    if promotion.discount_type == "flat" and promotion.discount_value > 500:
+        raise HTTPException(status_code=400, detail="discount_value cannot exceed $500 for flat discounts")
     for field, value in [
         ("max_discount", promotion.max_discount),
         ("total_budget", promotion.total_budget),
@@ -331,7 +337,7 @@ async def admin_get_promo_stats(date_range: Optional[str] = Query(None, alias="r
 
     # Usage stats
     total_redemptions = len(filtered_usage)
-    total_discount = sum(float(u.get("discount_applied", 0)) for u in filtered_usage)
+    total_discount = float(sum(Decimal(str(u.get("discount_applied", 0))) for u in filtered_usage))
 
     # Daily usage for charts (last 30 days)
     daily: Dict[str, Dict[str, Any]] = {}
@@ -343,7 +349,7 @@ async def admin_get_promo_stats(date_range: Optional[str] = Query(None, alias="r
         d = u.get("created_at", "")[:10]
         if d in daily:
             daily[d]["count"] += 1
-            daily[d]["amount"] += float(u.get("discount_applied", 0))
+            daily[d]["amount"] = float(Decimal(str(daily[d]["amount"])) + Decimal(str(u.get("discount_applied", 0))))
 
     daily_usage = sorted(daily.values(), key=lambda x: x["date"])
 

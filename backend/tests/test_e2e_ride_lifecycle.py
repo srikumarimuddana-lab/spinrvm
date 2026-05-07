@@ -28,7 +28,7 @@ Marked `e2e` so CI can filter them independently from fast unit tests:
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -58,7 +58,7 @@ def _ride_row(status: str, driver_id: str | None = None, **extra) -> dict:
         "distance_km": 3.2,
         "duration_minutes": 8,
         "otp": "4242",
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
     row.update(extra)
     return row
@@ -186,15 +186,10 @@ class TestRideLifecycleConcurrency:
         ride = {"id": RIDE_ID, "status": "searching", "driver_id": None, "rider_id": RIDER_ID}
         accepted = {**ride, "status": "driver_accepted", "driver_id": "driver_a"}
 
-        guard_ok = MagicMock()
-        guard_ok.modified_count = 1
-        guard_fail = MagicMock()
-        guard_fail.modified_count = 0
-
         with (
             patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[driver])),
             patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=ride)),
-            patch("backend.routes.drivers.db.update_one", AsyncMock(side_effect=[guard_ok, guard_fail])),
+            patch("backend.routes.drivers.db.update_one", AsyncMock(side_effect=[accepted, None])),
             patch("backend.routes.drivers.db.find_one", AsyncMock(return_value=accepted)),
             patch("backend.routes.drivers.manager.send_personal_message", AsyncMock()),
             patch("backend.routes.drivers.send_push_notification", AsyncMock()),

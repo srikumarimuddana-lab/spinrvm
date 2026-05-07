@@ -14,6 +14,10 @@ pydantic-settings>=2.5.0
 supabase>=2.10.0
 postgrest>=0.12.0
 realtime>=0.9.0
+# Direct Postgres access for the migration runner (backend/scripts/migrate.py).
+# Not needed by the FastAPI server itself (which uses supabase-py). Required
+# when running migrations outside of Docker: pip install -r requirements.txt.
+psycopg2-binary>=2.9.9
 
 # Authentication
 firebase-admin>=6.0.0
@@ -46,7 +50,7 @@ google-cloud-firestore>=2.27.0
 
 # Utilities
 python-dateutil>=2.9.0
-pytz>=2026.1
+pytz>=2026.2
 tenacity>=9.1.4
 click>=8.3.2
 jinja2>=3.1.6
@@ -77,8 +81,12 @@ boto3>=1.42.89
 staticmap>=0.5.7
 Pillow>=10.4.0
 
+# CRA T4A PDF generation (pure-Python, no system deps).
+# Used by backend/utils/t4a_pdf.py for on-demand driver tax slip download.
+fpdf2>=2.8.0
+
 # Error monitoring
-sentry-sdk>=2.58.0
+sentry-sdk>=2.59.0
 
 # Testing
 pytest>=9.0.3
@@ -91,9 +99,7 @@ pytest-env>=1.1.0
 # it lands in requirements-locked.txt with a proper SHA-256 hash.
 pytest-mock>=3.14.0
 
-# Development tools
-black>=26.3.1
-flake8>=7.3.0
+# Development tools — ruff supersedes both black and flake8; those are removed.
 
 # Redis (optional — transparent in-process fallback when REDIS_URL unset)
 redis[asyncio]>=5.0.0

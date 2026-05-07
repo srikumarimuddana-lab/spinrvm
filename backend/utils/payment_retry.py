@@ -7,7 +7,9 @@ Also resolves driver payouts stuck as 'pending' after transfer failures.
 
 import asyncio
 import logging
+import os
 import random
+import socket
 from datetime import datetime, timezone
 
 try:
@@ -23,15 +25,20 @@ try:
     from ..features import send_push_notification
     from ..settings_loader import get_app_settings
     from .datetime_utils import parse_iso_utc
-    from .metrics import inc as _metric_inc
-    from .metrics import set_gauge as _metric_gauge
+    from .redis_client import redis_set_nx
 except ImportError:
     from db import db
     from features import send_push_notification
     from settings_loader import get_app_settings
     from utils.datetime_utils import parse_iso_utc
+    from utils.redis_client import redis_set_nx
 
 logger = logging.getLogger(__name__)
+
+
+def _pod_id() -> str:
+    return f"{socket.gethostname()}:{os.getpid()}"
+
 
 MAX_RETRIES = 3
 RETRY_INTERVAL_SECONDS = 300  # 5 minutes
@@ -125,14 +132,14 @@ async def retry_failed_payments():
             intent = stripe.PaymentIntent.retrieve(payment_intent_id, api_key=stripe_secret)
 
             if intent.status == "succeeded":
-                # Already succeeded (webhook may have missed it)
+                # Already succeeded (webhook may have missed it) — mark paid but do NOT
+                # increment retry_count to avoid false "payment finally failed" alerts.
                 await db.update_one(
                     "rides",
                     {"id": ride_id},
                     {
                         "$set": {
                             "payment_status": "paid",
-                            "payment_retry_count": retry_count + 1,
                             "updated_at": datetime.now(timezone.utc).isoformat(),
                         }
                     },
@@ -140,8 +147,13 @@ async def retry_failed_payments():
                 logger.info(f"Payment retry: ride {ride_id} already paid (intent succeeded)")
 
             elif intent.status in ("requires_payment_method", "requires_confirmation"):
-                # Try to confirm again
-                stripe.PaymentIntent.confirm(payment_intent_id, api_key=stripe_secret)
+                # Idempotency key prevents duplicate charges when two replicas both pick
+                # up the same failed ride in the same retry loop tick.
+                stripe.PaymentIntent.confirm(
+                    payment_intent_id,
+                    api_key=stripe_secret,
+                    idempotency_key=f"retry-confirm-{ride_id}-{retry_count}",
+                )
                 attempt = retry_count + 1
                 await db.update_one(
                     "rides",
@@ -214,14 +226,23 @@ async def payment_retry_loop():
     """Background loop that retries failed payments every RETRY_INTERVAL_SECONDS."""
     logger.info(f"Payment retry service started (interval={RETRY_INTERVAL_SECONDS}s)")
     while True:
+        # Single-replica enforcement: only the pod that claims the lock runs
+        # the retry; others sleep the full interval. Prevents N simultaneous
+        # Stripe retries on multi-replica deploys. TTL is 1.5× interval so
+        # the lock expires cleanly before the next tick's election.
+        lock_ttl = int(RETRY_INTERVAL_SECONDS * 1.5)
+        if not await redis_set_nx("spinr:payment:retry:lock", _pod_id(), lock_ttl):
+            _record_heartbeat("payment_retry (5min)")
+            await asyncio.sleep(RETRY_INTERVAL_SECONDS)
+            continue
         try:
             await retry_failed_payments()
         except Exception as e:
-            logger.error(f"Payment retry loop error: {e}")
+            logger.error(f"Payment retry loop error: {e}", exc_info=True)
         try:
             await retry_stuck_payouts()
         except Exception as e:
-            logger.error(f"Payout retry loop error: {e}")
+            logger.error(f"Payout retry loop error: {e}", exc_info=True)
         _record_heartbeat("payment_retry (5min)")
         # B-P3-2: per-tick ±10% jitter so replicas don't tick in lockstep
         # and create a thundering herd against Stripe + Supabase. Tested

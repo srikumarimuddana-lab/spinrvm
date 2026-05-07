@@ -28,6 +28,7 @@ export default function SettingsPage() {
     const [saved, setSaved] = useState(false);
 
     const [mfaEnabled, setMfaEnabled] = useState(false);
+    const [mfaAvailable, setMfaAvailable] = useState(true);
     const [mfaLoading, setMfaLoading] = useState(true);
     const [showEnrollDialog, setShowEnrollDialog] = useState(false);
     const [showDisableForm, setShowDisableForm] = useState(false);
@@ -43,7 +44,10 @@ export default function SettingsPage() {
             .finally(() => setLoading(false));
 
         mfaStatus()
-            .then((d) => setMfaEnabled(d.mfa_enabled))
+            .then((d) => {
+                setMfaEnabled(d.mfa_enabled);
+                setMfaAvailable(d.available !== false);
+            })
             .catch(() => { })
             .finally(() => setMfaLoading(false));
     }, []);
@@ -343,7 +347,7 @@ export default function SettingsPage() {
                     </Card>
 
                     {/* Two-Factor Authentication */}
-                    <Card className="border-border/50">
+                    {mfaAvailable && <Card className="border-border/50">
                         <CardHeader>
                             <CardTitle className="text-base">Two-Factor Authentication</CardTitle>
                         </CardHeader>
@@ -428,7 +432,7 @@ export default function SettingsPage() {
                                 </>
                             )}
                         </CardContent>
-                    </Card>
+                    </Card>}
 
                     {/* Legal Documents */}
                     <Card className="border-border/50 lg:col-span-2">

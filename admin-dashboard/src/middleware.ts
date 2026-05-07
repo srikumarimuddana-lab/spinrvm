@@ -42,10 +42,13 @@ function generateNonce(): string {
 }
 
 function buildCsp(nonce: string): string {
+  const isDev = process.env.NODE_ENV === "development";
   return [
     "default-src 'self'",
-    // nonce replaces unsafe-inline; strict-dynamic lets Next.js load its chunks
-    `script-src 'nonce-${nonce}' 'strict-dynamic' https:`,
+    // nonce replaces unsafe-inline; strict-dynamic lets Next.js load its chunks.
+    // unsafe-eval is required in dev mode only: React/Turbopack uses eval() for
+    // source-map reconstruction and call-stack rebuilding. Never emitted in prod.
+    `script-src 'nonce-${nonce}' 'strict-dynamic' https:${isDev ? " 'unsafe-eval'" : ""}`,
     // unsafe-inline kept for styles: React style props + Recharts/Leaflet/Mapbox
     // emit inline style= attributes which cannot carry nonces
     "style-src 'self' 'unsafe-inline'",

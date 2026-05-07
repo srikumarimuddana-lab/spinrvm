@@ -42,6 +42,18 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         associatedDomains: [
             'applinks:spinr.app',
         ],
+        // Purpose strings — Apple rejects uploads with ITMS-90683 if any
+        // dependency calls a permission-gated API without a matching string.
+        // Driver app needs camera + photo library for onboarding document
+        // uploads (license, insurance, vehicle registration) per the
+        // Saskatchewan Transportation Act eligibility requirements.
+        // Location strings are supplied by the expo-location plugin block.
+        infoPlist: {
+            NSCameraUsageDescription:
+                'Spinr Driver uses your camera to scan and upload your driver license, vehicle insurance, and vehicle registration documents during onboarding and renewal.',
+            NSPhotoLibraryUsageDescription:
+                'Spinr Driver accesses your photo library so you can upload existing photos of your driver license, vehicle insurance, and vehicle registration.',
+        },
         // Required by Apple for any app using required-reason APIs (enforced from May 2024).
         // Missing this causes App Store / TestFlight rejection at upload time.
         privacyManifests: {

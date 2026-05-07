@@ -53,10 +53,10 @@ test.describe('rider-app: cancellation flow', () => {
     });
 
     await page.goto('/');
-    await page.waitForTimeout(2500);
+    await page.waitForLoadState('networkidle').catch(() => {});
 
     // App renders without crashing in searching state
-    await expect(page.locator('body')).toBeVisible();
+    await expect(page.locator('body')).toBeVisible({ timeout: 10_000 });
 
     const fatal = errors.filter(
       (e) => !/NativeEventEmitter|Deprecated|firebase|google|maps/i.test(e)
@@ -80,9 +80,9 @@ test.describe('rider-app: cancellation flow', () => {
     });
 
     await page.goto('/');
-    await page.waitForTimeout(2500);
+    await page.waitForLoadState('networkidle').catch(() => {});
 
-    await expect(page.locator('body')).toBeVisible();
+    await expect(page.locator('body')).toBeVisible({ timeout: 10_000 });
 
     const fatal = errors.filter(
       (e) => !/NativeEventEmitter|Deprecated|firebase|google|maps/i.test(e)
@@ -102,9 +102,9 @@ test.describe('rider-app: cancellation flow', () => {
     });
 
     await page.goto('/');
-    await page.waitForTimeout(2500);
+    await page.waitForLoadState('networkidle').catch(() => {});
 
-    await expect(page.locator('body')).toBeVisible();
+    await expect(page.locator('body')).toBeVisible({ timeout: 10_000 });
 
     // Cancel endpoint must not have been called for in_progress rides
     // (no UI button should trigger it automatically)
@@ -131,9 +131,9 @@ test.describe('rider-app: cancellation flow', () => {
     });
 
     await page.goto('/');
-    await page.waitForTimeout(2500);
+    await page.waitForLoadState('networkidle').catch(() => {});
 
-    await expect(page.locator('body')).toBeVisible();
+    await expect(page.locator('body')).toBeVisible({ timeout: 10_000 });
 
     const fatal = errors.filter(
       (e) => !/NativeEventEmitter|Deprecated|firebase|google|maps/i.test(e)

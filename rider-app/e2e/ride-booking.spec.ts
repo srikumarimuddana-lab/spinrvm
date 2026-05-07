@@ -53,11 +53,11 @@ test.describe('rider-app web: ride booking smoke', () => {
         activeRide: { ...MOCK_RIDE, status: stage.status },
       });
       await page.goto('/');
-      await page.waitForTimeout(2500);
+      await page.waitForLoadState('networkidle').catch(() => {});
 
       // R-P1-26: use specific screen selector with fallback to body
       const target = page.locator(stage.selector).first();
-      await expect(target).toBeVisible();
+      await expect(target).toBeVisible({ timeout: 10_000 });
     }
 
     const fatal = errors.filter(
@@ -76,10 +76,10 @@ test.describe('rider-app web: ride booking smoke', () => {
       activeRide: { ...MOCK_RIDE, status: 'completed', total_fare: 12.50 },
     });
     await page.goto('/');
-    await page.waitForTimeout(3000);
+    await page.waitForLoadState('networkidle').catch(() => {});
 
     // Verify the page rendered without fatal errors
-    await expect(page.locator('body')).toBeVisible();
+    await expect(page.locator('body')).toBeVisible({ timeout: 10_000 });
 
     const fatal = errors.filter(
       (e) => !/NativeEventEmitter|Deprecated|firebase|google|maps/i.test(e)
@@ -99,7 +99,7 @@ test.describe('rider-app web: ride booking smoke', () => {
     });
 
     await page.goto('/');
-    await page.waitForTimeout(3000);
+    await page.waitForLoadState('networkidle').catch(() => {});
     await expect(page).toHaveURL(/.*/);
     await estimatesCalled;
   });

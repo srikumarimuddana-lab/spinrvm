@@ -30,6 +30,23 @@ config.resolver.nodeModulesPaths = [
   path.resolve(__dirname, 'node_modules'),
 ];
 
+// Block .d.ts files and the entire @types/ tree from being bundled.
+// React 19 bundles its own types — the standalone @types/react package
+// is only present transitively (via @types/react-test-renderer) and its
+// patched main field would otherwise cause Metro to try parsing index.d.ts
+// (which uses `export =` syntax that Babel can't process).
+config.resolver.blockList = [
+  /.*\.d\.ts$/,
+  /node_modules[\\/]@types[\\/].*/,
+];
+
+// Force `react` and `react-dom` to resolve to the actual packages, not @types
+config.resolver.extraNodeModules = {
+  ...config.resolver.extraNodeModules,
+  react: path.resolve(__dirname, 'node_modules/react'),
+  'react-dom': path.resolve(__dirname, 'node_modules/react-dom'),
+};
+
 // ── Web build: stub native-only packages ──────────────────────────────────
 // react-native-maps and react-native-maps-directions are native-only.
 // On web, Metro resolves them to thin stubs so `expo export --platform web`

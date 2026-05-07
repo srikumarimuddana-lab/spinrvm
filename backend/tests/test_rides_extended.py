@@ -128,7 +128,10 @@ class TestAddTip:
             )
 
         assert result["success"] is True
-        assert result["tip_amount"] == 5.00
+        # Audit-17 Phase 1c: tip_amount crosses the wire as a decimal string
+        # (e.g. "5.00"), never an IEEE-754 float. See backend/routes/rides.py
+        # ``_money_str`` helper.
+        assert result["tip_amount"] == "5.00"
 
     def test_zero_tip_fails_pydantic_validation(self):
         from pydantic import ValidationError

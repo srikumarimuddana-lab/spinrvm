@@ -121,9 +121,7 @@ async def test_autocomplete_records_per_call_without_token(mock_redis, monkeypat
     mock_client = MagicMock()
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
-    mock_client.get = AsyncMock(
-        return_value=_mock_httpx_response({"status": "OK", "predictions": []})
-    )
+    mock_client.get = AsyncMock(return_value=_mock_httpx_response({"status": "OK", "predictions": []}))
 
     with patch("routes.maps_proxy.httpx.AsyncClient", return_value=mock_client):
         await maps_proxy.places_autocomplete(
@@ -214,9 +212,7 @@ async def test_reverse_geocode_caches_on_miss(mock_redis, monkeypatch):
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=False)
     mock_client.get = AsyncMock(
-        return_value=_mock_httpx_response(
-            {"status": "OK", "results": [{"formatted_address": "1 Main St"}]}
-        )
+        return_value=_mock_httpx_response({"status": "OK", "results": [{"formatted_address": "1 Main St"}]})
     )
 
     with patch("routes.maps_proxy.httpx.AsyncClient", return_value=mock_client):

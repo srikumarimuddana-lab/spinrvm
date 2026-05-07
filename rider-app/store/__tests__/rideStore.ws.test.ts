@@ -132,7 +132,7 @@ describe('rideStore — WebSocket-driven updates', () => {
     it('should clear chatMessages on clearRide', () => {
       useRideStore.setState({
         currentRide: { id: 'ride_1' } as any,
-        chatMessages: [{ id: 'm1', text: 'test' }],
+        chatMessages: [{ id: 'm1', text: 'test', sender: 'rider' }],
       });
 
       useRideStore.getState().clearRide();
@@ -170,7 +170,7 @@ describe('rideStore — WebSocket-driven updates', () => {
       useRideStore.setState({
         currentRide: { id: 'ride_1', status: 'driver_assigned' } as any,
         currentDriver: { id: 'driver_1', name: 'Jane' } as any,
-        chatMessages: [{ id: 'm1', text: 'On my way' }],
+        chatMessages: [{ id: 'm1', text: 'On my way', sender: 'driver' }],
       });
 
       useRideStore.getState().clearRide();

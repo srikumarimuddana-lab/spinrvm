@@ -74,6 +74,13 @@ class Settings(BaseSettings):
 
     # Rate limiting
     RATE_LIMIT: str = "10/minute"
+
+    # ── Google Maps Platform daily-spend circuit breaker ────────────────────
+    # When estimated USD spend for the current UTC day exceeds this threshold
+    # the Maps proxy responds 503 instead of forwarding to Google. Defence in
+    # depth on top of GCP-side budget alerts. Default is conservative; raise
+    # via env var once steady-state usage is known.
+    MAPS_DAILY_BUDGET_USD: float = 5.0
     # Redis configuration
     # Generic base URL (e.g. redis://localhost:6379/0). If specialized URLs below
     # are unset, they fall back to this.

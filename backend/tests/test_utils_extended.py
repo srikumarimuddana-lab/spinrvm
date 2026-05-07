@@ -1368,12 +1368,10 @@ class TestFaqsEndpoint:
 
 
 class TestSettingsEndpoints:
-    def test_debug_env_returns_masked_values(self):
-        from backend.routes.settings import debug_env
-
-        result = asyncio.run(debug_env())
-        assert "REDIS_URL" in result
-        assert "ENV" in result
+    # NOTE: test_debug_env_returns_masked_values removed — the /debug-env endpoint
+    # was an explicitly temporary Railway-Redis-injection probe and was deleted in
+    # commit "fix: remove temporary debug-env endpoint after Railway Redis validation".
+    # The test outlived its target.
 
     def test_get_public_settings(self):
         from backend.routes.settings import get_public_settings

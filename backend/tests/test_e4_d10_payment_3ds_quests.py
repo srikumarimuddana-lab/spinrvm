@@ -134,7 +134,10 @@ class TestPayment3DSRetry:
             patch("backend.utils.payment_retry.db.get_rows", AsyncMock(return_value=rides)),
             patch(
                 "backend.utils.payment_retry.db.update_one",
-                AsyncMock(side_effect=lambda t, q, d: updates.append((q, d))),
+                # Return a truthy ride dict so the retry loop's atomic-claim
+                # gate (`if claimed is None: continue`) passes; capture every
+                # call so individual tests can locate the post-claim update.
+                AsyncMock(side_effect=lambda t, q, d: (updates.append((q, d)) or {"id": RIDE_ID})),
             ),
             patch(
                 "backend.utils.payment_retry.get_app_settings",
@@ -151,12 +154,20 @@ class TestPayment3DSRetry:
 
         return updates, push_calls, mock_stripe
 
+    @staticmethod
+    def _find(updates, key, value):
+        """Return the first update_one call whose $set[key] == value."""
+        for q, d in updates:
+            if d.get("$set", {}).get(key) == value:
+                return q, d
+        raise AssertionError(f"No update found with $set[{key!r}] == {value!r}; got {updates!r}")
+
     async def test_already_succeeded_intent_marks_paid(self):
         """If the PaymentIntent already succeeded (webhook missed), mark paid."""
         updates, _, mock_stripe = await self._run_retry([_ride("requires_action", 0)], "succeeded")
 
         assert updates, "No DB update performed"
-        _, data = updates[0]
+        _, data = self._find(updates, "payment_status", "paid")
         assert data["$set"]["payment_status"] == "paid"
         mock_stripe.PaymentIntent.confirm.assert_not_called()
 
@@ -165,8 +176,7 @@ class TestPayment3DSRetry:
         updates, _, mock_stripe = await self._run_retry([_ride("requires_action", 0)], "requires_confirmation")
 
         mock_stripe.PaymentIntent.confirm.assert_called_once()
-        _, data = updates[0]
-        assert data["$set"]["payment_status"] == "processing"
+        _, data = self._find(updates, "payment_status", "processing")
         assert data["$set"]["payment_retry_count"] == 1
 
     async def test_cancelled_intent_is_capped_not_retried(self):
@@ -176,7 +186,7 @@ class TestPayment3DSRetry:
         updates, _, mock_stripe = await self._run_retry([_ride("requires_action", 0)], "canceled")
 
         mock_stripe.PaymentIntent.confirm.assert_not_called()
-        _, data = updates[0]
+        _, data = self._find(updates, "payment_retry_count", MAX_RETRIES)
         assert data["$set"]["payment_retry_count"] == MAX_RETRIES
 
     async def test_ride_at_max_retries_is_skipped(self):

@@ -233,6 +233,12 @@ class TestPayment3DSRetry:
         from backend.utils import payment_retry
 
         importlib.reload(payment_retry)
+        # The reload bifurcates sys.modules['backend.utils.payment_retry']
+        # from ['utils.payment_retry'] (conftest's alias is broken). Re-alias
+        # so later tests that patch the un-prefixed path still hit the same
+        # module object. Without this, test_payment_retry's patches go to a
+        # stale module while production code uses the reloaded one.
+        sys.modules["utils.payment_retry"] = sys.modules["backend.utils.payment_retry"]
 
         with (
             patch.dict(sys.modules, {"stripe": mock_stripe}),

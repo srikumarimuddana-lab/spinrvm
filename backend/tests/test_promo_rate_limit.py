@@ -82,6 +82,22 @@ def _build_promo_app() -> FastAPI:
 # ── /promo/validate (10 per minute) ──────────────────────────────────────────
 
 
+@pytest.fixture(autouse=True)
+def _enable_real_limiter():
+    """The global conftest disables `default_limiter` (so most tests don't trip
+    rate-limits incidentally). These tests need the real limiter ON to verify
+    enforcement, so locally re-enable + reset its storage before each test."""
+    from utils.rate_limiter import default_limiter
+
+    default_limiter.enabled = True
+    inner = getattr(default_limiter, "_limiter", None)
+    storage = getattr(inner, "storage", None) if inner is not None else None
+    if storage is not None and callable(getattr(storage, "reset", None)):
+        storage.reset()
+    yield
+    default_limiter.enabled = False
+
+
 class TestPromoValidateRateLimit:
     """Rate-limit enforcement for POST /promo/validate (promo_validate_limit: 10/min)."""
 

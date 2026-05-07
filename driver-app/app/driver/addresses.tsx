@@ -83,7 +83,9 @@ export default function AddressesScreen() {
             const res = await api.get<SavedAddress[]>('/addresses');
             setAddresses(res.data || []);
         } catch (err: any) {
-            console.log('Error fetching addresses:', err);
+            // PIPEDA: never spread the raw error body into logs — backend error
+            // payloads can contain saved-address strings or user identifiers.
+            console.error('Error fetching addresses', { code: err?.code, status: err?.status });
             showAlert('Error', 'Failed to load saved addresses', 'danger');
         } finally {
             setLoading(false);

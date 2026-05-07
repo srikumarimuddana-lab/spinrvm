@@ -69,12 +69,17 @@ _LOCK_KEY = "otp_lock:{}"
 
 
 async def _check_otp_lockout(phone: str) -> None:
-    """Raise 429 if phone is currently locked out. Never raises on Redis errors."""
+    """Raise 429 if phone is currently locked out. Fail closed on Redis errors."""
     try:
         locked = await redis_get(_LOCK_KEY.format(phone))
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.warning(f"_check_otp_lockout: redis_get failed: {e}")
-        return
+        logger.error(f"Redis unavailable in OTP lockout check: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail="Authentication service temporarily unavailable. Please try again."
+        )
     if locked:
         raise HTTPException(
             status_code=429,

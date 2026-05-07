@@ -533,6 +533,18 @@ async def create_ride(
         raise HTTPException(status_code=403, detail="Your account has been suspended due to policy violations.")
     if user_status == "suspended":
         raise HTTPException(status_code=403, detail="Your account is currently suspended. Please contact support.")
+
+    # Double-booking guard: reject if rider already has an active ride
+    existing_ride = await db.find_one(
+        "rides",
+        {
+            "rider_id": current_user["id"],
+            "status": {"$nin": ["completed", "cancelled"]}
+        }
+    )
+    if existing_ride:
+        raise HTTPException(status_code=409, detail="You already have an active ride. Please complete or cancel it first.")
+
     if body.payment_method == "card":
         if not rider_row or not rider_row.get("stripe_customer_id"):
             raise HTTPException(status_code=400, detail="No payment method on file. Please add a card first.")

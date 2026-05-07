@@ -8,6 +8,8 @@ import {
   ActivityIndicator,
   Platform,
   Image,
+  Linking,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -18,6 +20,7 @@ import { useAuthStore } from '@shared/store/authStore';
 import { useRideStore } from '../../store/rideStore';
 import AppMap from '@shared/components/AppMap';
 import CustomAlert from '@shared/components/CustomAlert';
+import { SOSButton } from '@shared/components/SOSButton';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -133,6 +136,34 @@ export default function HomeScreen() {
     router.push('/search-destination');
   };
 
+  const { currentRide, triggerEmergency } = useRideStore();
+
+  const handleSOSPress = async (rideId: string | undefined, lat?: number, lng?: number) => {
+    if (rideId) {
+      try {
+        await triggerEmergency(rideId, lat, lng);
+      } catch (error) {
+        Alert.alert(
+          '⚠️ Emergency Alert May Not Have Sent',
+          'Could not reach the server. Please call 911 directly.',
+          [
+            {
+              text: 'Call 911',
+              style: 'destructive',
+              onPress: () => Linking.openURL('tel:911'),
+            },
+            {
+              text: 'Cancel',
+              style: 'cancel',
+            },
+          ]
+        );
+      }
+    } else {
+      Linking.openURL('tel:911');
+    }
+  };
+
   return (
     <View style={styles.container}>
       {/* Map Implementation */}
@@ -233,23 +264,13 @@ export default function HomeScreen() {
         </View>
 
         {/* SOS Button - Left Side */}
-        <TouchableOpacity
-          style={styles.sosButton}
-          accessibilityLabel="SOS emergency button"
-          accessibilityRole="button"
-          accessibilityHint="Alerts emergency services"
-          onPress={() => {
-            setAlertState({
-              visible: true,
-              title: 'SOS Triggered',
-              message: 'Emergency services have been alerted. Stay calm and stay where you are.',
-              variant: 'danger',
-            });
-          }}
-        >
-          <Ionicons name="shield-checkmark" size={24} color="#FFFFFF" />
-          <Text style={styles.sosText}>SOS</Text>
-        </TouchableOpacity>
+        <View style={styles.sosContainer}>
+          <SOSButton
+            rideId={currentRide?.id}
+            onTrigger={handleSOSPress}
+            size="small"
+          />
+        </View>
 
         {/* Current Location Button - Fixed Logic */}
         <TouchableOpacity style={styles.locationButton} onPress={async () => {
@@ -517,27 +538,10 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.border,
       marginHorizontal: 4,
     },
-    sosButton: {
+    sosContainer: {
       position: 'absolute',
       left: 20,
-      bottom: 20, // Move to bottom like location button
-      backgroundColor: colors.primary,
-      flexDirection: 'row',
-      alignItems: 'center',
-      paddingHorizontal: 16,
-      paddingVertical: 10,
-      borderRadius: 24,
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.3,
-      shadowRadius: 8,
-      elevation: 6,
-    },
-    sosText: {
-      color: '#FFFFFF',
-      fontSize: 14,
-      fontFamily: 'PlusJakartaSans_700Bold',
-      marginLeft: 8,
+      bottom: 20,
     },
     bottomSheet: {
       backgroundColor: colors.surface,

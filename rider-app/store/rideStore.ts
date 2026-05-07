@@ -317,9 +317,12 @@ export const useRideStore = create<RideState>((set, get) => ({
   },
 
   createRide: async (paymentMethod) => {
-    const { pickup, dropoff, selectedVehicle, stops, scheduledTime } = get();
+    const { pickup, dropoff, selectedVehicle, stops, scheduledTime, currentRide } = get();
     if (!pickup || !dropoff || !selectedVehicle) {
       throw new Error('Missing ride details');
+    }
+    if (currentRide && !['completed', 'cancelled'].includes(currentRide.status)) {
+      throw new Error('You already have an active ride');
     }
 
     try {
@@ -448,7 +451,7 @@ export const useRideStore = create<RideState>((set, get) => ({
       });
     } catch (error: any) {
       console.error('Failed to trigger emergency:', error);
-      // Even if API fails, we don't throw to not block the local 911 UI flow
+      throw error;
     }
   },
 

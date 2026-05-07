@@ -17,12 +17,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     updates: {
         url: 'https://u.expo.dev/8f1e4f60-720e-46b0-9b71-33c13d3af043',
     },
-    // Use appVersion policy so runtime version tracks the `version` field above.
-    // The fingerprint policy was producing local-vs-EAS hash mismatches due to
-    // cross-OS yarn install differences (Windows host vs Linux EAS runner).
-    // appVersion is deterministic across environments — pre-launch with no
-    // production users, OTA compatibility risk is zero.
-    runtimeVersion: { policy: 'appVersion' },
+    // Bare workflow requires a literal string runtimeVersion (policies like
+    // 'fingerprint'/'appVersion' rejected by EAS CLI). Bump manually when
+    // shipping native changes that break JS-bundle compatibility. Pre-launch
+    // with no production users, OTA compatibility risk is zero.
+    runtimeVersion: '1.0.0',
     splash: {
         backgroundColor: '#ee2b2b',
         resizeMode: 'contain',

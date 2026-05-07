@@ -228,7 +228,7 @@ async def admin_create_promotion(promotion: PromotionCreateRequest, admin: dict 
         row = await db_supabase.insert_one("promotions", full_doc)
     except Exception:
         # Fallback: insert without optional fields that may not exist in schema
-        logger.warning("Promotions insert failed with optional fields, retrying without them")
+        logger.error("Promotions insert failed with optional fields, retrying without them", exc_info=True)
         row = await db_supabase.insert_one("promotions", doc)
 
     promotion_id = str(row.get("id") if row and isinstance(row, dict) else "")
@@ -265,7 +265,7 @@ async def admin_get_promo_usage(
             offset=offset,
         )
     except Exception:
-        logger.warning("promo_applications table may not exist yet")
+        logger.error("promo_applications table missing or query failed", exc_info=True)
         return []
 
     # Filter by date range in Python (supabase may not support complex date filters)
@@ -314,7 +314,7 @@ async def admin_get_promo_stats(date_range: Optional[str] = Query(None, alias="r
             "promo_applications", usage_filter, order="created_at", desc=True, limit=5000
         )
     except Exception:
-        logger.warning("promo_applications table may not exist yet")
+        logger.error("promo_applications table missing or query failed", exc_info=True)
         all_usage = []
 
     filtered_usage = all_usage

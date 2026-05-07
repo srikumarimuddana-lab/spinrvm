@@ -2,6 +2,7 @@ from decimal import Decimal
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 try:
@@ -10,23 +11,29 @@ try:
     from ..settings_loader import get_app_settings
     from ..utils.audit_logger import log_user_action as _audit_log_user
     from ..utils.error_handling import (
+        ErrorCode,
         PaymentException,
         PaymentMethodInvalidException,
+        SpinrException,
     )
     from ..utils.error_keys import ErrorKeys
     from ..utils.idempotency import idempotent_endpoint
-    from ..utils.rate_limiter import api_rate_limit, payment_action_limit
+    from ..utils.money import dollars_to_cents
+    from ..utils.rate_limiter import payment_action_limit
 except ImportError:
     import db_supabase
     from dependencies import get_current_user
     from settings_loader import get_app_settings
     from utils.audit_logger import log_user_action as _audit_log_user
     from utils.error_handling import (
+        ErrorCode,
         PaymentException,
         PaymentMethodInvalidException,
+        SpinrException,
     )
     from utils.error_keys import ErrorKeys
     from utils.idempotency import idempotent_endpoint
+    from utils.money import dollars_to_cents
     from utils.rate_limiter import payment_action_limit
 import logging
 
@@ -75,7 +82,9 @@ async def get_or_create_stripe_customer(user_id: str, stripe_secret: str):
         # Re-read to use the authoritative value in case a concurrent replica wrote first.
         # (The loser's Stripe customer is unused but harmless; deduplication can run offline.)
         fresh = await db_supabase.get_user_by_id(user_id)
-        stripe_customer_id = (fresh or {}).get("stripe_customer_id", stripe_customer_id)
+        if not fresh:
+            raise HTTPException(status_code=404, detail="User not found during Stripe customer creation")
+        stripe_customer_id = fresh["stripe_customer_id"]
 
     return stripe_customer_id
 
@@ -119,7 +128,10 @@ async def create_payment_intent(
                     action_hint="Refresh the fare estimate",
                 )
 
-        amount = int(Decimal(str(body.amount)).quantize(Decimal("0.01")) * 100)
+        # Decimal-safe dollars→cents (HALF_UP). ``int(body.amount * 100)``
+        # would undercharge by 1¢ on values like $0.29, $1.13, $17.81 due
+        # to binary-float drift. See backend/utils/money.py.
+        amount = dollars_to_cents(body.amount)
 
         # Get or create customer for saved payments
         stripe_customer_id = await get_or_create_stripe_customer(current_user["id"], stripe_secret)
@@ -157,10 +169,68 @@ async def create_payment_intent(
             idempotency_key=idempotency_key,
         )
 
+        # 3-D Secure / SCA happy-path: PaymentIntent succeeded at the API
+        # boundary but Stripe is asking the rider to complete an additional
+        # authentication step (3DS challenge). The mobile SDK reads
+        # `client_secret` + `next_action` to drive the flow. We surface this
+        # as a 402 with `code='action_required'` so the rider app branches
+        # into Stripe's handleNextAction() rather than treating it as
+        # success and confirming the payment server-side.
+        if getattr(intent, "status", None) == "requires_action":
+            return JSONResponse(
+                status_code=402,
+                content={
+                    "success": False,
+                    "detail": "Additional authentication required",
+                    "error": {
+                        "code": ErrorCode.PAYMENT_METHOD_INVALID.value,
+                        "message": "Additional authentication required",
+                        "message_key": ErrorKeys.PAYMENT_METHOD_INVALID,
+                        "details": {
+                            "code": "action_required",
+                            "client_secret": intent.client_secret,
+                            "payment_intent_id": intent.id,
+                            "next_action": getattr(intent, "next_action", None),
+                        },
+                    },
+                },
+            )
+
         return {"client_secret": intent.client_secret, "payment_intent_id": intent.id, "mock": False}
     except stripe.error.CardError as e:
+        # Order matters: CardError must come BEFORE the generic StripeError
+        # branch (Python checks except clauses top-down, and CardError is a
+        # StripeError subclass). Card-decline / wrong-CVC / expired-card all
+        # land here and must surface as 402 so the rider SDK switches to
+        # the "try another card" UX. 3-D Secure challenges raised
+        # synchronously (rare; the success-path handler above is the common
+        # route) appear as code='authentication_required' and we forward
+        # that to the SDK as code='action_required'.
         logger.error(f"Stripe CardError on create-intent: {e}", exc_info=True)
-        raise HTTPException(status_code=402, detail=e.user_message or "Card declined") from e
+        details: Dict[str, Any] = {}
+        if getattr(e, "code", None) == "authentication_required":
+            details["code"] = "action_required"
+        raise PaymentMethodInvalidException(
+            message=getattr(e, "user_message", None) or "Card declined",
+            message_key=ErrorKeys.PAYMENT_METHOD_INVALID,
+            status_code=402,
+            action_hint="Add a different card",
+            details=details or None,
+        ) from e
+    except stripe.error.RateLimitError as e:
+        # Stripe is throttling us. 429 with Retry-After lets the rider
+        # app's Axios interceptor back off rather than retrying instantly.
+        # We use SpinrException directly (not RateLimitExceededException)
+        # to keep the response shape identical to the OTP-lockout 429
+        # handler — same parser on the mobile side.
+        logger.error(f"Stripe RateLimitError on create-intent: {e}", exc_info=True)
+        raise SpinrException(
+            message="Payment provider is rate-limiting requests. Please try again shortly.",
+            error_code=ErrorCode.RATE_LIMIT_EXCEEDED,
+            status_code=429,
+            headers={"Retry-After": "30"},
+            action_hint="Try again in a moment",
+        ) from e
     except stripe.error.StripeError as e:
         logger.error(f"Stripe API error on create-intent: {e}", exc_info=True)
         raise HTTPException(status_code=502, detail="Payment service unavailable. Please try again.") from e
@@ -178,9 +248,36 @@ async def confirm_payment(
     payment_intent_id = body.get("payment_intent_id")
     ride_id = body.get("ride_id")
 
+    if ride_id:
+        ride = await db_supabase.get_ride(ride_id)
+        if not ride:
+            raise HTTPException(status_code=404, detail="Ride not found")
+        if ride["rider_id"] != current_user["id"]:
+            raise HTTPException(status_code=403, detail="forbidden")
+
+        # C-3: Idempotency check — if a prior webhook already settled this payment,
+        # return early with a clear signal rather than re-entering the Stripe flow.
+        # This covers the case where the rider app retries confirm_payment after a
+        # network timeout when the webhook has already processed the payment.
+        # HTTP 200 (not 409) because the payment succeeded — this is not an error.
+        payment_status = ride.get("payment_status")
+        if payment_status in ("paid", "processing"):
+            logger.info(
+                "confirm_payment: ride %s already in payment_status=%s, returning early (C-3 idempotency)",
+                ride_id,
+                payment_status,
+            )
+            return {"status": "already_processed", "payment_status": payment_status}
+
+        claimed = await db_supabase.claim_ride_payment_processing(ride_id)
+        if not claimed:
+            raise HTTPException(status_code=409, detail="payment_already_processing")
+
     if payment_intent_id and payment_intent_id.startswith("pi_mock_"):
-        # Mock payment
         if ride_id:
+            _ride = await db_supabase.get_ride(ride_id)
+            if not _ride or _ride.get("rider_id") != current_user["id"]:
+                raise HTTPException(status_code=403, detail="Not authorized to confirm payment for this ride")
             await db_supabase.update_ride(ride_id, {"payment_status": "paid", "payment_intent_id": payment_intent_id})
         return {"status": "succeeded", "mock": True}
 
@@ -191,7 +288,13 @@ async def confirm_payment(
         try:
             intent = stripe.PaymentIntent.retrieve(payment_intent_id, api_key=stripe_secret)
 
+            if intent.metadata.get("user_id") != str(current_user["id"]):
+                raise HTTPException(status_code=403, detail="Not authorized to confirm this payment")
+
             if ride_id:
+                _ride = await db_supabase.get_ride(ride_id)
+                if not _ride or _ride.get("rider_id") != current_user["id"]:
+                    raise HTTPException(status_code=403, detail="Not authorized to confirm payment for this ride")
                 await db_supabase.update_ride(
                     ride_id, {"payment_status": intent.status, "payment_intent_id": payment_intent_id}
                 )
@@ -472,12 +575,6 @@ async def add_card(request: Request = None, current_user: dict = Depends(get_cur
             message_key=ErrorKeys.PAYMENT_METHOD_INVALID,
             action_hint="Add a different card",
         ) from e
-    except stripe.error.CardError as e:
-        raise PaymentMethodInvalidException(
-            message=e.user_message or "Card declined",
-            message_key=ErrorKeys.PAYMENT_METHOD_INVALID,
-            action_hint="Add a different card",
-        ) from e
     except stripe.error.StripeError as e:
         logger.error(f"Stripe API error on add-card: {e}", exc_info=True)
         raise HTTPException(status_code=502, detail="Payment service unavailable. Please try again.") from e
@@ -572,6 +669,8 @@ async def create_payment_sheet(
         ride = await db_supabase.get_ride(body.ride_id)
         if not ride:
             raise HTTPException(status_code=404, detail="Ride not found")
+        if ride.get("rider_id") != current_user["id"]:
+            raise HTTPException(status_code=403, detail="Not authorized to pay for this ride")
         ride_fare = Decimal(str(ride.get("total_fare", 0)))
         requested = Decimal(str(body.amount))
         if requested != ride_fare:

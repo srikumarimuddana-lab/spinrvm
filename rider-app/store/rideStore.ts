@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { Alert, Linking } from 'react-native';
 import api from '@shared/api/client';
-import { useAuthStore } from '@shared/store/authStore';
+import { useAuthStore, registerLogoutCallback } from '@shared/store/authStore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { RideStatus } from '../constants/rideStatus';
 import { recordNonFatal } from '../utils/crashlytics';
@@ -51,6 +51,11 @@ interface RideEstimate {
   available: boolean;
   eta_minutes: number;
   driver_count: number;
+  // WAV (wheelchair-accessible vehicle) driver count nearby — populated by
+  // backend GET /rides/estimate. Used to gate the WAV toggle in ride-options.tsx
+  // (Saskatchewan Transportation Act s.22). Optional because older backends
+  // may not return it.
+  wav_available?: number;
   // P0-4: signed token that locks the surge shown in this estimate.
   // Sent back on POST /rides so the confirmed fare matches what the
   // rider saw, even if service-area surge changes between estimate + confirm.
@@ -97,6 +102,12 @@ interface Ride {
   distance_km: number;
   duration_minutes: number;
   base_fare: string; // MoneyString
+  // Per-component fare breakdown (PR #664 stringified Decimal in API
+  // response). Optional because some legacy / partially-migrated rides
+  // may not have all components set.
+  distance_fare?: string; // MoneyString
+  time_fare?: string; // MoneyString
+  booking_fee?: string; // MoneyString
   total_fare: string; // MoneyString
   payment_method: string;
   payment_status?: string;
@@ -131,7 +142,7 @@ interface Promo {
   [key: string]: unknown;
 }
 
-interface ChatMessage {
+export interface ChatMessage {
   id: string;
   text: string;
   sender: string;
@@ -585,8 +596,11 @@ export const useRideStore = create<RideState>((set, get) => ({
     try {
       const response = await api.get<SavedAddress[]>('/addresses');
       set({ savedAddresses: response.data as SavedAddress[] });
-    } catch (error: unknown) {
-      console.log('Error fetching addresses:', isErrorLike(error) ? error.message : error);
+    } catch (err: unknown) {
+      // PIPEDA: never spread the raw error body into logs — backend error
+      // payloads can contain saved-address strings or user identifiers.
+      const e = err as { code?: unknown; status?: unknown } | undefined;
+      console.error('Error fetching addresses', { code: e?.code, status: e?.status });
     }
   },
 
@@ -713,10 +727,17 @@ export const useRideStore = create<RideState>((set, get) => ({
     // while the next poll (reduced to 15 s via the WS fallback) fills
     // in any remaining details the WS message doesn't carry.
     const updated = { ...currentRide, status, ...(extra || {}) };
-    // Keep currentDriver so the ride-completed receipt screen can still show
-    // driver name/vehicle until the user taps Done. clearRide() will null it.
-    set({ currentRide: updated });
-    _persistRide(updated, currentDriver);
+    // Clear currentDriver and driverEtaSeconds on terminal states so stale
+    // driver location data doesn't persist into the next booking session.
+    // The receipt screen reads driver info from currentRide.driver, not
+    // currentDriver, so clearing here doesn't break the post-trip flow.
+    if (TERMINAL_STATUSES.has(status)) {
+      set({ currentRide: updated, currentDriver: null, driverEtaSeconds: null });
+      _persistRide(updated, null);
+    } else {
+      set({ currentRide: updated });
+      _persistRide(updated, currentDriver);
+    }
   },
 
   // ── Offline hydration ────────────────────────────────────────────
@@ -757,3 +778,21 @@ export const useRideStore = create<RideState>((set, get) => ({
     }
   },
 }));
+
+// Register a logout callback so that when authStore.logout() fires, all
+// per-session ride state is wiped. This prevents ghost data (currentRide,
+// currentDriver, chatMessages, estimates) from leaking to the next user who
+// logs in on the same device.
+registerLogoutCallback(() => {
+  useRideStore.setState({
+    currentRide: null,
+    currentDriver: null,
+    driverEtaSeconds: null,
+    chatMessages: [],
+    estimates: [],
+    nearbyDrivers: [],
+    appliedPromo: null,
+    error: null,
+  });
+  AsyncStorage.removeItem(ACTIVE_RIDE_KEY).catch(() => {});
+});

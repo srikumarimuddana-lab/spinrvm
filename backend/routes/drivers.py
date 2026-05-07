@@ -1436,8 +1436,9 @@ class PayoutRequest(BaseModel):
     amount: Decimal = Field(
         ...,
         ge=Decimal("10.00"),
+        le=Decimal("50000.00"),
         decimal_places=2,
-        description="Minimum payout is $10.00",
+        description="Payout must be between $10.00 and $50,000.00",
     )
 
 
@@ -2066,6 +2067,10 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
     if declined is None:
         # Race lost — another driver already accepted; our decline is a no-op.
         logger.info(f"[DECLINE] ride {ride_id} already claimed by another driver; decline ignored")
+        # SGI insurance period audit — even on a race loss the driver is no
+        # longer obligated to this ride, so we must log the period transition
+        # back to period 1 to avoid a gap in the commercial-insurance audit trail.
+        await record_period_transition(driver["id"], 1)
     else:
         # M-5: SGI insurance period audit — decline releases the driver from
         # period 2 back to period 1 only when the decline actually took effect.
@@ -2302,6 +2307,11 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         all_breadcrumbs = [b for b in all_breadcrumbs if b.get("lat") and b.get("lng")]
         all_breadcrumbs.sort(key=lambda b: str(b.get("timestamp", "")))
         gps_points_count = len(all_breadcrumbs)
+        if gps_points_count >= 1000:
+            logger.warning(
+                f"GPS breadcrumbs truncated at 1000 for ride {ride_id}; "
+                "actual_distance_km and route_polyline may be underreported"
+            )
 
         if gps_points_count >= 2:
             # Compute per-phase distances (attribute each segment to the
@@ -2443,7 +2453,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     # Post-ride receipt notification stub
     rider = await db_supabase.get_user_by_id(ride.get("rider_id"))
     if rider and rider.get("email"):
-        logger.info(f"Sending email receipt for ride {ride_id} to user {rider['id']}")
+        logger.info(f"Sending email receipt for ride {ride_id} (rider_id={rider.get('id')})")
 
     # Fire-and-forget: render the route PNG from phase_polylines and
     # upload to Cloudinary so the admin drawer + email receipt can
@@ -3308,7 +3318,7 @@ async def get_current_subscription(current_user: dict = Depends(get_current_user
                 await db_supabase.update_one("driver_subscriptions", {"id": sub["id"]}, {"status": "expired"})
                 return {"has_subscription": False, "subscription": None, "expired": True}
         except Exception:  # noqa: S110
-            pass
+            logger.warning("get_current_subscription: failed to check/update subscription expiry", exc_info=True)
 
     # Get today's ride count
     today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -3780,7 +3790,11 @@ async def check_expiring_subscriptions():
                             }
                         )
                     except Exception:  # noqa: S110
-                        pass
+                        logger.warning(
+                            "check_expiring_subscriptions: admin broadcast failed for driver %s",
+                            driver["id"],
+                            exc_info=True,
+                        )
 
                     enforced_count += 1
                     continue

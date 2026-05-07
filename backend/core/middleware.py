@@ -477,6 +477,9 @@ def init_middleware(app):
             "Accept",
             "Accept-Language",
             "Cache-Control",
+            "X-CSRF-Token",
+            "X-Request-ID",
+            "X-Deadline-Ms",
         ],
     )
 
@@ -519,7 +522,8 @@ def init_middleware(app):
                 response.headers["Access-Control-Allow-Methods"] = "*"
                 response.headers["Access-Control-Allow-Headers"] = (
                     "Authorization, Content-Type, X-Requested-With, "
-                    "Idempotency-Key, X-Forwarded-For, Accept, Accept-Language, Cache-Control"
+                    "Idempotency-Key, X-Forwarded-For, Accept, Accept-Language, Cache-Control, "
+                    "X-CSRF-Token, X-Request-ID, X-Deadline-Ms"
                 )
                 response.headers["Vary"] = "Origin"
             elif wildcard:

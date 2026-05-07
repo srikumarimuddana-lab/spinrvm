@@ -5,11 +5,13 @@ try:
     from ..db_supabase import claim_stripe_event, mark_stripe_event_processed
     from ..features import send_push_notification
     from ..settings_loader import get_app_settings
+    from ..utils.money import cents_to_dollars
 except ImportError:
     import db_supabase
     from db_supabase import claim_stripe_event, mark_stripe_event_processed
     from features import send_push_notification
     from settings_loader import get_app_settings
+    from utils.money import cents_to_dollars
 import logging
 from datetime import datetime, timezone
 
@@ -111,7 +113,11 @@ async def stripe_webhook(request: Request):
                 from services.corporate_wallet_service import apply_topup  # type: ignore
 
             amount_cents = data_object.get("amount_received") or data_object.get("amount", 0)
-            amount_cad = amount_cents / 100
+            # Decimal-safe cents→dollars (2-dp HALF_UP). Float division
+            # ``cents / 100`` drifts for arbitrary cent values; quantize
+            # first, then hand the float to apply_topup (Postgres NUMERIC
+            # rounds to column scale).
+            amount_cad = float(cents_to_dollars(amount_cents))
             await apply_topup(
                 wallet_id=meta["wallet_id"],
                 amount=amount_cad,
@@ -136,7 +142,12 @@ async def stripe_webhook(request: Request):
                 },
             )
             if updated is None:
-                logger.warning(f"Webhook payment_intent.succeeded: ride {ride_id} not found in DB")
+                logger.error(
+                    f"Webhook payment_intent.succeeded: ride {ride_id} not found or 0 rows "
+                    f"updated — payment {payment_intent_id} unlinked",
+                    extra={"domain": "payments", "event_id": event_id, "ride_id": ride_id},
+                )
+                raise HTTPException(status_code=500, detail="Ride update failed — Stripe will retry")
             else:
                 logger.info(f"Payment confirmed via webhook for ride {ride_id}")
 
@@ -160,7 +171,7 @@ async def stripe_webhook(request: Request):
         failure_message = data_object.get("last_payment_error", {}).get("message", "Payment failed")
 
         if ride_id:
-            await db_supabase.update_ride(
+            updated = await db_supabase.update_ride(
                 ride_id,
                 {
                     "payment_status": "failed",
@@ -168,6 +179,13 @@ async def stripe_webhook(request: Request):
                     "payment_failure_reason": failure_message,
                 },
             )
+            if updated is None:
+                logger.error(
+                    f"Webhook payment_intent.payment_failed: ride {ride_id} not found or 0 rows "
+                    f"updated — payment failure {payment_intent_id} unlinked",
+                    extra={"domain": "payments", "event_id": event_id, "ride_id": ride_id},
+                )
+                raise HTTPException(status_code=500, detail="Ride update failed — Stripe will retry")
             logger.warning(f"Payment failed for ride {ride_id}: {failure_message}")
 
         if user_id:
@@ -192,7 +210,11 @@ async def stripe_webhook(request: Request):
                         driver_rows = await db_supabase.get_rows("drivers", {"id": driver_id}, limit=1)
                         if driver_rows:
                             driver_user_id = driver_rows[0].get("user_id")
-                if driver_user_id:
+            except Exception as lookup_err:
+                logger.error(f"Driver payment-failed lookup error: {lookup_err}", exc_info=True)
+                driver_user_id = None
+            if driver_user_id:
+                try:
                     await send_push_notification(
                         driver_user_id,
                         "Rider payment failed",
@@ -203,8 +225,11 @@ async def stripe_webhook(request: Request):
                             "deeplink": "/driver/earnings",
                         },
                     )
-            except Exception as notify_err:
-                logger.warning(f"Driver payment-failed notification error: {notify_err}")
+                except Exception:
+                    logger.warning(
+                        "Push notification failed for payment_failed event; continuing",
+                        exc_info=True,
+                    )
 
     elif event_type == "checkout.session.completed":
         # ── Spinr Pass subscription payment confirmed ──────────

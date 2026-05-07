@@ -11,6 +11,7 @@ try:
     from ...dependencies import get_admin_user
     from ...utils.password import hash_password, verify_password
     from ...utils.password_policy import validate_admin_password
+    from ...utils.pii import redact_email as _redact_email
     from ...utils.rate_limiter import admin_staff_delete_limit
     from ...utils.refresh_tokens import revoke_all_for_user
 except ImportError:
@@ -18,6 +19,7 @@ except ImportError:
     from dependencies import get_admin_user
     from utils.password import hash_password, verify_password
     from utils.password_policy import validate_admin_password
+    from utils.pii import redact_email as _redact_email
     from utils.rate_limiter import admin_staff_delete_limit
     from utils.refresh_tokens import revoke_all_for_user
 
@@ -177,7 +179,11 @@ async def create_staff(req: StaffCreateRequest, admin: dict = Depends(require_ro
             "action": "staff_created",
             "resource": "staff",
             "resource_id": staff["id"],
-            "details": {"email": staff["email"], "role": staff["role"], "modules": staff["modules"]},
+            "details": {
+                "email_masked": _redact_email(staff["email"]),
+                "role": staff["role"],
+                "modules": staff["modules"],
+            },
             "created_at": datetime.now(timezone.utc).isoformat(),
         },
     )
@@ -294,7 +300,10 @@ async def delete_staff(request: Request, staff_id: str, admin: dict = Depends(re
             "action": "staff_deleted",
             "resource": "staff",
             "resource_id": staff_id,
-            "details": {"email": s.get("email") if s else None, "role": s.get("role") if s else None},
+            "details": {
+                "email_masked": _redact_email(s.get("email")) if s else None,
+                "role": s.get("role") if s else None,
+            },
             "created_at": datetime.now(timezone.utc).isoformat(),
         },
     )

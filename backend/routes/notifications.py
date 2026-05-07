@@ -136,7 +136,9 @@ async def get_notifications(
             "notifications", {"user_id": current_user["id"], "is_read": False}
         )
     except Exception:  # noqa: S110
-        pass
+        logger.warning(
+            "list_notifications: failed to fetch unread_count for user %s", current_user.get("id"), exc_info=True
+        )
 
     return {"notifications": notifications, "unread_count": unread_count}
 

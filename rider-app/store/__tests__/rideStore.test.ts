@@ -26,6 +26,7 @@ jest.mock('@shared/api/client', () => {
 
 // Mock the auth store (imported transitively via @shared/store/authStore)
 jest.mock('@shared/store/authStore', () => ({
+  registerLogoutCallback: jest.fn(),
   useAuthStore: {
     getState: jest.fn(() => ({ user: { id: 'user-abc' } })),
   },

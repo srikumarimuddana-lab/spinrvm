@@ -92,7 +92,7 @@ async def check_expiring_documents():
             # P2-6: process docs that have already expired OR expire within the
             # warning window.  Without this gate the original code only processed
             # future expiries (now < expiry_dt), silently skipping expired docs.
-            if not (expiry_dt < now or expiry_dt < warning_cutoff):
+            if expiry_dt > now and expiry_dt > warning_cutoff:
                 continue
 
             if expiry_dt <= now:
@@ -103,24 +103,31 @@ async def check_expiring_documents():
 
         # Also check document_files / driver_documents for expiry_date
         try:
-            docs = await db.get_rows(
-                "driver_documents",
-                {"driver_id": driver["id"], "status": "approved"},
-                limit=20,
-            )
-            for doc in docs:
-                exp_dt = parse_iso_utc(doc.get("expiry_date") or doc.get("expires_at"))
-                if exp_dt is None:
-                    continue
-                doc_name = doc.get("requirement_name") or doc.get("type") or "Document"
-                # P2-6: same gate — process expired OR expiring within warning window
-                if not (exp_dt < now or exp_dt < warning_cutoff):
-                    continue
-                if exp_dt <= now:
-                    expired_docs.append(doc_name)
-                else:
-                    days_left = (exp_dt - now).days
-                    expiring_docs.append({"label": doc_name, "days_left": days_left})
+            _DOC_PAGE_SIZE = 200
+            _doc_offset = 0
+            while True:
+                docs = await db.get_rows(
+                    "driver_documents",
+                    {"driver_id": driver["id"], "status": "approved"},
+                    limit=_DOC_PAGE_SIZE,
+                    offset=_doc_offset,
+                )
+                for doc in docs:
+                    exp_dt = parse_iso_utc(doc.get("expiry_date") or doc.get("expires_at"))
+                    if exp_dt is None:
+                        continue
+                    doc_name = doc.get("requirement_name") or doc.get("type") or "Document"
+                    # P2-6: same gate — process expired OR expiring within warning window
+                    if exp_dt > now and exp_dt > warning_cutoff:
+                        continue
+                    if exp_dt <= now:
+                        expired_docs.append(doc_name)
+                    else:
+                        days_left = (exp_dt - now).days
+                        expiring_docs.append({"label": doc_name, "days_left": days_left})
+                if len(docs) < _DOC_PAGE_SIZE:
+                    break
+                _doc_offset += _DOC_PAGE_SIZE
         except Exception as e:
             logger.debug(f"Failed to check driver_documents: {e}")
 

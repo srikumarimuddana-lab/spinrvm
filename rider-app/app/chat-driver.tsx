@@ -43,7 +43,7 @@ export default function ChatDriverScreen() {
       try {
         const res = await api.get<{ messages: unknown[] }>(`/rides/${rideId}/messages`);
         if (res.data?.messages) {
-          setChatMessages(res.data.messages);
+          setChatMessages(res.data.messages as import('../store/rideStore').ChatMessage[]);
         }
       } catch (e) {
         console.log('[Chat] Failed to load history:', e);
@@ -97,7 +97,7 @@ export default function ChatDriverScreen() {
       const res = await api.post<{ message?: unknown }>(`/rides/${rideId}/messages`, { text: text.trim() });
       if (res.data?.message) {
         // Optimistically add to local state (deduplicated by the store).
-        addChatMessage(res.data.message);
+        addChatMessage(res.data.message as import('../store/rideStore').ChatMessage);
       }
     } catch (e) {
       console.log('[Chat] Send failed:', e);

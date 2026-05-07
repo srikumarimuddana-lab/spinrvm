@@ -7,6 +7,17 @@ Runs every 10 minutes (wired from lifespan startup). Each tick:
      default payment method with confirm=True.
   4. The webhook handler (Task 5) credits the wallet when the charge
      clears — no work here beyond kicking off the intent.
+
+Replay-safety contract (CLAUDE.md, Background loops):
+  This loop runs on every replica simultaneously. The Stripe
+  PaymentIntent.create call is the side-effect we must not duplicate.
+  We pass an ``idempotency_key`` derived from
+  ``(wallet_id, today_date, today_sum_cents, topup_amount_cents)`` —
+  two replicas observing the same today_sum (i.e. no top-up has
+  cleared between their reads) generate the same key, so Stripe
+  dedupes and only one charge fires. Once the first top-up is credited
+  back via webhook, today_sum advances and the next tick uses a
+  different key, allowing the legitimate next top-up.
 """
 
 from __future__ import annotations
@@ -15,7 +26,7 @@ import asyncio
 import logging
 import random
 import time
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 import stripe
 
@@ -78,10 +89,12 @@ async def _process_one(wallet: dict, stripe_secret: str) -> None:
         logger.error("wallet %s has no stripe_customer_id", wallet["id"])
         return
 
-    topup_amount = Decimal(str(wallet["auto_topup_amount"]))
-    daily_cap = Decimal(str(wallet.get("auto_topup_daily_cap") or 5000))
+    topup_amount = Decimal(str(wallet["auto_topup_amount"])).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    daily_cap = Decimal(str(wallet.get("auto_topup_daily_cap") or "5000")).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP
+    )
     today_sum = await sum_autotopups_today(wallet["id"])
-    if today_sum + topup_amount > daily_cap:
+    if Decimal(str(today_sum)) + topup_amount > daily_cap:
         logger.info(
             "autotopup: wallet %s at daily cap (%s + %s > %s)",
             wallet["id"],
@@ -93,24 +106,44 @@ async def _process_one(wallet: dict, stripe_secret: str) -> None:
 
     pm_id = await get_default_payment_method(company["stripe_customer_id"], stripe_secret)
     if not pm_id:
-        logger.warning("wallet %s has no default payment method", wallet["id"])
+        logger.error("autotopup: wallet %s has no default payment method — skipping", wallet["id"])
         return
 
-    stripe.PaymentIntent.create(
-        amount=int(topup_amount * 100),
-        currency="cad",
-        customer=company["stripe_customer_id"],
-        payment_method=pm_id,
-        off_session=True,
-        confirm=True,
-        metadata={
-            "scope": "corporate_topup",
-            "company_id": company["id"],
-            "wallet_id": wallet["id"],
-            "initiated_by": "autotopup",
-        },
-        api_key=stripe_secret,
+    # Replay-safe idempotency key — two replicas seeing the same
+    # (wallet, today_sum, topup_amount) on the same calendar day produce
+    # the same key, so Stripe collapses the duplicate call. Once the
+    # first top-up clears via webhook, today_sum advances and the next
+    # tick uses a different key. Hash to keep the key under Stripe's
+    # 255-char limit and to avoid leaking ids in transit.
+    import hashlib
+    from datetime import date
+
+    seed = (
+        f"autotopup:{wallet['id']}:{date.today().isoformat()}:"
+        f"{int(round(today_sum * 100))}:{int(round(topup_amount * 100))}"
     )
+    idempotency_key = hashlib.sha256(seed.encode()).hexdigest()
+
+    try:
+        stripe.PaymentIntent.create(
+            amount=int(topup_amount * 100),
+            currency="cad",
+            customer=company["stripe_customer_id"],
+            payment_method=pm_id,
+            off_session=True,
+            confirm=True,
+            metadata={
+                "scope": "corporate_topup",
+                "company_id": company["id"],
+                "wallet_id": wallet["id"],
+                "initiated_by": "autotopup",
+            },
+            api_key=stripe_secret,
+            idempotency_key=idempotency_key,
+        )
+    except stripe.StripeError as e:
+        logger.error("autotopup: Stripe error for wallet %s: %s", wallet["id"], e, exc_info=True)
+        return
     logger.info("autotopup: kicked intent for wallet %s (%s CAD)", wallet["id"], topup_amount)
 
 

@@ -2,6 +2,7 @@
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "strict": true,
+    "types": ["jest", "node"],
     "paths": {
       "@/*": [
         "./*"
@@ -42,14 +43,26 @@
       "expo-constants": [
         "./node_modules/expo-constants"
       ],
+      "zustand/middleware": [
+        "./node_modules/zustand/middleware"
+      ],
+      "react": [
+        "./node_modules/@types/react"
+      ],
+      "@react-native-async-storage/async-storage": [
+        "./node_modules/@react-native-async-storage/async-storage"
+      ],
+      "react-native-safe-area-context": [
+        "./node_modules/react-native-safe-area-context"
+      ],
+      "@expo/vector-icons": [
+        "./node_modules/@expo/vector-icons"
+      ],
       "expo-location": [
         "./node_modules/expo-location"
       ],
       "expo-router": [
         "./node_modules/expo-router"
-      ],
-      "@expo/vector-icons": [
-        "./node_modules/@expo/vector-icons"
       ],
       "@expo/vector-icons/*": [
         "./node_modules/@expo/vector-icons/*"

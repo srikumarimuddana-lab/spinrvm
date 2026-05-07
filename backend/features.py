@@ -8,11 +8,27 @@ import asyncio
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
 from pydantic import BaseModel
+
+# Money helpers — keep tax / fee arithmetic in Decimal so 5% GST + 6% PST
+# on values like $47.83 stays bit-exact and matches the receipt.
+_TAX_TWO_PLACES = Decimal("0.01")
+
+
+def _money(v: Any) -> Decimal:
+    """Coerce DB / wire numerics to Decimal via str() (avoids float drift)."""
+    return Decimal(str(v or 0))
+
+
+def _q2(v: Decimal) -> Decimal:
+    """Quantize to 2 dp HALF_UP."""
+    return v.quantize(_TAX_TWO_PLACES, rounding=ROUND_HALF_UP)
+
 
 try:
     from . import db_supabase
@@ -659,13 +675,19 @@ async def calculate_all_fees(
                 in_airport = True
                 break
 
-    fees_total = 0.0
+    # Decimal-driven fee + tax calculation. Floats are still acceptable
+    # at the function signature for backwards compatibility — coerced via
+    # _money() (str path) so the binary representation can't poison
+    # GST/PST values that go on the rider's receipt.
+    fees_total = Decimal("0")
     fee_items = []
+    distance_d = _money(distance_km)
+    subtotal_d = _money(subtotal)
 
     for fee in area_fees_list:
         fee_type = fee.get("fee_type", "custom")
         calc_mode = fee.get("calc_mode", "flat")
-        amount = float(fee.get("amount", 0))
+        amount = _money(fee.get("amount", 0))
         conditions = fee.get("conditions", {})
 
         # Check conditions
@@ -687,13 +709,13 @@ async def calculate_all_fees(
         if calc_mode == "flat":
             fee_value = amount
         elif calc_mode == "per_km":
-            fee_value = amount * distance_km
+            fee_value = amount * distance_d
         elif calc_mode == "percentage":
-            fee_value = (amount / 100.0) * subtotal
+            fee_value = (amount / Decimal("100")) * subtotal_d
         else:
             fee_value = amount
 
-        fee_value = round(fee_value, 2)
+        fee_value = _q2(fee_value)
         fees_total += fee_value
         fee_items.append(
             {
@@ -701,38 +723,38 @@ async def calculate_all_fees(
                 "name": fee.get("fee_name"),
                 "type": fee_type,
                 "calc_mode": calc_mode,
-                "amount": amount,
-                "calculated_value": fee_value,
+                "amount": float(amount),
+                "calculated_value": float(fee_value),
             }
         )
 
     result["fees"] = fee_items
-    result["fees_total"] = round(fees_total, 2)
+    result["fees_total"] = float(_q2(fees_total))
 
-    # Calculate taxes
-    taxable_amount = subtotal + fees_total
-    tax_breakdown = {}
-    tax_total = 0.0
+    # Calculate taxes — Decimal end-to-end so the receipt line items
+    # reconcile to the cent. SK is GST 5% + PST 6%; HST provinces use the
+    # combined rate. Each tax is quantized independently before summing
+    # so the breakdown matches the displayed total.
+    taxable_amount = subtotal_d + fees_total
+    tax_breakdown: Dict[str, Dict[str, float]] = {}
+    tax_total = Decimal("0")
+
+    def _apply_tax(label: str, rate_value: Any) -> None:
+        nonlocal tax_total
+        rate = _money(rate_value)
+        amount = _q2(taxable_amount * rate / Decimal("100"))
+        tax_breakdown[label] = {"rate": float(rate), "amount": float(amount)}
+        tax_total += amount
 
     if matched_area.get("hst_enabled"):
-        hst_rate = float(matched_area.get("hst_rate", 0))
-        hst_amount = round(taxable_amount * (hst_rate / 100.0), 2)
-        tax_breakdown["HST"] = {"rate": hst_rate, "amount": hst_amount}
-        tax_total += hst_amount
+        _apply_tax("HST", matched_area.get("hst_rate", 0))
     else:
         if matched_area.get("gst_enabled", True):
-            gst_rate = float(matched_area.get("gst_rate", 5.0))
-            gst_amount = round(taxable_amount * (gst_rate / 100.0), 2)
-            tax_breakdown["GST"] = {"rate": gst_rate, "amount": gst_amount}
-            tax_total += gst_amount
-
+            _apply_tax("GST", matched_area.get("gst_rate", 5.0))
         if matched_area.get("pst_enabled", False):
-            pst_rate = float(matched_area.get("pst_rate", 0))
-            pst_amount = round(taxable_amount * (pst_rate / 100.0), 2)
-            tax_breakdown["PST"] = {"rate": pst_rate, "amount": pst_amount}
-            tax_total += pst_amount
+            _apply_tax("PST", matched_area.get("pst_rate", 0))
 
-    result["tax_amount"] = round(tax_total, 2)
+    result["tax_amount"] = float(_q2(tax_total))
     result["tax_breakdown"] = tax_breakdown
 
     return result
@@ -1186,12 +1208,12 @@ async def send_email(*, to: str, subject: str, body: str) -> bool:
                     "content": [{"type": "text/plain", "value": body}],
                 },
             )
-            logger.info(f"[EMAIL] SendGrid to={to} subject={subject!r} status={response.status_code}")
+            logger.info(f"[EMAIL] SendGrid sent subject={subject!r} status={response.status_code}")
             return response.status_code in (200, 201, 202)
     except Exception as e:
         logger.warning(f"[EMAIL] SendGrid failed: {e}")
 
-    logger.info(f"[EMAIL] (fallback log) to={to} subject={subject!r}")
+    logger.info(f"[EMAIL] (fallback log) subject={subject!r}")
     return False
 
 

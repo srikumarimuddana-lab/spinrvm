@@ -204,85 +204,133 @@ export default function RideDetailScreen() {
                         </View>
                     </View>
 
-                    {/* Fare Breakdown */}
+                    {/* Trip Earnings Breakdown */}
                     {isCompleted && (
-                        <View style={styles.card}>
-                            <Text style={styles.cardTitle}>Fare Breakdown</Text>
-                            <View style={styles.fareRow}>
-                                <Text style={styles.fareLabel}>Base Fare</Text>
-                                <Text style={styles.fareValue}>${(ride.base_fare || 0).toFixed(2)}</Text>
-                            </View>
-                            <View style={styles.fareRow}>
-                                <Text style={styles.fareLabel}>Distance Fare</Text>
-                                <Text style={styles.fareValue}>${(ride.distance_fare || 0).toFixed(2)}</Text>
-                            </View>
-                            <View style={styles.fareRow}>
-                                <Text style={styles.fareLabel}>Time Fare</Text>
-                                <Text style={styles.fareValue}>${(ride.time_fare || 0).toFixed(2)}</Text>
-                            </View>
-                            {ride.surge_multiplier > 1 && (
-                                <View style={styles.fareRow}>
-                                    <Text style={styles.fareLabel}>Surge ({ride.surge_multiplier}x)</Text>
-                                    <Text style={[styles.fareValue, { color: '#FF9500' }]}>
-                                        ${(ride.surge_fee || 0).toFixed(2)}
+                        <>
+                            {/* Rider name (first name only — PIPEDA) */}
+                            {ride.rider_name && (
+                                <View style={styles.riderRow}>
+                                    <Ionicons name="person-circle-outline" size={18} color={colors.textDim} />
+                                    <Text style={styles.riderNameText}>
+                                        {ride.rider_name.trim().split(' ')[0]}
                                     </Text>
                                 </View>
                             )}
 
-                            {/* Area Fees */}
-                            {ride.area_fees?.length > 0 && (
-                                <>
-                                    <View style={styles.fareDivider} />
-                                    {ride.area_fees.map((fee: any, i: number) => (
-                                        <View key={fee.id || i} style={styles.fareRow}>
-                                            <Text style={styles.fareLabel}>{fee.name || fee.type}</Text>
-                                            <Text style={styles.fareValue}>${(fee.calculated_value || 0).toFixed(2)}</Text>
-                                        </View>
-                                    ))}
-                                </>
-                            )}
+                            <View style={styles.card}>
+                                <Text style={styles.cardTitle}>Trip Earnings</Text>
 
-                            {/* Tax Breakdown */}
-                            {ride.tax_breakdown && Object.keys(ride.tax_breakdown).length > 0 && (
-                                <>
-                                    {Object.entries(ride.tax_breakdown).map(([name, info]: [string, any]) => (
-                                        <View key={name} style={styles.fareRow}>
-                                            <Text style={styles.fareLabel}>{name} ({info.rate}%)</Text>
-                                            <Text style={styles.fareValue}>${(info.amount || 0).toFixed(2)}</Text>
-                                        </View>
-                                    ))}
-                                </>
-                            )}
-
-                            <View style={styles.fareDivider} />
-                            <View style={styles.fareRow}>
-                                <Text style={styles.fareLabel}>Total Fare</Text>
-                                <Text style={[styles.fareValue, { fontSize: 16 }]}>
-                                    ${(ride.grand_total || ride.total_fare || 0).toFixed(2)}
-                                </Text>
-                            </View>
-                            <View style={styles.fareRow}>
-                                <Text style={styles.fareLabel}>Platform Fee</Text>
-                                <Text style={[styles.fareValue, { color: colors.primary }]}>
-                                    -${(ride.platform_fee || 0).toFixed(2)}
-                                </Text>
-                            </View>
-                            {(ride.tip_amount || 0) > 0 && (
+                                {/* Base fare — always shown */}
                                 <View style={styles.fareRow}>
-                                    <Text style={[styles.fareLabel, { color: '#FFD700' }]}>Tip</Text>
-                                    <Text style={[styles.fareValue, { color: '#FFD700' }]}>
-                                        +${ride.tip_amount.toFixed(2)}
+                                    <Text style={styles.fareLabel}>Base Fare</Text>
+                                    <Text style={styles.fareValue}>
+                                        ${parseFloat(ride.base_fare || '0').toFixed(2)}
                                     </Text>
                                 </View>
-                            )}
-                            <View style={styles.fareDivider} />
-                            <View style={styles.fareRow}>
-                                <Text style={styles.earningsLabel}>Your Earnings</Text>
-                                <Text style={styles.earningsValue}>
-                                    ${(ride.driver_earnings || 0).toFixed(2)}
-                                </Text>
+
+                                {/* Distance charge — hidden if zero */}
+                                {parseFloat(ride.distance_fare || '0') > 0 && (
+                                    <View style={styles.fareRow}>
+                                        <Text style={styles.fareLabel}>Distance Charge</Text>
+                                        <Text style={styles.fareValue}>
+                                            ${parseFloat(ride.distance_fare || '0').toFixed(2)}
+                                        </Text>
+                                    </View>
+                                )}
+
+                                {/* Time charge — hidden if zero */}
+                                {parseFloat(ride.time_fare || '0') > 0 && (
+                                    <View style={styles.fareRow}>
+                                        <Text style={styles.fareLabel}>Time Charge</Text>
+                                        <Text style={styles.fareValue}>
+                                            ${parseFloat(ride.time_fare || '0').toFixed(2)}
+                                        </Text>
+                                    </View>
+                                )}
+
+                                {/* Booking fee — informational */}
+                                {parseFloat(ride.booking_fee || '0') > 0 && (
+                                    <View style={styles.fareRow}>
+                                        <Text style={styles.fareLabel}>Booking Fee</Text>
+                                        <Text style={styles.fareValue}>
+                                            ${parseFloat(ride.booking_fee || '0').toFixed(2)}
+                                        </Text>
+                                    </View>
+                                )}
+
+                                {/* Surge bonus — hidden when multiplier is 1.0 */}
+                                {parseFloat(ride.surge_multiplier || '1') > 1 && (
+                                    <View style={styles.fareRow}>
+                                        <Text style={styles.fareLabel}>
+                                            Surge Bonus ({parseFloat(ride.surge_multiplier || '1').toFixed(2)}×)
+                                        </Text>
+                                        <Text style={[styles.fareValue, { color: '#FF9500' }]}>
+                                            ${parseFloat(ride.surge_fee || '0').toFixed(2)}
+                                        </Text>
+                                    </View>
+                                )}
+
+                                {/* Tip — shown in gold when present */}
+                                {parseFloat(ride.tip_amount || '0') > 0 && (
+                                    <View style={styles.fareRow}>
+                                        <Text style={[styles.fareLabel, { color: '#FFD700' }]}>Tip</Text>
+                                        <Text style={[styles.fareValue, { color: '#FFD700' }]}>
+                                            +${parseFloat(ride.tip_amount || '0').toFixed(2)}
+                                        </Text>
+                                    </View>
+                                )}
+
+                                <View style={styles.fareDivider} />
+
+                                {/* Your Earnings = grand_total (0% commission model) */}
+                                <View style={styles.fareRow}>
+                                    <Text style={styles.earningsLabel}>Your Earnings</Text>
+                                    <Text style={styles.earningsValue}>
+                                        ${parseFloat(ride.grand_total || ride.total_fare || '0').toFixed(2)}
+                                    </Text>
+                                </View>
                             </View>
-                        </View>
+
+                            {/* T4A Tax Summary — informational only */}
+                            <View style={styles.card}>
+                                <Text style={styles.cardTitle}>Tax Summary (T4A)</Text>
+
+                                {/* GST: 5% of subtotal before taxes */}
+                                {(() => {
+                                    const subtotal = parseFloat(ride.subtotal || ride.fare_before_tax || '0');
+                                    const gstAmt = subtotal > 0
+                                        ? subtotal * 0.05
+                                        : parseFloat(
+                                            (ride.tax_breakdown?.GST?.amount ?? ride.gst_amount ?? '0').toString()
+                                        );
+                                    const pstAmt = subtotal > 0
+                                        ? subtotal * 0.06
+                                        : parseFloat(
+                                            (ride.tax_breakdown?.PST?.amount ?? ride.pst_amount ?? '0').toString()
+                                        );
+                                    return (
+                                        <>
+                                            <View style={styles.fareRow}>
+                                                <Text style={styles.fareLabel}>GST Collected (5%)</Text>
+                                                <Text style={styles.fareValue}>${gstAmt.toFixed(2)}</Text>
+                                            </View>
+                                            <View style={styles.fareRow}>
+                                                <Text style={styles.fareLabel}>PST Collected (6%)</Text>
+                                                <Text style={styles.fareValue}>${pstAmt.toFixed(2)}</Text>
+                                            </View>
+                                        </>
+                                    );
+                                })()}
+
+                                <View style={styles.fareDivider} />
+                                <View style={[styles.taxNoteBox]}>
+                                    <Ionicons name="information-circle-outline" size={16} color={colors.textDim} />
+                                    <Text style={styles.taxNoteText}>
+                                        GST/PST collected from rider and remitted. Not deducted from your earnings.
+                                    </Text>
+                                </View>
+                            </View>
+                        </>
                     )}
 
                     {/* Trip Timeline */}
@@ -421,6 +469,31 @@ function createStyles(colors: ThemeColors) {
         },
         earningsLabel: { color: colors.primary, fontSize: 16, fontWeight: '700' },
         earningsValue: { color: colors.primary, fontSize: 20, fontWeight: '800' },
+        riderRow: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 8,
+            marginBottom: 12,
+        },
+        riderNameText: {
+            color: colors.textDim,
+            fontSize: 14,
+            fontWeight: '600',
+        },
+        taxNoteBox: {
+            flexDirection: 'row',
+            alignItems: 'flex-start',
+            gap: 8,
+            backgroundColor: colors.surfaceLight,
+            borderRadius: 10,
+            padding: 12,
+        },
+        taxNoteText: {
+            flex: 1,
+            color: colors.textDim,
+            fontSize: 12,
+            lineHeight: 18,
+        },
         timelineRow: {
             flexDirection: 'row',
             alignItems: 'center',

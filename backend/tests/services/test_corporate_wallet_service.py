@@ -35,7 +35,9 @@ async def test_topup_calls_rpc_with_positive_delta():
     rpc.assert_called_once()
     fn_name, params = rpc.call_args.args
     assert fn_name == "corporate_wallet_apply_delta"
-    assert params["p_delta"] == 100
+    # Money values cross the JSON boundary as decimal strings (Audit-17 P0-1).
+    # Postgres' numeric type accepts string literals losslessly.
+    assert params["p_delta"] == "100.00"
     assert params["p_type"] == "topup"
     assert params["p_scope"] == "master"
     assert params["p_stripe_pi"] == "pi_123"
@@ -71,8 +73,8 @@ async def test_adjustment_routes_through_rpc_with_floor():
         )
     params = rpc.call_args.args[1]
     assert params["p_type"] == "adjustment"
-    assert params["p_delta"] == -25
-    assert params["p_floor"] == -50
+    assert params["p_delta"] == "-25.00"
+    assert params["p_floor"] == "-50.00"
     assert params["p_notes"] == "manual correction"
     assert params["p_actor_user_id"] == "admin_1"
 
@@ -111,7 +113,7 @@ async def test_refund_routes_with_ride_id():
         )
     params = rpc.call_args.args[1]
     assert params["p_type"] == "refund"
-    assert params["p_delta"] == 10
+    assert params["p_delta"] == "10.00"
     assert params["p_ride_id"] == "ride_1"
 
 

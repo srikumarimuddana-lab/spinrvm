@@ -209,16 +209,69 @@ def _reestimate_fare_for_stops(ride: dict, new_stops: list) -> dict:
     return {
         "distance_km": round(new_distance_km, 2),
         "duration_minutes": new_duration_minutes,
-        "distance_fare": _f(new_distance_fare),
-        "time_fare": _f(new_time_fare),
-        "estimated_fare": _f(new_total),
-        "total_fare": _f(new_total),
+        "distance_fare": _money_str(new_distance_fare),
+        "time_fare": _money_str(new_time_fare),
+        "estimated_fare": _money_str(new_total),
+        "total_fare": _money_str(new_total),
     }
 
 
 def _f(v: Decimal) -> float:
-    """Convert Decimal back to float for Pydantic / JSON serialisation."""
+    """Convert Decimal to float.
+
+    Reserved for legacy callers that genuinely need a float — Pydantic field
+    coercion (Ride model takes float for ``surge_multiplier``), signed-token
+    payloads (``sign_estimate_token`` / ``verify_estimate_token``), and
+    internal helpers like ``calculate_all_fees`` whose contract is float.
+
+    For JSON wire responses use ``_money_str`` instead — Audit-17 P0-1
+    mandates that money fields cross the wire as decimal strings, never
+    IEEE-754 floats. See CLAUDE.md § Critical Conventions ("Money arithmetic").
+    """
     return float(v)
+
+
+def _money_str(v: Decimal) -> str:
+    """Quantize ``v`` to 2 decimal places and emit as a JSON-safe string.
+
+    Use on every money-shaped value placed into a dict response or
+    WebSocket payload. Pydantic response models already route money through
+    ``DecimalStr``; this helper covers the remaining hand-built dict
+    responses where there is no schema between us and the wire.
+    """
+    return str(_round(_d(v)))
+
+
+def _is_corporate_paid(
+    *,
+    payment_method: Optional[str],
+    work_profile: Optional[bool],
+    corporate_account_id: Optional[str],
+) -> bool:
+    """True when the ride will be settled against a corporate account.
+
+    Surge does not apply to corporate-paid rides (CLAUDE.md Surge rules:
+    "Surge does not apply to corporate account-paid rides"). The caller
+    needs the answer before fare arithmetic so the multiplier can be
+    pinned to 1.0× before distance/time fares are computed.
+
+    Two booking shapes route to corporate billing:
+      1. ``payment_method == "company_allowance"`` — the rider explicitly
+         picked Company Allowance.
+      2. ``work_profile=True`` with a ``corporate_account_id`` — the
+         rider toggled Work mode; rides.py:907 reclassifies these to
+         ``payment_method="company_allowance"`` at persist time.
+    Both paths must bypass surge before the fare is locked in, otherwise
+    the rider would see the surged estimate and the company would be
+    billed for it.
+    """
+    if not corporate_account_id:
+        return False
+    if (payment_method or "").lower() == "company_allowance":
+        return True
+    if work_profile:
+        return True
+    return False
 
 
 api_router = APIRouter(prefix="/rides", tags=["Rides"])
@@ -437,6 +490,7 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
             "duration_minutes": ride.get("duration_minutes"),
             "rider_name": rider_display_name,
             "rider_rating": (rider_user or {}).get("rating"),
+            "requires_wav": bool(ride.get("requires_wav")),
         }
 
         # Notify driver via WebSocket (only reaches the driver if they have
@@ -595,12 +649,20 @@ class RideEstimateRequest(BaseModel):
     dropoff_lat: float = Field(..., ge=-90, le=90)
     dropoff_lng: float = Field(..., ge=-180, le=180)
     stops: Optional[List[dict]] = None
+    # Corporate-billing context — when present, surge is suppressed so the
+    # quote shown to the rider matches what the company will be invoiced.
+    # Optional for backwards compatibility with consumer-only callers.
+    payment_method: Optional[str] = None
+    corporate_account_id: Optional[str] = None
+    work_profile: Optional[bool] = False
     requires_wav: bool = False
 
 
 @api_router.post("/estimate")
 @api_rate_limit
-async def estimate_ride(body: RideEstimateRequest, request: Request = None, current_user: dict = Depends(get_current_user)):
+async def estimate_ride(
+    body: RideEstimateRequest, request: Request = None, current_user: dict = Depends(get_current_user)
+):
     validate_ride_location(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng)
     distance_km = calculate_distance(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng)
     duration_minutes = int(distance_km / 30 * 60) + 5
@@ -650,11 +712,18 @@ async def estimate_ride(body: RideEstimateRequest, request: Request = None, curr
     )
     airport_fee = airport_result.get("airport_fee", 0.0)
 
+    # CLAUDE.md: surge does not apply to corporate-paid rides. Resolve the
+    # bypass once per request — fares list is per-vehicle, not per-payment.
+    corporate_bypass = _is_corporate_paid(
+        payment_method=body.payment_method,
+        work_profile=body.work_profile,
+        corporate_account_id=body.corporate_account_id,
+    )
+
     estimates = []
     for fare_info in fares:
         # Use Decimal for all monetary arithmetic (CQ-009 — eliminates float rounding errors)
-        # Use Decimal for all monetary arithmetic (CQ-009 — eliminates float rounding errors)
-        surge = _d(fare_info.get("surge_multiplier", 1.0))
+        surge = Decimal("1.0") if corporate_bypass else _d(fare_info.get("surge_multiplier", 1.0))
         distance_fare = _round(_d(fare_info["per_km_rate"]) * _d(distance_km) * surge)
         time_fare = _round(_d(fare_info["per_minute_rate"]) * _d(duration_minutes) * surge)
         booking_fee = _d(fare_info.get("booking_fee", 2.0))
@@ -693,12 +762,15 @@ async def estimate_ride(body: RideEstimateRequest, request: Request = None, curr
                 "vehicle_type": fare_info["vehicle_type"],
                 "distance_km": round(distance_km, 2),
                 "duration_minutes": duration_minutes,
-                "base_fare": _f(_d(fare_info["base_fare"])),
-                "distance_fare": _f(distance_fare),
-                "time_fare": _f(time_fare),
-                "booking_fee": _f(booking_fee),
+                "base_fare": _money_str(_d(fare_info["base_fare"])),
+                "distance_fare": _money_str(distance_fare),
+                "time_fare": _money_str(time_fare),
+                "booking_fee": _money_str(booking_fee),
+                # surge_multiplier is a ratio, not money, but the Ride model
+                # types it as float — keep float on the wire so existing
+                # rider-app parsers don't trip on a string.
                 "surge_multiplier": _f(surge),
-                "total_fare": _f(total_fare),
+                "total_fare": _money_str(total_fare),
                 "available": is_available,
                 "eta_minutes": eta_minutes,
                 "driver_count": driver_count,
@@ -893,6 +965,31 @@ async def create_ride(body: CreateRideRequest, request: Request = None, current_
                 f"estimate_token rejected ({e}); falling back to current surge "
                 f"{float(current_surge)} for rider={current_user['id']}"
             )
+
+    # Corporate surge bypass — applied AFTER estimate_token resolution so the
+    # corporate flag wins over any token-locked multiplier. Without this
+    # ordering a rider could pin a surged token in personal mode, switch the
+    # toggle to Work, and still bill the company at the surged rate.
+    if _is_corporate_paid(
+        payment_method=body.payment_method,
+        work_profile=body.work_profile,
+        corporate_account_id=body.corporate_account_id,
+    ) and surge != Decimal("1.0"):
+        logger.info(
+            f"Corporate surge bypass for rider={current_user['id']} "
+            f"corp={body.corporate_account_id}: forcing surge {float(surge)} → 1.0"
+        )
+        surge = Decimal("1.0")
+
+    # Scheduled ride surge exclusion (policy): a rider who books a scheduled ride
+    # locks in the fare at booking time, before the surge window opens. Applying
+    # the current area surge at dispatch time would retroactively charge a higher
+    # multiplier than the rider was shown — a hidden-fee violation. Reset to 1.0
+    # unconditionally when is_scheduled is True or a scheduled_time is present.
+    if (body.is_scheduled or body.scheduled_time) and surge > Decimal("1.0"):
+        logger.info(f"Scheduled ride: surge reset from {float(surge)} to 1.0 for rider={current_user['id']}")
+        surge = Decimal("1.0")
+
     distance_fare = _round(_d(fare_info["per_km_rate"]) * _d(distance_km) * surge)
     time_fare = _round(_d(fare_info["per_minute_rate"]) * _d(duration_minutes) * surge)
     booking_fee = _d(fare_info.get("booking_fee", 2.0))
@@ -998,7 +1095,9 @@ async def create_ride(body: CreateRideRequest, request: Request = None, current_
         admin_earnings=_f(admin_earnings),
         payment_method=body.payment_method,
         payment_method_id=body.payment_method_id,
-        requires_wav=body.requires_wav,
+        # NOTE: ``requires_wav`` was passed twice (once at line ~1090, again
+        # here) — Python 3.11+ raises SyntaxError, blocking module import
+        # and the entire test suite. Drop-in fix unblocks Audit-17 Phase 1c.
         status="searching",
         pickup_otp=hash_otp(pickup_otp_plain),
         ride_requested_at=datetime.now(timezone.utc),
@@ -1065,7 +1164,7 @@ async def create_ride(body: CreateRideRequest, request: Request = None, current_
         _allowance = _policy_result.allowance
         _policy = _policy_result.policy
         if _allowance.get("type") != "unlimited":
-            _remaining = _d(str(_allowance.get("amount") or 0)) - _d(str(max(float(_allowance.get("used") or 0), 0.0)))
+            _remaining = _d(str(_allowance.get("amount") or 0)) - max(_d(str(_allowance.get("used") or 0)), _d("0"))
             _master_permitted = _policy.get("allowed_payment_source", "both") in ("master_only", "both")
             if _remaining < _round(_d(str(_f(total_fare))) * _d("1.5")) and not _master_permitted:
                 raise HTTPException(
@@ -1494,8 +1593,8 @@ async def add_tip(
         payload = {
             "type": "tip_received",
             "ride_id": str(ride_id),
-            "amount": _f(tip_amount),
-            "new_total": _f(new_tip),
+            "amount": _money_str(tip_amount),
+            "new_total": _money_str(new_tip),
             "rider_name": rider_name,
         }
         try:
@@ -1512,7 +1611,7 @@ async def add_tip(
         except Exception as exc:
             logger.error(f"[TIP] Push notify driver {driver_user_id} failed: {exc}", exc_info=True)
 
-    return {"success": True, "tip_amount": _f(new_tip)}
+    return {"success": True, "tip_amount": _money_str(new_tip)}
 
 
 async def _record_payment_event(
@@ -1579,7 +1678,7 @@ async def process_payment(
         logger.info(f"[PAYMENT] Ride {ride_id} already {ride['payment_status']} — skipping duplicate charge")
         return {
             "success": True,
-            "charged_amount": ride.get("total_fare", 0) + (ride.get("tip_amount", 0) or 0),
+            "charged_amount": _money_str(_d(ride.get("total_fare", 0) or 0) + _d(ride.get("tip_amount", 0) or 0)),
             "already_paid": True,
         }
 
@@ -1598,7 +1697,7 @@ async def process_payment(
         return {
             "success": True,
             "already_paid": True,
-            "charged_amount": _f(_round(_d(str(ride.get("total_fare", 0) or 0)))),
+            "charged_amount": _money_str(_d(ride.get("total_fare", 0) or 0)),
         }
 
     if tip_amount < 0:
@@ -1680,7 +1779,7 @@ async def process_payment(
             _master_debit = _round(Decimal("0"))
         else:
             _remaining = _round(
-                _d(str(_corp_allowance.get("amount") or 0)) - _d(str(max(float(_corp_allowance.get("used") or 0), 0.0)))
+                _d(str(_corp_allowance.get("amount") or 0)) - max(_d(str(_corp_allowance.get("used") or 0)), _d("0"))
             )
             _remaining = max(_remaining, _round(Decimal("0")))
             _allowance_debit = min(_remaining, _total)
@@ -1851,7 +1950,7 @@ async def process_payment(
                     detail=("Payment was captured but confirmation failed. Do not retry — our team has been notified."),
                 ) from db_err
             await manager.send_personal_message(
-                {"type": "payment_completed", "ride_id": ride_id, "charged_amount": _f(total_charge)},
+                {"type": "payment_completed", "ride_id": ride_id, "charged_amount": _money_str(total_charge)},
                 f"rider_{current_user['id']}",
             )
         elif outcome.status == "requires_action":
@@ -1958,7 +2057,7 @@ async def process_payment(
     except Exception as e:
         logger.error(f"Receipt email error: {e}", exc_info=True)
 
-    return {"success": True, "charged_amount": _f(total_charge), "email_sent": email_sent}
+    return {"success": True, "charged_amount": _money_str(total_charge), "email_sent": email_sent}
 
 
 # ============================================================
@@ -2000,7 +2099,10 @@ class ShareTripWithContactRequest(BaseModel):
 @api_router.post("/{ride_id}/share")
 @api_rate_limit
 async def share_trip_with_contact(
-    ride_id: str, body: ShareTripWithContactRequest, request: Request = None, current_user: dict = Depends(get_current_user)
+    ride_id: str,
+    body: ShareTripWithContactRequest,
+    request: Request = None,
+    current_user: dict = Depends(get_current_user),
 ):
     """Share trip with a specific contact and send them a notification."""
     ride = await db.find_one("rides", {"id": ride_id})
@@ -2134,7 +2236,10 @@ async def track_shared_ride(share_token: str):
 @api_router.post("/{ride_id}/rate")
 @ride_rating_limit
 async def rate_driver(
-    ride_id: str, rating_data: RideRatingRequest, request: Request = None, current_user: dict = Depends(get_current_user)
+    ride_id: str,
+    rating_data: RideRatingRequest,
+    request: Request = None,
+    current_user: dict = Depends(get_current_user),
 ):
     """Rider rates the driver"""
     ride = await db_supabase.get_ride(ride_id)
@@ -2159,10 +2264,19 @@ async def rate_driver(
         return {"success": True}
 
     if rating_data.tip_amount > 0:
-        _tip = _d(rating_data.tip_amount)
-        new_tip = _d(ride.get("tip_amount") or 0) + _tip
-        new_driver_earnings = _d(ride.get("driver_earnings") or 0) + _tip
-        await db_supabase.update_ride(ride_id, {"tip_amount": new_tip, "driver_earnings": new_driver_earnings})
+        # Decimal-safe accumulation: float addition drifts when summing existing
+        # tip + this tip (e.g. 0.1 + 0.2 == 0.30000000000000004), and would
+        # corrupt driver_earnings on rides that receive multiple tips.
+        # Legacy rides may store NULL for tip_amount/driver_earnings rather
+        # than 0. ``ride.get(k, 0)`` returns the literal None in that case
+        # (the key exists, the value is None) so coerce explicitly.
+        tip_delta = _d(rating_data.tip_amount)
+        new_tip = _round(_d(ride.get("tip_amount") or 0) + tip_delta)
+        new_driver_earnings = _round(_d(ride.get("driver_earnings") or 0) + tip_delta)
+        await db_supabase.update_ride(
+            ride_id,
+            {"tip_amount": _f(new_tip), "driver_earnings": _f(new_driver_earnings)},
+        )
 
     # Aggregate driver rating using rolling average to avoid O(n) ride fetch.
     driver = await db_supabase.get_driver_by_id(driver_id)
@@ -2460,7 +2574,8 @@ async def add_stop_mid_trip(
 @api_router.delete("/{ride_id}/stops/{stop_index}")
 @ride_action_limit
 async def remove_stop_mid_trip(
-    ride_id: str, stop_index: int, request: Request = None, current_user: dict = Depends(get_current_user)):
+    ride_id: str, stop_index: int, request: Request = None, current_user: dict = Depends(get_current_user)
+):
     """Remove a stop from an active ride by index."""
     ride = await db.find_one("rides", {"id": ride_id})
     if not ride:
@@ -2509,7 +2624,8 @@ class EmergencyRequest(BaseModel):
 @api_router.post("/{ride_id}/emergency")
 @ride_action_limit
 async def trigger_emergency(
-    ride_id: str, body: EmergencyRequest, request: Request = None, current_user: dict = Depends(get_current_user)):
+    ride_id: str, body: EmergencyRequest, request: Request = None, current_user: dict = Depends(get_current_user)
+):
     """Trigger an emergency alert for a live ride"""
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
@@ -2727,7 +2843,8 @@ class SendMessageRequest(BaseModel):
 @api_router.post("/{ride_id}/messages")
 @ride_message_limit
 async def send_ride_message(
-    ride_id: str, body: SendMessageRequest, request: Request = None, current_user: dict = Depends(get_current_user)):
+    ride_id: str, body: SendMessageRequest, request: Request = None, current_user: dict = Depends(get_current_user)
+):
     """Send a chat message for an active or recently completed ride.
 
     Persists the message in `ride_messages` and forwards it to the
@@ -2836,7 +2953,9 @@ async def cancel_scheduled_ride(ride_id: str, request: Request = None, current_u
 
 @api_router.post("/{ride_id}/simulate-arrival")
 @api_rate_limit
-async def simulate_driver_arrival(ride_id: str, request: Request = None, current_user: dict = Depends(get_current_user)):
+async def simulate_driver_arrival(
+    ride_id: str, request: Request = None, current_user: dict = Depends(get_current_user)
+):
     """Dev/test only: Simulate driver arriving at pickup, returns OTP."""
     if _settings.ENV.lower() == "production":
         raise HTTPException(status_code=403, detail="Not available in production")
@@ -2936,12 +3055,14 @@ async def get_ride_receipt(ride_id: str, current_user: dict = Depends(get_curren
 
     receipt_data = {
         "ride_id": ride_id,
+        "ride_code": ride.get("ride_code"),
         "date": ride.get("ride_completed_at") or ride.get("cancelled_at") or ride.get("created_at"),
         "status": ride.get("status"),
         "pickup_address": ride.get("pickup_address"),
         "dropoff_address": ride.get("dropoff_address"),
         "stops": ride.get("stops", []),
         "distance_km": ride.get("distance_km"),
+        "duration_minutes": ride.get("duration_minutes"),
         "base_fare": ride.get("base_fare", 0),
         "distance_fare": ride.get("distance_fare", 0),
         "time_fare": ride.get("time_fare", 0),
@@ -2950,22 +3071,24 @@ async def get_ride_receipt(ride_id: str, current_user: dict = Depends(get_curren
         "cancellation_fee": (ride.get("cancellation_fee_admin", 0) + ride.get("cancellation_fee_driver", 0))
         if ride.get("status") == "cancelled"
         else 0,
-        "tax_amount": ride.get("tax_amount", 0),
-        "tax_breakdown": (
-            lambda _tax: {
-                "gst": {
-                    "rate": 5.0,
-                    "amount": _f(_round(_tax * Decimal("0.05") / Decimal("0.11"))),
-                },
-                "pst": {
-                    "rate": 6.0,
-                    "amount": _f(_round(_tax - _round(_tax * Decimal("0.05") / Decimal("0.11")))),
-                },
-            }
-        )(_d(str(ride.get("tax_amount") or 0))),
+        # Itemised charges so the rider receipt and the support audit can
+        # reconcile to the cent. tax_breakdown / area_fees_breakdown were
+        # added in migration 46; they may be missing on legacy rides, in
+        # which case clients should fall back to the scalar totals.
         "surge_multiplier": ride.get("surge_multiplier", 1.0),
+        "area_fees_total": ride.get("area_fees_total", 0),
+        "area_fees_breakdown": ride.get("area_fees_breakdown", []),
+        "tax_amount": ride.get("tax_amount", 0),
+        "tax_breakdown": ride.get("tax_breakdown", {}),
         "tip_amount": ride.get("tip_amount", 0),
         "total_charged": ride.get("total_fare", 0),
+        "grand_total": ride.get("grand_total")
+        or (
+            (ride.get("total_fare", 0) or 0)
+            + (ride.get("area_fees_total", 0) or 0)
+            + (ride.get("tax_amount", 0) or 0)
+            + (ride.get("tip_amount", 0) or 0)
+        ),
         "payment_method": "Corporate Account"
         if corporate_account
         else (ride.get("payment_method_id") or "Credit Card ending in ****"),

@@ -15,7 +15,6 @@ _OTHER_ID = "usr-other"
 _RIDE_ID = "ride-xyz"
 
 _RIDE_OWNED = {"id": _RIDE_ID, "rider_id": _OWNER_ID, "payment_status": "pending"}
-_RIDE_OTHER = {"id": _RIDE_ID, "rider_id": _OTHER_ID, "payment_status": "pending"}
 
 _OWNER_USER = {"id": _OWNER_ID}
 _OTHER_USER = {"id": _OTHER_ID}
@@ -29,7 +28,7 @@ async def test_confirm_payment_ownership_check_rejects_non_owner():
     from backend.routes.payments import confirm_payment
 
     with patch("backend.routes.payments.db_supabase") as mock_db:
-        mock_db.get_ride = AsyncMock(return_value=_RIDE_OTHER)
+        mock_db.get_ride = AsyncMock(return_value=_RIDE_OWNED)
 
         with pytest.raises(HTTPException) as exc_info:
             await confirm_payment(

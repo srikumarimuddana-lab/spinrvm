@@ -524,6 +524,14 @@ async def create_ride(
     # back to ``request`` without also reworking the rate-limit decorator.
     validate_ride_location(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng)
 
+    # Idempotency: Check for existing ride with same key to prevent double-charges on retry
+    idempotency_key = request.headers.get("Idempotency-Key")
+    if idempotency_key:
+        existing = await db.find_one("rides", {"idempotency_key": idempotency_key, "rider_id": current_user["id"]})
+        if existing:
+            logger.info(f"Idempotent ride creation: returning existing ride {existing.get('id')}")
+            return existing
+
     # Ban check + payment method validation share a single users-row read.
     # Previously this was two round-trips: ``find_one(users)`` (for card path)
     # + ``get_user_status`` (always). ``status`` lives on the same row.
@@ -665,6 +673,8 @@ async def create_ride(
     )
 
     ride_data = ride.dict()
+    if idempotency_key:
+        ride_data["idempotency_key"] = idempotency_key
     if service_area_id:
         ride_data["service_area_id"] = service_area_id
     # Preserve the original planned (straight-line) distance. ride.distance_km

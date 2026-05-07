@@ -18,12 +18,17 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     updates: {
         url: 'https://u.expo.dev/1ed02cf4-97cb-4678-b5a2-0881f89abaa8',
     },
-    // Bare workflow (after `expo prebuild`) does not support runtime version
-    // policies like { policy: 'appVersion' } — EAS Update requires a literal
-    // string. Bump this manually when you ship native changes that break
-    // JS-bundle compatibility. Keeping it in sync with `version` above is a
-    // reasonable default.
-    runtimeVersion: '1.0.0',
+    // Fingerprint policy: EAS hashes the native source tree on every build
+    // and uses that hash as the runtimeVersion. JS bundles only ship to clients
+    // whose native binary fingerprint matches — eliminating the manual-bump
+    // trap where a forgotten runtimeVersion edit could deliver an OTA update
+    // to clients with incompatible native code.
+    //
+    // Supported in SDK 53+ for the prebuild (CNG) workflow via @expo/fingerprint
+    // (already a transitive dep of expo@~55.0.20). Pre-launch phase: changing
+    // this from a literal '1.0.0' to a fingerprint hash has zero user impact
+    // because no production users exist yet.
+    runtimeVersion: { policy: 'fingerprint' },
     splash: {
         backgroundColor: '#ee2b2b',
         resizeMode: 'contain',

@@ -102,11 +102,14 @@ jobs:
 
       # Pre-build gate: runs only when a native build is about to happen.
       # Blocks the expensive EAS build credit spend on broken code.
-      - name: Pre-build validation (lint + type-check + tests)
+      # Order matters: expo-doctor first — it surfaces SDK / native-module
+      # mismatches that would otherwise produce confusing tsc / Jest errors.
+      - name: Pre-build validation (doctor + lint + type-check + tests)
         if: |
           (github.event_name == 'push' && contains(github.event.head_commit.message, '[build]')) ||
           (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'build')
         run: |
+          yarn doctor
           yarn tsc --noEmit
           yarn lint --max-warnings 0
           yarn test --ci --passWithNoTests
@@ -153,11 +156,12 @@ jobs:
           MESSAGE=$(echo "$MESSAGE" | head -1 | cut -c1-1000)
           eas update --channel "$CHANNEL" --auto --non-interactive --message "$MESSAGE"
 
-      - name: Pre-build validation (lint + type-check + tests)
+      - name: Pre-build validation (doctor + lint + type-check + tests)
         if: |
           (github.event_name == 'push' && contains(github.event.head_commit.message, '[build]')) ||
           (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'build')
         run: |
+          yarn doctor
           yarn tsc --noEmit
           yarn lint --max-warnings 0
           yarn test --ci --passWithNoTests

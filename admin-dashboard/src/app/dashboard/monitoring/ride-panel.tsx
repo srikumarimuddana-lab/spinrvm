@@ -5,7 +5,7 @@ import { MonitoringRide } from "./types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { CheckCircle, Copy, MapPin, Phone, XCircle } from "lucide-react";
+import { Car, CheckCircle, ChevronRight, Copy, Loader2, MapPin, Phone, XCircle } from "lucide-react";
 
 interface RidePanelProps {
     ride: MonitoringRide;

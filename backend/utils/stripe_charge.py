@@ -231,7 +231,7 @@ async def charge_ride(
         return ChargeOutcome(
             status="succeeded",
             payment_intent_id=pi_id,
-            charged_amount=float(_amount),
+            charged_amount=float(total_amount),
         )
 
     if status == "requires_action" or status == "requires_source_action":

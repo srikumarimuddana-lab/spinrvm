@@ -9,6 +9,7 @@ Verifies that:
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -23,6 +24,8 @@ STRIPE_SECRET = "sk_test_secret"
 
 
 def _make_ride(**overrides) -> dict:
+    # `created_at` must be inside the 24h window the retry loop scans, so
+    # use "now" rather than a hard-coded date that ages out of the window.
     base = {
         "id": RIDE_ID,
         "rider_id": "rider_1",
@@ -30,7 +33,7 @@ def _make_ride(**overrides) -> dict:
         "payment_intent_id": PI_ID,
         "payment_status": "failed",
         "payment_retry_count": 0,
-        "created_at": "2026-05-06T00:00:00+00:00",
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
     base.update(overrides)
     return base
@@ -56,7 +59,11 @@ async def test_retry_skips_when_stripe_already_succeeded():
     """
     ride = _make_ride()
 
-    mock_db_update = AsyncMock(return_value=None)
+    # The retry loop's atomic-claim step calls update_one and requires a
+    # truthy return to continue (it only acts on rows the claim succeeded on).
+    # Returning the ride dict satisfies that gate and lets every subsequent
+    # update_one call (paid / processing / failed) run for assertion.
+    mock_db_update = AsyncMock(return_value={"id": RIDE_ID})
     mock_confirm = MagicMock()
 
     fake_settings = {"stripe_secret_key": STRIPE_SECRET}
@@ -77,13 +84,15 @@ async def test_retry_skips_when_stripe_already_succeeded():
 
         await payment_retry.retry_failed_payments()
 
-    # DB should be updated to 'paid'
-    mock_db_update.assert_awaited_once()
-    call_args = mock_db_update.await_args
-    assert call_args[0][0] == "rides"
-    assert call_args[0][1] == {"id": RIDE_ID}
-    update_set = call_args[0][2]["$set"]
-    assert update_set["payment_status"] == "paid"
+    # update_one is awaited twice: once for the atomic 'retrying' claim,
+    # then for the final 'paid' write. Locate the 'paid' call.
+    paid_calls = [
+        c for c in mock_db_update.await_args_list if c[0][2].get("$set", {}).get("payment_status") == "paid"
+    ]
+    assert len(paid_calls) == 1
+    paid_call = paid_calls[0]
+    assert paid_call[0][0] == "rides"
+    assert paid_call[0][1] == {"id": RIDE_ID}
 
     # confirm must never be called
     mock_confirm.assert_not_called()
@@ -98,7 +107,11 @@ async def test_retry_proceeds_when_stripe_failed():
     """
     ride = _make_ride(payment_retry_count=1)
 
-    mock_db_update = AsyncMock(return_value=None)
+    # The retry loop's atomic-claim step calls update_one and requires a
+    # truthy return to continue (it only acts on rows the claim succeeded on).
+    # Returning the ride dict satisfies that gate and lets every subsequent
+    # update_one call (paid / processing / failed) run for assertion.
+    mock_db_update = AsyncMock(return_value={"id": RIDE_ID})
     mock_confirm = MagicMock(return_value=_fake_intent("processing"))
 
     fake_settings = {"stripe_secret_key": STRIPE_SECRET}
@@ -122,9 +135,11 @@ async def test_retry_proceeds_when_stripe_failed():
     mock_confirm.assert_called_once()
     _, confirm_kwargs = mock_confirm.call_args
     assert "idempotency_key" in confirm_kwargs
-    # key must include ride_id and attempt number (attempt = retry_count + 1 = 2)
+    # Idempotency key uses the pre-attempt retry_count (1) so a replay of
+    # the same attempt produces the same key — preventing double charges.
+    # Format: retry-confirm-<ride_id>-<retry_count>
     assert RIDE_ID in confirm_kwargs["idempotency_key"]
-    assert "2" in confirm_kwargs["idempotency_key"]
+    assert confirm_kwargs["idempotency_key"].endswith("-1")
 
     # DB update must set payment_status='processing' and increment count
     mock_db_update.assert_awaited()
@@ -137,17 +152,23 @@ async def test_retry_proceeds_when_stripe_failed():
 
 
 @pytest.mark.anyio
-async def test_retry_falls_through_when_retrieve_raises():
+async def test_retry_marks_ride_failed_when_retrieve_raises():
     """
     When stripe.PaymentIntent.retrieve raises a StripeError, the loop must:
-      - Still call stripe.PaymentIntent.confirm() (fail-open)
+      - NOT call stripe.PaymentIntent.confirm() (fail-closed per CLAUDE.md
+        "never warn-and-continue on payment errors")
+      - Increment payment_retry_count and mark the ride 'failed'
       - NOT silently skip the ride
     """
     import stripe as stripe_module
 
     ride = _make_ride()
 
-    mock_db_update = AsyncMock(return_value=None)
+    # The retry loop's atomic-claim step calls update_one and requires a
+    # truthy return to continue (it only acts on rows the claim succeeded on).
+    # Returning the ride dict satisfies that gate and lets every subsequent
+    # update_one call (paid / processing / failed) run for assertion.
+    mock_db_update = AsyncMock(return_value={"id": RIDE_ID})
     mock_confirm = MagicMock(return_value=_fake_intent("processing"))
 
     fake_settings = {"stripe_secret_key": STRIPE_SECRET}
@@ -167,7 +188,11 @@ async def test_retry_falls_through_when_retrieve_raises():
 
         await payment_retry.retry_failed_payments()
 
-    # confirm must still be called because retrieve failure is fail-open
-    mock_confirm.assert_called_once()
-    _, confirm_kwargs = mock_confirm.call_args
-    assert "idempotency_key" in confirm_kwargs
+    # confirm must NOT be called: retrieve failure is fail-closed; the
+    # ride is marked failed and the retry counter is bumped instead.
+    mock_confirm.assert_not_called()
+    failed_calls = [
+        c for c in mock_db_update.await_args_list if c[0][2].get("$set", {}).get("payment_status") == "failed"
+    ]
+    assert len(failed_calls) == 1
+    assert failed_calls[0][0][2]["$set"]["payment_retry_count"] == 1

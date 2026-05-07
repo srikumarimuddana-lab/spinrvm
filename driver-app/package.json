@@ -122,6 +122,7 @@
     "start": "expo start",
     "web": "expo start --web",
     "build:web": "expo export --platform web",
+    "lint": "expo lint",
     "doctor": "npx --yes expo-doctor",
     "test": "jest",
     "test:watch": "jest --watch",

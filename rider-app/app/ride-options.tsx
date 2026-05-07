@@ -53,8 +53,6 @@ function RideOptionsScreenContent() {
     setRequiresWav,
     scheduledTime,
     setScheduledTime,
-    requiresWav,
-    setRequiresWav,
     quietMode,
     setQuietMode,
     riderNotes,
@@ -645,7 +643,7 @@ function RideOptionsScreenContent() {
                 </View>
                 <Switch
                   value={requiresWav}
-                  onValueChange={(v) => !wavDisabled && setRequiresWav(v)}
+                  onValueChange={(v) => { if (!wavDisabled) setRequiresWav(v); }}
                   disabled={wavDisabled}
                   trackColor={{ false: '#D1D5DB', true: colors.primary + '60' }}
                   thumbColor={requiresWav ? colors.primary : '#F3F4F6'}

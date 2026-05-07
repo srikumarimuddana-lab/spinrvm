@@ -255,6 +255,11 @@ interface IncomingRide {
     duration_minutes?: number;
     rider_name?: string;
     rider_rating?: number;
+    // Wheelchair-accessible vehicle requested by rider — Saskatchewan
+    // Transportation Act s.22. Drivers with WAV-equipped vehicles see this
+    // flag in the ride offer panel; non-WAV drivers should not receive
+    // these offers at all (backend filters dispatch).
+    requires_wav?: boolean;
 }
 
 interface DriverState {

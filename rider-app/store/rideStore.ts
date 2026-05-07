@@ -51,6 +51,11 @@ interface RideEstimate {
   available: boolean;
   eta_minutes: number;
   driver_count: number;
+  // WAV (wheelchair-accessible vehicle) driver count nearby — populated by
+  // backend GET /rides/estimate. Used to gate the WAV toggle in ride-options.tsx
+  // (Saskatchewan Transportation Act s.22). Optional because older backends
+  // may not return it.
+  wav_available?: number;
   // P0-4: signed token that locks the surge shown in this estimate.
   // Sent back on POST /rides so the confirmed fare matches what the
   // rider saw, even if service-area surge changes between estimate + confirm.
@@ -97,6 +102,12 @@ interface Ride {
   distance_km: number;
   duration_minutes: number;
   base_fare: string; // MoneyString
+  // Per-component fare breakdown (PR #664 stringified Decimal in API
+  // response). Optional because some legacy / partially-migrated rides
+  // may not have all components set.
+  distance_fare?: string; // MoneyString
+  time_fare?: string; // MoneyString
+  booking_fee?: string; // MoneyString
   total_fare: string; // MoneyString
   payment_method: string;
   payment_status?: string;

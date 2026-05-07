@@ -176,18 +176,18 @@ class TestAddStopMidTrip:
 
         assert exc_info.value.status_code == 403
 
-    @pytest.mark.xfail(
-        strict=False,
-        reason=(
-            "Fare recalculation on mid-trip stop is not yet implemented. "
-            "add_stop_mid_trip() updates the stops array and notifies the driver "
-            "but does not call the fare estimator or update estimated_fare / total_fare. "
-            "TODO: add fare re-estimate on stop mutation; update riders and driver UIs."
-        ),
-    )
     async def test_fare_is_recalculated_after_stop_added(self):
-        """Adding a stop should trigger a fare recalculation."""
-        ride = _ride(status="in_progress")
+        """Adding a stop persists a recalculated fare on the ride row."""
+        # Seed enough fare detail for the proportional recalc helper to scale.
+        ride = _ride(
+            status="in_progress",
+            distance_km=4.0,
+            duration_minutes=10,
+            base_fare=3.0,
+            distance_fare=8.0,    # implies $2/km effective rate
+            time_fare=5.0,
+            booking_fee=2.0,
+        )
 
         class _Req:
             address = "Detour Ave"
@@ -213,11 +213,65 @@ class TestAddStopMidTrip:
                 current_user={"id": RIDER_ID},
             )
 
-        # Assert that the update included a new estimated_fare — not yet implemented
         updates = updated_calls[0].get("$set", {}) if updated_calls else {}
-        assert "estimated_fare" in updates, (
-            "Fare was not recalculated — add_stop_mid_trip must update estimated_fare"
+        # The recalc patches all fare components — assert the contract that
+        # downstream UIs depend on so the rider sees the revised quote.
+        for field in ("distance_km", "duration_minutes", "distance_fare",
+                      "time_fare", "total_fare", "estimated_fare", "driver_earnings"):
+            assert field in updates, f"recalc missing field: {field}"
+
+        # Adding a detour ~10 km away from the original 4-km route must
+        # produce a longer total distance and a strictly larger fare.
+        assert updates["distance_km"] > ride["distance_km"], "distance must grow with a real detour"
+        assert updates["total_fare"] > ride["total_fare"], "fare must grow when distance grows"
+        # Driver earnings exclude booking_fee — sanity-check the split holds.
+        assert updates["driver_earnings"] == round(
+            updates["total_fare"] - ride["booking_fee"], 2
         )
+
+    async def test_stops_updated_ws_payload_carries_new_fare(self):
+        """The driver-facing WS event must include the recalculated fare so
+        the driver sees the new total without an extra HTTP fetch."""
+        ride = _ride(
+            status="in_progress",
+            distance_km=4.0,
+            duration_minutes=10,
+            base_fare=3.0,
+            distance_fare=8.0,
+            time_fare=5.0,
+            booking_fee=2.0,
+        )
+
+        class _Req:
+            address = "Detour Ave"
+            lat = 52.20
+            lng = -106.70
+            position = None
+
+        ws_calls = []
+
+        async def _capture_ws(message, channel):
+            ws_calls.append((channel, message))
+
+        with (
+            patch("backend.routes.rides.db.find_one", AsyncMock(side_effect=[ride, _driver_row()])),
+            patch("backend.routes.rides.db.update_one", AsyncMock(return_value={})),
+            patch("backend.routes.rides.manager.send_personal_message", AsyncMock(side_effect=_capture_ws)),
+        ):
+            from backend.routes import rides as rides_mod
+            await rides_mod.add_stop_mid_trip(
+                ride_id=RIDE_ID,
+                req=_Req(),
+                current_user={"id": RIDER_ID},
+            )
+
+        driver_msgs = [m for ch, m in ws_calls if f"driver_{DRIVER_USER_ID}" in str(ch)]
+        assert driver_msgs, "Driver WS event missing"
+        msg = driver_msgs[0]
+        assert msg["type"] == "stops_updated"
+        assert "total_fare" in msg
+        assert "distance_km" in msg
+        assert msg["total_fare"] > ride["total_fare"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -303,3 +357,44 @@ class TestRemoveStopMidTrip:
 
         assert exc_info.value.status_code == 400
         assert "Invalid stop index" in exc_info.value.detail
+
+    async def test_fare_is_recalculated_after_stop_removed(self):
+        """Removing a stop must shrink the fare proportional to the saved distance."""
+        # Original ride had a detour at (52.20, -106.70) — same coords used in
+        # add-stop happy path. Remove it and the fare should drop.
+        ride = _ride(
+            status="in_progress",
+            stops=[_stop("Detour Ave", lat=52.20, lng=-106.70)],
+            distance_km=20.0,        # detoured route
+            duration_minutes=45,
+            base_fare=3.0,
+            distance_fare=40.0,      # implies $2/km effective rate
+            time_fare=22.5,
+            booking_fee=2.0,
+            total_fare=67.5,
+        )
+
+        updated_calls = []
+
+        async def _capture_update(table, filter_doc, update_doc):
+            updated_calls.append(update_doc)
+            return {}
+
+        with (
+            patch("backend.routes.rides.db.find_one", AsyncMock(side_effect=[ride, _driver_row()])),
+            patch("backend.routes.rides.db.update_one", AsyncMock(side_effect=_capture_update)),
+            patch("backend.routes.rides.manager.send_personal_message", AsyncMock()),
+        ):
+            from backend.routes import rides as rides_mod
+            await rides_mod.remove_stop_mid_trip(
+                ride_id=RIDE_ID,
+                stop_index=0,
+                current_user={"id": RIDER_ID},
+            )
+
+        updates = updated_calls[0].get("$set", {}) if updated_calls else {}
+        assert "total_fare" in updates
+        # Direct pickup→dropoff is shorter than the detour we removed, so
+        # both distance and fare must shrink.
+        assert updates["distance_km"] < ride["distance_km"]
+        assert updates["total_fare"] < ride["total_fare"]

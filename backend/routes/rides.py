@@ -1724,6 +1724,79 @@ async def cancel_ride_rider(request: Request, ride_id: str, current_user: dict =
 # ── Mid-Trip Stop Editing ─────────────────────────────────────────────
 
 
+def _route_distance_km(pickup_lat: float, pickup_lng: float, stops: list, dropoff_lat: float, dropoff_lng: float) -> float:
+    """Sum great-circle legs: pickup → stop1 → … → stopN → dropoff.
+
+    Used by add/remove_stop_mid_trip to recalculate the ride distance once the
+    rider mutates the stop list. Mirrors the haversine math used by /estimate
+    so the recalc lines up with the original quote when stops == [].
+    """
+    if not stops:
+        return calculate_distance(pickup_lat, pickup_lng, dropoff_lat, dropoff_lng)
+    total = 0.0
+    prev_lat, prev_lng = pickup_lat, pickup_lng
+    for s in stops:
+        s_lat = float(s.get("lat", 0))
+        s_lng = float(s.get("lng", 0))
+        total += calculate_distance(prev_lat, prev_lng, s_lat, s_lng)
+        prev_lat, prev_lng = s_lat, s_lng
+    total += calculate_distance(prev_lat, prev_lng, dropoff_lat, dropoff_lng)
+    return total
+
+
+def _recalculate_fare_for_stops(ride: dict, new_stops: list) -> dict:
+    """Recompute distance, duration, and fare components when stops change.
+
+    Scales the existing distance_fare / time_fare by the new/old distance and
+    duration ratios, leaving base_fare, booking_fee, airport_fee, and surge
+    untouched. That way we don't need to re-read the fare config table or
+    re-apply surge — the rate-per-km the rider was originally quoted (with
+    surge already baked in via the locked estimate_token at create-time) is
+    preserved on a per-km basis.
+
+    Returns the $set patch dict — caller composes the update_one call.
+    """
+    old_distance = float(ride.get("distance_km") or 0) or 0.0
+    old_duration = int(ride.get("duration_minutes") or 0) or 0
+    old_distance_fare = float(ride.get("distance_fare") or 0)
+    old_time_fare = float(ride.get("time_fare") or 0)
+    base_fare = float(ride.get("base_fare") or 0)
+    booking_fee = float(ride.get("booking_fee") or 0)
+
+    new_distance = _route_distance_km(
+        float(ride.get("pickup_lat") or 0),
+        float(ride.get("pickup_lng") or 0),
+        new_stops,
+        float(ride.get("dropoff_lat") or 0),
+        float(ride.get("dropoff_lng") or 0),
+    )
+    new_duration = int(new_distance / 30 * 60) + 5  # mirrors /estimate
+
+    # Scale fare components by ratio so we don't depend on the live fare
+    # config row (rates may have changed since the ride was created).
+    if old_distance > 0:
+        new_distance_fare = round(old_distance_fare * (new_distance / old_distance), 2)
+    else:
+        new_distance_fare = old_distance_fare
+    if old_duration > 0:
+        new_time_fare = round(old_time_fare * (new_duration / old_duration), 2)
+    else:
+        new_time_fare = old_time_fare
+
+    new_total = round(base_fare + new_distance_fare + new_time_fare + booking_fee, 2)
+    new_driver_earnings = round(base_fare + new_distance_fare + new_time_fare, 2)
+
+    return {
+        "distance_km": round(new_distance, 2),
+        "duration_minutes": new_duration,
+        "distance_fare": new_distance_fare,
+        "time_fare": new_time_fare,
+        "total_fare": new_total,
+        "estimated_fare": new_total,
+        "driver_earnings": new_driver_earnings,
+    }
+
+
 class AddStopMidTripRequest(BaseModel):
     address: str
     lat: float
@@ -1750,22 +1823,22 @@ async def add_stop_mid_trip(ride_id: str, req: AddStopMidTripRequest, current_us
     else:
         stops.append(new_stop)
 
-    await db.update_one(
-        "rides",
-        {"id": ride_id},
-        {"$set": {"stops": stops, "updated_at": datetime.utcnow().isoformat()}},
-    )
+    fare_patch = _recalculate_fare_for_stops(ride, stops)
+    set_doc = {"stops": stops, "updated_at": datetime.utcnow().isoformat(), **fare_patch}
 
-    # Notify driver via WebSocket
+    await db.update_one("rides", {"id": ride_id}, {"$set": set_doc})
+
+    # Notify driver via WebSocket — include the new fare so both apps show
+    # the revised quote without an extra HTTP round-trip.
     if ride.get("driver_id"):
         driver = await db.find_one("drivers", {"id": ride["driver_id"]})
         if driver and driver.get("user_id"):
             await manager.send_personal_message(
-                {"type": "stops_updated", "ride_id": ride_id, "stops": stops},
+                {"type": "stops_updated", "ride_id": ride_id, "stops": stops, **fare_patch},
                 f"driver_{driver['user_id']}",
             )
 
-    return {"success": True, "stops": stops}
+    return {"success": True, "stops": stops, **fare_patch}
 
 
 @api_router.delete("/{ride_id}/stops/{stop_index}")
@@ -1785,22 +1858,21 @@ async def remove_stop_mid_trip(ride_id: str, stop_index: int, current_user: dict
 
     stops.pop(stop_index)
 
-    await db.update_one(
-        "rides",
-        {"id": ride_id},
-        {"$set": {"stops": stops, "updated_at": datetime.utcnow().isoformat()}},
-    )
+    fare_patch = _recalculate_fare_for_stops(ride, stops)
+    set_doc = {"stops": stops, "updated_at": datetime.utcnow().isoformat(), **fare_patch}
+
+    await db.update_one("rides", {"id": ride_id}, {"$set": set_doc})
 
     # Notify driver
     if ride.get("driver_id"):
         driver = await db.find_one("drivers", {"id": ride["driver_id"]})
         if driver and driver.get("user_id"):
             await manager.send_personal_message(
-                {"type": "stops_updated", "ride_id": ride_id, "stops": stops},
+                {"type": "stops_updated", "ride_id": ride_id, "stops": stops, **fare_patch},
                 f"driver_{driver['user_id']}",
             )
 
-    return {"success": True, "stops": stops}
+    return {"success": True, "stops": stops, **fare_patch}
 
 
 class EmergencyRequest(BaseModel):

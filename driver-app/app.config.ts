@@ -37,8 +37,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     },
     ios: ({
         supportsTablet: true,
-        // @ts-expect-error minimumOsVersion is valid Expo config but not yet in SDK 54 type defs
-        minimumOsVersion: '16.0', // SDK 55 minimum; was 13.0 on SDK 54
+        minimumOsVersion: '16.0', // SDK 55 minimum; was 13.0 on SDK 54 (now in ExpoConfig types)
         bundleIdentifier: BUNDLE_ID,
         googleServicesFile: './GoogleService-Info.plist',
         config: {

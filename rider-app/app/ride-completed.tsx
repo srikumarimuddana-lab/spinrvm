@@ -19,6 +19,15 @@ import { useStripe } from '@stripe/stripe-react-native';
 import { attemptRidePayment, PaymentAlertButton } from '../utils/attemptRidePayment';
 import { useSpinrPaymentSheet } from '../hooks/useSpinrPaymentSheet';
 
+// PR #664 stringified Decimal money fields in API responses (e.g. total_fare,
+// base_fare, tip_amount). The receipt UI needs them as numbers for arithmetic
+// and as 2-dp display strings. These two helpers narrow `MoneyString | number
+// | undefined` cleanly without spreading parseFloat noise across the file.
+const toNum = (v: string | number | null | undefined): number =>
+  typeof v === 'number' ? v : v ? parseFloat(v) || 0 : 0;
+const fmt = (v: string | number | null | undefined): string =>
+  toNum(v).toFixed(2);
+
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 
@@ -56,7 +65,7 @@ function RideCompletedScreenContent() {
   const mapRef = React.useRef<MapView>(null);
 
   const tipOptions = [2, 5, 10];
-  const fare = currentRide?.total_fare || 0;
+  const fare = toNum(currentRide?.total_fare);
   const duration = currentRide?.duration_minutes || 0;
   const distance = currentRide?.distance_km || 0;
 
@@ -102,10 +111,10 @@ function RideCompletedScreenContent() {
       `▸ TO    ${currentRide?.dropoff_address || '—'}`,
       ``,
       `━━━━━━ FARE BREAKDOWN ━━━━━━`,
-      `Base fare:     $${(currentRide?.base_fare || 0).toFixed(2)}`,
-      `Distance fare: $${(currentRide?.distance_fare || 0).toFixed(2)}  (${distance.toFixed(1)} km)`,
-      `Time fare:     $${(currentRide?.time_fare || 0).toFixed(2)}  (${duration} min)`,
-      `Booking fee:   $${(currentRide?.booking_fee || 0).toFixed(2)}`,
+      `Base fare:     $${fmt(currentRide?.base_fare)}`,
+      `Distance fare: $${fmt(currentRide?.distance_fare)}  (${distance.toFixed(1)} km)`,
+      `Time fare:     $${fmt(currentRide?.time_fare)}  (${duration} min)`,
+      `Booking fee:   $${fmt(currentRide?.booking_fee)}`,
       tipAmount > 0 ? `Tip:           $${tipAmount.toFixed(2)}` : null,
       `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
       `TOTAL:         $${total.toFixed(2)} CAD`,
@@ -198,11 +207,11 @@ function RideCompletedScreenContent() {
         return;
       }
 
-      const total = (currentRide?.total_fare || 0) + (tipAmount || 0);
+      const total = toNum(currentRide?.total_fare) + toNum(tipAmount);
       Analytics.paymentCompleted({ method: 'default', amount: chargedAmount ?? total });
 
       Analytics.rideCompleted({
-        fare: currentRide?.total_fare || 0,
+        fare: toNum(currentRide?.total_fare),
         distance_km: currentRide?.distance_km,
       });
 
@@ -229,7 +238,7 @@ function RideCompletedScreenContent() {
     const tipAmount = selectedTip || (customTip ? parseFloat(customTip) || 0 : 0);
     const result = await presentSheet({
       rideId: rideId as string,
-      amount: currentRide?.total_fare || 0,
+      amount: toNum(currentRide?.total_fare),
       tipAmount,
     });
     if (!result.ok) {
@@ -241,9 +250,9 @@ function RideCompletedScreenContent() {
     try {
       await rateRide(rideId as string, rating, comment || undefined, tipAmount > 0 ? tipAmount : undefined);
     } catch { /* already rated guard */ }
-    const total = (currentRide?.total_fare || 0) + tipAmount;
+    const total = toNum(currentRide?.total_fare) + toNum(tipAmount);
     Analytics.paymentCompleted({ method: 'google_pay', amount: total });
-    Analytics.rideCompleted({ fare: currentRide?.total_fare || 0, distance_km: currentRide?.distance_km });
+    Analytics.rideCompleted({ fare: toNum(currentRide?.total_fare), distance_km: currentRide?.distance_km });
     clearRide();
     router.replace('/(tabs)');
   };

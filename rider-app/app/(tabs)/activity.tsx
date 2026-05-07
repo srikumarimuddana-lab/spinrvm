@@ -31,12 +31,16 @@ interface RideHistory {
 
 type FilterType = 'all' | 'personal' | 'business';
 
+type TabType = 'upcoming' | 'past';
+
 export default function ActivityScreen() {
   const router = useRouter();
   const { token } = useAuthStore();
   const [rides, setRides] = useState<RideHistory[]>([]);
+  const [scheduledRides, setScheduledRides] = useState<RideHistory[]>([]);
   const [vehicleTypes, setVehicleTypes] = useState<Record<string, string>>({});
   const [filter, setFilter] = useState<FilterType>('all');
+  const [tab, setTab] = useState<TabType>('upcoming');
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
   const { colors } = useTheme();
@@ -44,12 +48,14 @@ export default function ActivityScreen() {
 
   const fetchData = async () => {
     try {
-      const [ridesRes, typesRes] = await Promise.all([
+      const [ridesRes, scheduledRes, typesRes] = await Promise.all([
         api.get('/rides/history').catch(() => ({ data: [] })),
+        api.get('/rides/scheduled').catch(() => ({ data: [] })),
         api.get('/vehicle-types').catch(() => ({ data: [] }))
       ]);
 
       setRides(ridesRes.data || []);
+      setScheduledRides(scheduledRes.data || []);
 
       const typesMap: Record<string, string> = {};
       (typesRes.data || []).forEach((t: any) => {
@@ -169,27 +175,47 @@ export default function ActivityScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Filter Tabs */}
+      {/* Tab Selection: Upcoming vs Past */}
       <View style={styles.filterTabs}>
         <TouchableOpacity
-          style={[styles.filterTab, filter === 'all' && styles.filterTabActive]}
-          onPress={() => setFilter('all')}
+          style={[styles.filterTab, tab === 'upcoming' && styles.filterTabActive]}
+          onPress={() => setTab('upcoming')}
         >
-          <Text style={[styles.filterTabText, filter === 'all' && styles.filterTabTextActive]}>All</Text>
+          <Text style={[styles.filterTabText, tab === 'upcoming' && styles.filterTabTextActive]}>
+            Upcoming {scheduledRides.length > 0 && `(${scheduledRides.length})`}
+          </Text>
         </TouchableOpacity>
         <TouchableOpacity
-          style={[styles.filterTab, filter === 'personal' && styles.filterTabActive]}
-          onPress={() => setFilter('personal')}
+          style={[styles.filterTab, tab === 'past' && styles.filterTabActive]}
+          onPress={() => setTab('past')}
         >
-          <Text style={[styles.filterTabText, filter === 'personal' && styles.filterTabTextActive]}>Personal</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.filterTab, filter === 'business' && styles.filterTabActive]}
-          onPress={() => setFilter('business')}
-        >
-          <Text style={[styles.filterTabText, filter === 'business' && styles.filterTabTextActive]}>Business</Text>
+          <Text style={[styles.filterTabText, tab === 'past' && styles.filterTabTextActive]}>Past</Text>
         </TouchableOpacity>
       </View>
+
+      {/* Personal/Business Filter (only for past rides) */}
+      {tab === 'past' && (
+        <View style={styles.filterTabs}>
+          <TouchableOpacity
+            style={[styles.filterTab, filter === 'all' && styles.filterTabActive]}
+            onPress={() => setFilter('all')}
+          >
+            <Text style={[styles.filterTabText, filter === 'all' && styles.filterTabTextActive]}>All</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.filterTab, filter === 'personal' && styles.filterTabActive]}
+            onPress={() => setFilter('personal')}
+          >
+            <Text style={[styles.filterTabText, filter === 'personal' && styles.filterTabTextActive]}>Personal</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.filterTab, filter === 'business' && styles.filterTabActive]}
+            onPress={() => setFilter('business')}
+          >
+            <Text style={[styles.filterTabText, filter === 'business' && styles.filterTabTextActive]}>Business</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* Rides List */}
       <ScrollView
@@ -200,58 +226,111 @@ export default function ActivityScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
       >
-        {rides.length === 0 && !loading ? (
-          <View style={styles.emptyState}>
-            <View style={styles.emptyIconContainer}>
-              <Ionicons name="car-outline" size={48} color="#CCC" />
+        {tab === 'upcoming' ? (
+          // Upcoming/Scheduled Rides
+          scheduledRides.length === 0 && !loading ? (
+            <View style={styles.emptyState}>
+              <View style={styles.emptyIconContainer}>
+                <Ionicons name="calendar-outline" size={48} color="#CCC" />
+              </View>
+              <Text style={styles.emptyTitle}>No scheduled rides</Text>
+              <Text style={styles.emptyText}>
+                Your upcoming rides will appear here
+              </Text>
             </View>
-            <Text style={styles.emptyTitle}>No rides yet</Text>
-            <Text style={styles.emptyText}>
-              Your ride history will appear here once{"\n"}you complete your first trip.
-            </Text>
-          </View>
+          ) : (
+            scheduledRides.map((ride) => (
+              <TouchableOpacity
+                key={ride.id}
+                style={styles.rideCard}
+                onPress={() => handleRidePress(ride)}
+              >
+                <View style={[styles.rideIcon, { backgroundColor: '#EFF6FF' }]}>
+                  <Ionicons
+                    name="calendar-outline"
+                    size={20}
+                    color={colors.primary}
+                  />
+                </View>
+
+                <View style={styles.rideDetails}>
+                  <Text style={styles.rideDestination} numberOfLines={1}>
+                    {ride.dropoff_address || 'Unknown destination'}
+                  </Text>
+                  <Text style={styles.rideInfo}>
+                    {formatDate(ride.scheduled_time || ride.created_at)} • {getVehicleType(ride.vehicle_type_id)}
+                  </Text>
+                </View>
+
+                <View style={styles.rideFareContainer}>
+                  <Text style={styles.rideFare}>
+                    ${ride.total_fare?.toFixed(2) || '0.00'}
+                  </Text>
+                  <View style={styles.rideStatusContainer}>
+                    <View style={[styles.statusDot, { backgroundColor: '#F59E0B' }]} />
+                    <Text style={[styles.rideStatus, { color: '#F59E0B' }]}>
+                      Scheduled
+                    </Text>
+                  </View>
+                </View>
+              </TouchableOpacity>
+            ))
+          )
         ) : (
-          Object.entries(groupedRides).map(([month, monthRides]) => (
-            <View key={month}>
-              <Text style={styles.monthHeader}>{month}</Text>
-              {monthRides.map((ride) => (
-                <TouchableOpacity
-                  key={ride.id}
-                  style={styles.rideCard}
-                  onPress={() => handleRidePress(ride)}
-                >
-                  <View style={[styles.rideIcon, { backgroundColor: getRideIconBg(ride.status) }]}>
-                    <Ionicons
-                      name={getRideIcon(ride.status) as any}
-                      size={20}
-                      color={colors.primary}
-                    />
-                  </View>
+          // Past Rides
+          rides.length === 0 && !loading ? (
+            <View style={styles.emptyState}>
+              <View style={styles.emptyIconContainer}>
+                <Ionicons name="car-outline" size={48} color="#CCC" />
+              </View>
+              <Text style={styles.emptyTitle}>No rides yet</Text>
+              <Text style={styles.emptyText}>
+                Your ride history will appear here once{"\n"}you complete your first trip.
+              </Text>
+            </View>
+          ) : (
+            Object.entries(groupedRides).map(([month, monthRides]) => (
+              <View key={month}>
+                <Text style={styles.monthHeader}>{month}</Text>
+                {monthRides.map((ride) => (
+                  <TouchableOpacity
+                    key={ride.id}
+                    style={styles.rideCard}
+                    onPress={() => handleRidePress(ride)}
+                  >
+                    <View style={[styles.rideIcon, { backgroundColor: getRideIconBg(ride.status) }]}>
+                      <Ionicons
+                        name={getRideIcon(ride.status) as any}
+                        size={20}
+                        color={colors.primary}
+                      />
+                    </View>
 
-                  <View style={styles.rideDetails}>
-                    <Text style={styles.rideDestination} numberOfLines={1}>
-                      {ride.dropoff_address || 'Unknown destination'}
-                    </Text>
-                    <Text style={styles.rideInfo}>
-                      {formatDate(ride.created_at)} • {getVehicleType(ride.vehicle_type_id)}
-                    </Text>
-                  </View>
-
-                  <View style={styles.rideFareContainer}>
-                    <Text style={[styles.rideFare, ride.status === 'cancelled' && styles.rideFareCancelled]}>
-                      ${ride.status === 'cancelled' ? '0.00' : ride.total_fare?.toFixed(2) || '0.00'}
-                    </Text>
-                    <View style={styles.rideStatusContainer}>
-                      <View style={[styles.statusDot, { backgroundColor: getStatusColor(ride.status) }]} />
-                      <Text style={[styles.rideStatus, { color: getStatusColor(ride.status) }]}>
-                        {getStatusText(ride.status)}
+                    <View style={styles.rideDetails}>
+                      <Text style={styles.rideDestination} numberOfLines={1}>
+                        {ride.dropoff_address || 'Unknown destination'}
+                      </Text>
+                      <Text style={styles.rideInfo}>
+                        {formatDate(ride.created_at)} • {getVehicleType(ride.vehicle_type_id)}
                       </Text>
                     </View>
-                  </View>
-                </TouchableOpacity>
-              ))}
-            </View>
-          ))
+
+                    <View style={styles.rideFareContainer}>
+                      <Text style={[styles.rideFare, ride.status === 'cancelled' && styles.rideFareCancelled]}>
+                        ${ride.status === 'cancelled' ? '0.00' : ride.total_fare?.toFixed(2) || '0.00'}
+                      </Text>
+                      <View style={styles.rideStatusContainer}>
+                        <View style={[styles.statusDot, { backgroundColor: getStatusColor(ride.status) }]} />
+                        <Text style={[styles.rideStatus, { color: getStatusColor(ride.status) }]}>
+                          {getStatusText(ride.status)}
+                        </Text>
+                      </View>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ))
+          )
         )}
       </ScrollView>
     </SafeAreaView>

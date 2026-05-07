@@ -691,9 +691,33 @@ async def _require_staff_from_token(authorization: str | None) -> dict:
 
 @admin_auth_router.get("/mfa/status")
 async def admin_mfa_status(authorization: Optional[str] = Header(None)):
-    """Return MFA enrollment status for the authenticated staff member."""
-    staff = await _require_staff_from_token(authorization)
-    return {"mfa_enabled": bool(staff.get("mfa_enabled"))}
+    """Return MFA enrollment status for the authenticated staff member.
+
+    Super admin (admin-001 env account) has no admin_staff row and cannot
+    enroll in TOTP MFA — return available=false instead of a 400 so the
+    frontend can hide the MFA panel gracefully.
+    """
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        scheme, token = authorization.split()
+        if scheme.lower() != "bearer":
+            raise HTTPException(status_code=401, detail="Invalid auth scheme")
+        payload = jwt.decode(
+            token,
+            settings.JWT_SECRET,
+            algorithms=[settings.ALGORITHM],
+            audience=JWT_AUD_ADMIN,
+        )
+    except (ValueError, jwt.InvalidTokenError) as e:
+        raise HTTPException(status_code=401, detail=f"Invalid token: {e}") from e
+    user_id = payload.get("user_id")
+    if not user_id or user_id == "admin-001":
+        return {"mfa_enabled": False, "available": False}
+    staff = await db.find_one("admin_staff", {"id": user_id})
+    if not staff:
+        raise HTTPException(status_code=404, detail="Staff member not found")
+    return {"mfa_enabled": bool(staff.get("mfa_enabled")), "available": True}
 
 
 @admin_auth_router.post("/mfa/enroll")

@@ -17,17 +17,12 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     updates: {
         url: 'https://u.expo.dev/8f1e4f60-720e-46b0-9b71-33c13d3af043',
     },
-    // Fingerprint policy: EAS hashes the native source tree on every build
-    // and uses that hash as the runtimeVersion. JS bundles only ship to clients
-    // whose native binary fingerprint matches — eliminating the manual-bump
-    // trap where a forgotten runtimeVersion edit could deliver an OTA update
-    // to clients with incompatible native code.
-    //
-    // Supported in SDK 53+ for the prebuild (CNG) workflow via @expo/fingerprint
-    // (already a transitive dep of expo@~55.0.20). Pre-launch phase: changing
-    // this from a literal '1.0.0' to a fingerprint hash has zero user impact
-    // because no production users exist yet.
-    runtimeVersion: { policy: 'fingerprint' },
+    // Use appVersion policy so runtime version tracks the `version` field above.
+    // The fingerprint policy was producing local-vs-EAS hash mismatches due to
+    // cross-OS yarn install differences (Windows host vs Linux EAS runner).
+    // appVersion is deterministic across environments — pre-launch with no
+    // production users, OTA compatibility risk is zero.
+    runtimeVersion: { policy: 'appVersion' },
     splash: {
         backgroundColor: '#ee2b2b',
         resizeMode: 'contain',

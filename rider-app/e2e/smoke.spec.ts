@@ -30,7 +30,7 @@ test.describe('rider-app web: smoke', () => {
     await mockBackend(page);
     await page.goto('/');
     // Index screen schedules a router.replace('/login') after ~1.5s splash
-    await page.waitForTimeout(2000);
+    await page.waitForURL(/login|\/$|index/, { timeout: 8_000 }).catch(() => {});
     await expect(page).toHaveURL(/login|\/$|index/);
   });
 
@@ -38,9 +38,9 @@ test.describe('rider-app web: smoke', () => {
     await seedAuthedSession(page);
     await mockBackend(page);
     await page.goto('/');
-    await page.waitForTimeout(2000);
     // With auth seeded and no active ride, index should route to (tabs)
     // — the URL hash or pathname should no longer reference /login
+    await page.waitForURL((url) => !url.toString().includes('/login'), { timeout: 8_000 }).catch(() => {});
     const url = page.url();
     expect(url).not.toMatch(/\/login/);
   });

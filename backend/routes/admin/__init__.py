@@ -18,6 +18,27 @@ could `POST /api/admin/staff` to create themselves as a super-admin.
 ``admin_auth_router`` (login / session / logout) is mounted directly
 by server.py as a separate router and stays public so the dashboard
 can reach /api/admin/auth/login without a token.
+
+Auth coverage audit — 2026-05-06
+----------------------------------
+All admin API endpoints have been audited for authentication gating.
+Coverage is provided by two complementary mechanisms:
+
+1. Router-level dependency (this file):
+   ``admin_router = APIRouter(dependencies=[Depends(get_admin_user)])``
+   covers every sub-router included via ``admin_router.include_router()``.
+   This is the primary gate for all sub-routers in this package.
+
+2. Per-handler ``Depends(get_admin_user)`` in function signatures:
+   Used by ``routes/admin/monitoring.py``, which is mounted directly on
+   ``app`` (not via ``admin_router``) in server.py. Every endpoint in
+   that file carries the dependency individually.
+
+Excluded from ``admin_router`` by design (public):
+   - ``admin_auth_router`` (login, session, logout, MFA, refresh, unlock)
+     — mounted separately by server.py; login must be reachable pre-auth.
+
+No unprotected admin API endpoints exist as of this audit.
 """
 
 from fastapi import APIRouter, Depends

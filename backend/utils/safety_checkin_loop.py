@@ -35,9 +35,13 @@ except ImportError:
 try:
     from ..db import db as _supabase_db
     from ..features import send_push_notification
+    from ..socket_manager import manager as _ws_manager
+    from .audit_logger import log_admin_action as _log_audit
 except ImportError:
     from db import db as _supabase_db  # type: ignore
     from features import send_push_notification  # type: ignore
+    from socket_manager import manager as _ws_manager  # type: ignore
+    from utils.audit_logger import log_admin_action as _log_audit  # type: ignore
 
 try:
     from .loop_monitor import record_heartbeat as _record_heartbeat
@@ -73,7 +77,6 @@ async def safety_checkin_loop() -> None:
 async def _tick() -> None:
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(minutes=_CHECKIN_AFTER_MINUTES)
-    cutoff_iso = cutoff.isoformat()
 
     in_progress = await _supabase_db.get_rows(
         "rides",
@@ -150,7 +153,7 @@ async def _tick() -> None:
             logger.error(
                 f"[SAFETY_CHECKIN] Escalation failed for ride {ride_id}; "
                 "will retry on next tick. Check DB/Redis connectivity.",
-                exc_info=False,
+                exc_info=True,
             )
 
 
@@ -178,7 +181,40 @@ async def _escalate(ride: dict, now: datetime) -> None:
         # Mark escalated only after a successful insert so a DB failure does
         # not silently suppress future escalation attempts.
         await redis_set(_escalated_key(ride_id), "1", ttl=4 * 3600)
-        logger.warning(f"[SAFETY_CHECKIN] No response from rider {rider_id} on ride {ride_id}; safety incident opened.")
+        logger.error(f"[SAFETY_CHECKIN] No response from rider {rider_id} on ride {ride_id}; safety incident opened.")
+
+        # Broadcast to admin WS connections so the safety dashboard lights up
+        # without requiring a page refresh.
+        try:
+            await _ws_manager.broadcast_to_admins(
+                {
+                    "type": "safety_incident_opened",
+                    "incident_id": incident["id"],
+                    "ride_id": ride_id,
+                    "rider_id": rider_id,
+                    "reason": "safety_checkin_no_response",
+                    "created_at": incident["created_at"],
+                }
+            )
+        except Exception as _ws_exc:
+            logger.error(f"[SAFETY_CHECKIN] Admin WS broadcast failed for incident {incident['id']}: {_ws_exc}")
+
+        # Write audit log entry for the automated escalation.
+        try:
+            await _log_audit(
+                admin={"id": "system", "role": "system"},
+                action="safety_incident_auto_escalated",
+                resource="safety_incidents",
+                resource_id=incident["id"],
+                details={
+                    "ride_id": ride_id,
+                    "rider_id": rider_id,
+                    "reason": "safety_checkin_no_response",
+                    "escalate_after_seconds": _ESCALATE_AFTER_SECONDS,
+                },
+            )
+        except Exception as _audit_exc:
+            logger.error(f"[SAFETY_CHECKIN] Audit log write failed for incident {incident['id']}: {_audit_exc}")
     except Exception:
         logger.error(
             f"[SAFETY_CHECKIN] Failed to escalate ride {ride_id} — will retry next tick",

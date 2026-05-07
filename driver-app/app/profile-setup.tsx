@@ -17,7 +17,7 @@ import { useRouter } from 'expo-router';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
-import { useAuthStore } from '@shared/store/authStore';
+import { useAuthStore, type User } from '@shared/store/authStore';
 import api from '@shared/api/client';
 import CustomAlert from '@shared/components/CustomAlert';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -82,7 +82,7 @@ export default function ProfileSetupScreen() {
         return;
       }
       try {
-        const res = await api.get('/auth/me');
+        const res = await api.get<User>('/auth/me');
         const fresh = res.data;
         if (cancelled) return;
         if (fresh?.first_name && fresh?.last_name && fresh?.email) {
@@ -105,7 +105,7 @@ export default function ProfileSetupScreen() {
       let areas: any[] = [];
       try {
         // Public endpoint — returns only active areas, no admin auth required.
-        const areasRes = await api.get('/service-areas');
+        const areasRes = await api.get<any[]>('/service-areas');
         areas = areasRes.data || [];
       } catch {
         areas = [
@@ -199,7 +199,6 @@ export default function ProfileSetupScreen() {
         last_name: lastName.trim(),
         email: email.trim().toLowerCase(),
         gender,
-        role: 'driver',
         city: city || undefined,
         service_area_id: serviceAreaId || undefined,
       });

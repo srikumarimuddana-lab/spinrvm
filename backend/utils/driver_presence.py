@@ -78,7 +78,7 @@ async def is_present(driver_id: str) -> bool:
         val = await redis_get(_key(driver_id))
         return val is not None
     except Exception as exc:  # pragma: no cover - defensive
-        logger.warning(f"[presence] is_present({driver_id}) failed: {exc}")
+        logger.error(f"[presence] is_present({driver_id}) failed: {exc}", exc_info=True)
         return False
 
 
@@ -109,7 +109,7 @@ async def present_driver_ids(candidate_ids: List[str]) -> set:
             vals = await r.mget(*keys)
             return {cid for cid, v in zip(candidate_ids, vals, strict=False) if v is not None}
         except Exception as exc:
-            logger.warning(f"[presence] MGET failed, falling back: {exc}")
+            logger.error(f"[presence] MGET failed, falling back to per-key reads: {exc}", exc_info=True)
 
     # In-process fallback (single replica, dev/test).
     result = set()
@@ -137,7 +137,7 @@ async def list_present_ids() -> List[str]:
             k = key.decode() if isinstance(key, bytes) else key
             ids.append(k[len(_PREFIX) :])
     except Exception as exc:
-        logger.warning(f"[presence] SCAN failed: {exc}")
+        logger.error(f"[presence] SCAN failed: {exc}", exc_info=True)
     return ids
 
 

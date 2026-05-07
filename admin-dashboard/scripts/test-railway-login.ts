@@ -3,6 +3,8 @@
 //   npx tsx admin-dashboard/scripts/test-railway-login.ts <email> <password>
 //   BACKEND_URL=http://localhost:8000 npx tsx admin-dashboard/scripts/test-railway-login.ts <email> <password>
 
+import { redactEmail } from '../../shared/utils/pii';
+
 const BACKEND_URL =
   process.env.BACKEND_URL ?? 'https://spinr-backend-production.up.railway.app';
 
@@ -10,7 +12,7 @@ async function testAdminLogin(email: string, password: string) {
   console.log(`\n🔍 Testing Admin Login Flow against ${BACKEND_URL}`);
   
   // 1. Attempt Login
-  console.log(`\n➡️ POST /api/admin/auth/login with email: ${email}`);
+  console.log(`\n➡️ POST /api/admin/auth/login with email: ${redactEmail(email)}`);
   const loginRes = await fetch(`${BACKEND_URL}/api/admin/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -60,7 +62,7 @@ async function testAdminLogin(email: string, password: string) {
   
   if (sessionData.authenticated) {
     console.log(`✅ Session verified successfully!`);
-    console.log(`👤 Authenticated User: ${sessionData.user?.email}`);
+    console.log(`👤 Authenticated User: ${redactEmail(sessionData.user?.email)}`);
     console.log(`\n🎉 The admin JWT flow is working perfectly against the Railway backend!`);
   } else {
     console.error(`❌ Session check returned 200 OK but authenticated=false!`);

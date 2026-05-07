@@ -191,6 +191,11 @@ export default function CompanyMembersPage() {
     async function handleInvite(e: React.FormEvent) {
         e.preventDefault();
         if (!inviteEmail) return;
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(inviteEmail.trim())) {
+            toast({ title: "Invalid email address", description: "Please enter a valid email", variant: "destructive" });
+            return;
+        }
         setInviting(true);
         try {
             const res = await inviteCompanyMember(companyId, { email: inviteEmail, role: inviteRole });

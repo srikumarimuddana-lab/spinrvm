@@ -27,6 +27,7 @@ jest.mock('../../store/rideStore', () => {
 });
 
 jest.mock('@shared/store/authStore', () => ({
+  registerLogoutCallback: jest.fn(),
   useAuthStore: Object.assign(
     (selector: (s: any) => any) =>
       selector({ user: { id: 'user-abc' }, token: 'tok-xyz' }),

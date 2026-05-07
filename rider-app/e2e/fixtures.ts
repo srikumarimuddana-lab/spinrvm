@@ -27,6 +27,7 @@ export const MOCK_TOKEN = 'e2e-rider-jwt-token';
 export const MOCK_RIDE = {
   id: 'ride_e2e_1',
   rider_id: MOCK_USER.id,
+  driver_id: null as string | null,
   status: 'searching',
   total_fare: 18.5,
   grand_total: 18.5,

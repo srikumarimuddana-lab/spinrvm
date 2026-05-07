@@ -1,6 +1,7 @@
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Query
@@ -176,8 +177,8 @@ async def admin_get_subscription_stats(
     active = [s for s in all_subs if s.get("status") == "active"]
     expired = [s for s in all_subs if s.get("status") == "expired"]
     cancelled = [s for s in all_subs if s.get("status") == "cancelled"]
-    total_revenue = sum(float(s.get("price") or 0) for s in all_subs)
-    active_revenue = sum(float(s.get("price") or 0) for s in active)
+    total_revenue = float(sum(Decimal(str(s.get("price") or 0)) for s in all_subs))
+    active_revenue = float(sum(Decimal(str(s.get("price") or 0)) for s in active))
 
     # Filter to date range for transactions and charts
     def parse_dt(s):
@@ -192,7 +193,7 @@ async def admin_get_subscription_stats(
         if dt and range_start <= dt <= range_end:
             in_range.append(s)
 
-    range_revenue = sum(float(s.get("price") or 0) for s in in_range)
+    range_revenue = float(sum(Decimal(str(s.get("price") or 0)) for s in in_range))
 
     # Per-plan breakdown
     plan_stats = defaultdict(lambda: {"name": "", "count": 0, "revenue": 0.0, "active": 0})
@@ -200,7 +201,7 @@ async def admin_get_subscription_stats(
         pid = s.get("plan_id") or "unknown"
         plan_stats[pid]["name"] = s.get("plan_name") or plan_map.get(pid, {}).get("name", "Unknown")
         plan_stats[pid]["count"] += 1
-        plan_stats[pid]["revenue"] += float(s.get("price") or 0)
+        plan_stats[pid]["revenue"] = float(Decimal(str(plan_stats[pid]["revenue"])) + Decimal(str(s.get("price") or 0)))
         if s.get("status") == "active":
             plan_stats[pid]["active"] += 1
 
@@ -212,7 +213,7 @@ async def admin_get_subscription_stats(
         dt = parse_dt(s.get("created_at") or s.get("started_at"))
         if dt:
             day_key = dt.strftime("%Y-%m-%d")
-            daily_revenue[day_key] += float(s.get("price") or 0)
+            daily_revenue[day_key] = float(Decimal(str(daily_revenue[day_key])) + Decimal(str(s.get("price") or 0)))
             daily_new_subs[day_key] += 1
 
     revenue_chart = []

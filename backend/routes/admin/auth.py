@@ -300,9 +300,11 @@ async def admin_login(request: Request, response: Response, body: LoginRequest):
         if ok:
             if not staff.get("is_active", True):
                 raise HTTPException(status_code=403, detail="Account is deactivated")
-            await db_supabase.update_one(
-                "admin_staff", {"id": staff["id"]}, {"last_login": datetime.now(timezone.utc).isoformat()}
-            )
+            updates: dict = {"last_login": datetime.now(timezone.utc).isoformat()}
+            if needs_upgrade:
+                updates["password_hash"] = hash_password(body.password)
+                logger.info("admin auth: upgraded legacy password hash for staff %s", staff["id"])
+            await db_supabase.update_one("admin_staff", {"id": staff["id"]}, updates)
             if staff.get("mfa_enabled"):
                 mfa_token = _mint_mfa_challenge_token(staff["id"])
                 await _clear_login_failures(body.email)

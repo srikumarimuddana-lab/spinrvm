@@ -116,7 +116,7 @@ class TestCardSuccess:
             result = await rides_mod.process_payment(ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID})
 
         assert result["success"] is True
-        assert result["charged_amount"] == 18.5
+        assert Decimal(str(result["charged_amount"])) == Decimal("18.5")
 
         # The last write to payment_status must be "paid"
         assert _last_payment_status_write(updates) == "paid"
@@ -142,10 +142,10 @@ class TestCardSuccess:
             result = await rides_mod.process_payment(ride_id=RIDE_ID, req=req, current_user={"id": RIDER_ID})
 
         # Fare was 18.5, tip 2 → 20.5
-        assert result["charged_amount"] == 20.5
+        assert Decimal(str(result["charged_amount"])) == Decimal("20.5")
         # tip_amount must be persisted on the ride
         paid_write = next(u for u in updates if u.get("payment_status") == "paid")
-        assert paid_write.get("tip_amount") == 2.0
+        assert Decimal(str(paid_write.get("tip_amount"))) == Decimal("2.0")
 
 
 @pytest.mark.asyncio

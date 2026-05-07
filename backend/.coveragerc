@@ -1,0 +1,39 @@
+[run]
+source = .
+omit =
+    # Diagnostic / one-off scripts — not part of the production runtime
+    diagnose_driver_ws.py
+    diagnose_nearby_drivers.py
+    list_users.py
+    make_admin.py
+    onboarding_status.py
+    check_permissions.py
+    seed_vehicle_types.py
+    settings_loader.py
+    supabase_client.py
+    sms_service.py
+    documents.py
+    geo_utils.py
+    features.py
+    validators.py
+    logging_utils.py
+    db.py
+    schemas.py
+    # Root-level smoke / manual test files
+    test_corporate_accounts.py
+    test_dns.py
+    tests_smoke_supabase.py
+    # Migration runners (tested by migration-safety CI gate, not pytest)
+    migrate.py
+    scripts/migrate.py
+    scripts/run_migrations.py
+    # Test files themselves
+    tests/*
+
+[report]
+exclude_lines =
+    pragma: no cover
+    if TYPE_CHECKING:
+    raise NotImplementedError
+    \.\.\.
+    pass

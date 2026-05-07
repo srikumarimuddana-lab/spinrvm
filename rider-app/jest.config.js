@@ -12,6 +12,11 @@ module.exports = {
   ],
   modulePaths: ['<rootDir>/node_modules'],
   moduleNameMapper: {
+    // tsconfig paths include "react" → "@types/react" to fix TypeScript resolution for
+    // shared/ files; jest-expo converts tsconfig paths to moduleNameMapper, which would
+    // redirect require('react') to a types-only package with no runtime code.
+    // Override here to always use the real react module for tests.
+    '^react$': '<rootDir>/node_modules/react',
     // Expo SDK 54 winter (WinterCG) runtime executes require('./ImportMetaRegistry')
     // lazily via installGlobal — that require fails inside Jest's sandbox.
     // Mock the index so jest-expo's setup.js gets a no-op instead of the real runtime.

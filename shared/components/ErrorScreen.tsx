@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Image, Platform } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, type Href } from 'expo-router';
 import { useTheme } from '../theme/ThemeContext';
 import type { ThemeColors } from '../theme/index';
 
@@ -143,7 +143,7 @@ export function UnauthorizedScreen({ onLogin }: { onLogin?: () => void }) {
     if (onLogin) {
       onLogin();
     } else {
-      router.push('/login' as any);
+      router.push('/login' as Href);
     }
   };
 

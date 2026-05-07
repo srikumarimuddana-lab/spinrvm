@@ -19,6 +19,7 @@ export default function RidesPage() {
     const [page, setPage] = useState(0);
     const [areas, setAreas] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
+    const [loadError, setLoadError] = useState(false);
     const [search, setSearch] = useState("");
     const [statusFilter, setStatusFilter] = useState("all");
     const [areaFilter, setAreaFilter] = useState("all");
@@ -34,13 +35,17 @@ export default function RidesPage() {
     // work from a single loaded batch).
     const loadRides = useCallback(async (p: number, tab: string) => {
         setLoading(true);
+        setLoadError(false);
         try {
             const opts = tab === "scheduled" ? { isScheduled: true } : undefined;
             const res = await getRides(PAGE_SIZE, p * PAGE_SIZE, opts);
             setRides(res.rides);
             setTotalCount(res.total_count);
-        } catch {}
-        finally { setLoading(false); }
+        } catch {
+            setLoadError(true);
+        } finally {
+            setLoading(false);
+        }
     }, []);
 
     useEffect(() => {
@@ -124,6 +129,19 @@ export default function RidesPage() {
 
             {/* Stats Overview */}
             <RideStatsCards />
+
+            {/* Load error banner */}
+            {loadError && !loading && (
+                <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 flex items-center justify-between">
+                    <span>Failed to load rides — check backend health.</span>
+                    <button
+                        onClick={() => loadRides(page, statusFilter)}
+                        className="ml-4 text-red-700 underline hover:no-underline text-sm"
+                    >
+                        Retry
+                    </button>
+                </div>
+            )}
 
             {/* Rides Table */}
             <RideList

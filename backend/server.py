@@ -1,3 +1,4 @@
+import logging as _logging
 import os
 import sys
 
@@ -5,11 +6,106 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from fastapi import APIRouter, FastAPI
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request as _Request
+from starlette.responses import Response as _Response
 
 from core.config import settings
 from core.lifespan import lifespan
 from core.middleware import init_middleware
 from core.security import init_firebase
+
+_depr_logger = _logging.getLogger("spinr.deprecated_routes")
+
+# Paths (or path prefixes) that are served at a legacy mount AND also exist
+# under /api/v1/. Any request whose URL path starts with one of these strings
+# (and does NOT start with /api/v1/ or /api/) triggers a deprecation warning.
+# Update this set when legacy mounts are removed.
+_DEPRECATED_ROOT_PREFIXES: frozenset[str] = frozenset(
+    {
+        # settings_router: canonical is /api/v1/settings/..., legacy root is /settings/...
+        "/settings",
+        "/company-info",
+    }
+)
+
+# Paths served at /api/... that are also reachable at /api/v1/...
+# Rate-limit counters split across these two prefixes double the effective
+# quota for callers who alternate between them.
+_DEPRECATED_API_PREFIXES: frozenset[str] = frozenset(
+    {
+        # auth_router: canonical /api/v1/auth/..., legacy /api/auth/...
+        "/api/auth",
+        # files_router: canonical /api/v1/documents/..., legacy /api/documents/...
+        "/api/documents",
+        # corporate_accounts_router:
+        #   canonical /api/v1/admin/corporate-accounts/...
+        #   legacy    /api/admin/corporate-accounts/...
+        "/api/admin/corporate-accounts",
+    }
+)
+
+# Admin-only paths that exist ONLY at /api/admin/... and have no /api/v1/ twin.
+# These must be excluded so we don't mistakenly flag them as deprecated.
+_API_ADMIN_ONLY_PATHS: frozenset[str] = frozenset(
+    {
+        "/api/admin/auth",
+        "/api/admin/monitoring",
+        "/api/admin/corporate-accounts/wallet",  # corporate_wallet_router
+    }
+)
+
+
+class DeprecatedRootPathMiddleware(BaseHTTPMiddleware):
+    """Add X-Spinr-Deprecated: true header and emit a WARNING log for any
+    request that hits a known legacy/root-mount path that is also reachable
+    at the canonical /api/v1/ prefix.
+
+    This middleware is purely observational — it does NOT redirect or block
+    any traffic. Monitor the [DEPRECATED_ROUTE] log lines to measure usage
+    of the old paths before removing the duplicate mounts.
+    """
+
+    async def dispatch(self, request: _Request, call_next) -> _Response:  # type: ignore[override]
+        path = request.url.path
+
+        deprecated = False
+
+        # Check deprecated root paths (e.g. /settings/...)
+        for prefix in _DEPRECATED_ROOT_PREFIXES:
+            if path == prefix or path.startswith(prefix + "/"):
+                deprecated = True
+                break
+
+        # Check deprecated /api/ paths that are also at /api/v1/
+        if not deprecated:
+            for prefix in _DEPRECATED_API_PREFIXES:
+                if path == prefix or path.startswith(prefix + "/"):
+                    # Make sure this is not an /api/-only path (no /api/v1/ twin)
+                    is_api_only = any(path == excl or path.startswith(excl + "/") for excl in _API_ADMIN_ONLY_PATHS)
+                    if not is_api_only:
+                        deprecated = True
+                        break
+
+        response: _Response = await call_next(request)
+
+        if deprecated:
+            # Derive the canonical /api/v1/ equivalent for the log message.
+            if path.startswith("/api/"):
+                canonical = "/api/v1/" + path[len("/api/") :]
+            else:
+                canonical = "/api/v1" + path
+
+            _depr_logger.warning(
+                "[DEPRECATED_ROUTE] %s — use %s instead",
+                path,
+                canonical,
+            )
+            response.headers["X-Spinr-Deprecated"] = "true"
+
+        return response
+
+
 from documents import admin_documents_router, documents_router, files_router, upload_router
 from features import admin_support_router, pricing_router, support_router
 from routes.addresses import api_router as addresses_router
@@ -67,15 +163,11 @@ async def health():
 # Counters cover: DB retries by policy/reason, cache hit/miss by
 # prefix, circuit-breaker state, call-level totals, and Redis stats.
 # See utils/metrics.py for the counter definitions.
-from fastapi import Request as _Request  # noqa: E402
 from fastapi import Response as _MetricsResponse  # noqa: E402
-
-from utils.rate_limiter import default_limiter as _metrics_limiter  # noqa: E402
 
 
 @app.get("/metrics")
-@_metrics_limiter.limit("10/minute")
-async def metrics(request: _Request) -> _MetricsResponse:
+async def metrics() -> _MetricsResponse:
     from utils.metrics import render_prometheus, set_gauge
     from utils.redis_client import get_redis_stats
 
@@ -115,6 +207,11 @@ async def metrics(request: _Request) -> _MetricsResponse:
 
 # Initialize middleware
 init_middleware(app)
+
+# Register the deprecation-header middleware AFTER the main middleware stack so
+# it runs on the way out (response phase) and can append the response header.
+# It is lightweight — O(prefixes) string comparison per request.
+app.add_middleware(DeprecatedRootPathMiddleware)
 
 # Register exception handlers so unhandled errors return JSON (with CORS
 # headers) instead of falling through to Starlette's ServerErrorMiddleware,

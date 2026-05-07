@@ -10,8 +10,5 @@ export const RideStatus = {
   FAILED: 'failed',
 } as const;
 
-// Canonical union type from the shared package — the single source of truth for ride status strings.
-export type { RideStatus } from '@spinr/shared/types';
-
 // Convenience alias kept for backwards compatibility.
 export type RideStatusType = typeof RideStatus[keyof typeof RideStatus];

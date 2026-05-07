@@ -98,16 +98,27 @@ async def request_data_export(current_user: dict = Depends(get_current_user)):
 
 
 async def _anonymise_rides(user_id: str) -> None:
-    """Strip PII from all rides linked to a user (PIPEDA R-P2-46).
+    """Strip PII from completed rides linked to a user (PIPEDA R-P2-46).
 
     Ride records are retained for 7 years per Saskatchewan Transportation Act
     but personal identifiers are removed immediately on deletion request.
-    Coordinates are rounded to 2 dp (~1 km precision) to remove exact addresses.
+    Only 'completed' rides are anonymised — in_progress rides remain fully
+    linked for insurance period audit obligations.
+    Coordinates are rounded to 2 dp (~1 km precision); address text fields
+    are replaced with '[anonymized]'.
     """
     try:
-        rides = await db_supabase.get_rows("rides", {"rider_id": user_id}, limit=5000)
+        rides = await db_supabase.get_rows(
+            "rides",
+            {"rider_id": user_id, "status": "completed"},
+            limit=5000,
+        )
         for ride in rides:
-            updates: dict = {"rider_id": None}
+            updates: dict = {
+                "rider_id": None,
+                "pickup_address": "[anonymized]",
+                "dropoff_address": "[anonymized]",
+            }
             for lat_field in ("pickup_lat", "dropoff_lat"):
                 if ride.get(lat_field) is not None:
                     updates[lat_field] = round(float(ride[lat_field]), 2)
@@ -115,7 +126,7 @@ async def _anonymise_rides(user_id: str) -> None:
                 if ride.get(lng_field) is not None:
                     updates[lng_field] = round(float(ride[lng_field]), 2)
             await db_supabase.update_one("rides", {"id": ride["id"]}, updates)
-        logger.info(f"Anonymised {len(rides)} rides for deleted user {user_id}")
+        logger.info(f"Anonymised {len(rides)} completed rides for deleted user {user_id}")
     except Exception as e:
         # Log but don't fail the deletion — ride anonymisation is best-effort;
         # the account is still marked pending_deletion so the purge loop retries.

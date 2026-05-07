@@ -5,7 +5,7 @@ Tests cover JWT token handling, OTP generation/verification, and user authentica
 
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -121,7 +121,7 @@ class TestJWTTokenHandling:
         payload = {
             "sub": "user_123",
             "phone": "+1234567890",
-            "exp": datetime.utcnow() - timedelta(minutes=5),  # Expired 5 minutes ago
+            "exp": datetime.now(timezone.utc) - timedelta(minutes=5),  # Expired 5 minutes ago
         }
 
         expired_token = jwt.encode(
@@ -146,7 +146,7 @@ class TestJWTTokenHandling:
         payload = {
             "sub": "user_123",
             "phone": "+1234567890",
-            "exp": datetime.utcnow() + timedelta(minutes=30),
+            "exp": datetime.now(timezone.utc) + timedelta(minutes=30),
         }
 
         wrong_token = jwt.encode(payload, "wrong-secret-key", algorithm=mock_settings.ALGORITHM)
@@ -330,8 +330,12 @@ class TestAuthEndpoints:
             return_value=MagicMock(data=[{"id": "otp_123"}])
         )
 
-        # Use a valid E.164 phone with at least 12 chars (e.g. +12345678901 = 12 chars)
-        response = test_client.post("/api/auth/send-otp", json={"phone": "+12345678901"})
+        # Dev-OTP fallback is gated on ENV=development; pytest.ini sets
+        # ENV=test which (correctly) refuses the bypass. Patch ENV so the
+        # success path is reachable without configuring Twilio.
+        with patch("backend.routes.auth.settings.ENV", "development"):
+            # Use a valid E.164 phone with at least 12 chars (e.g. +12345678901 = 12 chars)
+            response = test_client.post("/api/auth/send-otp", json={"phone": "+12345678901"})
 
         assert response.status_code == 200
 

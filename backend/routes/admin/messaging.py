@@ -171,7 +171,7 @@ async def admin_get_cloud_messages(
             offset=offset,
         )
     except Exception:
-        logger.warning("cloud_messages table may not exist yet")
+        logger.error("cloud_messages table missing or query failed", exc_info=True)
         return []
     return messages
 
@@ -182,7 +182,7 @@ async def admin_get_cloud_message_stats():
     try:
         all_messages = await db_supabase.get_rows("cloud_messages", {}, limit=10000)
     except Exception:
-        logger.warning("cloud_messages table may not exist yet")
+        logger.error("cloud_messages table missing or query failed", exc_info=True)
         all_messages = []
 
     total = len(all_messages)

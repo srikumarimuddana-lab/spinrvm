@@ -50,11 +50,16 @@ function LoginForm() {
         // Await the HttpOnly admin_token cookie being written before navigating.
         // router.push triggers middleware immediately; if the cookie isn't committed
         // yet the middleware redirects back to /login, causing an instant logout loop.
-        await fetch('/api/auth/set-cookie', {
+        // If the cookie write fails, surface an error instead of redirecting into a
+        // broken session — auth succeeded but the session cannot be persisted.
+        const cookieRes = await fetch('/api/auth/set-cookie', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ token: data.token }),
-        }).catch(() => {});
+        });
+        if (!cookieRes.ok) {
+            throw new Error('Login succeeded but session could not be saved. Please try again.');
+        }
         const next = sanitizeNextPath(searchParams.get("next"));
         router.push(next);
     };

@@ -1,0 +1,900 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>009 — Admin: Corporate Accounts</title>
+<link rel="stylesheet" href="../themes/default.css">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: var(--font); background: #0a0a0f; color: var(--adm-text); min-height: 100vh; }
+
+  .page-header { background: #12121a; border-bottom: 1px solid rgba(255,255,255,0.06); padding: 20px 32px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
+  .page-header h1 { font-size: 13px; font-weight: 500; color: rgba(255,255,255,0.4); letter-spacing: 0.08em; text-transform: uppercase; }
+  .sketch-label { font-size: 11px; color: rgba(255,255,255,0.25); font-family: var(--font-mono); }
+  .design-q { font-size: 12px; color: rgba(255,255,255,0.5); margin-top: 2px; font-style: italic; }
+
+  .variants-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; padding: 32px; align-items: start; }
+  .variant-wrap  { display: flex; flex-direction: column; gap: 12px; }
+  .variant-label { display: flex; align-items: center; gap: 10px; }
+  .variant-letter { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; flex-shrink: 0; }
+  .la .variant-letter { background: rgba(66,153,225,0.2); color: #4299E1; }
+  .lb .variant-letter { background: rgba(56,161,105,0.2); color: #38A169; }
+  .lc .variant-letter { background: rgba(229,62,62,0.2); color: #E53E3E; }
+  .variant-name { font-size: 13px; font-weight: 600; color: rgba(255,255,255,0.8); }
+  .variant-desc { font-size: 11px; color: rgba(255,255,255,0.35); margin-top: 1px; }
+  .winner-badge { margin-left: auto; font-size: 10px; font-weight: 700; letter-spacing: 0.06em; padding: 3px 8px; border-radius: 4px; background: rgba(229,62,62,0.2); color: #E53E3E; }
+
+  .variant-frame { border-radius: 10px; overflow: hidden; border: 1px solid rgba(255,255,255,0.08); background: var(--adm-bg); position: relative; }
+  .variant-frame.winner { border-color: rgba(229,62,62,0.35); box-shadow: 0 0 0 1px rgba(229,62,62,0.15), 0 20px 40px rgba(0,0,0,0.4); }
+
+  .insight-bar { background: rgba(0,0,0,0.35); border-radius: 8px; padding: 10px 14px; font-size: 11.5px; color: rgba(255,255,255,0.5); display: flex; align-items: center; gap: 10px; }
+  .insight-icon { font-size: 14px; }
+
+  .analysis-box { background: rgba(0,0,0,0.3); border-radius: 8px; padding: 14px 16px; }
+  .cf-label { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(255,255,255,0.3); margin-bottom: 8px; }
+  .cf-item { font-size: 12px; color: rgba(255,255,255,0.5); display: flex; align-items: flex-start; gap: 6px; margin-bottom: 4px; }
+  .cf-item::before { content: '·'; color: rgba(255,255,255,0.2); flex-shrink: 0; }
+  .cf-verdict { margin-top: 10px; font-size: 12px; font-weight: 700; }
+  .verdict-yes { color: #38A169; }
+  .verdict-no  { color: #E53E3E; }
+  .verdict-med { color: #ED8936; }
+
+  /* ── Shared admin chrome ── */
+  .adm-frame { display: flex; height: 660px; }
+  .adm-sidebar { width: 180px; flex-shrink: 0; background: var(--adm-sidebar); display: flex; flex-direction: column; padding: 14px 0; }
+  .adm-logo { padding: 0 14px 14px; font-size: 15px; font-weight: 800; color: white; border-bottom: 1px solid rgba(255,255,255,0.08); margin-bottom: 6px; }
+  .adm-logo span { color: var(--spinr-red); }
+  .nav-item { padding: 8px 14px; font-size: 12px; color: var(--adm-sidebar-text); cursor: pointer; display: flex; align-items: center; gap: 8px; }
+  .nav-item:hover { background: rgba(255,255,255,0.06); }
+  .nav-item.active { background: var(--adm-sidebar-active); color: white; }
+  .nav-icon { width: 14px; text-align: center; font-size: 13px; }
+  .nav-badge { margin-left: auto; background: var(--spinr-red); color: white; font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 8px; }
+
+  .adm-main { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+  .adm-topbar { padding: 12px 18px; border-bottom: 1px solid var(--adm-border); display: flex; align-items: center; gap: 10px; flex-shrink: 0; background: white; }
+  .adm-topbar h2 { font-size: 14px; font-weight: 700; color: var(--adm-text); }
+  .adm-topbar-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  .topbar-btn { padding: 5px 12px; border-radius: 6px; font-size: 11.5px; font-weight: 600; border: 1px solid var(--adm-border); background: white; cursor: pointer; color: var(--adm-text-muted); }
+  .topbar-btn.primary { background: var(--spinr-red); color: white; border-color: transparent; }
+  .scroll-body { flex: 1; overflow-y: auto; background: var(--adm-bg); }
+
+  /* status badges */
+  .sbadge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 10px; font-size: 10.5px; font-weight: 700; }
+  .sb-healthy  { background: rgba(56,161,105,0.1); color: #276749; }
+  .sb-warning  { background: rgba(237,137,54,0.12); color: #C05621; }
+  .sb-critical { background: rgba(229,62,62,0.1); color: #C53030; }
+  .sb-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+
+  /* ═══════════════════════════════════════
+     VARIANT A — Spreadsheet Table
+  ═══════════════════════════════════════ */
+  .tbl-a { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .tbl-a th { padding: 9px 14px; text-align: left; font-size: 10px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--adm-text-dim); background: var(--adm-surface-2); border-bottom: 1px solid var(--adm-border); white-space: nowrap; position: sticky; top: 0; cursor: pointer; }
+  .tbl-a th:hover { color: var(--adm-text); }
+  .sort-icon { margin-left: 3px; opacity: 0.4; font-size: 9px; }
+  .tbl-a td { padding: 10px 14px; border-bottom: 1px solid rgba(0,0,0,0.04); vertical-align: middle; }
+  .tbl-a tr:hover td { background: rgba(0,0,0,0.02); }
+  .co-name { font-weight: 700; color: var(--adm-text); font-size: 12.5px; }
+  .co-sub  { font-size: 10.5px; color: var(--adm-text-muted); margin-top: 1px; }
+  .money { font-weight: 700; font-size: 12.5px; font-family: var(--font-mono); }
+  .money-green  { color: #276749; }
+  .money-amber  { color: #C05621; }
+  .money-red    { color: #C53030; }
+  .tbl-link { font-size: 11px; color: var(--info-blue); cursor: pointer; font-weight: 600; }
+
+  /* ═══════════════════════════════════════
+     VARIANT B — Card Grid
+  ═══════════════════════════════════════ */
+  .card-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; padding: 16px; }
+  .corp-card { background: white; border: 1px solid var(--adm-border); border-radius: 10px; padding: 14px; cursor: pointer; transition: all 0.15s; }
+  .corp-card:hover { box-shadow: var(--shadow-md); border-color: #d1d5db; }
+  .corp-card.at-risk { border-color: rgba(229,62,62,0.3); background: rgba(229,62,62,0.02); }
+  .cc-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 12px; }
+  .cc-logo { width: 36px; height: 36px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; }
+  .cc-name { font-size: 13px; font-weight: 700; color: var(--adm-text); margin-top: 2px; }
+  .cc-sub  { font-size: 11px; color: var(--adm-text-muted); margin-top: 1px; }
+  .cc-metrics { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 12px; }
+  .cc-metric { background: var(--adm-surface-2); border-radius: 6px; padding: 8px 10px; }
+  .cc-metric-val { font-size: 14px; font-weight: 800; color: var(--adm-text); font-family: var(--font-mono); }
+  .cc-metric-lbl { font-size: 10px; color: var(--adm-text-dim); margin-top: 2px; }
+  .cc-bar-wrap { margin-bottom: 10px; }
+  .cc-bar-label { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--adm-text-muted); margin-bottom: 4px; }
+  .cc-bar { height: 5px; background: var(--adm-surface-2); border-radius: 3px; overflow: hidden; }
+  .cc-bar-fill { height: 100%; border-radius: 3px; transition: width 0.4s; }
+  .fill-green { background: var(--online-green); }
+  .fill-amber { background: var(--warning-amber); }
+  .fill-red   { background: var(--spinr-red); }
+  .cc-footer { display: flex; justify-content: space-between; align-items: center; }
+
+  /* ═══════════════════════════════════════
+     VARIANT C — Financial Health Dashboard
+  ═══════════════════════════════════════ */
+
+  /* KPI header strip */
+  .kpi-strip { display: grid; grid-template-columns: repeat(5, 1fr); gap: 0; border-bottom: 1px solid var(--adm-border); background: white; flex-shrink: 0; }
+  .kpi-cell { padding: 14px 16px; border-right: 1px solid var(--adm-border); }
+  .kpi-cell:last-child { border-right: none; }
+  .kpi-label { font-size: 10px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--adm-text-dim); margin-bottom: 5px; }
+  .kpi-value { font-size: 20px; font-weight: 800; font-family: var(--font-mono); color: var(--adm-text); line-height: 1; }
+  .kpi-sub   { font-size: 10.5px; color: var(--adm-text-muted); margin-top: 3px; }
+  .kpi-delta { font-size: 11px; font-weight: 700; margin-top: 2px; }
+  .delta-up   { color: #276749; }
+  .delta-down { color: #C53030; }
+  .kpi-value.warn  { color: #C05621; }
+  .kpi-value.crit  { color: #C53030; }
+
+  /* Filter/sort bar */
+  .filter-bar { padding: 10px 16px; border-bottom: 1px solid var(--adm-border); display: flex; align-items: center; gap: 8px; background: var(--adm-surface-2); flex-shrink: 0; }
+  .health-filter { display: flex; gap: 4px; }
+  .hf-btn { padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; border: 1px solid var(--adm-border); background: white; cursor: pointer; color: var(--adm-text-muted); transition: all 0.15s; }
+  .hf-btn.active { color: white; border-color: transparent; }
+  .hf-all      { background: var(--adm-text); }
+  .hf-healthy  { background: var(--online-green); }
+  .hf-warning  { background: var(--warning-amber); }
+  .hf-critical { background: var(--spinr-red); }
+  .fb-spacer { flex: 1; }
+  .sort-select { padding: 4px 10px; border-radius: 6px; font-size: 11.5px; border: 1px solid var(--adm-border); background: white; color: var(--adm-text); cursor: pointer; }
+
+  /* Account rows — the hybrid list */
+  .acct-list { padding: 8px 0; }
+  .acct-row {
+    padding: 12px 16px;
+    display: grid;
+    grid-template-columns: 220px 1fr 110px 100px 90px 80px;
+    align-items: center;
+    gap: 12px;
+    border-bottom: 1px solid rgba(0,0,0,0.04);
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+  .acct-row:hover { background: rgba(0,0,0,0.02); }
+  .acct-row.crit-row { background: rgba(229,62,62,0.025); }
+  .acct-row.crit-row:hover { background: rgba(229,62,62,0.05); }
+  .acct-row.warn-row { background: rgba(237,137,54,0.02); }
+
+  .acct-identity { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .acct-logo { width: 34px; height: 34px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 15px; flex-shrink: 0; }
+  .acct-info { min-width: 0; }
+  .acct-name { font-size: 13px; font-weight: 700; color: var(--adm-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .acct-sub  { font-size: 10.5px; color: var(--adm-text-muted); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* Balance bar column — the key visual differentiator */
+  .balance-col { display: flex; flex-direction: column; gap: 4px; }
+  .balance-header { display: flex; justify-content: space-between; align-items: baseline; }
+  .balance-amount { font-size: 12.5px; font-weight: 800; font-family: var(--font-mono); }
+  .balance-limit  { font-size: 10px; color: var(--adm-text-dim); }
+  .balance-track { height: 6px; background: var(--adm-surface-2); border-radius: 3px; overflow: hidden; }
+  .balance-fill  { height: 100%; border-radius: 3px; transition: width 0.4s; }
+
+  .acct-mrr   { font-size: 13px; font-weight: 700; font-family: var(--font-mono); color: var(--adm-text); }
+  .acct-mrr-sub { font-size: 10px; color: var(--adm-text-dim); margin-top: 1px; }
+
+  .acct-util { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+  .util-pct  { font-size: 13px; font-weight: 700; font-family: var(--font-mono); }
+  .util-lbl  { font-size: 10px; color: var(--adm-text-dim); }
+
+  .acct-action { text-align: right; }
+  .row-action { padding: 5px 10px; border-radius: 6px; font-size: 11px; font-weight: 600; border: 1px solid var(--adm-border); background: white; cursor: pointer; color: var(--adm-text-muted); white-space: nowrap; }
+  .row-action:hover { background: var(--adm-surface-2); }
+  .row-action.alert { background: rgba(229,62,62,0.08); color: var(--spinr-red); border-color: transparent; }
+
+  /* Col headers */
+  .acct-col-headers {
+    padding: 8px 16px;
+    display: grid;
+    grid-template-columns: 220px 1fr 110px 100px 90px 80px;
+    gap: 12px;
+    border-bottom: 1px solid var(--adm-border);
+    background: var(--adm-surface-2);
+    position: sticky; top: 0; z-index: 5;
+  }
+  .col-hd { font-size: 10px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--adm-text-dim); cursor: pointer; display: flex; align-items: center; gap: 3px; }
+  .col-hd:hover { color: var(--adm-text-muted); }
+  .col-hd.right { justify-content: flex-end; }
+
+  /* Sparkline */
+  .sparkline { width: 60px; height: 24px; }
+
+  /* At-risk alert banner */
+  .at-risk-banner {
+    margin: 12px 16px 0;
+    background: rgba(229,62,62,0.07);
+    border: 1px solid rgba(229,62,62,0.2);
+    border-radius: 8px;
+    padding: 10px 14px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 12px;
+  }
+  .arb-icon { font-size: 16px; flex-shrink: 0; }
+  .arb-text { color: #C53030; font-weight: 600; }
+  .arb-sub  { color: #C53030; opacity: 0.7; font-size: 11px; margin-top: 1px; }
+  .arb-action { margin-left: auto; font-size: 11px; font-weight: 700; color: var(--spinr-red); cursor: pointer; white-space: nowrap; }
+</style>
+</head>
+<body>
+
+<div class="page-header">
+  <div>
+    <div class="sketch-label">009 / admin-corporate</div>
+    <div class="design-q">"Can finance see the health of all corporate accounts at a glance?"</div>
+  </div>
+  <h1>Spinr Sketch System</h1>
+</div>
+
+<div class="variants-grid">
+
+  <!-- ═══ VARIANT A — Spreadsheet Table ═══ -->
+  <div class="variant-wrap">
+    <div class="variant-label la">
+      <div class="variant-letter">A</div>
+      <div>
+        <div class="variant-name">Spreadsheet Table</div>
+        <div class="variant-desc">Dense column table — finance-familiar, pattern-blind</div>
+      </div>
+    </div>
+    <div class="insight-bar">
+      <span class="insight-icon">📊</span>
+      <span>Pattern recognition requires reading every row. Sorting helps but loses overall picture.</span>
+    </div>
+    <div class="variant-frame" style="height:660px;overflow:hidden">
+      <div class="adm-frame">
+        <div class="adm-sidebar">
+          <div class="adm-logo"><span>Spinr</span> Ops</div>
+          <div class="nav-item"><span class="nav-icon">🗺</span> Monitoring</div>
+          <div class="nav-item"><span class="nav-icon">🚗</span> Drivers</div>
+          <div class="nav-item"><span class="nav-icon">👤</span> Riders</div>
+          <div class="nav-item"><span class="nav-icon">🚕</span> Rides</div>
+          <div class="nav-item active"><span class="nav-icon">🏢</span> Corporate <span class="nav-badge">2</span></div>
+          <div class="nav-item"><span class="nav-icon">💰</span> Payments</div>
+          <div class="nav-item"><span class="nav-icon">📊</span> Analytics</div>
+          <div class="nav-item"><span class="nav-icon">⚙️</span> Settings</div>
+        </div>
+        <div class="adm-main">
+          <div class="adm-topbar">
+            <h2>Corporate Accounts</h2>
+            <div class="adm-topbar-right">
+              <button class="topbar-btn">Export CSV</button>
+              <button class="topbar-btn">Filter</button>
+              <button class="topbar-btn primary">+ New Account</button>
+            </div>
+          </div>
+          <div class="scroll-body">
+            <table class="tbl-a">
+              <thead>
+                <tr>
+                  <th>Company <span class="sort-icon">↕</span></th>
+                  <th>Members <span class="sort-icon">↕</span></th>
+                  <th>Balance <span class="sort-icon">↑</span></th>
+                  <th>MRR <span class="sort-icon">↕</span></th>
+                  <th>Rides / Mo <span class="sort-icon">↕</span></th>
+                  <th>Util % <span class="sort-icon">↕</span></th>
+                  <th>Last Payment <span class="sort-icon">↕</span></th>
+                  <th>Status <span class="sort-icon">↕</span></th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><div class="co-name">Potash Corp SK</div><div class="co-sub">potashsk.com · Enterprise</div></td>
+                  <td>142</td>
+                  <td><span class="money money-green">$12,400</span></td>
+                  <td><span class="money">$8,200</span></td>
+                  <td>874</td>
+                  <td>78%</td>
+                  <td><div class="co-sub">May 1, 2026</div></td>
+                  <td><span class="sbadge sb-healthy"><span class="sb-dot"></span> Healthy</span></td>
+                  <td><span class="tbl-link">View →</span></td>
+                </tr>
+                <tr>
+                  <td><div class="co-name">Conexus Credit</div><div class="co-sub">conexuscu.com · Business</div></td>
+                  <td>58</td>
+                  <td><span class="money money-green">$4,100</span></td>
+                  <td><span class="money">$3,100</span></td>
+                  <td>312</td>
+                  <td>65%</td>
+                  <td><div class="co-sub">Apr 28, 2026</div></td>
+                  <td><span class="sbadge sb-healthy"><span class="sb-dot"></span> Healthy</span></td>
+                  <td><span class="tbl-link">View →</span></td>
+                </tr>
+                <tr>
+                  <td><div class="co-name">SaskTel</div><div class="co-sub">sasktel.com · Enterprise</div></td>
+                  <td>214</td>
+                  <td><span class="money money-amber">$980</span></td>
+                  <td><span class="money">$11,400</span></td>
+                  <td>1,241</td>
+                  <td>92%</td>
+                  <td><div class="co-sub">Mar 31, 2026</div></td>
+                  <td><span class="sbadge sb-warning"><span class="sb-dot"></span> Low Balance</span></td>
+                  <td><span class="tbl-link">View →</span></td>
+                </tr>
+                <tr>
+                  <td><div class="co-name">Wawanesa Mutual</div><div class="co-sub">wawanesa.com · Business</div></td>
+                  <td>31</td>
+                  <td><span class="money money-red">$0</span></td>
+                  <td><span class="money">$1,800</span></td>
+                  <td>178</td>
+                  <td>44%</td>
+                  <td><div class="co-sub" style="color:#C53030">Overdue 12d</div></td>
+                  <td><span class="sbadge sb-critical"><span class="sb-dot"></span> Critical</span></td>
+                  <td><span class="tbl-link">View →</span></td>
+                </tr>
+                <tr>
+                  <td><div class="co-name">SGI (Crown)</div><div class="co-sub">sgi.sk.ca · Government</div></td>
+                  <td>89</td>
+                  <td><span class="money money-green">$7,800</span></td>
+                  <td><span class="money">$4,900</span></td>
+                  <td>521</td>
+                  <td>71%</td>
+                  <td><div class="co-sub">May 3, 2026</div></td>
+                  <td><span class="sbadge sb-healthy"><span class="sb-dot"></span> Healthy</span></td>
+                  <td><span class="tbl-link">View →</span></td>
+                </tr>
+                <tr>
+                  <td><div class="co-name">Co-op Refinery</div><div class="co-sub">crs.coop · Business</div></td>
+                  <td>47</td>
+                  <td><span class="money money-amber">$620</span></td>
+                  <td><span class="money">$2,400</span></td>
+                  <td>218</td>
+                  <td>83%</td>
+                  <td><div class="co-sub" style="color:#C05621">Overdue 3d</div></td>
+                  <td><span class="sbadge sb-warning"><span class="sb-dot"></span> Warning</span></td>
+                  <td><span class="tbl-link">View →</span></td>
+                </tr>
+                <tr>
+                  <td><div class="co-name">RBC Wealth Mgmt</div><div class="co-sub">rbc.com · Enterprise</div></td>
+                  <td>76</td>
+                  <td><span class="money money-green">$9,200</span></td>
+                  <td><span class="money">$5,300</span></td>
+                  <td>447</td>
+                  <td>68%</td>
+                  <td><div class="co-sub">May 2, 2026</div></td>
+                  <td><span class="sbadge sb-healthy"><span class="sb-dot"></span> Healthy</span></td>
+                  <td><span class="tbl-link">View →</span></td>
+                </tr>
+                <tr>
+                  <td><div class="co-name">Federated Co-op</div><div class="co-sub">fcl.coop · Business</div></td>
+                  <td>22</td>
+                  <td><span class="money money-red">$0</span></td>
+                  <td><span class="money">$900</span></td>
+                  <td>71</td>
+                  <td>29%</td>
+                  <td><div class="co-sub" style="color:#C53030">Overdue 18d</div></td>
+                  <td><span class="sbadge sb-critical"><span class="sb-dot"></span> Critical</span></td>
+                  <td><span class="tbl-link">View →</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="analysis-box">
+      <div class="cf-label">Analysis</div>
+      <div class="cf-item">Finance-familiar — mirrors Excel/accounting tools</div>
+      <div class="cf-item">Sortable columns let you surface worst accounts</div>
+      <div class="cf-item">No visual encoding — status badge is only signal</div>
+      <div class="cf-item">Must read every row to form a portfolio picture</div>
+      <div class="cf-item">No summary — total ARR, at-risk $ require mental math</div>
+      <div class="cf-verdict verdict-no">✗ Pattern recognition requires reading, not glancing</div>
+    </div>
+  </div>
+
+  <!-- ═══ VARIANT B — Card Grid ═══ -->
+  <div class="variant-wrap">
+    <div class="variant-label lb">
+      <div class="variant-letter">B</div>
+      <div>
+        <div class="variant-name">Card Grid</div>
+        <div class="variant-desc">Account cards with metrics + mini balance bar</div>
+      </div>
+    </div>
+    <div class="insight-bar">
+      <span class="insight-icon">🃏</span>
+      <span>Good visual hierarchy per account. Cross-account comparison is hard — cards don't align.</span>
+    </div>
+    <div class="variant-frame" style="height:660px;overflow:hidden">
+      <div class="adm-frame">
+        <div class="adm-sidebar">
+          <div class="adm-logo"><span>Spinr</span> Ops</div>
+          <div class="nav-item"><span class="nav-icon">🗺</span> Monitoring</div>
+          <div class="nav-item"><span class="nav-icon">🚗</span> Drivers</div>
+          <div class="nav-item"><span class="nav-icon">👤</span> Riders</div>
+          <div class="nav-item"><span class="nav-icon">🚕</span> Rides</div>
+          <div class="nav-item active"><span class="nav-icon">🏢</span> Corporate <span class="nav-badge">2</span></div>
+          <div class="nav-item"><span class="nav-icon">💰</span> Payments</div>
+          <div class="nav-item"><span class="nav-icon">📊</span> Analytics</div>
+          <div class="nav-item"><span class="nav-icon">⚙️</span> Settings</div>
+        </div>
+        <div class="adm-main">
+          <div class="adm-topbar">
+            <h2>Corporate Accounts</h2>
+            <div class="adm-topbar-right">
+              <button class="topbar-btn">All</button>
+              <button class="topbar-btn" style="border-color:rgba(229,62,62,0.3);color:#C53030">⚠ At Risk (2)</button>
+              <button class="topbar-btn primary">+ New Account</button>
+            </div>
+          </div>
+          <div class="scroll-body">
+            <div class="card-grid">
+
+              <!-- Card: Wawanesa CRITICAL -->
+              <div class="corp-card at-risk" onclick="alert('Open Wawanesa Mutual account detail')">
+                <div class="cc-header">
+                  <div style="display:flex;align-items:center;gap:10px">
+                    <div class="cc-logo" style="background:rgba(229,62,62,0.1)">🏛</div>
+                    <div>
+                      <div class="cc-name">Wawanesa Mutual</div>
+                      <div class="cc-sub">31 members · Business</div>
+                    </div>
+                  </div>
+                  <span class="sbadge sb-critical"><span class="sb-dot"></span> Critical</span>
+                </div>
+                <div class="cc-metrics">
+                  <div class="cc-metric"><div class="cc-metric-val" style="color:#C53030">$0</div><div class="cc-metric-lbl">Wallet Balance</div></div>
+                  <div class="cc-metric"><div class="cc-metric-val">$1,800</div><div class="cc-metric-lbl">MRR</div></div>
+                  <div class="cc-metric"><div class="cc-metric-val">178</div><div class="cc-metric-lbl">Rides / month</div></div>
+                  <div class="cc-metric"><div class="cc-metric-val" style="color:#C05621">44%</div><div class="cc-metric-lbl">Allowance util</div></div>
+                </div>
+                <div class="cc-bar-wrap">
+                  <div class="cc-bar-label"><span>Wallet balance</span><span style="color:#C53030;font-weight:700">Depleted · Overdue 12d</span></div>
+                  <div class="cc-bar"><div class="cc-bar-fill fill-red" style="width:0%"></div></div>
+                </div>
+                <div class="cc-footer">
+                  <span class="sbadge" style="background:rgba(229,62,62,0.1);color:#C53030;font-size:10px">Payment overdue 12 days</span>
+                  <button class="topbar-btn" style="font-size:11px;padding:4px 10px;background:rgba(229,62,62,0.08);color:var(--spinr-red);border-color:transparent" onclick="event.stopPropagation();alert('Send payment reminder to Wawanesa Mutual')">Send Reminder</button>
+                </div>
+              </div>
+
+              <!-- Card: SaskTel WARNING -->
+              <div class="corp-card at-risk" onclick="alert('Open SaskTel account detail')">
+                <div class="cc-header">
+                  <div style="display:flex;align-items:center;gap:10px">
+                    <div class="cc-logo" style="background:rgba(237,137,54,0.1)">📡</div>
+                    <div>
+                      <div class="cc-name">SaskTel</div>
+                      <div class="cc-sub">214 members · Enterprise</div>
+                    </div>
+                  </div>
+                  <span class="sbadge sb-warning"><span class="sb-dot"></span> Low Balance</span>
+                </div>
+                <div class="cc-metrics">
+                  <div class="cc-metric"><div class="cc-metric-val" style="color:#C05621">$980</div><div class="cc-metric-lbl">Wallet Balance</div></div>
+                  <div class="cc-metric"><div class="cc-metric-val">$11,400</div><div class="cc-metric-lbl">MRR</div></div>
+                  <div class="cc-metric"><div class="cc-metric-val">1,241</div><div class="cc-metric-lbl">Rides / month</div></div>
+                  <div class="cc-metric"><div class="cc-metric-val" style="color:#C53030">92%</div><div class="cc-metric-lbl">Allowance util</div></div>
+                </div>
+                <div class="cc-bar-wrap">
+                  <div class="cc-bar-label"><span>Wallet balance</span><span style="color:#C05621;font-weight:700">8% remaining</span></div>
+                  <div class="cc-bar"><div class="cc-bar-fill fill-amber" style="width:8%"></div></div>
+                </div>
+                <div class="cc-footer">
+                  <span class="sbadge" style="background:rgba(237,137,54,0.1);color:#C05621;font-size:10px">Est. depleted in ~2 days</span>
+                  <button class="topbar-btn" style="font-size:11px;padding:4px 10px" onclick="event.stopPropagation();alert('Request top-up from SaskTel')">Request Top-up</button>
+                </div>
+              </div>
+
+              <!-- Card: Potash Corp HEALTHY -->
+              <div class="corp-card" onclick="alert('Open Potash Corp SK account detail')">
+                <div class="cc-header">
+                  <div style="display:flex;align-items:center;gap:10px">
+                    <div class="cc-logo" style="background:rgba(56,161,105,0.1)">⛏</div>
+                    <div>
+                      <div class="cc-name">Potash Corp SK</div>
+                      <div class="cc-sub">142 members · Enterprise</div>
+                    </div>
+                  </div>
+                  <span class="sbadge sb-healthy"><span class="sb-dot"></span> Healthy</span>
+                </div>
+                <div class="cc-metrics">
+                  <div class="cc-metric"><div class="cc-metric-val" style="color:#276749">$12,400</div><div class="cc-metric-lbl">Wallet Balance</div></div>
+                  <div class="cc-metric"><div class="cc-metric-val">$8,200</div><div class="cc-metric-lbl">MRR</div></div>
+                  <div class="cc-metric"><div class="cc-metric-val">874</div><div class="cc-metric-lbl">Rides / month</div></div>
+                  <div class="cc-metric"><div class="cc-metric-val">78%</div><div class="cc-metric-lbl">Allowance util</div></div>
+                </div>
+                <div class="cc-bar-wrap">
+                  <div class="cc-bar-label"><span>Wallet balance</span><span style="color:#276749;font-weight:700">65% of limit</span></div>
+                  <div class="cc-bar"><div class="cc-bar-fill fill-green" style="width:65%"></div></div>
+                </div>
+                <div class="cc-footer">
+                  <span class="sbadge sb-healthy" style="font-size:10px">Paid May 1</span>
+                  <span class="tbl-link" onclick="event.stopPropagation();alert('View Potash Corp detail')">View detail →</span>
+                </div>
+              </div>
+
+              <!-- Card: SGI HEALTHY -->
+              <div class="corp-card" onclick="alert('Open SGI account detail')">
+                <div class="cc-header">
+                  <div style="display:flex;align-items:center;gap:10px">
+                    <div class="cc-logo" style="background:rgba(66,153,225,0.1)">🏛</div>
+                    <div>
+                      <div class="cc-name">SGI (Crown)</div>
+                      <div class="cc-sub">89 members · Government</div>
+                    </div>
+                  </div>
+                  <span class="sbadge sb-healthy"><span class="sb-dot"></span> Healthy</span>
+                </div>
+                <div class="cc-metrics">
+                  <div class="cc-metric"><div class="cc-metric-val" style="color:#276749">$7,800</div><div class="cc-metric-lbl">Wallet Balance</div></div>
+                  <div class="cc-metric"><div class="cc-metric-val">$4,900</div><div class="cc-metric-lbl">MRR</div></div>
+                  <div class="cc-metric"><div class="cc-metric-val">521</div><div class="cc-metric-lbl">Rides / month</div></div>
+                  <div class="cc-metric"><div class="cc-metric-val">71%</div><div class="cc-metric-lbl">Allowance util</div></div>
+                </div>
+                <div class="cc-bar-wrap">
+                  <div class="cc-bar-label"><span>Wallet balance</span><span style="color:#276749;font-weight:700">52% of limit</span></div>
+                  <div class="cc-bar"><div class="cc-bar-fill fill-green" style="width:52%"></div></div>
+                </div>
+                <div class="cc-footer">
+                  <span class="sbadge sb-healthy" style="font-size:10px">Paid May 3</span>
+                  <span class="tbl-link" onclick="event.stopPropagation();alert('View SGI detail')">View detail →</span>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="analysis-box">
+      <div class="cf-label">Analysis</div>
+      <div class="cf-item">Balance bars give immediate visual urgency signal</div>
+      <div class="cf-item">At-risk cards float to top naturally</div>
+      <div class="cf-item">Only 4 accounts visible without scrolling</div>
+      <div class="cf-item">Cross-account comparison is hard — metrics don't align</div>
+      <div class="cf-item">No portfolio summary — total ARR invisible</div>
+      <div class="cf-verdict verdict-med">~ Good for ≤8 accounts, breaks at scale</div>
+    </div>
+  </div>
+
+  <!-- ═══ VARIANT C — Financial Health Dashboard (WINNER) ═══ -->
+  <div class="variant-wrap">
+    <div class="variant-label lc">
+      <div class="variant-letter">C</div>
+      <div>
+        <div class="variant-name">Financial Health Dashboard</div>
+        <div class="variant-desc">KPI header + hybrid list with balance bars + at-risk alert</div>
+      </div>
+      <div class="winner-badge">WINNER</div>
+    </div>
+    <div class="insight-bar">
+      <span class="insight-icon">💡</span>
+      <span>Portfolio summary visible in 2 seconds. Balance bars encode urgency pre-attentively — no reading required.</span>
+    </div>
+    <div class="variant-frame winner" style="height:660px;overflow:hidden">
+      <div class="adm-frame">
+        <div class="adm-sidebar">
+          <div class="adm-logo"><span>Spinr</span> Ops</div>
+          <div class="nav-item"><span class="nav-icon">🗺</span> Monitoring</div>
+          <div class="nav-item"><span class="nav-icon">🚗</span> Drivers</div>
+          <div class="nav-item"><span class="nav-icon">👤</span> Riders</div>
+          <div class="nav-item"><span class="nav-icon">🚕</span> Rides</div>
+          <div class="nav-item active"><span class="nav-icon">🏢</span> Corporate <span class="nav-badge">2</span></div>
+          <div class="nav-item"><span class="nav-icon">💰</span> Payments</div>
+          <div class="nav-item"><span class="nav-icon">📊</span> Analytics</div>
+          <div class="nav-item"><span class="nav-icon">⚙️</span> Settings</div>
+        </div>
+        <div class="adm-main">
+          <!-- KPI Strip — visible immediately, no scroll -->
+          <div class="kpi-strip">
+            <div class="kpi-cell">
+              <div class="kpi-label">Total MRR</div>
+              <div class="kpi-value">$38.1k</div>
+              <div class="kpi-delta delta-up">↑ 12% vs Apr</div>
+            </div>
+            <div class="kpi-cell">
+              <div class="kpi-label">Total Wallet</div>
+              <div class="kpi-value">$35,100</div>
+              <div class="kpi-sub">across 8 accounts</div>
+            </div>
+            <div class="kpi-cell">
+              <div class="kpi-label">At-Risk ARR</div>
+              <div class="kpi-value crit">$32,400</div>
+              <div class="kpi-sub">2 accounts critical</div>
+            </div>
+            <div class="kpi-cell">
+              <div class="kpi-label">Overdue</div>
+              <div class="kpi-value warn">$2,700</div>
+              <div class="kpi-sub">Wawanesa + Federated</div>
+            </div>
+            <div class="kpi-cell">
+              <div class="kpi-label">Rides This Month</div>
+              <div class="kpi-value">3,862</div>
+              <div class="kpi-delta delta-up">↑ 8% vs Apr</div>
+            </div>
+          </div>
+
+          <!-- At-risk banner -->
+          <div class="at-risk-banner">
+            <div class="arb-icon">🚨</div>
+            <div>
+              <div class="arb-text">2 accounts critical — wallets depleted, payments overdue</div>
+              <div class="arb-sub">Wawanesa Mutual (12d overdue · $1,800 MRR) · Federated Co-op (18d overdue · $900 MRR)</div>
+            </div>
+            <div class="arb-action" onclick="alert('Send bulk payment reminders to Wawanesa Mutual and Federated Co-op?')">Send Reminders →</div>
+          </div>
+
+          <!-- Filter bar -->
+          <div class="filter-bar">
+            <div class="health-filter">
+              <button class="hf-btn hf-all active" onclick="filterAccounts('all',this)">All (8)</button>
+              <button class="hf-btn hf-healthy" onclick="filterAccounts('healthy',this)">Healthy (5)</button>
+              <button class="hf-btn hf-warning" onclick="filterAccounts('warning',this)">Warning (1)</button>
+              <button class="hf-btn hf-critical" onclick="filterAccounts('critical',this)">Critical (2)</button>
+            </div>
+            <div class="fb-spacer"></div>
+            <select class="sort-select" onchange="alert('Sort by: ' + this.value)">
+              <option>Sort: Health (worst first)</option>
+              <option>Sort: Balance ↑</option>
+              <option>Sort: MRR ↓</option>
+              <option>Sort: Utilization ↓</option>
+              <option>Sort: Last payment</option>
+            </select>
+            <button class="topbar-btn primary" style="font-size:11px;padding:5px 12px">+ New Account</button>
+          </div>
+
+          <!-- Hybrid list -->
+          <div class="scroll-body">
+            <div class="acct-col-headers">
+              <div class="col-hd">Account</div>
+              <div class="col-hd">Wallet Balance</div>
+              <div class="col-hd right">MRR</div>
+              <div class="col-hd right">Rides / mo</div>
+              <div class="col-hd right">Util %</div>
+              <div class="col-hd right"></div>
+            </div>
+            <div class="acct-list" id="acctListC">
+              <!-- populated by JS -->
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="analysis-box">
+      <div class="cf-label">Analysis</div>
+      <div class="cf-item">KPI strip answers "what's the portfolio health?" in 2 seconds</div>
+      <div class="cf-item">Balance bars pre-attentively encode urgency — no reading required</div>
+      <div class="cf-item">At-risk banner surfaces critical accounts + bulk action</div>
+      <div class="cf-item">8+ accounts visible in the hybrid list without card bloat</div>
+      <div class="cf-item">Column alignment enables fast comparison across accounts</div>
+      <div class="cf-verdict verdict-yes">✓ Portfolio health readable in under 5 seconds</div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Summary -->
+<div style="padding:0 32px 40px">
+  <div style="background:#12121a;border-radius:12px;border:1px solid rgba(255,255,255,0.06);padding:24px">
+    <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:rgba(255,255,255,0.3);margin-bottom:16px">Design Decision Summary</div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:24px">
+      <div>
+        <div style="font-size:13px;font-weight:700;color:rgba(255,255,255,0.7);margin-bottom:6px">A — Spreadsheet Table</div>
+        <div style="font-size:12px;color:rgba(255,255,255,0.4);line-height:1.6">Finance-familiar. Good for export and precise number lookup. Fails the "at a glance" criterion — pattern recognition requires reading every status badge row by row. No portfolio-level summary. Sorting helps but destroys the overall picture.</div>
+      </div>
+      <div>
+        <div style="font-size:13px;font-weight:700;color:rgba(255,255,255,0.7);margin-bottom:6px">B — Card Grid</div>
+        <div style="font-size:12px;color:rgba(255,255,255,0.4);line-height:1.6">Balance bars provide visual urgency. Works well for ≤8 accounts. Breaks at scale — only 4 cards are visible without scrolling, and misaligned metrics make cross-account comparison difficult. No portfolio summary strip.</div>
+      </div>
+      <div>
+        <div style="font-size:13px;font-weight:700;color:#E53E3E;margin-bottom:6px">C — Financial Health Dashboard ← Winner</div>
+        <div style="font-size:12px;color:rgba(255,255,255,0.4);line-height:1.6">The KPI strip answers the portfolio question before the user reads any rows. Balance bars pre-attentively encode wallet urgency. The at-risk banner surfaces critical accounts with a one-click bulk action. The hybrid list shows 8+ accounts in aligned columns — dense but scannable. Finance can answer "who do I call?" in under 5 seconds.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const ACCOUNTS = [
+    {
+      key: 'wawanesa', health: 'critical', logo: '🏛', logoBg: 'rgba(229,62,62,0.1)',
+      name: 'Wawanesa Mutual', sub: '31 members · Business',
+      balance: '$0', balancePct: 0, balanceColor: '#C53030', fillCls: 'fill-red',
+      balanceLbl: 'Depleted · Overdue 12d', balanceLblColor: '#C53030',
+      mrr: '$1,800', rides: '178', util: '44%', utilColor: '#C05621',
+      actionLabel: 'Send Reminder', actionCls: 'alert',
+      rowCls: 'crit-row',
+      statusCls: 'sb-critical', statusLabel: 'Critical',
+    },
+    {
+      key: 'federated', health: 'critical', logo: '🌾', logoBg: 'rgba(229,62,62,0.1)',
+      name: 'Federated Co-op', sub: '22 members · Business',
+      balance: '$0', balancePct: 0, balanceColor: '#C53030', fillCls: 'fill-red',
+      balanceLbl: 'Depleted · Overdue 18d', balanceLblColor: '#C53030',
+      mrr: '$900', rides: '71', util: '29%', utilColor: 'var(--adm-text-muted)',
+      actionLabel: 'Send Reminder', actionCls: 'alert',
+      rowCls: 'crit-row',
+      statusCls: 'sb-critical', statusLabel: 'Critical',
+    },
+    {
+      key: 'sasktel', health: 'warning', logo: '📡', logoBg: 'rgba(237,137,54,0.1)',
+      name: 'SaskTel', sub: '214 members · Enterprise',
+      balance: '$980', balancePct: 8, balanceColor: '#C05621', fillCls: 'fill-amber',
+      balanceLbl: '8% remaining · Est. depleted 2d', balanceLblColor: '#C05621',
+      mrr: '$11,400', rides: '1,241', util: '92%', utilColor: '#C53030',
+      actionLabel: 'Request Top-up', actionCls: '',
+      rowCls: 'warn-row',
+      statusCls: 'sb-warning', statusLabel: 'Low Balance',
+    },
+    {
+      key: 'coop', health: 'warning', logo: '⛽', logoBg: 'rgba(237,137,54,0.1)',
+      name: 'Co-op Refinery', sub: '47 members · Business',
+      balance: '$620', balancePct: 26, balanceColor: '#C05621', fillCls: 'fill-amber',
+      balanceLbl: '26% remaining · Overdue 3d', balanceLblColor: '#C05621',
+      mrr: '$2,400', rides: '218', util: '83%', utilColor: '#C05621',
+      actionLabel: 'Request Top-up', actionCls: '',
+      rowCls: 'warn-row',
+      statusCls: 'sb-warning', statusLabel: 'Warning',
+    },
+    {
+      key: 'potash', health: 'healthy', logo: '⛏', logoBg: 'rgba(56,161,105,0.1)',
+      name: 'Potash Corp SK', sub: '142 members · Enterprise',
+      balance: '$12,400', balancePct: 65, balanceColor: '#276749', fillCls: 'fill-green',
+      balanceLbl: '65% of limit', balanceLblColor: '#276749',
+      mrr: '$8,200', rides: '874', util: '78%', utilColor: 'var(--adm-text)',
+      actionLabel: 'View', actionCls: '',
+      rowCls: '',
+      statusCls: 'sb-healthy', statusLabel: 'Healthy',
+    },
+    {
+      key: 'sgi', health: 'healthy', logo: '🏛', logoBg: 'rgba(66,153,225,0.1)',
+      name: 'SGI (Crown)', sub: '89 members · Government',
+      balance: '$7,800', balancePct: 52, balanceColor: '#276749', fillCls: 'fill-green',
+      balanceLbl: '52% of limit', balanceLblColor: '#276749',
+      mrr: '$4,900', rides: '521', util: '71%', utilColor: 'var(--adm-text)',
+      actionLabel: 'View', actionCls: '',
+      rowCls: '',
+      statusCls: 'sb-healthy', statusLabel: 'Healthy',
+    },
+    {
+      key: 'conexus', health: 'healthy', logo: '💳', logoBg: 'rgba(56,161,105,0.1)',
+      name: 'Conexus Credit', sub: '58 members · Business',
+      balance: '$4,100', balancePct: 58, balanceColor: '#276749', fillCls: 'fill-green',
+      balanceLbl: '58% of limit', balanceLblColor: '#276749',
+      mrr: '$3,100', rides: '312', util: '65%', utilColor: 'var(--adm-text)',
+      actionLabel: 'View', actionCls: '',
+      rowCls: '',
+      statusCls: 'sb-healthy', statusLabel: 'Healthy',
+    },
+    {
+      key: 'rbc', health: 'healthy', logo: '🏦', logoBg: 'rgba(66,153,225,0.1)',
+      name: 'RBC Wealth Mgmt', sub: '76 members · Enterprise',
+      balance: '$9,200', balancePct: 61, balanceColor: '#276749', fillCls: 'fill-green',
+      balanceLbl: '61% of limit', balanceLblColor: '#276749',
+      mrr: '$5,300', rides: '447', util: '68%', utilColor: 'var(--adm-text)',
+      actionLabel: 'View', actionCls: '',
+      rowCls: '',
+      statusCls: 'sb-healthy', statusLabel: 'Healthy',
+    },
+  ];
+
+  function buildAcctRow(a) {
+    const row = document.createElement('div');
+    row.className = 'acct-row' + (a.rowCls ? ' ' + a.rowCls : '');
+    row.addEventListener('click', () => alert('Open ' + a.name + ' account detail'));
+
+    /* Identity */
+    const identity = document.createElement('div');
+    identity.className = 'acct-identity';
+
+    const logo = document.createElement('div');
+    logo.className = 'acct-logo';
+    logo.style.background = a.logoBg;
+    logo.textContent = a.logo;
+
+    const info = document.createElement('div');
+    info.className = 'acct-info';
+    const nm = document.createElement('div');
+    nm.className = 'acct-name';
+    nm.textContent = a.name;
+    const sb = document.createElement('div');
+    sb.className = 'acct-sub';
+    sb.textContent = a.sub;
+    info.appendChild(nm);
+    info.appendChild(sb);
+    identity.appendChild(logo);
+    identity.appendChild(info);
+
+    /* Balance bar column */
+    const balCol = document.createElement('div');
+    balCol.className = 'balance-col';
+
+    const balHdr = document.createElement('div');
+    balHdr.className = 'balance-header';
+    const balAmt = document.createElement('span');
+    balAmt.className = 'balance-amount';
+    balAmt.style.color = a.balanceColor;
+    balAmt.textContent = a.balance;
+    const balLbl = document.createElement('span');
+    balLbl.className = 'balance-limit';
+    balLbl.style.color = a.balanceLblColor;
+    balLbl.textContent = a.balanceLbl;
+    balHdr.appendChild(balAmt);
+    balHdr.appendChild(balLbl);
+
+    const track = document.createElement('div');
+    track.className = 'balance-track';
+    const fill = document.createElement('div');
+    fill.className = 'balance-fill ' + a.fillCls;
+    fill.style.width = a.balancePct + '%';
+    track.appendChild(fill);
+
+    balCol.appendChild(balHdr);
+    balCol.appendChild(track);
+
+    /* MRR */
+    const mrrCol = document.createElement('div');
+    mrrCol.className = 'acct-util';
+    const mrrVal = document.createElement('div');
+    mrrVal.className = 'acct-mrr';
+    mrrVal.textContent = a.mrr;
+    const mrrLbl = document.createElement('div');
+    mrrLbl.className = 'acct-mrr-sub';
+    mrrLbl.textContent = 'per month';
+    mrrCol.appendChild(mrrVal);
+    mrrCol.appendChild(mrrLbl);
+
+    /* Rides */
+    const ridesCol = document.createElement('div');
+    ridesCol.className = 'acct-util';
+    const ridesVal = document.createElement('div');
+    ridesVal.className = 'acct-mrr';
+    ridesVal.textContent = a.rides;
+    const ridesLbl = document.createElement('div');
+    ridesLbl.className = 'acct-mrr-sub';
+    ridesLbl.textContent = 'this month';
+    ridesCol.appendChild(ridesVal);
+    ridesCol.appendChild(ridesLbl);
+
+    /* Util */
+    const utilCol = document.createElement('div');
+    utilCol.className = 'acct-util';
+    const utilVal = document.createElement('div');
+    utilVal.className = 'util-pct';
+    utilVal.style.color = a.utilColor;
+    utilVal.textContent = a.util;
+    const utilLbl = document.createElement('div');
+    utilLbl.className = 'util-lbl';
+    utilLbl.textContent = 'allowance';
+    utilCol.appendChild(utilVal);
+    utilCol.appendChild(utilLbl);
+
+    /* Action */
+    const actionCol = document.createElement('div');
+    actionCol.className = 'acct-action';
+    const btn = document.createElement('button');
+    btn.className = 'row-action' + (a.actionCls ? ' ' + a.actionCls : '');
+    btn.textContent = a.actionLabel;
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      alert(a.actionLabel + ': ' + a.name);
+    });
+    actionCol.appendChild(btn);
+
+    row.appendChild(identity);
+    row.appendChild(balCol);
+    row.appendChild(mrrCol);
+    row.appendChild(ridesCol);
+    row.appendChild(utilCol);
+    row.appendChild(actionCol);
+    return row;
+  }
+
+  function renderAccounts(filter) {
+    const list = document.getElementById('acctListC');
+    list.textContent = '';
+    const filtered = filter === 'all' ? ACCOUNTS : ACCOUNTS.filter(a => a.health === filter);
+    filtered.forEach(a => list.appendChild(buildAcctRow(a)));
+  }
+
+  function filterAccounts(filter, btn) {
+    document.querySelectorAll('.hf-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    renderAccounts(filter);
+  }
+
+  renderAccounts('all');
+</script>
+</body>
+</html>

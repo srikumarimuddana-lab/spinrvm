@@ -1,4 +1,4 @@
-import { initializeApp, getApps } from 'firebase/app';
+import { initializeApp, getApps, FirebaseApp } from 'firebase/app';
 import { getAuth, Auth } from 'firebase/auth';
 
 /**
@@ -30,7 +30,7 @@ const firebaseConfig = {
 };
 
 // Initialize Firebase (avoid duplicate init on hot reload)
-let app;
+let app: FirebaseApp | undefined;
 let auth: Auth;
 
 if (!firebaseConfig.apiKey || !firebaseConfig.projectId) {

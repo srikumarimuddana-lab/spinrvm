@@ -60,6 +60,28 @@ else:
         )
         _rate_limit_storage_uri = "memory://"
 
+# ---------------------------------------------------------------------------
+# OTP fail-closed policy
+# ---------------------------------------------------------------------------
+# For keys that identify OTP flows ("otp", "send_otp", "verify_otp"), the
+# in-memory fallback is NOT acceptable: on a multi-replica deployment each
+# replica keeps its own counter, so the effective limit becomes (limit ×
+# N_replicas)/window — making brute-force trivially easy.
+#
+# If Redis is unavailable at request time for an OTP key we therefore
+# raise HTTP 503 rather than silently degrade.  Non-OTP keys continue to
+# use the in-memory fallback because the risk is much lower (general API
+# rate limiting, not auth security).
+# ---------------------------------------------------------------------------
+_OTP_KEY_FRAGMENTS = ("otp", "send_otp", "verify_otp")
+
+
+def _is_otp_key(key: str) -> bool:
+    """Return True if *key* belongs to an OTP rate-limit bucket."""
+    lower = key.lower()
+    return any(fragment in lower for fragment in _OTP_KEY_FRAGMENTS)
+
+
 # Default limiter — reads the real client IP from X-Forwarded-For when the
 # app sits behind a load balancer or CDN (Cloudflare, Fly.io, Railway). (P2-7)
 default_limiter = Limiter(
@@ -67,7 +89,6 @@ default_limiter = Limiter(
     default_limits=["100/minute", "1000/hour"],
     storage_uri=_rate_limit_storage_uri,
 )
-
 
 # ============================================================================
 # Custom Key Functions
@@ -95,7 +116,7 @@ def get_client_identifier(request: Request) -> str:
         # Note: This is a best-effort attempt, body may already be consumed
         # For actual phone-based limiting, apply decorator directly with phone param
     except Exception:  # noqa: S110
-        pass
+        logger.warning("rate_limiter: get_rate_limit_key: body parse failed; falling back to IP", exc_info=True)
 
     # Fallback to real IP (respects X-Forwarded-For behind proxies)
     return f"ip:{get_ipaddr(request)}"
@@ -189,6 +210,18 @@ promo_validate_limit = default_limiter.limit("10/minute")
 
 # Location updates - allow frequent updates for drivers
 location_update_limit = default_limiter.limit("60/minute")
+
+# Payment actions (tip, process-payment) — sensitive financial ops, tight limit
+payment_action_limit = default_limiter.limit("5/minute")
+
+# Ride rating — once per completed ride, extra friction prevents spam
+ride_rating_limit = default_limiter.limit("5/hour")
+
+# In-ride messaging — generous but bounded to prevent SMS relay abuse
+ride_message_limit = default_limiter.limit("30/minute")
+
+# Ride state transitions (start, complete, emergency) — ride lifecycle ops
+ride_action_limit = default_limiter.limit("20/minute")
 
 # Document uploads - restrictive to prevent abuse
 document_upload_limit = default_limiter.limit("5/minute")
@@ -344,7 +377,16 @@ class RedisRateLimiter:
         redis = await self._get_redis()
 
         if redis == "memory":
-            # Fallback to memory-based limiting (not recommended for production)
+            # Fail-closed for OTP keys: in-memory fallback is unsafe on
+            # multi-replica deployments because each replica tracks its own
+            # counter, multiplying the effective limit by N_replicas.
+            # See module-level comment on _OTP_KEY_FRAGMENTS for the rationale.
+            if _is_otp_key(key):
+                raise HTTPException(
+                    status_code=503,
+                    detail="Rate limiting unavailable, please retry",
+                )
+            # Non-OTP keys: in-memory fallback is acceptable for general rate limiting.
             return self._memory_check(key, limit, window)
 
         # Redis-based sliding window
@@ -365,14 +407,23 @@ class RedisRateLimiter:
         try:
             results = await pipe.execute()
         except Exception as e:
-            # Redis went down mid-operation — reset and fall back to in-memory.
+            # Redis went down mid-operation — reset connection for next attempt.
             # Log at ERROR so this surfaces in SRE alerting (DV-6).
             logger.error(
                 f"Redis unavailable mid-operation — rate limiter degraded to in-memory ({e}); "
                 "OTP brute-force protection weakened on multi-replica deployments"
             )
             self._redis = None
-            return self._memory_check(key.replace("ratelimit:", ""), limit, window)
+            bare_key = key.replace("ratelimit:", "")
+            # Fail-closed for OTP keys: do NOT fall back to in-memory — raise
+            # 503 so the caller retries once Redis recovers.  See module-level
+            # comment on _OTP_KEY_FRAGMENTS for the full rationale.
+            if _is_otp_key(bare_key):
+                raise HTTPException(
+                    status_code=503,
+                    detail="Rate limiting unavailable, please retry",
+                ) from None
+            return self._memory_check(bare_key, limit, window)
 
         current_count = results[2]
 

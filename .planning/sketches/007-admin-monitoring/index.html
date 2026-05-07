@@ -1,0 +1,951 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>007 — Admin Monitoring · Spinr Sketch</title>
+<link rel="stylesheet" href="../themes/default.css">
+<style>
+  /* ── Base ───────────────────────────────────────── */
+  body { background: #0d0f14; font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif; margin: 0; padding: 0; }
+
+  .page-header { text-align: center; padding: 28px 20px 12px; }
+  .page-header h1 { color: #fff; font-size: 22px; font-weight: 700; margin: 0 0 4px; letter-spacing: -0.5px; }
+  .page-header p { color: #666; font-size: 13px; margin: 0; }
+  .design-q { display: inline-block; background: #1a1e2d; color: #a0aec0; border: 1px solid #2d3748; border-radius: 20px; padding: 6px 16px; font-size: 12px; margin-top: 10px; }
+
+  .toolbar { display: flex; justify-content: center; gap: 0; padding: 16px 20px 0; }
+  .toolbar button { background: #1a1e2d; color: #666; border: 1px solid #2d3748; padding: 7px 18px; font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+  .toolbar button:first-child { border-radius: 8px 0 0 8px; }
+  .toolbar button:last-child { border-radius: 0 8px 8px 0; }
+  .toolbar button.active { background: #E53E3E; color: #fff; border-color: #E53E3E; }
+
+  .stage-bar { display: flex; justify-content: center; gap: 8px; padding: 12px 20px 0; }
+  .stage-bar button { background: #1a1e2d; color: #666; border: 1px solid #2d3748; border-radius: 20px; padding: 5px 14px; font-size: 11px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+  .stage-bar button.active { background: #2d3748; color: #fff; border-color: #4a5568; }
+
+  /* ── Desktop Frame Row ──────────────────────────── */
+  .frames-row { display: flex; justify-content: center; gap: 28px; padding: 24px 20px 32px; overflow-x: auto; }
+  .frame-wrap { display: flex; flex-direction: column; align-items: center; gap: 10px; flex-shrink: 0; }
+  .variant-label { color: #666; font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; text-align: center; }
+  .variant-label span { color: #E53E3E; }
+
+  /* ── Browser Frame ──────────────────────────────── */
+  .browser { width: 510px; height: 720px; background: #0f1117; border-radius: 12px; border: 1.5px solid #2d3748; overflow: hidden; box-shadow: 0 24px 64px rgba(0,0,0,0.7); display: flex; flex-direction: column; }
+  .browser-chrome { height: 36px; background: #1a1e2d; border-bottom: 1px solid #2d3748; display: flex; align-items: center; gap: 8px; padding: 0 12px; flex-shrink: 0; }
+  .browser-chrome .dot { width: 10px; height: 10px; border-radius: 50%; }
+  .browser-chrome .dot.red { background: #742a2a; }
+  .browser-chrome .dot.yellow { background: #744210; }
+  .browser-chrome .dot.green { background: #276749; }
+  .browser-chrome .url-bar { flex: 1; background: #0f1117; border-radius: 6px; height: 20px; margin: 0 12px; display: flex; align-items: center; padding: 0 8px; }
+  .browser-chrome .url-bar span { font-size: 10px; color: #4a5568; }
+  .browser-chrome .url-bar .secure { color: #38A169; margin-right: 4px; font-size: 9px; }
+  .browser-content { flex: 1; overflow: hidden; position: relative; }
+
+  /* Panel visibility */
+  .panel { display: none; position: absolute; inset: 0; }
+  .panel.visible { display: flex; flex-direction: column; }
+
+  /* ═══════════════════════════════════════════════════
+     SHARED ADMIN COMPONENTS
+  ══════════════════════════════════════════════════ */
+  .admin-topbar { height: 44px; background: #0a0d14; border-bottom: 1px solid #1a1e2d; display: flex; align-items: center; gap: 0; padding: 0; flex-shrink: 0; }
+  .admin-topbar .logo { width: 120px; display: flex; align-items: center; gap: 8px; padding: 0 16px; border-right: 1px solid #1a1e2d; height: 100%; }
+  .admin-topbar .logo .spinr-mark { width: 20px; height: 20px; border-radius: 6px; background: #E53E3E; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 900; color: #fff; }
+  .admin-topbar .logo span { font-size: 13px; font-weight: 700; color: #fff; }
+  .admin-topbar .logo small { font-size: 9px; color: #4a5568; }
+  .admin-topbar .nav-items { display: flex; height: 100%; }
+  .admin-topbar .nav-item { display: flex; align-items: center; padding: 0 14px; font-size: 11px; font-weight: 600; color: #4a5568; cursor: pointer; border-bottom: 2px solid transparent; }
+  .admin-topbar .nav-item.active { color: #fff; border-bottom-color: #E53E3E; }
+  .admin-topbar .right { margin-left: auto; display: flex; align-items: center; gap: 8px; padding-right: 12px; }
+  .admin-topbar .alert-bell { position: relative; width: 28px; height: 28px; border-radius: 8px; background: #1a1e2d; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+  .admin-topbar .alert-bell .badge { position: absolute; top: -4px; right: -4px; width: 14px; height: 14px; border-radius: 50%; background: #E53E3E; font-size: 8px; font-weight: 700; color: #fff; display: flex; align-items: center; justify-content: center; }
+  .admin-topbar .user-chip { background: #1a1e2d; border-radius: 8px; padding: 4px 10px; font-size: 10px; color: #a0aec0; }
+
+  /* Stats bar */
+  .stats-bar { display: flex; align-items: stretch; background: #0a0d14; border-bottom: 1px solid #1a1e2d; flex-shrink: 0; }
+  .stat-cell { flex: 1; padding: 8px 12px; border-right: 1px solid #1a1e2d; }
+  .stat-cell:last-child { border-right: none; }
+  .stat-cell .s-val { font-size: 20px; font-weight: 800; color: #fff; letter-spacing: -0.5px; }
+  .stat-cell .s-val.green { color: #38A169; }
+  .stat-cell .s-val.gold { color: #D69E2E; }
+  .stat-cell .s-val.red { color: #E53E3E; }
+  .stat-cell .s-lbl { font-size: 9px; color: #4a5568; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; margin-top: 1px; }
+
+  /* Alert banner */
+  .alert-banner { background: #2d0a0a; border-bottom: 2px solid #E53E3E; padding: 7px 12px; display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  .alert-banner .a-dot { width: 7px; height: 7px; border-radius: 50%; background: #E53E3E; animation: blink 0.8s ease-in-out infinite; flex-shrink: 0; }
+  .alert-banner .a-text { font-size: 11px; color: #fc8181; font-weight: 600; flex: 1; }
+  .alert-banner .a-text strong { color: #fff; }
+  .alert-banner .a-act { background: #E53E3E; color: #fff; font-size: 10px; font-weight: 700; padding: 3px 8px; border-radius: 6px; cursor: pointer; flex-shrink: 0; }
+
+  @keyframes blink { 0%,100%{opacity:1;} 50%{opacity:0.3;} }
+
+  /* ═══════════════════════════════════════════════════
+     VARIANT A — Map-Dominant
+  ══════════════════════════════════════════════════ */
+
+  .a-body { display: flex; flex: 1; overflow: hidden; }
+  .a-sidebar { width: 162px; background: #0a0d14; border-right: 1px solid #1a1e2d; overflow-y: auto; flex-shrink: 0; display: flex; flex-direction: column; }
+  .a-sidebar .s-header { padding: 8px 10px; border-bottom: 1px solid #1a1e2d; font-size: 9px; color: #4a5568; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; }
+  .a-sidebar .filter-chips { display: flex; gap: 4px; padding: 6px 10px; flex-wrap: wrap; border-bottom: 1px solid #1a1e2d; }
+  .a-sidebar .filter-chips .chip { background: #1a1e2d; border-radius: 10px; padding: 2px 8px; font-size: 9px; color: #718096; cursor: pointer; }
+  .a-sidebar .filter-chips .chip.on { background: #E53E3E; color: #fff; }
+  .a-ride-item { padding: 8px 10px; border-bottom: 1px solid #0f1117; cursor: pointer; transition: background 0.15s; }
+  .a-ride-item:hover { background: #1a1e2d; }
+  .a-ride-item.alert { background: #1a0505; border-left: 2px solid #E53E3E; }
+  .a-ride-item .ri-top { display: flex; justify-content: space-between; align-items: center; }
+  .a-ride-item .ri-id { font-size: 9px; color: #4a5568; font-weight: 700; }
+  .a-ride-item .ri-status { font-size: 8px; font-weight: 700; padding: 1px 5px; border-radius: 6px; }
+  .a-ride-item .ri-status.searching { background: #1a1400; color: #D69E2E; }
+  .a-ride-item .ri-status.matched { background: #0f1a2e; color: #63b3ed; }
+  .a-ride-item .ri-status.transit { background: #0f2010; color: #68D391; }
+  .a-ride-item .ri-status.arrived { background: #1a0520; color: #d6bcfa; }
+  .a-ride-item .ri-status.sos { background: #2d0a0a; color: #fc8181; animation: blink 0.8s infinite; }
+  .a-ride-item .ri-rider { font-size: 11px; font-weight: 600; color: #fff; margin-top: 3px; }
+  .a-ride-item .ri-dest { font-size: 10px; color: #718096; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .a-ride-item .ri-meta { display: flex; justify-content: space-between; margin-top: 3px; font-size: 9px; color: #4a5568; }
+  .a-ride-item .ri-meta .eta { color: #a0aec0; }
+
+  .a-map { flex: 1; position: relative; overflow: hidden; background: #1a1e2d; }
+  .a-map svg { width: 100%; height: 100%; }
+  .a-map-controls { position: absolute; top: 10px; right: 10px; display: flex; flex-direction: column; gap: 4px; }
+  .a-map-controls button { width: 28px; height: 28px; background: rgba(15,17,23,0.9); border: 1px solid #2d3748; border-radius: 6px; color: #a0aec0; font-size: 14px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  .a-legend { position: absolute; bottom: 10px; left: 10px; background: rgba(10,13,20,0.9); border: 1px solid #2d3748; border-radius: 8px; padding: 8px 10px; }
+  .a-legend .leg-item { display: flex; align-items: center; gap: 5px; font-size: 9px; color: #718096; margin-bottom: 3px; }
+  .a-legend .leg-item:last-child { margin-bottom: 0; }
+  .a-legend .leg-dot { width: 7px; height: 7px; border-radius: 50%; }
+
+  /* ═══════════════════════════════════════════════════
+     VARIANT B — Table-First
+  ══════════════════════════════════════════════════ */
+
+  .b-body { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+  .b-toolbar { padding: 8px 12px; border-bottom: 1px solid #1a1e2d; display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  .b-toolbar .filter-chip { background: #1a1e2d; border: 1px solid #2d3748; border-radius: 6px; padding: 3px 10px; font-size: 10px; color: #718096; cursor: pointer; }
+  .b-toolbar .filter-chip.on { border-color: #E53E3E; color: #fc8181; background: #1a0505; }
+  .b-toolbar .spacer { flex: 1; }
+  .b-toolbar .map-toggle { background: #1a1e2d; border: 1px solid #2d3748; border-radius: 6px; padding: 3px 10px; font-size: 10px; color: #a0aec0; cursor: pointer; }
+  .b-toolbar .search-box { background: #0a0d14; border: 1px solid #1a1e2d; border-radius: 6px; padding: 3px 10px; font-size: 10px; color: #718096; width: 100px; }
+
+  .b-main { flex: 1; overflow: hidden; display: flex; gap: 0; }
+  .b-table-wrap { flex: 1; overflow-y: auto; }
+  .b-table { width: 100%; border-collapse: collapse; }
+  .b-table thead tr { background: #0a0d14; position: sticky; top: 0; z-index: 10; }
+  .b-table th { padding: 6px 8px; text-align: left; font-size: 9px; font-weight: 700; color: #4a5568; letter-spacing: 0.5px; text-transform: uppercase; border-bottom: 1px solid #1a1e2d; white-space: nowrap; }
+  .b-table th:first-child { padding-left: 12px; }
+  .b-table td { padding: 7px 8px; border-bottom: 1px solid #0f1117; font-size: 11px; color: #a0aec0; white-space: nowrap; vertical-align: middle; }
+  .b-table td:first-child { padding-left: 12px; }
+  .b-table tr:hover td { background: #1a1e2d; }
+  .b-table tr.alert-row td { background: #1a0505; }
+  .b-table tr.alert-row:hover td { background: #220808; }
+  .b-status-badge { display: inline-block; padding: 2px 6px; border-radius: 6px; font-size: 9px; font-weight: 700; }
+  .b-status-badge.searching { background: #1a1400; color: #D69E2E; }
+  .b-status-badge.matched { background: #0f1a2e; color: #63b3ed; }
+  .b-status-badge.transit { background: #0f2010; color: #68D391; }
+  .b-status-badge.arrived { background: #1a0520; color: #d6bcfa; }
+  .b-status-badge.sos { background: #2d0a0a; color: #fc8181; }
+  .b-action-btn { padding: 2px 7px; background: #1a1e2d; border-radius: 5px; font-size: 9px; color: #a0aec0; cursor: pointer; border: 1px solid #2d3748; }
+  .b-action-btn.urgent { background: #E53E3E; color: #fff; border-color: #E53E3E; }
+  .b-mini-map { width: 140px; background: #1a1e2d; border-left: 1px solid #1a1e2d; flex-shrink: 0; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+  .b-mini-map .map-title { font-size: 9px; color: #4a5568; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; }
+  .b-mini-map svg { width: 100%; height: 120px; border-radius: 6px; }
+
+  /* ═══════════════════════════════════════════════════
+     VARIANT C — Triage Board ★
+  ══════════════════════════════════════════════════ */
+
+  .c-body { flex: 1; overflow: hidden; display: flex; }
+  .c-board { flex: 1; overflow: hidden; display: flex; flex-direction: column; border-right: 1px solid #1a1e2d; }
+  .c-board-header { padding: 6px 10px; border-bottom: 1px solid #1a1e2d; flex-shrink: 0; font-size: 9px; color: #4a5568; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; }
+  .c-columns { flex: 1; overflow: hidden; display: flex; gap: 0; }
+  .c-col { flex: 1; border-right: 1px solid #1a1e2d; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+  .c-col:last-child { border-right: none; }
+  .c-col-header { padding: 6px 8px; border-bottom: 1px solid #1a1e2d; display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
+  .c-col-header .col-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+  .c-col-header .col-name { font-size: 9px; font-weight: 700; color: #718096; letter-spacing: 0.3px; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .c-col-header .col-count { background: #1a1e2d; border-radius: 8px; padding: 1px 5px; font-size: 9px; font-weight: 700; color: #a0aec0; flex-shrink: 0; }
+  .c-col-header .col-count.alert { background: #E53E3E; color: #fff; animation: blink 0.8s infinite; }
+  .c-col-body { flex: 1; overflow-y: auto; padding: 6px 5px; display: flex; flex-direction: column; gap: 5px; }
+  .c-card { background: #13172a; border-radius: 8px; padding: 7px 8px; border: 1px solid #1a1e2d; cursor: pointer; }
+  .c-card:hover { background: #1a1e2d; }
+  .c-card.alert { background: #1a0505; border-color: #742a2a; }
+  .c-card.alert-sos { border-color: #E53E3E; background: #220808; }
+  .c-card .cc-id { font-size: 8px; color: #4a5568; font-weight: 700; }
+  .c-card .cc-rider { font-size: 11px; font-weight: 700; color: #fff; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .c-card .cc-driver { font-size: 9px; color: #718096; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .c-card .cc-meta { display: flex; justify-content: space-between; margin-top: 4px; }
+  .c-card .cc-eta { font-size: 9px; font-weight: 700; color: #a0aec0; }
+  .c-card .cc-fare { font-size: 9px; color: #D69E2E; }
+  .c-card .cc-btn { width: 100%; margin-top: 5px; padding: 3px 0; background: #1a1e2d; border: 1px solid #2d3748; border-radius: 5px; font-size: 9px; color: #a0aec0; text-align: center; cursor: pointer; }
+  .c-card.alert-sos .cc-btn { background: #E53E3E; border-color: #E53E3E; color: #fff; font-weight: 700; }
+  .c-card .cc-timer { font-size: 9px; color: #E53E3E; font-weight: 700; margin-top: 2px; }
+  .c-card .cc-otp { font-size: 9px; color: #d6bcfa; font-weight: 700; margin-top: 2px; }
+
+  .c-right { width: 162px; display: flex; flex-direction: column; flex-shrink: 0; }
+  .c-map-panel { flex: 1; position: relative; overflow: hidden; background: #1a1e2d; }
+  .c-map-panel svg { width: 100%; height: 100%; }
+  .c-right-stats { border-top: 1px solid #1a1e2d; padding: 8px; }
+  .c-right-stats .rs-row { display: flex; justify-content: space-between; font-size: 9px; color: #718096; padding: 2px 0; }
+  .c-right-stats .rs-row .rs-val { font-weight: 700; color: #a0aec0; }
+  .c-right-stats .rs-row .rs-val.green { color: #38A169; }
+  .c-right-stats .rs-row .rs-val.gold { color: #D69E2E; }
+
+  /* ── Notes ───────────────────────────────────────── */
+  .notes-row { display: flex; justify-content: center; gap: 28px; padding: 0 20px 40px; flex-wrap: wrap; }
+  .note-card { width: 510px; background: #1a1e2d; border-radius: 14px; padding: 14px 18px; border: 1px solid #2d3748; }
+  .note-card h3 { font-size: 11px; font-weight: 700; color: #E53E3E; letter-spacing: 1px; text-transform: uppercase; margin: 0 0 8px; }
+  .note-card p { font-size: 11px; color: #718096; margin: 0 0 5px; line-height: 1.6; }
+  .note-card strong { color: #a0aec0; }
+</style>
+</head>
+<body>
+
+<div class="page-header">
+  <h1>007 — Admin Monitoring</h1>
+  <p>Spinr Sketch Series · Admin Dashboard Surface · 3 Variants</p>
+  <span class="design-q">"Can a dispatcher manage 20 rides without overwhelm?"</span>
+</div>
+
+<div class="toolbar">
+  <button class="active" onclick="setVariant('a',this)">A — Map-Dominant</button>
+  <button onclick="setVariant('b',this)">B — Table-First</button>
+  <button onclick="setVariant('c',this)">C — Triage Board ★</button>
+</div>
+
+<div class="stage-bar">
+  <button class="active" id="stage-btn-1" onclick="setStage('1',this)">Normal (20 rides)</button>
+  <button id="stage-btn-2" onclick="setStage('2',this)">Alert State (SOS + timeout)</button>
+</div>
+
+<!-- ── Desktop Frames ──────────────────────────── -->
+<div class="frames-row">
+
+  <!-- ══ FRAME A ══════════════════════════════════ -->
+  <div class="frame-wrap">
+    <div class="variant-label"><span>A</span> — Map-Dominant</div>
+    <div class="browser">
+      <div class="browser-chrome">
+        <div class="dot red"></div><div class="dot yellow"></div><div class="dot green"></div>
+        <div class="url-bar"><span class="secure">🔒</span><span>admin.spinr.ca/monitoring</span></div>
+        <span style="font-size:10px;color:#4a5568;">Ops ▸</span>
+      </div>
+      <div class="browser-content">
+
+        <!-- A Stage 1 — Normal -->
+        <div class="panel visible" id="a-stage-1">
+          <div class="admin-topbar">
+            <div class="logo"><div class="spinr-mark">S</div><div><span>Spinr</span><br><small>Admin</small></div></div>
+            <div class="nav-items">
+              <div class="nav-item active">Live</div>
+              <div class="nav-item">Drivers</div>
+              <div class="nav-item">Analytics</div>
+            </div>
+            <div class="right">
+              <div class="alert-bell"><span style="font-size:12px;">🔔</span></div>
+              <div class="user-chip">Dispatch ▸</div>
+            </div>
+          </div>
+          <div class="stats-bar">
+            <div class="stat-cell"><div class="s-val green">20</div><div class="s-lbl">Active Rides</div></div>
+            <div class="stat-cell"><div class="s-val gold">2</div><div class="s-lbl">Searching</div></div>
+            <div class="stat-cell"><div class="s-val">14</div><div class="s-lbl">In Progress</div></div>
+            <div class="stat-cell"><div class="s-val">38</div><div class="s-lbl">Online Drivers</div></div>
+            <div class="stat-cell"><div class="s-val green">0</div><div class="s-lbl">Alerts</div></div>
+          </div>
+          <div class="a-body">
+            <div class="a-sidebar">
+              <div class="s-header">Live Rides</div>
+              <div class="filter-chips">
+                <div class="chip on">All</div>
+                <div class="chip">SOS</div>
+                <div class="chip">Wait</div>
+              </div>
+              <div class="a-ride-item"><div class="ri-top"><span class="ri-id">R-1847</span><span class="ri-status transit">IN TRIP</span></div><div class="ri-rider">Sarah M.</div><div class="ri-dest">→ Midtown Mall</div><div class="ri-meta"><span>Alex J.</span><span class="eta">8 min</span></div></div>
+              <div class="a-ride-item"><div class="ri-top"><span class="ri-id">R-1848</span><span class="ri-status matched">MATCHED</span></div><div class="ri-rider">James K.</div><div class="ri-dest">→ Airport</div><div class="ri-meta"><span>Marcus T.</span><span class="eta">12 min</span></div></div>
+              <div class="a-ride-item"><div class="ri-top"><span class="ri-id">R-1849</span><span class="ri-status searching">SEARCH</span></div><div class="ri-rider">Emma R.</div><div class="ri-dest">→ University</div><div class="ri-meta"><span>2:30</span><span class="eta" style="color:#D69E2E;">wait</span></div></div>
+              <div class="a-ride-item"><div class="ri-top"><span class="ri-id">R-1850</span><span class="ri-status transit">IN TRIP</span></div><div class="ri-rider">David L.</div><div class="ri-dest">→ Downtown</div><div class="ri-meta"><span>Sandra K.</span><span class="eta">3 min</span></div></div>
+              <div class="a-ride-item"><div class="ri-top"><span class="ri-id">R-1851</span><span class="ri-status arrived">ARRIVED</span></div><div class="ri-rider">Maria G.</div><div class="ri-dest">→ North End</div><div class="ri-meta"><span>James W.</span><span class="eta">OTP</span></div></div>
+              <div class="a-ride-item"><div class="ri-top"><span class="ri-id">R-1852</span><span class="ri-status searching">SEARCH</span></div><div class="ri-rider">Tom B.</div><div class="ri-dest">→ Hospital</div><div class="ri-meta"><span>1:15</span><span class="eta" style="color:#D69E2E;">wait</span></div></div>
+              <div class="a-ride-item"><div class="ri-top"><span class="ri-id">R-1853</span><span class="ri-status transit">IN TRIP</span></div><div class="ri-rider">Chen W.</div><div class="ri-dest">→ Richmond Mall</div><div class="ri-meta"><span>Pat N.</span><span class="eta">14 min</span></div></div>
+              <div class="a-ride-item"><div class="ri-top"><span class="ri-id">R-1854</span><span class="ri-status matched">MATCHED</span></div><div class="ri-rider">Lisa P.</div><div class="ri-dest">→ College Dr</div><div class="ri-meta"><span>Steve M.</span><span class="eta">6 min</span></div></div>
+              <div class="a-ride-item"><div class="ri-top"><span class="ri-id">R-1855</span><span class="ri-status transit">IN TRIP</span></div><div class="ri-rider">Mike D.</div><div class="ri-dest">→ South Park</div><div class="ri-meta"><span>Kim L.</span><span class="eta">5 min</span></div></div>
+              <div class="a-ride-item"><div class="ri-top"><span class="ri-id">R-1856</span><span class="ri-status transit">IN TRIP</span></div><div class="ri-rider">Anna F.</div><div class="ri-dest">→ Downtown</div><div class="ri-meta"><span>Ryan B.</span><span class="eta">7 min</span></div></div>
+              <div style="padding:6px 10px;font-size:9px;color:#4a5568;text-align:center;">+ 10 more →</div>
+            </div>
+            <div class="a-map">
+              <svg viewBox="0 0 348 644" xmlns="http://www.w3.org/2000/svg">
+                <rect width="348" height="644" fill="#1a1e2d"/>
+                <!-- Grid -->
+                <line x1="0" y1="80" x2="348" y2="80" stroke="#222840" stroke-width="1"/>
+                <line x1="0" y1="160" x2="348" y2="160" stroke="#222840" stroke-width="1"/>
+                <line x1="0" y1="240" x2="348" y2="240" stroke="#222840" stroke-width="1"/>
+                <line x1="0" y1="320" x2="348" y2="320" stroke="#222840" stroke-width="1"/>
+                <line x1="0" y1="400" x2="348" y2="400" stroke="#222840" stroke-width="1"/>
+                <line x1="0" y1="480" x2="348" y2="480" stroke="#222840" stroke-width="1"/>
+                <line x1="0" y1="560" x2="348" y2="560" stroke="#222840" stroke-width="1"/>
+                <line x1="58" y1="0" x2="58" y2="644" stroke="#222840" stroke-width="1"/>
+                <line x1="116" y1="0" x2="116" y2="644" stroke="#222840" stroke-width="1"/>
+                <line x1="174" y1="0" x2="174" y2="644" stroke="#222840" stroke-width="1"/>
+                <line x1="232" y1="0" x2="232" y2="644" stroke="#222840" stroke-width="1"/>
+                <line x1="290" y1="0" x2="290" y2="644" stroke="#222840" stroke-width="1"/>
+                <!-- Major roads -->
+                <path d="M 0 320 L 348 320" stroke="#2d3748" stroke-width="8"/>
+                <path d="M 174 0 L 174 644" stroke="#2d3748" stroke-width="8"/>
+                <path d="M 0 240 L 348 240" stroke="#2d3748" stroke-width="4"/>
+                <path d="M 0 400 L 348 400" stroke="#2d3748" stroke-width="4"/>
+                <path d="M 116 0 L 116 644" stroke="#2d3748" stroke-width="4"/>
+                <path d="M 232 0 L 232 644" stroke="#2d3748" stroke-width="4"/>
+                <!-- Road labels -->
+                <text x="180" y="315" font-size="7" fill="#3a4060">Victoria Ave</text>
+                <text x="178" y="200" font-size="6" fill="#3a4060" writing-mode="tb">Albert St</text>
+                <!-- Green in-trip dots -->
+                <circle cx="200" cy="280" r="6" fill="#38A169"/><text x="193" y="273" font-size="6" fill="#fff" font-weight="bold">1847</text>
+                <circle cx="290" cy="380" r="6" fill="#38A169"/>
+                <circle cx="130" cy="200" r="6" fill="#38A169"/>
+                <circle cx="250" cy="450" r="6" fill="#38A169"/>
+                <circle cx="80" cy="350" r="6" fill="#38A169"/>
+                <circle cx="310" cy="260" r="6" fill="#38A169"/>
+                <circle cx="160" cy="500" r="6" fill="#38A169"/>
+                <circle cx="220" cy="160" r="6" fill="#38A169"/>
+                <circle cx="100" cy="430" r="6" fill="#38A169"/>
+                <circle cx="270" cy="330" r="6" fill="#38A169"/>
+                <circle cx="150" cy="290" r="6" fill="#38A169"/>
+                <circle cx="340" cy="420" r="6" fill="#38A169"/>
+                <circle cx="60" cy="280" r="6" fill="#38A169"/>
+                <circle cx="190" cy="580" r="6" fill="#38A169"/>
+                <!-- Blue matched dots -->
+                <circle cx="240" cy="220" r="6" fill="#63b3ed"/>
+                <circle cx="90" cy="160" r="6" fill="#63b3ed"/>
+                <circle cx="320" cy="490" r="6" fill="#63b3ed"/>
+                <!-- Gold searching dots -->
+                <circle cx="174" cy="320" r="7" fill="#D69E2E" opacity="0.9"/>
+                <circle cx="174" cy="320" r="4" fill="#000"/>
+                <circle cx="116" cy="240" r="7" fill="#D69E2E" opacity="0.9"/>
+                <circle cx="116" cy="240" r="4" fill="#000"/>
+                <!-- Purple arrived dot -->
+                <circle cx="60" cy="480" r="6" fill="#d6bcfa"/>
+              </svg>
+              <div class="a-map-controls">
+                <button>+</button>
+                <button>−</button>
+                <button style="font-size:10px;">⌖</button>
+              </div>
+              <div class="a-legend">
+                <div class="leg-item"><div class="leg-dot" style="background:#38A169;"></div>In trip (14)</div>
+                <div class="leg-item"><div class="leg-dot" style="background:#63b3ed;"></div>Matched (3)</div>
+                <div class="leg-item"><div class="leg-dot" style="background:#D69E2E;"></div>Searching (2)</div>
+                <div class="leg-item"><div class="leg-dot" style="background:#d6bcfa;"></div>Arrived (1)</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- A Stage 2 — Alert -->
+        <div class="panel" id="a-stage-2">
+          <div class="admin-topbar">
+            <div class="logo"><div class="spinr-mark">S</div><div><span>Spinr</span><br><small>Admin</small></div></div>
+            <div class="nav-items">
+              <div class="nav-item active">Live</div>
+              <div class="nav-item">Drivers</div>
+              <div class="nav-item">Analytics</div>
+            </div>
+            <div class="right">
+              <div class="alert-bell"><span style="font-size:12px;">🔔</span><div class="badge">2</div></div>
+              <div class="user-chip">Dispatch ▸</div>
+            </div>
+          </div>
+          <div class="alert-banner">
+            <div class="a-dot"></div>
+            <div class="a-text"><strong>R-1855 SOS ACTIVE</strong> · Mike D. in trip with Kim L. · 1:42 elapsed</div>
+            <div class="a-act">Respond</div>
+          </div>
+          <div class="alert-banner" style="background:#1a0f00;border-color:#D69E2E;">
+            <div class="a-dot" style="background:#D69E2E;"></div>
+            <div class="a-text" style="color:#F6E05E;"><strong>R-1852 Dispatch Timeout</strong> · Tom B. waiting 4m12s · Hospital route · No driver</div>
+            <div class="a-act" style="background:#D69E2E;color:#000;">Assign</div>
+          </div>
+          <div class="stats-bar">
+            <div class="stat-cell"><div class="s-val green">20</div><div class="s-lbl">Active Rides</div></div>
+            <div class="stat-cell"><div class="s-val gold">1</div><div class="s-lbl">Searching</div></div>
+            <div class="stat-cell"><div class="s-val">14</div><div class="s-lbl">In Progress</div></div>
+            <div class="stat-cell"><div class="s-val">38</div><div class="s-lbl">Online Drivers</div></div>
+            <div class="stat-cell"><div class="s-val red">2</div><div class="s-lbl">⚠ Alerts</div></div>
+          </div>
+          <div class="a-body">
+            <div class="a-sidebar">
+              <div class="s-header">Live Rides</div>
+              <div class="filter-chips">
+                <div class="chip">All</div>
+                <div class="chip on">Alerts</div>
+                <div class="chip">SOS</div>
+              </div>
+              <div class="a-ride-item alert" style="border-left-color:#E53E3E;"><div class="ri-top"><span class="ri-id">R-1855</span><span class="ri-status sos">SOS ⚡</span></div><div class="ri-rider">Mike D.</div><div class="ri-dest">→ South Park</div><div class="ri-meta"><span style="color:#E53E3E;">Kim L.</span><span class="eta" style="color:#E53E3E;">1:42</span></div></div>
+              <div class="a-ride-item alert" style="border-left-color:#D69E2E;"><div class="ri-top"><span class="ri-id">R-1852</span><span class="ri-status searching">TIMEOUT</span></div><div class="ri-rider">Tom B.</div><div class="ri-dest">→ Hospital</div><div class="ri-meta"><span style="color:#D69E2E;">4m12s</span><span class="eta" style="color:#D69E2E;">⚠</span></div></div>
+              <div style="height:1px;background:#2d3748;margin:4px 0;"></div>
+              <div class="a-ride-item"><div class="ri-top"><span class="ri-id">R-1847</span><span class="ri-status transit">IN TRIP</span></div><div class="ri-rider">Sarah M.</div><div class="ri-dest">→ Midtown Mall</div><div class="ri-meta"><span>Alex J.</span><span class="eta">8 min</span></div></div>
+              <div class="a-ride-item"><div class="ri-top"><span class="ri-id">R-1848</span><span class="ri-status matched">MATCHED</span></div><div class="ri-rider">James K.</div><div class="ri-dest">→ Airport</div><div class="ri-meta"><span>Marcus T.</span><span class="eta">12 min</span></div></div>
+              <div class="a-ride-item"><div class="ri-top"><span class="ri-id">R-1849</span><span class="ri-status searching">SEARCH</span></div><div class="ri-rider">Emma R.</div><div class="ri-dest">→ University</div><div class="ri-meta"><span>2:30</span><span class="eta" style="color:#D69E2E;">wait</span></div></div>
+              <div class="a-ride-item"><div class="ri-top"><span class="ri-id">R-1850</span><span class="ri-status transit">IN TRIP</span></div><div class="ri-rider">David L.</div><div class="ri-dest">→ Downtown</div><div class="ri-meta"><span>Sandra K.</span><span class="eta">3 min</span></div></div>
+            </div>
+            <div class="a-map">
+              <svg viewBox="0 0 348 560" xmlns="http://www.w3.org/2000/svg">
+                <rect width="348" height="560" fill="#1a1e2d"/>
+                <line x1="0" y1="80" x2="348" y2="80" stroke="#222840" stroke-width="1"/>
+                <line x1="0" y1="160" x2="348" y2="160" stroke="#222840" stroke-width="1"/>
+                <line x1="0" y1="240" x2="348" y2="240" stroke="#222840" stroke-width="1"/>
+                <line x1="0" y1="320" x2="348" y2="320" stroke="#222840" stroke-width="1"/>
+                <line x1="0" y1="400" x2="348" y2="400" stroke="#222840" stroke-width="1"/>
+                <line x1="0" y1="480" x2="348" y2="480" stroke="#222840" stroke-width="1"/>
+                <line x1="58" y1="0" x2="58" y2="560" stroke="#222840" stroke-width="1"/>
+                <line x1="116" y1="0" x2="116" y2="560" stroke="#222840" stroke-width="1"/>
+                <line x1="174" y1="0" x2="174" y2="560" stroke="#222840" stroke-width="1"/>
+                <line x1="232" y1="0" x2="232" y2="560" stroke="#222840" stroke-width="1"/>
+                <line x1="290" y1="0" x2="290" y2="560" stroke="#222840" stroke-width="1"/>
+                <path d="M 0 280 L 348 280" stroke="#2d3748" stroke-width="8"/>
+                <path d="M 174 0 L 174 560" stroke="#2d3748" stroke-width="8"/>
+                <path d="M 0 200 L 348 200" stroke="#2d3748" stroke-width="4"/>
+                <path d="M 0 360 L 348 360" stroke="#2d3748" stroke-width="4"/>
+                <path d="M 116 0 L 116 560" stroke="#2d3748" stroke-width="4"/>
+                <path d="M 232 0 L 232 560" stroke="#2d3748" stroke-width="4"/>
+                <!-- SOS ride flashing red -->
+                <circle cx="220" cy="330" r="14" fill="#E53E3E" opacity="0.15"/>
+                <circle cx="220" cy="330" r="9" fill="#E53E3E"/>
+                <circle cx="220" cy="330" r="4" fill="#fff"/>
+                <text x="210" y="320" font-size="7" fill="#fc8181" font-weight="bold">SOS</text>
+                <!-- Timeout ride gold -->
+                <circle cx="116" cy="200" r="9" fill="#D69E2E"/>
+                <circle cx="116" cy="200" r="4" fill="#000"/>
+                <text x="106" y="190" font-size="7" fill="#F6E05E" font-weight="bold">4:12</text>
+                <!-- Normal green -->
+                <circle cx="200" cy="240" r="5" fill="#38A169"/>
+                <circle cx="290" cy="320" r="5" fill="#38A169"/>
+                <circle cx="130" cy="160" r="5" fill="#38A169"/>
+                <circle cx="250" cy="400" r="5" fill="#38A169"/>
+                <circle cx="80" cy="300" r="5" fill="#38A169"/>
+                <circle cx="310" cy="220" r="5" fill="#38A169"/>
+                <circle cx="160" cy="440" r="5" fill="#38A169"/>
+                <circle cx="50" cy="240" r="5" fill="#38A169"/>
+                <circle cx="270" cy="280" r="5" fill="#38A169"/>
+                <circle cx="150" cy="350" r="5" fill="#38A169"/>
+                <circle cx="340" cy="380" r="5" fill="#38A169"/>
+                <circle cx="60" cy="400" r="5" fill="#38A169"/>
+                <circle cx="190" cy="490" r="5" fill="#38A169"/>
+                <circle cx="320" cy="460" r="5" fill="#38A169"/>
+                <!-- Blue matched -->
+                <circle cx="240" cy="180" r="5" fill="#63b3ed"/>
+                <circle cx="90" cy="140" r="5" fill="#63b3ed"/>
+                <circle cx="305" cy="430" r="5" fill="#63b3ed"/>
+              </svg>
+              <div class="a-legend">
+                <div class="leg-item"><div class="leg-dot" style="background:#E53E3E;"></div>SOS (1) ⚡</div>
+                <div class="leg-item"><div class="leg-dot" style="background:#D69E2E;"></div>Timeout (1) ⚠</div>
+                <div class="leg-item"><div class="leg-dot" style="background:#38A169;"></div>In trip (14)</div>
+                <div class="leg-item"><div class="leg-dot" style="background:#63b3ed;"></div>Matched (3)</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ FRAME B ══════════════════════════════════ -->
+  <div class="frame-wrap">
+    <div class="variant-label"><span>B</span> — Table-First</div>
+    <div class="browser">
+      <div class="browser-chrome">
+        <div class="dot red"></div><div class="dot yellow"></div><div class="dot green"></div>
+        <div class="url-bar"><span class="secure">🔒</span><span>admin.spinr.ca/monitoring</span></div>
+        <span style="font-size:10px;color:#4a5568;">Ops ▸</span>
+      </div>
+      <div class="browser-content">
+
+        <!-- B Stage 1 — Normal -->
+        <div class="panel visible" id="b-stage-1">
+          <div class="admin-topbar">
+            <div class="logo"><div class="spinr-mark">S</div><div><span>Spinr</span><br><small>Admin</small></div></div>
+            <div class="nav-items">
+              <div class="nav-item active">Live</div>
+              <div class="nav-item">Drivers</div>
+              <div class="nav-item">Analytics</div>
+            </div>
+            <div class="right">
+              <div class="alert-bell"><span style="font-size:12px;">🔔</span></div>
+              <div class="user-chip">Dispatch ▸</div>
+            </div>
+          </div>
+          <div class="stats-bar">
+            <div class="stat-cell"><div class="s-val green">20</div><div class="s-lbl">Active Rides</div></div>
+            <div class="stat-cell"><div class="s-val gold">2</div><div class="s-lbl">Searching</div></div>
+            <div class="stat-cell"><div class="s-val">14</div><div class="s-lbl">In Progress</div></div>
+            <div class="stat-cell"><div class="s-val">38</div><div class="s-lbl">Drivers Online</div></div>
+            <div class="stat-cell"><div class="s-val green">0</div><div class="s-lbl">Alerts</div></div>
+          </div>
+          <div class="b-body">
+            <div class="b-toolbar">
+              <div class="filter-chip on">All (20)</div>
+              <div class="filter-chip">Searching (2)</div>
+              <div class="filter-chip">In Trip (14)</div>
+              <div class="filter-chip">Alerts (0)</div>
+              <div class="spacer"></div>
+              <input class="search-box" type="text" placeholder="Search rider…" style="outline:none;">
+              <div class="map-toggle">🗺 Map</div>
+            </div>
+            <div class="b-main">
+              <div class="b-table-wrap">
+                <table class="b-table">
+                  <thead>
+                    <tr>
+                      <th>Ride</th>
+                      <th>Rider</th>
+                      <th>Driver</th>
+                      <th>Status</th>
+                      <th>Dest.</th>
+                      <th>ETA</th>
+                      <th>Fare</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr><td style="color:#fff;">R-1847</td><td>Sarah M.</td><td>Alex J. ★4.9</td><td><span class="b-status-badge transit">In Trip</span></td><td>Midtown Mall</td><td style="color:#38A169;">8 min</td><td style="color:#D69E2E;">$18.40</td><td><button class="b-action-btn">View</button></td></tr>
+                    <tr><td style="color:#fff;">R-1848</td><td>James K.</td><td>Marcus T. ★4.7</td><td><span class="b-status-badge matched">Matched</span></td><td>Airport</td><td>12 min</td><td style="color:#D69E2E;">$34.20</td><td><button class="b-action-btn">View</button></td></tr>
+                    <tr><td style="color:#fff;">R-1849</td><td>Emma R.</td><td style="color:#718096;">—</td><td><span class="b-status-badge searching">Searching</span></td><td>University</td><td style="color:#D69E2E;">2m30s</td><td style="color:#4a5568;">—</td><td><button class="b-action-btn">Assign</button></td></tr>
+                    <tr><td style="color:#fff;">R-1850</td><td>David L.</td><td>Sandra K. ★4.8</td><td><span class="b-status-badge transit">In Trip</span></td><td>Downtown</td><td style="color:#38A169;">3 min</td><td style="color:#D69E2E;">$9.80</td><td><button class="b-action-btn">View</button></td></tr>
+                    <tr><td style="color:#fff;">R-1851</td><td>Maria G.</td><td>James W. ★4.6</td><td><span class="b-status-badge arrived">Arrived</span></td><td>North End</td><td style="color:#d6bcfa;">OTP</td><td style="color:#D69E2E;">$11.20</td><td><button class="b-action-btn">View</button></td></tr>
+                    <tr><td style="color:#fff;">R-1852</td><td>Tom B.</td><td style="color:#718096;">—</td><td><span class="b-status-badge searching">Searching</span></td><td>Hospital</td><td style="color:#D69E2E;">1m15s</td><td style="color:#4a5568;">—</td><td><button class="b-action-btn">Assign</button></td></tr>
+                    <tr><td style="color:#fff;">R-1853</td><td>Chen W.</td><td>Pat N. ★4.9</td><td><span class="b-status-badge transit">In Trip</span></td><td>Richmond Mall</td><td>14 min</td><td style="color:#D69E2E;">$22.10</td><td><button class="b-action-btn">View</button></td></tr>
+                    <tr><td style="color:#fff;">R-1854</td><td>Lisa P.</td><td>Steve M. ★4.8</td><td><span class="b-status-badge matched">Matched</span></td><td>College Dr</td><td>6 min</td><td style="color:#D69E2E;">$14.60</td><td><button class="b-action-btn">View</button></td></tr>
+                    <tr><td style="color:#fff;">R-1855</td><td>Mike D.</td><td>Kim L. ★4.7</td><td><span class="b-status-badge transit">In Trip</span></td><td>South Park</td><td>5 min</td><td style="color:#D69E2E;">$16.30</td><td><button class="b-action-btn">View</button></td></tr>
+                    <tr><td style="color:#fff;">R-1856</td><td>Anna F.</td><td>Ryan B. ★4.8</td><td><span class="b-status-badge transit">In Trip</span></td><td>Downtown</td><td>7 min</td><td style="color:#D69E2E;">$11.20</td><td><button class="b-action-btn">View</button></td></tr>
+                    <tr><td colspan="8" style="text-align:center;color:#4a5568;font-size:10px;padding:8px;">Showing 10 of 20 · Load more</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="b-mini-map">
+                <div class="map-title">Live Map</div>
+                <svg viewBox="0 0 124 120" xmlns="http://www.w3.org/2000/svg">
+                  <rect width="124" height="120" fill="#1a1e2d" rx="6"/>
+                  <path d="M 0 60 L 124 60" stroke="#2d3748" stroke-width="4"/>
+                  <path d="M 62 0 L 62 120" stroke="#2d3748" stroke-width="4"/>
+                  <path d="M 0 40 L 124 40" stroke="#2d3748" stroke-width="2"/>
+                  <path d="M 0 80 L 124 80" stroke="#2d3748" stroke-width="2"/>
+                  <path d="M 40 0 L 40 120" stroke="#2d3748" stroke-width="2"/>
+                  <path d="M 84 0 L 84 120" stroke="#2d3748" stroke-width="2"/>
+                  <circle cx="70" cy="52" r="4" fill="#38A169"/>
+                  <circle cx="104" cy="68" r="3" fill="#38A169"/>
+                  <circle cx="46" cy="36" r="3" fill="#38A169"/>
+                  <circle cx="88" cy="85" r="3" fill="#38A169"/>
+                  <circle cx="28" cy="62" r="3" fill="#38A169"/>
+                  <circle cx="110" cy="46" r="3" fill="#38A169"/>
+                  <circle cx="56" cy="90" r="3" fill="#38A169"/>
+                  <circle cx="30" cy="88" r="3" fill="#38A169"/>
+                  <circle cx="96" cy="28" r="3" fill="#38A169"/>
+                  <circle cx="68" cy="100" r="3" fill="#38A169"/>
+                  <circle cx="14" cy="44" r="3" fill="#38A169"/>
+                  <circle cx="50" cy="16" r="3" fill="#38A169"/>
+                  <circle cx="118" cy="92" r="3" fill="#38A169"/>
+                  <circle cx="78" cy="75" r="3" fill="#38A169"/>
+                  <circle cx="86" cy="54" r="4" fill="#63b3ed"/>
+                  <circle cx="32" cy="30" r="4" fill="#63b3ed"/>
+                  <circle cx="110" cy="106" r="4" fill="#63b3ed"/>
+                  <circle cx="62" cy="60" r="5" fill="#D69E2E"/>
+                  <circle cx="40" cy="40" r="5" fill="#D69E2E"/>
+                  <circle cx="62" cy="60" r="3" fill="#000"/>
+                  <circle cx="40" cy="40" r="3" fill="#000"/>
+                </svg>
+                <div style="font-size:8px;color:#4a5568;margin-top:4px;">● Green=trip ● Blue=matched</div>
+                <div style="font-size:8px;color:#718096;margin-top:2px;">● Gold=search</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- B Stage 2 — Alert -->
+        <div class="panel" id="b-stage-2">
+          <div class="admin-topbar">
+            <div class="logo"><div class="spinr-mark">S</div><div><span>Spinr</span><br><small>Admin</small></div></div>
+            <div class="nav-items">
+              <div class="nav-item active">Live</div>
+              <div class="nav-item">Drivers</div>
+              <div class="nav-item">Analytics</div>
+            </div>
+            <div class="right">
+              <div class="alert-bell"><span style="font-size:12px;">🔔</span><div class="badge">2</div></div>
+              <div class="user-chip">Dispatch ▸</div>
+            </div>
+          </div>
+          <div class="alert-banner">
+            <div class="a-dot"></div>
+            <div class="a-text"><strong>R-1855 SOS ACTIVE</strong> · Mike D. in trip with Kim L. · 1:42 elapsed</div>
+            <div class="a-act">Respond</div>
+          </div>
+          <div class="stats-bar">
+            <div class="stat-cell"><div class="s-val green">20</div><div class="s-lbl">Active Rides</div></div>
+            <div class="stat-cell"><div class="s-val gold">1</div><div class="s-lbl">Searching</div></div>
+            <div class="stat-cell"><div class="s-val">14</div><div class="s-lbl">In Progress</div></div>
+            <div class="stat-cell"><div class="s-val">38</div><div class="s-lbl">Drivers Online</div></div>
+            <div class="stat-cell"><div class="s-val red">2</div><div class="s-lbl">⚠ Alerts</div></div>
+          </div>
+          <div class="b-body">
+            <div class="b-toolbar">
+              <div class="filter-chip">All</div>
+              <div class="filter-chip">Searching</div>
+              <div class="filter-chip">In Trip</div>
+              <div class="filter-chip on">Alerts (2)</div>
+              <div class="spacer"></div>
+              <div class="map-toggle">🗺 Map</div>
+            </div>
+            <div class="b-main">
+              <div class="b-table-wrap">
+                <table class="b-table">
+                  <thead>
+                    <tr>
+                      <th>Ride</th><th>Rider</th><th>Driver</th><th>Status</th><th>Dest.</th><th>ETA</th><th>Fare</th><th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr class="alert-row"><td style="color:#fc8181;font-weight:700;">R-1855 ⚡</td><td style="color:#fff;">Mike D.</td><td style="color:#fc8181;">Kim L. ★4.7</td><td><span class="b-status-badge sos">SOS ⚡</span></td><td>South Park</td><td style="color:#E53E3E;">1:42</td><td style="color:#D69E2E;">$16.30</td><td><button class="b-action-btn urgent">Respond</button></td></tr>
+                    <tr class="alert-row" style="background:#1a0f00;"><td style="color:#F6E05E;font-weight:700;">R-1852 ⚠</td><td style="color:#fff;">Tom B.</td><td style="color:#D69E2E;">—</td><td><span class="b-status-badge searching">Timeout</span></td><td>Hospital</td><td style="color:#E53E3E;">4m12s</td><td style="color:#4a5568;">—</td><td><button class="b-action-btn urgent" style="background:#D69E2E;color:#000;border-color:#D69E2E;">Assign</button></td></tr>
+                    <tr style="opacity:0.5;"><td>R-1847</td><td>Sarah M.</td><td>Alex J. ★4.9</td><td><span class="b-status-badge transit">In Trip</span></td><td>Midtown Mall</td><td style="color:#38A169;">8 min</td><td style="color:#D69E2E;">$18.40</td><td><button class="b-action-btn">View</button></td></tr>
+                    <tr style="opacity:0.5;"><td>R-1848</td><td>James K.</td><td>Marcus T. ★4.7</td><td><span class="b-status-badge matched">Matched</span></td><td>Airport</td><td>12 min</td><td style="color:#D69E2E;">$34.20</td><td><button class="b-action-btn">View</button></td></tr>
+                    <tr style="opacity:0.5;"><td>R-1849</td><td>Emma R.</td><td style="color:#718096;">—</td><td><span class="b-status-badge searching">Searching</span></td><td>University</td><td style="color:#D69E2E;">2m30s</td><td style="color:#4a5568;">—</td><td><button class="b-action-btn">Assign</button></td></tr>
+                    <tr style="opacity:0.5;"><td>R-1850</td><td>David L.</td><td>Sandra K. ★4.8</td><td><span class="b-status-badge transit">In Trip</span></td><td>Downtown</td><td style="color:#38A169;">3 min</td><td style="color:#D69E2E;">$9.80</td><td><button class="b-action-btn">View</button></td></tr>
+                    <tr style="opacity:0.5;"><td>R-1851</td><td>Maria G.</td><td>James W. ★4.6</td><td><span class="b-status-badge arrived">Arrived</span></td><td>North End</td><td style="color:#d6bcfa;">OTP</td><td style="color:#D69E2E;">$11.20</td><td><button class="b-action-btn">View</button></td></tr>
+                    <tr style="opacity:0.5;"><td>R-1853</td><td>Chen W.</td><td>Pat N. ★4.9</td><td><span class="b-status-badge transit">In Trip</span></td><td>Richmond Mall</td><td>14 min</td><td style="color:#D69E2E;">$22.10</td><td><button class="b-action-btn">View</button></td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="b-mini-map">
+                <div class="map-title">Live Map</div>
+                <svg viewBox="0 0 124 120" xmlns="http://www.w3.org/2000/svg">
+                  <rect width="124" height="120" fill="#1a1e2d" rx="6"/>
+                  <path d="M 0 60 L 124 60" stroke="#2d3748" stroke-width="4"/>
+                  <path d="M 62 0 L 62 120" stroke="#2d3748" stroke-width="4"/>
+                  <path d="M 0 40 L 124 40" stroke="#2d3748" stroke-width="2"/>
+                  <path d="M 0 80 L 124 80" stroke="#2d3748" stroke-width="2"/>
+                  <path d="M 40 0 L 40 120" stroke="#2d3748" stroke-width="2"/>
+                  <path d="M 84 0 L 84 120" stroke="#2d3748" stroke-width="2"/>
+                  <!-- SOS -->
+                  <circle cx="79" cy="65" r="8" fill="#E53E3E" opacity="0.2"/>
+                  <circle cx="79" cy="65" r="5" fill="#E53E3E"/>
+                  <!-- Timeout gold -->
+                  <circle cx="40" cy="40" r="5" fill="#D69E2E"/>
+                  <circle cx="40" cy="40" r="2" fill="#000"/>
+                  <!-- Normal (dim) -->
+                  <circle cx="70" cy="52" r="3" fill="#38A169" opacity="0.5"/>
+                  <circle cx="104" cy="68" r="3" fill="#38A169" opacity="0.5"/>
+                  <circle cx="46" cy="36" r="3" fill="#38A169" opacity="0.5"/>
+                  <circle cx="88" cy="85" r="3" fill="#38A169" opacity="0.5"/>
+                  <circle cx="28" cy="62" r="3" fill="#38A169" opacity="0.5"/>
+                  <circle cx="110" cy="46" r="3" fill="#38A169" opacity="0.5"/>
+                  <circle cx="56" cy="90" r="3" fill="#38A169" opacity="0.5"/>
+                </svg>
+                <div style="font-size:8px;color:#fc8181;margin-top:4px;font-weight:700;">⚡ SOS: R-1855</div>
+                <div style="font-size:8px;color:#D69E2E;margin-top:2px;font-weight:700;">⚠ Timeout: R-1852</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ FRAME C ══════════════════════════════════ -->
+  <div class="frame-wrap">
+    <div class="variant-label"><span>C</span> — Triage Board <span style="color:#D69E2E;">★</span></div>
+    <div class="browser">
+      <div class="browser-chrome">
+        <div class="dot red"></div><div class="dot yellow"></div><div class="dot green"></div>
+        <div class="url-bar"><span class="secure">🔒</span><span>admin.spinr.ca/monitoring</span></div>
+        <span style="font-size:10px;color:#4a5568;">Ops ▸</span>
+      </div>
+      <div class="browser-content">
+
+        <!-- C Stage 1 — Normal -->
+        <div class="panel visible" id="c-stage-1">
+          <div class="admin-topbar">
+            <div class="logo"><div class="spinr-mark">S</div><div><span>Spinr</span><br><small>Admin</small></div></div>
+            <div class="nav-items">
+              <div class="nav-item active">Live</div>
+              <div class="nav-item">Drivers</div>
+              <div class="nav-item">Analytics</div>
+            </div>
+            <div class="right">
+              <div class="alert-bell"><span style="font-size:12px;">🔔</span></div>
+              <div class="user-chip">Dispatch ▸</div>
+            </div>
+          </div>
+          <div class="stats-bar">
+            <div class="stat-cell"><div class="s-val green">20</div><div class="s-lbl">Active Rides</div></div>
+            <div class="stat-cell"><div class="s-val gold">2</div><div class="s-lbl">Searching</div></div>
+            <div class="stat-cell"><div class="s-val">14</div><div class="s-lbl">In Progress</div></div>
+            <div class="stat-cell"><div class="s-val">38</div><div class="s-lbl">Drivers Online</div></div>
+            <div class="stat-cell"><div class="s-val green">0</div><div class="s-lbl">Alerts</div></div>
+          </div>
+          <div class="c-body">
+            <div class="c-board">
+              <div class="c-board-header">Ride Triage Board · 20 active</div>
+              <div class="c-columns">
+
+                <div class="c-col">
+                  <div class="c-col-header"><div class="col-dot" style="background:#D69E2E;"></div><div class="col-name">Searching</div><div class="col-count">2</div></div>
+                  <div class="c-col-body">
+                    <div class="c-card"><div class="cc-id">R-1849</div><div class="cc-rider">Emma R.</div><div class="cc-driver">No driver yet</div><div class="cc-meta"><span class="cc-eta" style="color:#D69E2E;">2:30</span><span class="cc-fare">—</span></div><div class="cc-btn">Assign driver</div></div>
+                    <div class="c-card"><div class="cc-id">R-1852</div><div class="cc-rider">Tom B.</div><div class="cc-driver">→ Hospital</div><div class="cc-meta"><span class="cc-eta" style="color:#D69E2E;">1:15</span><span class="cc-fare">—</span></div><div class="cc-btn">Assign driver</div></div>
+                  </div>
+                </div>
+
+                <div class="c-col">
+                  <div class="c-col-header"><div class="col-dot" style="background:#63b3ed;"></div><div class="col-name">Matched</div><div class="col-count">4</div></div>
+                  <div class="c-col-body">
+                    <div class="c-card"><div class="cc-id">R-1848</div><div class="cc-rider">James K.</div><div class="cc-driver">Marcus T. ★4.7</div><div class="cc-meta"><span class="cc-eta">12 min</span><span class="cc-fare">$34</span></div></div>
+                    <div class="c-card"><div class="cc-id">R-1854</div><div class="cc-rider">Lisa P.</div><div class="cc-driver">Steve M. ★4.8</div><div class="cc-meta"><span class="cc-eta">6 min</span><span class="cc-fare">$15</span></div></div>
+                    <div class="c-card"><div class="cc-id">R-1858</div><div class="cc-rider">Grace T.</div><div class="cc-driver">Paul R. ★4.7</div><div class="cc-meta"><span class="cc-eta">9 min</span><span class="cc-fare">$19</span></div></div>
+                  </div>
+                </div>
+
+                <div class="c-col">
+                  <div class="c-col-header"><div class="col-dot" style="background:#38A169;"></div><div class="col-name">In Trip</div><div class="col-count">11</div></div>
+                  <div class="c-col-body">
+                    <div class="c-card"><div class="cc-id">R-1847</div><div class="cc-rider">Sarah M.</div><div class="cc-driver">Alex J. ★4.9</div><div class="cc-meta"><span class="cc-eta">8 min</span><span class="cc-fare">$18</span></div></div>
+                    <div class="c-card"><div class="cc-id">R-1850</div><div class="cc-rider">David L.</div><div class="cc-driver">Sandra K. ★4.8</div><div class="cc-meta"><span class="cc-eta" style="color:#38A169;">3 min</span><span class="cc-fare">$10</span></div></div>
+                    <div class="c-card"><div class="cc-id">R-1853</div><div class="cc-rider">Chen W.</div><div class="cc-driver">Pat N. ★4.9</div><div class="cc-meta"><span class="cc-eta">14 min</span><span class="cc-fare">$22</span></div></div>
+                    <div class="c-card"><div class="cc-id">R-1855</div><div class="cc-rider">Mike D.</div><div class="cc-driver">Kim L. ★4.7</div><div class="cc-meta"><span class="cc-eta">5 min</span><span class="cc-fare">$16</span></div></div>
+                    <div style="font-size:8px;color:#4a5568;text-align:center;padding:4px;">+ 7 more</div>
+                  </div>
+                </div>
+
+                <div class="c-col">
+                  <div class="c-col-header"><div class="col-dot" style="background:#d6bcfa;"></div><div class="col-name">Arrived</div><div class="col-count">2</div></div>
+                  <div class="c-col-body">
+                    <div class="c-card"><div class="cc-id">R-1851</div><div class="cc-rider">Maria G.</div><div class="cc-driver">James W. ★4.6</div><div class="cc-meta"><span class="cc-eta" style="color:#d6bcfa;">OTP</span><span class="cc-fare">$11</span></div><div class="cc-otp">OTP: 7 4 2 1</div></div>
+                    <div class="c-card"><div class="cc-id">R-1860</div><div class="cc-rider">Peter H.</div><div class="cc-driver">Dana F. ★4.8</div><div class="cc-meta"><span class="cc-eta" style="color:#d6bcfa;">OTP</span><span class="cc-fare">$13</span></div></div>
+                  </div>
+                </div>
+
+                <div class="c-col">
+                  <div class="c-col-header"><div class="col-dot" style="background:#68D391;"></div><div class="col-name">Completing</div><div class="col-count">1</div></div>
+                  <div class="c-col-body">
+                    <div class="c-card"><div class="cc-id">R-1843</div><div class="cc-rider">Helen B.</div><div class="cc-driver">Carl V. ★4.9</div><div class="cc-meta"><span class="cc-eta" style="color:#68D391;">Done</span><span class="cc-fare">$28</span></div></div>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+            <div class="c-right">
+              <div class="c-map-panel">
+                <svg viewBox="0 0 162 490" xmlns="http://www.w3.org/2000/svg">
+                  <rect width="162" height="490" fill="#1a1e2d"/>
+                  <path d="M 0 245 L 162 245" stroke="#2d3748" stroke-width="5"/>
+                  <path d="M 81 0 L 81 490" stroke="#2d3748" stroke-width="5"/>
+                  <path d="M 0 163 L 162 163" stroke="#2d3748" stroke-width="3"/>
+                  <path d="M 0 327 L 162 327" stroke="#2d3748" stroke-width="3"/>
+                  <path d="M 54 0 L 54 490" stroke="#2d3748" stroke-width="3"/>
+                  <path d="M 108 0 L 108 490" stroke="#2d3748" stroke-width="3"/>
+                  <!-- In trip green -->
+                  <circle cx="93" cy="215" r="5" fill="#38A169"/>
+                  <circle cx="135" cy="295" r="4" fill="#38A169"/>
+                  <circle cx="50" cy="168" r="4" fill="#38A169"/>
+                  <circle cx="115" cy="380" r="4" fill="#38A169"/>
+                  <circle cx="26" cy="278" r="4" fill="#38A169"/>
+                  <circle cx="143" cy="200" r="4" fill="#38A169"/>
+                  <circle cx="70" cy="390" r="4" fill="#38A169"/>
+                  <circle cx="22" cy="184" r="4" fill="#38A169"/>
+                  <circle cx="120" cy="130" r="4" fill="#38A169"/>
+                  <circle cx="78" cy="440" r="4" fill="#38A169"/>
+                  <circle cx="148" cy="350" r="4" fill="#38A169"/>
+                  <!-- Matched blue -->
+                  <circle cx="111" cy="163" r="5" fill="#63b3ed"/>
+                  <circle cx="37" cy="122" r="5" fill="#63b3ed"/>
+                  <circle cx="148" cy="408" r="5" fill="#63b3ed"/>
+                  <circle cx="60" cy="310" r="4" fill="#63b3ed"/>
+                  <!-- Searching gold -->
+                  <circle cx="81" cy="245" r="6" fill="#D69E2E"/>
+                  <circle cx="81" cy="245" r="3" fill="#000"/>
+                  <circle cx="54" cy="163" r="6" fill="#D69E2E"/>
+                  <circle cx="54" cy="163" r="3" fill="#000"/>
+                  <!-- Arrived purple -->
+                  <circle cx="26" cy="380" r="5" fill="#d6bcfa"/>
+                  <circle cx="140" cy="72" r="5" fill="#d6bcfa"/>
+                </svg>
+              </div>
+              <div class="c-right-stats">
+                <div class="rs-row"><span>Avg wait time</span><span class="rs-val gold">1:52</span></div>
+                <div class="rs-row"><span>Match rate</span><span class="rs-val green">90%</span></div>
+                <div class="rs-row"><span>Surge active</span><span class="rs-val">None</span></div>
+                <div class="rs-row"><span>Drivers avail.</span><span class="rs-val green">18</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- C Stage 2 — Alert -->
+        <div class="panel" id="c-stage-2">
+          <div class="admin-topbar">
+            <div class="logo"><div class="spinr-mark">S</div><div><span>Spinr</span><br><small>Admin</small></div></div>
+            <div class="nav-items">
+              <div class="nav-item active">Live</div>
+              <div class="nav-item">Drivers</div>
+              <div class="nav-item">Analytics</div>
+            </div>
+            <div class="right">
+              <div class="alert-bell"><span style="font-size:12px;">🔔</span><div class="badge">2</div></div>
+              <div class="user-chip">Dispatch ▸</div>
+            </div>
+          </div>
+          <div class="alert-banner">
+            <div class="a-dot"></div>
+            <div class="a-text"><strong>R-1855 SOS</strong> · Mike D. + Kim L. · 1:42 elapsed · South Park</div>
+            <div class="a-act">Respond</div>
+          </div>
+          <div class="alert-banner" style="background:#1a0f00;border-color:#D69E2E;">
+            <div class="a-dot" style="background:#D69E2E;"></div>
+            <div class="a-text" style="color:#F6E05E;"><strong>R-1852 Timeout</strong> · Tom B. → Hospital · 4m12s · No drivers nearby</div>
+            <div class="a-act" style="background:#D69E2E;color:#000;">Assign</div>
+          </div>
+          <div class="stats-bar">
+            <div class="stat-cell"><div class="s-val green">20</div><div class="s-lbl">Active Rides</div></div>
+            <div class="stat-cell"><div class="s-val gold">1</div><div class="s-lbl">Searching</div></div>
+            <div class="stat-cell"><div class="s-val">14</div><div class="s-lbl">In Progress</div></div>
+            <div class="stat-cell"><div class="s-val">38</div><div class="s-lbl">Drivers Online</div></div>
+            <div class="stat-cell"><div class="s-val red">2</div><div class="s-lbl">⚠ Alerts</div></div>
+          </div>
+          <div class="c-body">
+            <div class="c-board">
+              <div class="c-board-header" style="color:#fc8181;">⚡ 2 Alerts require action</div>
+              <div class="c-columns">
+
+                <div class="c-col" style="border-right-color:#742a2a;">
+                  <div class="c-col-header" style="background:#1a0505;border-bottom-color:#742a2a;"><div class="col-dot" style="background:#E53E3E;animation:blink 0.8s infinite;"></div><div class="col-name" style="color:#fc8181;">Alerts</div><div class="col-count alert">2</div></div>
+                  <div class="c-col-body">
+                    <div class="c-card alert-sos"><div class="cc-id" style="color:#fc8181;">R-1855 ⚡ SOS</div><div class="cc-rider">Mike D.</div><div class="cc-driver" style="color:#E53E3E;">Kim L. · in trip</div><div class="cc-timer">1:42 elapsed</div><div class="cc-btn">Respond now</div></div>
+                    <div class="c-card alert"><div class="cc-id" style="color:#F6E05E;">R-1852 ⚠</div><div class="cc-rider">Tom B.</div><div class="cc-driver">→ Hospital · no driver</div><div class="cc-timer" style="color:#D69E2E;">4m12s wait</div><div class="cc-btn" style="background:#1a1400;border-color:#744210;color:#D69E2E;">Assign driver</div></div>
+                  </div>
+                </div>
+
+                <div class="c-col">
+                  <div class="c-col-header"><div class="col-dot" style="background:#D69E2E;"></div><div class="col-name">Searching</div><div class="col-count">1</div></div>
+                  <div class="c-col-body">
+                    <div class="c-card"><div class="cc-id">R-1849</div><div class="cc-rider">Emma R.</div><div class="cc-driver">→ University</div><div class="cc-meta"><span class="cc-eta" style="color:#D69E2E;">2:30</span><span class="cc-fare">—</span></div></div>
+                  </div>
+                </div>
+
+                <div class="c-col">
+                  <div class="c-col-header"><div class="col-dot" style="background:#63b3ed;"></div><div class="col-name">Matched</div><div class="col-count">4</div></div>
+                  <div class="c-col-body">
+                    <div class="c-card"><div class="cc-id">R-1848</div><div class="cc-rider">James K.</div><div class="cc-driver">Marcus T. ★4.7</div><div class="cc-meta"><span class="cc-eta">12 min</span><span class="cc-fare">$34</span></div></div>
+                    <div class="c-card"><div class="cc-id">R-1854</div><div class="cc-rider">Lisa P.</div><div class="cc-driver">Steve M. ★4.8</div><div class="cc-meta"><span class="cc-eta">6 min</span><span class="cc-fare">$15</span></div></div>
+                  </div>
+                </div>
+
+                <div class="c-col">
+                  <div class="c-col-header"><div class="col-dot" style="background:#38A169;"></div><div class="col-name">In Trip</div><div class="col-count">11</div></div>
+                  <div class="c-col-body">
+                    <div class="c-card"><div class="cc-id">R-1847</div><div class="cc-rider">Sarah M.</div><div class="cc-driver">Alex J. ★4.9</div><div class="cc-meta"><span class="cc-eta">8 min</span><span class="cc-fare">$18</span></div></div>
+                    <div class="c-card"><div class="cc-id">R-1850</div><div class="cc-rider">David L.</div><div class="cc-driver">Sandra K. ★4.8</div><div class="cc-meta"><span class="cc-eta" style="color:#38A169;">3 min</span><span class="cc-fare">$10</span></div></div>
+                    <div style="font-size:8px;color:#4a5568;text-align:center;padding:4px;">+ 9 more</div>
+                  </div>
+                </div>
+
+                <div class="c-col">
+                  <div class="c-col-header"><div class="col-dot" style="background:#d6bcfa;"></div><div class="col-name">Arrived</div><div class="col-count">2</div></div>
+                  <div class="c-col-body">
+                    <div class="c-card"><div class="cc-id">R-1851</div><div class="cc-rider">Maria G.</div><div class="cc-driver">James W. ★4.6</div><div class="cc-otp">OTP: 7 4 2 1</div></div>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+            <div class="c-right">
+              <div class="c-map-panel">
+                <svg viewBox="0 0 162 490" xmlns="http://www.w3.org/2000/svg">
+                  <rect width="162" height="490" fill="#1a1e2d"/>
+                  <path d="M 0 245 L 162 245" stroke="#2d3748" stroke-width="5"/>
+                  <path d="M 81 0 L 81 490" stroke="#2d3748" stroke-width="5"/>
+                  <path d="M 0 163 L 162 163" stroke="#2d3748" stroke-width="3"/>
+                  <path d="M 0 327 L 162 327" stroke="#2d3748" stroke-width="3"/>
+                  <path d="M 54 0 L 54 490" stroke="#2d3748" stroke-width="3"/>
+                  <path d="M 108 0 L 108 490" stroke="#2d3748" stroke-width="3"/>
+                  <!-- SOS pulsing -->
+                  <circle cx="100" cy="265" r="14" fill="#E53E3E" opacity="0.1"/>
+                  <circle cx="100" cy="265" r="8" fill="#E53E3E"/>
+                  <circle cx="100" cy="265" r="3" fill="#fff"/>
+                  <text x="86" y="254" font-size="7" fill="#fc8181" font-weight="bold">SOS</text>
+                  <!-- Timeout -->
+                  <circle cx="54" cy="163" r="7" fill="#D69E2E"/>
+                  <circle cx="54" cy="163" r="3" fill="#000"/>
+                  <!-- Normal (dim) -->
+                  <circle cx="93" cy="215" r="4" fill="#38A169" opacity="0.4"/>
+                  <circle cx="135" cy="295" r="3" fill="#38A169" opacity="0.4"/>
+                  <circle cx="50" cy="168" r="3" fill="#38A169" opacity="0.4"/>
+                  <circle cx="115" cy="380" r="3" fill="#38A169" opacity="0.4"/>
+                  <circle cx="26" cy="278" r="3" fill="#38A169" opacity="0.4"/>
+                  <circle cx="143" cy="200" r="3" fill="#38A169" opacity="0.4"/>
+                  <circle cx="70" cy="390" r="3" fill="#38A169" opacity="0.4"/>
+                  <circle cx="111" cy="163" r="4" fill="#63b3ed" opacity="0.4"/>
+                  <circle cx="37" cy="122" r="4" fill="#63b3ed" opacity="0.4"/>
+                </svg>
+              </div>
+              <div class="c-right-stats">
+                <div class="rs-row"><span style="color:#fc8181;">⚡ SOS active</span><span class="rs-val red">1:42</span></div>
+                <div class="rs-row"><span style="color:#D69E2E;">⚠ Dispatch fail</span><span class="rs-val gold">4:12</span></div>
+                <div class="rs-row"><span>Match rate</span><span class="rs-val gold">85%</span></div>
+                <div class="rs-row"><span>Drivers avail.</span><span class="rs-val green">18</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Notes -->
+<div class="notes-row">
+  <div class="note-card">
+    <h3>A — Map-Dominant</h3>
+    <p><strong>Model:</strong> Spatial situational awareness first. Dispatcher sees where all 20 rides are geographically. Sidebar list acts as secondary index.</p>
+    <p><strong>Strength:</strong> Excellent for spotting geographic clustering (supply gap in north end), surge prediction, and driver availability by zone.</p>
+    <p><strong>Weakness:</strong> Alert escalation gets lost. In alert state, 2 red dots on a map of 20 are easy to miss. Urgent action requires too much scanning. The sidebar must be scrolled to find the right ride.</p>
+  </div>
+  <div class="note-card">
+    <h3>B — Table-First</h3>
+    <p><strong>Model:</strong> Operational efficiency through sortable data. Dispatcher filters to alerts, acts immediately. Mini-map provides spatial context without dominating.</p>
+    <p><strong>Strength:</strong> Best for dispatchers who think in "queue management" — process items in order, mark done, move on. Alert filter zeroes in immediately.</p>
+    <p><strong>Weakness:</strong> In normal state, 20 rows of identical-density data creates uniformity fatigue. Important patterns (long dispatch wait, clustering) aren't visible without active filtering. UI doesn't teach the dispatcher what to look for — reactive, not proactive.</p>
+  </div>
+  <div class="note-card">
+    <h3>C — Triage Board ★</h3>
+    <p><strong>Model:</strong> State-column Kanban. Each ride lives in exactly one column that matches its operational state. The dispatcher's attention flows left-to-right: alerts → searching → matched → in trip → arrived.</p>
+    <p><strong>Strength:</strong> In normal state, the board teaches normal — healthy rides fill the "In Trip" column, sparse "Searching" means good supply. In alert state, a new "Alerts" column materializes at the far left, making the problem spatially impossible to miss. "Searching" column card timers naturally surface oldest waits without filtering.</p>
+    <p><strong>Key insight:</strong> The board communicates system health at a glance via column density — a "Searching" column with 6 cards is visually alarming before any alert fires. This enables <strong>proactive dispatch</strong>, not just reactive incident response.</p>
+    <p><strong>Right panel:</strong> Mini-map + live KPIs (avg wait, match rate, surge status, drivers available) gives operational context without competing with the action surface.</p>
+  </div>
+</div>
+
+<script>
+  var currentStage = '1';
+
+  function setVariant(v, btn) {
+    document.querySelectorAll('.toolbar button').forEach(function(b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+  }
+
+  function setStage(s, btn) {
+    currentStage = s;
+    document.querySelectorAll('.stage-bar button').forEach(function(b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    document.querySelectorAll('.panel').forEach(function(p) { p.classList.remove('visible'); });
+    ['a','b','c'].forEach(function(v) {
+      var el = document.getElementById(v + '-stage-' + currentStage);
+      if (el) el.classList.add('visible');
+    });
+  }
+</script>
+</body>
+</html>

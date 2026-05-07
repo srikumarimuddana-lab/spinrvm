@@ -77,7 +77,7 @@ export default function LoginScreen() {
     const formattedNumber = `+1${phoneNumber.replace(/\D/g, '')}`;
 
     try {
-      const response = await api.post('/auth/send-otp', { phone: formattedNumber });
+      const response = await api.post<{ success?: boolean }>('/auth/send-otp', { phone: formattedNumber });
       if (response.data.success) {
         router.push({
           pathname: '/otp',

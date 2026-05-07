@@ -20,16 +20,25 @@
     "./store/locationStore": "./store/locationStore.ts",
     "./services/firebase": "./services/firebase.ts",
     "./utils/logger": "./utils/logger.ts",
+    "./utils/pii": "./utils/pii.ts",
     "./utils/responsive": "./utils/responsive.ts",
     "./cache": "./cache/index.ts",
     "./types": "./types/index.ts",
     "./types/*": "./types/*",
     "./components/*": "./components/*"
   },
+  "scripts": {
+    "build": "tsc --project tsconfig.build.json",
+    "build:watch": "tsc --project tsconfig.build.json --watch",
+    "typecheck": "tsc --noEmit"
+  },
   "dependencies": {
-    "@react-native-community/netinfo": "^12.0.1"
+    "@react-native-community/netinfo": "^11.5.2"
   },
   "devDependencies": {
-    "@types/node": "^25.6.0"
+    "@types/node": "^20.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-native": "^0.73.0",
+    "typescript": "~5.9.2"
   }
 }

@@ -113,7 +113,10 @@ export function SOSButton({ rideId, onTrigger, size = 'small' }: SOSButtonProps)
       const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
       lat = loc.coords.latitude;
       lng = loc.coords.longitude;
-    } catch {}
+    } catch (locationErr) {
+      console.warn('[SOS] Location fetch failed — proceeding without coordinates:',
+        locationErr instanceof Error ? locationErr.message : String(locationErr));
+    }
 
     // Attempt backend call with one retry before declaring failure.
     // Never treat missing rideId as success — that would show "Alert Sent"
@@ -200,12 +203,12 @@ export function SOSButton({ rideId, onTrigger, size = 'small' }: SOSButtonProps)
             : 'Emergency SOS'
         }
         accessibilityRole="button"
-        accessibilityHint={
-          failed
-            ? 'Tap to retry sending the emergency alert'
-            : 'Hold for 1.2 seconds to send an emergency alert'
-        }
-        accessibilityState={{ selected: triggered, busy: sending }}
+        accessibilityHint={failed ? "Alert failed — double tap to retry" : triggered ? "Alert sent" : "Double tap to send SOS alert"}
+        accessibilityState={{
+          selected: triggered,
+          busy: sending,
+          disabled: sending,
+        }}
       >
         <Ionicons name={iconName} size={isLarge ? 28 : 20} color="#FFF" />
         {isLarge && <Text style={styles.btnText}>{labelText}</Text>}

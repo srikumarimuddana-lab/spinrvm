@@ -39,7 +39,6 @@ These advisory CI gates must be flipped to **blocking** before production. They 
 | OI-004 | HIGH | `security-gates.yml` | `eslint-security` (JS SAST) | 55, 70 | Set `continue-on-error: false` |
 | OI-005 | HIGH | `security-gates.yml` | `semgrep` | 90 | Set `continue-on-error: false` |
 | OI-006 | HIGH | `security-gates.yml` | `pip-audit` | 115 | Set `continue-on-error: false` |
-| OI-007 | MEDIUM | `ci-guardrails.yml` | Multiple jobs | 31, 49, 124, 200, 325, 543 | Review per-job; flip security-relevant ones to blocking |
 | OI-008 | LOW | `claude-review.yml` | `review` | 47 | Keep `continue-on-error: true` — advisory by design |
 
 **Note**: OI-003 through OI-006 are Phase 5 SEC-1 work. Do not flip them before device testing (Phase 3) completes — some scans produce noisy findings that need triage before becoming hard blocks.
@@ -76,6 +75,7 @@ These advisory CI gates must be flipped to **blocking** before production. They 
 | B-P2-8 | MEDIUM | Docker base images unpinned — `backend/Dockerfile` | PR in P0 sprint | 2026-04-29 |
 | Q-5 | MEDIUM | Root `Dockerfile` unpinned (dev/CI image) | This session | 2026-05-02 |
 | Q-2 | MEDIUM | `any` types in `shared/services/firebase.ts` and `shared/config/firebaseConfig.ts` | This session | 2026-05-02 |
+| OI-007 | MEDIUM | `ci-guardrails.yml` jobs reviewed per-job: `migration-safety-gate` (line 325) flipped to `continue-on-error: false` (safety-critical; PR #166 slot-collision regression). `coverage-regression-gate` (line 31), `lint-trend-gate` (line 124), and `breaking-change-gate` (line 543) intentionally kept `continue-on-error: true` (advisory by design). | branch `claude/audit-expo-dependencies-Jt8BL` | 2026-05-06 |
 
 ---
 
@@ -93,7 +93,7 @@ Before production, all of the following must be true:
 - [ ] OI-001 resolved (driver card accessibility)
 - [ ] OI-002 resolved (close button aria-label)
 - [ ] OI-003 through OI-006 flipped to blocking in `security-gates.yml`
-- [ ] OI-007 jobs reviewed and appropriate ones made blocking
+- [x] OI-007 jobs reviewed and appropriate ones made blocking (migration-safety-gate flipped; others remain advisory)
 - [ ] pip-audit run against `requirements-locked.txt` — 0 HIGH/CRITICAL
 - [ ] yarn audit run in rider-app and driver-app — 0 HIGH/CRITICAL
 - [ ] All findings opened during Phase 3 device testing resolved or downgraded

@@ -70,7 +70,7 @@ class TestSOSRiderTrigger:
         ):
             result = await rides_mod.trigger_emergency(
                 ride_id=RIDE_ID,
-                request=_sos_request(),
+                body=_sos_request(),
                 current_user={"id": RIDER_ID},
             )
 
@@ -97,7 +97,7 @@ class TestSOSRiderTrigger:
         ):
             await rides_mod.trigger_emergency(
                 ride_id=RIDE_ID,
-                request=_sos_request(),
+                body=_sos_request(),
                 current_user={"id": RIDER_ID},
             )
 
@@ -120,7 +120,7 @@ class TestSOSRiderTrigger:
         ):
             await rides_mod.trigger_emergency(
                 ride_id=RIDE_ID,
-                request=_sos_request(lat=52.1333, lng=-106.6700),
+                body=_sos_request(lat=52.1333, lng=-106.6700),
                 current_user={"id": RIDER_ID},
             )
 
@@ -150,7 +150,7 @@ class TestSOSDriverTrigger:
         ):
             await rides_mod.trigger_emergency(
                 ride_id=RIDE_ID,
-                request=_sos_request(),
+                body=_sos_request(),
                 current_user={"id": DRIVER_USER_ID},
             )
 
@@ -179,7 +179,7 @@ class TestSOSAuthGuards:
             with pytest.raises(HTTPException) as exc:
                 await rides_mod.trigger_emergency(
                     ride_id=RIDE_ID,
-                    request=_sos_request(),
+                    body=_sos_request(),
                     current_user={"id": "stranger_user"},
                 )
 
@@ -194,7 +194,7 @@ class TestSOSAuthGuards:
             with pytest.raises(HTTPException) as exc:
                 await rides_mod.trigger_emergency(
                     ride_id="nonexistent_ride",
-                    request=_sos_request(),
+                    body=_sos_request(),
                     current_user={"id": RIDER_ID},
                 )
 
@@ -224,7 +224,7 @@ class TestSOSBroadcastResiliency:
             # Must not raise even though broadcast failed
             result = await rides_mod.trigger_emergency(
                 ride_id=RIDE_ID,
-                request=_sos_request(),
+                body=_sos_request(),
                 current_user={"id": RIDER_ID},
             )
 

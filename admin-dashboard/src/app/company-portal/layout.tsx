@@ -14,7 +14,7 @@ export default function CompanyPortalRootLayout({
 
     useEffect(() => {
         if (!isLoading && !isAuthenticated) {
-            router.push("/login?next=/company-portal");
+            router.replace("/login?next=/company-portal");
         }
     }, [isAuthenticated, isLoading, router]);
 

@@ -8,6 +8,11 @@ Close all P0 security/safety findings across backend, admin, and rider surfaces 
 
 **Status (2026-04-27):** Sprint COMPLETE. All 6 P0s shipped. All P1/P2 candidates also shipped (B-P1-1 via #124, B-P1-5 via #124, B-P2-1 via #124, B-P2-2 via #124; B-P1-2 and B-P1-6 were already in-place). A-P0-3 GPS OOM fix (Postgres function + migration 54) shipped in #126. Sentry loguru bridge shipped in #126. logger.warning sweep on payment/dispatch/safety paths shipped in #127.
 
+**Status (2026-05-06):** Full audit sweep complete. All P0/P1/P2/P3/P4 actionable findings resolved.
+- PR #479 (merged): R-P2-30/31/33/43/44/45/46, B-P1-10, B-P2-1, R-P2-14, TASK-4-1, admin-07-1, B-P1-9
+- PR #484 (merged): P4-7 T4A annual issuance background job (CRA Feb 28 deadline), 12 unit tests
+- Remaining non-blockers: P3-4 coverage gap (2 pp), P4-5 E2E suite stabilising (non-blocking CI), rider-P4 roadmap items
+
 ## In-flight
 
 | Ticket | Owner | State | Notes |
@@ -88,6 +93,8 @@ None currently open in production (pre-launch).
 | #182 | **B-P2-8 partial** — `backend/Dockerfile` builder pinned to `python:3.12.9-slim` (was `3.12-slim` mutable tag); `docs/runbooks/docker-image-pinning.md` documents the SHA256 digest-pin procedure (manual step, requires `docker pull`). RO-root half noted as future host-migration item (Railway doesn't expose). |
 | #207 | **L-P1-4 + L-P1-2** — `gst_registered`/`gst_bn` T4A fields added (migration 58, `GET /drivers/me/t4a-summary`, CSV export); 10 unsafe `any` types tightened in `shared/store/authStore.ts`. Both next-sprint candidates now closed. |
 | #266 | **E2E regression suite** — Playwright specs for cancellation flow, payment guard (no double-charge), driver-cancel path, admin rides view, and SOS/emergency-alert (R-P0-1 regression). Covers the full ride lifecycle end-to-end. |
+| #313 | **B-P2-8 half 2 + L-P1-2 extended** — `backend/Dockerfile` both `FROM` lines pinned to `python:3.12.9-slim@sha256:48a11b7...` (bit-for-bit reproducible builds); `any` → `unknown` across `shared/api/client.ts`, `cachedClient.ts`, `offlineQueue.ts`, `upload.ts`, `locationStore.ts`; E2E CI `BACKEND_URL` fix. |
+| #551 | **Any-type sweep — stores** (in review) — 68 `any` occurrences eliminated across `rideStore.ts` (27), `driverStore.ts` (13), `walletStore.ts` (10), `documentStore.ts` (6), `questStore.ts` (4), `workProfileStore.ts` (3), `firebase.ts` (1). New interfaces: `Promo`, `ChatMessage`, `CompletedRideData`, `RideHistoryItem`, `AllowanceRequest`, `RNFileDescriptor`. |
 
 ## Lessons learned (2026-04-28 incident)
 
@@ -103,7 +110,7 @@ PRs #138 and #141 both used migration slot 56 to `CREATE OR REPLACE` the same Po
 - ~~**L-P0-3 WAV dispatch**~~ — shipped PR #240 (merged 2026-04-29); migrations 60 + 61; `is_wav` on drivers, `requires_wav` on rides; WAV-only dispatch matching. Saskatchewan Transportation Act accessibility mandate now satisfied.
 - ~~**L-P1-2 authStore.ts**~~ — shipped in #207 (2026-04-28): 10 `any` types tightened in `shared/store/authStore.ts`.
 - ~~**L-P1-4 earnings GST/BN**~~ — shipped in #207 (2026-04-28): `gst_registered`/`gst_bn` fields added via migration 58 + `GET /drivers/me/t4a-summary` updated.
-- **Dockerfile SHA256 digest pin** (B-P2-8 second half): manual step, follow `docs/runbooks/docker-image-pinning.md`. Quarterly cadence.
+- ~~**Dockerfile SHA256 digest pin** (B-P2-8 second half)~~ — shipped #313 (2026-05-06): both `FROM python:3.12.9-slim` lines pinned to `@sha256:48a11b7...`. Refresh quarterly per `docs/runbooks/docker-image-pinning.md`.
 - **Read-only-root-filesystem** (B-P2-8 third half): host migration off Railway (Fly.io / K8s / ECS); not gating launch.
 - ~~**CI enhancement: cross-PR migration target check**~~ — shipped (PR in flight on `claude/ci-error-audit-system-HPjKP`): new step in `migration-safety-gate` scans new `.sql` files for `CREATE OR REPLACE` targets and cross-checks against all existing migrations; annotate with `-- migration-override-ok: reason` to suppress.
 

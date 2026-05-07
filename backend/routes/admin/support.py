@@ -1,6 +1,7 @@
 import logging
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -129,17 +130,17 @@ async def admin_get_dispute_stats():
         }
 
     counts = {"open": 0, "under_review": 0, "resolved": 0, "rejected": 0}
-    total_refunded = 0.0
+    total_refunded = Decimal(0)
     for d in rows or []:
         s = d.get("status")
         if s in counts:
             counts[s] += 1
         if s == "resolved":
             try:
-                total_refunded += float(d.get("refund_amount") or 0)
+                total_refunded += Decimal(str(d.get("refund_amount") or 0))
             except (TypeError, ValueError):
                 pass
-    return {**counts, "total_refunded": round(total_refunded, 2)}
+    return {**counts, "total_refunded": float(round(total_refunded, 2))}
 
 
 @router.post("/disputes")

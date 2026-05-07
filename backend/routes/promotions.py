@@ -9,7 +9,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 try:
     from .. import db_supabase
@@ -36,7 +36,8 @@ api_router = APIRouter(prefix="/promo", tags=["Promotions"])
 
 class ValidatePromoRequest(BaseModel):
     code: str
-    ride_fare: Decimal = Decimal("0.00")  # Decimal for currency precision
+    ride_fare: Decimal = Decimal("0.00")  # Decimal for currency precision; ignored when ride_id is provided
+    ride_id: Optional[str] = None  # When set, fare is fetched server-side (R-P2-33)
 
 
 class ApplyPromoRequest(BaseModel):
@@ -55,11 +56,12 @@ class CreatePromoCodeRequest(BaseModel):
     is_active: bool = True
     description: Optional[str] = None
 
-    @validator("discount_value")
-    def validate_discount_value(cls, v, values):
-        if values.get("discount_type") == "percentage" and v > 100:
+    @field_validator("discount_value")
+    @classmethod
+    def validate_discount_value(cls, value, info):
+        if info.data.get("discount_type") == "percentage" and value > 100:
             raise ValueError("Percentage discount cannot exceed 100")
-        return v
+        return value
 
 
 class UpdatePromoCodeRequest(BaseModel):
@@ -127,10 +129,20 @@ async def validate_promo(
                 status_code=400, detail="You have already used this promo code the maximum number of times"
             )
 
-    # 4. Minimum ride fare
+    # 4. Minimum ride fare — use server-fetched fare when ride_id is provided (R-P2-33)
     min_fare = promo.get("min_ride_fare", 0)
-    if min_fare > 0 and req.ride_fare < min_fare:
-        raise HTTPException(status_code=400, detail=f"Minimum ride fare of ${min_fare:.2f} required for this promo")
+    if min_fare > 0:
+        if req.ride_id:
+            ride_rows = await db_supabase.get_rows(
+                "rides", {"id": req.ride_id, "rider_id": current_user["id"]}, limit=1
+            )
+            if not ride_rows:
+                raise HTTPException(status_code=404, detail="Ride not found")
+            effective_fare = Decimal(str(ride_rows[0].get("total_fare") or "0"))
+        else:
+            effective_fare = req.ride_fare
+        if effective_fare < min_fare:
+            raise HTTPException(status_code=400, detail=f"Minimum ride fare of ${min_fare:.2f} required for this promo")
 
     # 5. Private coupon — assigned to specific users only
     assigned_users = promo.get("assigned_user_ids", [])

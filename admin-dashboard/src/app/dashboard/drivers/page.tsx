@@ -540,7 +540,7 @@ export default function DriversPage() {
                                             <Button variant="ghost" size="sm" onClick={() => setEditing(false)} disabled={saving}>Cancel</Button>
                                             <Button size="sm" onClick={saveEdits} disabled={saving} className="bg-emerald-600 hover:bg-emerald-700 text-white">{saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />} Save</Button>
                                         </>)}
-                                        <Button variant="ghost" size="icon-sm" onClick={() => { setSelected(null); setEditing(false); }}><X className="h-4 w-4" /></Button>
+                                        <Button variant="ghost" size="icon-sm" aria-label="Close" onClick={() => { setSelected(null); setEditing(false); }}><X className="h-4 w-4" /></Button>
                                     </div>
                                 </div>
                                 <div className="grid grid-cols-4 gap-3 mt-5">

@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -41,7 +41,7 @@ def _promo(max_uses: int = 5, uses: int = 0, **extra) -> dict:
         "max_uses": max_uses,
         "uses": uses,
         "max_uses_per_user": 1,
-        "expiry_date": (datetime.utcnow() + timedelta(days=30)).isoformat(),
+        "expiry_date": (datetime.now(timezone.utc) + timedelta(days=30)).isoformat(),
         "assigned_user_ids": [],
         "first_ride_only": False,
         "new_user_days": 0,

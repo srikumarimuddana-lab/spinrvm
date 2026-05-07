@@ -429,7 +429,8 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
         {/* ── Cancel link (pickup phases only) ────────────── */}
         {(rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup') ? (
           <TouchableOpacity
-            style={styles.cancelBtn}
+            style={[styles.cancelBtn, isLoading && { opacity: 0.4 }]}
+            disabled={isLoading}
             onPress={() => showAlert(
               t('activeRide.cancelRide'),
               t('activeRide.cancelRideWarning'),

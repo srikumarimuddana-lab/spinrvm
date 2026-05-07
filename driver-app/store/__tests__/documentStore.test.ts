@@ -149,8 +149,7 @@ describe('documentStore — uploadDocument', () => {
 
         expect(mockPost).toHaveBeenCalledWith(
             '/drivers/documents/upload',
-            expect.any(FormData),
-            expect.objectContaining({ headers: { 'Content-Type': undefined } })
+            expect.any(FormData)
         );
         expect(result).toEqual(newDoc);
         expect(useDocumentStore.getState().documents).toContainEqual(newDoc);

@@ -384,7 +384,7 @@ export default function RideStatusScreen() {
                 <Text style={styles.devLabel}>DEV: {currentRide.status}</Text>
                 {currentRide.status === 'searching' && (
                   <TouchableOpacity style={styles.devBtn} onPress={async () => {
-                    try { await simulateDriverArrival(); } catch {}
+                    try { await simulateDriverArrival(); } catch (err) { console.error('[ride-status]', err); }
                     if (rideId) fetchRide(rideId);
                   }}>
                     <Text style={styles.devBtnText}>Assign Driver</Text>
@@ -392,7 +392,7 @@ export default function RideStatusScreen() {
                 )}
                 {(currentRide.status === 'driver_assigned' || currentRide.status === 'driver_accepted') && (
                   <TouchableOpacity style={styles.devBtn} onPress={async () => {
-                    try { await api.post(`/drivers/rides/${currentRide.id}/arrive`); } catch {}
+                    try { await api.post(`/drivers/rides/${currentRide.id}/arrive`); } catch (err) { console.error('[ride-status]', err); }
                     if (rideId) fetchRide(rideId);
                   }}>
                     <Text style={styles.devBtnText}>Arrive at Pickup</Text>

@@ -6,6 +6,7 @@ Provides aggregated operational intelligence for the admin dashboard.
 import logging
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -162,6 +163,7 @@ async def get_driver_acceptance_rates(
             )
         except Exception as e:
             logger.error(f"Failed to fetch rides for acceptance stats: {e}", exc_info=True, extra={"domain": "admin"})
+            raise HTTPException(status_code=503, detail="analytics_unavailable") from e
 
     users_list: list = []
     if user_ids:
@@ -169,6 +171,7 @@ async def get_driver_acceptance_rates(
             users_list = await db.get_rows("users", {"id": {"$in": user_ids}}, limit=len(user_ids))
         except Exception as e:
             logger.error(f"Failed to fetch users for acceptance stats: {e}", exc_info=True, extra={"domain": "admin"})
+            raise HTTPException(status_code=503, detail="analytics_unavailable") from e
 
     rides_by_driver: dict = {}
     for r in all_rides:
@@ -274,8 +277,12 @@ async def get_analytics_overview(
     completion_rate = round(completed / total * 100, 1) if total > 0 else 0
     cancellation_rate = round(cancelled / total * 100, 1) if total > 0 else 0
 
-    total_revenue = sum(float(r.get("total_fare") or 0) for r in period_rides if r.get("status") == "completed")
-    total_tips = sum(float(r.get("tip_amount") or 0) for r in period_rides if r.get("status") == "completed")
+    total_revenue = float(
+        sum(Decimal(str(r.get("total_fare") or 0)) for r in period_rides if r.get("status") == "completed")
+    )
+    total_tips = float(
+        sum(Decimal(str(r.get("tip_amount") or 0)) for r in period_rides if r.get("status") == "completed")
+    )
     avg_fare = round(total_revenue / completed, 2) if completed > 0 else 0
 
     # Daily ride counts for chart

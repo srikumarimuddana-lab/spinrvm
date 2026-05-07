@@ -85,7 +85,7 @@ export const CACHE_KEYS = {
 
 // Main cache class
 class AppCache {
-    private memoryCache: Map<string, { data: any; expiry: number }> = new Map();
+    private memoryCache: Map<string, { data: unknown; expiry: number }> = new Map();
 
     /**
      * Get data from cache

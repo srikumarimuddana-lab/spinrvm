@@ -70,6 +70,10 @@ async def _call_send_otp(db_settings_return=None, db_settings_raise=None):
         ),
         patch("backend.routes.auth.db_supabase.delete_many", AsyncMock()),
         patch("backend.routes.auth.db_supabase.insert_otp_record", AsyncMock()),
+        # Dev-OTP fallback is gated on ENV=development per the production-
+        # hardening note in routes/auth.py — pytest.ini defaults to ENV=test
+        # which (correctly) refuses the bypass, so patch it for these tests.
+        patch("backend.routes.auth.settings.ENV", "development"),
     ]
     for p in patches:
         p.start()
@@ -93,7 +97,9 @@ class TestSendOtpShadowingRegression:
         In test ENV, should fall back to dev OTP 123456 and return success."""
         result = asyncio.run(_call_send_otp(db_settings_return={}))
         assert result["success"] is True
-        assert PHONE in result["message"]
+        # Response masks phone as ***NNNN for PIPEDA compliance — never echo
+        # the full E.164 number back to the client.
+        assert PHONE[-4:] in result["message"]
 
     def test_db_returns_twilio_config_dict(self):
         """get_app_settings returns a dict WITH twilio creds — the code must
@@ -117,9 +123,12 @@ class TestSendOtpShadowingRegression:
         assert result["success"] is True
 
     def test_phone_is_normalized_in_response(self):
-        """Sanity check that the E.164 phone the user provided flows through."""
+        """Sanity check that the E.164 phone the user provided flows through —
+        only the last 4 digits should appear (PII masking)."""
         result = asyncio.run(_call_send_otp(db_settings_return={}))
-        assert PHONE in result["message"]
+        # Full number must NOT be echoed back; only the last-4 mask is allowed.
+        assert PHONE not in result["message"]
+        assert PHONE[-4:] in result["message"]
 
 
 class TestVerifyOtpLockoutHelpers:

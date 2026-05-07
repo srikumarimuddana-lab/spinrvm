@@ -15,7 +15,7 @@ Run:
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -48,7 +48,7 @@ def _ride(status: str) -> dict:
         "status": status,
         "pickup_address": "123 Main",
         "dropoff_address": "456 Broadway",
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
 

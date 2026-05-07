@@ -101,7 +101,7 @@ describe('driverStore — config + race handling', () => {
         pickup_lng: -104,
         dropoff_lat: 51,
         dropoff_lng: -105,
-        fare: 15,
+        fare: '15',
       });
 
       await useDriverStore.getState().acceptRide('ride-1');
@@ -158,7 +158,7 @@ describe('driverStore — config + race handling', () => {
         pickup_lng: -104,
         dropoff_lat: 51,
         dropoff_lng: -105,
-        fare: 15,
+        fare: '15',
       });
 
       expect(useDriverStore.getState().countdownSeconds).toBe(20);

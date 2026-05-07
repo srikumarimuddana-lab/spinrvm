@@ -68,8 +68,7 @@ function TaxDocumentsScreen() {
                 generated_at: null,
             }));
             setDocuments(synthesized);
-        } catch (err) {
-            console.log('Error fetching tax documents:', err);
+        } catch {
             showAlert('Error', 'Failed to load tax documents. Please try again.', 'danger');
         } finally {
             setLoading(false);
@@ -92,7 +91,7 @@ function TaxDocumentsScreen() {
 
             // T4A: fetch the per-year summary and either open the signed URL
             // (once the PDF generator ships) or display the summary inline.
-            const res = await api.get(`/drivers/t4a/${doc.tax_year}`);
+            const res = await api.get<{ url?: string; file_url?: string; total_earnings?: string; year?: number; total_trips?: number; net_earnings?: string }>(`/drivers/t4a/${doc.tax_year}`);
             const url = res.data?.url || res.data?.file_url;
             if (url) {
                 await Linking.openURL(url);

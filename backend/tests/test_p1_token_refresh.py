@@ -51,7 +51,7 @@ def _refresh_row(audience: str = "rider", **extra) -> dict:
         "id": OLD_REFRESH_ROW_ID,
         "user_id": USER_ID,
         "audience": audience,
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
         **extra,
     }
 

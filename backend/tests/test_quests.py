@@ -13,16 +13,16 @@ Routes under test (backend/routes/quests.py):
 
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-_FUTURE = (datetime.utcnow() + timedelta(days=30)).isoformat()
-_PAST = (datetime.utcnow() - timedelta(days=1)).isoformat()
-_NOW = datetime.utcnow().isoformat()
+_FUTURE = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+_PAST = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+_NOW = datetime.now(timezone.utc).isoformat()
 
 SAMPLE_USER = {"id": "user_123", "phone": "+1234567890", "role": "rider", "is_driver": True}
 SAMPLE_ADMIN = {"id": "admin_1", "phone": "+1112223333", "role": "admin", "is_driver": False}

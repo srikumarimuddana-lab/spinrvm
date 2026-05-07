@@ -81,7 +81,7 @@ function RideEarningsTab() {
                     setEarnings(Array.isArray(arr) ? arr : []);
                 } else { setEarnings([]); }
             })
-            .catch(() => {})
+            .catch((e) => console.error('[Earnings] load failed:', e))
             .finally(() => setLoading(false));
     }, []);
 
@@ -191,7 +191,7 @@ function SpinrPassRevenueTab() {
         if (selectedAreas.length > 0 && !comparing) params.service_area_ids = selectedAreas.join(",");
         getSubscriptionStats(params)
             .then((res) => { setData(res); setServiceAreas(res.service_areas || []); })
-            .catch(() => {})
+            .catch((e) => console.error('[Earnings] subscription stats load failed:', e))
             .finally(() => setLoading(false));
     };
 

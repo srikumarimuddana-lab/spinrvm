@@ -53,14 +53,12 @@ def validate_phone(phone: str, raise_exception: bool = True) -> Tuple[bool, Opti
     bare_10_pattern = re.compile(r"^[2-9]\d{9}$")
     if bare_10_pattern.match(cleaned):
         normalized = f"+1{cleaned}"
-        logger.info(f"Normalized phone {phone} to {normalized}")
         return True, normalized
 
     # Bare 11-digit with leading 1 (e.g. 14165551234)
     bare_11_pattern = re.compile(r"^1[2-9]\d{9}$")
     if bare_11_pattern.match(cleaned):
         normalized = f"+{cleaned}"
-        logger.info(f"Normalized phone {phone} to {normalized}")
         return True, normalized
 
     if raise_exception:

@@ -1436,8 +1436,9 @@ class PayoutRequest(BaseModel):
     amount: Decimal = Field(
         ...,
         ge=Decimal("10.00"),
+        le=Decimal("50000.00"),
         decimal_places=2,
-        description="Minimum payout is $10.00",
+        description="Payout must be between $10.00 and $50,000.00",
     )
 
 

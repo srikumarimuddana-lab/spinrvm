@@ -98,6 +98,9 @@ pytest-env>=1.1.0
 # lockfile install, which bypassed hash verification. Declaring it here ensures
 # it lands in requirements-locked.txt with a proper SHA-256 hash.
 pytest-mock>=3.14.0
+# pytest-timeout is used by CI's `pytest --timeout=30` flag (ci.yml backend-test job).
+# Without it in the lockfile, CI fails with "unrecognized arguments: --timeout=30".
+pytest-timeout>=0.4.0
 
 # Development tools — ruff supersedes both black and flake8; those are removed.
 

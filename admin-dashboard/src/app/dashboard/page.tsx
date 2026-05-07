@@ -28,10 +28,11 @@ export default function DashboardPage() {
     const [plans, setPlans] = useState<any[]>([]);
     const [subs, setSubs] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
+    const [statsError, setStatsError] = useState(false);
 
     useEffect(() => {
         Promise.all([
-            getStats().catch(() => null),
+            getStats().catch(() => { setStatsError(true); return null; }),
             getSubscriptionPlans().catch(() => []),
             getDriverSubscriptions().catch(() => []),
         ]).then(([s, p, sub]) => {
@@ -79,6 +80,13 @@ export default function DashboardPage() {
                     {new Date().toLocaleDateString('en-CA', { weekday: 'long', month: 'short', day: 'numeric' })}
                 </div>
             </div>
+
+            {/* Stats load error banner */}
+            {statsError && (
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                    Dashboard stats are temporarily unavailable. Check backend health and reload the page.
+                </div>
+            )}
 
             {/* Top Stats Row */}
             {stats && (

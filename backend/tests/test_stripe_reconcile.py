@@ -1,0 +1,560 @@
+"""Tests for utils/stripe_reconcile.py.
+
+Covers:
+- Skips cleanly when stripe_secret_key not configured
+- Stripe API list failure → returns early, no DB query
+- DB query failure → returns early, no discrepancies written
+- DB_PAID_STRIPE_MISSING: ride in DB but no matching PI in Stripe
+- DB_PAID_STRIPE_MISMATCH: PI exists but status != "succeeded"
+- DB_PAID_AMOUNT_MISMATCH: Stripe amount_received differs from DB fare
+- STRIPE_ORPHAN: succeeded PI with no matching DB ride
+- Clean run (zero discrepancies) → info log, not error
+- audit_logs write failure → error logged, not raised
+- Redis lock not acquired → tick skipped, no Stripe call
+- _in_window: valid/outside/edge/malformed timestamps
+- Multiple discrepancy types in a single pass
+"""
+
+from __future__ import annotations
+
+import sys
+from datetime import date, datetime, time, timedelta, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+# ── Helpers ────────────────────────────────────────────────────────────────
+
+
+def _yesterday_epoch() -> tuple[int, int]:
+    """Return (window_start, window_end) epoch ints for yesterday UTC."""
+    yesterday = date.today() - timedelta(days=1)
+    start = int(datetime.combine(yesterday, time(0, 0), tzinfo=timezone.utc).timestamp())
+    end = int(datetime.combine(yesterday, time(23, 59, 59), tzinfo=timezone.utc).timestamp())
+    return start, end
+
+
+def _ts_yesterday(hour: int = 12) -> str:
+    """ISO timestamp at 'hour' UTC yesterday."""
+    yesterday = date.today() - timedelta(days=1)
+    dt = datetime.combine(yesterday, time(hour, 0), tzinfo=timezone.utc)
+    return dt.isoformat()
+
+
+def _ride(
+    ride_id: str = "ride1",
+    pi_id: str = "pi_abc",
+    fare: str = "25.00",
+) -> dict:
+    return {
+        "id": ride_id,
+        "payment_intent_id": pi_id,
+        "fare": fare,
+        "status": "completed",
+        "payment_status": "paid",
+        "completed_at": _ts_yesterday(),
+    }
+
+
+def _pi(pi_id: str = "pi_abc", status: str = "succeeded", amount_received: int = 2500) -> dict:
+    return {"id": pi_id, "status": status, "amount_received": amount_received}
+
+
+def _make_stripe_mock(pis: list[dict]) -> MagicMock:
+    """Return a mock stripe module whose PaymentIntent.list auto_paging_iter yields pis."""
+    mock = MagicMock()
+    list_result = MagicMock()
+    list_result.auto_paging_iter.return_value = iter(pis)
+    mock.PaymentIntent.list.return_value = list_result
+    return mock
+
+
+# ── Skip when unconfigured ─────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_skips_when_no_stripe_secret_key():
+    """No stripe_secret_key in settings → function returns without touching DB."""
+    db_mock = AsyncMock()
+
+    with (
+        patch("utils.stripe_reconcile.get_app_settings", AsyncMock(return_value={})),
+        patch("utils.stripe_reconcile.db_supabase", db_mock),
+    ):
+        from utils.stripe_reconcile import _run_reconciliation_tick
+
+        await _run_reconciliation_tick()
+
+    db_mock.get_rows.assert_not_awaited()
+    db_mock.insert_one.assert_not_awaited()
+
+
+# ── Stripe API failure ─────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_stripe_api_failure_returns_early():
+    """Stripe list() raises → DB get_rows never called."""
+    db_mock = AsyncMock()
+    stripe_mock = MagicMock()
+    stripe_mock.PaymentIntent.list.side_effect = RuntimeError("Stripe 500")
+
+    with (
+        patch("utils.stripe_reconcile.get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk_test"})),
+        patch("utils.stripe_reconcile.db_supabase", db_mock),
+        patch.dict(sys.modules, {"stripe": stripe_mock}),
+    ):
+        from utils.stripe_reconcile import _run_reconciliation_tick
+
+        await _run_reconciliation_tick()
+
+    db_mock.get_rows.assert_not_awaited()
+
+
+# ── DB query failure ───────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_db_query_failure_returns_early():
+    """DB get_rows raises → function returns before writing audit_logs."""
+    db_mock = AsyncMock()
+    db_mock.get_rows.side_effect = RuntimeError("DB down")
+    stripe_mock = _make_stripe_mock([])
+
+    with (
+        patch("utils.stripe_reconcile.get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk_test"})),
+        patch("utils.stripe_reconcile.db_supabase", db_mock),
+        patch.dict(sys.modules, {"stripe": stripe_mock}),
+    ):
+        from utils.stripe_reconcile import _run_reconciliation_tick
+
+        await _run_reconciliation_tick()
+
+    db_mock.insert_one.assert_not_awaited()
+
+
+# ── DB_PAID_STRIPE_MISSING ────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_detects_db_paid_stripe_missing():
+    """DB ride has PI id but PI absent in Stripe → DB_PAID_STRIPE_MISSING discrepancy."""
+    ride = _ride(pi_id="pi_gone")
+    db_mock = AsyncMock()
+    db_mock.get_rows.return_value = [ride]
+    db_mock.insert_one.return_value = {"id": "log1"}
+    stripe_mock = _make_stripe_mock([])  # no PIs in Stripe
+
+    with (
+        patch("utils.stripe_reconcile.get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk_test"})),
+        patch("utils.stripe_reconcile.db_supabase", db_mock),
+        patch.dict(sys.modules, {"stripe": stripe_mock}),
+    ):
+        from utils.stripe_reconcile import _run_reconciliation_tick
+
+        await _run_reconciliation_tick()
+
+    db_mock.insert_one.assert_awaited_once()
+    audit_detail = db_mock.insert_one.call_args[0][1]["details"]
+    assert audit_detail["discrepancies"] == 1
+    assert audit_detail["discrepancy_detail"][0]["type"] == "DB_PAID_STRIPE_MISSING"
+    assert audit_detail["discrepancy_detail"][0]["payment_intent_id"] == "pi_gone"
+
+
+# ── DB_PAID_STRIPE_MISMATCH ───────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_detects_db_paid_stripe_mismatch():
+    """PI exists but status is 'requires_action' → DB_PAID_STRIPE_MISMATCH."""
+    ride = _ride()
+    pi = _pi(status="requires_action", amount_received=2500)
+    db_mock = AsyncMock()
+    db_mock.get_rows.return_value = [ride]
+    db_mock.insert_one.return_value = {"id": "log1"}
+    stripe_mock = _make_stripe_mock([pi])
+
+    with (
+        patch("utils.stripe_reconcile.get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk_test"})),
+        patch("utils.stripe_reconcile.db_supabase", db_mock),
+        patch.dict(sys.modules, {"stripe": stripe_mock}),
+    ):
+        from utils.stripe_reconcile import _run_reconciliation_tick
+
+        await _run_reconciliation_tick()
+
+    audit_detail = db_mock.insert_one.call_args[0][1]["details"]
+    types = [d["type"] for d in audit_detail["discrepancy_detail"]]
+    assert "DB_PAID_STRIPE_MISMATCH" in types
+
+
+# ── DB_PAID_AMOUNT_MISMATCH ───────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_detects_db_paid_amount_mismatch():
+    """Stripe amount_received (cents) != DB fare × 100 → DB_PAID_AMOUNT_MISMATCH."""
+    ride = _ride(fare="25.00")  # expect 2500 cents
+    pi = _pi(status="succeeded", amount_received=2499)  # 1 cent short
+    db_mock = AsyncMock()
+    db_mock.get_rows.return_value = [ride]
+    db_mock.insert_one.return_value = {"id": "log1"}
+    stripe_mock = _make_stripe_mock([pi])
+
+    with (
+        patch("utils.stripe_reconcile.get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk_test"})),
+        patch("utils.stripe_reconcile.db_supabase", db_mock),
+        patch.dict(sys.modules, {"stripe": stripe_mock}),
+    ):
+        from utils.stripe_reconcile import _run_reconciliation_tick
+
+        await _run_reconciliation_tick()
+
+    audit_detail = db_mock.insert_one.call_args[0][1]["details"]
+    mismatch = next(d for d in audit_detail["discrepancy_detail"] if d["type"] == "DB_PAID_AMOUNT_MISMATCH")
+    assert mismatch["db_cents"] == 2500
+    assert mismatch["stripe_cents"] == 2499
+
+
+@pytest.mark.asyncio
+async def test_no_amount_mismatch_when_fare_matches():
+    """Stripe amount_received exactly matches DB fare → no DB_PAID_AMOUNT_MISMATCH."""
+    ride = _ride(fare="25.00")
+    pi = _pi(status="succeeded", amount_received=2500)
+    db_mock = AsyncMock()
+    db_mock.get_rows.return_value = [ride]
+    db_mock.insert_one.return_value = {"id": "log1"}
+    stripe_mock = _make_stripe_mock([pi])
+
+    with (
+        patch("utils.stripe_reconcile.get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk_test"})),
+        patch("utils.stripe_reconcile.db_supabase", db_mock),
+        patch.dict(sys.modules, {"stripe": stripe_mock}),
+    ):
+        from utils.stripe_reconcile import _run_reconciliation_tick
+
+        await _run_reconciliation_tick()
+
+    audit_detail = db_mock.insert_one.call_args[0][1]["details"]
+    types = [d["type"] for d in audit_detail["discrepancy_detail"]]
+    assert "DB_PAID_AMOUNT_MISMATCH" not in types
+
+
+# ── STRIPE_ORPHAN ─────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_detects_stripe_orphan():
+    """Succeeded PI with no matching DB ride → STRIPE_ORPHAN."""
+    pi = _pi(pi_id="pi_orphan", status="succeeded", amount_received=1500)
+    db_mock = AsyncMock()
+    db_mock.get_rows.return_value = []  # no rides in DB window
+    db_mock.insert_one.return_value = {"id": "log1"}
+    stripe_mock = _make_stripe_mock([pi])
+
+    with (
+        patch("utils.stripe_reconcile.get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk_test"})),
+        patch("utils.stripe_reconcile.db_supabase", db_mock),
+        patch.dict(sys.modules, {"stripe": stripe_mock}),
+    ):
+        from utils.stripe_reconcile import _run_reconciliation_tick
+
+        await _run_reconciliation_tick()
+
+    audit_detail = db_mock.insert_one.call_args[0][1]["details"]
+    orphan = next(d for d in audit_detail["discrepancy_detail"] if d["type"] == "STRIPE_ORPHAN")
+    assert orphan["payment_intent_id"] == "pi_orphan"
+    assert orphan["stripe_amount"] == 1500
+
+
+@pytest.mark.asyncio
+async def test_failed_stripe_pi_not_flagged_as_orphan():
+    """A failed/cancelled PI with no DB ride is NOT an orphan (only succeeded PIs matter)."""
+    pi = _pi(pi_id="pi_failed", status="canceled", amount_received=0)
+    db_mock = AsyncMock()
+    db_mock.get_rows.return_value = []
+    db_mock.insert_one.return_value = {"id": "log1"}
+    stripe_mock = _make_stripe_mock([pi])
+
+    with (
+        patch("utils.stripe_reconcile.get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk_test"})),
+        patch("utils.stripe_reconcile.db_supabase", db_mock),
+        patch.dict(sys.modules, {"stripe": stripe_mock}),
+    ):
+        from utils.stripe_reconcile import _run_reconciliation_tick
+
+        await _run_reconciliation_tick()
+
+    audit_detail = db_mock.insert_one.call_args[0][1]["details"]
+    assert audit_detail["discrepancies"] == 0
+
+
+# ── Clean run ─────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_clean_run_writes_zero_discrepancies():
+    """Matched ride + succeeded PI with correct amount → zero discrepancies in audit log."""
+    ride = _ride(fare="10.50")
+    pi = _pi(status="succeeded", amount_received=1050)
+    db_mock = AsyncMock()
+    db_mock.get_rows.return_value = [ride]
+    db_mock.insert_one.return_value = {"id": "log1"}
+    stripe_mock = _make_stripe_mock([pi])
+
+    with (
+        patch("utils.stripe_reconcile.get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk_test"})),
+        patch("utils.stripe_reconcile.db_supabase", db_mock),
+        patch.dict(sys.modules, {"stripe": stripe_mock}),
+    ):
+        from utils.stripe_reconcile import _run_reconciliation_tick
+
+        await _run_reconciliation_tick()
+
+    audit_detail = db_mock.insert_one.call_args[0][1]["details"]
+    assert audit_detail["discrepancies"] == 0
+    assert audit_detail["discrepancy_detail"] == []
+
+
+# ── audit_logs write failure ───────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_audit_log_write_failure_does_not_raise():
+    """audit_logs insert failure → error logged, function completes without raising."""
+    db_mock = AsyncMock()
+    db_mock.get_rows.return_value = []
+    db_mock.insert_one.side_effect = RuntimeError("audit DB down")
+    stripe_mock = _make_stripe_mock([])
+
+    with (
+        patch("utils.stripe_reconcile.get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk_test"})),
+        patch("utils.stripe_reconcile.db_supabase", db_mock),
+        patch.dict(sys.modules, {"stripe": stripe_mock}),
+    ):
+        from utils.stripe_reconcile import _run_reconciliation_tick
+
+        await _run_reconciliation_tick()  # must not raise
+
+
+# ── Multiple discrepancy types ────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_multiple_discrepancy_types_counted():
+    """One missing PI + one orphan PI → discrepancy count = 2."""
+    ride_missing = _ride(ride_id="ride_missing", pi_id="pi_missing")
+    pi_orphan = _pi(pi_id="pi_orphan", status="succeeded", amount_received=999)
+    db_mock = AsyncMock()
+    db_mock.get_rows.return_value = [ride_missing]
+    db_mock.insert_one.return_value = {"id": "log1"}
+    stripe_mock = _make_stripe_mock([pi_orphan])  # only orphan PI, not ride_missing's PI
+
+    with (
+        patch("utils.stripe_reconcile.get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk_test"})),
+        patch("utils.stripe_reconcile.db_supabase", db_mock),
+        patch.dict(sys.modules, {"stripe": stripe_mock}),
+    ):
+        from utils.stripe_reconcile import _run_reconciliation_tick
+
+        await _run_reconciliation_tick()
+
+    audit_detail = db_mock.insert_one.call_args[0][1]["details"]
+    assert audit_detail["discrepancies"] == 2
+    types = {d["type"] for d in audit_detail["discrepancy_detail"]}
+    assert types == {"DB_PAID_STRIPE_MISSING", "STRIPE_ORPHAN"}
+
+
+# ── _in_window ─────────────────────────────────────────────────────────────
+
+
+def test_in_window_valid_timestamp_inside():
+    """Timestamp exactly at window_start falls inside."""
+    from utils.stripe_reconcile import _in_window
+
+    start, end = _yesterday_epoch()
+    mid = start + (end - start) // 2
+    dt_iso = datetime.fromtimestamp(mid, tz=timezone.utc).isoformat()
+    assert _in_window(dt_iso, start, end) is True
+
+
+def test_in_window_timestamp_before_window():
+    """Timestamp before window_start → False."""
+    from utils.stripe_reconcile import _in_window
+
+    start, end = _yesterday_epoch()
+    before_iso = datetime.fromtimestamp(start - 1, tz=timezone.utc).isoformat()
+    assert _in_window(before_iso, start, end) is False
+
+
+def test_in_window_timestamp_after_window():
+    """Timestamp after window_end → False."""
+    from utils.stripe_reconcile import _in_window
+
+    start, end = _yesterday_epoch()
+    after_iso = datetime.fromtimestamp(end + 1, tz=timezone.utc).isoformat()
+    assert _in_window(after_iso, start, end) is False
+
+
+def test_in_window_z_suffix_handled():
+    """ISO timestamps ending in 'Z' (Supabase format) are accepted."""
+    from utils.stripe_reconcile import _in_window
+
+    start, end = _yesterday_epoch()
+    mid = start + 60
+    dt_z = datetime.fromtimestamp(mid, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    assert _in_window(dt_z, start, end) is True
+
+
+def test_in_window_malformed_returns_false():
+    """Malformed timestamp → False, no exception raised."""
+    from utils.stripe_reconcile import _in_window
+
+    assert _in_window("not-a-date", 0, 9999999999) is False
+    assert _in_window("", 0, 9999999999) is False
+
+
+def test_in_window_boundary_inclusive():
+    """window_start and window_end are both inclusive."""
+    from utils.stripe_reconcile import _in_window
+
+    start, end = _yesterday_epoch()
+    start_iso = datetime.fromtimestamp(start, tz=timezone.utc).isoformat()
+    end_iso = datetime.fromtimestamp(end, tz=timezone.utc).isoformat()
+    assert _in_window(start_iso, start, end) is True
+    assert _in_window(end_iso, start, end) is True
+
+
+# ── Redis lock guard ───────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_loop_skips_tick_when_lock_not_acquired():
+    """redis_set_nx returns False → _run_reconciliation_tick never called."""
+    import asyncio
+
+    tick_called = False
+
+    async def fake_tick():
+        nonlocal tick_called
+        tick_called = True
+
+    sleep_calls: list[float] = []
+
+    async def fake_sleep(secs: float) -> None:
+        sleep_calls.append(secs)
+        if len(sleep_calls) >= 2:
+            raise asyncio.CancelledError()
+
+    with (
+        patch("utils.stripe_reconcile.redis_set_nx", AsyncMock(return_value=False)),
+        patch("utils.stripe_reconcile._run_reconciliation_tick", fake_tick),
+        patch("utils.stripe_reconcile._seconds_until", return_value=0),
+        patch("utils.stripe_reconcile.asyncio.sleep", fake_sleep),
+    ):
+        from utils.stripe_reconcile import stripe_reconcile_loop
+
+        with pytest.raises(asyncio.CancelledError):
+            await stripe_reconcile_loop(target_hour_utc=2)
+
+    assert not tick_called
+
+
+@pytest.mark.asyncio
+async def test_loop_runs_tick_when_lock_acquired():
+    """redis_set_nx returns True → _run_reconciliation_tick is called."""
+    import asyncio
+
+    tick_called = False
+
+    async def fake_tick():
+        nonlocal tick_called
+        tick_called = True
+
+    sleep_calls: list[float] = []
+
+    async def fake_sleep(secs: float) -> None:
+        sleep_calls.append(secs)
+        if len(sleep_calls) >= 2:
+            raise asyncio.CancelledError()
+
+    with (
+        patch("utils.stripe_reconcile.redis_set_nx", AsyncMock(return_value=True)),
+        patch("utils.stripe_reconcile._run_reconciliation_tick", fake_tick),
+        patch("utils.stripe_reconcile._seconds_until", return_value=0),
+        patch("utils.stripe_reconcile.asyncio.sleep", fake_sleep),
+    ):
+        from utils.stripe_reconcile import stripe_reconcile_loop
+
+        with pytest.raises(asyncio.CancelledError):
+            await stripe_reconcile_loop(target_hour_utc=2)
+
+    assert tick_called
+
+
+# ── Rides outside window are filtered ─────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_rides_outside_window_ignored():
+    """DB ride with completed_at two days ago is not in yesterday's window → no discrepancy."""
+    two_days_ago = (date.today() - timedelta(days=2)).isoformat() + "T12:00:00+00:00"
+    ride = {
+        "id": "old_ride",
+        "payment_intent_id": "pi_old",
+        "fare": "15.00",
+        "status": "completed",
+        "payment_status": "paid",
+        "completed_at": two_days_ago,
+    }
+    db_mock = AsyncMock()
+    db_mock.get_rows.return_value = [ride]
+    db_mock.insert_one.return_value = {"id": "log1"}
+    stripe_mock = _make_stripe_mock([])  # no Stripe PIs
+
+    with (
+        patch("utils.stripe_reconcile.get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk_test"})),
+        patch("utils.stripe_reconcile.db_supabase", db_mock),
+        patch.dict(sys.modules, {"stripe": stripe_mock}),
+    ):
+        from utils.stripe_reconcile import _run_reconciliation_tick
+
+        await _run_reconciliation_tick()
+
+    audit_detail = db_mock.insert_one.call_args[0][1]["details"]
+    assert audit_detail["db_rides_checked"] == 0
+    assert audit_detail["discrepancies"] == 0
+
+
+# ── Ride with no fare field skips amount check ────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_ride_with_no_fare_skips_amount_check():
+    """Ride missing fare field → only status checked, no DB_PAID_AMOUNT_MISMATCH raised."""
+    ride = {
+        "id": "ride_nofar",
+        "payment_intent_id": "pi_nofar",
+        "fare": None,
+        "status": "completed",
+        "payment_status": "paid",
+        "completed_at": _ts_yesterday(),
+    }
+    pi = _pi(pi_id="pi_nofar", status="succeeded", amount_received=999)
+    db_mock = AsyncMock()
+    db_mock.get_rows.return_value = [ride]
+    db_mock.insert_one.return_value = {"id": "log1"}
+    stripe_mock = _make_stripe_mock([pi])
+
+    with (
+        patch("utils.stripe_reconcile.get_app_settings", AsyncMock(return_value={"stripe_secret_key": "sk_test"})),
+        patch("utils.stripe_reconcile.db_supabase", db_mock),
+        patch.dict(sys.modules, {"stripe": stripe_mock}),
+    ):
+        from utils.stripe_reconcile import _run_reconciliation_tick
+
+        await _run_reconciliation_tick()
+
+    audit_detail = db_mock.insert_one.call_args[0][1]["details"]
+    types = [d["type"] for d in audit_detail["discrepancy_detail"]]
+    assert "DB_PAID_AMOUNT_MISMATCH" not in types

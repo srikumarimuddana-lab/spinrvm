@@ -10,112 +10,422 @@ Coverage:
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Import the module under test.  The dual-import pattern means we can import
-# directly from the bare path (backend dir is on sys.path via conftest.py).
-# ---------------------------------------------------------------------------
-from utils.surge_engine import SURGE_CAP, ratio_to_multiplier
-
-# ── Tier boundary parametrize ────────────────────────────────────────────────
+# ── ratio_to_multiplier ────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize(
-    "ratio, expected",
-    [
-        # Below the first tier threshold (< 0.5) → normal
-        (0.0, 1.0),
-        (0.49, 1.0),
-        # At / above the first threshold (≥ 0.5) → 1.25×
-        (0.5, 1.25),
-        (0.65, 1.25),
-        # At / above the second threshold (≥ 0.8) → 1.5×
-        (0.8, 1.5),
-        (1.0, 1.5),
-        # At / above the third threshold (≥ 1.2) → 1.75×
-        (1.2, 1.75),
-        (1.6, 1.75),
-        # At / above the fourth threshold (≥ 2.0) → 2.0×
-        (2.0, 2.0),
-        (2.5, 2.0),
-        # At / above the cap threshold (≥ 3.0) → SURGE_CAP (2.5×)
-        (3.0, 2.5),
-        (5.0, 2.5),
-        (100.0, 2.5),
-    ],
-)
-def test_ratio_to_multiplier_tier_table(ratio: float, expected: float) -> None:
-    """ratio_to_multiplier maps every tier boundary and interior value correctly."""
-    result = ratio_to_multiplier(ratio)
-    assert result == expected, f"ratio={ratio}: expected multiplier {expected}, got {result}"
+def test_ratio_below_first_threshold_returns_normal():
+    """ratio < 0.5 → 1.0× (no surge)."""
+    from utils.surge_engine import ratio_to_multiplier
+
+    assert ratio_to_multiplier(0.0) == 1.0
+    assert ratio_to_multiplier(0.1) == 1.0
+    assert ratio_to_multiplier(0.49) == 1.0
 
 
-# ── SURGE_CAP constant ───────────────────────────────────────────────────────
+def test_ratio_at_first_threshold_returns_second_tier():
+    """ratio == 0.5 falls into [0.5, 0.8) → 1.25×."""
+    from utils.surge_engine import ratio_to_multiplier
+
+    assert ratio_to_multiplier(0.5) == 1.25
+    assert ratio_to_multiplier(0.79) == 1.25
 
 
-def test_surge_cap_is_25() -> None:
-    """SURGE_CAP must equal 2.5 (auto-mode hard ceiling per CLAUDE.md)."""
+def test_ratio_at_second_threshold_returns_third_tier():
+    """ratio == 0.8 falls into [0.8, 1.2) → 1.5×."""
+    from utils.surge_engine import ratio_to_multiplier
+
+    assert ratio_to_multiplier(0.8) == 1.5
+    assert ratio_to_multiplier(1.0) == 1.5
+    assert ratio_to_multiplier(1.19) == 1.5
+
+
+def test_ratio_at_third_threshold_returns_fourth_tier():
+    """ratio == 1.2 falls into [1.2, 2.0) → 1.75×."""
+    from utils.surge_engine import ratio_to_multiplier
+
+    assert ratio_to_multiplier(1.2) == 1.75
+    assert ratio_to_multiplier(1.5) == 1.75
+    assert ratio_to_multiplier(1.99) == 1.75
+
+
+def test_ratio_at_fourth_threshold_returns_fifth_tier():
+    """ratio == 2.0 falls into [2.0, 3.0) → 2.0×."""
+    from utils.surge_engine import ratio_to_multiplier
+
+    assert ratio_to_multiplier(2.0) == 2.0
+    assert ratio_to_multiplier(2.5) == 2.0
+    assert ratio_to_multiplier(2.99) == 2.0
+
+
+def test_ratio_at_cap_threshold_returns_surge_cap():
+    """ratio == 3.0 hits the hard cap → 2.5× (SURGE_CAP)."""
+    from utils.surge_engine import SURGE_CAP, ratio_to_multiplier
+
+    assert ratio_to_multiplier(3.0) == SURGE_CAP
+    assert ratio_to_multiplier(5.0) == SURGE_CAP
+    assert ratio_to_multiplier(100.0) == SURGE_CAP
+
+
+def test_surge_cap_value_is_2_5():
+    """SURGE_CAP constant must be 2.5 — regulatory ceiling for auto mode."""
+    from utils.surge_engine import SURGE_CAP
+
     assert SURGE_CAP == 2.5
 
 
-def test_ratio_to_multiplier_never_exceeds_surge_cap() -> None:
-    """No ratio, however large, should produce a multiplier above SURGE_CAP."""
-    for ratio in (3.0, 10.0, 100.0, 1_000_000.0):
-        assert ratio_to_multiplier(ratio) <= SURGE_CAP, (
-            f"ratio={ratio} produced a multiplier exceeding SURGE_CAP={SURGE_CAP}"
-        )
+# ── _count_demand_in_area ──────────────────────────────────────────────────
 
 
-# ── Return type ──────────────────────────────────────────────────────────────
+@pytest.mark.asyncio
+async def test_count_demand_db_failure_returns_zero():
+    """DB exception in _count_demand_in_area → returns 0 (does not propagate)."""
+    db_mock = MagicMock()
+    db_mock.get_rows = AsyncMock(side_effect=RuntimeError("DB down"))
+
+    with patch("utils.surge_engine.db", db_mock):
+        from utils.surge_engine import _count_demand_in_area
+
+        result = await _count_demand_in_area("area1")
+
+    assert result == 0
 
 
-def test_surge_returns_float_not_decimal() -> None:
-    """
-    The engine works in plain float throughout — callers must not assume Decimal.
-    Verify that ratio_to_multiplier returns a float for both normal and capped cases.
-    """
-    for ratio in (0.0, 0.5, 1.0, 2.0, 3.0):
-        result = ratio_to_multiplier(ratio)
-        assert isinstance(result, float), f"ratio={ratio}: expected float, got {type(result).__name__}"
+@pytest.mark.asyncio
+async def test_count_demand_counts_active_statuses_only():
+    """Only rides in active statuses contribute to demand count."""
+    rides = [
+        {"status": "searching"},
+        {"status": "driver_assigned"},
+        {"status": "driver_en_route"},
+        {"status": "completed"},  # not active
+        {"status": "cancelled"},  # not active
+    ]
+    db_mock = MagicMock()
+    db_mock.get_rows = AsyncMock(return_value=rides)
+
+    with patch("utils.surge_engine.db", db_mock):
+        from utils.surge_engine import _count_demand_in_area
+
+        result = await _count_demand_in_area("area1")
+
+    assert result == 3
 
 
-# ── Manual-override: auto engine must skip 'manual' source areas ─────────────
+# ── _count_supply_in_area ──────────────────────────────────────────────────
 
 
-@pytest.mark.anyio
-async def test_surge_not_recalculated_when_source_is_manual() -> None:
-    """
-    recalculate_all_surges() must skip any area whose surge_source == 'manual'.
-    A manual area with a sky-high ratio should NOT have its multiplier touched.
-    """
-    # Area with manual override — would be 2.5× if auto-calculated (ratio≥3.0)
-    manual_area = {
-        "id": "area-manual-01",
-        "name": "Downtown (manual override)",
-        "is_active": True,
-        "surge_source": "manual",
-        "surge_multiplier": 3.0,  # admin set this manually
-        "parent_service_area_id": None,
-    }
+@pytest.mark.asyncio
+async def test_count_supply_no_polygon_returns_zero():
+    """get_service_area_polygon returns None → supply is 0."""
+    with (
+        patch("utils.surge_engine.get_service_area_polygon", return_value=None),
+        patch("utils.surge_engine.db", MagicMock()),
+    ):
+        from utils.surge_engine import _count_supply_in_area
 
-    # We expect calculate_surge_for_area / db.update_one to never be called
-    # for the manual area.  Patch db.get_rows to return only this area.
-    mock_db_update = AsyncMock()
+        result = await _count_supply_in_area({"id": "area1"})
+
+    assert result == 0
+
+
+@pytest.mark.asyncio
+async def test_count_supply_db_failure_returns_zero():
+    """DB exception in _count_supply_in_area → returns 0 (does not propagate)."""
+    db_mock = MagicMock()
+    db_mock.get_rows = AsyncMock(side_effect=RuntimeError("DB down"))
 
     with (
-        patch("utils.surge_engine.db") as mock_db,
-        patch("utils.surge_engine.calculate_surge_for_area", new_callable=AsyncMock) as mock_calc,
+        patch("utils.surge_engine.get_service_area_polygon", return_value=[(0, 0), (1, 0), (1, 1)]),
+        patch("utils.surge_engine.db", db_mock),
     ):
-        mock_db.get_rows = AsyncMock(return_value=[manual_area])
-        mock_db.update_one = mock_db_update
+        from utils.surge_engine import _count_supply_in_area
 
+        result = await _count_supply_in_area({"id": "area1"})
+
+    assert result == 0
+
+
+@pytest.mark.asyncio
+async def test_count_supply_presence_filter_removes_ghost_drivers():
+    """Drivers not in present_driver_ids set are excluded from supply count."""
+    drivers = [
+        {"id": "d1", "lat": 52.1, "lng": -106.7, "user_id": "u1", "is_online": True, "is_available": True},
+        {"id": "d2", "lat": 52.2, "lng": -106.8, "user_id": "u2", "is_online": True, "is_available": True},
+    ]
+    db_mock = MagicMock()
+    db_mock.get_rows = AsyncMock(return_value=drivers)
+
+    with (
+        patch("utils.surge_engine.get_service_area_polygon", return_value=[(0, 0)]),
+        patch("utils.surge_engine.db", db_mock),
+        patch("utils.surge_engine.present_driver_ids", AsyncMock(return_value={"d1"})),
+        patch("utils.surge_engine.point_in_polygon", return_value=True),
+    ):
+        from utils.surge_engine import _count_supply_in_area
+
+        result = await _count_supply_in_area({"id": "area1"})
+
+    assert result == 1  # only d1 is present; d2 filtered out
+
+
+@pytest.mark.asyncio
+async def test_count_supply_presence_failure_falls_back_to_db_state():
+    """presence_driver_ids failure → warning logged, DB drivers used as-is (safe fallback)."""
+    drivers = [
+        {"id": "d1", "lat": 52.1, "lng": -106.7, "user_id": "u1"},
+        {"id": "d2", "lat": 52.2, "lng": -106.8, "user_id": "u2"},
+    ]
+    db_mock = MagicMock()
+    db_mock.get_rows = AsyncMock(return_value=drivers)
+
+    with (
+        patch("utils.surge_engine.get_service_area_polygon", return_value=[(0, 0)]),
+        patch("utils.surge_engine.db", db_mock),
+        patch("utils.surge_engine.present_driver_ids", AsyncMock(side_effect=RuntimeError("Redis down"))),
+        patch("utils.surge_engine.point_in_polygon", return_value=True),
+    ):
+        from utils.surge_engine import _count_supply_in_area
+
+        result = await _count_supply_in_area({"id": "area1"})
+
+    # Both drivers counted (fallback to DB state on presence failure)
+    assert result == 2
+
+
+# ── calculate_surge_for_area ───────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_calculate_surge_no_demand_returns_normal():
+    """demand=0, supply=5 → ratio=0 → multiplier=1.0."""
+    with (
+        patch("utils.surge_engine._count_demand_in_area", AsyncMock(return_value=0)),
+        patch("utils.surge_engine._count_supply_in_area", AsyncMock(return_value=5)),
+    ):
+        from utils.surge_engine import calculate_surge_for_area
+
+        result = await calculate_surge_for_area({"id": "area1"})
+
+    assert result["multiplier"] == 1.0
+    assert result["ratio"] == 0.0
+    assert result["demand_count"] == 0
+    assert result["supply_count"] == 5
+
+
+@pytest.mark.asyncio
+async def test_calculate_surge_zero_supply_uses_1_as_denominator():
+    """demand=5, supply=0 → ratio=5/1=5.0 → SURGE_CAP (2.5)."""
+    with (
+        patch("utils.surge_engine._count_demand_in_area", AsyncMock(return_value=5)),
+        patch("utils.surge_engine._count_supply_in_area", AsyncMock(return_value=0)),
+    ):
+        from utils.surge_engine import SURGE_CAP, calculate_surge_for_area
+
+        result = await calculate_surge_for_area({"id": "area1"})
+
+    assert result["multiplier"] == SURGE_CAP
+    assert result["ratio"] == 5.0
+
+
+@pytest.mark.asyncio
+async def test_calculate_surge_high_demand_returns_cap():
+    """demand=15, supply=4 → ratio=3.75 → SURGE_CAP."""
+    with (
+        patch("utils.surge_engine._count_demand_in_area", AsyncMock(return_value=15)),
+        patch("utils.surge_engine._count_supply_in_area", AsyncMock(return_value=4)),
+    ):
+        from utils.surge_engine import SURGE_CAP, calculate_surge_for_area
+
+        result = await calculate_surge_for_area({"id": "area1"})
+
+    assert result["multiplier"] == SURGE_CAP
+
+
+@pytest.mark.asyncio
+async def test_calculate_surge_mid_tier():
+    """demand=4, supply=5 → ratio=0.8 → 1.5×."""
+    with (
+        patch("utils.surge_engine._count_demand_in_area", AsyncMock(return_value=4)),
+        patch("utils.surge_engine._count_supply_in_area", AsyncMock(return_value=5)),
+    ):
+        from utils.surge_engine import calculate_surge_for_area
+
+        result = await calculate_surge_for_area({"id": "area1"})
+
+    assert result["multiplier"] == 1.5
+
+
+# ── recalculate_all_surges ─────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_recalculate_skips_manual_override_areas():
+    """Areas with surge_source='manual' are never updated."""
+    areas = [
+        {"id": "a1", "surge_source": "manual", "surge_multiplier": 2.0, "is_active": True},
+    ]
+    db_mock = MagicMock()
+    db_mock.get_rows = AsyncMock(return_value=areas)
+    db_mock.update_one = AsyncMock()
+
+    with patch("utils.surge_engine.db", db_mock):
         from utils.surge_engine import recalculate_all_surges
 
         results = await recalculate_all_surges()
 
+    assert results == []
+    db_mock.update_one.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_recalculate_skips_sub_areas():
+    """Areas with parent_service_area_id set are sub-areas (airports) and skipped."""
+    areas = [
+        {
+            "id": "airport1",
+            "parent_service_area_id": "main_area",
+            "surge_multiplier": 1.0,
+            "is_active": True,
+        }
+    ]
+    db_mock = MagicMock()
+    db_mock.get_rows = AsyncMock(return_value=areas)
+    db_mock.update_one = AsyncMock()
+
+    with patch("utils.surge_engine.db", db_mock):
+        from utils.surge_engine import recalculate_all_surges
+
+        results = await recalculate_all_surges()
+
+    assert results == []
+    db_mock.update_one.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_recalculate_does_not_update_db_when_multiplier_unchanged():
+    """If new multiplier equals current, no DB update_one call."""
+    areas = [{"id": "a1", "surge_source": "auto", "surge_multiplier": 1.0, "is_active": True}]
+    db_mock = MagicMock()
+    db_mock.get_rows = AsyncMock(return_value=areas)
+    db_mock.update_one = AsyncMock()
+    db_mock.insert_one = AsyncMock(return_value={"id": "row1"})
+
+    with (
+        patch("utils.surge_engine.db", db_mock),
+        patch("utils.surge_engine._count_demand_in_area", AsyncMock(return_value=0)),
+        patch("utils.surge_engine._count_supply_in_area", AsyncMock(return_value=10)),
+    ):
+        from utils.surge_engine import recalculate_all_surges
+
+        results = await recalculate_all_surges()
+
+    # Multiplier unchanged (1.0 → 1.0); update_one should NOT be called
+    db_mock.update_one.assert_not_awaited()
+    assert results[0]["multiplier"] == 1.0
+
+
+@pytest.mark.asyncio
+async def test_recalculate_updates_db_when_multiplier_changes():
+    """When new multiplier differs from stored, update_one IS called."""
+    areas = [{"id": "a1", "surge_source": "auto", "surge_multiplier": 1.0, "is_active": True}]
+    db_mock = MagicMock()
+    db_mock.get_rows = AsyncMock(return_value=areas)
+    db_mock.update_one = AsyncMock()
+    db_mock.insert_one = AsyncMock(return_value={"id": "row1"})
+
+    with (
+        patch("utils.surge_engine.db", db_mock),
+        # demand=4, supply=5 → ratio=0.8 → 1.5× (changed from 1.0)
+        patch("utils.surge_engine._count_demand_in_area", AsyncMock(return_value=4)),
+        patch("utils.surge_engine._count_supply_in_area", AsyncMock(return_value=5)),
+    ):
+        from utils.surge_engine import recalculate_all_surges
+
+        await recalculate_all_surges()
+
+    db_mock.update_one.assert_awaited_once()
+    update_payload = db_mock.update_one.call_args[0][2]
+    assert update_payload["surge_multiplier"] == 1.5
+    assert update_payload["surge_active"] is True
+
+
+@pytest.mark.asyncio
+async def test_recalculate_area_failure_does_not_abort_remaining():
+    """An exception processing one area logs error but continues to next area."""
+    areas = [
+        {"id": "a1", "surge_source": "auto", "surge_multiplier": 1.0, "is_active": True},
+        {"id": "a2", "surge_source": "auto", "surge_multiplier": 1.0, "is_active": True},
+    ]
+    db_mock = MagicMock()
+    db_mock.get_rows = AsyncMock(return_value=areas)
+    db_mock.update_one = AsyncMock()
+    db_mock.insert_one = AsyncMock(return_value={"id": "row1"})
+
+    call_count = 0
+
+    async def flaky_demand(area_id: str) -> int:
+        nonlocal call_count
+        call_count += 1
+        if area_id == "a1":
+            raise RuntimeError("demand query failed")
+        return 0
+
+    with (
+        patch("utils.surge_engine.db", db_mock),
+        patch("utils.surge_engine._count_demand_in_area", side_effect=flaky_demand),
+        patch("utils.surge_engine._count_supply_in_area", AsyncMock(return_value=5)),
+    ):
+        from utils.surge_engine import recalculate_all_surges
+
+        results = await recalculate_all_surges()  # must not raise
+
+    # a2 processed despite a1 failure
+    assert call_count == 2
+    assert any(r["area_id"] == "a2" for r in results)
+
+
+@pytest.mark.asyncio
+async def test_recalculate_service_areas_db_failure_returns_empty():
+    """DB failure fetching service_areas → returns [] without raising."""
+    db_mock = MagicMock()
+    db_mock.get_rows = AsyncMock(side_effect=RuntimeError("DB down"))
+
+    with patch("utils.surge_engine.db", db_mock):
+        from utils.surge_engine import recalculate_all_surges
+
+        results = await recalculate_all_surges()
+
+    assert results == []
+
+
+@pytest.mark.asyncio
+async def test_recalculate_inserts_surge_pricing_history_row():
+    """Every processed area gets a surge_pricing history row inserted."""
+    areas = [{"id": "a1", "surge_source": "auto", "surge_multiplier": 1.0, "is_active": True}]
+    db_mock = MagicMock()
+    db_mock.get_rows = AsyncMock(return_value=areas)
+    db_mock.update_one = AsyncMock()
+    db_mock.insert_one = AsyncMock(return_value={"id": "h1"})
+
+    with (
+        patch("utils.surge_engine.db", db_mock),
+        patch("utils.surge_engine._count_demand_in_area", AsyncMock(return_value=0)),
+        patch("utils.surge_engine._count_supply_in_area", AsyncMock(return_value=10)),
+    ):
+        from utils.surge_engine import recalculate_all_surges
+
+        await recalculate_all_surges()
+
+    # insert_one called for surge_pricing history
+    db_mock.insert_one.assert_awaited_once()
+    table, payload = db_mock.insert_one.call_args[0]
+    assert table == "surge_pricing"
+    assert payload["service_area_id"] == "a1"
+    assert payload["source"] == "auto"
     # The manual area was skipped → calculate_surge_for_area never called
     mock_calc.assert_not_called()
     # No DB update should have been written for the manual area

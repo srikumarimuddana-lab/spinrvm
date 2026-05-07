@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import { useAuthStore } from '@shared/store/authStore';
 import { useRideStore } from '../store/rideStore';
 import { API_URL } from '@shared/config';
+import { RideStatus } from '../constants/rideStatus';
 
 /**
  * Real-time WebSocket client for the rider app.
@@ -73,6 +74,7 @@ export function useRiderSocket() {
             data.lng,
             data.speed ?? null,
             data.heading ?? null,
+            data.eta_seconds ?? null,
           );
         }
         break;
@@ -93,7 +95,7 @@ export function useRiderSocket() {
 
       case 'ride_completed':
         if (rideId) {
-          applyRideStatusFromWS(rideId, 'completed', {
+          applyRideStatusFromWS(rideId, RideStatus.COMPLETED, {
             total_fare: data.total_fare,
           });
           fetchRide(rideId);
@@ -109,8 +111,13 @@ export function useRiderSocket() {
         break;
 
       // Driver didn't respond in time — backend is re-dispatching.
-      // Refetch the ride so the UI shows the "searching" state again.
+      // R-P1-16: Show Alert first so the rider knows what happened,
+      // then refetch so the UI transitions back to "searching".
       case 'driver_timeout':
+        Alert.alert(
+          'Driver Unavailable',
+          'The driver did not respond in time. Finding another driver\u2026',
+        );
         if (rideId) fetchRide(rideId);
         break;
 
@@ -166,6 +173,12 @@ export function useRiderSocket() {
         token,
         client_type: 'rider',
       }));
+      // Re-sync ride state: any events sent while disconnected are not
+      // buffered by the server, so pull from the HTTP source of truth.
+      const rideId = rideIdRef.current;
+      if (rideId) {
+        useRideStore.getState().fetchRide(rideId);
+      }
     };
 
     ws.onmessage = (event) => {
@@ -252,7 +265,8 @@ export function useRiderSocket() {
     }
   }, []);
 
-  return { connectionState, sendMessage };
+  const wsConnected = connectionState === 'connected';
+  return { connectionState, wsConnected, sendMessage };
 }
 
 export default useRiderSocket;

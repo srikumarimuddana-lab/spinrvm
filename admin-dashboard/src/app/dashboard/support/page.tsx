@@ -1,14 +1,17 @@
 "use client";
 
 import { useState } from "react";
-import { LifeBuoy, HelpCircle, PackageSearch, Flag, FileWarning } from "lucide-react";
+import { LifeBuoy, HelpCircle, PackageSearch, Flag, FileWarning, BookOpen, ScrollText } from "lucide-react";
 import dynamic from "next/dynamic";
+import { useRequireModule } from "@/hooks/useRequireModule";
 
 const TicketsTab = dynamic(() => import("./_tabs/tickets"), { ssr: false, loading: () => <TabLoader /> });
 const DisputesTab = dynamic(() => import("./_tabs/disputes"), { ssr: false, loading: () => <TabLoader /> });
 const LostAndFoundTab = dynamic(() => import("./_tabs/lost-and-found"), { ssr: false, loading: () => <TabLoader /> });
 const FlagsTab = dynamic(() => import("./_tabs/flags"), { ssr: false, loading: () => <TabLoader /> });
 const ComplaintsTab = dynamic(() => import("./_tabs/complaints"), { ssr: false, loading: () => <TabLoader /> });
+const FaqsTab = dynamic(() => import("./_tabs/faqs"), { ssr: false, loading: () => <TabLoader /> });
+const LegalDocumentsTab = dynamic(() => import("./_tabs/legal-documents"), { ssr: false, loading: () => <TabLoader /> });
 
 const TABS = [
     { id: "tickets", label: "Tickets", icon: LifeBuoy },
@@ -16,6 +19,8 @@ const TABS = [
     { id: "complaints", label: "Complaints", icon: FileWarning },
     { id: "lost-found", label: "Lost & Found", icon: PackageSearch },
     { id: "flags", label: "Flags", icon: Flag },
+    { id: "faqs", label: "FAQs", icon: BookOpen },
+    { id: "legal", label: "Legal", icon: ScrollText },
 ];
 
 function TabLoader() {
@@ -23,8 +28,10 @@ function TabLoader() {
 }
 
 export default function SupportPage() {
+    const { allowed } = useRequireModule("support");
     const [activeTab, setActiveTab] = useState("tickets");
 
+    if (!allowed) return null;
     return (
         <div className="px-1 sm:px-0">
             <div className="mb-4">
@@ -53,6 +60,8 @@ export default function SupportPage() {
             {activeTab === "complaints" && <ComplaintsTab />}
             {activeTab === "lost-found" && <LostAndFoundTab />}
             {activeTab === "flags" && <FlagsTab />}
+            {activeTab === "faqs" && <FaqsTab />}
+            {activeTab === "legal" && <LegalDocumentsTab />}
         </div>
     );
 }

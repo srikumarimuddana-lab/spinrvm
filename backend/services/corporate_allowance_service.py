@@ -5,9 +5,11 @@ locks the master wallet + allowance rows atomically and writes paired ledger
 entries. Callers pass the master `wallet_id` and the target `allowance_id`;
 the RPC validates they exist before mutating anything.
 """
+
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from decimal import Decimal
+from typing import Any, Dict, Optional, Union
 
 try:
     from ..db_supabase import run_sync  # type: ignore
@@ -23,20 +25,24 @@ async def _apply(
     allowance_id: str,
     member_id: str,
     type_: str,
-    amount: float,
+    amount: Union[Decimal, float],
     actor_user_id: Optional[str] = None,
     notes: Optional[str] = None,
-    floor: Optional[float] = None,
+    floor: Optional[Union[Decimal, float]] = None,
 ) -> Dict[str, Any]:
     params = {
         "p_wallet_id": wallet_id,
         "p_allowance_id": allowance_id,
         "p_member_id": member_id,
         "p_type": type_,
-        "p_amount": amount,
+        # supabase-py serialises params via stdlib json which cannot handle
+        # Decimal. Follow the str() convention used by wallet_increment_balance
+        # and wallet_pay_for_ride in db_supabase.py — Postgres numeric accepts
+        # string literals and preserves full precision.
+        "p_amount": str(amount),
         "p_actor_user_id": actor_user_id,
         "p_notes": notes,
-        "p_floor": floor,
+        "p_floor": str(floor) if floor is not None else None,
     }
 
     def _fn():
@@ -54,17 +60,22 @@ async def apply_grant(
     wallet_id: str,
     allowance_id: str,
     member_id: str,
-    amount: float,
+    amount: Union[Decimal, float],
     actor_user_id: Optional[str] = None,
     notes: Optional[str] = None,
-    floor: Optional[float] = None,
+    floor: Optional[Union[Decimal, float]] = None,
 ) -> Dict[str, Any]:
     if amount <= 0:
         raise ValueError("grant amount must be positive")
     return await _apply(
-        wallet_id=wallet_id, allowance_id=allowance_id, member_id=member_id,
-        type_="allowance_grant", amount=amount,
-        actor_user_id=actor_user_id, notes=notes, floor=floor,
+        wallet_id=wallet_id,
+        allowance_id=allowance_id,
+        member_id=member_id,
+        type_="allowance_grant",
+        amount=amount,
+        actor_user_id=actor_user_id,
+        notes=notes,
+        floor=floor,
     )
 
 
@@ -78,9 +89,13 @@ async def apply_reset(
 ) -> Dict[str, Any]:
     """Zero out the `used` counter at the start of a new period."""
     return await _apply(
-        wallet_id=wallet_id, allowance_id=allowance_id, member_id=member_id,
-        type_="allowance_reset", amount=0,
-        actor_user_id=actor_user_id, notes=notes,
+        wallet_id=wallet_id,
+        allowance_id=allowance_id,
+        member_id=member_id,
+        type_="allowance_reset",
+        amount=0,
+        actor_user_id=actor_user_id,
+        notes=notes,
     )
 
 
@@ -89,14 +104,18 @@ async def apply_rollback(
     wallet_id: str,
     allowance_id: str,
     member_id: str,
-    amount: float,
+    amount: Union[Decimal, float],
     actor_user_id: Optional[str] = None,
     notes: Optional[str] = None,
 ) -> Dict[str, Any]:
     if amount <= 0:
         raise ValueError("rollback amount must be positive")
     return await _apply(
-        wallet_id=wallet_id, allowance_id=allowance_id, member_id=member_id,
-        type_="allowance_rollback", amount=amount,
-        actor_user_id=actor_user_id, notes=notes,
+        wallet_id=wallet_id,
+        allowance_id=allowance_id,
+        member_id=member_id,
+        type_="allowance_rollback",
+        amount=amount,
+        actor_user_id=actor_user_id,
+        notes=notes,
     )

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import Link from "next/link";
 import {
     listCorporateAccounts,
@@ -10,7 +10,8 @@ import {
     CorporateAccount,
     CompanyStatus,
 } from "@/lib/api";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Pagination } from "@/components/ui/pagination";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -28,7 +29,6 @@ import {
     DialogFooter,
     DialogHeader,
     DialogTitle,
-    DialogTrigger,
 } from "@/components/ui/dialog";
 import {
     AlertDialog,
@@ -51,6 +51,8 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { Building2, Plus, Pencil, Trash2, Search, Mail, Phone, RefreshCw, ShieldCheck } from "lucide-react";
+import { useRequireModule } from "@/hooks/useRequireModule";
+import { useToast } from "@/components/ui/use-toast";
 
 const STATUS_PILL_CLASSES: Record<CompanyStatus, string> = {
     pending_verification: "bg-yellow-100 text-yellow-800 hover:bg-yellow-100",
@@ -67,11 +69,18 @@ function StatusPill({ status }: { status: CompanyStatus }) {
     );
 }
 
+const PAGE_SIZE = 50;
+
 export default function CorporateAccountsPage() {
+    const { allowed } = useRequireModule("corporate_accounts");
+    const { toast } = useToast();
     const [accounts, setAccounts] = useState<CorporateAccount[]>([]);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState("");
     const [statusFilter, setStatusFilter] = useState<CompanyStatus | "all">("all");
+    const [page, setPage] = useState(0);
+    const [hasNextPage, setHasNextPage] = useState(false);
+    const reqIdRef = useRef(0);
 
     // Dialog states
     const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -89,22 +98,38 @@ export default function CorporateAccountsPage() {
         is_active: true
     });
 
+    // Reset page on filter changes; search is debounced below.
+    useEffect(() => { setPage(0); }, [statusFilter]);
+
     useEffect(() => {
-        fetchAccounts();
-    }, [statusFilter]);
+        const handle = setTimeout(() => { setPage(0); }, 300);
+        return () => clearTimeout(handle);
+    }, [search]);
+
+    useEffect(() => { fetchAccounts(); }, [page, statusFilter, search]);
 
     const fetchAccounts = async () => {
         setLoading(true);
+        const reqId = ++reqIdRef.current;
         try {
-            const data = await listCorporateAccounts({
+            const rows = await listCorporateAccounts({
                 status: statusFilter === "all" ? undefined : statusFilter,
-                limit: 500,
+                search: search.trim() || undefined,
+                skip: page * PAGE_SIZE,
+                limit: PAGE_SIZE + 1,
             });
-            setAccounts(data);
+            if (reqId !== reqIdRef.current) return;
+            const arr = Array.isArray(rows) ? rows : [];
+            setHasNextPage(arr.length > PAGE_SIZE);
+            setAccounts(arr.slice(0, PAGE_SIZE));
         } catch (error) {
+            if (reqId !== reqIdRef.current) return;
             console.error("Failed to fetch corporate accounts:", error);
+            toast({ title: "Failed to load accounts", variant: "destructive" });
+            setAccounts([]);
+            setHasNextPage(false);
         } finally {
-            setLoading(false);
+            if (reqId === reqIdRef.current) setLoading(false);
         }
     };
 
@@ -152,7 +177,7 @@ export default function CorporateAccountsPage() {
             fetchAccounts();
         } catch (error) {
             console.error("Failed to save account:", error);
-            alert("Failed to save account. Please try again.");
+            toast({ title: "Failed to save account", description: "Please try again.", variant: "destructive" });
         } finally {
             setFormLoading(false);
         }
@@ -167,17 +192,13 @@ export default function CorporateAccountsPage() {
             fetchAccounts();
         } catch (error) {
             console.error("Failed to delete account:", error);
-            alert("Failed to delete account.");
+            toast({ title: "Failed to delete account", variant: "destructive" });
         } finally {
             setFormLoading(false);
         }
     };
 
-    const filteredAccounts = accounts.filter(acc =>
-        acc.name.toLowerCase().includes(search.toLowerCase()) ||
-        acc.contact_name?.toLowerCase().includes(search.toLowerCase()) ||
-        acc.contact_email?.toLowerCase().includes(search.toLowerCase())
-    );
+    if (!allowed) return null;
 
     return (
         <div className="space-y-6">
@@ -252,14 +273,14 @@ export default function CorporateAccountsPage() {
                                         </div>
                                     </TableCell>
                                 </TableRow>
-                            ) : filteredAccounts.length === 0 ? (
+                            ) : accounts.length === 0 ? (
                                 <TableRow>
                                     <TableCell colSpan={6} className="text-center py-10 text-muted-foreground">
                                         No corporate accounts found.
                                     </TableCell>
                                 </TableRow>
                             ) : (
-                                filteredAccounts.map((account) => (
+                                accounts.map((account) => (
                                     <TableRow key={account.id}>
                                         <TableCell className="font-medium">
                                             <div className="flex items-center gap-2">
@@ -312,6 +333,13 @@ export default function CorporateAccountsPage() {
                     </Table>
                 </CardContent>
             </Card>
+
+            <Pagination
+                page={page}
+                pageSize={PAGE_SIZE}
+                hasNextPage={hasNextPage}
+                onPageChange={setPage}
+            />
 
             {/* Create/Edit Dialog */}
             <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
@@ -401,7 +429,7 @@ export default function CorporateAccountsPage() {
                     <AlertDialogHeader>
                         <AlertDialogTitle>Are you sure?</AlertDialogTitle>
                         <AlertDialogDescription>
-                            This will permanently delete the corporate account "{currentAccount?.name}".
+                            This will permanently delete the corporate account &quot;{currentAccount?.name}&quot;.
                             This action cannot be undone.
                         </AlertDialogDescription>
                     </AlertDialogHeader>

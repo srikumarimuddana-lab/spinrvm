@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Loader2, RefreshCw, Users, Car, Building2 } from "lucide-react";
 
-// Dynamic import for Leaflet (client-side only)
+// Dynamic import — MapLibre GL needs window, so defer to client.
 const HeatMap = dynamic(() => import("@/components/heat-map"), {
     ssr: false,
     loading: () => (
@@ -43,6 +43,7 @@ export default function HeatMapPage() {
     const [endDate, setEndDate] = useState("");
     const [serviceAreaId, setServiceAreaId] = useState<string>("all");
     const [groupBy, setGroupBy] = useState<"pickup" | "dropoff" | "both">("both");
+    const [dateError, setDateError] = useState<string | null>(null);
 
     // Display toggles
     const [showPickups, setShowPickups] = useState(true);
@@ -103,6 +104,11 @@ export default function HeatMapPage() {
 
     // Fetch heat map data when filters change
     const fetchHeatMapData = useCallback(() => {
+        if (startDate && endDate && startDate > endDate) {
+            setDateError("Start date must be before end date.");
+            return;
+        }
+        setDateError(null); // clear previous error when dates are valid
         setLoading(true);
         const { start_date, end_date } = getDateRange();
 
@@ -151,7 +157,7 @@ export default function HeatMapPage() {
                         variant="outline"
                         size="sm"
                         onClick={fetchHeatMapData}
-                        disabled={loading}
+                        disabled={loading || !!dateError}
                     >
                         <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
                         Refresh
@@ -289,6 +295,9 @@ export default function HeatMapPage() {
                             />
                         </div>
                     </div>
+                    {dateError && (
+                        <p className="text-sm text-destructive mt-2">{dateError}</p>
+                    )}
 
                     {/* Display Toggles */}
                     <div className="flex items-center gap-6 mt-4 pt-4 border-t">

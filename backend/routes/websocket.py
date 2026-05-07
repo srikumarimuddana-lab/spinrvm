@@ -1,23 +1,56 @@
 import asyncio
-import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from firebase_admin import auth as firebase_auth
+from loguru import logger
 
 try:
     from .. import db_supabase
+    from ..core.config import settings
     from ..dependencies import verify_jwt_token
+    from ..settings_loader import get_app_settings
     from ..socket_manager import manager
+    from ..utils.driver_presence import clear_presence, mark_present
+    from ..utils.maps_eta import get_ride_eta_seconds
+    from ..utils.redis_client import redis_expire, redis_incr
 except ImportError:
     import db_supabase
+    from core.config import settings
     from dependencies import verify_jwt_token
     from socket_manager import manager
+    from utils.driver_presence import clear_presence, mark_present
 
 db = db_supabase  # legacy alias
 
-logger = logging.getLogger(__name__)
+# ETA helpers — separate try/except so they survive the dual-import pattern
+# without the formatter stripping them from the main block's except branch.
+try:
+    from ..settings_loader import get_app_settings
+    from ..utils.maps_eta import get_ride_eta_seconds
+except ImportError:
+    try:
+        from settings_loader import get_app_settings  # type: ignore[no-redef]
+        from utils.maps_eta import get_ride_eta_seconds  # type: ignore[no-redef]
+    except ImportError:
+        # Stubs used when backend is imported outside its package (e.g. tests).
+        async def get_app_settings():  # type: ignore[misc]
+            return {}
+
+        async def get_ride_eta_seconds(*_a, **_kw):  # type: ignore[misc]
+            return None
+
+
+# ── Maps API key in-process cache ─────────────────────────────────────────
+# get_app_settings() hits Supabase on every call. We cache the key for 60 s
+# so the hot GPS-ping loop (60 pings/min/driver) stays DB-free.
+_maps_key_cache: str = ""
+_maps_key_fetched_at: float = 0.0
+_MAPS_KEY_CACHE_TTL = 60.0  # seconds
+
+# Ride statuses where the driver is en-route to pickup — ETA to pickup point.
+_ETA_PICKUP_STATUSES = {"driver_assigned", "driver_accepted", "driver_arrived"}
 
 # Note: WebSocket routes are usually attached directly to the app, but APIRouter supports them too.
 # However, the original server.py had it on @app.websocket.
@@ -35,17 +68,190 @@ WS_MAX_MESSAGES_PER_SECOND = 30
 WS_MAX_MESSAGE_SIZE = 64 * 1024  # 64 KB max message payload
 
 
-async def heartbeat_task(websocket: WebSocket, connection_key: str):
-    """Background task that sends periodic ping messages to keep the connection alive
-    and detect dead connections early. This is critical for rideshare apps where
-    a silently disconnected driver would miss ride offers."""
+async def _handle_driver_ws_disconnect(connection_key: str | None, user: dict | None) -> None:
+    """Narrow post-disconnect hook: surface "socket dropped" to admins.
+
+    Intent (``drivers.is_online``) and reachability (Redis presence) are now
+    separated Uber/Lyft-style. The socket dying does NOT mean the driver
+    tapped Stop — the app could be momentarily backgrounded, on a flaky
+    tunnel, or restarting after an OS memory pressure kill. Flipping
+    ``is_online=False`` here produced the "driver taps Go Online, phone
+    shows offline a second later" bug because the iOS background-location
+    permission dialog sends the app into 'inactive', which closed the WS,
+    which ran this handler, which overwrote the Go-Online write.
+
+    So this function deliberately does NOT write to the drivers table.
+    It only:
+
+    1. Broadcasts a ``driver_connection_lost`` admin event so the live
+       monitoring dashboard can show "intent: online / reachable: no" —
+       the same visual distinction Uber's ops console makes.
+    2. Records a best-effort audit entry so operators can see *why* the
+       driver stopped appearing in dispatch (socket died) even though
+       the DB still says online.
+
+    Reconciliation is handled elsewhere: the presence sweeper flips
+    ``is_online=False`` for drivers whose presence TTL has expired for
+    longer than the grace window, and dispatch already filters on live
+    presence so ghost-online rows can't be routed to.
+    """
+    if not connection_key or not connection_key.startswith("driver_") or not user:
+        return
+    # A newer WS reconnecting under the same key means this late-firing
+    # disconnect is stale — nothing to broadcast.
+    if connection_key in manager.active_connections:
+        return
+    try:
+        driver_profile_off = await db.find_one("drivers", {"user_id": user["id"]})
+        if not driver_profile_off:
+            return
+        driver_id = driver_profile_off["id"]
+        was_online = bool(driver_profile_off.get("is_online"))
+
+        # Only log + broadcast for drivers who were actually intent-online;
+        # idle sockets (app open, never tapped Go Online) disconnecting is
+        # not operationally interesting.
+        if was_online:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            try:
+                await db_supabase.insert_one(
+                    "driver_activity_log",
+                    {
+                        "id": str(uuid.uuid4()),
+                        "driver_id": driver_id,
+                        "event_type": "connection_lost",
+                        "title": "Connection lost",
+                        "description": "Driver WebSocket closed — app backgrounded, force-killed, or lost network. Intent stays online; presence sweeper will reconcile if the app doesn't reconnect.",
+                        "metadata": {"reason": "ws_disconnect", "source": "websocket"},
+                        "actor": "system",
+                        "created_at": now_iso,
+                    },
+                )
+            except Exception as _log_exc:
+                logger.warning(f"[WS] activity log insert failed for {driver_id}: {_log_exc}")
+
+            await manager.broadcast_to_admins(
+                {
+                    "type": "driver_connection_lost",
+                    "driver_id": driver_id,
+                    "is_reachable": False,
+                }
+            )
+    except Exception as _exc:
+        logger.warning(f"[WS] disconnect handler failed for {connection_key}: {_exc}")
+
+
+async def _read_token_version(connection_key: str, user_id: str) -> int | None:
+    """Read the row's current ``token_version`` for this connection (B-P1-11).
+
+    The connection_key prefix tells us which table to hit:
+    ``admin_*`` → admin_staff, ``rider_*``/``driver_*`` → users.
+
+    Returns the integer token_version, or None if the read failed
+    (transient DB hiccup) or the row no longer exists. Callers MUST
+    treat None as "do not act" — closing a healthy socket because of
+    a one-off DB blip would be a worse failure mode than letting a
+    revoked token live another 30s until the next heartbeat tick.
+    """
+    try:
+        if connection_key.startswith("admin_"):
+            row = await db.find_one("admin_staff", {"id": user_id})
+        else:
+            row = await db_supabase.get_user_by_id(user_id)
+        if not row:
+            return None
+        return int(row.get("token_version") or 0)
+    except Exception as e:
+        logger.warning(f"WS token_version read failed for {connection_key}: {e}")
+        return None
+
+
+async def heartbeat_task(
+    websocket: WebSocket,
+    connection_key: str,
+    conn_state: dict | None = None,
+    *,
+    user_id: str | None = None,
+    claim_token_version: int = 0,
+):
+    """Background task that sends periodic ping messages to keep the connection
+    alive and detect dead connections early. Critical for rideshare apps where
+    a silently disconnected driver would miss ride offers.
+
+    Detection works in two ways:
+
+    1. If the ping itself fails to send (TCP buffer rejected, RST received),
+       close the socket immediately — pre-existing behavior.
+    2. If pings keep succeeding but the client hasn't sent a pong recently
+       (phone died mid-connection, airplane mode, OS killed the app in the
+       background — all cases where there's no clean close frame), we close
+       the socket after a grace window. `conn_state["last_pong_at"]` is
+       updated by the pong-handler branch in the main receive loop.
+
+    B-P1-11 also re-validates the user's ``token_version`` each tick.
+    If /auth/logout-all (or the B-P1-3 reuse cascade) bumped the row's
+    version since this socket connected, close the socket so the user
+    is forced through /auth/refresh — which will fail (refresh tokens
+    revoked) and surface session-expired UX. Without this re-check, a
+    user who hit "Sign out everywhere" would keep receiving ride
+    events on the old socket until it dropped on its own. DB read
+    failure is treated as "do not act" — see _read_token_version.
+
+    Either path raises ``WebSocketDisconnect`` in the receive loop, which
+    clears Redis presence and triggers ``_handle_driver_ws_disconnect`` to
+    notify admins — but does NOT write ``is_online=False``. See the
+    presence sweeper for the reconciliation layer that actually flips
+    ``is_online`` when a driver stays unreachable past the grace window.
+    """
+    loop = asyncio.get_event_loop()
+    # Tolerate one missed ping window before giving up — HEARTBEAT_INTERVAL
+    # for the ping to go out, HEARTBEAT_TIMEOUT for the pong to come back,
+    # plus one interval of slack for mobile network latency.
+    stale_threshold = (HEARTBEAT_INTERVAL * 2) + HEARTBEAT_TIMEOUT
     try:
         while True:
             await asyncio.sleep(HEARTBEAT_INTERVAL)
+
+            # B-P1-11: token_version re-validation. Skipped when user_id
+            # wasn't passed (legacy callers), so this hook is opt-in and
+            # backwards-compatible with any future heartbeat caller that
+            # hasn't been updated.
+            if user_id:
+                stored_version = await _read_token_version(connection_key, user_id)
+                if stored_version is not None and stored_version > claim_token_version:
+                    logger.info(
+                        f"WS heartbeat: token_version stale for {connection_key} "
+                        f"(stored={stored_version} > claim={claim_token_version}); closing"
+                    )
+                    try:
+                        await websocket.send_json({"type": "session_revoked", "reason": "token_revoked"})
+                    except Exception:  # noqa: S110 — socket may already be dead
+                        pass
+                    try:
+                        await websocket.close(code=1008, reason="token_revoked")
+                    except Exception:  # noqa: S110
+                        pass
+                    break
+
             try:
-                await websocket.send_json({"type": "ping", "timestamp": datetime.utcnow().isoformat()})
+                await websocket.send_json({"type": "ping", "timestamp": datetime.now(timezone.utc).isoformat()})
             except Exception:
-                logger.info(f"Heartbeat failed for {connection_key} - connection likely dead")
+                logger.info(f"Heartbeat send failed for {connection_key} — connection likely dead")
+                break
+            # Pong-staleness check is opt-in via conn_state; legacy/test
+            # callers that pass conn_state=None skip this branch and rely
+            # purely on the send-side failure path above.
+            if conn_state is None:
+                continue
+            last_pong = conn_state.get("last_pong_at", 0.0)
+            if loop.time() - last_pong > stale_threshold:
+                logger.info(
+                    f"[WS] {connection_key} no pong for {loop.time() - last_pong:.1f}s — closing stale connection"
+                )
+                try:
+                    await websocket.close(code=1001)  # 1001 = going away
+                except Exception:  # noqa: S110
+                    pass
                 break
     except asyncio.CancelledError:
         pass
@@ -61,19 +267,60 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
     user = None
     connection_key = None
     hb_task = None
+    # Track the driver row id when this socket authenticates as a driver so
+    # the disconnect / error branches can clear Redis presence regardless of
+    # where the drop happened.
+    current_driver_id: str | None = None
 
     try:
-        # Require the first message to be an auth message containing a token
-        auth_msg = await websocket.receive_json()
+        # Require the first message to be an auth message containing a token.
+        # Enforce a 30-second deadline so clients that connect but never send
+        # anything cannot hold the connection open indefinitely (resource
+        # exhaustion risk under load). Close code 1008 = Policy Violation per
+        # RFC 6455 — correct for an auth protocol timeout.
+        try:
+            auth_msg = await asyncio.wait_for(websocket.receive_json(), timeout=30.0)
+        except asyncio.TimeoutError:
+            logger.warning("[WS] Auth timeout — no message received within 30s, closing connection")
+            await websocket.close(code=1008)  # 1008 = Policy Violation
+            return
+        except Exception:
+            await websocket.close(code=1011)
+            return
         if not auth_msg or auth_msg.get("type") != "auth" or not auth_msg.get("token"):
             await websocket.send_json({"type": "error", "message": "authentication_required"})
             await websocket.close()
             return
 
         token = auth_msg.get("token")
-        # Try Firebase token first
+        # Try Firebase token first. verify_id_token is a synchronous
+        # crypto call (RSA verify + key fetch) that blocks the event
+        # loop for tens of ms under cold-cache — enough to stall every
+        # other socket on this VM during a reconnect storm. Push it
+        # into the default threadpool so only this coroutine waits.
         try:
-            payload = firebase_auth.verify_id_token(token)
+            payload = await asyncio.to_thread(firebase_auth.verify_id_token, token)
+            # B-P1-1 / DV-10: bind audience to client_type. Without this a
+            # driver-app Firebase token would mint a `role: "rider"` row
+            # below (or vice versa) — same cross-app reuse hazard fixed in
+            # routes/auth.py and dependencies/__init__.py. Production fails
+            # fast in core/config._guard_production_secrets when either
+            # FIREBASE_*_APP_ID is unset, so the empty-string branch is
+            # only reachable in dev/test.
+            expected_aud = ""
+            if client_type == "driver":
+                expected_aud = settings.FIREBASE_DRIVER_APP_ID or ""
+            elif client_type == "rider":
+                expected_aud = settings.FIREBASE_RIDER_APP_ID or ""
+            if not expected_aud:
+                await websocket.send_json({"type": "error", "message": "firebase_audience_not_configured"})
+                await websocket.close()
+                return
+            if payload.get("aud") != expected_aud:
+                await websocket.send_json({"type": "error", "message": "ERR_TOKEN_AUDIENCE"})
+                await websocket.close()
+                return
+
             uid = payload.get("uid") or payload.get("user_id")
             user = await db_supabase.get_user_by_id(uid)
             if not user:
@@ -85,16 +332,43 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                         "id": uid,
                         "phone": phone or "",
                         "role": "rider",
-                        "created_at": datetime.utcnow(),
+                        "created_at": datetime.now(timezone.utc),
                         "profile_complete": False,
                     }
                     await db_supabase.create_user(new_user)
                     user = new_user
         except Exception:
-            # Fallback to legacy JWT
+            # Fallback to legacy JWT. Same threadpool rationale —
+            # jwt.decode performs HMAC verification which is fast but
+            # still blocking; keep the loop free under load.
             try:
-                payload = verify_jwt_token(token)
-                user = await db_supabase.get_user_by_id(payload["user_id"])
+                payload = await asyncio.to_thread(verify_jwt_token, token)
+                # Admin tokens are minted with a `role` claim and have no row
+                # in the `users` table (admin-001 is env-var creds; admin_staff
+                # rows live in a separate table). Without this branch the
+                # lookup returns None and the client is told
+                # invalid_token_or_user_not_found — which the monitoring
+                # hook reacts to with exponential-backoff reconnects, i.e.
+                # the repeating "WebSocket failed" loop seen in the admin
+                # live-monitoring console. Mirrors get_current_user() in
+                # dependencies/__init__.py.
+                _admin_roles = {
+                    "admin",
+                    "super_admin",
+                    "operations",
+                    "support",
+                    "finance",
+                    "custom",
+                }
+                if payload.get("role") in _admin_roles and payload.get("email"):
+                    user = {
+                        "id": payload["user_id"],
+                        "email": payload.get("email"),
+                        "phone": payload.get("phone", ""),
+                        "role": payload["role"],
+                    }
+                else:
+                    user = await db_supabase.get_user_by_id(payload["user_id"])
             except Exception:
                 user = None
 
@@ -103,7 +377,34 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
             await websocket.close()
             return
 
-        # If connecting as driver, ensure user has a driver profile
+        # B-P1-11: Reject the handshake if the JWT's token_version claim
+        # is below the row's current value. This catches the case where
+        # the user called /auth/logout-all and is now reconnecting with
+        # a stale token they had cached client-side. HTTP requests
+        # already enforce this in dependencies.py::_token_version_mismatch;
+        # without the same gate here, a stale-token reconnect would
+        # silently succeed and start receiving ride events again.
+        # Firebase tokens carry no token_version claim — treated as 0,
+        # which matches the existing HTTP-side behaviour.
+        try:
+            claim_token_version = int((payload or {}).get("token_version") or 0)
+        except (TypeError, ValueError):
+            claim_token_version = 0
+        try:
+            stored_token_version = int((user or {}).get("token_version") or 0)
+        except (TypeError, ValueError):
+            stored_token_version = 0
+        if claim_token_version < stored_token_version:
+            await websocket.send_json({"type": "error", "message": "session_revoked"})
+            await websocket.close()
+            return
+
+        # If connecting as driver, ensure user has a driver profile.
+        # Cache the driver_id on the connection — the location-update
+        # handler used to re-look-this-up on every GPS ping (1 Hz × N
+        # drivers = constant DB load); keeping it here makes subsequent
+        # per-message handlers pure in-memory lookups.
+        driver_profile = None
         if client_type == "driver":
             driver_profile = (lambda _r: _r[0] if _r else None)(
                 await db_supabase.get_rows("drivers", {"user_id": user["id"]}, limit=1)
@@ -112,6 +413,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                 await websocket.send_json({"type": "error", "message": "user_is_not_a_driver"})
                 await websocket.close()
                 return
+            current_driver_id = driver_profile["id"]
         elif client_type == "admin":
             # Admin clients must have admin or super_admin role
             if user.get("role") not in ("admin", "super_admin"):
@@ -130,23 +432,42 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
         # socket is broken (observed: repeated online toggles on Railway).
         await websocket.send_json({"type": "auth_success", "client_type": client_type})
 
-        # Notify admins that a driver came online
-        if client_type == "driver":
-            driver_profile_for_status = await db.find_one("drivers", {"user_id": user["id"]})
-            if driver_profile_for_status:
-                await manager.broadcast_to_admins(
-                    {
-                        "type": "driver_status_changed",
-                        "driver_id": driver_profile_for_status["id"],
-                        "is_online": True,
-                    }
-                )
+        # Notify admins the driver's socket reconnected. Reflect whatever
+        # the DB says about is_online — don't assume reconnect == online,
+        # because the driver might still be toggled off (e.g. they opened
+        # the app but haven't hit Go Online yet). Admins should always see
+        # intent-based status, not socket-presence. We reuse the profile
+        # we already fetched above rather than issuing a second lookup.
+        if client_type == "driver" and driver_profile:
+            # Uber/Lyft-style presence: socket is alive → driver is present.
+            # Expires after PRESENCE_TTL if the socket dies without a
+            # clean disconnect. Refreshed on every pong and location ping.
+            await mark_present(current_driver_id)
+            await manager.broadcast_to_admins(
+                {
+                    "type": "driver_status_changed",
+                    "driver_id": current_driver_id,
+                    "is_online": bool(driver_profile.get("is_online")),
+                }
+            )
 
-        # GAP FIX: Start heartbeat background task
-        hb_task = asyncio.create_task(heartbeat_task(websocket, connection_key))
-
-        # Rate limiting state
-        _msg_timestamps: list = []
+        # GAP FIX: Start heartbeat background task. conn_state is shared with
+        # heartbeat_task so it can detect stale connections — every pong the
+        # client sends bumps last_pong_at; the heartbeat closes the socket
+        # if pongs stop arriving (phone died, app killed, airplane mode).
+        # B-P1-11: pass user_id + claim_token_version so the heartbeat can
+        # re-validate against the DB row each tick and close the socket
+        # if /auth/logout-all bumped token_version since connect.
+        conn_state: dict = {"last_pong_at": asyncio.get_event_loop().time()}
+        hb_task = asyncio.create_task(
+            heartbeat_task(
+                websocket,
+                connection_key,
+                conn_state,
+                user_id=user["id"],
+                claim_token_version=claim_token_version,
+            )
+        )
 
         # Main message loop
         while True:
@@ -165,71 +486,93 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                 await websocket.send_json({"type": "error", "message": "invalid_json"})
                 continue
 
-            # Per-connection rate limiting
-            now_ts = asyncio.get_event_loop().time()
-            _msg_timestamps = [t for t in _msg_timestamps if now_ts - t < 1.0]
-            if len(_msg_timestamps) >= WS_MAX_MESSAGES_PER_SECOND:
-                await websocket.send_json({"type": "error", "message": "rate_limited"})
+            # B-P1-12: Per-USER rate limiting (not per-connection).
+            # Replaces the old closure-scoped _msg_timestamps which an
+            # attacker could side-step by opening N sockets to get
+            # N×WS_MAX_MESSAGES_PER_SECOND throughput. The manager's
+            # bucket aggregates across every WebSocket the user has
+            # open on this machine. See docs/runbooks/websockets.md
+            # for the multi-replica caveat. We drop the offending
+            # message but keep the socket alive — a brief burst from
+            # a buggy reconnect should not force a re-auth round-trip.
+            if not manager.note_user_message(
+                user["id"],
+                max_per_second=WS_MAX_MESSAGES_PER_SECOND,
+            ):
+                await websocket.send_json(
+                    {
+                        "type": "rate_limited",
+                        "scope": "user",
+                        "limit": WS_MAX_MESSAGES_PER_SECOND,
+                        "window_seconds": 1,
+                        "retry_after_seconds": 1,
+                    }
+                )
                 continue
-            _msg_timestamps.append(now_ts)
 
-            # GAP FIX: Handle pong responses (client acknowledges our ping)
+            # GAP FIX: Handle pong responses (client acknowledges our ping).
+            # Bump last_pong_at so heartbeat_task knows the client is alive —
+            # without this, the staleness check inside heartbeat_task would
+            # treat every connection as dead after a few intervals.
             if data.get("type") == "pong":
-                # Client is alive, nothing to do
+                conn_state["last_pong_at"] = asyncio.get_event_loop().time()
+                # Refresh presence TTL on every heartbeat — this is the
+                # primary signal that the driver is still reachable.
+                if current_driver_id:
+                    await mark_present(current_driver_id)
                 continue
 
             if data.get("type") in ("driver_location", "location_update"):
-                # Accept both message types for backwards compat
-                driver_id = data.get("driver_id")
+                # Accept both message types for backwards compat.
+                # Ownership is enforced by the cached driver_id from auth —
+                # we deliberately ignore any driver_id the client sent to
+                # prevent a compromised token from spoofing locations for
+                # another driver.
                 lat = data.get("lat")
                 lng = data.get("lng")
+                driver_id = current_driver_id if client_type == "driver" else None
 
-                # If driver_id not sent, look it up from the authenticated user
-                if not driver_id and client_type == "driver":
-                    dp = (lambda _r: _r[0] if _r else None)(
-                        await db_supabase.get_rows("drivers", {"user_id": user["id"]}, limit=1)
-                    )
-                    if dp:
-                        driver_id = dp["id"]
-
-                # Verify driver ownership
-                is_valid_driver = False
-                if client_type == "driver" and driver_id:
-                    owned_driver = (lambda _r: _r[0] if _r else None)(
-                        await db_supabase.get_rows("drivers", {"id": driver_id, "user_id": user["id"]}, limit=1)
-                    )
-                    if owned_driver:
-                        is_valid_driver = True
-
-                if driver_id and lat and lng and is_valid_driver:
+                if driver_id and lat and lng:
                     manager.update_driver_location(driver_id, lat, lng)
                     await db_supabase.update_driver_location(driver_id, lat, lng)
+                    # Location pings are an even stronger liveness signal
+                    # than pongs — fresh GPS proves the app is running and
+                    # foregrounded, not just that TCP is open.
+                    await mark_present(driver_id)
 
-                    # ── Persist GPS breadcrumb ──────────────────────
-                    active_ride = (lambda _r: _r[0] if _r else None)(
-                        await db_supabase.get_rows(
-                            "rides",
-                            {
-                                "driver_id": driver_id,
-                                "status": {
-                                    "$in": ["driver_assigned", "driver_accepted", "driver_arrived", "in_progress"]
-                                },
+                    # One query covers breadcrumb tagging AND rider fan-out;
+                    # previously we hit the rides table twice per GPS ping.
+                    # `driver_accepted` is included so breadcrumbs are tagged
+                    # navigating_to_pickup during that brief state, but the
+                    # rider fan-out list stays restricted to assigned/
+                    # arrived/in_progress to match the pre-refactor behaviour.
+                    active_rides = await db_supabase.get_rows(
+                        "rides",
+                        {
+                            "driver_id": driver_id,
+                            "status": {
+                                "$in": [
+                                    "driver_assigned",
+                                    "driver_accepted",
+                                    "driver_arrived",
+                                    "in_progress",
+                                ]
                             },
-                            limit=1,
-                        )
+                        },
+                        limit=10,
                     )
+                    active_ride = active_rides[0] if active_rides else None
                     ride_id = active_ride["id"] if active_ride else None
 
-                    # Determine tracking phase
-                    tracking_phase = "online_idle"
-                    if active_ride:
-                        status_map = {
-                            "driver_assigned": "navigating_to_pickup",
-                            "driver_accepted": "navigating_to_pickup",
-                            "driver_arrived": "arrived_at_pickup",
-                            "in_progress": "trip_in_progress",
-                        }
-                        tracking_phase = status_map.get(active_ride.get("status", ""), "online_idle")
+                    status_map = {
+                        "driver_assigned": "navigating_to_pickup",
+                        "driver_accepted": "navigating_to_pickup",
+                        "driver_arrived": "arrived_at_pickup",
+                        "in_progress": "trip_in_progress",
+                    }
+                    tracking_phase = (
+                        status_map.get(active_ride.get("status", ""), "online_idle") if active_ride else "online_idle"
+                    )
 
                     breadcrumb = {
                         "id": str(uuid.uuid4()),
@@ -240,83 +583,148 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                         "speed": data.get("speed"),
                         "heading": data.get("heading"),
                         "tracking_phase": tracking_phase,
-                        "timestamp": datetime.utcnow(),
+                        "timestamp": datetime.now(timezone.utc),
                     }
                     # 'accuracy' and 'altitude' columns seem missing in Supabase schema, so omitted for now.
 
                     await db_supabase.insert_one("driver_location_history", breadcrumb)
 
-                    # Forward to rider in real-time
-                    rides = await db_supabase.get_rows(
-                        "rides",
-                        {
-                            "driver_id": driver_id,
-                            "status": {"$in": ["driver_assigned", "driver_arrived", "in_progress"]},
-                        },
-                        limit=10,
-                    )
-                    for ride in rides:
+                    # Refresh the Maps API key from DB at most every 60 s.
+                    now_mono = asyncio.get_event_loop().time()
+                    global _maps_key_cache, _maps_key_fetched_at
+                    if now_mono - _maps_key_fetched_at > _MAPS_KEY_CACHE_TTL:
+                        try:
+                            _app_cfg = await get_app_settings()
+                            _maps_key_cache = (_app_cfg or {}).get("google_maps_api_key") or ""
+                        except Exception:
+                            logger.debug("Maps API key refresh failed; retaining stale key", exc_info=True)
+                        _maps_key_fetched_at = now_mono
+
+                    location_update = {
+                        "type": "driver_location_update",
+                        "driver_id": driver_id,
+                        "lat": lat,
+                        "lng": lng,
+                        "speed": data.get("speed"),
+                        "heading": data.get("heading"),
+                    }
+
+                    # Forward to riders of in-flight rides only (exclude
+                    # driver_accepted: rider hasn't been told yet).
+                    # Each ride gets a location_update optionally enriched with
+                    # eta_seconds when the driver is still en-route to pickup.
+                    for ride in active_rides:
+                        if ride.get("status") == "driver_accepted":
+                            continue
+
+                        ride_status = ride.get("status", "")
+                        rider_msg = location_update.copy()
+
+                        if ride_status in _ETA_PICKUP_STATUSES:
+                            pickup_lat = ride.get("pickup_lat")
+                            pickup_lng = ride.get("pickup_lng")
+                            if pickup_lat is not None and pickup_lng is not None:
+                                try:
+                                    eta_sec = await get_ride_eta_seconds(
+                                        driver_lat=lat,
+                                        driver_lng=lng,
+                                        dest_lat=pickup_lat,
+                                        dest_lng=pickup_lng,
+                                        maps_api_key=_maps_key_cache,
+                                        driver_id=driver_id,
+                                        ride_id=ride["id"],
+                                    )
+                                    if eta_sec is not None:
+                                        rider_msg["eta_seconds"] = eta_sec
+                                except Exception:
+                                    logger.debug(
+                                        "ETA fetch failed; omitting eta_seconds from location update", exc_info=True
+                                    )
+
                         await manager.send_personal_message(
-                            {
-                                "type": "driver_location_update",
-                                "driver_id": driver_id,
-                                "lat": lat,
-                                "lng": lng,
-                                "speed": data.get("speed"),
-                                "heading": data.get("heading"),
-                            },
+                            rider_msg,
                             f"rider_{ride['rider_id']}",
                         )
 
                     # Broadcast live location to all connected admin monitoring clients
-                    await manager.broadcast_to_admins(
-                        {
-                            "type": "driver_location_update",
-                            "driver_id": driver_id,
-                            "lat": lat,
-                            "lng": lng,
-                            "speed": data.get("speed"),
-                            "heading": data.get("heading"),
-                        }
-                    )
+                    await manager.broadcast_to_admins(location_update)
 
             elif data.get("type") == "location_batch":
-                # Batch upload of buffered GPS points (offline recovery)
+                # Batch upload of buffered GPS points (offline recovery).
+                # Same ownership model as single-point updates: always use
+                # the driver_id bound to this authenticated socket; ignore
+                # any client-supplied value.
                 points = data.get("points", [])
-                driver_id = data.get("driver_id")
-                if not driver_id and client_type == "driver":
-                    dp = (lambda _r: _r[0] if _r else None)(
-                        await db_supabase.get_rows("drivers", {"user_id": user["id"]}, limit=1)
+                driver_id = current_driver_id if client_type == "driver" else None
+
+                # Per-USER sliding-window rate limit on total batch points to
+                # prevent a single user from flooding driver_location_history
+                # across N concurrent sockets (500-point batches × N sockets
+                # sent every second = N × 30 000 inserts/min).
+                # Uses the same Redis key pattern as the per-message rate limiter
+                # (note_user_message) so the limit aggregates across every WS
+                # connection the user has open on any replica.
+                _BATCH_WINDOW_SECS = 10
+                _BATCH_POINTS_LIMIT = 1000  # max points per user per 10-second window
+                _batch_rl_key = f"ws:batch_rl:{user['id']}"
+                try:
+                    _batch_count = await redis_incr(_batch_rl_key)
+                    # Only set the TTL on the first increment so we don't
+                    # keep resetting the window on every message.
+                    if _batch_count == 1:
+                        await redis_expire(_batch_rl_key, _BATCH_WINDOW_SECS)
+                    # Accumulate the full point count, not just message count.
+                    # INCRBY is not in our thin redis_client wrapper, so call
+                    # incr once per point would be expensive; instead we incr
+                    # by len(points) by calling redis_incr len(points)-1 extra
+                    # times. For batches of reasonable size (≤500) this is
+                    # acceptable; for the common single-connection driver it
+                    # hits the Redis fast-path each time.
+                    for _ in range(len(points) - 1):
+                        await redis_incr(_batch_rl_key)
+                    _batch_total = _batch_count + max(0, len(points) - 1)
+                except Exception:
+                    # Redis unavailable — fall back to allowing the request
+                    # rather than blocking all batch uploads in degraded mode.
+                    logger.warning(
+                        "ws:batch_rl Redis check failed for user %s; allowing batch",
+                        user["id"],
                     )
-                    if dp:
-                        driver_id = dp["id"]
-                if driver_id and points and client_type == "driver":
-                    owned = (lambda _r: _r[0] if _r else None)(
-                        await db_supabase.get_rows("drivers", {"id": driver_id, "user_id": user["id"]}, limit=1)
+                    _batch_total = 0
+                if _batch_total > _BATCH_POINTS_LIMIT:
+                    await websocket.send_json(
+                        {
+                            "type": "rate_limited",
+                            "scope": "location_batch",
+                            "limit": _BATCH_POINTS_LIMIT,
+                            "window_seconds": _BATCH_WINDOW_SECS,
+                        }
                     )
-                    if owned:
-                        docs = []
-                        for pt in points[:500]:  # cap at 500 points per batch
-                            docs.append(
-                                {
-                                    "id": str(uuid.uuid4()),
-                                    "driver_id": driver_id,
-                                    "ride_id": pt.get("ride_id"),
-                                    "lat": pt.get("lat"),
-                                    "lng": pt.get("lng"),
-                                    "speed": pt.get("speed"),
-                                    "heading": pt.get("heading"),
-                                    "accuracy": pt.get("accuracy"),
-                                    "altitude": pt.get("altitude"),
-                                    "tracking_phase": pt.get("tracking_phase", "online_idle"),
-                                    "timestamp": datetime.fromisoformat(pt["timestamp"])
-                                    if pt.get("timestamp")
-                                    else datetime.utcnow(),
-                                }
-                            )
-                        if docs:
-                            await db_supabase.insert_many("driver_location_history", docs)
-                        await websocket.send_json({"type": "location_batch_ack", "count": len(docs)})
+                    continue
+
+                if driver_id and points:
+                    docs = []
+                    for pt in points[:500]:  # cap at 500 points per batch
+                        docs.append(
+                            {
+                                "id": str(uuid.uuid4()),
+                                "driver_id": driver_id,
+                                "ride_id": pt.get("ride_id"),
+                                "lat": pt.get("lat"),
+                                "lng": pt.get("lng"),
+                                "speed": pt.get("speed"),
+                                "heading": pt.get("heading"),
+                                "accuracy": pt.get("accuracy"),
+                                "altitude": pt.get("altitude"),
+                                "tracking_phase": pt.get("tracking_phase", "online_idle"),
+                                "timestamp": datetime.fromisoformat(pt["timestamp"])
+                                if pt.get("timestamp")
+                                else datetime.now(timezone.utc),
+                            }
+                        )
+                    if docs:
+                        await db_supabase.insert_many("driver_location_history", docs)
+                    await websocket.send_json({"type": "location_batch_ack", "count": len(docs)})
 
             elif data.get("type") == "ride_status_update":
                 ride_id = data.get("ride_id")
@@ -342,8 +750,17 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                 lng = data.get("lng")
                 radius = data.get("radius", 5)  # km
                 if lat and lng:
+                    # is_verified + status='active' prevent unverified / suspended
+                    # drivers from being broadcast to riders via the realtime map.
                     drivers = await db_supabase.get_rows(
-                        "drivers", {"is_online": True, "is_available": True}, limit=100
+                        "drivers",
+                        {
+                            "is_online": True,
+                            "is_available": True,
+                            "is_verified": True,
+                            "status": "active",
+                        },
+                        limit=100,
                     )
 
                     nearby = []
@@ -384,7 +801,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                             "ride_id": ride_id,
                             "text": message,
                             "sender": sender,
-                            "timestamp": datetime.utcnow(),
+                            "timestamp": datetime.now(timezone.utc),
                         }
 
                         # Persist message to database
@@ -400,24 +817,40 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
             else:
                 logger.warning(f"Unknown WS message type: {data.get('type')}")
 
-    except WebSocketDisconnect:
-        if connection_key and connection_key.startswith("driver_"):
-            # Notify admins the driver went offline
-            driver_profile_off = await db.find_one("drivers", {"user_id": user["id"]}) if user else None
-            if driver_profile_off:
-                await manager.broadcast_to_admins(
-                    {
-                        "type": "driver_status_changed",
-                        "driver_id": driver_profile_off["id"],
-                        "is_online": False,
-                    }
-                )
-        if connection_key:
+    except WebSocketDisconnect as _wsd:
+        # A newer WS can register under the same connection_key while this
+        # one's disconnect handler is queued. Only run cleanup if THIS
+        # specific socket is still the one the manager has for this key —
+        # otherwise we'd evict the newer socket from active_connections
+        # and clear its presence key, stranding a live connection.
+        # The check is performed atomically inside the disconnect block (not
+        # pre-computed) so a reconnect arriving between the check and the
+        # actual removal cannot slip through.
+        logger.info(
+            f"[GO-ONLINE] WS branch=WebSocketDisconnect connection_key={connection_key} "
+            f"code={getattr(_wsd, 'code', None)} reason={getattr(_wsd, 'reason', None)} "
+            f"current_driver_id={current_driver_id}"
+        )
+        if connection_key and manager.active_connections.get(connection_key) is websocket:
+            # Remove ourselves from the manager dict FIRST. _handle_driver_ws_offline's
+            # "newer WS present" check looks at whether the key is still populated
+            # after we leave — with manager.disconnect happening after, the check
+            # was always tripping on the current socket and the offline flip never
+            # ran on a clean disconnect.
             manager.disconnect(connection_key)
+            if current_driver_id:
+                await clear_presence(current_driver_id)
+            await _handle_driver_ws_disconnect(connection_key, user)
     except Exception as e:
-        logger.exception(f"WebSocket error: {e}")
-        if connection_key:
+        logger.exception(
+            f"[GO-ONLINE] WS branch=Exception connection_key={connection_key} "
+            f"current_driver_id={current_driver_id} err={e}"
+        )
+        if connection_key and manager.active_connections.get(connection_key) is websocket:
             manager.disconnect(connection_key)
+            if current_driver_id:
+                await clear_presence(current_driver_id)
+            await _handle_driver_ws_disconnect(connection_key, user)
         try:
             await websocket.close()
         except Exception:  # noqa: S110

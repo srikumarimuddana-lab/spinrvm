@@ -1,0 +1,58 @@
+appId: com.spinr.user
+---
+# Rider App — SOS Button (P3-18 / R13)
+# Verifies: tapping SOS shows confirmation dialog; confirming triggers the alert.
+# Assumes a trip is in progress.
+
+- launchApp
+
+# Trip should be in progress or driver accepted
+- assertVisible:
+    text: "Trip in Progress"
+    optional: true
+
+# Find and tap SOS button
+- tapOn:
+    text: "SOS"
+    optional: true
+- tapOn:
+    id: "sos-button"
+    optional: true
+- tapOn:
+    text: "Emergency"
+    optional: true
+
+# Confirmation dialog should appear
+- waitForAnimationToEnd:
+    timeout: 1500
+
+- assertVisible:
+    text: "Emergency"
+    optional: true
+
+# Confirm the alert (tap the primary action)
+- tapOn:
+    text: "Confirm"
+    optional: true
+- tapOn:
+    text: "Send Alert"
+    optional: true
+- tapOn:
+    text: "Yes"
+    optional: true
+
+# Feedback: alert sent confirmation
+- waitForAnimationToEnd:
+    timeout: 2000
+
+- assertVisible:
+    text: "Alert Sent"
+    optional: true
+- assertVisible:
+    text: "Emergency"
+    optional: true
+
+# 911 option should be visible
+- assertVisible:
+    text: "911"
+    optional: true

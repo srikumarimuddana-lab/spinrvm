@@ -135,23 +135,28 @@ class TestMergeFareConfigs:
 
 
 def _make_db(vehicle_types=None, areas=None, fare_configs=None):
-    """Build a mock db that supports the chain `db.X.find(...).to_list(N)`."""
+    """Build a mock db that supports the flat Supabase-style interface FareService uses."""
     db = MagicMock()
 
-    def make_table(rows):
-        find_result = MagicMock()
-        find_result.to_list = AsyncMock(return_value=rows or [])
-        table = MagicMock()
-        table.find = MagicMock(return_value=find_result)
-        return table
+    # FareService calls db.get_rows(table_name, filters, limit=...) sequentially:
+    # 1st call: vehicle_types, 2nd call: service_areas, 3rd call: fare_configs
+    side_effects = []
+    side_effects.append(vehicle_types if vehicle_types is not None else [])
+    if areas is not None:
+        side_effects.append(areas)
+    if fare_configs is not None:
+        side_effects.append(fare_configs)
 
-    db.vehicle_types = make_table(vehicle_types)
-    db.service_areas = make_table(areas)
-    db.fare_configs = make_table(fare_configs)
+    db.get_rows = AsyncMock(side_effect=side_effects)
+    db.find_one = AsyncMock(return_value=None)
+    db.insert_one = AsyncMock(return_value=None)
+    db.update_one = AsyncMock(return_value=None)
     return db
 
 
-@pytest.mark.asyncio
+pytestmark = pytest.mark.anyio
+
+
 class TestFareService:
     async def test_returns_empty_when_no_vehicle_types(self):
         svc = FareService(_make_db(vehicle_types=[]))

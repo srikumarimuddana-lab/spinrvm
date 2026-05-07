@@ -9,6 +9,7 @@ This module provides configurable rate limiting with support for:
 """
 
 import hashlib
+import os
 import time
 from functools import wraps
 from typing import Callable, Dict
@@ -33,7 +34,7 @@ except ImportError:  # pragma: no cover — package-relative fallback for tests
 # "memory://" (process-local; dev only). In production the empty default
 # is blocked by _validate_production_config() so we never silently fall
 # back to memory across a multi-machine deploy.
-_rate_limit_storage_uri = settings.RATE_LIMIT_REDIS_URL or "memory://"
+_rate_limit_storage_uri = os.environ.get("RATE_LIMIT_REDIS_URL") or settings.RATE_LIMIT_REDIS_URL or "memory://"
 
 if _rate_limit_storage_uri == "memory://":
     logger.warning(
@@ -47,16 +48,39 @@ else:
     # is misconfigured or temporarily unavailable during a cold start.
     try:
         import redis as _redis_sync
+
         _probe = _redis_sync.from_url(_rate_limit_storage_uri, socket_connect_timeout=2)
         _probe.ping()
         _probe.close()
         scheme = _rate_limit_storage_uri.split("://", 1)[0]
         logger.info(f"Rate limiter using distributed storage backend: {scheme}://…")
     except Exception as _redis_err:
-        logger.warning(
-            f"Redis unavailable — rate limiter using in-memory fallback ({_redis_err})"
+        logger.error(
+            f"Redis unavailable — rate limiter degraded to in-memory fallback ({_redis_err}); OTP brute-force protection weakened on multi-replica deployments"
         )
         _rate_limit_storage_uri = "memory://"
+
+# ---------------------------------------------------------------------------
+# OTP fail-closed policy
+# ---------------------------------------------------------------------------
+# For keys that identify OTP flows ("otp", "send_otp", "verify_otp"), the
+# in-memory fallback is NOT acceptable: on a multi-replica deployment each
+# replica keeps its own counter, so the effective limit becomes (limit ×
+# N_replicas)/window — making brute-force trivially easy.
+#
+# If Redis is unavailable at request time for an OTP key we therefore
+# raise HTTP 503 rather than silently degrade.  Non-OTP keys continue to
+# use the in-memory fallback because the risk is much lower (general API
+# rate limiting, not auth security).
+# ---------------------------------------------------------------------------
+_OTP_KEY_FRAGMENTS = ("otp", "send_otp", "verify_otp")
+
+
+def _is_otp_key(key: str) -> bool:
+    """Return True if *key* belongs to an OTP rate-limit bucket."""
+    lower = key.lower()
+    return any(fragment in lower for fragment in _OTP_KEY_FRAGMENTS)
+
 
 # Default limiter — reads the real client IP from X-Forwarded-For when the
 # app sits behind a load balancer or CDN (Cloudflare, Fly.io, Railway). (P2-7)
@@ -65,7 +89,6 @@ default_limiter = Limiter(
     default_limits=["100/minute", "1000/hour"],
     storage_uri=_rate_limit_storage_uri,
 )
-
 
 # ============================================================================
 # Custom Key Functions
@@ -93,7 +116,7 @@ def get_client_identifier(request: Request) -> str:
         # Note: This is a best-effort attempt, body may already be consumed
         # For actual phone-based limiting, apply decorator directly with phone param
     except Exception:  # noqa: S110
-        pass
+        logger.warning("rate_limiter: get_rate_limit_key: body parse failed; falling back to IP", exc_info=True)
 
     # Fallback to real IP (respects X-Forwarded-For behind proxies)
     return f"ip:{get_ipaddr(request)}"
@@ -170,17 +193,50 @@ login_rate_limit = default_limiter.limit("5/minute")
 # General API endpoints - more permissive
 api_rate_limit = default_limiter.limit("30/minute")
 
-# Ride creation - prevent spam ride requests
-ride_request_limit = default_limiter.limit("10/minute")
+# Ride creation - prevent spam ride requests (max 5 per minute per user)
+ride_request_limit = default_limiter.limit("5/minute")
+
+# Ride cancellation - max 10 per hour per user (prevents cancellation farming)
+cancel_ride_limit = default_limiter.limit("10/hour")
+
+# Ride read endpoints — generous ceiling covers 3 s polling without churn
+ride_read_limit = default_limiter.limit("120/minute")
+
+# Promo enumeration guard - max 20 per minute
+promo_available_limit = default_limiter.limit("20/minute")
+
+# Promo brute-force guard - max 10 per minute
+promo_validate_limit = default_limiter.limit("10/minute")
 
 # Location updates - allow frequent updates for drivers
 location_update_limit = default_limiter.limit("60/minute")
+
+# Payment actions (tip, process-payment) — sensitive financial ops, tight limit
+payment_action_limit = default_limiter.limit("5/minute")
+
+# Ride rating — once per completed ride, extra friction prevents spam
+ride_rating_limit = default_limiter.limit("5/hour")
+
+# In-ride messaging — generous but bounded to prevent SMS relay abuse
+ride_message_limit = default_limiter.limit("30/minute")
+
+# Ride state transitions (start, complete, emergency) — ride lifecycle ops
+ride_action_limit = default_limiter.limit("20/minute")
 
 # Document uploads - restrictive to prevent abuse
 document_upload_limit = default_limiter.limit("5/minute")
 
 # Admin endpoints - restrictive for security
 admin_rate_limit = default_limiter.limit("100/minute")
+
+# Admin wallet mutations — additional friction against accidental bulk credit/debit (F-36)
+admin_wallet_limit = default_limiter.limit("10/minute")
+
+# Admin mass notifications — prevent accidental spam blasts (F-36)
+admin_mass_notify_limit = default_limiter.limit("3/minute")
+
+# Admin staff deletion — one-way destructive action, extra caution (F-36)
+admin_staff_delete_limit = default_limiter.limit("5/minute")
 
 
 # ============================================================================
@@ -192,20 +248,66 @@ async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) 
     """
     Custom handler for rate limit exceeded errors.
 
-    Returns a 429 JSON response with retry information. Previously this
-    returned a plain dict, which Starlette serialised with a 200 status —
-    clients that check `response.status != 429` treated throttled
-    requests as successful. Always return a JSONResponse here so the
-    HTTP status and Retry-After header are set correctly.
+    Emits the response shape pinned by docs/runbooks/rate-limits.md:
+
+      Headers:
+        Retry-After: <seconds>           — RFC 9110, integer seconds
+        RateLimit-Limit: <amount>        — IETF draft-ietf-httpapi-ratelimit-headers
+        RateLimit-Remaining: 0           — always 0 once we're past the limit
+        RateLimit-Reset: <seconds>       — same as Retry-After (delta-seconds form)
+
+      Body:
+        {
+          "error": "rate_limit_exceeded",
+          "message": "...",
+          "retry_after": <seconds>,
+          "limit": <amount> | null,
+          "documentation_url": "..."
+        }
+
+    The previous implementation hard-coded ``Retry-After: 60`` as a
+    sentinel. The 429 fired correctly, but a client looking at the
+    header to decide "wait 60s before retrying" was always told 60s
+    regardless of whether the actual limit was 5/minute or 5/hour.
+    We now read the limit's window size from ``exc.limit.limit`` —
+    a worst-case wait that's guaranteed correct (the bucket will
+    have headroom by then). Computing the *exact* bucket reset time
+    requires probing the storage backend's per-key state, which the
+    slowapi/limits abstraction doesn't expose cheaply; window-size
+    is the standard fallback and what most rate-limit middleware
+    use as Retry-After.
     """
-    # Calculate retry time from the exception
-    retry_after = getattr(exc, "retry_after", 60)
+    retry_after = 60  # safe default if exc.limit is malformed
+    limit_amount: int | None = None
+    try:
+        # exc.limit is a slowapi.wrappers.Limit; the parsed RateLimitItem
+        # is exc.limit.limit (yes, doubly nested — slowapi naming).
+        rl_item = exc.limit.limit
+        retry_after = int(rl_item.get_expiry())
+        limit_amount = int(rl_item.amount)
+    except (AttributeError, TypeError, ValueError) as e:
+        # Never crash the handler — emitting a 429 with a sentinel
+        # Retry-After is strictly better than 500'ing a rate-limited
+        # request. Log loudly so we notice if slowapi changes shape.
+        logger.warning(f"rate_limit_handler: could not derive retry_after/limit ({e})")
+
+    headers: Dict[str, str] = {"Retry-After": str(retry_after)}
+    if limit_amount is not None:
+        # IETF draft-ietf-httpapi-ratelimit-headers (in last call as of
+        # 2026). Even if the draft never RFCs, GitHub/Twitter/Stripe
+        # already emit these and our clients' parsing logic is the
+        # de-facto consumer. RateLimit-Reset uses the delta-seconds
+        # form (same value as Retry-After) per the draft's §5.3.
+        headers["RateLimit-Limit"] = str(limit_amount)
+        headers["RateLimit-Remaining"] = "0"
+        headers["RateLimit-Reset"] = str(retry_after)
 
     logger.warning(
         f"Rate limit exceeded | "
         f"Path: {request.url.path} | "
         f"Method: {request.method} | "
         f"IP: {get_remote_address(request)} | "
+        f"Limit: {limit_amount} | "
         f"Retry-After: {retry_after}s"
     )
 
@@ -215,9 +317,10 @@ async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) 
             "error": "rate_limit_exceeded",
             "message": "Too many requests. Please slow down and try again later.",
             "retry_after": retry_after,
+            "limit": limit_amount,
             "documentation_url": "https://spinr.app/docs/rate-limits",
         },
-        headers={"Retry-After": str(retry_after)},
+        headers=headers,
     )
 
 
@@ -274,7 +377,16 @@ class RedisRateLimiter:
         redis = await self._get_redis()
 
         if redis == "memory":
-            # Fallback to memory-based limiting (not recommended for production)
+            # Fail-closed for OTP keys: in-memory fallback is unsafe on
+            # multi-replica deployments because each replica tracks its own
+            # counter, multiplying the effective limit by N_replicas.
+            # See module-level comment on _OTP_KEY_FRAGMENTS for the rationale.
+            if _is_otp_key(key):
+                raise HTTPException(
+                    status_code=503,
+                    detail="Rate limiting unavailable, please retry",
+                )
+            # Non-OTP keys: in-memory fallback is acceptable for general rate limiting.
             return self._memory_check(key, limit, window)
 
         # Redis-based sliding window
@@ -295,10 +407,23 @@ class RedisRateLimiter:
         try:
             results = await pipe.execute()
         except Exception as e:
-            # Redis went down mid-operation — reset connection and use in-memory fallback
-            logger.warning(f"Redis unavailable — rate limiter using in-memory fallback ({e})")
+            # Redis went down mid-operation — reset connection for next attempt.
+            # Log at ERROR so this surfaces in SRE alerting (DV-6).
+            logger.error(
+                f"Redis unavailable mid-operation — rate limiter degraded to in-memory ({e}); "
+                "OTP brute-force protection weakened on multi-replica deployments"
+            )
             self._redis = None
-            return self._memory_check(key.replace("ratelimit:", ""), limit, window)
+            bare_key = key.replace("ratelimit:", "")
+            # Fail-closed for OTP keys: do NOT fall back to in-memory — raise
+            # 503 so the caller retries once Redis recovers.  See module-level
+            # comment on _OTP_KEY_FRAGMENTS for the full rationale.
+            if _is_otp_key(bare_key):
+                raise HTTPException(
+                    status_code=503,
+                    detail="Rate limiting unavailable, please retry",
+                ) from None
+            return self._memory_check(bare_key, limit, window)
 
         current_count = results[2]
 

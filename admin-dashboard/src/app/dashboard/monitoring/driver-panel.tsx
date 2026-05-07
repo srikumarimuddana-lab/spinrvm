@@ -1,13 +1,16 @@
 // src/app/dashboard/monitoring/driver-panel.tsx
 "use client";
 
+import { useEffect, useState } from "react";
 import { MonitoringDriver } from "./types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useToast } from "@/components/ui/use-toast";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { ExternalLink, Flag, Phone, Star } from "lucide-react";
 import Link from "next/link";
+import { getDriverRides, getDriverDocuments } from "@/lib/api";
 
 interface DriverPanelProps {
     driver: MonitoringDriver;
@@ -15,12 +18,33 @@ interface DriverPanelProps {
 }
 
 export function DriverPanel({ driver, onRideClick }: DriverPanelProps) {
+    const { toast } = useToast();
+    const [rides, setRides] = useState<any[]>([]);
+    const [docs, setDocs] = useState<any[]>([]);
+    const [tabLoading, setTabLoading] = useState(false);
+
+    useEffect(() => {
+        setTabLoading(true);
+        Promise.all([
+            getDriverRides(driver.id),
+            getDriverDocuments(driver.id),
+        ]).then(([ridesRes, docsRes]) => {
+            setRides((ridesRes as any)?.rides?.slice(0, 10) ?? []);
+            setDocs(Array.isArray(docsRes) ? docsRes : []);
+        }).catch(() => {}).finally(() => setTabLoading(false));
+    }, [driver.id]);
+
     const initials = driver.name
         .split(" ")
         .map((n) => n[0])
         .join("")
         .toUpperCase()
         .slice(0, 2);
+
+    // Stale = driver tapped "Go Online" but their app hasn't pinged us within
+    // the presence TTL (~90 s). Effective is_online is already false here, so
+    // the main badge shows Offline — this pill just explains *why* to the operator.
+    const isStale = driver.intent_online === true && driver.is_present === false;
 
     return (
         <div className="flex h-full flex-col overflow-hidden">
@@ -34,12 +58,23 @@ export function DriverPanel({ driver, onRideClick }: DriverPanelProps) {
                     <p className="truncate font-semibold">{driver.name}</p>
                     <p className="text-xs text-muted-foreground">{driver.phone}</p>
                 </div>
-                <Badge
-                    variant={driver.is_online ? "default" : "secondary"}
-                    className={driver.is_online ? "bg-green-500 hover:bg-green-500" : ""}
-                >
-                    {driver.is_online ? (driver.active_ride_id ? "On Ride" : "Online") : "Offline"}
-                </Badge>
+                <div className="flex flex-col items-end gap-1">
+                    <Badge
+                        variant={driver.is_online ? "default" : "secondary"}
+                        className={driver.is_online ? "bg-green-500 hover:bg-green-500" : ""}
+                    >
+                        {driver.is_online ? (driver.active_ride_id ? "On Ride" : "Online") : "Offline"}
+                    </Badge>
+                    {isStale && (
+                        <Badge
+                            variant="outline"
+                            className="border-amber-500/50 text-[10px] text-amber-600"
+                            title="Driver tapped Go Online but their app is not reachable (no heartbeat within 90s)."
+                        >
+                            Stale
+                        </Badge>
+                    )}
+                </div>
             </div>
 
             <Tabs defaultValue="overview" className="flex flex-1 flex-col overflow-hidden">
@@ -65,8 +100,8 @@ export function DriverPanel({ driver, onRideClick }: DriverPanelProps) {
                             <p className="text-xs text-muted-foreground">Rides</p>
                         </div>
                         <div className="rounded-lg bg-muted p-2 text-center">
-                            <p className="text-lg font-bold text-green-600">
-                                {driver.is_online ? "●" : "○"}
+                            <p className={`text-sm font-bold ${driver.is_online ? "text-green-600" : "text-muted-foreground"}`}>
+                                {driver.is_online ? (driver.active_ride_id ? "On Ride" : "Online") : "Offline"}
                             </p>
                             <p className="text-xs text-muted-foreground">Status</p>
                         </div>
@@ -121,6 +156,7 @@ export function DriverPanel({ driver, onRideClick }: DriverPanelProps) {
                             size="sm"
                             variant="outline"
                             className="flex-1 gap-1.5 text-xs text-destructive hover:text-destructive"
+                            onClick={() => toast({ title: "Use driver profile to flag", description: `Open the full profile for ${driver.name} to submit a formal flag.` })}
                         >
                             <Flag className="h-3.5 w-3.5" /> Flag
                         </Button>
@@ -138,24 +174,44 @@ export function DriverPanel({ driver, onRideClick }: DriverPanelProps) {
 
                 {/* Rides tab */}
                 <TabsContent value="rides" className="flex-1 overflow-y-auto px-4 pb-4">
-                    <div className="mt-4">
-                        <Link href={`/dashboard/drivers?id=${driver.id}`}>
-                            <Button size="sm" variant="outline" className="w-full text-xs">
-                                View ride history in Drivers page
-                            </Button>
-                        </Link>
-                    </div>
+                    {tabLoading ? (
+                        <div className="flex justify-center py-8"><span className="text-xs text-muted-foreground">Loading…</span></div>
+                    ) : rides.length === 0 ? (
+                        <p className="pt-6 text-center text-xs text-muted-foreground">No rides found</p>
+                    ) : (
+                        <div className="mt-2 space-y-1">
+                            {rides.map((r: any) => (
+                                <div key={r.id} className="rounded-lg border border-border px-3 py-2 text-xs">
+                                    <div className="flex items-center justify-between">
+                                        <span className="font-medium">{r.pickup_address?.split(',')[0] ?? 'Pickup'} → {r.dropoff_address?.split(',')[0] ?? 'Dropoff'}</span>
+                                        <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${r.status === 'completed' ? 'bg-green-100 text-green-700' : r.status === 'cancelled' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>{r.status}</span>
+                                    </div>
+                                    <div className="mt-0.5 flex items-center justify-between text-muted-foreground">
+                                        <span>{r.created_at ? new Date(r.created_at).toLocaleDateString('en-CA') : '—'}</span>
+                                        <span>${r.total_fare ? Number(r.total_fare).toFixed(2) : '—'}</span>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
                 </TabsContent>
 
                 {/* Documents tab */}
                 <TabsContent value="documents" className="flex-1 overflow-y-auto px-4 pb-4">
-                    <div className="mt-4">
-                        <Link href={`/dashboard/documents?driver_id=${driver.id}`}>
-                            <Button size="sm" variant="outline" className="w-full text-xs">
-                                View Documents
-                            </Button>
-                        </Link>
-                    </div>
+                    {tabLoading ? (
+                        <div className="flex justify-center py-8"><span className="text-xs text-muted-foreground">Loading…</span></div>
+                    ) : docs.length === 0 ? (
+                        <p className="pt-6 text-center text-xs text-muted-foreground">No documents found</p>
+                    ) : (
+                        <div className="mt-2 space-y-2">
+                            {docs.map((doc: any) => (
+                                <div key={doc.id} className="flex items-center justify-between rounded-lg border border-border px-3 py-2 text-xs">
+                                    <span className="font-medium capitalize">{(doc.document_type ?? 'Document').replace(/_/g, ' ')}</span>
+                                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${doc.status === 'verified' ? 'bg-green-100 text-green-700' : doc.status === 'expired' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>{doc.status ?? 'pending'}</span>
+                                </div>
+                            ))}
+                        </div>
+                    )}
                 </TabsContent>
             </Tabs>
         </div>

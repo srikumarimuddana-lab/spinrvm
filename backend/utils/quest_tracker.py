@@ -5,12 +5,14 @@ for any active quests the driver has joined.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 try:
     from ..db import db
+    from .datetime_utils import parse_iso_utc
 except ImportError:
     from db import db
+    from utils.datetime_utils import parse_iso_utc
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +39,7 @@ async def update_quest_progress_on_ride_complete(driver_id: str, ride: dict):
                 continue
 
             # Check if quest has expired
-            now = datetime.utcnow().isoformat()
+            now = datetime.now(timezone.utc).isoformat()
             if quest.get("end_date", "") < now:
                 await db.update_one(
                     "quest_progress",
@@ -60,12 +62,7 @@ async def update_quest_progress_on_ride_complete(driver_id: str, ride: dict):
                 completed_at = ride.get("completed_at") or ride.get("updated_at")
                 if completed_at:
                     if isinstance(completed_at, str):
-                        try:
-                            completed_at = datetime.fromisoformat(
-                                completed_at.replace("Z", "+00:00").replace("+00:00", "")
-                            )
-                        except ValueError:
-                            completed_at = datetime.utcnow()
+                        completed_at = parse_iso_utc(completed_at) or datetime.now(timezone.utc)
                     hour = completed_at.hour
                     if 7 <= hour <= 9 or 17 <= hour <= 20:
                         new_value += 1
@@ -74,11 +71,11 @@ async def update_quest_progress_on_ride_complete(driver_id: str, ride: dict):
             target = quest["target_value"]
             update_data = {
                 "current_value": new_value,
-                "updated_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
             }
             if new_value >= target:
                 update_data["status"] = "completed"
-                update_data["completed_at"] = datetime.utcnow().isoformat()
+                update_data["completed_at"] = datetime.now(timezone.utc).isoformat()
                 logger.info(f"Driver {driver_id} completed quest {quest['id']} ({quest['title']})")
 
             await db.update_one(

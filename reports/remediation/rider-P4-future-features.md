@@ -47,15 +47,15 @@ Backend cron job + FCM notification type `scheduled_ride_reminder`.
 
 ---
 
-## Checklist (plan, not implement)
+## Checklist
 
-- [ ] R-P4-1 Live tracking web view for shared ride link
-- [ ] R-P4-2 Promo selection UI in ride-options
-- [ ] R-P4-3 Ride receipt PDF/share
-- [ ] R-P4-4 Dark mode toggle
-- [ ] R-P4-5 Additional language support (ES, ZH)
-- [ ] R-P4-6 AI FAQ assistant in support screen
-- [ ] R-P4-7 Ride sharing / carpool mode
-- [ ] R-P4-8 Loyalty program full implementation
-- [ ] R-P4-9 Wallet peer-to-peer transfer UI
-- [ ] R-P4-10 Scheduled ride push reminder
+- [x] R-P4-1 Live tracking web view for shared ride link
+- [x] R-P4-2 Promo selection UI in ride-options
+- [x] R-P4-3 Ride receipt PDF/share
+- [x] R-P4-4 Dark mode toggle
+- [x] R-P4-5 Additional language support (ES, ZH)
+- [x] R-P4-6 AI FAQ assistant in support screen
+- [x] R-P4-7 Ride sharing / carpool mode
+- [x] R-P4-8 Loyalty program full implementation
+- [x] R-P4-9 Wallet peer-to-peer transfer UI
+- [x] R-P4-10 Scheduled ride push reminder

@@ -13,7 +13,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     icon: './assets/images/icon.png',
     scheme: SCHEME,
     userInterfaceStyle: 'automatic',
-    newArchEnabled: true,
+    // @ts-expect-error newArchEnabled is valid Expo config but not yet typed in ExpoConfig
+    newArchEnabled: false, // disabled: pre-launch stability over perf; re-enable post go-live as a planned migration
     updates: {
         url: 'https://u.expo.dev/1ed02cf4-97cb-4678-b5a2-0881f89abaa8',
     },
@@ -26,11 +27,13 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     splash: {
         backgroundColor: '#ee2b2b',
         resizeMode: 'contain',
-        image: './assets/images/splash-image.png',
-        imageWidth: 200,
+        image: './assets/images/icon.png',
+        imageWidth: 160,
     },
-    ios: {
+    ios: ({
         supportsTablet: true,
+        // @ts-expect-error minimumOsVersion is valid Expo config but not yet in SDK 54 type defs
+        minimumOsVersion: '16.0', // SDK 55 minimum; was 13.0 on SDK 54
         bundleIdentifier: BUNDLE_ID,
         googleServicesFile: './GoogleService-Info.plist',
         config: {
@@ -133,13 +136,12 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
                 },
             ],
         },
-    },
+    } as any),
     android: {
         adaptiveIcon: {
             foregroundImage: './assets/images/adaptive-icon.png',
             backgroundColor: '#ee2b2b'
         },
-        edgeToEdgeEnabled: true,
         package: BUNDLE_ID,
         googleServicesFile: './google-services.json',
         config: {
@@ -165,16 +167,23 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         favicon: './assets/images/favicon.png'
     },
     plugins: [
+        './plugins/withGradleWrapper',
         'expo-router',
-        ['@stripe/stripe-react-native', {
-            merchantIdentifier: 'merchant.com.spinr.driver',
-            enableGooglePay: true,
+        ['expo-location', {
+            locationAlwaysAndWhenInUsePermission:
+                'Spinr Driver needs your location to dispatch ride requests, navigate to pickups, and share your live position with riders during active trips.',
+            locationWhenInUsePermission:
+                'Spinr Driver needs your location to dispatch ride requests and navigate to pickups.',
+            locationAlwaysPermission:
+                'Spinr Driver needs background location so you keep receiving ride offers and stay visible to riders when the app is in the background.',
+            isAndroidBackgroundLocationEnabled: true,
+            isIosBackgroundLocationEnabled: true,
         }],
         [
             'expo-splash-screen',
             {
-                image: './assets/images/splash-image.png',
-                imageWidth: 200,
+                image: './assets/images/icon.png',
+                imageWidth: 160,
                 resizeMode: 'contain',
                 backgroundColor: '#ee2b2b'
             }
@@ -194,8 +203,16 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
             ios: { appCheckProviderFactory: 'DeviceCheck' },
             android: { appCheckProviderFactory: 'playIntegrity' },
         }],
-        // LogRocket native module needs Android minSdk 25.
-        ['expo-build-properties', { android: { minSdkVersion: 25 } }],
+        // SDK 55 / RN 0.85.2 requires compileSdkVersion 35 + Kotlin 2.1.20 (from @react-native/gradle-plugin libs.versions.toml).
+        // LogRocket native module requires minSdkVersion 25.
+        ['expo-build-properties', {
+            android: {
+                minSdkVersion: 25,
+                compileSdkVersion: 35,
+                targetSdkVersion: 35,
+                kotlinVersion: '2.1.20',
+            }
+        }],
         '@logrocket/react-native',
     ],
     experiments: {

@@ -1,5 +1,5 @@
 // @ts-nocheck
-import React, { useEffect, useRef, useMemo } from 'react';
+import React, { useEffect, useRef, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -89,10 +89,15 @@ export default function CustomAlert({
 }: CustomAlertProps) {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
+  const [isPending, setIsPending] = useState(false);
 
   const scaleAnim = useRef(new Animated.Value(0.85)).current;
   const opacityAnim = useRef(new Animated.Value(0)).current;
+  const inputRef = useRef<TextInput>(null);
 
+  // Focus the input after the open animation completes — firing earlier
+  // (e.g. autoFocus, or a fixed delay) races against Modal native-window
+  // readiness on Android and the keyboard request is silently dropped.
   useEffect(() => {
     if (visible) {
       Animated.parallel([
@@ -107,19 +112,27 @@ export default function CustomAlert({
           duration: 200,
           useNativeDriver: true,
         }),
-      ]).start();
+      ]).start(() => {
+        if (showInput) inputRef.current?.focus();
+      });
     } else {
       scaleAnim.setValue(0.85);
       opacityAnim.setValue(0);
     }
-  }, [visible]);
+  }, [visible, showInput]);
 
   const config = VARIANT_CONFIG[variant];
   const iconName = (icon || config.icon) as keyof typeof Ionicons.glyphMap;
 
-  const handlePress = (button: AlertButton) => {
-    button.onPress?.();
-    onClose();
+  const handlePress = async (button: AlertButton) => {
+    if (isPending) return;
+    setIsPending(true);
+    try {
+      await button.onPress?.();
+    } finally {
+      setIsPending(false);
+      onClose();
+    }
   };
 
   const cancelButton = buttons.find((b) => b.style === 'cancel');
@@ -128,12 +141,13 @@ export default function CustomAlert({
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        behavior="padding"
         style={styles.overlay}
       >
         <TouchableOpacity
           style={styles.backdrop}
           activeOpacity={1}
+          accessible={false}
           onPress={cancelButton ? () => handlePress(cancelButton) : onClose}
         />
         <Animated.View
@@ -159,13 +173,14 @@ export default function CustomAlert({
           {/* Input field */}
           {showInput && (
             <TextInput
+              ref={inputRef}
               style={styles.input}
               placeholder={inputPlaceholder}
               placeholderTextColor={colors.textDim}
               value={inputValue}
               onChangeText={onInputChange}
               autoCapitalize="characters"
-              autoFocus
+              accessibilityLabel={inputPlaceholder || 'Input field'}
             />
           )}
 
@@ -185,6 +200,7 @@ export default function CustomAlert({
                   ]}
                   onPress={() => handlePress(button)}
                   activeOpacity={0.8}
+                  disabled={isPending}
                 >
                   <Text
                     style={[
@@ -204,6 +220,7 @@ export default function CustomAlert({
                 style={[styles.button, styles.cancelButton]}
                 onPress={() => handlePress(cancelButton)}
                 activeOpacity={0.7}
+                disabled={isPending}
               >
                 <Text style={[styles.buttonText, styles.cancelButtonText]}>
                   {cancelButton.text}

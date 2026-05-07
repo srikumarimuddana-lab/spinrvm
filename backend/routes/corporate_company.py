@@ -4,11 +4,13 @@ and used by the rider app for read paths (balances).
 Separation: writes requiring admin role use require_company_admin.
 Reads available to any active member use require_company_member.
 """
+
 from __future__ import annotations
 
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 try:
     from ..db_supabase import (  # type: ignore
@@ -16,18 +18,23 @@ try:
         delete_allowed_domain,
         get_allowance_request_by_id,
         get_corporate_member_by_id,
+        get_corporate_policy,
         get_corporate_wallet_by_company,
         get_member_allowance,
         list_allowed_domains,
         list_company_allowance_requests,
         list_company_allowances,
         list_company_members,
+        list_company_ride_payment_sources,
+        list_wallet_transactions,
         update_allowance_request,
         update_corporate_member,
+        upsert_corporate_policy,
         upsert_member_allowance,
     )
     from ..dependencies.company_guard import (  # type: ignore
         require_company_admin,
+        require_company_member,
     )
     from ..schemas.corporate import (  # type: ignore
         AllowanceCreate,
@@ -36,6 +43,8 @@ try:
         AllowedDomainCreate,
         MemberInvite,
         MemberUpdate,
+        PolicyCreate,
+        PolicyUpdate,
     )
     from ..services.corporate_allowance_service import apply_grant  # type: ignore
     from ..services.corporate_membership_service import invite_member  # type: ignore
@@ -45,18 +54,23 @@ except ImportError:
         delete_allowed_domain,
         get_allowance_request_by_id,
         get_corporate_member_by_id,
+        get_corporate_policy,
         get_corporate_wallet_by_company,
         get_member_allowance,
         list_allowed_domains,
         list_company_allowance_requests,
         list_company_allowances,
         list_company_members,
+        list_company_ride_payment_sources,
+        list_wallet_transactions,
         update_allowance_request,
         update_corporate_member,
+        upsert_corporate_policy,
         upsert_member_allowance,
     )
     from dependencies.company_guard import (  # type: ignore
         require_company_admin,
+        require_company_member,
     )
     from schemas.corporate import (  # type: ignore
         AllowanceCreate,
@@ -65,12 +79,34 @@ except ImportError:
         AllowedDomainCreate,
         MemberInvite,
         MemberUpdate,
+        PolicyCreate,
+        PolicyUpdate,
     )
     from services.corporate_allowance_service import apply_grant  # type: ignore
     from services.corporate_membership_service import invite_member  # type: ignore
 
 
 router = APIRouter(prefix="/company/{company_id}", tags=["Corporate Company"])
+
+
+def _validate_geofence(geofence: Optional[dict]) -> None:
+    """Raise 422 if geofence is not a valid minimal GeoJSON FeatureCollection."""
+    if geofence is None:
+        return
+    if not isinstance(geofence, dict) or geofence.get("type") != "FeatureCollection":
+        raise HTTPException(status_code=422, detail="geofence must be a GeoJSON FeatureCollection")
+    features = geofence.get("features")
+    if not isinstance(features, list):
+        raise HTTPException(status_code=422, detail="geofence.features must be a list")
+    for feat in features:
+        if not isinstance(feat, dict):
+            raise HTTPException(status_code=422, detail="each geofence feature must be an object")
+        geom = feat.get("geometry")
+        if not isinstance(geom, dict) or not geom.get("type") or "coordinates" not in geom:
+            raise HTTPException(
+                status_code=422,
+                detail="each geofence feature must have a geometry with type and coordinates",
+            )
 
 
 # ---------- Members ----------
@@ -134,8 +170,14 @@ async def remove_member(
 
 # ---------- Allowances ----------
 @router.get("/allowances")
-async def list_allowances(company_id: str, guard=Depends(require_company_admin)):
-    return await list_company_allowances(company_id)
+async def list_allowances(
+    company_id: str,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+    guard=Depends(require_company_admin),
+):
+    rows = await list_company_allowances(company_id)
+    return rows[skip : skip + limit]
 
 
 @router.get("/members/{member_id}/allowance")
@@ -166,6 +208,9 @@ async def set_allowance(
     for k in ("period_start", "period_end"):
         if patch.get(k) is not None:
             patch[k] = patch[k].isoformat()
+    for money_key in ("amount", "auto_approve_topup_amount"):
+        if patch.get(money_key) is not None:
+            patch[money_key] = str(Decimal(str(patch[money_key])).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
     return await upsert_member_allowance(member_id=member_id, patch=patch)
 
 
@@ -184,6 +229,9 @@ async def patch_allowance(
         patch["status"] = patch["status"].value
     if not patch:
         return await get_member_allowance(member_id) or {}
+    for money_key in ("amount", "auto_approve_topup_amount"):
+        if money_key in patch and patch[money_key] is not None:
+            patch[money_key] = str(Decimal(str(patch[money_key])).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
     return await upsert_member_allowance(member_id=member_id, patch=patch)
 
 
@@ -248,14 +296,17 @@ async def decide_allowance_request(
         wallet = await get_corporate_wallet_by_company(company_id)
         if not allowance or not wallet:
             raise HTTPException(status_code=409, detail="missing allowance or wallet")
+        amount_raw = request.get("amount")
+        if amount_raw is None:
+            raise HTTPException(status_code=422, detail="allowance request amount is required")
         await apply_grant(
             wallet_id=wallet["id"],
             allowance_id=allowance["id"],
             member_id=request["member_id"],
-            amount=float(request["amount"]),
+            amount=Decimal(str(amount_raw)),
             actor_user_id=guard["user"]["id"],
             notes=f"approved request {request_id}",
-            floor=float(wallet.get("soft_negative_floor", -50)),
+            floor=Decimal(str(wallet.get("soft_negative_floor", "-50"))),
         )
     return await update_allowance_request(
         request_id=request_id,
@@ -263,3 +314,260 @@ async def decide_allowance_request(
         reviewed_by=guard["user"]["id"],
         decision_notes=body.note,
     )
+
+
+# ---------- Policy ----------
+
+
+@router.get("/policy")
+async def get_policy(
+    company_id: str,
+    guard=Depends(require_company_member),
+):
+    """Return the company's active policy row.
+
+    Accessible to any active company member so the rider Work Profile
+    screen can display the policy summary ("Max $80/ride, Mon–Fri 9am–7pm").
+    Returns an empty dict when no policy has been configured yet.
+    """
+    return await get_corporate_policy(company_id) or {}
+
+
+@router.put("/policy")
+async def replace_policy(
+    company_id: str,
+    body: PolicyCreate,
+    guard=Depends(require_company_admin),
+):
+    """Create or fully replace the company's policy.
+
+    Idempotent — safe to call multiple times; always returns the current state.
+    """
+    patch = body.model_dump()
+    patch["allowed_payment_source"] = (
+        patch["allowed_payment_source"].value
+        if hasattr(patch["allowed_payment_source"], "value")
+        else patch["allowed_payment_source"]
+    )
+
+    _validate_geofence(patch.get("allowed_geofence"))
+
+    # Serialise TimeWindow objects to plain dicts for JSON storage.
+    if patch.get("allowed_time_windows") is not None:
+        patch["allowed_time_windows"] = [
+            w.model_dump() if hasattr(w, "model_dump") else w for w in patch["allowed_time_windows"]
+        ]
+
+    return await upsert_corporate_policy(company_id, patch)
+
+
+@router.patch("/policy")
+async def patch_policy(
+    company_id: str,
+    body: PolicyUpdate,
+    guard=Depends(require_company_admin),
+):
+    """Partially update the company's policy.
+
+    Only the fields present in the request body are changed; omitted
+    fields retain their current values.
+    """
+    patch = body.model_dump(exclude_none=True)
+    if not patch:
+        return await get_corporate_policy(company_id) or {}
+
+    if "allowed_payment_source" in patch and hasattr(patch["allowed_payment_source"], "value"):
+        patch["allowed_payment_source"] = patch["allowed_payment_source"].value
+
+    if "allowed_geofence" in patch:
+        _validate_geofence(patch["allowed_geofence"])
+
+    if "allowed_time_windows" in patch and patch["allowed_time_windows"] is not None:
+        patch["allowed_time_windows"] = [
+            w.model_dump() if hasattr(w, "model_dump") else w for w in patch["allowed_time_windows"]
+        ]
+
+    return await upsert_corporate_policy(company_id, patch)
+
+
+# ---------- Billing (Plan 6) ----------
+
+
+def _month_bounds(month: str) -> tuple[str, str]:
+    """Return (from_iso, to_iso) [inclusive-exclusive] bounds for YYYY-MM."""
+    from datetime import datetime as _dt
+
+    try:
+        anchor = _dt.strptime(month, "%Y-%m")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="month must be YYYY-MM") from exc
+    if anchor.month == 12:
+        end = anchor.replace(year=anchor.year + 1, month=1)
+    else:
+        end = anchor.replace(month=anchor.month + 1)
+    return anchor.isoformat(), end.isoformat()
+
+
+_ZERO = Decimal("0.00")
+_TWO = Decimal("0.01")
+
+
+def _d(v) -> Decimal:
+    return Decimal(str(v or 0)).quantize(_TWO, rounding=ROUND_HALF_UP)
+
+
+def _aggregate_rows(rows: list[dict]) -> dict:
+    allowance_total = _ZERO
+    master_total = _ZERO
+    by_member: dict[str, dict] = {}
+    for r in rows:
+        ad = _d(r.get("allowance_debit_amount"))
+        md = _d(r.get("master_fallback_amount"))
+        allowance_total += ad
+        master_total += md
+        mid = r.get("member_id") or "unknown"
+        slot = by_member.setdefault(
+            mid,
+            {"member_id": mid, "ride_count": 0, "allowance_total": _ZERO, "master_total": _ZERO, "total": _ZERO},
+        )
+        slot["ride_count"] += 1
+        slot["allowance_total"] += ad
+        slot["master_total"] += md
+        slot["total"] += ad + md
+    total = allowance_total + master_total
+    by_member_out = [
+        {
+            **v,
+            "allowance_total": float(v["allowance_total"].quantize(_TWO, rounding=ROUND_HALF_UP)),
+            "master_total": float(v["master_total"].quantize(_TWO, rounding=ROUND_HALF_UP)),
+            "total": float(v["total"].quantize(_TWO, rounding=ROUND_HALF_UP)),
+        }
+        for v in sorted(by_member.values(), key=lambda m: m["total"], reverse=True)
+    ]
+    return {
+        "ride_count": len(rows),
+        "allowance_total": float(allowance_total.quantize(_TWO, rounding=ROUND_HALF_UP)),
+        "master_total": float(master_total.quantize(_TWO, rounding=ROUND_HALF_UP)),
+        "total": float(total.quantize(_TWO, rounding=ROUND_HALF_UP)),
+        "avg_fare": float((total / len(rows)).quantize(_TWO, rounding=ROUND_HALF_UP)) if rows else 0.0,
+        "by_member": by_member_out,
+    }
+
+
+@router.get("/billing/summary")
+async def billing_summary(
+    company_id: str,
+    month: Optional[str] = None,
+    guard=Depends(require_company_admin),
+):
+    """Aggregate spend for a month (defaults to the current month in UTC).
+
+    Returns ride count, total company spend (allowance + master fallback),
+    average fare, and per-member breakdown sorted by total desc.
+    """
+    from datetime import datetime as _dt
+    from datetime import timezone as _tz
+
+    if month is None:
+        month = _dt.now(_tz.utc).strftime("%Y-%m")
+    from_iso, to_iso = _month_bounds(month)
+
+    # Page through all rows so the summary is never silently truncated.
+    all_rows: list[dict] = []
+    page_size = 1000
+    offset = 0
+    while True:
+        page = await list_company_ride_payment_sources(
+            company_id=company_id,
+            from_iso=from_iso,
+            to_iso=to_iso,
+            limit=page_size,
+            offset=offset,
+        )
+        all_rows.extend(page)
+        if len(page) < page_size:
+            break
+        offset += page_size
+
+    wallet = await get_corporate_wallet_by_company(company_id) or {}
+    return {
+        "month": month,
+        "wallet_balance": float(Decimal(str(wallet.get("balance") or "0")).quantize(_TWO, rounding=ROUND_HALF_UP)),
+        "wallet_currency": wallet.get("currency") or "CAD",
+        **_aggregate_rows(all_rows),
+    }
+
+
+@router.get("/billing/statements/{month}")
+async def billing_statement(
+    company_id: str,
+    month: str,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(200, ge=1, le=500),
+    guard=Depends(require_company_admin),
+):
+    """Monthly statement line items + summary totals, paginated.
+
+    `month` is YYYY-MM; returns 422 if the string is malformed.
+    Line items are paginated via skip/limit. The summary covers the full
+    month (all pages) regardless of the current page window.
+    """
+    from_iso, to_iso = _month_bounds(month)
+
+    # Paginated line items for the current page
+    line_items = await list_company_ride_payment_sources(
+        company_id=company_id,
+        from_iso=from_iso,
+        to_iso=to_iso,
+        limit=limit,
+        offset=skip,
+    )
+
+    # Full-month aggregation (page through all rows so totals are accurate)
+    all_rows: list[dict] = []
+    page_size = 1000
+    offset = 0
+    while True:
+        page = await list_company_ride_payment_sources(
+            company_id=company_id,
+            from_iso=from_iso,
+            to_iso=to_iso,
+            limit=page_size,
+            offset=offset,
+        )
+        all_rows.extend(page)
+        if len(page) < page_size:
+            break
+        offset += page_size
+
+    return {
+        "month": month,
+        "from": from_iso,
+        "to": to_iso,
+        "line_items": line_items,
+        "summary": _aggregate_rows(all_rows),
+    }
+
+
+@router.get("/billing/transactions")
+async def billing_transactions(
+    company_id: str,
+    skip: int = 0,
+    limit: int = 50,
+    guard=Depends(require_company_admin),
+):
+    """Paged corporate wallet ledger (top-ups, debits, adjustments)."""
+    wallet = await get_corporate_wallet_by_company(company_id)
+    if not wallet:
+        raise HTTPException(status_code=404, detail="Wallet not found")
+    txns = await list_wallet_transactions(
+        wallet_id=wallet["id"],
+        skip=max(skip, 0),
+        limit=min(max(limit, 1), 200),
+    )
+    return {
+        "wallet_id": wallet["id"],
+        "balance": float(Decimal(str(wallet.get("balance") or "0")).quantize(_TWO, rounding=ROUND_HALF_UP)),
+        "currency": wallet.get("currency") or "CAD",
+        "transactions": txns,
+    }

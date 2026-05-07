@@ -1,9 +1,13 @@
+import hashlib
 import logging
+import secrets
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 import jwt
-from fastapi import APIRouter, Header, HTTPException, Request
+import pyotp
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -11,7 +15,10 @@ from slowapi.util import get_remote_address
 try:
     from ... import db_supabase
     from ...core.config import settings
+    from ...dependencies import JWT_AUD_ADMIN, get_admin_user
+    from ...utils.audit_logger import log_admin_action
     from ...utils.password import hash_password, verify_password
+    from ...utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set
     from ...utils.refresh_tokens import (
         issue_refresh_token,
         lookup_refresh_token,
@@ -21,7 +28,10 @@ try:
 except ImportError:
     import db_supabase
     from core.config import settings
+    from dependencies import JWT_AUD_ADMIN, get_admin_user
+    from utils.audit_logger import log_admin_action
     from utils.password import hash_password, verify_password
+    from utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set
     from utils.refresh_tokens import (
         issue_refresh_token,
         lookup_refresh_token,
@@ -38,6 +48,69 @@ logger = logging.getLogger(__name__)
 # to 5 attempts per minute per IP. Matches the pattern already used
 # for the rider/driver OTP endpoint in routes/auth.py.
 limiter = Limiter(key_func=get_remote_address)
+
+# Per-account lockout (A-P3-2) — 5 failures within the sliding window
+# triggers a 24-hour lockout regardless of IP (defends against distributed
+# attacks that rotate IPs to bypass the per-IP SlowAPI limit above). Stored
+# in Redis with TTL; falls back to in-process dict when Redis is unavailable.
+_LOGIN_MAX_FAILURES = 5
+# 24h lockout in production; 2 minutes in dev so a mistyped password doesn't
+# lock you out of a local environment for the rest of the day.
+_LOGIN_LOCKOUT_TTL_SECONDS = 2 * 60 if settings.ENV.lower() != "production" else 24 * 60 * 60
+
+
+def _lockout_key(email: str) -> str:
+    return f"admin:login_failures:{email.lower().strip()}"
+
+
+async def _is_account_locked(email: str) -> bool:
+    try:
+        val = await redis_get(_lockout_key(email))
+        return val is not None and int(val) >= _LOGIN_MAX_FAILURES
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[REDIS] _is_account_locked check failed for admin login ({email!r}): {e}")
+        raise HTTPException(status_code=503, detail="ERR_AUTH_UNAVAILABLE") from None
+
+
+async def _record_login_failure(email: str) -> None:
+    try:
+        key = _lockout_key(email)
+        count = await redis_incr(key)
+        if count == 1:
+            await redis_expire(key, _LOGIN_LOCKOUT_TTL_SECONDS)
+    except Exception as e:
+        logger.error(f"[REDIS] _record_login_failure could not persist failure count ({email!r}): {e}")
+
+
+async def _clear_login_failures(email: str) -> None:
+    try:
+        await redis_delete(_lockout_key(email))
+    except Exception as e:
+        logger.error(f"[REDIS] _clear_login_failures could not clear failure count ({email!r}): {e}")
+
+
+ALL_MODULES = [
+    "dashboard",
+    "users",
+    "drivers",
+    "rides",
+    "earnings",
+    "promotions",
+    "surge",
+    "service_areas",
+    "vehicle_types",
+    "pricing",
+    "support",
+    "disputes",
+    "notifications",
+    "settings",
+    "corporate_accounts",
+    "documents",
+    "heatmap",
+    "staff",
+]
 
 # Auth sub-router — mounted at /admin/auth by server.py directly
 admin_auth_router = APIRouter(prefix="/admin/auth", tags=["Admin Auth"])
@@ -89,7 +162,9 @@ def _mint_admin_access_token(
             "role": role,
             "modules": modules,
             "phone": phone,
+            "aud": JWT_AUD_ADMIN,
             "token_version": int(token_version or 0),
+            "jti": secrets.token_hex(16),
             "iat": now,
             "exp": expires_at,
         },
@@ -113,9 +188,17 @@ async def get_session(authorization: Optional[str] = Header(None)):
     except ValueError:
         return SessionResponse(user=None, authenticated=False)
 
-    # Verify the JWT token
+    # Verify the JWT token. ``audience=JWT_AUD_ADMIN`` makes PyJWT
+    # reject any token whose ``aud`` claim is missing or wrong, so a
+    # rider/driver token cannot be presented here for an admin
+    # session even if it was signed with the same JWT_SECRET.
     try:
-        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.ALGORITHM])
+        payload = jwt.decode(
+            token,
+            settings.JWT_SECRET,
+            algorithms=[settings.ALGORITHM],
+            audience=JWT_AUD_ADMIN,
+        )
         user_id = payload.get("user_id")
         role = payload.get("role")
         email = payload.get("email")
@@ -142,9 +225,15 @@ async def get_session(authorization: Optional[str] = Header(None)):
         return SessionResponse(user=None, authenticated=False)
 
 
+def _admin_login_rate_limit() -> str:
+    # Strict in production (brute-force defence); permissive in dev/staging
+    # so a developer doesn't get locked out after a few mistyped passwords.
+    return "3/30minutes" if settings.ENV.lower() == "production" else "20/minute"
+
+
 @admin_auth_router.post("/login")
-@limiter.limit("5/minute")
-async def admin_login(request: Request, body: LoginRequest):
+@limiter.limit(_admin_login_rate_limit)
+async def admin_login(request: Request, response: Response, body: LoginRequest):
     """Admin login — supports super admin + staff members with module access.
 
     Rate-limited to 5 attempts per minute per IP (see `limiter` above)
@@ -153,33 +242,24 @@ async def admin_login(request: Request, body: LoginRequest):
     extract the client address; the Pydantic body has been renamed
     from ``request`` to ``body`` to free up the name.
     """
-    ALL_MODULES = [
-        "dashboard",
-        "users",
-        "drivers",
-        "rides",
-        "earnings",
-        "promotions",
-        "surge",
-        "service_areas",
-        "vehicle_types",
-        "pricing",
-        "support",
-        "disputes",
-        "notifications",
-        "settings",
-        "corporate_accounts",
-        "documents",
-        "heatmap",
-        "staff",
-    ]
-
     user_agent = request.headers.get("user-agent", "")
     client_ip = get_remote_address(request)
 
-    # 1. Super admin from env. Extra truthy-check on ADMIN_PASSWORD so an
-    # empty/whitespace value in .env cannot match an empty body.password.
-    if settings.ADMIN_PASSWORD and body.email == settings.ADMIN_EMAIL and body.password == settings.ADMIN_PASSWORD:
+    # Per-account lockout (F-21): reject before touching credentials so that
+    # timing differences cannot reveal whether an account exists.
+    if await _is_account_locked(body.email):
+        raise HTTPException(
+            status_code=423,
+            detail="Account locked due to too many failed login attempts. Try again in 24 hours.",
+        )
+
+    # 1. Super admin from env. Extra truthy-checks so an empty/whitespace
+    # env var cannot match an empty body.password (A-P3-1: bcrypt comparison).
+    if (
+        settings.admin_password_hash
+        and body.email == settings.ADMIN_EMAIL
+        and verify_password(body.password, settings.admin_password_hash)[0]
+    ):
         # admin-001 has no DB row, so token_version stays at 0. We still
         # emit the claim + an exp so a captured super-admin token dies
         # after ADMIN_ACCESS_TOKEN_TTL_HOURS and can't live forever.
@@ -194,6 +274,7 @@ async def admin_login(request: Request, body: LoginRequest):
         refresh_raw, _, refresh_expires_at = await issue_refresh_token(
             "admin-001", audience="admin", user_agent=user_agent, ip=client_ip
         )
+        await _clear_login_failures(body.email)
         return {
             "user": {
                 "id": "admin-001",
@@ -219,9 +300,15 @@ async def admin_login(request: Request, body: LoginRequest):
         if ok:
             if not staff.get("is_active", True):
                 raise HTTPException(status_code=403, detail="Account is deactivated")
-            await db_supabase.update_one(
-                "admin_staff", {"id": staff["id"]}, {"last_login": datetime.utcnow().isoformat()}
-            )
+            updates: dict = {"last_login": datetime.now(timezone.utc).isoformat()}
+            if needs_upgrade:
+                updates["password_hash"] = hash_password(body.password)
+                logger.info("admin auth: upgraded legacy password hash for staff %s", staff["id"])
+            await db_supabase.update_one("admin_staff", {"id": staff["id"]}, updates)
+            if staff.get("mfa_enabled"):
+                mfa_token = _mint_mfa_challenge_token(staff["id"])
+                await _clear_login_failures(body.email)
+                return {"mfa_required": True, "mfa_token": mfa_token}
             modules = staff.get("modules", ["dashboard"])
             token, access_expires_at = _mint_admin_access_token(
                 user_id=staff["id"],
@@ -234,6 +321,7 @@ async def admin_login(request: Request, body: LoginRequest):
             refresh_raw, _, refresh_expires_at = await issue_refresh_token(
                 staff["id"], audience="admin", user_agent=user_agent, ip=client_ip
             )
+            await _clear_login_failures(body.email)
             return {
                 "user": {
                     "id": staff["id"],
@@ -249,6 +337,7 @@ async def admin_login(request: Request, body: LoginRequest):
                 "refresh_expires_at": refresh_expires_at.isoformat(),
             }
 
+    await _record_login_failure(body.email)
     raise HTTPException(status_code=401, detail="Invalid credentials")
 
 
@@ -332,13 +421,16 @@ async def admin_refresh(request: Request, body: RefreshRequest):
 
 @admin_auth_router.post("/logout")
 @limiter.limit("10/minute")
-async def admin_logout(request: Request, body: LogoutRequest):
-    """Admin logout — revokes the presented refresh token.
+async def admin_logout(
+    request: Request,
+    body: LogoutRequest,
+    authorization: Optional[str] = Header(None),
+):
+    """Admin logout — revokes the refresh token and blacklists the access token JTI.
 
-    Previously returned a canned success message with zero DB side
-    effects. Now actually stamps revoked_at so the refresh token can
-    never be exchanged again. The current access token keeps working
-    until exp; use /admin/auth/logout-all for immediate kill.
+    Blacklisting the JTI means the access token stops working immediately
+    rather than coasting until its exp claim. The Redis key is set with a TTL
+    equal to the token's remaining lifetime so the blacklist is self-pruning.
 
     The ``request`` parameter is required by slowapi's rate limiter
     (>=0.1.9 validates the signature at decoration time) even though we
@@ -347,6 +439,26 @@ async def admin_logout(request: Request, body: LogoutRequest):
     """
     if body.refresh_token:
         await revoke_refresh_token(body.refresh_token)
+
+    if authorization:
+        try:
+            scheme, access_token = authorization.split()
+            if scheme.lower() == "bearer":
+                payload = jwt.decode(
+                    access_token,
+                    settings.JWT_SECRET,
+                    algorithms=[settings.ALGORITHM],
+                    options={"verify_exp": False},
+                )
+                jti = payload.get("jti")
+                exp = payload.get("exp")
+                if jti and exp:
+                    remaining = int(exp - datetime.now(timezone.utc).timestamp())
+                    if remaining > 0:
+                        await redis_set(f"admin:revoked:{jti}", "1", ttl=remaining)
+        except Exception:  # noqa: S110
+            pass  # malformed / already-expired token — nothing to blacklist
+
     return {"success": True}
 
 
@@ -367,9 +479,21 @@ async def admin_logout_all(request: Request, authorization: Optional[str] = Head
         scheme, token = authorization.split()
         if scheme.lower() != "bearer":
             raise HTTPException(status_code=401, detail="Invalid auth scheme")
-        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.ALGORITHM])
+        payload = jwt.decode(
+            token,
+            settings.JWT_SECRET,
+            algorithms=[settings.ALGORITHM],
+            audience=JWT_AUD_ADMIN,
+        )
     except (ValueError, jwt.InvalidTokenError) as e:
-        raise HTTPException(status_code=401, detail=f"Invalid token: {e}") from e
+        # B-P3-leak-cleanup: JWT library error strings carry hints
+        # about token shape (algorithm, kid, exp, audience). Don't
+        # ship them to the client — log server-side and surface a
+        # generic "Invalid token" so the auth path can't be
+        # fingerprinted by sending malformed tokens and reading the
+        # rejection reasons.
+        logger.error("Admin auth rejected malformed token", exc_info=True, extra={"domain": "admin"})
+        raise HTTPException(status_code=401, detail="Invalid token") from e
 
     user_id = payload.get("user_id")
     if not user_id or user_id == "admin-001":
@@ -385,6 +509,23 @@ async def admin_logout_all(request: Request, authorization: Optional[str] = Head
     new_version = int(staff.get("token_version") or 0) + 1
     await db.update_one("admin_staff", {"id": user_id}, {"$set": {"token_version": new_version}})
     revoked = await revoke_all_for_user(user_id)
+
+    # B-P1-11: kick any live admin WebSocket sockets (live monitoring
+    # console, etc.) so the staff member is logged out instantly. See
+    # the rider/driver logout_all comment for the best-effort rationale.
+    try:
+        try:
+            from ...socket_manager import manager as ws_manager
+        except ImportError:  # pragma: no cover — package-relative fallback
+            from socket_manager import manager as ws_manager
+        await ws_manager.kick_user(
+            user_id,
+            client_types=["admin"],
+            reason="logout_all",
+        )
+    except Exception as e:
+        logger.warning(f"admin logout-all: WS kick failed for {user_id}: {e}")
+
     logger.info(f"admin logout-all: user={user_id} token_version→{new_version} revoked_refresh={revoked}")
     return {"success": True, "revoked_refresh_tokens": revoked}
 
@@ -418,9 +559,21 @@ async def change_password(request: Request, body: ChangePasswordRequest, authori
         scheme, token = authorization.split()
         if scheme.lower() != "bearer":
             raise HTTPException(status_code=401, detail="Invalid auth scheme")
-        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.ALGORITHM])
+        payload = jwt.decode(
+            token,
+            settings.JWT_SECRET,
+            algorithms=[settings.ALGORITHM],
+            audience=JWT_AUD_ADMIN,
+        )
     except (ValueError, jwt.InvalidTokenError) as e:
-        raise HTTPException(status_code=401, detail=f"Invalid token: {e}") from e
+        # B-P3-leak-cleanup: JWT library error strings carry hints
+        # about token shape (algorithm, kid, exp, audience). Don't
+        # ship them to the client — log server-side and surface a
+        # generic "Invalid token" so the auth path can't be
+        # fingerprinted by sending malformed tokens and reading the
+        # rejection reasons.
+        logger.error("Admin auth rejected malformed token", exc_info=True, extra={"domain": "admin"})
+        raise HTTPException(status_code=401, detail="Invalid token") from e
 
     user_id = payload.get("user_id")
     if not user_id or user_id == "admin-001":
@@ -453,3 +606,440 @@ async def change_password(request: Request, body: ChangePasswordRequest, authori
 
     logger.info(f"Password changed for admin_staff id={user_id}")
     return {"success": True, "message": "Password changed successfully"}
+
+
+# ── MFA models ──────────────────────────────────────────────────────────────
+
+
+class MfaConfirmRequest(BaseModel):
+    totp_code: str
+
+
+class MfaDisableRequest(BaseModel):
+    totp_code: str
+    password: str
+
+
+class MfaChallengeRequest(BaseModel):
+    mfa_token: str
+    totp_code: str
+
+
+# ── MFA helpers ──────────────────────────────────────────────────────────────
+
+
+def _mint_mfa_challenge_token(user_id: str) -> str:
+    now = datetime.now(timezone.utc)
+    return jwt.encode(
+        {"type": "mfa_challenge", "user_id": user_id, "exp": now + timedelta(minutes=5)},
+        settings.JWT_SECRET,
+        algorithm=settings.ALGORITHM,
+    )
+
+
+def _generate_backup_codes() -> tuple[list[str], list[dict]]:
+    codes: list[str] = []
+    records: list[dict] = []
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+    for _ in range(10):
+        code = "".join(secrets.choice(alphabet) for _ in range(8))
+        h = hashlib.sha256(code.encode()).hexdigest()
+        codes.append(code)
+        records.append({"hash": h, "used": False})
+    return codes, records
+
+
+def _consume_backup_code(code: str, stored: list[dict]) -> tuple[bool, list[dict]]:
+    h = hashlib.sha256(code.upper().encode()).hexdigest()
+    updated = list(stored)
+    for i, entry in enumerate(updated):
+        if not entry.get("used") and entry.get("hash") == h:
+            updated[i] = {**entry, "used": True}
+            return True, updated
+    return False, stored
+
+
+async def _require_staff_from_token(authorization: str | None) -> dict:
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        scheme, token = authorization.split()
+        if scheme.lower() != "bearer":
+            raise HTTPException(status_code=401, detail="Invalid auth scheme")
+        payload = jwt.decode(
+            token,
+            settings.JWT_SECRET,
+            algorithms=[settings.ALGORITHM],
+            audience=JWT_AUD_ADMIN,
+        )
+    except (ValueError, jwt.InvalidTokenError) as e:
+        raise HTTPException(status_code=401, detail=f"Invalid token: {e}") from e
+    user_id = payload.get("user_id")
+    if not user_id or user_id == "admin-001":
+        raise HTTPException(
+            status_code=400,
+            detail="MFA is not available for the super admin env account. Use a staff account.",
+        )
+    staff = await db.find_one("admin_staff", {"id": user_id})
+    if not staff:
+        raise HTTPException(status_code=404, detail="Staff member not found")
+    return staff
+
+
+# ── MFA endpoints ─────────────────────────────────────────────────────────
+
+
+@admin_auth_router.get("/mfa/status")
+async def admin_mfa_status(authorization: Optional[str] = Header(None)):
+    """Return MFA enrollment status for the authenticated staff member."""
+    staff = await _require_staff_from_token(authorization)
+    return {"mfa_enabled": bool(staff.get("mfa_enabled"))}
+
+
+@admin_auth_router.post("/mfa/enroll")
+@limiter.limit("5/minute")
+async def admin_mfa_enroll(request: Request, authorization: Optional[str] = Header(None)):
+    """Begin TOTP enrollment. Returns secret + otpauth URI; confirm with /mfa/confirm."""
+    staff = await _require_staff_from_token(authorization)
+    secret = pyotp.random_base32()
+    uri = pyotp.TOTP(secret).provisioning_uri(name=staff["email"], issuer_name="Spinr Admin")
+    await db_supabase.update_one("admin_staff", {"id": staff["id"]}, {"mfa_secret_pending": secret})
+    return {"secret": secret, "otpauth_uri": uri}
+
+
+@admin_auth_router.post("/mfa/confirm")
+@limiter.limit("5/minute")
+async def admin_mfa_confirm(request: Request, body: MfaConfirmRequest, authorization: Optional[str] = Header(None)):
+    """Confirm TOTP enrollment by verifying the first code. Activates MFA and issues backup codes."""
+    staff = await _require_staff_from_token(authorization)
+    pending = staff.get("mfa_secret_pending")
+    if not pending:
+        raise HTTPException(status_code=400, detail="No pending MFA enrollment. Call /mfa/enroll first.")
+    if not pyotp.TOTP(pending).verify(body.totp_code, valid_window=1):
+        raise HTTPException(status_code=400, detail="Invalid TOTP code")
+    plaintext_codes, hashed_records = _generate_backup_codes()
+    await db_supabase.update_one(
+        "admin_staff",
+        {"id": staff["id"]},
+        {"mfa_enabled": True, "mfa_secret": pending, "mfa_secret_pending": None, "mfa_backup_codes": hashed_records},
+    )
+    await log_admin_action(staff, "mfa_enabled", "admin_staff", staff["id"], {})
+    return {"backup_codes": plaintext_codes}
+
+
+@admin_auth_router.post("/mfa/disable")
+@limiter.limit("3/minute")
+async def admin_mfa_disable(request: Request, body: MfaDisableRequest, authorization: Optional[str] = Header(None)):
+    """Disable MFA. Requires current password + valid TOTP code."""
+    staff = await _require_staff_from_token(authorization)
+    if not staff.get("mfa_enabled"):
+        raise HTTPException(status_code=400, detail="MFA is not enabled on this account")
+    ok, _ = verify_password(body.password, staff.get("password_hash", ""))
+    if not ok:
+        raise HTTPException(status_code=400, detail="Incorrect password")
+    if not pyotp.TOTP(staff["mfa_secret"]).verify(body.totp_code, valid_window=1):
+        raise HTTPException(status_code=400, detail="Invalid TOTP code")
+    await db_supabase.update_one(
+        "admin_staff",
+        {"id": staff["id"]},
+        {"mfa_enabled": False, "mfa_secret": None, "mfa_backup_codes": None},
+    )
+    await log_admin_action(staff, "mfa_disabled", "admin_staff", staff["id"], {})
+    return {"success": True}
+
+
+@admin_auth_router.post("/mfa/challenge")
+@limiter.limit("10/minute")
+async def admin_mfa_challenge(request: Request, body: MfaChallengeRequest):
+    """Exchange an MFA challenge token + TOTP (or backup code) for full admin tokens."""
+    try:
+        payload = jwt.decode(body.mfa_token, settings.JWT_SECRET, algorithms=[settings.ALGORITHM])
+    except jwt.InvalidTokenError as e:
+        raise HTTPException(status_code=401, detail=f"Invalid MFA token: {e}") from e
+    if payload.get("type") != "mfa_challenge":
+        raise HTTPException(status_code=401, detail="Invalid token type")
+    user_id = payload.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid MFA token")
+    staff = await db.find_one("admin_staff", {"id": user_id})
+    if not staff or not staff.get("is_active", True):
+        raise HTTPException(status_code=401, detail="Account not found or inactive")
+    if not staff.get("mfa_enabled") or not staff.get("mfa_secret"):
+        raise HTTPException(status_code=400, detail="MFA not configured for this account")
+    totp_valid = pyotp.TOTP(staff["mfa_secret"]).verify(body.totp_code, valid_window=1)
+    if not totp_valid:
+        backup_codes = staff.get("mfa_backup_codes") or []
+        matched, updated_codes = _consume_backup_code(body.totp_code, backup_codes)
+        if not matched:
+            raise HTTPException(status_code=401, detail="Invalid TOTP code or backup code")
+        await db_supabase.update_one("admin_staff", {"id": user_id}, {"mfa_backup_codes": updated_codes})
+    user_agent = request.headers.get("user-agent", "")
+    client_ip = get_remote_address(request)
+    modules = staff.get("modules", ["dashboard"])
+    token, access_expires_at = _mint_admin_access_token(
+        user_id=staff["id"],
+        email=staff["email"],
+        role=staff.get("role", "custom"),
+        modules=modules,
+        phone=staff["email"],
+        token_version=int(staff.get("token_version") or 0),
+    )
+    refresh_raw, _, refresh_expires_at = await issue_refresh_token(
+        staff["id"], audience="admin", user_agent=user_agent, ip=client_ip
+    )
+    return {
+        "user": {
+            "id": staff["id"],
+            "email": staff["email"],
+            "role": staff.get("role", "custom"),
+            "first_name": staff.get("first_name", ""),
+            "last_name": staff.get("last_name", ""),
+            "modules": modules,
+        },
+        "token": token,
+        "refresh_token": refresh_raw,
+        "access_expires_at": access_expires_at.isoformat(),
+        "refresh_expires_at": refresh_expires_at.isoformat(),
+    }
+
+
+# ── Break-glass emergency access ─────────────────────────────────────────────
+
+_BG_RATE_KEY = "spinr:admin:break_glass:rate"
+_BG_MAX_USES_PER_DAY = 5
+_BG_TOKEN_TTL_HOURS = 1
+
+
+class BreakGlassRequest(BaseModel):
+    token: str
+    justification: str
+
+
+@admin_auth_router.post("/break-glass")
+async def break_glass_access(request: Request, body: BreakGlassRequest):
+    """Emergency access endpoint — issues a 1-hour super_admin JWT when a
+    valid pre-shared break-glass token is presented with a justification.
+
+    Every use is logged to audit_logs at ERROR level (reaches Sentry) so
+    operators are alerted immediately.  The endpoint is disabled unless
+    BREAK_GLASS_TOKEN_HASH is set in the environment.
+
+    Rate-limited to 5 uses per 24h (Redis); each attempt is logged
+    regardless of outcome so brute-force attempts are visible in Sentry.
+
+    Token management:
+      Generate a token + its SHA-256 hash with:
+        python3 -c "import hashlib, secrets; t=secrets.token_hex(32);
+          print('TOKEN:', t); print('HASH:', hashlib.sha256(t.encode()).hexdigest())"
+      Store BREAK_GLASS_TOKEN_HASH=<hash> in the environment.
+      Keep the raw token in an offline vault (1Password, Vault, etc.).
+    """
+    client_ip = get_remote_address(request)
+    user_agent = request.headers.get("user-agent", "unknown")
+
+    # 1. Feature-gate: disabled unless hash is configured
+    if not settings.BREAK_GLASS_TOKEN_HASH:
+        logger.warning("break_glass: attempt from %s — endpoint not configured", client_ip)
+        raise HTTPException(status_code=404, detail="Not found")
+
+    # 2. Justification required (non-empty, min 10 chars)
+    justification = (body.justification or "").strip()
+    if len(justification) < 10:
+        logger.error(
+            "break_glass: rejected from %s — justification too short (%d chars)",
+            client_ip,
+            len(justification),
+        )
+        raise HTTPException(status_code=400, detail="justification must be at least 10 characters")
+
+    # 3. Daily rate limit (5 attempts total, including failed token checks)
+    try:
+        from utils.redis_client import redis_expire, redis_get, redis_incr  # noqa: PLC0415
+    except ImportError:
+        from ..utils.redis_client import redis_expire, redis_get, redis_incr  # type: ignore[no-redef]
+
+    daily_use_count: int = 0
+    try:
+        count_raw = await redis_get(_BG_RATE_KEY)
+        count = int(count_raw or 0)
+    except Exception:
+        count = 0
+
+    if count >= _BG_MAX_USES_PER_DAY:
+        logger.error(
+            "break_glass: RATE LIMIT EXCEEDED from %s — %d attempts today",
+            client_ip,
+            count,
+        )
+        raise HTTPException(status_code=429, detail="Break-glass rate limit exceeded for today")
+
+    # Increment before token validation so brute-force attempts consume quota
+    try:
+        daily_use_count = await redis_incr(_BG_RATE_KEY)
+        if daily_use_count == 1:
+            # First use today — set expiry to 24h
+            await redis_expire(_BG_RATE_KEY, 86400)
+    except Exception:  # noqa: S110
+        pass  # Redis unavailable — allow through; rate limiting is best-effort
+
+    # 4. Constant-time token comparison
+    provided_hash = hashlib.sha256(body.token.encode()).hexdigest()
+    if not secrets.compare_digest(provided_hash, settings.BREAK_GLASS_TOKEN_HASH):
+        logger.error(
+            "break_glass: INVALID TOKEN from %s (ua=%s) justification=%r",
+            client_ip,
+            user_agent,
+            justification[:100],
+        )
+        raise HTTPException(status_code=401, detail="Invalid break-glass token")
+
+    # 5. Mint a short-lived super_admin token (1 hour, no refresh)
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(hours=_BG_TOKEN_TTL_HOURS)
+    bg_token = jwt.encode(
+        {
+            "user_id": "break-glass",
+            "email": "break-glass@spinr.ca",
+            "role": "super_admin",
+            "modules": ALL_MODULES,
+            "phone": "",
+            "aud": JWT_AUD_ADMIN,
+            "token_version": 0,
+            "jti": secrets.token_hex(16),
+            "iat": now,
+            "exp": expires_at,
+            "break_glass": True,
+        },
+        settings.JWT_SECRET,
+        algorithm=settings.ALGORITHM,
+    )
+
+    # 6. Mandatory audit log — this MUST land; if it fails, still return the token
+    #    (operator is in an emergency) but log loudly so the gap is visible.
+    audit_payload = {
+        "actor": "break-glass",
+        "client_ip": client_ip,
+        "user_agent": user_agent,
+        "justification": justification,
+        "token_expires_at": expires_at.isoformat(),
+        "daily_use_count": daily_use_count,
+    }
+    try:
+        await db_supabase.insert_one(
+            "audit_logs",
+            {
+                "id": str(uuid.uuid4()),
+                "action": "break_glass_access",
+                "entity_type": "system",
+                "entity_id": "break_glass",
+                "details": audit_payload,
+                "created_at": now.isoformat(),
+            },
+        )
+    except Exception as exc:
+        logger.error("break_glass: AUDIT LOG WRITE FAILED — %s", exc, exc_info=True)
+
+    # 7. Sentry-visible error-level log so on-call is paged immediately
+    logger.error(
+        "BREAK GLASS ACCESSED from ip=%s ua=%s justification=%r — 1h super_admin token issued; investigate urgently",
+        client_ip,
+        user_agent,
+        justification[:200],
+    )
+
+    return {
+        "token": bg_token,
+        "role": "super_admin",
+        "expires_at": expires_at.isoformat(),
+        "ttl_hours": _BG_TOKEN_TTL_HOURS,
+        "warning": "This token is time-limited and every use is audited. Use only in genuine emergencies.",
+    }
+
+
+# ----------------------------------------------------------------------
+# Admin unlock (L-12)
+# ----------------------------------------------------------------------
+# When an admin trips the per-account lockout (5 failed logins → 24h ban),
+# they have no self-service path back in. If a typo storm freezes the only
+# super_admin, ops is stuck. This endpoint lets a *different* super_admin
+# clear another admin's lockout. Every call is audit-logged.
+
+
+class UnlockRequest(BaseModel):
+    email: str
+
+
+@admin_auth_router.post("/unlock")
+async def admin_unlock(
+    request: Request,
+    body: UnlockRequest,
+    actor: dict = Depends(get_admin_user),
+):
+    """Clear the 24h login lockout on another admin account.
+
+    Caller must be a super_admin. Body: {"email": "<target>"}.
+    - 404 if the target admin doesn't exist.
+    - 200 {"unlocked": false, "reason": "not_locked"} if not currently locked
+      (idempotent — safe to call repeatedly without false positives).
+    - 200 {"unlocked": true} on success.
+    """
+    if actor.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="role_required:super_admin")
+
+    target_email = (body.email or "").strip().lower()
+    if not target_email:
+        raise HTTPException(status_code=422, detail="email required")
+
+    # Verify the target exists in admin_staff (don't leak which emails are
+    # registered to non-super_admins, but super_admin already has staff list).
+    rows = await db_supabase.get_rows("admin_staff", {"email": target_email}, limit=1)
+    target = rows[0] if rows else None
+    if not target:
+        raise HTTPException(status_code=404, detail="admin not found")
+
+    # Check current lock state. Redis key holds failure count; lock is in
+    # effect when count >= _LOGIN_MAX_FAILURES (see _is_account_locked).
+    try:
+        raw = await redis_get(_lockout_key(target_email))
+    except Exception as e:
+        logger.error(
+            "[REDIS] admin_unlock could not read lockout state for %s: %s",
+            target_email,
+            e,
+        )
+        raise HTTPException(status_code=503, detail="ERR_AUTH_UNAVAILABLE") from None
+
+    failure_count = int(raw) if raw is not None else 0
+    was_locked = failure_count >= _LOGIN_MAX_FAILURES
+
+    if not was_locked:
+        # Idempotent: nothing to clear. Still audit the no-op so we have a
+        # record that someone tried (helps detect coordination issues).
+        await log_admin_action(
+            actor,
+            "admin_unlock_noop",
+            "admin_staff",
+            target["id"],
+            {"target_email": target_email, "failure_count": failure_count},
+        )
+        return {"unlocked": False, "reason": "not_locked"}
+
+    # Clear the failure counter (deletes the Redis key with TTL).
+    await _clear_login_failures(target_email)
+
+    await log_admin_action(
+        actor,
+        "admin_unlocked",
+        "admin_staff",
+        target["id"],
+        {"target_email": target_email, "prior_failure_count": failure_count},
+    )
+
+    logger.info(
+        "admin unlock: actor=%s target=%s prior_failures=%s",
+        actor.get("id"),
+        target["id"],
+        failure_count,
+    )
+
+    return {"unlocked": True}

@@ -1,0 +1,308 @@
+name: CI Error Audit
+
+on:
+  # Trigger after any watched workflow completes with a failure
+  workflow_run:
+    workflows:
+      - CI/CD Pipeline
+      - Test Environment CI/CD        # H2: was "Test Environment" (name mismatch)
+      # ⚠ BLIND SPOT (M4): test-env.yml uses "|| true" / "|| echo" on several
+      # steps so its jobs always report success. workflow_run will never fire
+      # for genuine test-env failures until those suppressions are removed.
+      # Tracked in CR-2026-008 — requires approval before modifying test-env.yml.
+      - Deploy Backend
+      - EAS Mobile (Build + Update)   # H1: was missing
+    types:
+      - completed
+
+  # Manual trigger for ad-hoc audits or re-analysis
+  workflow_dispatch:
+    inputs:
+      workflow_run_id:
+        description: "Workflow run ID to audit (leave blank for most recent failure)"
+        required: false
+        type: string
+      surface:
+        description: "Surface to audit"
+        required: false
+        default: "all"
+        type: choice
+        options:
+          - all
+          - backend
+          - rider-app
+          - driver-app
+          - admin-dashboard
+          - frontend
+      severity_filter:
+        description: "Minimum severity to report"
+        required: false
+        default: "P2"
+        type: choice
+        options:
+          - P0
+          - P1
+          - P2
+          - P3
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+  pull-requests: read
+
+jobs:
+  # ─── Only proceed if the triggering workflow actually failed ───────────────
+  check-trigger:
+    name: Check trigger condition
+    runs-on: ubuntu-latest
+    outputs:
+      should_run:    ${{ steps.check.outputs.should_run }}
+      run_id:        ${{ steps.check.outputs.run_id }}
+      workflow_name: ${{ steps.check.outputs.workflow_name }}
+      head_sha:      ${{ steps.check.outputs.head_sha }}   # C4/H8: needed for correct checkout
+      head_branch:   ${{ steps.check.outputs.head_branch }}
+    steps:
+      - name: Evaluate trigger
+        id: check
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
+            CONCLUSION="${{ github.event.workflow_run.conclusion }}"
+            # M1: only audit hard failures, not cancellations (too noisy)
+            if [[ "$CONCLUSION" == "failure" ]]; then
+              echo "should_run=true"        >> "$GITHUB_OUTPUT"
+              echo "run_id=${{ github.event.workflow_run.id }}"      >> "$GITHUB_OUTPUT"
+              echo "workflow_name=${{ github.event.workflow_run.name }}" >> "$GITHUB_OUTPUT"
+              echo "head_sha=${{ github.event.workflow_run.head_sha }}"  >> "$GITHUB_OUTPUT"
+              echo "head_branch=${{ github.event.workflow_run.head_branch }}" >> "$GITHUB_OUTPUT"
+            else
+              echo "should_run=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            # Manual dispatch — always run
+            echo "should_run=true"     >> "$GITHUB_OUTPUT"
+            # H8: workflow_dispatch exposes inputs, not github.event.workflow_run
+            echo "run_id=${{ github.event.inputs.workflow_run_id || github.run_id }}" >> "$GITHUB_OUTPUT"
+            echo "workflow_name=manual" >> "$GITHUB_OUTPUT"
+            echo "head_sha=${{ github.sha }}"        >> "$GITHUB_OUTPUT"
+            echo "head_branch=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ─── Collect failure artefacts and job logs ───────────────────────────────
+  collect-failure-data:
+    name: Collect failure data
+    runs-on: ubuntu-latest
+    needs: check-trigger
+    if: needs.check-trigger.outputs.should_run == 'true'
+    outputs:
+      failed_jobs:   ${{ steps.parse.outputs.failed_jobs }}
+      error_summary: ${{ steps.parse.outputs.error_summary }}
+      top_severity:  ${{ steps.parse.outputs.top_severity }}  # C1/H8: needed by notify-critical
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Fetch failed job data from GitHub API
+        id: fetch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # M6: script reads from env, no --token arg
+          RUN_ID: ${{ needs.check-trigger.outputs.run_id }}
+          REPO: ${{ github.repository }}
+        run: |
+          python3 scripts/ci-audit/fetch_run_data.py \
+            --run-id "$RUN_ID" \
+            --repo "$REPO" \
+            --output /tmp/run_data.json
+
+      - name: Parse failure signals
+        id: parse
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/ci-audit/error_classifier.py \
+            --input /tmp/run_data.json \
+            --output /tmp/classified_errors.json \
+            --surface "${{ inputs.surface || 'all' }}"
+
+          # Export summary for downstream jobs
+          python3 - <<'PYEOF'
+          import json, os
+          data = json.load(open('/tmp/classified_errors.json'))
+          jobs    = list({e['job'] for e in data.get('errors', [])})
+          summary = data.get('summary', 'No summary available')
+          top_sev = data.get('top_severity', 'P3')
+          out = os.environ.get('GITHUB_OUTPUT', '')
+          with open(out, 'a') as f:
+              f.write(f"failed_jobs={json.dumps(jobs)}\n")
+              f.write(f"error_summary={summary}\n")
+              f.write(f"top_severity={top_sev}\n")
+          PYEOF
+
+      - name: Upload classified errors
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-audit-classified-errors
+          path: /tmp/classified_errors.json
+          retention-days: 30
+
+  # ─── Run the full audit: classify → assess impact → recommend fixes ────────
+  run-audit:
+    name: Run audit analysis
+    runs-on: ubuntu-latest
+    needs: [check-trigger, collect-failure-data]
+    # H3: also guard on collect-failure-data succeeding (not just check-trigger)
+    if: |
+      needs.check-trigger.outputs.should_run == 'true' &&
+      needs.collect-failure-data.result == 'success'
+    outputs:
+      report_file: ${{ steps.generate-report.outputs.report_file }}
+    steps:
+      # C4: checkout the FAILING commit so git diff / impact analysis is correct
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.check-trigger.outputs.head_sha || github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Download classified errors
+        uses: actions/download-artifact@v8
+        with:
+          name: ci-audit-classified-errors
+          path: /tmp/
+
+      - name: Run impact assessment
+        run: |
+          python3 scripts/ci-audit/impact_assessor.py \
+            --errors /tmp/classified_errors.json \
+            --repo-root . \
+            --output /tmp/impact_report.json
+
+      - name: Generate fix recommendations
+        run: |
+          python3 scripts/ci-audit/fix_recommender.py \
+            --errors /tmp/classified_errors.json \
+            --impact /tmp/impact_report.json \
+            --output /tmp/fix_recommendations.json
+
+      - name: Generate audit report
+        id: generate-report
+        env:
+          WORKFLOW_NAME: ${{ needs.check-trigger.outputs.workflow_name }}
+          RUN_ID: ${{ needs.check-trigger.outputs.run_id }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ needs.check-trigger.outputs.head_branch }}
+          COMMIT_SHA: ${{ needs.check-trigger.outputs.head_sha }}
+        run: |
+          REPORT_DATE=$(date -u +"%Y-%m-%d")
+          REPORT_FILE="reports/audits/${REPORT_DATE}-ci-failure-${RUN_ID}.md"
+
+          python3 scripts/ci-audit/report_generator.py \
+            --errors /tmp/classified_errors.json \
+            --impact /tmp/impact_report.json \
+            --fixes /tmp/fix_recommendations.json \
+            --workflow "$WORKFLOW_NAME" \
+            --run-id "$RUN_ID" \
+            --repo "$REPO" \
+            --branch "$BRANCH" \
+            --commit "$COMMIT_SHA" \
+            --output "/tmp/audit_report.md" \
+            --report-path "$REPORT_FILE"
+
+          # M3: use GITHUB_OUTPUT (not GITHUB_ENV) for downstream step reference
+          echo "report_file=$REPORT_FILE" >> "$GITHUB_OUTPUT"
+          cat /tmp/audit_report.md
+
+      - name: Generate change requests for identified improvements
+        run: |
+          python3 scripts/ci-audit/change_request_generator.py \
+            --fixes /tmp/fix_recommendations.json \
+            --output /tmp/change_requests.json
+
+      - name: Upload full audit bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-audit-full-report
+          path: |
+            /tmp/classified_errors.json
+            /tmp/impact_report.json
+            /tmp/fix_recommendations.json
+            /tmp/audit_report.md
+            /tmp/change_requests.json
+          retention-days: 90
+
+  # ─── Create GitHub issues for P0/P1 findings ──────────────────────────────
+  create-audit-issues:
+    name: Create audit issues
+    runs-on: ubuntu-latest
+    needs: [check-trigger, run-audit]
+    # H3: also guard on run-audit succeeding
+    if: |
+      needs.check-trigger.outputs.should_run == 'true' &&
+      needs.run-audit.result == 'success'
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Download audit bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: ci-audit-full-report
+          path: /tmp/audit/
+
+      - name: Create CI error report issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # M6: script reads from env
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ needs.check-trigger.outputs.run_id }}
+          WORKFLOW_NAME: ${{ needs.check-trigger.outputs.workflow_name }}
+          BRANCH: ${{ needs.check-trigger.outputs.head_branch }}
+        run: |
+          python3 scripts/ci-audit/create_github_issue.py \
+            --report /tmp/audit/audit_report.md \
+            --errors /tmp/audit/classified_errors.json \
+            --change-requests /tmp/audit/change_requests.json \
+            --repo "$REPO" \
+            --run-id "$RUN_ID" \
+            --workflow "$WORKFLOW_NAME" \
+            --branch "$BRANCH" \
+            --severity-filter "${{ inputs.severity_filter || 'P1' }}"
+
+  # ─── Slack alert for P0 (blocking) failures ───────────────────────────────
+  notify-critical:
+    name: Notify on P0 failures
+    runs-on: ubuntu-latest
+    # C1: must depend on collect-failure-data to read its top_severity output
+    needs: [check-trigger, collect-failure-data, run-audit]
+    # C1: check top_severity output (not failed_jobs which is a list of job names)
+    # H3: also guard on upstream jobs succeeding
+    if: |
+      needs.check-trigger.outputs.should_run == 'true' &&
+      needs.collect-failure-data.result == 'success' &&
+      needs.run-audit.result == 'success' &&
+      needs.collect-failure-data.outputs.top_severity == 'P0'
+    steps:
+      - name: Send critical Slack alert
+        uses: 8398a7/action-slack@v3
+        with:
+          status: failure
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+          text: |
+            :rotating_light: *P0 CI Failure Audit — Immediate Action Required*
+            Workflow: `${{ needs.check-trigger.outputs.workflow_name }}`
+            Branch: `${{ needs.check-trigger.outputs.head_branch }}`
+            Run: https://github.com/${{ github.repository }}/actions/runs/${{ needs.check-trigger.outputs.run_id }}
+            An audit issue has been created with root cause analysis and fix recommendations.

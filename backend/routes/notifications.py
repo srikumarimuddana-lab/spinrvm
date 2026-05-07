@@ -4,7 +4,7 @@ notifications.py – In-app notification system for Spinr.
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, Query
@@ -80,7 +80,9 @@ async def register_push_token(body: RegisterTokenRequest, current_user: dict = D
 
     if existing:
         await db_supabase.update_one(
-            "push_tokens", {"id": existing["id"]}, {"token": token, "updated_at": datetime.utcnow().isoformat()}
+            "push_tokens",
+            {"id": existing["id"]},
+            {"token": token, "updated_at": datetime.now(timezone.utc).isoformat()},
         )
     else:
         await db_supabase.insert_one(
@@ -90,7 +92,7 @@ async def register_push_token(body: RegisterTokenRequest, current_user: dict = D
                 "user_id": current_user["id"],
                 "token": token,
                 "platform": platform,
-                "created_at": datetime.utcnow().isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
             },
         )
 
@@ -100,7 +102,7 @@ async def register_push_token(body: RegisterTokenRequest, current_user: dict = D
     try:
         await db.update_one("users", {"id": current_user["id"]}, {"$set": {"fcm_token": token}})
     except Exception as exc:
-        logger.warning(f"Failed to mirror FCM token onto users.fcm_token: {exc}")
+        logger.error(f"Failed to mirror FCM token onto users.fcm_token: {exc}", exc_info=True)
 
     logger.info(f"FCM token registered for user {current_user['id']} ({platform})")
     return {"success": True}
@@ -134,7 +136,9 @@ async def get_notifications(
             "notifications", {"user_id": current_user["id"], "is_read": False}
         )
     except Exception:  # noqa: S110
-        pass
+        logger.warning(
+            "list_notifications: failed to fetch unread_count for user %s", current_user.get("id"), exc_info=True
+        )
 
     return {"notifications": notifications, "unread_count": unread_count}
 
@@ -145,7 +149,7 @@ async def mark_as_read(notification_id: str, current_user: dict = Depends(get_cu
     await db_supabase.update_one(
         "notifications",
         {"id": notification_id, "user_id": current_user["id"]},
-        {"is_read": True, "read_at": datetime.utcnow().isoformat()},
+        {"is_read": True, "read_at": datetime.now(timezone.utc).isoformat()},
     )
     return {"success": True}
 
@@ -156,7 +160,7 @@ async def mark_all_read(current_user: dict = Depends(get_current_user)):
     await db_supabase.update_one(
         "notifications",
         {"user_id": current_user["id"], "is_read": False},
-        {"is_read": True, "read_at": datetime.utcnow().isoformat()},
+        {"is_read": True, "read_at": datetime.now(timezone.utc).isoformat()},
     )
     return {"success": True}
 
@@ -183,7 +187,7 @@ async def get_preferences(current_user: dict = Depends(get_current_user)):
 @api_router.put("/preferences")
 async def update_preferences(req: PreferencesUpdate, current_user: dict = Depends(get_current_user)):
     """Update notification preferences."""
-    update_data: Dict[str, Any] = {"updated_at": datetime.utcnow().isoformat()}
+    update_data: Dict[str, Any] = {"updated_at": datetime.now(timezone.utc).isoformat()}
     for field in [
         "push_enabled",
         "email_enabled",
@@ -247,7 +251,7 @@ async def create_notification(
         "type": notification_type,
         "data": payload,
         "is_read": False,
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db_supabase.insert_one("notifications", notification)
     return notification

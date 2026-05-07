@@ -64,8 +64,9 @@ export default function BecomeDriverScreen() {
     (async () => {
       try {
         const res = await api.get('/vehicle-types');  // just to verify API works
-        const areasRes = await api.get('/admin/service-areas');
-        const active = (areasRes.data || []).filter((a: any) => a.is_active);
+        // Public endpoint — returns only active areas, no admin auth required.
+        const areasRes = await api.get<any[]>('/service-areas');
+        const active = areasRes.data || [];
         setServiceAreas(active);
         if (active.length > 0 && !serviceAreaId) setServiceAreaId(active[0].id);
       } catch (e) {
@@ -488,7 +489,7 @@ export default function BecomeDriverScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ flex: 1 }}>
         <View style={styles.header}>
           {currentStep > 0 ? (
             <TouchableOpacity onPress={prevStep} style={styles.backButton}>

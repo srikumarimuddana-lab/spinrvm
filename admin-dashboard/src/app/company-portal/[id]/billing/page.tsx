@@ -1,0 +1,286 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import { useParams } from "next/navigation";
+import {
+    BillingStatement,
+    BillingSummary,
+    BillingTransactionsPage,
+    getCompanyBillingStatement,
+    getCompanyBillingSummary,
+    getCompanyBillingTransactions,
+} from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import {
+    Table,
+    TableBody,
+    TableCell,
+    TableHead,
+    TableHeader,
+    TableRow,
+} from "@/components/ui/table";
+import { Download } from "lucide-react";
+
+function monthOptions(): string[] {
+    const out: string[] = [];
+    const now = new Date();
+    for (let i = 0; i < 12; i++) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        out.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+    }
+    return out;
+}
+
+function formatCAD(n: number | undefined) {
+    return (n ?? 0).toLocaleString("en-CA", {
+        style: "currency",
+        currency: "CAD",
+    });
+}
+
+function toCSV(statement: BillingStatement): string {
+    const header = [
+        "ride_id",
+        "member_id",
+        "source_type",
+        "allowance_debit_amount",
+        "master_fallback_amount",
+        "policy_check_result",
+        "created_at",
+    ].join(",");
+    const body = statement.line_items
+        .map((r) =>
+            [
+                r.ride_id,
+                r.member_id,
+                r.source_type,
+                r.allowance_debit_amount,
+                r.master_fallback_amount,
+                r.policy_check_result ?? "",
+                r.created_at,
+            ].join(",")
+        )
+        .join("\n");
+    return `${header}\n${body}`;
+}
+
+export default function BillingPage() {
+    const { id } = useParams<{ id: string }>();
+    const months = monthOptions();
+    const [month, setMonth] = useState<string>(months[0]);
+    const [summary, setSummary] = useState<BillingSummary | null>(null);
+    const [statement, setStatement] = useState<BillingStatement | null>(null);
+    const [txns, setTxns] = useState<BillingTransactionsPage | null>(null);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+
+    const load = useCallback(async () => {
+        if (!id) return;
+        setLoading(true);
+        setError(null);
+        try {
+            const [s, st, t] = await Promise.all([
+                getCompanyBillingSummary(id, month),
+                getCompanyBillingStatement(id, month),
+                getCompanyBillingTransactions(id, 0, 50).catch(() => null),
+            ]);
+            setSummary(s);
+            setStatement(st);
+            setTxns(t);
+        } catch (e) {
+            setError(e instanceof Error ? e.message : "Failed to load");
+        } finally {
+            setLoading(false);
+        }
+    }, [id, month]);
+
+    useEffect(() => {
+        load();
+    }, [load]);
+
+    const downloadCSV = () => {
+        if (!statement) return;
+        const blob = new Blob([toCSV(statement)], { type: "text/csv" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `spinr-statement-${month}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+    };
+
+    return (
+        <div className="space-y-6">
+            <header className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                    <h1 className="text-2xl font-semibold">Billing</h1>
+                    <p className="text-muted-foreground">
+                        Month-to-date spend, monthly statements, wallet ledger.
+                    </p>
+                </div>
+                <div className="flex items-center gap-2">
+                    <select
+                        className="rounded border border-input bg-background px-2 py-1.5 text-sm"
+                        value={month}
+                        onChange={(e) => setMonth(e.target.value)}
+                    >
+                        {months.map((m) => (
+                            <option key={m} value={m}>
+                                {m}
+                            </option>
+                        ))}
+                    </select>
+                    <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={downloadCSV}
+                        disabled={!statement}
+                    >
+                        <Download className="mr-1 h-4 w-4" /> CSV
+                    </Button>
+                </div>
+            </header>
+
+            {error && (
+                <p className="rounded bg-red-50 p-3 text-sm text-red-700">{error}</p>
+            )}
+
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <Metric label="Wallet balance" value={formatCAD(summary?.wallet_balance)} />
+                <Metric
+                    label="Total spend"
+                    value={formatCAD(summary?.total)}
+                    sub={`${summary?.ride_count ?? 0} rides`}
+                />
+                <Metric
+                    label="Allowance"
+                    value={formatCAD(summary?.allowance_total)}
+                    sub="Member allowances"
+                />
+                <Metric
+                    label="Master fallback"
+                    value={formatCAD(summary?.master_total)}
+                    sub="Overflow debits"
+                />
+            </div>
+
+            <Card>
+                <CardContent className="p-4">
+                    <h2 className="mb-3 font-medium">By member</h2>
+                    <Table>
+                        <TableHeader>
+                            <TableRow>
+                                <TableHead>Member</TableHead>
+                                <TableHead>Rides</TableHead>
+                                <TableHead>Allowance</TableHead>
+                                <TableHead>Master</TableHead>
+                                <TableHead className="text-right">Total</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {loading && (
+                                <TableRow>
+                                    <TableCell colSpan={5} className="text-center text-muted-foreground">
+                                        Loading…
+                                    </TableCell>
+                                </TableRow>
+                            )}
+                            {!loading && (summary?.by_member?.length ?? 0) === 0 && (
+                                <TableRow>
+                                    <TableCell colSpan={5} className="text-center text-muted-foreground">
+                                        No work rides for this month.
+                                    </TableCell>
+                                </TableRow>
+                            )}
+                            {summary?.by_member?.map((m) => (
+                                <TableRow key={m.member_id}>
+                                    <TableCell className="font-mono text-xs">
+                                        {m.member_id}
+                                    </TableCell>
+                                    <TableCell>{m.ride_count}</TableCell>
+                                    <TableCell>{formatCAD(m.allowance_total)}</TableCell>
+                                    <TableCell>{formatCAD(m.master_total)}</TableCell>
+                                    <TableCell className="text-right font-medium">
+                                        {formatCAD(m.total)}
+                                    </TableCell>
+                                </TableRow>
+                            ))}
+                        </TableBody>
+                    </Table>
+                </CardContent>
+            </Card>
+
+            <Card>
+                <CardContent className="p-4">
+                    <h2 className="mb-3 font-medium">Wallet ledger</h2>
+                    <Table>
+                        <TableHeader>
+                            <TableRow>
+                                <TableHead>Date</TableHead>
+                                <TableHead>Type</TableHead>
+                                <TableHead>Notes</TableHead>
+                                <TableHead className="text-right">Amount</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {!txns && !loading && (
+                                <TableRow>
+                                    <TableCell colSpan={4} className="text-center text-muted-foreground">
+                                        No wallet configured.
+                                    </TableCell>
+                                </TableRow>
+                            )}
+                            {txns?.transactions.length === 0 && (
+                                <TableRow>
+                                    <TableCell colSpan={4} className="text-center text-muted-foreground">
+                                        No transactions.
+                                    </TableCell>
+                                </TableRow>
+                            )}
+                            {txns?.transactions.map((t) => (
+                                <TableRow key={t.id}>
+                                    <TableCell className="text-xs text-muted-foreground">
+                                        {t.created_at?.slice(0, 10)}
+                                    </TableCell>
+                                    <TableCell>
+                                        <Badge variant="secondary" className="text-[10px]">
+                                            {t.type}
+                                        </Badge>
+                                    </TableCell>
+                                    <TableCell className="max-w-[40ch] truncate text-xs">
+                                        {t.notes ?? ""}
+                                    </TableCell>
+                                    <TableCell className="text-right font-medium">
+                                        {formatCAD(t.amount)}
+                                    </TableCell>
+                                </TableRow>
+                            ))}
+                        </TableBody>
+                    </Table>
+                </CardContent>
+            </Card>
+        </div>
+    );
+}
+
+function Metric({
+    label,
+    value,
+    sub,
+}: {
+    label: string;
+    value: string;
+    sub?: string;
+}) {
+    return (
+        <Card>
+            <CardContent className="p-4">
+                <div className="text-xs text-muted-foreground">{label}</div>
+                <div className="text-2xl font-semibold">{value}</div>
+                {sub && <div className="text-xs text-muted-foreground">{sub}</div>}
+            </CardContent>
+        </Card>
+    );
+}

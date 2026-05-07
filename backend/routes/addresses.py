@@ -4,10 +4,12 @@ try:
     from .. import db_supabase
     from ..dependencies import get_current_user
     from ..schemas import SavedAddress, SavedAddressCreate
+    from ..validators import sanitize_string
 except ImportError:
     import db_supabase
     from dependencies import get_current_user
     from schemas import SavedAddress, SavedAddressCreate
+    from validators import sanitize_string
 
 api_router = APIRouter(prefix="/addresses", tags=["Addresses"])
 
@@ -26,8 +28,8 @@ async def get_saved_addresses(current_user: dict = Depends(get_current_user)):
 async def create_saved_address(request: SavedAddressCreate, current_user: dict = Depends(get_current_user)):
     address = SavedAddress(
         user_id=current_user["id"],
-        name=request.name,
-        address=request.address,
+        name=sanitize_string(request.name)[1],
+        address=sanitize_string(request.address)[1],
         lat=request.lat,
         lng=request.lng,
         icon=request.icon,
@@ -39,6 +41,6 @@ async def create_saved_address(request: SavedAddressCreate, current_user: dict =
 @api_router.delete("/{address_id}")
 async def delete_saved_address(address_id: str, current_user: dict = Depends(get_current_user)):
     result = await db_supabase.delete_one("saved_addresses", {"id": address_id, "user_id": current_user["id"]})
-    if result.deleted_count == 0:
+    if not result:
         raise HTTPException(status_code=404, detail="Address not found")
     return {"success": True}

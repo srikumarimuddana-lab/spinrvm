@@ -2,9 +2,14 @@
 
 import { useEffect, useState, lazy, Suspense } from "react";
 import { useRouter } from "next/navigation";
-import { getServiceAreas, createServiceArea, updateServiceArea, deleteServiceArea, getSubscriptionPlans, createSubscriptionPlan, updateSubscriptionPlan, deleteSubscriptionPlan, getDriverSubscriptions, getAreaFees, createAreaFee, updateAreaFee, deleteAreaFee } from "@/lib/api";
-import { Infinity as InfinityIcon } from "lucide-react";
-import { Plus, Trash2, Pencil, MapPin, Settings, DollarSign, Car, CreditCard, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, X, FileText, GripVertical, Clock, ShieldCheck, ShieldAlert, CheckCircle, AlertTriangle, Image, Plane, Radar } from "lucide-react";
+import { useToast } from "@/components/ui/use-toast";
+import {
+    AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+    AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { getServiceAreas, createServiceArea, updateServiceArea, deleteServiceArea, getSubscriptionPlans, createSubscriptionPlan, updateSubscriptionPlan, deleteSubscriptionPlan, getDriverSubscriptions, getAreaFees, createAreaFee, updateAreaFee, deleteAreaFee, getVehicleTypes } from "@/lib/api";
+import { Plus, Trash2, Pencil, MapPin, Settings, DollarSign, Car, CreditCard, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, FileText, Clock, ShieldCheck, ShieldAlert, CheckCircle, Image, Plane, Radar } from "lucide-react";
+import { useRequireModule } from "@/hooks/useRequireModule";
 
 const GeofenceMap = lazy(() => import("@/components/geofence-map"));
 
@@ -48,9 +53,16 @@ function getAreaCenter(area: any): { lat: number; lng: number } {
 }
 
 export default function ServiceAreasPage() {
+  const { allowed } = useRequireModule("service_areas");
   const router = useRouter();
+  const { toast } = useToast();
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   const [areas, setAreas] = useState<any[]>([]);
   const [plans, setPlans] = useState<any[]>([]);
+  // Existing vehicle types (from /api/admin/vehicle-types) so the
+  // Vehicle Pricing editor can render a dropdown of known types
+  // instead of a free-text input the operator has to spell exactly.
+  const [vehicleTypes, setVehicleTypes] = useState<{ id: string; name: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [editTab, setEditTab] = useState("general");
@@ -85,8 +97,14 @@ export default function ServiceAreasPage() {
   const load = async () => {
     setLoading(true);
     try {
-      const [a, p] = await Promise.all([getServiceAreas(), getSubscriptionPlans().catch(() => [])]);
-      setAreas(a); setPlans(p);
+      const [a, p, vt] = await Promise.all([
+        getServiceAreas(),
+        getSubscriptionPlans().catch(() => []),
+        getVehicleTypes().catch(() => [] as any[]),
+      ]);
+      setAreas(a);
+      setPlans(p);
+      setVehicleTypes((vt || []).map((v: any) => ({ id: v.id, name: v.name })));
     } catch {}
     setLoading(false);
   };
@@ -125,13 +143,13 @@ export default function ServiceAreasPage() {
       setShowCreate(false);
       setCreateForm({ name: "", city: "", province: "SK", preset: "", polygon: [], polygonText: "", is_active: true, is_airport: false });
       load();
-    } catch (e: any) { alert(e?.message || "Failed to create"); }
+    } catch (e: any) { toast({ title: "Failed to create service area", description: e?.message, variant: "destructive" }); }
   };
 
   const handleCreateAirportSubRegion = async (parentId: string) => {
     const parent = areas.find(a => a.id === parentId);
     if (!airportForm.name || airportForm.polygon.length < 3) {
-      alert("Please enter a name and draw the airport boundary on the map.");
+      toast({ title: "Missing airport boundary", description: "Please enter a name and draw the airport boundary on the map.", variant: "destructive" });
       return;
     }
     try {
@@ -148,7 +166,7 @@ export default function ServiceAreasPage() {
       setAddAirportFor(null);
       setAirportForm({ name: "", airport_fee: 2.0, polygon: [] });
       load();
-    } catch (e: any) { alert(e?.message || "Failed to create airport zone"); }
+    } catch (e: any) { toast({ title: "Failed to create airport zone", description: e?.message, variant: "destructive" }); }
   };
 
   const handleFieldUpdate = async (areaId: string, field: string, value: any) => {
@@ -161,18 +179,25 @@ export default function ServiceAreasPage() {
         }
         return a;
       }));
-    } catch (e: any) { alert("Failed to update: " + (e?.message || "")); }
+    } catch (e: any) { toast({ title: "Failed to update field", description: e?.message, variant: "destructive" }); }
   };
 
   const handleVehiclePricingUpdate = async (areaId: string, pricing: any[]) => {
     await handleFieldUpdate(areaId, 'vehicle_pricing', pricing);
   };
 
-  const handleDelete = async (id: string, name: string) => {
-    if (!confirm(`Delete "${name}"? This cannot be undone.`)) return;
-    await deleteServiceArea(id);
-    load();
+  const handleDelete = (id: string, name: string) => {
+    setDeleteTarget({ id, name });
   };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    try { await deleteServiceArea(deleteTarget.id); load(); }
+    catch (e: any) { toast({ title: "Failed to delete service area", description: e?.message, variant: "destructive" }); }
+    finally { setDeleteTarget(null); }
+  };
+
+  if (!allowed) return null;
 
   return (
     <div>
@@ -259,7 +284,7 @@ export default function ServiceAreasPage() {
             return (
               <div key={area.id} className="bg-white rounded-2xl border overflow-hidden">
                 {/* Area Header — click to expand */}
-                <div className="flex items-center gap-4 p-5 cursor-pointer" onClick={() => { const newId = isExpanded ? null : area.id; setExpandedId(newId); setEditTab("general"); if (newId && !areaFees[newId]) loadAreaFees(newId); }}>
+                <div className="flex items-center gap-4 p-5 cursor-pointer" role="button" tabIndex={0} aria-expanded={isExpanded} onClick={() => { const newId = isExpanded ? null : area.id; setExpandedId(newId); setEditTab("general"); if (newId && !areaFees[newId]) loadAreaFees(newId); }} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); const newId = isExpanded ? null : area.id; setExpandedId(newId); setEditTab("general"); if (newId && !areaFees[newId]) loadAreaFees(newId); } }}>
                   <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${area.is_active ? 'bg-green-100' : 'bg-gray-100'}`}>
                     <MapPin className={`h-5 w-5 ${area.is_active ? 'text-green-600' : 'text-gray-400'}`} />
                   </div>
@@ -315,13 +340,13 @@ export default function ServiceAreasPage() {
                           try {
                             await updateServiceArea(area.id, updates);
                             setAreas(prev => prev.map(a => a.id === area.id ? { ...a, ...updates } : a));
-                          } catch (e: any) { alert("Failed to save: " + (e?.message || "")); }
+                          } catch (e: any) { toast({ title: "Failed to save", description: e?.message, variant: "destructive" }); }
                         }} onDelete={() => handleDelete(area.id, area.name)} />
                       )}
 
                       {/* Vehicle Pricing Tab */}
                       {editTab === 'pricing' && (
-                        <VehiclePricingEditor pricing={area.vehicle_pricing || []} onSave={p => handleVehiclePricingUpdate(area.id, p)} />
+                        <VehiclePricingEditor pricing={area.vehicle_pricing || []} vehicleTypes={vehicleTypes} onSave={p => handleVehiclePricingUpdate(area.id, p)} />
                       )}
 
                       {/* Fees & Taxes Tab */}
@@ -476,6 +501,19 @@ export default function ServiceAreasPage() {
           })}
         </div>
       )}
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete "{deleteTarget?.name}"?</AlertDialogTitle>
+            <AlertDialogDescription>This cannot be undone.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDelete} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -495,6 +533,11 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
     search_radius_km: area.search_radius_km || 10,
     min_driver_rating: area.min_driver_rating || 4.0,
     show_demand_heatmap: area.show_demand_heatmap || false,
+    // Surge is per-area now — no separate Pricing page. surge_active
+    // gates whether build_fares_for_area multiplies the fare;
+    // surge_multiplier is the factor (1.0 = off, 1.5 = +50%, etc.).
+    surge_active: area.surge_active !== undefined ? area.surge_active : !!area.surge_enabled,
+    surge_multiplier: area.surge_multiplier ?? 1.0,
   });
   const [pendingPolygon, setPendingPolygon] = useState<any>(null);
   const [saving, setSaving] = useState(false);
@@ -502,6 +545,14 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
 
   const handleSave = async () => {
     setSaving(true);
+    // Only stamp surge_source="manual" if the operator actually
+    // changed one of the surge fields since load. If they didn't
+    // touch surge we leave surge_source alone so surge_engine keeps
+    // running against this area. This lets admins save unrelated
+    // fields (name, radius, etc.) without freezing auto-surge.
+    const surgeTouched =
+      form.surge_active !== (area.surge_active !== undefined ? area.surge_active : !!area.surge_enabled) ||
+      parseFloat(String(form.surge_multiplier)) !== parseFloat(String(area.surge_multiplier ?? 1.0));
     const updates: any = {
       name: form.name,
       city: form.city,
@@ -512,7 +563,10 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
       search_radius_km: parseFloat(String(form.search_radius_km)) || 10,
       min_driver_rating: parseFloat(String(form.min_driver_rating)) || 4.0,
       show_demand_heatmap: form.show_demand_heatmap,
+      surge_active: form.surge_active,
+      surge_multiplier: parseFloat(String(form.surge_multiplier)) || 1.0,
     };
+    if (surgeTouched) updates.surge_source = "manual";
     if (pendingPolygon) {
       updates.polygon = pendingPolygon;
     }
@@ -556,6 +610,61 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
             {form.show_demand_heatmap ? <ToggleRight className="h-6 w-6 text-green-500" /> : <ToggleLeft className="h-6 w-6 text-gray-300" />}
           </button>
           <span className="text-xs text-gray-400">Show ride demand overlay to drivers</span>
+        </div>
+      </div>
+
+      {/* Surge pricing — lives here now, no separate /dashboard/pricing page */}
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <h4 className="font-bold text-gray-800">Surge Pricing</h4>
+          {area.surge_source === "manual" && (
+            <button
+              type="button"
+              onClick={async () => {
+                // Hand this area back to surge_engine. The engine
+                // will recompute a multiplier on its next tick
+                // based on demand vs available drivers.
+                await onSave({ surge_source: "auto" });
+              }}
+              className="text-[11px] text-blue-600 hover:underline font-semibold"
+            >
+              Reset to auto-surge
+            </button>
+          )}
+        </div>
+        <p className="text-sm text-gray-500 mb-3">
+          Temporarily raise fares in this area during high-demand periods. When active,
+          every vehicle&apos;s fare is multiplied by the surge factor.
+          {area.surge_source === "auto" && (
+            <span className="text-blue-600"> Currently auto-managed by the surge engine; editing these fields will switch it to manual.</span>
+          )}
+          {area.surge_source === "manual" && (
+            <span className="text-amber-600"> Currently on manual override — surge engine will not touch this area until you reset.</span>
+          )}
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+          <div className="flex items-center gap-2 pt-1">
+            <button type="button" onClick={() => setForm({ ...form, surge_active: !form.surge_active })}>
+              {form.surge_active ? <ToggleRight className="h-6 w-6 text-green-500" /> : <ToggleLeft className="h-6 w-6 text-gray-300" />}
+            </button>
+            <label className="text-xs font-semibold text-gray-500">
+              Surge {form.surge_active ? "ON" : "off"}
+            </label>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 mb-1">Surge Multiplier</label>
+            <input
+              className="w-full border rounded-lg px-3 py-2 text-sm"
+              type="number"
+              step="0.1"
+              min="1"
+              max="5"
+              value={form.surge_multiplier}
+              onChange={e => setForm({ ...form, surge_multiplier: e.target.value as any })}
+              disabled={!form.surge_active}
+            />
+          </div>
+          <p className="text-[11px] text-gray-400 pb-2">1.0 = no surge · 1.5 = +50% · 2.0 = double</p>
         </div>
       </div>
 
@@ -636,7 +745,7 @@ function FieldInput({ label, value, type = "text", onSave }: { label: string; va
   );
 }
 
-function FieldSelect({ label, value, options, onSave }: { label: string; value: string; options: string[]; onSave: (v: string) => void }) {
+function _FieldSelect({ label, value, options, onSave }: { label: string; value: string; options: string[]; onSave: (v: string) => void }) {
   return (
     <div>
       <label className="block text-xs font-semibold text-gray-500 mb-1">{label}</label>
@@ -660,7 +769,7 @@ function FieldToggle({ label, value, onSave }: { label: string; value: boolean; 
 
 // ─── Vehicle Pricing Editor ───
 
-function VehiclePricingEditor({ pricing, onSave }: { pricing: any[]; onSave: (p: any[]) => void }) {
+function VehiclePricingEditor({ pricing, vehicleTypes, onSave }: { pricing: any[]; vehicleTypes: { id: string; name: string }[]; onSave: (p: any[]) => void }) {
   const [rows, setRows] = useState(pricing.length > 0 ? pricing : [
     { vehicle_type: 'Economy', base_fare: 3.50, per_km: 1.20, per_min: 0.25, min_fare: 7.00, booking_fee: 2.00 },
     { vehicle_type: 'Premium', base_fare: 5.00, per_km: 2.00, per_min: 0.40, min_fare: 12.00, booking_fee: 2.50 },
@@ -676,6 +785,12 @@ function VehiclePricingEditor({ pricing, onSave }: { pricing: any[]; onSave: (p:
 
   const addRow = () => setRows([...rows, { vehicle_type: '', base_fare: 0, per_km: 0, per_min: 0, min_fare: 0, booking_fee: 0 }]);
   const removeRow = (i: number) => setRows(rows.filter((_, idx) => idx !== i));
+
+  // Vehicle types already taken by other rows — prevents picking the
+  // same type twice in the same area. The current row's own value is
+  // still allowed so editing doesn't disable its own <option>.
+  const takenNames = (currentIdx: number) =>
+    new Set(rows.map((r, i) => (i === currentIdx ? null : r.vehicle_type)).filter(Boolean));
 
   return (
     <div>
@@ -693,21 +808,52 @@ function VehiclePricingEditor({ pricing, onSave }: { pricing: any[]; onSave: (p:
             </tr>
           </thead>
           <tbody>
-            {rows.map((r, i) => (
-              <tr key={i} className="border-b">
-                {['vehicle_type', 'base_fare', 'per_km', 'per_min', 'min_fare', 'booking_fee'].map(f => (
-                  <td key={f} className="py-2 pr-2">
-                    <input className="w-full border rounded-lg px-2 py-1.5 text-sm"
-                      type={f === 'vehicle_type' ? 'text' : 'number'} step="0.01"
-                      value={(r as any)[f]} onChange={e => update(i, f, e.target.value)} />
+            {rows.map((r, i) => {
+              const taken = takenNames(i);
+              const currentVal = (r as any).vehicle_type || "";
+              // If the saved row references a type that no longer exists
+              // in vehicle_types (deleted from the Vehicle Types page),
+              // keep it as a stale option so the operator still sees it
+              // and can pick a replacement.
+              const hasCurrentInList = vehicleTypes.some(v => v.name === currentVal);
+              return (
+                <tr key={i} className="border-b">
+                  <td className="py-2 pr-2">
+                    <select
+                      className="w-full border rounded-lg px-2 py-1.5 text-sm bg-white"
+                      value={currentVal}
+                      onChange={e => update(i, 'vehicle_type', e.target.value)}
+                    >
+                      <option value="" disabled>Select vehicle type…</option>
+                      {vehicleTypes.map(v => (
+                        <option key={v.id} value={v.name} disabled={taken.has(v.name)}>
+                          {v.name}{taken.has(v.name) ? ' (already added)' : ''}
+                        </option>
+                      ))}
+                      {currentVal && !hasCurrentInList && (
+                        <option value={currentVal}>{currentVal} (deleted)</option>
+                      )}
+                    </select>
                   </td>
-                ))}
-                <td className="py-2"><button onClick={() => removeRow(i)} className="text-gray-400 hover:text-red-500"><Trash2 className="h-4 w-4" /></button></td>
-              </tr>
-            ))}
+                  {['base_fare', 'per_km', 'per_min', 'min_fare', 'booking_fee'].map(f => (
+                    <td key={f} className="py-2 pr-2">
+                      <input className="w-full border rounded-lg px-2 py-1.5 text-sm"
+                        type="number" step="0.01"
+                        value={(r as any)[f]} onChange={e => update(i, f, e.target.value)} />
+                    </td>
+                  ))}
+                  <td className="py-2"><button onClick={() => removeRow(i)} className="text-gray-400 hover:text-red-500"><Trash2 className="h-4 w-4" /></button></td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
+      {vehicleTypes.length === 0 && (
+        <p className="text-xs text-amber-600 mt-2">
+          No vehicle types defined yet. Add them under <span className="font-semibold">Dashboard → Vehicle Types</span> first.
+        </p>
+      )}
       <div className="flex gap-3 mt-3">
         <button onClick={addRow} className="text-sm text-red-500 font-semibold hover:underline">+ Add vehicle type</button>
         <button onClick={() => onSave(rows)} className="bg-red-500 text-white px-5 py-2 rounded-xl text-sm font-semibold hover:bg-red-600">Save Pricing</button>
@@ -894,6 +1040,8 @@ function AreaFeesEditor({ areaId, area, fees, loading, onReload, onFieldUpdate }
     areaId: string; area: any; fees: any[]; loading: boolean;
     onReload: () => void; onFieldUpdate: (areaId: string, field: string, value: any) => void;
 }) {
+    const { toast } = useToast();
+    const [feeDeleteTarget, setFeeDeleteTarget] = useState<string | null>(null);
     const [editingFee, setEditingFee] = useState<any>(null);
     const [saving, setSaving] = useState(false);
 
@@ -916,20 +1064,27 @@ function AreaFeesEditor({ areaId, area, fees, loading, onReload, onFieldUpdate }
         try {
             await createAreaFee(areaId, { fee_name: 'New Fee', fee_type: 'custom', calc_mode: 'flat', amount: 0, is_active: true });
             onReload();
-        } catch (e: any) { alert(e?.message || 'Failed'); }
+        } catch (e: any) { toast({ title: "Failed to create fee", description: e?.message, variant: "destructive" }); }
         setSaving(false);
     };
 
     const handleUpdate = async (feeId: string, data: any) => {
-        try { await updateAreaFee(areaId, feeId, data); onReload(); } catch (e: any) { alert(e?.message || 'Failed'); }
+        try { await updateAreaFee(areaId, feeId, data); onReload(); } catch (e: any) { toast({ title: "Failed to update fee", description: e?.message, variant: "destructive" }); }
     };
 
-    const handleDelete = async (feeId: string) => {
-        if (!confirm('Delete this fee?')) return;
-        try { await deleteAreaFee(areaId, feeId); onReload(); } catch (e: any) { alert(e?.message || 'Failed'); }
+    const handleDelete = (feeId: string) => {
+        setFeeDeleteTarget(feeId);
+    };
+
+    const confirmFeeDelete = async () => {
+        if (!feeDeleteTarget) return;
+        try { await deleteAreaFee(areaId, feeDeleteTarget); onReload(); }
+        catch (e: any) { toast({ title: "Failed to delete fee", description: e?.message, variant: "destructive" }); }
+        finally { setFeeDeleteTarget(null); }
     };
 
     return (
+        <>
         <div className="space-y-6">
             {/* SECTION 1: Area Fees */}
             <div>
@@ -1055,6 +1210,20 @@ function AreaFeesEditor({ areaId, area, fees, loading, onReload, onFieldUpdate }
                 </div>
             </div>
         </div>
+
+        <AlertDialog open={!!feeDeleteTarget} onOpenChange={(open) => { if (!open) setFeeDeleteTarget(null); }}>
+            <AlertDialogContent>
+                <AlertDialogHeader>
+                    <AlertDialogTitle>Delete fee?</AlertDialogTitle>
+                    <AlertDialogDescription>This cannot be undone.</AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction onClick={confirmFeeDelete} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
+                </AlertDialogFooter>
+            </AlertDialogContent>
+        </AlertDialog>
+        </>
     );
 }
 
@@ -1143,6 +1312,8 @@ const DURATION_OPTIONS = [
 function SpinrPassAreaTab({ area, plans, onToggle, onPlansChanged }: {
   area: any; plans: any[]; onToggle: (v: boolean) => void; onPlansChanged: () => void;
 }) {
+  const { toast } = useToast();
+  const [planDeleteTarget, setPlanDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [subs, setSubs] = useState<any[]>([]);
@@ -1168,7 +1339,7 @@ function SpinrPassAreaTab({ area, plans, onToggle, onPlansChanged }: {
       if (editingId) { await updateSubscriptionPlan(editingId, data); }
       else { await createSubscriptionPlan(data); }
       resetForm(); onPlansChanged();
-    } catch (e: any) { alert(e?.message || "Failed to save plan"); }
+    } catch (e: any) { toast({ title: "Failed to save plan", description: e?.message, variant: "destructive" }); }
   };
 
   const handleEdit = (p: any) => {
@@ -1177,9 +1348,15 @@ function SpinrPassAreaTab({ area, plans, onToggle, onPlansChanged }: {
     setShowForm(true);
   };
 
-  const handleDeletePlan = async (p: any) => {
-    if (!confirm(`Delete "${p.name}" plan?`)) return;
-    await deleteSubscriptionPlan(p.id); onPlansChanged();
+  const handleDeletePlan = (p: any) => {
+    setPlanDeleteTarget({ id: p.id, name: p.name });
+  };
+
+  const confirmPlanDelete = async () => {
+    if (!planDeleteTarget) return;
+    try { await deleteSubscriptionPlan(planDeleteTarget.id); onPlansChanged(); }
+    catch (e: any) { toast({ title: "Failed to delete plan", description: e?.message, variant: "destructive" }); }
+    finally { setPlanDeleteTarget(null); }
   };
 
   const handleTogglePlan = async (p: any) => {
@@ -1337,6 +1514,19 @@ function SpinrPassAreaTab({ area, plans, onToggle, onPlansChanged }: {
           )}
         </div>
       )}
+
+      <AlertDialog open={!!planDeleteTarget} onOpenChange={(open) => { if (!open) setPlanDeleteTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete "{planDeleteTarget?.name}" plan?</AlertDialogTitle>
+            <AlertDialogDescription>This cannot be undone.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmPlanDelete} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

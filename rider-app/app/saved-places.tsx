@@ -116,7 +116,7 @@ export default function SavedPlacesScreen() {
       setShowAdd(false);
       resetForm();
     } catch (err: any) {
-      setAlertState({ visible: true, title: 'Error', message: err.message || 'Failed to save place', variant: 'danger' });
+      setAlertState({ visible: true, title: 'Error', message: err.response?.data?.detail || err.message || 'Failed to save place', variant: 'danger' });
     } finally { setSaving(false); }
   };
 
@@ -173,7 +173,7 @@ export default function SavedPlacesScreen() {
       {loading ? (
         <View style={styles.center}><ActivityIndicator size="large" color={colors.primary} /></View>
       ) : (
-        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
           <FlatList
             data={savedAddresses}
             renderItem={renderPlace}

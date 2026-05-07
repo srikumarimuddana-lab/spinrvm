@@ -1,4 +1,5 @@
 """Pydantic v2 schemas for corporate accounts (B2B v1)."""
+
 from __future__ import annotations
 
 from datetime import date, datetime
@@ -307,3 +308,92 @@ class AllowedDomainCreate(BaseModel):
         if not v or "." not in v:
             raise ValueError("domain must contain a dot")
         return v
+
+
+# ── Policy ────────────────────────────────────────────────────────────────────
+
+
+class PaymentSourcePolicy(str, Enum):
+    ALLOWANCE_ONLY = "allowance_only"
+    MASTER_ONLY = "master_only"
+    BOTH = "both"
+
+
+class TimeWindow(BaseModel):
+    """One allowed day+time slot for the time_window policy rule."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    day: str = Field(
+        ...,
+        pattern=r"^(mon|tue|wed|thu|fri|sat|sun)$",
+        description="Lowercase 3-letter day abbreviation",
+    )
+    start: str = Field(
+        ...,
+        pattern=r"^\d{2}:\d{2}$",
+        description="Start time HH:MM (24h, company timezone)",
+    )
+    end: str = Field(
+        ...,
+        pattern=r"^\d{2}:\d{2}$",
+        description="End time HH:MM (24h, company timezone)",
+    )
+
+    @model_validator(mode="after")
+    def _check_order(self) -> "TimeWindow":
+        if self.end <= self.start:
+            raise ValueError("end must be after start")
+        return self
+
+
+class PolicyCreate(BaseModel):
+    """Full policy replacement payload (PUT /company/{id}/policy)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_fare_per_ride: Optional[float] = Field(
+        None,
+        gt=0,
+        le=10000,
+        description="Max CAD fare per work ride.  NULL means no cap.",
+    )
+    allowed_geofence: Optional[dict] = Field(
+        None,
+        description="GeoJSON FeatureCollection.  Pickup AND dropoff must be "
+        "inside at least one polygon.  NULL means no restriction.",
+    )
+    allowed_time_windows: Optional[list[TimeWindow]] = Field(
+        None,
+        description="Allowed booking windows.  NULL means 24/7.",
+    )
+    allowed_payment_source: PaymentSourcePolicy = PaymentSourcePolicy.BOTH
+    active: bool = True
+
+
+class PolicyUpdate(BaseModel):
+    """Partial policy update (PATCH /company/{id}/policy)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_fare_per_ride: Optional[float] = Field(None, gt=0, le=10000)
+    allowed_geofence: Optional[dict] = None
+    allowed_time_windows: Optional[list[TimeWindow]] = None
+    allowed_payment_source: Optional[PaymentSourcePolicy] = None
+    active: Optional[bool] = None
+
+
+class PolicyResponse(BaseModel):
+    """Policy row as returned to the company portal and rider Work Profile."""
+
+    model_config = ConfigDict(from_attributes=True, extra="ignore")
+
+    id: str
+    company_id: str
+    active: bool
+    max_fare_per_ride: Optional[float] = None
+    allowed_geofence: Optional[dict] = None
+    allowed_time_windows: Optional[list] = None
+    allowed_payment_source: PaymentSourcePolicy = PaymentSourcePolicy.BOTH
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None

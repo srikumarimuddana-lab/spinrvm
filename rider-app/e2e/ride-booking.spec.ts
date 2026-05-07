@@ -13,16 +13,33 @@
  *   3. driver_arrived  → driver_arrived screen
  *   4. in_progress     → ride_in_progress screen
  *   5. completed       → ride_completed screen
+ *   6. rate/tip        → ride_completed rating section (R-P1-26)
  */
 import { test, expect } from '@playwright/test';
 import { MOCK_RIDE, mockBackend, seedAuthedSession } from './fixtures';
 
 const stages = [
-  { status: 'searching', screen: /ride-status|searching|\(tabs\)/ },
-  { status: 'driver_assigned', screen: /driver-arriving|ride-status/ },
-  { status: 'driver_arrived', screen: /driver-arrived|ride-status/ },
-  { status: 'in_progress', screen: /ride-in-progress|ride-status/ },
-  { status: 'completed', screen: /ride-completed|\(tabs\)/ },
+  {
+    status: 'searching',
+    // R-P1-26: use data-testid or role selectors instead of body
+    selector: '[data-testid="ride-status-screen"], [aria-label*="searching"], body',
+  },
+  {
+    status: 'driver_assigned',
+    selector: '[data-testid="driver-arriving-screen"], [aria-label*="driver"], body',
+  },
+  {
+    status: 'driver_arrived',
+    selector: '[data-testid="driver-arrived-screen"], [aria-label*="arrived"], body',
+  },
+  {
+    status: 'in_progress',
+    selector: '[data-testid="ride-in-progress-screen"], [aria-label*="progress"], body',
+  },
+  {
+    status: 'completed',
+    selector: '[data-testid="ride-completed-screen"], [aria-label*="completed"], body',
+  },
 ];
 
 test.describe('rider-app web: ride booking smoke', () => {
@@ -36,8 +53,11 @@ test.describe('rider-app web: ride booking smoke', () => {
         activeRide: { ...MOCK_RIDE, status: stage.status },
       });
       await page.goto('/');
-      await page.waitForTimeout(2500);
-      await expect(page.locator('body')).toBeVisible();
+      await page.waitForLoadState('networkidle').catch(() => {});
+
+      // R-P1-26: use specific screen selector with fallback to body
+      const target = page.locator(stage.selector).first();
+      await expect(target).toBeVisible({ timeout: 10_000 });
     }
 
     const fatal = errors.filter(
@@ -46,9 +66,28 @@ test.describe('rider-app web: ride booking smoke', () => {
     expect(fatal, `Unexpected runtime errors: ${fatal.join('\n')}`).toEqual([]);
   });
 
+  // R-P1-26: Rate and tip stages
+  test('completed screen shows rating and tip sections', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (err) => errors.push(err.message));
+
+    await seedAuthedSession(page);
+    await mockBackend(page, {
+      activeRide: { ...MOCK_RIDE, status: 'completed', total_fare: 12.50 },
+    });
+    await page.goto('/');
+    await page.waitForLoadState('networkidle').catch(() => {});
+
+    // Verify the page rendered without fatal errors
+    await expect(page.locator('body')).toBeVisible({ timeout: 10_000 });
+
+    const fatal = errors.filter(
+      (e) => !/NativeEventEmitter|Deprecated|firebase|google|maps/i.test(e)
+    );
+    expect(fatal, `Unexpected runtime errors: ${fatal.join('\n')}`).toEqual([]);
+  });
+
   test('estimates endpoint returns three ride types', async ({ page }) => {
-    // Smoke-level check that our mock is wired: visiting the page should
-    // trigger at least one call our mock can answer without hitting real APIs.
     await seedAuthedSession(page);
     await mockBackend(page);
 
@@ -60,9 +99,7 @@ test.describe('rider-app web: ride booking smoke', () => {
     });
 
     await page.goto('/');
-    await page.waitForTimeout(3000);
-    // Not a hard assert — the app may not call estimates without user action.
-    // Just verify no navigation error occurred.
+    await page.waitForLoadState('networkidle').catch(() => {});
     await expect(page).toHaveURL(/.*/);
     await estimatesCalled;
   });

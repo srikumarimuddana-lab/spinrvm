@@ -10,8 +10,9 @@ import { Button } from "@/components/ui/button";
 import {
     Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
-import { Download, Car, CreditCard, Users, TrendingUp, DollarSign, UserPlus, XCircle, Clock, MapPin, X, GitCompareArrows, Wallet, CheckCircle, AlertTriangle } from "lucide-react";
+import { Download, Car, CreditCard, Users, TrendingUp, DollarSign, UserPlus, Clock, MapPin, X, GitCompareArrows, Wallet, CheckCircle, AlertTriangle } from "lucide-react";
 import { getPayouts, getPayoutStats } from "@/lib/api";
+import { useRequireModule } from "@/hooks/useRequireModule";
 import { Legend } from "recharts";
 import { Input } from "@/components/ui/input";
 import {
@@ -27,8 +28,10 @@ const tooltipStyle = {
 };
 
 export default function EarningsPage() {
+    const { allowed } = useRequireModule("earnings");
     const [tab, setTab] = useState<"rides" | "spinr-pass" | "payouts">("rides");
 
+    if (!allowed) return null;
     return (
         <div className="space-y-6">
             <div className="flex items-center justify-between">
@@ -78,7 +81,7 @@ function RideEarningsTab() {
                     setEarnings(Array.isArray(arr) ? arr : []);
                 } else { setEarnings([]); }
             })
-            .catch(() => {})
+            .catch((e) => console.error('[Earnings] load failed:', e))
             .finally(() => setLoading(false));
     }, []);
 
@@ -188,7 +191,7 @@ function SpinrPassRevenueTab() {
         if (selectedAreas.length > 0 && !comparing) params.service_area_ids = selectedAreas.join(",");
         getSubscriptionStats(params)
             .then((res) => { setData(res); setServiceAreas(res.service_areas || []); })
-            .catch(() => {})
+            .catch((e) => console.error('[Earnings] subscription stats load failed:', e))
             .finally(() => setLoading(false));
     };
 

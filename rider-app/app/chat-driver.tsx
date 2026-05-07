@@ -13,6 +13,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useRideStore } from '../store/rideStore';
+import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -37,13 +38,12 @@ export default function ChatDriverScreen() {
 
   // Load chat history from the backend on mount.
   useEffect(() => {
-    if (!rideId) return;
+    if (!rideId) { router.replace('/(tabs)' as any); return; }
     (async () => {
       try {
-        const api = (await import('@shared/api/client')).default;
-        const res = await api.get(`/rides/${rideId}/messages`);
+        const res = await api.get<{ messages: unknown[] }>(`/rides/${rideId}/messages`);
         if (res.data?.messages) {
-          setChatMessages(res.data.messages);
+          setChatMessages(res.data.messages as import('../store/rideStore').ChatMessage[]);
         }
       } catch (e) {
         console.log('[Chat] Failed to load history:', e);
@@ -80,8 +80,7 @@ export default function ChatDriverScreen() {
   const handleCall = async () => {
     if (!rideId) return;
     try {
-      const api = (await import('@shared/api/client')).default;
-      const res = await api.get(`/rides/${rideId}/call`);
+      const res = await api.get<{ phone?: string }>(`/rides/${rideId}/call`);
       if (res.data?.phone) {
         const { Linking } = require('react-native');
         Linking.openURL(`tel:${res.data.phone}`);
@@ -95,11 +94,10 @@ export default function ChatDriverScreen() {
     if (!text.trim() || !rideId || sending) return;
     setSending(true);
     try {
-      const api = (await import('@shared/api/client')).default;
-      const res = await api.post(`/rides/${rideId}/messages`, { text: text.trim() });
+      const res = await api.post<{ message?: unknown }>(`/rides/${rideId}/messages`, { text: text.trim() });
       if (res.data?.message) {
         // Optimistically add to local state (deduplicated by the store).
-        addChatMessage(res.data.message);
+        addChatMessage(res.data.message as import('../store/rideStore').ChatMessage);
       }
     } catch (e) {
       console.log('[Chat] Send failed:', e);

@@ -1,16 +1,27 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Stack } from 'expo-router';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+
+// Exported so payment screens can guard CardField rendering behind a valid key.
+export const StripeKeyContext = React.createContext<string | null>(null);
+import { Stack, router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { View, ActivityIndicator, StyleSheet, Text, Platform } from 'react-native';
+import { Alert, View, ActivityIndicator, StyleSheet, Text, Platform } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { StripeProvider } from '@stripe/stripe-react-native';
 import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold, PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import * as SplashScreen from 'expo-splash-screen';
+
+// Keep the native splash up until our React-rendered splash is mounted,
+// otherwise the destination tab (which contains the SOSButton) momentarily
+// flashes through during the boot transition.
+SplashScreen.preventAutoHideAsync().catch(() => {});
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import NetInfo from '@react-native-community/netinfo';
+import api from '@shared/api/client';
 import { useAuthStore } from '@shared/store/authStore';
 import { useLocationStore } from '@shared/store/locationStore';
 import { useRideStore } from '../store/rideStore';
+import { useWorkProfileStore } from '../store/workProfileStore';
 import { useRiderSocket } from '../hooks/useRiderSocket';
 import SpinrConfig from '@shared/config/spinr.config';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
@@ -18,7 +29,6 @@ import { OfflineBanner } from '@shared/components/OfflineBanner';
 import { ThemeProvider, useTheme } from '@shared/theme/ThemeContext';
 import { captureMessage, setUser } from '@shared/services/errorReporting';
 import Analytics from '@shared/analytics';
-import LogRocket from '@logrocket/react-native';
 import {
   initFirebaseServices,
   requestPushPermissionAndGetToken,
@@ -26,6 +36,31 @@ import {
   setBackgroundMessageHandler,
   onTokenRefresh,
 } from '@shared/services/firebase';
+import { handleScheduledRideReminderFCM } from '../hooks/useScheduledRideReminder';
+
+// R-P1-29: Route to the correct screen based on FCM notification data.
+// Called both for killed-state (getInitialNotification) and tapped-while-backgrounded notifications.
+function routeFromNotificationData(data: Record<string, string> | undefined) {
+  if (!data?.type || !data?.ride_id) return;
+  const { type, ride_id } = data;
+  switch (type) {
+    case 'driver_accepted':
+    case 'driver_arrived':
+      router.push({ pathname: '/driver-arriving', params: { rideId: ride_id } } as any);
+      break;
+    case 'ride_started':
+      router.push({ pathname: '/ride-in-progress', params: { rideId: ride_id } } as any);
+      break;
+    case 'ride_completed':
+      router.push({ pathname: '/ride-completed', params: { rideId: ride_id } } as any);
+      break;
+    case 'ride_cancelled':
+      router.replace('/(tabs)' as any);
+      break;
+    default:
+      break;
+  }
+}
 
 // expo-notifications' push-token APIs were removed from Expo Go in SDK 53,
 // and its import throws on web where notifications don't exist. Lazy-require
@@ -38,6 +73,18 @@ if (canUseNotifications) {
     Notifications = require('expo-notifications');
   } catch (e) {
     console.log('[Push] expo-notifications unavailable:', e);
+  }
+}
+
+// @logrocket/react-native ships a native module that isn't linked in Expo Go
+// — importing it eagerly throws on module-load. Lazy-require so the app
+// mounts in Expo Go / web, and no-op the init/identify calls there.
+let LogRocket: any = null;
+if (!isExpoGo && Platform.OS !== 'web') {
+  try {
+    LogRocket = require('@logrocket/react-native').default ?? require('@logrocket/react-native');
+  } catch (e) {
+    console.log('[LogRocket] unavailable:', e);
   }
 }
 
@@ -85,6 +132,7 @@ export default function RootLayout() {
 
   const { initialize: initializeAuth, isInitialized: isAuthInitialized, token: authToken } = useAuthStore();
   const { initialize: initializeLocation, isInitialized: isLocationInitialized } = useLocationStore();
+  const hydrateWorkProfile = useWorkProfileStore(s => s.hydrate);
   const [isOffline, setIsOffline] = useState(false);
   // Stripe publishable key is fetched from the backend at boot so operators
   // can rotate it without an app release. Until it loads, we render children
@@ -107,7 +155,7 @@ export default function RootLayout() {
   // that isn't linked there, so calling init would throw. Same gating
   // pattern as @shared/services/firebase.
   useEffect(() => {
-    if (isExpoGo) return;
+    if (!LogRocket) return;
     try {
       LogRocket.init('gfuign/spinr');
     } catch (e) {
@@ -122,7 +170,6 @@ export default function RootLayout() {
   useEffect(() => {
     (async () => {
       try {
-        const api = (await import('@shared/api/client')).default;
         const res = await api.get<{ stripe_publishable_key?: string }>('/settings');
         const key = res.data?.stripe_publishable_key;
         if (key) setStripePublishableKey(key);
@@ -136,7 +183,7 @@ export default function RootLayout() {
   useEffect(() => {
     const init = async () => {
       try {
-        await Promise.all([initializeAuth(), initializeLocation()]);
+        await Promise.all([initializeAuth(), initializeLocation(), hydrateWorkProfile()]);
 
         // Firebase native modules: Crashlytics + App Check. FCM token
         // registration is deferred to a separate effect that waits for
@@ -165,6 +212,16 @@ export default function RootLayout() {
               name: 'Default',
               importance: Notifications.AndroidImportance.DEFAULT,
               sound: 'default',
+            });
+            // Channel for scheduled ride reminders (T-15 min alert)
+            await Notifications.setNotificationChannelAsync('scheduled-reminders', {
+              name: 'Scheduled Ride Reminders',
+              description: 'Reminder 15 minutes before your scheduled ride departs.',
+              importance: Notifications.AndroidImportance.HIGH,
+              sound: 'default',
+              vibrationPattern: [0, 250, 150, 250],
+              lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+              enableVibrate: true,
             });
           } catch (e) {
             console.log('[Push] Android channel setup failed:', e);
@@ -207,7 +264,6 @@ export default function RootLayout() {
       try {
         const fcmToken = await requestPushPermissionAndGetToken();
         if (!fcmToken) return;
-        const api = (await import('@shared/api/client')).default;
         await api.post('/notifications/register-token', {
           token: fcmToken,
           platform: Platform.OS,
@@ -217,7 +273,7 @@ export default function RootLayout() {
         const uid = useAuthStore.getState().user?.id;
         if (uid) {
           setUser(uid);
-          if (!isExpoGo) {
+          if (LogRocket) {
             try { LogRocket.identify(uid); } catch (e) { console.log('[LogRocket] identify failed:', e); }
           }
         }
@@ -232,7 +288,6 @@ export default function RootLayout() {
     // silently fail when Firebase rotates the device token.
     const unsubTokenRefresh = onTokenRefresh(async (newToken: string) => {
       try {
-        const api = (await import('@shared/api/client')).default;
         await api.post('/notifications/register-token', {
           token: newToken,
           platform: Platform.OS,
@@ -249,27 +304,61 @@ export default function RootLayout() {
   }, [isAuthInitialized, authToken]);
 
   // ── Foreground FCM message handler ──
-  // When the backend pushes a ride-state update (driver accepted,
-  // arrived, ride started, ride cancelled), refresh the currentRide
-  // from the API so the UI snaps to the new state immediately instead
-  // of waiting up to 5 seconds for the next polling cycle in
-  // ride-status.tsx / driver-arriving.tsx / ride-in-progress.tsx.
-  //
-  // Backend notifications currently carry only title/body (no `data`
-  // field), so we can't route by event type — we refetch whatever ride
-  // the store considers active. If there's no currentRide we no-op.
-  // Gated on `isAuthInitialized` so the subscription doesn't race the
-  // rest of cold-start.
   useEffect(() => {
     if (!isAuthInitialized) return;
 
     const unsubscribe = onForegroundMessage((remoteMessage: any) => {
       console.log('[Push] Rider foreground FCM:', remoteMessage?.notification?.title);
+
+      // Scheduled ride reminder — show a local notification so the alert
+      // appears even when the app is foregrounded (FCM suppresses the
+      // OS banner for foreground messages).
+      const reminderRideId = handleScheduledRideReminderFCM(remoteMessage);
+      if (reminderRideId) {
+        if (Notifications) {
+          const scheduledTime = remoteMessage?.data?.scheduled_time;
+          const timeLabel = scheduledTime
+            ? new Date(scheduledTime).toLocaleTimeString('en-CA', { hour: '2-digit', minute: '2-digit' })
+            : 'soon';
+          Notifications.scheduleNotificationAsync({
+            content: {
+              title: '🚗 Ride in 15 minutes',
+              body: `Your scheduled Spinr ride departs at ${timeLabel}. Get ready!`,
+              data: { type: 'scheduled_ride_reminder', rideId: reminderRideId },
+              sound: 'default',
+              ...(Platform.OS === 'android' ? { channelId: 'scheduled-reminders' } : {}),
+            },
+            trigger: null, // show immediately
+          }).catch(() => {});
+        }
+        return; // don't also refetch ride for reminder events
+      }
+
+      // Safety check-in — ask the rider if they're okay; POST confirmation on tap.
+      if (remoteMessage?.data?.type === 'safety_checkin') {
+        const checkinRideId = remoteMessage?.data?.ride_id as string | undefined;
+        if (checkinRideId) {
+          Alert.alert(
+            'Safety check-in',
+            "Just checking in — are you okay?\n\nIf you don't respond, we'll follow up with you shortly.",
+            [
+              {
+                text: "I'm okay",
+                onPress: () => {
+                  api.post(`/rides/${checkinRideId}/safety-checkin`).catch((e) => console.warn('[Layout] Safety checkin failed:', e?.message ?? e));
+                },
+              },
+            ],
+            { cancelable: false },
+          );
+        }
+        return;
+      }
+
+      // All other FCM types — refresh the active ride state
       const currentRide = useRideStore.getState().currentRide;
       if (currentRide?.id) {
-        useRideStore.getState().fetchRide(currentRide.id).catch(() => {
-          // Polling will cover the next attempt; don't surface.
-        });
+        useRideStore.getState().fetchRide(currentRide.id).catch((e) => console.warn('[Layout] fetchRide on foreground failed:', e?.message ?? e));
       }
     });
 
@@ -277,6 +366,44 @@ export default function RootLayout() {
       if (typeof unsubscribe === 'function') unsubscribe();
     };
   }, [isAuthInitialized]);
+
+  // R-P1-29: Killed-state deep linking — check if the app was opened by tapping
+  // a notification while it was fully killed. expo-notifications.getInitialNotificationResponseAsync()
+  // returns the tapped notification response in that case.
+  // The routing call is deferred 100ms to ensure the Expo Router Stack is fully
+  // mounted before navigation is attempted — calls fired before hydration are
+  // silently dropped.
+  useEffect(() => {
+    // Only route from notification AFTER auth is initialized and app is ready
+    if (!isAuthInitialized || !canUseNotifications || !Notifications) return;
+    let timer: ReturnType<typeof setTimeout>;
+    (async () => {
+      try {
+        const response = await Notifications.getInitialNotificationResponseAsync?.();
+        if (response?.notification?.request?.content?.data) {
+          const data = response.notification.request.content.data as Record<string, string>;
+          console.log('[Push] Killed-state notification tap — routing from data:', data);
+          // Add a small defer to ensure Stack is mounted
+          timer = setTimeout(() => {
+            routeFromNotificationData(data);
+          }, 100);
+        }
+      } catch (e) {
+        console.log('[Push] getInitialNotification failed:', e);
+      }
+    })();
+    return () => clearTimeout(timer);
+  }, [isAuthInitialized]);
+
+  // Clear ride session data when the user logs out so a subsequent login
+  // doesn't show the previous session's ride, driver, or chat state.
+  const prevAuthTokenRef = useRef(authToken);
+  useEffect(() => {
+    if (prevAuthTokenRef.current && !authToken) {
+      useRideStore.getState().clearRide();
+    }
+    prevAuthTokenRef.current = authToken;
+  }, [authToken]);
 
   // ── Network connectivity monitoring for offline sync ──
   useEffect(() => {
@@ -297,10 +424,15 @@ export default function RootLayout() {
     return unsubscribe;
   }, [isAuthInitialized, isOffline]);
 
+  const onLoadingLayout = useCallback(() => {
+    // React splash is on screen — safe to drop the native splash.
+    SplashScreen.hideAsync().catch(() => {});
+  }, []);
+
   if (!fontsLoaded || fontError || !isAuthInitialized || !isLocationInitialized) {
     return (
       <ErrorBoundary>
-        <View style={styles.loadingContainer}>
+        <View style={styles.loadingContainer} onLayout={onLoadingLayout}>
           <Text style={styles.logoText}>Spinr</Text>
           <ActivityIndicator size="large" color="#FFFFFF" style={{ marginTop: 20 }} />
         </View>
@@ -310,8 +442,23 @@ export default function RootLayout() {
 
   return (
     <ThemeProvider>
-      <RootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} stripePublishableKey={stripePublishableKey} />
+      <RootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} stripePublishableKey={stripePublishableKey} wsState={wsState} />
     </ThemeProvider>
+  );
+}
+
+function MaybeStripeProvider({
+  publishableKey,
+  children,
+}: {
+  publishableKey: string | null;
+  children: React.ReactNode;
+}) {
+  if (!publishableKey) return <>{children}</>;
+  return (
+    <StripeProvider publishableKey={publishableKey} merchantIdentifier="merchant.com.spinr.user">
+      {children as React.ReactElement}
+    </StripeProvider>
   );
 }
 
@@ -319,29 +466,36 @@ function RootLayoutInner({
   isOffline,
   setIsOffline,
   stripePublishableKey,
+  wsState,
 }: {
   isOffline: boolean;
   setIsOffline: (v: boolean) => void;
   stripePublishableKey: string | null;
+  wsState: import('../hooks/useRiderSocket').RiderSocketState;
 }) {
   const { isDark } = useTheme();
   return (
     <ErrorBoundary>
       <OfflineBanner visible={isOffline} onVisibilityChange={setIsOffline} />
+      {wsState === 'reconnecting' && (
+        <View style={{ backgroundColor: '#F59E0B', paddingVertical: 4, alignItems: 'center' }}>
+          <Text style={{ color: '#fff', fontSize: 12, fontWeight: '600' }}>
+            Reconnecting to ride updates…
+          </Text>
+        </View>
+      )}
       <GestureHandlerRootView>
         <View style={{ flex: 1 }}>
           <SafeAreaProvider>
             <StatusBar style={isOffline ? "light" : isDark ? "light" : "dark"} />
-            {/* StripeProvider always wraps the Stack so useStripe() /
-                <CardField> work on any screen. When the publishable key
-                isn't loaded yet (or the fetch failed) we pass an empty
-                string; createPaymentMethod will reject with a clear
-                error and the manage-cards screen surfaces it as
-                "Payments unavailable — try again shortly". */}
-            <StripeProvider
-              publishableKey={stripePublishableKey || ''}
-              merchantIdentifier="merchant.com.spinr.user"
-            >
+            {/* MaybeStripeProvider defers mounting the native Stripe SDK until
+                the real publishable key is fetched from the backend. Passing
+                an empty string (or a malformed key) to StripeProvider's native
+                module throws IllegalArgumentException on Android and crashes
+                the app. StripeKeyContext exposes the key to child screens so
+                they can gate CardField rendering independently. */}
+            <StripeKeyContext.Provider value={stripePublishableKey}>
+            <MaybeStripeProvider publishableKey={stripePublishableKey}>
             <Stack
               screenOptions={{
                 headerShown: false,
@@ -349,13 +503,14 @@ function RootLayoutInner({
               }}
             >
               {/* Auth */}
-              <Stack.Screen name="index" />
+              <Stack.Screen name="index" options={{ animation: 'none' }} />
               <Stack.Screen name="login" />
               <Stack.Screen name="otp" />
               <Stack.Screen name="profile-setup" options={{ headerShown: false }} />
 
-              {/* Main */}
-              <Stack.Screen name="(tabs)" options={{ animation: 'fade' }} />
+              {/* Main — instant cut from splash so the home tab's SOSButton
+                  doesn't flash through a cross-fade transition. */}
+              <Stack.Screen name="(tabs)" options={{ animation: 'none' }} />
 
               {/* Ride flow */}
               <Stack.Screen name="search-destination" options={{ animation: 'slide_from_bottom' }} />
@@ -382,7 +537,8 @@ function RootLayoutInner({
               <Stack.Screen name="ride-details" />
               <Stack.Screen name="settings" />
             </Stack>
-            </StripeProvider>
+            </MaybeStripeProvider>
+            </StripeKeyContext.Provider>
           </SafeAreaProvider>
         </View>
       </GestureHandlerRootView>

@@ -7,18 +7,31 @@ service_areas.surge_multiplier for areas where surge_source == 'auto'.
 """
 
 import asyncio
+import random
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 from loguru import logger
 
 try:
+    from utils.loop_monitor import record_heartbeat as _record_heartbeat
+except ImportError:
+
+    def _record_heartbeat(name: str) -> None:  # type: ignore[misc]
+        pass
+
+
+try:
     from db import db
     from geo_utils import get_service_area_polygon, point_in_polygon
+    from utils.driver_presence import present_driver_ids
+    from utils.metrics import inc as _metric_inc
+    from utils.metrics import set_gauge as _metric_gauge
 except ImportError:
     from ..db import db
     from ..geo_utils import get_service_area_polygon, point_in_polygon
+    from .driver_presence import present_driver_ids
 
 # ── Surge tier mapping ───────────────────────────────────────────────
 # Maps demand/supply ratio to multiplier. Thresholds are tuned for a
@@ -51,7 +64,7 @@ def ratio_to_multiplier(ratio: float) -> float:
 
 async def _count_demand_in_area(area_id: str) -> int:
     """Count active/recent ride requests in a service area."""
-    cutoff = (datetime.utcnow() - timedelta(minutes=DEMAND_WINDOW_MINUTES)).isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=DEMAND_WINDOW_MINUTES)).isoformat()
     try:
         rides = await db.get_rows(
             "rides",
@@ -65,7 +78,7 @@ async def _count_demand_in_area(area_id: str) -> int:
         active_statuses = {"searching", "driver_assigned", "driver_en_route"}
         return sum(1 for r in rides if r.get("status") in active_statuses)
     except Exception as e:
-        logger.warning(f"Surge: failed to count demand for area {area_id}: {e}")
+        logger.error(f"Surge: failed to count demand for area {area_id}: {e}", exc_info=True)
         return 0
 
 
@@ -78,6 +91,19 @@ async def _count_supply_in_area(area: Dict[str, Any]) -> int:
     try:
         drivers = await db.get_rows("drivers", {"is_online": True, "is_available": True}, limit=500)
 
+        # Presence filter: ghost-online drivers (app force-killed, phone dead)
+        # shouldn't count as "supply" or we'd compute a lower surge than the
+        # real market needs. Safe-fallback: if presence lookup fails, trust
+        # the DB rows — worst case surge is slightly under-pricing for one
+        # tick, never over-pricing based on a Redis outage.
+        try:
+            driver_ids = [d["id"] for d in drivers if d.get("id")]
+            present = await present_driver_ids(driver_ids) if driver_ids else set()
+            if present:
+                drivers = [d for d in drivers if d["id"] in present]
+        except Exception as exc:
+            logger.warning(f"Surge: presence filter failed, using DB state: {exc}")
+
         count = 0
         for d in drivers:
             d_lat = d.get("lat")
@@ -87,7 +113,7 @@ async def _count_supply_in_area(area: Dict[str, Any]) -> int:
                     count += 1
         return count
     except Exception as e:
-        logger.warning(f"Surge: failed to count supply for area {area.get('id')}: {e}")
+        logger.error(f"Surge: failed to count supply for area {area.get('id')}: {e}", exc_info=True)
         return 0
 
 
@@ -125,7 +151,8 @@ async def recalculate_all_surges() -> List[Dict[str, Any]]:
     try:
         areas = await db.get_rows("service_areas", {"is_active": True}, limit=100)
     except Exception as e:
-        logger.error(f"Surge: failed to fetch service areas: {e}")
+        original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
+        logger.error(f"Surge: failed to fetch service areas: {e} | original={original}")
         return results
 
     for area in areas:
@@ -172,14 +199,14 @@ async def recalculate_all_surges() -> List[Dict[str, Any]]:
                     "ratio": metrics["ratio"],
                     "source": "auto",
                     "is_active": new_multiplier > 1.0,
-                    "created_at": datetime.utcnow().isoformat(),
-                    "updated_at": datetime.utcnow().isoformat(),
-                }
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                },
             )
 
             results.append(metrics)
         except Exception as e:
-            logger.warning(f"Surge: failed to update area {area.get('id')}: {e}")
+            logger.error(f"Surge: failed to update area {area.get('id')}: {e}", exc_info=True)
 
     return results
 
@@ -233,4 +260,9 @@ async def surge_recalculation_loop():
                 logger.debug(f"Surge recalc complete: {len(results)} areas, {active} surging")
         except Exception as e:
             logger.error(f"Surge recalculation loop error: {e}")
-        await asyncio.sleep(RECALC_INTERVAL_SECONDS)
+        _record_heartbeat("surge_engine (2min)")
+        # B-P3-2: ±10% per-tick jitter so replicas don't all flip surge
+        # state on the same wall-clock tick (rider apps would receive a
+        # synchronised price-change notification storm).
+        delta = RECALC_INTERVAL_SECONDS * 0.1
+        await asyncio.sleep(RECALC_INTERVAL_SECONDS + random.uniform(-delta, delta))

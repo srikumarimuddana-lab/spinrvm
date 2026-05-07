@@ -7,7 +7,7 @@ wallet on claim.
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Optional
 
@@ -29,6 +29,11 @@ _TWO = Decimal("0.01")
 
 def _d(v) -> Decimal:
     return Decimal(str(v)).quantize(_TWO, rounding=ROUND_HALF_UP)
+
+
+def _f(v: Decimal) -> str:
+    """Serialize Decimal → string for DB writes and API responses. Never use for arithmetic."""
+    return str(v)
 
 
 # ── Request Schemas ──────────────────────────────────────────────────
@@ -68,7 +73,7 @@ async def get_available_quests(current_user: dict = Depends(get_current_user)):
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
 
     try:
         # Get all active quests
@@ -158,7 +163,7 @@ async def join_quest(quest_id: str, current_user: dict = Depends(get_current_use
     if not quest.get("is_active", True):
         raise HTTPException(status_code=400, detail="Quest is no longer active")
 
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     if quest.get("end_date", "") < now:
         raise HTTPException(status_code=400, detail="Quest has ended")
 
@@ -188,9 +193,9 @@ async def join_quest(quest_id: str, current_user: dict = Depends(get_current_use
         "driver_id": driver["id"],
         "current_value": 0,
         "status": "active",
-        "started_at": datetime.utcnow().isoformat(),
-        "created_at": datetime.utcnow().isoformat(),
-        "updated_at": datetime.utcnow().isoformat(),
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.insert_one("quest_progress", progress_data)
 
@@ -278,7 +283,7 @@ async def claim_quest_reward(progress_id: str, current_user: dict = Depends(get_
     if not quest:
         raise HTTPException(status_code=404, detail="Quest not found")
 
-    reward_amount = float(quest["reward_amount"])
+    reward_amount = _d(quest["reward_amount"])
 
     # Pay reward to wallet
     if quest.get("reward_type", "wallet_credit") == "wallet_credit":
@@ -291,14 +296,14 @@ async def claim_quest_reward(progress_id: str, current_user: dict = Depends(get_
         await db.update_one(
             "wallets",
             {"id": wallet["id"]},
-            {"$set": {"balance": float(new_balance), "updated_at": datetime.utcnow().isoformat()}},
+            {"$set": {"balance": _f(new_balance), "updated_at": datetime.now(timezone.utc).isoformat()}},
         )
         await _record_transaction(
             wallet_id=wallet["id"],
             user_id=current_user["id"],
             txn_type="quest_reward",
-            amount=reward_amount,
-            balance_after=float(new_balance),
+            amount=_f(reward_amount),
+            balance_after=_f(new_balance),
             reference_id=quest["id"],
             description=f"Quest reward: {quest['title']}",
         )
@@ -310,8 +315,8 @@ async def claim_quest_reward(progress_id: str, current_user: dict = Depends(get_
         {
             "$set": {
                 "status": "claimed",
-                "claimed_at": datetime.utcnow().isoformat(),
-                "updated_at": datetime.utcnow().isoformat(),
+                "claimed_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
             }
         },
     )
@@ -344,8 +349,8 @@ async def admin_create_quest(req: CreateQuestRequest, admin: dict = Depends(get_
         "service_area_id": req.service_area_id,
         "min_driver_rating": req.min_driver_rating,
         "metadata": {},
-        "created_at": datetime.utcnow().isoformat(),
-        "updated_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.insert_one("quests", quest_data)
 
@@ -369,7 +374,7 @@ async def admin_list_quests(
             "quests",
             filters,
             limit=limit,
-            skip=offset,
+            offset=offset,
             order="created_at",
         )
     except Exception as e:
@@ -412,7 +417,7 @@ async def admin_update_quest(quest_id: str, req: UpdateQuestRequest, admin: dict
     if not quest:
         raise HTTPException(status_code=404, detail="Quest not found")
 
-    update_data = {"updated_at": datetime.utcnow().isoformat()}
+    update_data = {"updated_at": datetime.now(timezone.utc).isoformat()}
     if req.title is not None:
         update_data["title"] = req.title
     if req.description is not None:
@@ -451,7 +456,7 @@ async def admin_get_quest_participants(
             "quest_progress",
             filters,
             limit=limit,
-            skip=offset,
+            offset=offset,
             order="created_at",
         )
     except Exception as e:

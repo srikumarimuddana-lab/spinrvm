@@ -1,32 +1,30 @@
 import React, { useEffect, useRef, useMemo } from 'react';
-import { View, Text, StyleSheet, Animated } from 'react-native';
+import { View, Text, Image, StyleSheet, Animated } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '@shared/store/authStore';
 import { useRideStore } from '../store/rideStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
+// The native splash (configured in app.config.ts) shows the Spinr icon at
+// 160px on the brand red background. The React-rendered splash below mirrors
+// the EXACT same image at the EXACT same size on the SAME background, so the
+// native→React handoff looks like a single continuous screen. The tagline
+// fades in beneath the static logo to give a subtle hint of motion.
 export default function Index() {
   const router = useRouter();
   const { isInitialized, token, user } = useAuthStore();
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const scaleAnim = useRef(new Animated.Value(0.5)).current;
+  const taglineFade = useRef(new Animated.Value(0)).current;
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   useEffect(() => {
-    Animated.parallel([
-      Animated.timing(fadeAnim, {
-        toValue: 1,
-        duration: 1000,
-        useNativeDriver: true,
-      }),
-      Animated.spring(scaleAnim, {
-        toValue: 1,
-        friction: 8,
-        useNativeDriver: true,
-      }),
-    ]).start();
+    Animated.timing(taglineFade, {
+      toValue: 1,
+      duration: 700,
+      delay: 250,
+      useNativeDriver: true,
+    }).start();
   }, []);
 
   useEffect(() => {
@@ -77,18 +75,16 @@ export default function Index() {
 
   return (
     <View style={styles.container}>
-      <Animated.View
-        style={[
-          styles.logoContainer,
-          {
-            opacity: fadeAnim,
-            transform: [{ scale: scaleAnim }],
-          },
-        ]}
-      >
-        <Text style={styles.logo}>Spinr</Text>
-        <Text style={styles.tagline}>Ride local. Support local.</Text>
-      </Animated.View>
+      <View style={styles.logoContainer}>
+        <Image
+          source={require('../assets/images/icon.png')}
+          style={styles.logo}
+          resizeMode="contain"
+        />
+        <Animated.Text style={[styles.tagline, { opacity: taglineFade }]}>
+          Ride local. Support local.
+        </Animated.Text>
+      </View>
     </View>
   );
 }
@@ -105,16 +101,14 @@ function createStyles(colors: ThemeColors) {
       alignItems: 'center',
     },
     logo: {
-      fontSize: 64,
-      fontFamily: 'PlusJakartaSans_700Bold',
-      color: '#FFFFFF',
-      letterSpacing: -2,
+      width: 160,
+      height: 160,
     },
     tagline: {
       fontSize: 16,
       fontFamily: 'PlusJakartaSans_400Regular',
-      color: 'rgba(255, 255, 255, 0.8)',
-      marginTop: 8,
+      color: 'rgba(255, 255, 255, 0.85)',
+      marginTop: 16,
     },
   });
 }

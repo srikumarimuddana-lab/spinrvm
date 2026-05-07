@@ -1,10 +1,10 @@
 import logging
 import uuid
-import os
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import Response
 from pydantic import BaseModel
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -12,6 +12,7 @@ from slowapi.util import get_remote_address
 try:
     from .. import db_supabase
     from ..core.config import settings
+    from ..core.csrf import clear_csrf_cookie, generate_csrf_token, set_csrf_cookie
     from ..dependencies import (
         OTP_EXPIRY_MINUTES,
         create_jwt_token,
@@ -21,6 +22,15 @@ try:
     from ..schemas import AuthResponse, OTPRecord, SendOTPRequest, UserProfile, VerifyOTPRequest
     from ..settings_loader import get_app_settings
     from ..sms_service import send_otp_sms
+    from ..utils.audit_logger import log_user_action as _audit_log_user
+    from ..utils.crypto import hash_otp
+    from ..utils.error_handling import (
+        ErrorCode,
+        SpinrException,
+        TokenExpiredException,
+    )
+    from ..utils.error_keys import ErrorKeys
+    from ..utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set
     from ..utils.refresh_tokens import (
         issue_refresh_token,
         lookup_refresh_token,
@@ -28,13 +38,10 @@ try:
         revoke_refresh_token,
     )
     from ..validators import validate_phone
-    from ..utils.redis_client import (
-        redis_get, redis_set, redis_incr, redis_expire, redis_delete
-    )
-    from ..utils.crypto import hash_otp
 except ImportError:
     import db_supabase
     from core.config import settings
+    from core.csrf import clear_csrf_cookie, generate_csrf_token, set_csrf_cookie
     from dependencies import (
         OTP_EXPIRY_MINUTES,
         create_jwt_token,
@@ -44,6 +51,15 @@ except ImportError:
     from schemas import AuthResponse, OTPRecord, SendOTPRequest, UserProfile, VerifyOTPRequest
     from settings_loader import get_app_settings
     from sms_service import send_otp_sms
+    from utils.audit_logger import log_user_action as _audit_log_user
+    from utils.crypto import hash_otp
+    from utils.error_handling import (
+        ErrorCode,
+        SpinrException,
+        TokenExpiredException,
+    )
+    from utils.error_keys import ErrorKeys
+    from utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set
     from utils.refresh_tokens import (
         issue_refresh_token,
         lookup_refresh_token,
@@ -51,10 +67,6 @@ except ImportError:
         revoke_refresh_token,
     )
     from validators import validate_phone
-    from utils.redis_client import (
-        redis_get, redis_set, redis_incr, redis_expire, redis_delete
-    )
-    from utils.crypto import hash_otp
 
 db = db_supabase  # legacy alias
 
@@ -69,23 +81,36 @@ _LOCK_KEY = "otp_lock:{}"
 
 
 async def _check_otp_lockout(phone: str) -> None:
-    """Raise 429 if phone is currently locked out. Fail closed on Redis errors."""
+    """Raise 429 if phone is currently locked out. Raises 503 on Redis errors (fail closed).
+
+    B-P1-8: Mirrors the response shape pinned by the slowapi 429 path
+    (utils/rate_limiter.py::rate_limit_exceeded_handler) so mobile
+    clients can use a single 429 parser regardless of which gate
+    (slowapi window or OTP lockout) tripped. RateLimit-* headers per
+    draft-ietf-httpapi-ratelimit-headers; Retry-After per RFC 9110.
+    """
     try:
         locked = await redis_get(_LOCK_KEY.format(phone))
+        if locked:
+            retry_after = int(settings.OTP_LOCKOUT_DURATION_SECONDS)
+            raise HTTPException(
+                status_code=429,
+                detail="Too many failed attempts — try again later",
+                headers={
+                    "Retry-After": str(retry_after),
+                    "RateLimit-Limit": str(int(settings.OTP_MAX_FAILURES)),
+                    "RateLimit-Remaining": "0",
+                    "RateLimit-Reset": str(retry_after),
+                },
+            )
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Redis unavailable in OTP lockout check: {e}")
         raise HTTPException(
             status_code=503,
-            detail="Authentication service temporarily unavailable. Please try again."
-        )
-    if locked:
-        raise HTTPException(
-            status_code=429,
-            detail="Too many failed attempts. Please try again later.",
-            headers={"Retry-After": str(settings.OTP_LOCKOUT_DURATION_SECONDS)},
-        )
+            detail="Auth service temporarily unavailable, please try again",
+        ) from None
 
 
 async def _record_otp_failure(phone: str) -> None:
@@ -101,11 +126,23 @@ async def _record_otp_failure(phone: str) -> None:
                 "1",
                 settings.OTP_LOCKOUT_DURATION_SECONDS,
             )
-            logger.warning(
-                f"OTP_LOCKOUT_TRIGGERED phone=...{phone[-4:]} after {count} failures"
-            )
+            logger.warning(f"OTP_LOCKOUT_TRIGGERED phone=...{phone[-4:]} after {count} failures")
+            try:
+                import asyncio
+
+                asyncio.create_task(
+                    _audit_log_user(
+                        {"id": f"phone:{phone[-4:]}", "role": "anonymous"},
+                        "otp_lockout_triggered",
+                        "users",
+                        phone[-4:],
+                        {"failures": count, "phone_last4": phone[-4:]},
+                    )
+                )
+            except Exception:
+                logger.debug("audit_log write failed for OTP failure event", exc_info=True)
     except Exception as e:
-        logger.warning(f"_record_otp_failure: {e}")
+        logger.error(f"_record_otp_failure: {e}", exc_info=True)
 
 
 async def _clear_otp_failures(phone: str) -> None:
@@ -114,33 +151,42 @@ async def _clear_otp_failures(phone: str) -> None:
         await redis_delete(_FAIL_KEY.format(phone))
         await redis_delete(_LOCK_KEY.format(phone))
     except Exception as e:
-        logger.warning(f"_clear_otp_failures: {e}")
-
-
-def _is_dev_otp_bypass(otp: str) -> bool:
-    if settings.ENV.lower() != "development":
-        return False
-    return otp in ("1234", "123456")
+        logger.error(f"_clear_otp_failures: {e}", exc_info=True)
 
 
 # ── Helpers for Auth Responses ──────────────────────────────────────────
 def _make_auth_response(
+    response: Response,
     token: str,
     refresh_token: str,
     user_obj: UserProfile,
     is_new_user: bool,
     access_expires_at: datetime,
     refresh_expires_at: datetime,
+    csrf_token: Optional[str] = None,
+    admin_ttl_minutes: int = 15,
 ) -> AuthResponse:
+    # P3: Set HTTP-only cookies instead of returning tokens in response
+    try:
+        from ..utils.cookie_manager import CookieManager
+    except ImportError:
+        from utils.cookie_manager import CookieManager
+
+    CookieManager.set_auth_cookie(response, token, ttl_minutes=admin_ttl_minutes)
+    CookieManager.set_refresh_cookie(response, refresh_token, ttl_days=30)
+
+    # Return response WITHOUT tokens (they're in cookies now)
     return AuthResponse(
-        token=token,
-        refresh_token=refresh_token,
+        token="",  # No longer returned in JSON
+        refresh_token="",  # No longer returned in JSON
         expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         user=user_obj,
         is_new_user=is_new_user,
         access_expires_at=access_expires_at,
         refresh_expires_at=refresh_expires_at,
+        csrf_token=csrf_token,
     )
+
 
 @api_router.post("/send-otp")
 @limiter.limit("3/minute")
@@ -157,7 +203,7 @@ async def send_otp(request: Request, body: SendOTPRequest):
     try:
         app_settings = await get_app_settings()
     except Exception as e:
-        logger.warning(f"Could not read app_settings from DB: {e}")
+        logger.error(f"Could not read app_settings from DB: {e}", exc_info=True)
 
     twilio_configured = bool(
         app_settings
@@ -166,11 +212,21 @@ async def send_otp(request: Request, body: SendOTPRequest):
         and app_settings.get("twilio_from_number")
     )
 
-    is_dev = settings.ENV.lower() in ("development", "test")
+    # Dev bypass is gated on "development" only — never "test" or "staging".
+    # An externally-reachable test/staging instance with a known OTP code is
+    # an account-takeover vector against any phone number. Mirrors
+    # `_is_dev_otp_bypass` so /send-otp and /verify-otp agree on the gate.
+    is_dev = settings.ENV.lower() == "development"
 
     if not twilio_configured and not is_dev:
-        # In production, refuse to silently fall back to a known OTP.
-        raise HTTPException(status_code=503, detail="SMS service not configured")
+        # In production / test / staging, refuse to silently fall back to a
+        # known OTP. Force the operator to configure Twilio.
+        raise SpinrException(
+            message="SMS service not configured",
+            error_code=ErrorCode.SERVICE_UNAVAILABLE,
+            status_code=503,
+            message_key=ErrorKeys.SYSTEM_SERVICE_UNAVAILABLE,
+        )
 
     # Dev fallback: fixed OTP so local testing doesn't need Twilio.
     # The 4-digit length matches the real generated OTP so OTP screens accept it.
@@ -179,14 +235,23 @@ async def send_otp(request: Request, body: SendOTPRequest):
     otp_record = OTPRecord(
         phone=phone,
         code=hash_otp(otp_code),  # stored as SHA-256 hash (SEC-016)
-        expires_at=datetime.utcnow() + timedelta(minutes=OTP_EXPIRY_MINUTES),
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=OTP_EXPIRY_MINUTES),
     )
 
     try:
         await db_supabase.delete_many("otp_records", {"phone": phone})
         await db_supabase.insert_otp_record(otp_record.dict())
     except Exception as e:
-        logger.warning(f"Could not store OTP in DB: {e}")
+        # Returning 200 here would lie to the client: a missing OTP row means
+        # every subsequent /verify-otp will fail. Surface the DB error so the
+        # client retries instead of getting stuck.
+        logger.error(f"Could not store OTP in DB: {e}", exc_info=True)
+        raise SpinrException(
+            message="Could not store OTP, please try again",
+            error_code=ErrorCode.DATABASE_ERROR,
+            status_code=503,
+            message_key=ErrorKeys.SYSTEM_DATABASE,
+        ) from e
 
     # Send OTP via SMS (Twilio when configured, console log otherwise)
     sms_result = await send_otp_sms(
@@ -198,18 +263,39 @@ async def send_otp(request: Request, body: SendOTPRequest):
     )
     if not sms_result.get("success"):
         logger.error(f"Failed to send OTP SMS: {sms_result.get('error')}")
-        raise HTTPException(status_code=500, detail="Failed to send verification code")
+        raise SpinrException(
+            message="Failed to send verification code",
+            error_code=ErrorCode.SERVICE_UNAVAILABLE,
+            status_code=503,
+            message_key=ErrorKeys.SYSTEM_SERVICE_UNAVAILABLE,
+        )
 
-    response = {"success": True, "message": f"OTP sent to {phone}"}
+    response = {"success": True, "message": f"OTP sent to ***{phone[-4:]}"}
     # Dev OTP is logged to server console via sms_service.py — never return it
     # in the API response to avoid accidental exposure in client-side logs.
+    import asyncio
+    import hashlib
+
+    _ph = hashlib.sha256(phone.encode()).hexdigest()[:16]
+    try:
+        asyncio.create_task(
+            _audit_log_user(
+                {"id": f"phone_hash:{_ph}", "role": "anonymous"},
+                "otp_sent",
+                "users",
+                _ph,
+                {"phone_last4": phone[-4:]},
+            )
+        )
+    except Exception:
+        logger.error("audit_log write failed for otp_sent", exc_info=True)
 
     return response
 
 
 @api_router.post("/verify-otp", response_model=AuthResponse)
 @limiter.limit("5/minute")
-async def verify_otp(request: Request, body: VerifyOTPRequest):
+async def verify_otp(request: Request, response: Response, body: VerifyOTPRequest):
     phone = body.phone.strip()
     code = body.code.strip()
 
@@ -217,23 +303,29 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
     await _check_otp_lockout(phone)
     otp_record = None
     try:
-        # compare hashes, never plain text (SEC-016)
-        otp_record = await db_supabase.get_otp_record(phone, hash_otp(code))
-    except Exception as e:
-        logger.warning(f"Could not query OTP from DB: {e}")
+        # R-P1-14: Fetch by phone only; compare hashes in constant time with
+        # hmac.compare_digest to prevent timing-based hash-prefix leakage.
+        import hmac as _hmac
 
-    if not otp_record and _is_dev_otp_bypass(code):
-        logger.info("Dev mode: accepting bypass OTP")
-        otp_record = {
-            "id": "dev",
-            "phone": phone,
-            "code": hash_otp(code),
-            "expires_at": datetime.utcnow() + timedelta(minutes=5),
-        }
+        otp_record = await db_supabase.get_otp_record_by_phone(phone)
+        if otp_record:
+            expected = otp_record.get("code", "")
+            actual = hash_otp(code)
+            if not _hmac.compare_digest(str(expected), str(actual)):
+                otp_record = None
+    except Exception as e:
+        logger.error(f"Could not query OTP from DB: {e}", exc_info=True)
+
     if not otp_record:
         # Wrong code — record the failure (may trigger lockout)
         await _record_otp_failure(phone)
-        raise HTTPException(status_code=400, detail="Invalid verification code")
+        raise SpinrException(
+            message="ERR_OTP_INVALID",
+            error_code=ErrorCode.AUTH_OTP_INVALID,
+            status_code=400,
+            message_key=ErrorKeys.AUTH_OTP_INVALID,
+            action_hint="Re-enter the 4-digit code",
+        )
     # Parse expires_at to datetime if it's a string (from Supabase)
     expires_at = otp_record.get("expires_at")
     if isinstance(expires_at, str):
@@ -243,11 +335,21 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
             expires_at = datetime.fromisoformat(expires_at)
         except ValueError:
             logger.error(f"Invalid date format for OTP expires_at: {expires_at}")
-            raise HTTPException(status_code=500, detail="Internal data error: invalid expiration date") from None
+            raise SpinrException(
+                message="Internal error processing OTP record",
+                error_code=ErrorCode.INTERNAL_ERROR,
+                status_code=500,
+                message_key=ErrorKeys.SYSTEM_INTERNAL,
+            ) from None
 
     if not expires_at:
         logger.error("OTP record missing expires_at field")
-        raise HTTPException(status_code=500, detail="Internal data error: missing expiration date")
+        raise SpinrException(
+            message="Internal error processing OTP record",
+            error_code=ErrorCode.INTERNAL_ERROR,
+            status_code=500,
+            message_key=ErrorKeys.SYSTEM_INTERNAL,
+        )
 
     # Ensure expires_at is timezone-aware for comparison
     if expires_at.tzinfo is None:
@@ -256,14 +358,21 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
     if datetime.now(timezone.utc) > expires_at:
         try:
             await db_supabase.delete_otp_record(otp_record["id"])
-        except Exception:  # noqa: S110
-            pass
-        raise HTTPException(status_code=400, detail="OTP has expired")
+        except Exception:
+            # Non-fatal: OTP expiry cleanup failure does not block the error response
+            logger.warning("Failed to delete expired OTP record %s", otp_record["id"], exc_info=True)
+        raise SpinrException(
+            message="ERR_OTP_EXPIRED",
+            error_code=ErrorCode.AUTH_OTP_EXPIRED,
+            status_code=400,
+            message_key=ErrorKeys.AUTH_OTP_EXPIRED,
+            action_hint="Request a new code",
+        )
 
     try:
         await db_supabase.update_one("otp_records", {"id": otp_record["id"]}, {"verified": True})
-    except Exception:  # noqa: S110
-        pass
+    except Exception:
+        logger.error("auth: failed to mark OTP %s as verified — reuse risk", otp_record.get("id"), exc_info=True)
 
     # SEC-008: Clear failure counter + lockout on successful verification
     await _clear_otp_failures(phone)
@@ -271,11 +380,29 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
         # Find or create user
         existing_user = None
         try:
-            logger.info(f"Searching for user with phone: {phone}")
+            logger.info(f"Searching for user with phone: ***{phone[-4:]}")
             existing_user = await db_supabase.get_user_by_phone(phone)
             logger.info(f"User search result found: {bool(existing_user)}")
         except Exception as e:
-            logger.warning(f"Could not query user from DB: {e}")
+            # Surface the real underlying Supabase error. DatabaseError
+            # wraps the original exception in .details["original"]; str(e)
+            # only gives the generic "Database operation failed" message.
+            original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
+            logger.error(
+                f"get_user_by_phone failed for ***{phone[-4:]}: type={type(e).__name__} msg={e} original={original}",
+                exc_info=True,
+            )
+            # Refuse to silently fall through to user creation — a DB read
+            # failure is NOT the same as "user doesn't exist". Creating a
+            # new row here generates duplicate accounts on every retry and
+            # locks the real user out of their own profile, wallet, and
+            # ride history. Fail the login so the client retries.
+            raise SpinrException(
+                message="Service temporarily unavailable, please try again",
+                error_code=ErrorCode.DATABASE_ERROR,
+                status_code=503,
+                message_key=ErrorKeys.SYSTEM_DATABASE,
+            ) from e
 
         user_agent = request.headers.get("user-agent", "")
         client_ip = get_remote_address(request)
@@ -287,7 +414,14 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
                 await db_supabase.update_one("users", {"id": existing_user["id"]}, {"current_session_id": session_id})
                 existing_user["current_session_id"] = session_id
             except Exception as e:
-                logger.warning(f"Could not update session_id for existing user: {e}")
+                logger.error(f"Could not update session_id for existing user: {e}", exc_info=True)
+            # Mirror session_id in Redis so revocation propagates instantly across
+            # all replicas without waiting for a Postgres read on every request.
+            await redis_set(
+                f"session:{existing_user['id']}",
+                session_id,
+                ttl=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            )
             user_id = existing_user["id"]
             token_version = int(existing_user.get("token_version") or 0)
             access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -305,15 +439,36 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
                 user_obj = UserProfile(**existing_user)
                 logger.info("UserProfile valid")
             except Exception as e:
-                logger.warning(f"UserProfile validation failed, falling back to raw dict: {e}")
+                logger.error(f"UserProfile validation failed, falling back to raw dict: {e}", exc_info=True)
                 user_obj = existing_user
+            csrf = generate_csrf_token()
+            set_csrf_cookie(
+                response, csrf, secure=settings.ENV == "production", max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+            )
+            try:
+                import asyncio
+
+                asyncio.create_task(
+                    _audit_log_user(
+                        existing_user,
+                        "otp_verify_success",
+                        "users",
+                        user_id,
+                        {"is_new_user": False},
+                    )
+                )
+            except Exception:
+                logger.error("audit_log write failed for otp_verify_success (returning user)", exc_info=True)
             return _make_auth_response(
+                response,
                 token,
                 refresh_raw,
                 user_obj,
                 is_new_user=False,
                 access_expires_at=access_expires_at,
                 refresh_expires_at=refresh_expires_at,
+                csrf_token=csrf,
+                admin_ttl_minutes=15,
             )
         else:
             logger.info("Creating new user")
@@ -323,7 +478,7 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
                 "id": user_id,
                 "phone": phone,
                 "role": "rider",
-                "created_at": datetime.utcnow().isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
                 "profile_complete": False,
                 "current_session_id": session_id,
                 "token_version": 0,
@@ -331,26 +486,77 @@ async def verify_otp(request: Request, body: VerifyOTPRequest):
             try:
                 await db_supabase.create_user(new_user)
             except Exception as e:
-                logger.warning(f"Could not persist new user to DB: {e}")
+                # Issuing a JWT for a row that doesn't exist would break
+                # every subsequent authenticated call. Refuse to mint a
+                # token until persistence is confirmed.
+                logger.error(f"Could not persist new user to DB: {e}", exc_info=True)
+                raise SpinrException(
+                    message="Could not create user account, please try again",
+                    error_code=ErrorCode.DATABASE_ERROR,
+                    status_code=503,
+                    message_key=ErrorKeys.SYSTEM_DATABASE,
+                ) from e
+            await redis_set(
+                f"session:{user_id}",
+                session_id,
+                ttl=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            )
             access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
             token = create_jwt_token(user_id, phone, session_id=session_id, token_version=0)
             refresh_raw, _, refresh_expires_at = await issue_refresh_token(
                 user_id, audience="rider", user_agent=user_agent, ip=client_ip
             )
+            csrf = generate_csrf_token()
+            set_csrf_cookie(
+                response, csrf, secure=settings.ENV == "production", max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+            )
+            try:
+                import asyncio
+
+                asyncio.create_task(
+                    _audit_log_user(
+                        new_user,
+                        "otp_verify_success",
+                        "users",
+                        user_id,
+                        {"is_new_user": True},
+                    )
+                )
+            except Exception:
+                logger.error("audit_log write failed for otp_verify_success (new user)", exc_info=True)
             return _make_auth_response(
+                response,
                 token,
                 refresh_raw,
                 UserProfile(**new_user),
                 is_new_user=True,
                 access_expires_at=access_expires_at,
                 refresh_expires_at=refresh_expires_at,
+                csrf_token=csrf,
+                admin_ttl_minutes=15,
             )
+    except (HTTPException, SpinrException):
+        # Already a well-formed HTTP/Spinr error (e.g. the 503 raised when
+        # get_user_by_phone fails) — let it propagate unchanged instead
+        # of being re-wrapped as a generic 500.
+        raise
     except Exception as e:
-        logger.error(f"CRITICAL ERROR IN VERIFY_OTP: {e}")
-        import traceback
-
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Internal Login Error: {str(e)}") from e
+        # B-P3-leak-cleanup: NEVER interpolate {e} into the client-
+        # facing detail. This path is reachable UNAUTHENTICATED, so a
+        # leak here exposes Supabase row IDs, Firebase JWT errors, and
+        # internal stack frames to anyone with internet access. The
+        # framework sanitiser (utils/error_handling.py) already replaces
+        # 5xx detail with "Internal server error", but the manual
+        # str(e) made the leak's intent explicit; clean it up so the
+        # next contributor doesn't copy the pattern. logger.exception
+        # captures the full traceback server-side automatically.
+        logger.exception("CRITICAL ERROR IN VERIFY_OTP")
+        raise SpinrException(
+            message="Internal Login Error",
+            error_code=ErrorCode.INTERNAL_ERROR,
+            status_code=500,
+            message_key=ErrorKeys.SYSTEM_INTERNAL,
+        ) from e
 
 
 class FirebaseAuthRequest(BaseModel):
@@ -359,7 +565,7 @@ class FirebaseAuthRequest(BaseModel):
 
 @api_router.post("/firebase", response_model=AuthResponse)
 @limiter.limit("10/minute")
-async def firebase_auth_login(request: Request, body: FirebaseAuthRequest):
+async def firebase_auth_login(request: Request, response: Response, body: FirebaseAuthRequest):
     """Exchange a Firebase ID token for Spinr access + refresh tokens.
 
     Mirrors the OTP verify flow: verify identity, find-or-create the user
@@ -368,13 +574,34 @@ async def firebase_auth_login(request: Request, body: FirebaseAuthRequest):
     """
     try:
         from firebase_admin import auth as _firebase_auth  # type: ignore
-        payload = _firebase_auth.verify_id_token(body.firebase_token)
-    except Exception as e:
-        raise HTTPException(status_code=401, detail="Invalid Firebase token") from e
 
+        payload = _firebase_auth.verify_id_token(body.firebase_token, check_revoked=True)
+    except Exception as e:
+        raise SpinrException(
+            message="Invalid Firebase token",
+            error_code=ErrorCode.AUTH_INVALID_CREDENTIALS,
+            status_code=401,
+            message_key=ErrorKeys.AUTH_INVALID_CREDENTIALS,
+        ) from e
+
+    # B-P1-1 / DV-10: enforce audience binding unconditionally. Production fails
+    # fast in core/config._guard_production_secrets when FIREBASE_DRIVER_APP_ID
+    # is unset, so this branch is only reachable in dev/test.
     driver_app_id = settings.FIREBASE_DRIVER_APP_ID
-    if driver_app_id and payload.get("aud") != driver_app_id:
-        raise HTTPException(status_code=401, detail="Token not issued for driver app")
+    if not driver_app_id:
+        raise SpinrException(
+            message="Driver Firebase audience not configured",
+            error_code=ErrorCode.SERVICE_UNAVAILABLE,
+            status_code=503,
+            message_key=ErrorKeys.SYSTEM_SERVICE_UNAVAILABLE,
+        )
+    if payload.get("aud") != driver_app_id:
+        raise SpinrException(
+            message="Token not issued for driver app",
+            error_code=ErrorCode.AUTH_INVALID_CREDENTIALS,
+            status_code=401,
+            message_key=ErrorKeys.AUTH_INVALID_CREDENTIALS,
+        )
 
     uid: str = payload.get("uid") or payload.get("user_id") or ""
     phone: str = payload.get("phone_number") or ""
@@ -382,9 +609,18 @@ async def firebase_auth_login(request: Request, body: FirebaseAuthRequest):
     user_agent = request.headers.get("user-agent", "")
     client_ip = get_remote_address(request)
 
-    user = await db_supabase.get_user_by_id(uid)
-    if not user and phone:
-        user = await db_supabase.get_user_by_phone(phone)
+    try:
+        user = await db_supabase.get_user_by_id(uid)
+        if not user and phone:
+            user = await db_supabase.get_user_by_phone(phone)
+    except Exception as e:
+        logger.error(f"firebase_auth: user lookup failed uid={uid}: {e}", exc_info=True)
+        raise SpinrException(
+            message="User lookup failed, please try again",
+            error_code=ErrorCode.DATABASE_ERROR,
+            status_code=503,
+            message_key=ErrorKeys.SYSTEM_DATABASE,
+        ) from e
 
     is_new_user = False
     session_id = str(uuid.uuid4())
@@ -394,7 +630,7 @@ async def firebase_auth_login(request: Request, body: FirebaseAuthRequest):
             "id": uid,
             "phone": phone,
             "role": "rider",
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
             "profile_complete": False,
             "current_session_id": session_id,
             "token_version": 0,
@@ -402,13 +638,38 @@ async def firebase_auth_login(request: Request, body: FirebaseAuthRequest):
         try:
             await db_supabase.create_user(new_user)
         except Exception as e:
-            logger.warning(f"firebase_auth: could not persist user {uid}: {e}")
+            # Never hand back a token for an unpersisted row — the access
+            # token we're about to mint would point at no row, and every
+            # subsequent request would 401 against `get_current_user`.
+            logger.error(
+                f"firebase_auth: could not persist user {uid}: {e}",
+                exc_info=True,
+            )
+            raise SpinrException(
+                message="Could not persist user account, please try again",
+                error_code=ErrorCode.DATABASE_ERROR,
+                status_code=503,
+                message_key=ErrorKeys.SYSTEM_DATABASE,
+            ) from e
         user = new_user
     else:
         try:
             await db_supabase.update_one("users", {"id": uid}, {"current_session_id": session_id})
         except Exception as e:
-            logger.warning(f"firebase_auth: could not update session_id for {uid}: {e}")
+            # Without a persisted current_session_id, single-device login
+            # can't enforce ERR_SESSION_EXPIRED on the prior device, and
+            # the new token we're about to mint references a session_id
+            # that isn't recorded server-side.
+            logger.error(
+                f"firebase_auth: could not update session_id for {uid}: {e}",
+                exc_info=True,
+            )
+            raise SpinrException(
+                message="Could not update session, please try again",
+                error_code=ErrorCode.DATABASE_ERROR,
+                status_code=503,
+                message_key=ErrorKeys.SYSTEM_DATABASE,
+            ) from e
         user["current_session_id"] = session_id
 
     user_id = user["id"]
@@ -416,7 +677,7 @@ async def firebase_auth_login(request: Request, body: FirebaseAuthRequest):
     access_expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     token = create_jwt_token(user_id, phone, session_id=session_id, token_version=token_version)
     refresh_raw, _, refresh_expires_at = await issue_refresh_token(
-        user_id, audience="rider", user_agent=user_agent, ip=client_ip
+        user_id, audience="driver", user_agent=user_agent, ip=client_ip
     )
 
     try:
@@ -424,13 +685,34 @@ async def firebase_auth_login(request: Request, body: FirebaseAuthRequest):
     except Exception:
         user_obj = user  # type: ignore[assignment]
 
+    csrf = generate_csrf_token()
+    set_csrf_cookie(
+        response, csrf, secure=settings.ENV == "production", max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    )
+    try:
+        import asyncio
+
+        asyncio.create_task(
+            _audit_log_user(
+                user,
+                "firebase_auth_login",
+                "users",
+                user_id,
+                {"is_new_user": is_new_user},
+            )
+        )
+    except Exception:
+        logger.error("audit_log write failed for firebase_auth_login", exc_info=True)
     return _make_auth_response(
+        response,
         token,
         refresh_raw,
         user_obj,
         is_new_user=is_new_user,
         access_expires_at=access_expires_at,
         refresh_expires_at=refresh_expires_at,
+        csrf_token=csrf,
+        admin_ttl_minutes=15,
     )
 
 
@@ -460,8 +742,14 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         # Self-heal the column so the next login is fast and consistent.
         try:
             await db_supabase.update_one("users", {"id": current_user["id"]}, {"profile_complete": True})
-        except Exception:
-            logger.warning("Could not self-heal profile_complete")
+        except Exception as e:
+            # B-P1-5 / CLAUDE.md: this is a DB write failure, not a
+            # recoverable anomaly. Mutating `current_user` in memory
+            # below masks the persistence failure for the next login.
+            logger.error(
+                f"Could not self-heal profile_complete for {current_user.get('id')}: {e}",
+                exc_info=True,
+            )
         current_user["profile_complete"] = True
 
     # Derive driver onboarding status (None for non-drivers).
@@ -475,7 +763,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         current_user["driver_onboarding_detail"] = detail
         current_user["driver_onboarding_next_screen"] = next_screen
     except Exception:
-        logger.warning("Could not derive onboarding status")
+        logger.error("Could not derive onboarding status", exc_info=True)
 
     return UserProfile(**current_user)
 
@@ -498,6 +786,7 @@ class RefreshResponse(BaseModel):
     refresh_token: str
     access_expires_at: datetime
     refresh_expires_at: datetime
+    csrf_token: Optional[str] = None
 
 
 class LogoutRequest(BaseModel):
@@ -507,33 +796,69 @@ class LogoutRequest(BaseModel):
 
 @api_router.post("/refresh", response_model=RefreshResponse)
 @limiter.limit("20/minute")
-async def refresh_access_token(request: Request, body: RefreshRequest):
+async def refresh_access_token(request: Request, response: Response, body: Optional[RefreshRequest] = None):
     """Exchange a refresh token for a new access token + rotated refresh token.
 
+    P3: Now reads refresh_token from HTTP-only cookie instead of request body.
     Returns 401 on any lookup failure (revoked / expired / unknown) —
     the client's reaction to all three is the same (re-login), and
     distinguishing them would leak an oracle.
     """
-    row = await lookup_refresh_token(body.refresh_token)
-    if not row:
-        raise HTTPException(status_code=401, detail="Invalid refresh token")
+    # P3: Read refresh token from cookie instead of request body
+    refresh_token_from_cookie = request.cookies.get("refresh_token")
+    if not refresh_token_from_cookie:
+        raise TokenExpiredException(
+            message="Missing refresh_token cookie",
+            message_key=ErrorKeys.AUTH_TOKEN_EXPIRED,
+            action_hint="Sign in again",
+        )
 
-    if row.get("audience") != "rider":
-        # Admin refresh tokens go through /admin/auth/refresh; rider tokens
-        # minted for admin use would be a privilege-escalation vector.
-        raise HTTPException(status_code=401, detail="Invalid refresh token")
+    row = await lookup_refresh_token(refresh_token_from_cookie)
+    if not row:
+        raise TokenExpiredException(
+            message="Invalid refresh token",
+            message_key=ErrorKeys.AUTH_TOKEN_EXPIRED,
+            action_hint="Sign in again",
+        )
+
+    if row.get("audience") not in {"rider", "driver"}:
+        # Admin refresh tokens go through /admin/auth/refresh. Only rider and
+        # driver tokens are valid here; anything else is a privilege-escalation
+        # attempt or a minted-for-wrong-endpoint token.
+        raise TokenExpiredException(
+            message="Invalid refresh token",
+            message_key=ErrorKeys.AUTH_TOKEN_EXPIRED,
+            action_hint="Sign in again",
+        )
 
     user_id = row.get("user_id")
     if not user_id:
-        raise HTTPException(status_code=401, detail="Invalid refresh token")
+        raise TokenExpiredException(
+            message="Invalid refresh token",
+            message_key=ErrorKeys.AUTH_TOKEN_EXPIRED,
+            action_hint="Sign in again",
+        )
 
     user = None
     try:
         user = await db.find_one("users", {"id": user_id})
     except Exception as e:
-        logger.warning(f"refresh: user lookup failed for {user_id}: {e}")
+        # Distinguish "DB unavailable" (503, retry with back-off) from
+        # "user not found" (401, prompt re-login). Returning 401 on a DB
+        # outage causes clients to wipe their session pointlessly.
+        logger.error(f"refresh: user lookup failed for {user_id}: {e}", exc_info=True)
+        raise SpinrException(
+            message="Service temporarily unavailable, please try again",
+            error_code=ErrorCode.DATABASE_ERROR,
+            status_code=503,
+            message_key=ErrorKeys.SYSTEM_DATABASE,
+        ) from e
     if not user:
-        raise HTTPException(status_code=401, detail="Invalid refresh token")
+        raise TokenExpiredException(
+            message="Invalid refresh token",
+            message_key=ErrorKeys.AUTH_TOKEN_EXPIRED,
+            action_hint="Sign in again",
+        )
 
     user_agent = request.headers.get("user-agent", "")
     client_ip = get_remote_address(request)
@@ -543,7 +868,7 @@ async def refresh_access_token(request: Request, body: RefreshRequest):
     # revoked_at != null and the lookup returns None.
     new_raw, _, refresh_expires_at = await issue_refresh_token(
         user_id,
-        audience="rider",
+        audience=row.get("audience", "rider"),
         user_agent=user_agent,
         ip=client_ip,
         replaces=row.get("id"),
@@ -551,7 +876,7 @@ async def refresh_access_token(request: Request, body: RefreshRequest):
 
     session_id = user.get("current_session_id") or row.get("user_agent") or ""
     token_version = int(user.get("token_version") or 0)
-    access_expires_at = datetime.now(timezone.utc) + timedelta(days=_core_settings.ACCESS_TOKEN_TTL_DAYS)
+    access_expires_at = datetime.now(timezone.utc) + timedelta(days=settings.ACCESS_TOKEN_TTL_DAYS)
     token = create_jwt_token(
         user_id,
         user.get("phone", ""),
@@ -559,32 +884,84 @@ async def refresh_access_token(request: Request, body: RefreshRequest):
         token_version=token_version,
     )
 
+    csrf = generate_csrf_token()
+    set_csrf_cookie(
+        response, csrf, secure=settings.ENV == "production", max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    )
+
+    # P3: Set HTTP-only cookies instead of returning tokens in response
+    try:
+        from ..utils.cookie_manager import CookieManager
+    except ImportError:
+        from utils.cookie_manager import CookieManager
+    CookieManager.set_auth_cookie(response, token, ttl_minutes=15)
+    CookieManager.set_refresh_cookie(response, new_raw, ttl_days=30)
+
     return RefreshResponse(
-        token=token,
-        refresh_token=new_raw,
+        token="",  # No longer returned in JSON
+        refresh_token="",  # No longer returned in JSON
         access_expires_at=access_expires_at,
         refresh_expires_at=refresh_expires_at,
+        csrf_token=csrf,
     )
 
 
 @api_router.post("/logout")
 @limiter.limit("3/minute")
-async def logout(request: Request, body: LogoutRequest, current_user: dict = Depends(get_current_user)):
+async def logout(
+    request: Request,
+    response: Response,
+    body: Optional[LogoutRequest] = None,
+    current_user: dict = Depends(get_current_user),
+):
     """Revoke the presented refresh token.
 
     Previously a no-op (the endpoint didn't exist). Now stamps
     revoked_at on the row so the refresh token can never be exchanged
     again. The current access token keeps working until its exp; for
     immediate kill use /auth/logout-all.
+
+    P3: Now also clears HTTP-only cookies.
     """
-    if body.refresh_token:
+    # P3: Clear HTTP-only cookies
+    try:
+        from ..utils.cookie_manager import CookieManager
+    except ImportError:
+        from utils.cookie_manager import CookieManager
+    CookieManager.clear_all_cookies(response)
+
+    # Read refresh token from cookie if present
+    refresh_token_from_cookie = request.cookies.get("refresh_token")
+    if refresh_token_from_cookie:
+        await revoke_refresh_token(refresh_token_from_cookie)
+    elif body and body.refresh_token:
+        # Fallback to body for backwards compatibility
         await revoke_refresh_token(body.refresh_token)
+
+    # Delete the Redis session key so the revocation propagates instantly
+    # to all replicas rather than waiting for the access-token TTL.
+    if current_user:
+        await redis_delete(f"session:{current_user['id']}")
+        try:
+            import asyncio
+
+            asyncio.create_task(
+                _audit_log_user(
+                    current_user,
+                    "user_logged_out",
+                    "users",
+                    current_user["id"],
+                )
+            )
+        except Exception:
+            logger.error("audit_log write failed for logout event", exc_info=True)
+    clear_csrf_cookie(response)
     return {"success": True}
 
 
 @api_router.post("/logout-all")
 @limiter.limit("5/minute")
-async def logout_all(request: Request, current_user: dict = Depends(get_current_user)):
+async def logout_all(request: Request, response: Response, current_user: dict = Depends(get_current_user)):
     """Force-invalidate every session for the caller.
 
     Bumps ``users.token_version`` so all outstanding access tokens are
@@ -598,9 +975,51 @@ async def logout_all(request: Request, current_user: dict = Depends(get_current_
     try:
         await db.update_one("users", {"id": user_id}, {"$set": {"token_version": new_version}})
     except Exception as e:
-        logger.warning(f"logout-all: could not bump token_version for {user_id}: {e}")
-        raise HTTPException(status_code=500, detail="Could not invalidate sessions") from e
+        logger.error(f"logout-all: could not bump token_version for {user_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Could not invalidate sessions",
+        ) from e
 
     revoked = await revoke_all_for_user(user_id)
+
+    # B-P1-11: kick any live WebSocket sockets so the user is logged
+    # out instantly rather than waiting up to 30s for the heartbeat
+    # to re-validate token_version. Best-effort — the heartbeat is
+    # the safety net, so a kick failure here must not fail the
+    # logout-all response. The heartbeat re-read still closes the
+    # socket on its next tick.
+    try:
+        try:
+            from ..socket_manager import manager as ws_manager
+        except ImportError:  # pragma: no cover — package-relative fallback
+            from socket_manager import manager as ws_manager
+        await ws_manager.kick_user(
+            user_id,
+            client_types=["rider", "driver"],
+            reason="logout_all",
+        )
+    except Exception as e:
+        # B-P1-5 / CLAUDE.md: WS kick is the only signal that propagates
+        # logout to other devices in real time. The token-version bump and
+        # refresh-token revocation above will eventually catch the next
+        # API request, but the gap (up to 15 min for the access TTL) is
+        # exactly the window an attacker exploits. exc_info captures
+        # whether this was Redis pub/sub vs in-process registry vs socket
+        # send so on-call can target the fix.
+        logger.error(
+            f"logout-all: WS kick failed for {user_id}: {e}",
+            exc_info=True,
+        )
+
     logger.info(f"logout-all: user={user_id} token_version→{new_version} revoked_refresh={revoked}")
+
+    # P3: Clear HTTP-only cookies
+    try:
+        from ..utils.cookie_manager import CookieManager
+    except ImportError:
+        from utils.cookie_manager import CookieManager
+    CookieManager.clear_all_cookies(response)
+
+    clear_csrf_cookie(response)
     return {"success": True, "revoked_refresh_tokens": revoked}

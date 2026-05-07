@@ -12,11 +12,11 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
-  BarChart3, TrendingUp, TrendingDown, XCircle, CheckCircle, Users,
-  Clock, RefreshCw, Activity, Car, DollarSign, Target,
+  BarChart3, TrendingDown, XCircle, CheckCircle,
+  RefreshCw, Activity, Car, DollarSign, Target,
 } from "lucide-react";
 import {
-  BarChart, Bar, PieChart, Pie, Cell, LineChart, Line,
+  BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
 import {
@@ -54,18 +54,23 @@ const REASON_LABELS: Record<string, string> = {
 export default function AnalyticsPage() {
   const [dateRange, setDateRange] = useState("30d");
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(false);
   const [overview, setOverview] = useState<any>(null);
   const [cancellations, setCancellations] = useState<any>(null);
   const [driverRates, setDriverRates] = useState<any>(null);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
+    setFetchError(false);
     try {
       const [ov, cancel, drivers] = await Promise.all([
         getAnalyticsOverview(dateRange).catch(() => null),
         getCancellationBreakdown(dateRange).catch(() => null),
         getDriverAcceptanceRates(dateRange).catch(() => null),
       ]);
+      if (ov === null || cancel === null || drivers === null) {
+        setFetchError(true);
+      }
       setOverview(ov);
       setCancellations(cancel);
       setDriverRates(drivers);
@@ -113,6 +118,16 @@ export default function AnalyticsPage() {
         </div>
       </div>
 
+      {/* Backend error banner */}
+      {fetchError && !loading && (
+        <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 flex items-center justify-between">
+          <span>Analytics data unavailable — the backend returned an error. Check service health and try again.</span>
+          <Button variant="outline" size="sm" onClick={fetchAll} className="ml-4 text-red-700 border-red-300 hover:bg-red-100">
+            <RefreshCw className="h-3 w-3 mr-1" /> Retry
+          </Button>
+        </div>
+      )}
+
       {/* KPI Cards */}
       {overview && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -152,14 +167,14 @@ export default function AnalyticsPage() {
       )}
 
       {/* Daily Trend Chart */}
-      {overview?.daily_chart?.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Activity className="h-5 w-5" /> Daily Ride Trend
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Activity className="h-5 w-5" /> Daily Ride Trend
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {overview?.daily_chart && overview.daily_chart.length > 0 ? (
             <ResponsiveContainer width="100%" height={300}>
               <BarChart data={overview.daily_chart}>
                 <CartesianGrid strokeDasharray="3 3" />
@@ -171,9 +186,11 @@ export default function AnalyticsPage() {
                 <Bar dataKey="cancelled" fill="#EF4444" name="Cancelled" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
-          </CardContent>
-        </Card>
-      )}
+          ) : (
+            <p className="text-sm text-muted-foreground text-center py-8">No data for selected period</p>
+          )}
+        </CardContent>
+      </Card>
 
       <Tabs defaultValue="cancellations">
         <TabsList>
@@ -220,15 +237,19 @@ export default function AnalyticsPage() {
                 <CardTitle>Cancellations by Hour</CardTitle>
               </CardHeader>
               <CardContent>
-                <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={cancellations?.hourly_distribution || []}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="hour" fontSize={11} tickFormatter={(h) => `${h}:00`} />
-                    <YAxis fontSize={11} />
-                    <Tooltip labelFormatter={(h) => `${h}:00`} />
-                    <Bar dataKey="count" fill="#EF4444" radius={[3, 3, 0, 0]} name="Cancellations" />
-                  </BarChart>
-                </ResponsiveContainer>
+                {(cancellations?.hourly_distribution?.length ?? 0) > 0 ? (
+                  <ResponsiveContainer width="100%" height={300}>
+                    <BarChart data={cancellations.hourly_distribution}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="hour" fontSize={11} tickFormatter={(h) => `${h}:00`} />
+                      <YAxis fontSize={11} />
+                      <Tooltip labelFormatter={(h) => `${h}:00`} />
+                      <Bar dataKey="count" fill="#EF4444" radius={[3, 3, 0, 0]} name="Cancellations" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <p className="text-sm text-muted-foreground text-center py-8">No cancellation data</p>
+                )}
               </CardContent>
             </Card>
           </div>

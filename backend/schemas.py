@@ -1,32 +1,66 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Optional
 
-from pydantic import BaseModel, EmailStr, Field, validator
+from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic.functional_serializers import PlainSerializer
 
 try:
     from .validators import validate_license_plate, validate_vehicle_year, validate_vin
 except ImportError:
     from validators import validate_license_plate, validate_vehicle_year, validate_vin
 
+# Decimal type that serializes as a plain string on the wire.
+# Use this instead of bare `Decimal` for any money / rate field in a response
+# model so that JSON output is "2.50" (string), never 2.5 (float).
+DecimalStr = Annotated[Decimal, PlainSerializer(lambda x: str(x), return_type=str)]
+
 # ============ Models ============
 
 
+class DriverPublicView(BaseModel):
+    """Safe subset of driver fields exposed to riders — no PII."""
+
+    id: str
+    name: str
+    rating: Optional[float] = None
+    total_rides: Optional[int] = None
+    photo_url: Optional[str] = None
+    vehicle_make: Optional[str] = None
+    vehicle_model: Optional[str] = None
+    vehicle_color: Optional[str] = None
+    license_plate: Optional[str] = None
+    vehicle_year: Optional[int] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+
+
 class SendOTPRequest(BaseModel):
-    phone: str = Field(..., min_length=10, max_length=15, pattern=r'^\+\d+$')
+    phone: str = Field(
+        ...,
+        min_length=12,
+        max_length=12,
+        pattern=r"^\+1\d{10}$",
+        description="Canadian/US phone in E.164 format: +1XXXXXXXXXX",
+    )
 
 
 class VerifyOTPRequest(BaseModel):
-    phone: str = Field(..., min_length=10, max_length=15, pattern=r'^\+\d+$')
-    code: str = Field(..., min_length=4, max_length=4, pattern=r'^\d{4}$')
+    phone: str = Field(
+        ...,
+        min_length=12,
+        max_length=12,
+        pattern=r"^\+1\d{10}$",
+        description="Canadian/US phone in E.164 format: +1XXXXXXXXXX",
+    )
+    code: str = Field(..., min_length=4, max_length=4, pattern=r"^\d{4}$")
 
 
 class CreateProfileRequest(BaseModel):
     first_name: str = Field(..., min_length=1, max_length=50)
     last_name: str = Field(..., min_length=1, max_length=50)
     email: EmailStr
-    address: str = Field(..., min_length=10, max_length=200)
     gender: str
     role: Optional[str] = None  # 'driver' when coming from driver app
 
@@ -60,10 +94,12 @@ class OTPRecord(BaseModel):
     code: str
     expires_at: datetime
     verified: bool = False
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
 
 class RefreshTokenRequest(BaseModel):
     refresh_token: str
+
 
 class AuthResponse(BaseModel):
     token: str
@@ -74,6 +110,8 @@ class AuthResponse(BaseModel):
     expires_in: int  # access token lifetime in seconds
     access_expires_at: Optional[datetime] = None
     refresh_expires_at: Optional[datetime] = None
+    # CSRF double-submit token — echo back as X-CSRF-Token on state-changing requests
+    csrf_token: Optional[str] = None
 
 
 class AppSettings(BaseModel):
@@ -88,16 +126,25 @@ class AppSettings(BaseModel):
     driver_matching_algorithm: str = "nearest"
     min_driver_rating: float = 4.0
     search_radius_km: float = 10.0
-    cancellation_fee_admin: Decimal = Decimal("0.50")  # Admin gets 50 cents
-    cancellation_fee_driver: Decimal = Decimal("2.50")  # Default driver gets $2.50 (rest of $3 total)
-    platform_fee_percent: Decimal = Decimal("0.0")  # 0% commission - driver keeps all fare
+    cancellation_fee_admin: DecimalStr = Decimal("0.50")  # Admin gets 50 cents
+    cancellation_fee_driver: DecimalStr = Decimal("2.50")  # Default driver gets $2.50 (rest of $3 total)
+    platform_fee_percent: DecimalStr = Decimal("0.0")  # 0% commission - driver keeps all fare
     # When false, drivers can go online without an active Spinr Pass. Set
     # this to true to enforce the subscription gate at the "go online" call.
     # Defaults to false so the product works out of the box pre-launch.
     require_driver_subscription: bool = False
     terms_of_service_text: str = ""
     privacy_policy_text: str = ""
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    # Public company / contact info. Exposed via GET /api/company-info (no
+    # auth) so the rider and driver apps can embed these in their Support
+    # / Profile footers without each app hard-coding them. None of these
+    # fields are sensitive — they're the same info on a business card.
+    company_name: str = "Spinr"
+    company_address: str = ""
+    company_phone: str = ""
+    company_email: str = ""
+    company_website: str = ""
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class ServiceArea(BaseModel):
@@ -107,9 +154,9 @@ class ServiceArea(BaseModel):
     polygon: List[Dict[str, float]]
     is_active: bool = True
     is_airport: bool = False
-    airport_fee: Decimal = Decimal("0.0")
+    airport_fee: DecimalStr = Decimal("0.0")
     surge_multiplier: float = 1.0
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class VehicleType(BaseModel):
@@ -120,20 +167,20 @@ class VehicleType(BaseModel):
     capacity: int
     image_url: Optional[str] = None
     is_active: bool = True
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class FareConfig(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     service_area_id: str
     vehicle_type_id: str
-    base_fare: Decimal
-    per_km_rate: Decimal
-    per_minute_rate: Decimal
-    minimum_fare: Decimal
-    booking_fee: Decimal = Decimal("2.0")
+    base_fare: DecimalStr
+    per_km_rate: DecimalStr
+    per_minute_rate: DecimalStr
+    minimum_fare: DecimalStr
+    booking_fee: DecimalStr = Decimal("2.0")
     is_active: bool = True
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class SavedAddress(BaseModel):
@@ -144,12 +191,12 @@ class SavedAddress(BaseModel):
     lat: float
     lng: float
     icon: str = "location"
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class SavedAddressCreate(BaseModel):
-    name: str
-    address: str
+    name: str = Field(..., min_length=1, max_length=100)
+    address: str = Field(..., min_length=5, max_length=300)
     lat: float
     lng: float
     icon: str = "location"
@@ -159,6 +206,8 @@ class Driver(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     user_id: Optional[str] = None
     name: str
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
     phone: str
     photo_url: str = ""
     vehicle_type_id: str
@@ -188,23 +237,26 @@ class Driver(BaseModel):
     lng: float
     is_online: bool = True
     is_available: bool = True
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-    @validator('license_plate')
-    def _check_license_plate(cls, v: str) -> str:
-        return validate_license_plate(v)
+    @field_validator("license_plate")
+    @classmethod
+    def _check_license_plate(cls, value: str) -> str:
+        return validate_license_plate(value)
 
-    @validator('vehicle_vin', pre=True, always=True)
-    def _check_vin(cls, v: Optional[str]) -> Optional[str]:
-        if v is None:
-            return v
-        return validate_vin(v)
+    @field_validator("vehicle_vin", mode="before")
+    @classmethod
+    def _check_vin(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        return validate_vin(value)
 
-    @validator('vehicle_year', pre=True, always=True)
-    def _check_vehicle_year(cls, v: Optional[int]) -> Optional[int]:
-        if v is None:
-            return v
-        return validate_vehicle_year(v)
+    @field_validator("vehicle_year", mode="before")
+    @classmethod
+    def _check_vehicle_year(cls, value: Optional[int]) -> Optional[int]:
+        if value is None:
+            return value
+        return validate_vehicle_year(value)
 
 
 class Ride(BaseModel):
@@ -220,24 +272,29 @@ class Ride(BaseModel):
     dropoff_lng: float
     stops: Optional[List[Dict[str, Any]]] = []
     is_scheduled: bool = False
+    requires_wav: bool = False
+    quiet_mode: bool = False
+    rider_notes: Optional[str] = None
     scheduled_time: Optional[datetime] = None
     corporate_account_id: Optional[str] = None
+    requires_wav: bool = False
     distance_km: float
     duration_minutes: int
-    base_fare: Decimal
-    distance_fare: Decimal = Decimal("0.0")
-    time_fare: Decimal = Decimal("0.0")
-    booking_fee: Decimal = Decimal("2.0")
+    base_fare: DecimalStr
+    distance_fare: DecimalStr = Decimal("0.0")
+    time_fare: DecimalStr = Decimal("0.0")
+    booking_fee: DecimalStr = Decimal("2.0")
     surge_multiplier: float = 1.0
-    total_fare: Decimal
-    tip_amount: Decimal = Decimal("0.0")
+    total_fare: DecimalStr
+    tip_amount: DecimalStr = Decimal("0.0")
     payment_method: str = "card"
+    payment_method_id: Optional[str] = None
     payment_intent_id: Optional[str] = None
     payment_status: str = "pending"
     status: str = "searching"
     pickup_otp: str = ""
     # Timeline tracking
-    ride_requested_at: datetime = Field(default_factory=datetime.utcnow)
+    ride_requested_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     driver_notified_at: Optional[datetime] = None
     driver_accepted_at: Optional[datetime] = None
     driver_arrived_at: Optional[datetime] = None
@@ -245,21 +302,21 @@ class Ride(BaseModel):
     ride_completed_at: Optional[datetime] = None
     cancelled_at: Optional[datetime] = None
     # Earnings split
-    driver_earnings: Decimal = Decimal("0.0")  # Distance fare goes to driver
-    admin_earnings: Decimal = Decimal("0.0")  # Booking fee goes to admin
-    cancellation_fee_driver: Decimal = Decimal("0.0")
-    cancellation_fee_admin: Decimal = Decimal("0.0")
+    driver_earnings: DecimalStr = Decimal("0.0")  # Distance fare goes to driver
+    admin_earnings: DecimalStr = Decimal("0.0")  # Booking fee goes to admin
+    cancellation_fee_driver: DecimalStr = Decimal("0.0")
+    cancellation_fee_admin: DecimalStr = Decimal("0.0")
     # Rating
     rider_rating: Optional[int] = None
     rider_comment: Optional[str] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class RideRatingRequest(BaseModel):
     rating: int = Field(ge=1, le=5, description="Rating must be between 1 and 5")
     comment: Optional[str] = None
-    tip_amount: Decimal = Field(default=Decimal("0.0"), ge=0, description="Tip amount must be non-negative")
+    tip_amount: DecimalStr = Field(default=Decimal("0.0"), ge=0, description="Tip amount must be non-negative")
 
 
 class CreateRideRequest(BaseModel):
@@ -270,31 +327,99 @@ class CreateRideRequest(BaseModel):
     dropoff_address: str
     dropoff_lat: float
     dropoff_lng: float
-    stops: Optional[List[Dict[str, Any]]] = []
+    stops: Optional[List[Dict[str, Any]]] = Field(default=[], max_length=5)
     is_scheduled: bool = False
+    requires_wav: bool = False
+    quiet_mode: bool = False
+    rider_notes: Optional[str] = None
+    scheduled_timezone: Optional[str] = None  # IANA name e.g. "America/Toronto"; used for DST-gap guard
     scheduled_time: Optional[datetime] = None
     corporate_account_id: Optional[str] = None
     payment_method: str = "card"
+    # P0-4 surge-lock: optional signed token returned by /rides/estimate.
+    # When present + valid, the backend reuses the surge_multiplier that
+    # was shown to the rider instead of re-reading the service area, so
+    # the confirmed fare can't bait-and-switch from the estimate.
+    estimate_token: Optional[str] = None
+    payment_method_id: Optional[str] = None
+    work_profile: Optional[bool] = None
+    requires_wav: bool = False
 
     # ── Input validation (SEC-017) ──────────────────────────────────────── #
 
-    @validator('pickup_address', 'dropoff_address')
-    def validate_address(cls, v: str) -> str:
-        v = v.strip()
-        if len(v) < 3:
-            raise ValueError('Address must be at least 3 characters')
-        if len(v) > 500:
-            raise ValueError('Address must be 500 characters or fewer')
-        return v
+    @field_validator("pickup_address", "dropoff_address")
+    @classmethod
+    def validate_address(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) < 3:
+            raise ValueError("Address must be at least 3 characters")
+        if len(value) > 500:
+            raise ValueError("Address must be 500 characters or fewer")
+        return value
 
-    @validator('pickup_lat', 'dropoff_lat')
-    def validate_lat(cls, v: float) -> float:
-        if not (-90.0 <= v <= 90.0):
-            raise ValueError('Latitude must be between -90 and 90')
-        return v
+    @field_validator("pickup_lat", "dropoff_lat")
+    @classmethod
+    def validate_lat(cls, value: float) -> float:
+        if not (-90.0 <= value <= 90.0):
+            raise ValueError("Latitude must be between -90 and 90")
+        return value
 
-    @validator('pickup_lng', 'dropoff_lng')
-    def validate_lng(cls, v: float) -> float:
-        if not (-180.0 <= v <= 180.0):
-            raise ValueError('Longitude must be between -180 and 180')
-        return v
+    @field_validator("pickup_lng", "dropoff_lng")
+    @classmethod
+    def validate_lng(cls, value: float) -> float:
+        if not (-180.0 <= value <= 180.0):
+            raise ValueError("Longitude must be between -180 and 180")
+        return value
+
+    @field_validator("stops")
+    @classmethod
+    def validate_stops(cls, stops: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        for stop in stops:
+            lat = stop.get("lat")
+            lng = stop.get("lng")
+            if lat is None or lng is None:
+                raise ValueError("Each stop must have lat and lng")
+            if not (-90 <= float(lat) <= 90):
+                raise ValueError(f"Stop latitude out of range: {lat}")
+            if not (-180 <= float(lng) <= 180):
+                raise ValueError(f"Stop longitude out of range: {lng}")
+        return stops
+
+    @field_validator("scheduled_time", mode="after")
+    @classmethod
+    def validate_scheduled_time(cls, value: Optional[datetime], info) -> Optional[datetime]:
+        if value is not None:
+            from datetime import timedelta
+
+            # Normalise to UTC-aware for the "in the future" comparison, then
+            # strip tz for the DST-gap round-trip check which needs a naive wall time.
+            v_utc = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+            if v_utc < datetime.now(timezone.utc) + timedelta(minutes=5):
+                raise ValueError("Scheduled time must be at least 5 minutes in the future")
+
+            naive = v_utc.replace(tzinfo=None)
+
+            tz_name: Optional[str] = info.data.get("scheduled_timezone")
+            if tz_name:
+                try:
+                    import zoneinfo
+
+                    tz = zoneinfo.ZoneInfo(tz_name)
+                except (ImportError, KeyError) as exc:
+                    raise ValueError(f"Unknown or unsupported timezone: {tz_name}") from exc
+
+                # DST-gap guard: construct the wall-clock time in the named
+                # timezone (fold=0 = pre-transition assumption), convert to UTC,
+                # then convert back and verify the hour/minute round-trips.
+                # A mismatch means the local time doesn't exist (clock was
+                # skipped forward over it).
+                utc_tz = zoneinfo.ZoneInfo("UTC")
+                local = naive.replace(tzinfo=tz, fold=0)
+                back = local.astimezone(utc_tz).astimezone(tz)
+                if back.hour != naive.hour or back.minute != naive.minute:
+                    raise ValueError(
+                        f"The time {naive.strftime('%H:%M')} does not exist in "
+                        f"{tz_name} on that date (DST spring-forward gap). "
+                        "Please choose a time after the clocks change."
+                    )
+        return value

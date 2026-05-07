@@ -1,4 +1,5 @@
-import React, { useRef, useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View,
   Text,
@@ -9,32 +10,54 @@ import {
   TextInput,
   KeyboardAvoidingView,
   Platform,
+  Switch,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useRideStore } from '../store/rideStore';
+import { useWorkProfileStore } from '../store/workProfileStore';
 import CustomAlert from '@shared/components/CustomAlert';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import Analytics from '@shared/analytics';
+import { useScheduledRideReminder } from '../hooks/useScheduledRideReminder';
 
-const PAYMENT_METHODS = [
-  { id: 'card', name: 'Credit Card', icon: 'card', last4: '4242' },
-  { id: 'wallet', name: 'Spinr Wallet', icon: 'wallet', last4: '' },
-];
+interface CorporateAccount {
+  id: string;
+  company_name: string;
+}
 
-export default function PaymentConfirmScreen() {
+interface SavedCard {
+  id: string;
+  brand: string;
+  last4: string;
+  exp_month: number;
+  exp_year: number;
+  is_default: boolean;
+}
+
+function PaymentConfirmScreenContent() {
   const router = useRouter();
   const { pickup, dropoff, selectedVehicle, estimates, createRide, isLoading, scheduledTime } = useRideStore();
   const [selectedPayment, setSelectedPayment] = useState('card');
+  const [savedCards, setSavedCards] = useState<SavedCard[]>([]);
+  const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
   const [promoExpanded, setPromoExpanded] = useState(false);
   const [promoCode, setPromoCode] = useState('');
   const [promoDiscount, setPromoDiscount] = useState(0);
   const [promoValidating, setPromoValidating] = useState(false);
   const [promoApplied, setPromoApplied] = useState(false);
   const [promoMessage, setPromoMessage] = useState('');
+  const { profiles: workProfiles, workModeEnabled, fetchProfiles: fetchWorkProfiles, activeCompanyId } = useWorkProfileStore();
+  const corporateAccounts: CorporateAccount[] = workProfiles
+    .map(p => ({ id: p.company.id ?? '', company_name: p.company.name ?? '' }))
+    .filter(a => a.id);
+  const [useCorporate, setUseCorporate] = useState(workModeEnabled);
+  const [selectedCorporateId, setSelectedCorporateId] = useState<string | null>(
+    workModeEnabled ? (activeCompanyId ?? null) : null,
+  );
   const [alertState, setAlertState] = useState<{
     visible: boolean;
     title: string;
@@ -45,25 +68,63 @@ export default function PaymentConfirmScreen() {
 
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
+  const { scheduleReminder } = useScheduledRideReminder();
 
   const selectedEstimate = estimates.find((e) => e.vehicle_type.id === selectedVehicle?.id);
 
-  const isSubmitting = useRef(false);
+  useEffect(() => {
+    fetchWorkProfiles();
+  }, []);
+
+  useEffect(() => {
+    api.get('/payments/cards').then((res) => {
+      const cards: SavedCard[] = Array.isArray(res.data) ? res.data : [];
+      setSavedCards(cards);
+      const defaultCard = cards.find((c) => c.is_default) ?? cards[0];
+      if (defaultCard) setSelectedCardId(defaultCard.id);
+    }).catch((e) => {
+      console.warn('[PaymentConfirm] Failed to load saved cards:', e?.message ?? e);
+    });
+  }, []);
+
+  // Keep corporate toggle in sync when work mode is toggled elsewhere
+  useEffect(() => {
+    if (workModeEnabled && corporateAccounts.length > 0) {
+      setUseCorporate(true);
+      setSelectedCorporateId(prev => prev ?? activeCompanyId ?? corporateAccounts[0]?.id ?? null);
+    }
+  }, [workModeEnabled, corporateAccounts.length]);
+
+  const [isBooking, setIsBooking] = useState(false);
   const handleBookRide = async () => {
-    if (isSubmitting.current) return;
-    isSubmitting.current = true;
+    if (isBooking || isLoading) return;
+    setIsBooking(true);
     try {
-      const ride = await createRide(selectedPayment);
+      const corpId = useCorporate && selectedCorporateId ? selectedCorporateId : null;
+      const pmId = selectedPayment === 'card' ? (selectedCardId ?? undefined) : undefined;
+      const ride = await createRide(selectedPayment, corpId, pmId);
       Analytics.rideRequested({
         vehicle_type: selectedVehicle?.name ?? 'unknown',
         estimated_fare: totalFare,
       });
       Analytics.paymentInitiated({ method: selectedPayment, amount: totalFare });
-      router.replace('/driver-arriving?rideId=' + ride.id);
+
+      // Schedule a local 15-min reminder if this is a scheduled ride.
+      // The backend cron also fires an FCM `scheduled_ride_reminder`; this
+      // local notification is a client-side fallback.
+      if (scheduledTime && ride.id) {
+        scheduleReminder(ride.id, scheduledTime).catch(() => {});
+      }
+
+      if (scheduledTime) {
+        router.replace('/(tabs)');
+      } else {
+        router.replace('/driver-arriving?rideId=' + ride.id);
+      }
     } catch (error: any) {
       setAlertState({ visible: true, title: 'Error', message: error.message || 'Failed to book ride', variant: 'danger' });
     } finally {
-      isSubmitting.current = false;
+      setIsBooking(false);
     }
   };
 
@@ -73,11 +134,11 @@ export default function PaymentConfirmScreen() {
     setPromoValidating(true);
     setPromoMessage('');
     try {
-      const fare = selectedEstimate?.total_fare || 0;
-      const res = await api.post('/promo/validate', { code, ride_fare: fare });
-      setPromoDiscount(res.data.discount_amount);
+      const fare = parseFloat(selectedEstimate?.total_fare || '0');
+      const res = await api.post<{ discount_amount?: number }>('/promo/validate', { code, ride_fare: fare });
+      setPromoDiscount(res.data.discount_amount ?? 0);
       setPromoApplied(true);
-      setPromoMessage(`-$${res.data.discount_amount.toFixed(2)} discount applied!`);
+      setPromoMessage(`-$${(res.data.discount_amount ?? 0).toFixed(2)} discount applied!`);
     } catch (error: any) {
       const msg = error?.response?.data?.detail || 'Invalid promo code';
       setPromoMessage(msg);
@@ -88,13 +149,19 @@ export default function PaymentConfirmScreen() {
     }
   };
 
-  const totalFare = (selectedEstimate?.total_fare || 0) - promoDiscount;
+  const totalFare = Math.max(0, parseFloat(selectedEstimate?.total_fare || '0') - promoDiscount);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={() => router.back()}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
           <Ionicons name="arrow-back" size={24} color={colors.text} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Confirm booking</Text>
@@ -111,9 +178,9 @@ export default function PaymentConfirmScreen() {
             </View>
             <View style={styles.vehicleDetails}>
               <Text style={styles.vehicleName}>{selectedVehicle?.name}</Text>
-              <Text style={styles.vehicleDesc}>{selectedEstimate?.duration_minutes} min • {selectedEstimate?.distance_km} km</Text>
+              <Text style={styles.vehicleDesc} allowFontScaling={false}>{selectedEstimate?.duration_minutes} min • {selectedEstimate?.distance_km} km</Text>
             </View>
-            <Text style={styles.totalPrice}>${selectedEstimate?.total_fare.toFixed(2)}</Text>
+            <Text style={styles.totalPrice} allowFontScaling={false}>${parseFloat(selectedEstimate?.total_fare || '0').toFixed(2)}</Text>
           </View>
 
           <View style={styles.routeContainer}>
@@ -142,19 +209,19 @@ export default function PaymentConfirmScreen() {
 
             <View style={styles.fareRow}>
               <Text style={styles.fareLabel}>Base fare</Text>
-              <Text style={styles.fareValue}>${selectedEstimate.base_fare.toFixed(2)}</Text>
+              <Text style={styles.fareValue} allowFontScaling={false}>${parseFloat(selectedEstimate.base_fare).toFixed(2)}</Text>
             </View>
             <View style={styles.fareRow}>
               <Text style={styles.fareLabel}>Distance ({selectedEstimate.distance_km} km)</Text>
-              <Text style={styles.fareValue}>${selectedEstimate.distance_fare.toFixed(2)}</Text>
+              <Text style={styles.fareValue} allowFontScaling={false}>${parseFloat(selectedEstimate.distance_fare).toFixed(2)}</Text>
             </View>
             <View style={styles.fareRow}>
               <Text style={styles.fareLabel}>Time ({selectedEstimate.duration_minutes} min)</Text>
-              <Text style={styles.fareValue}>${selectedEstimate.time_fare.toFixed(2)}</Text>
+              <Text style={styles.fareValue} allowFontScaling={false}>${parseFloat(selectedEstimate.time_fare).toFixed(2)}</Text>
             </View>
             <View style={styles.fareRow}>
               <Text style={styles.fareLabel}>Booking fee</Text>
-              <Text style={styles.fareValue}>${selectedEstimate.booking_fee.toFixed(2)}</Text>
+              <Text style={styles.fareValue} allowFontScaling={false}>${parseFloat(selectedEstimate.booking_fee).toFixed(2)}</Text>
             </View>
 
             <View style={styles.fareDivider} />
@@ -163,7 +230,7 @@ export default function PaymentConfirmScreen() {
             {(selectedEstimate as any).area_fees?.map((fee: any, i: number) => (
               <View key={fee.id || i} style={styles.fareRow}>
                 <Text style={styles.fareLabel}>{fee.name || fee.type}</Text>
-                <Text style={styles.fareValue}>${Number(fee.calculated_value || 0).toFixed(2)}</Text>
+                <Text style={styles.fareValue} allowFontScaling={false}>${Number(fee.calculated_value || 0).toFixed(2)}</Text>
               </View>
             ))}
 
@@ -171,7 +238,7 @@ export default function PaymentConfirmScreen() {
             {(selectedEstimate as any).tax_breakdown && Object.entries((selectedEstimate as any).tax_breakdown).map(([name, info]: [string, any]) => (
               <View key={name} style={styles.fareRow}>
                 <Text style={styles.fareLabel}>{name} ({info.rate}%)</Text>
-                <Text style={styles.fareValue}>${Number(info.amount || 0).toFixed(2)}</Text>
+                <Text style={styles.fareValue} allowFontScaling={false}>${Number(info.amount || 0).toFixed(2)}</Text>
               </View>
             ))}
 
@@ -185,8 +252,8 @@ export default function PaymentConfirmScreen() {
             <View style={styles.fareDivider} />
             <View style={styles.fareRow}>
               <Text style={styles.fareTotalLabel}>Estimated Total</Text>
-              <Text style={styles.fareTotalValue}>
-                ${((selectedEstimate as any).grand_total || selectedEstimate.total_fare).toFixed(2)}
+              <Text style={styles.fareTotalValue} allowFontScaling={false}>
+                ${parseFloat((selectedEstimate as any).grand_total || selectedEstimate.total_fare).toFixed(2)}
               </Text>
             </View>
           </View>
@@ -194,45 +261,146 @@ export default function PaymentConfirmScreen() {
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Payment Method</Text>
-          {PAYMENT_METHODS.map((method) => (
+
+          {/* Saved cards from Stripe */}
+          {savedCards.map((card) => {
+            const isSelected = selectedPayment === 'card' && selectedCardId === card.id;
+            return (
+              <TouchableOpacity
+                key={card.id}
+                style={[styles.paymentOption, isSelected && styles.paymentOptionSelected]}
+                onPress={() => { setSelectedPayment('card'); setSelectedCardId(card.id); }}
+                accessibilityRole="radio"
+                accessibilityLabel={`${card.brand.charAt(0).toUpperCase() + card.brand.slice(1)} card ending in ${card.last4}, expires ${card.exp_month}/${String(card.exp_year).slice(-2)}`}
+                accessibilityState={{ checked: isSelected }}
+              >
+                <View style={styles.paymentIconContainer}>
+                  <Ionicons name="card" size={24} color={isSelected ? colors.primary : colors.textDim} />
+                </View>
+                <View style={styles.paymentInfo}>
+                  <Text style={styles.paymentName}>{card.brand.charAt(0).toUpperCase() + card.brand.slice(1)}</Text>
+                  <Text style={styles.paymentDetails}>•••• {card.last4}  {card.exp_month}/{String(card.exp_year).slice(-2)}</Text>
+                </View>
+                {isSelected && (
+                  <View style={styles.paymentCheck}>
+                    <Ionicons name="checkmark" size={18} color="#FFFFFF" />
+                  </View>
+                )}
+              </TouchableOpacity>
+            );
+          })}
+
+          {/* Show generic card option if no saved cards loaded yet */}
+          {savedCards.length === 0 && (
             <TouchableOpacity
-              key={method.id}
-              style={[
-                styles.paymentOption,
-                selectedPayment === method.id && styles.paymentOptionSelected,
-              ]}
-              onPress={() => setSelectedPayment(method.id)}
+              style={[styles.paymentOption, selectedPayment === 'card' && styles.paymentOptionSelected]}
+              onPress={() => setSelectedPayment('card')}
+              accessibilityRole="radio"
+              accessibilityLabel="Credit card"
+              accessibilityState={{ checked: selectedPayment === 'card' }}
             >
               <View style={styles.paymentIconContainer}>
-                <Ionicons
-                  name={method.icon as any}
-                  size={24}
-                  color={selectedPayment === method.id ? colors.primary : colors.textDim}
-                />
+                <Ionicons name="card" size={24} color={selectedPayment === 'card' ? colors.primary : colors.textDim} />
               </View>
               <View style={styles.paymentInfo}>
-                <Text style={styles.paymentName}>{method.name}</Text>
-                {method.last4 && (
-                  <Text style={styles.paymentDetails}>•••• {method.last4}</Text>
-                )}
+                <Text style={styles.paymentName}>Credit Card</Text>
               </View>
-              {selectedPayment === method.id && (
+              {selectedPayment === 'card' && (
                 <View style={styles.paymentCheck}>
                   <Ionicons name="checkmark" size={18} color="#FFFFFF" />
                 </View>
               )}
             </TouchableOpacity>
-          ))}
+          )}
 
-          <TouchableOpacity style={styles.addPaymentButton} onPress={() => router.push('/manage-cards' as any)}>
+          {/* Wallet */}
+          <TouchableOpacity
+            style={[styles.paymentOption, selectedPayment === 'wallet' && styles.paymentOptionSelected]}
+            onPress={() => setSelectedPayment('wallet')}
+            accessibilityRole="radio"
+            accessibilityLabel="Spinr Wallet"
+            accessibilityState={{ checked: selectedPayment === 'wallet' }}
+          >
+            <View style={styles.paymentIconContainer}>
+              <Ionicons name="wallet" size={24} color={selectedPayment === 'wallet' ? colors.primary : colors.textDim} />
+            </View>
+            <View style={styles.paymentInfo}>
+              <Text style={styles.paymentName}>Spinr Wallet</Text>
+            </View>
+            {selectedPayment === 'wallet' && (
+              <View style={styles.paymentCheck}>
+                <Ionicons name="checkmark" size={18} color="#FFFFFF" />
+              </View>
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.addPaymentButton}
+            onPress={() => router.push('/manage-cards' as any)}
+            accessibilityRole="button"
+            accessibilityLabel="Add payment method"
+            accessibilityHint="Opens the manage cards screen"
+          >
             <Ionicons name="add" size={20} color={colors.primary} />
             <Text style={styles.addPaymentText}>Add Payment Method</Text>
           </TouchableOpacity>
         </View>
 
+        {/* Corporate Billing */}
+        {corporateAccounts.length > 0 && (
+          <View style={styles.corporateSection}>
+            <View style={styles.corporateRow}>
+              <View style={styles.corporateIconWrap}>
+                <Ionicons name="business" size={20} color={colors.primary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.corporateTitle}>Bill to Business</Text>
+                <Text style={styles.corporateSubtitle}>
+                  {useCorporate && selectedCorporateId
+                    ? corporateAccounts.find(a => a.id === selectedCorporateId)?.company_name
+                    : 'Use a corporate account'}
+                </Text>
+              </View>
+              <Switch
+                value={useCorporate}
+                onValueChange={(v) => setUseCorporate(v)}
+                trackColor={{ false: colors.border, true: colors.primary }}
+                thumbColor="#FFF"
+                accessibilityLabel="Bill to business"
+                accessibilityHint="Toggle to charge this ride to a corporate account"
+              />
+            </View>
+            {useCorporate && corporateAccounts.length > 1 && (
+              <View style={styles.corporatePicker}>
+                {corporateAccounts.map((acct) => (
+                  <TouchableOpacity
+                    key={acct.id}
+                    style={[styles.corporateOption, selectedCorporateId === acct.id && styles.corporateOptionSelected]}
+                    onPress={() => setSelectedCorporateId(acct.id)}
+                    accessibilityRole="radio"
+                    accessibilityLabel={acct.company_name}
+                    accessibilityState={{ checked: selectedCorporateId === acct.id }}
+                  >
+                    <Text style={[styles.corporateOptionText, selectedCorporateId === acct.id && { color: colors.primary }]}>
+                      {acct.company_name}
+                    </Text>
+                    {selectedCorporateId === acct.id && <Ionicons name="checkmark" size={16} color={colors.primary} />}
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
+        )}
+
         {/* Promo Code */}
         {!promoExpanded ? (
-          <TouchableOpacity style={styles.promoButton} onPress={() => setPromoExpanded(true)}>
+          <TouchableOpacity
+            style={styles.promoButton}
+            onPress={() => setPromoExpanded(true)}
+            accessibilityRole="button"
+            accessibilityLabel={promoApplied ? `Promo applied, saving $${promoDiscount.toFixed(2)}` : 'Add promo code'}
+            accessibilityHint="Opens the promo code entry field"
+          >
             <Ionicons name="pricetag" size={20} color={colors.primary} />
             <Text style={styles.promoText}>
               {promoApplied ? `Promo applied: -$${promoDiscount.toFixed(2)}` : 'Add promo code'}
@@ -251,11 +419,16 @@ export default function PaymentConfirmScreen() {
                 onChangeText={(t) => { setPromoCode(t.toUpperCase()); setPromoApplied(false); setPromoMessage(''); }}
                 autoCapitalize="characters"
                 autoFocus
+                returnKeyType="done"
+                onSubmitEditing={handleApplyPromo}
               />
               <TouchableOpacity
                 style={[styles.promoApplyButton, (!promoCode.trim() || promoValidating) && styles.promoApplyDisabled]}
                 onPress={handleApplyPromo}
                 disabled={!promoCode.trim() || promoValidating}
+                accessibilityRole="button"
+                accessibilityLabel="Apply promo code"
+                accessibilityState={{ disabled: !promoCode.trim() || promoValidating, busy: promoValidating }}
               >
                 {promoValidating ? (
                   <ActivityIndicator color="#FFF" size="small" />
@@ -276,6 +449,9 @@ export default function PaymentConfirmScreen() {
         <TouchableOpacity
           style={styles.splitButton}
           onPress={() => router.push('/fare-split' as any)}
+          accessibilityRole="button"
+          accessibilityLabel="Split fare"
+          accessibilityHint="Share the cost of this ride with friends"
         >
           <View style={styles.splitIconContainer}>
             <Ionicons name="people" size={20} color={colors.primary} />
@@ -293,36 +469,40 @@ export default function PaymentConfirmScreen() {
       <View style={styles.footer}>
         <View style={styles.totalRow}>
           <Text style={styles.totalLabel}>Subtotal</Text>
-          <Text style={styles.totalAmount}>${selectedEstimate?.total_fare.toFixed(2)}</Text>
+          <Text style={styles.totalAmount} allowFontScaling={false}>${parseFloat(selectedEstimate?.total_fare || '0').toFixed(2)}</Text>
         </View>
         {promoDiscount > 0 && (
           <View style={styles.discountRow}>
             <Text style={styles.discountLabel}>Promo discount</Text>
-            <Text style={styles.discountAmount}>-${promoDiscount.toFixed(2)}</Text>
+            <Text style={styles.discountAmount} allowFontScaling={false}>-${promoDiscount.toFixed(2)}</Text>
           </View>
         )}
         {promoDiscount > 0 && (
           <View style={[styles.totalRow, { marginTop: 4 }]}>
             <Text style={[styles.totalLabel, { fontFamily: 'PlusJakartaSans_700Bold', color: colors.text }]}>Total</Text>
-            <Text style={styles.totalAmount}>${totalFare.toFixed(2)}</Text>
+            <Text style={styles.totalAmount} allowFontScaling={false}>${totalFare.toFixed(2)}</Text>
           </View>
         )}
         {scheduledTime && (
           <View style={styles.scheduledBadge}>
             <Ionicons name="calendar-outline" size={16} color={colors.primary} />
-            <Text style={styles.scheduledText}>
+            <Text style={styles.scheduledText} allowFontScaling={false}>
               Scheduled: {scheduledTime.toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' })}{' '}
               at {scheduledTime.toLocaleTimeString('en-CA', { hour: '2-digit', minute: '2-digit' })}
             </Text>
           </View>
         )}
         <TouchableOpacity
-          style={styles.bookButton}
+          style={[styles.bookButton, (isLoading || isBooking) && { opacity: 0.6 }]}
           onPress={handleBookRide}
-          disabled={isLoading}
+          disabled={isLoading || isBooking}
           activeOpacity={0.8}
+          accessibilityRole="button"
+          accessibilityLabel={scheduledTime ? `Schedule ${selectedVehicle?.name}` : `Book ${selectedVehicle?.name}`}
+          accessibilityHint={`Total $${totalFare.toFixed(2)}`}
+          accessibilityState={{ disabled: isLoading || isBooking, busy: isBooking }}
         >
-          {isLoading ? (
+          {isLoading || isBooking ? (
             <ActivityIndicator color="#FFFFFF" />
           ) : (
             <>
@@ -343,6 +523,14 @@ export default function PaymentConfirmScreen() {
         onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
       />
     </SafeAreaView>
+  );
+}
+
+export default function PaymentConfirmScreen() {
+  return (
+    <ErrorBoundary>
+      <PaymentConfirmScreenContent />
+    </ErrorBoundary>
   );
 }
 
@@ -689,6 +877,57 @@ function createStyles(colors: ThemeColors) {
       fontSize: 18,
       fontFamily: 'PlusJakartaSans_700Bold',
       color: colors.primary,
+    },
+    corporateSection: {
+      backgroundColor: colors.surface,
+      padding: 16,
+      marginBottom: 12,
+    },
+    corporateRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+    },
+    corporateIconWrap: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      backgroundColor: colors.primary + '15',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    corporateTitle: {
+      fontSize: 15,
+      fontFamily: 'PlusJakartaSans_600SemiBold',
+      color: colors.text,
+    },
+    corporateSubtitle: {
+      fontSize: 13,
+      fontFamily: 'PlusJakartaSans_400Regular',
+      color: colors.textDim,
+      marginTop: 2,
+    },
+    corporatePicker: {
+      marginTop: 12,
+      borderTopWidth: 1,
+      borderTopColor: colors.border,
+      paddingTop: 12,
+    },
+    corporateOption: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingVertical: 10,
+      paddingHorizontal: 12,
+      borderRadius: 10,
+    },
+    corporateOptionSelected: {
+      backgroundColor: colors.primary + '10',
+    },
+    corporateOptionText: {
+      fontSize: 14,
+      fontFamily: 'PlusJakartaSans_500Medium',
+      color: colors.text,
     },
     splitButton: {
       flexDirection: 'row',

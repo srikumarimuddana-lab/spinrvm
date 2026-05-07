@@ -61,13 +61,10 @@ export function MonitoringToolbar({
                     <span className="h-2 w-2 rounded-full bg-green-500" />
                     {counts.online} Online
                 </button>
-                <button
-                    onClick={() => onFilterChange({ showOnline: !filters.showOnline })}
-                    className="flex items-center gap-1 rounded bg-amber-500/10 px-2 py-1 text-amber-600 ring-1 ring-amber-500/30"
-                >
+                <div className="flex items-center gap-1 rounded bg-amber-500/10 px-2 py-1 text-amber-600 ring-1 ring-amber-500/30">
                     <span className="h-2 w-2 rounded-full bg-amber-500" />
                     {counts.onRide} On Ride
-                </button>
+                </div>
                 <button
                     onClick={() => onFilterChange({ showOffline: !filters.showOffline })}
                     className={`flex items-center gap-1 rounded px-2 py-1 transition-colors ${
@@ -118,17 +115,37 @@ export function MonitoringToolbar({
                 onValueChange={(v) =>
                     onFilterChange({ vehicleTypeId: v === "all" ? null : v })
                 }
+                // Disable the dropdown when an area is selected but has
+                // no vehicle types configured — nothing to pick, and
+                // selecting "All" here is a no-op since there are none.
+                disabled={!!filters.serviceAreaId && vehicleTypes.length === 0}
             >
                 <SelectTrigger className="h-8 w-36 text-xs">
-                    <SelectValue placeholder="All Vehicles" />
+                    <SelectValue
+                        placeholder={
+                            filters.serviceAreaId && vehicleTypes.length === 0
+                                ? "No vehicles configured"
+                                : "All Vehicles"
+                        }
+                    />
                 </SelectTrigger>
                 <SelectContent>
-                    <SelectItem value="all">All Vehicles</SelectItem>
-                    {vehicleTypes.map((v) => (
-                        <SelectItem key={v.id} value={v.id}>
-                            {v.name}
-                        </SelectItem>
-                    ))}
+                    {vehicleTypes.length === 0 ? (
+                        <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                            {filters.serviceAreaId
+                                ? "No vehicle types configured for this area"
+                                : "No vehicle types"}
+                        </div>
+                    ) : (
+                        <>
+                            <SelectItem value="all">All Vehicles</SelectItem>
+                            {vehicleTypes.map((v) => (
+                                <SelectItem key={v.id} value={v.id}>
+                                    {v.name}
+                                </SelectItem>
+                            ))}
+                        </>
+                    )}
                 </SelectContent>
             </Select>
 

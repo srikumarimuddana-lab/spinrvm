@@ -9,13 +9,15 @@ Prophet/statsmodels for time-series ML forecasting.
 
 import logging
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 try:
     from ..db import db
+    from .datetime_utils import parse_iso_utc
 except ImportError:
     from db import db
+    from utils.datetime_utils import parse_iso_utc
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +70,7 @@ async def _get_historical_hourly_demand(
 
     Returns a nested dict: {day_of_week: {hour: avg_ride_count}}.
     """
-    start = (datetime.utcnow() - timedelta(days=lookback_days)).isoformat()
+    start = (datetime.now(timezone.utc) - timedelta(days=lookback_days)).isoformat()
 
     try:
         filters: Dict[str, Any] = {"status": "completed"}
@@ -87,14 +89,10 @@ async def _get_historical_hourly_demand(
         if area_id and r.get("service_area_id") != area_id:
             continue
 
-        try:
-            dt = datetime.fromisoformat(created.replace("Z", "+00:00").replace("+00:00", ""))
-            day = dt.weekday()
-            hour = dt.hour
-            date_key = dt.strftime("%Y-%m-%d")
-            buckets[day][hour].append(date_key)
-        except (ValueError, TypeError):
+        dt = parse_iso_utc(created)
+        if dt is None:
             continue
+        buckets[dt.weekday()][dt.hour].append(dt.strftime("%Y-%m-%d"))
 
     # Average per unique day (not per ride)
     result: Dict[int, Dict[int, float]] = {}
@@ -125,7 +123,7 @@ async def forecast_demand(
     historical = await _get_historical_hourly_demand(area_id, lookback_days)
     has_data = any(historical.get(d, {}).get(h, 0) > 0 for d in range(7) for h in range(24))
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     forecasts = []
 
     # Compute the max value for peak detection

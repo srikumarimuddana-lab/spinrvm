@@ -5,21 +5,34 @@ try:
     from ..db_supabase import claim_stripe_event, mark_stripe_event_processed
     from ..features import send_push_notification
     from ..settings_loader import get_app_settings
+    from ..utils.money import cents_to_dollars
 except ImportError:
     import db_supabase
     from db_supabase import claim_stripe_event, mark_stripe_event_processed
     from features import send_push_notification
     from settings_loader import get_app_settings
+    from utils.money import cents_to_dollars
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
-# IMPORTANT: This router does NOT have a /api/ prefix in the original server.py
-# In server.py: app.post("/webhooks/stripe")
-# So we should probably mount it at root or handle it carefully.
-# However, for consistency with other modules, let's define the router here.
-# The user will need to mount it appropriately in server.py.
 api_router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
+
+# B-P2-2: Explicit allowlist of Stripe event types we process. Any event type
+# NOT in this set is logged and acknowledged (200) without processing.
+# Return 200 (not 400) for unknown events — 400 causes Stripe to retry for
+# 3 days and creates noise; we want Stripe to stop re-sending them.
+_STRIPE_HANDLED_EVENTS = frozenset(
+    {
+        "payment_intent.succeeded",
+        "payment_intent.payment_failed",
+        "checkout.session.completed",
+        "charge.refunded",
+        "customer.subscription.deleted",
+    }
+)
+# Public alias exported for tests
+ALLOWED_STRIPE_EVENTS = _STRIPE_HANDLED_EVENTS
 
 
 @api_router.post("/stripe")
@@ -46,7 +59,6 @@ async def stripe_webhook(request: Request):
     try:
         import stripe
 
-        stripe.api_key = stripe_secret
         event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid payload") from None
@@ -101,7 +113,11 @@ async def stripe_webhook(request: Request):
                 from services.corporate_wallet_service import apply_topup  # type: ignore
 
             amount_cents = data_object.get("amount_received") or data_object.get("amount", 0)
-            amount_cad = amount_cents / 100
+            # Decimal-safe cents→dollars (2-dp HALF_UP). Float division
+            # ``cents / 100`` drifts for arbitrary cent values; quantize
+            # first, then hand the float to apply_topup (Postgres NUMERIC
+            # rounds to column scale).
+            amount_cad = float(cents_to_dollars(amount_cents))
             await apply_topup(
                 wallet_id=meta["wallet_id"],
                 amount=amount_cad,
@@ -117,23 +133,36 @@ async def stripe_webhook(request: Request):
         payment_intent_id = data_object.get("id")
 
         if ride_id:
-            await db_supabase.update_ride(
+            updated = await db_supabase.update_ride(
                 ride_id,
                 {
                     "payment_status": "paid",
                     "payment_intent_id": payment_intent_id,
-                    "paid_at": datetime.utcnow(),
+                    "paid_at": datetime.now(timezone.utc),
                 },
             )
-            logger.info(f"Payment confirmed via webhook for ride {ride_id}")
+            if updated is None:
+                logger.error(
+                    f"Webhook payment_intent.succeeded: ride {ride_id} not found or 0 rows "
+                    f"updated — payment {payment_intent_id} unlinked",
+                    extra={"domain": "payments", "event_id": event_id, "ride_id": ride_id},
+                )
+                raise HTTPException(status_code=500, detail="Ride update failed — Stripe will retry")
+            else:
+                logger.info(f"Payment confirmed via webhook for ride {ride_id}")
 
         if user_id:
-            await send_push_notification(
-                user_id,
-                "Payment Confirmed ✅",
-                "Your payment has been processed successfully.",
-                {"type": "payment_confirmed", "ride_id": ride_id or ""},
-            )
+            # Wrap push notification so a Firebase outage does not cause Stripe
+            # to retry the webhook for days (which would re-process the payment event).
+            try:
+                await send_push_notification(
+                    user_id,
+                    "Payment Confirmed ✅",
+                    "Your payment has been processed successfully.",
+                    {"type": "payment_confirmed", "ride_id": ride_id or ""},
+                )
+            except Exception as _push_err:
+                logger.error(f"Webhook: push notification failed for user {user_id}: {_push_err}")
 
     elif event_type == "payment_intent.payment_failed":
         ride_id = data_object.get("metadata", {}).get("ride_id")
@@ -142,7 +171,7 @@ async def stripe_webhook(request: Request):
         failure_message = data_object.get("last_payment_error", {}).get("message", "Payment failed")
 
         if ride_id:
-            await db_supabase.update_ride(
+            updated = await db_supabase.update_ride(
                 ride_id,
                 {
                     "payment_status": "failed",
@@ -150,15 +179,25 @@ async def stripe_webhook(request: Request):
                     "payment_failure_reason": failure_message,
                 },
             )
+            if updated is None:
+                logger.error(
+                    f"Webhook payment_intent.payment_failed: ride {ride_id} not found or 0 rows "
+                    f"updated — payment failure {payment_intent_id} unlinked",
+                    extra={"domain": "payments", "event_id": event_id, "ride_id": ride_id},
+                )
+                raise HTTPException(status_code=500, detail="Ride update failed — Stripe will retry")
             logger.warning(f"Payment failed for ride {ride_id}: {failure_message}")
 
         if user_id:
-            await send_push_notification(
-                user_id,
-                "Payment Failed ❌",
-                f"Your payment could not be processed: {failure_message}",
-                {"type": "payment_failed", "ride_id": ride_id or ""},
-            )
+            try:
+                await send_push_notification(
+                    user_id,
+                    "Payment Failed ❌",
+                    f"Your payment could not be processed: {failure_message}",
+                    {"type": "payment_failed", "ride_id": ride_id or ""},
+                )
+            except Exception as _push_err:
+                logger.error(f"Webhook: push notification failed for user {user_id}: {_push_err}")
 
         # Notify the driver so they know the rider's payment failed (13-10)
         if ride_id:
@@ -168,12 +207,14 @@ async def stripe_webhook(request: Request):
                 if ride_row:
                     driver_id = ride_row.get("driver_id")
                     if driver_id:
-                        driver_rows = await db_supabase.get_rows(
-                            "drivers", {"id": driver_id}, limit=1
-                        )
+                        driver_rows = await db_supabase.get_rows("drivers", {"id": driver_id}, limit=1)
                         if driver_rows:
                             driver_user_id = driver_rows[0].get("user_id")
-                if driver_user_id:
+            except Exception as lookup_err:
+                logger.error(f"Driver payment-failed lookup error: {lookup_err}", exc_info=True)
+                driver_user_id = None
+            if driver_user_id:
+                try:
                     await send_push_notification(
                         driver_user_id,
                         "Rider payment failed",
@@ -184,8 +225,11 @@ async def stripe_webhook(request: Request):
                             "deeplink": "/driver/earnings",
                         },
                     )
-            except Exception as notify_err:
-                logger.warning(f"Driver payment-failed notification error: {notify_err}")
+                except Exception:
+                    logger.warning(
+                        "Push notification failed for payment_failed event; continuing",
+                        exc_info=True,
+                    )
 
     elif event_type == "checkout.session.completed":
         # ── Spinr Pass subscription payment confirmed ──────────
@@ -215,8 +259,134 @@ async def stripe_webhook(request: Request):
                 f"status={data_object.get('payment_status')} subscription={subscription_id}"
             )
 
+    elif event_type == "charge.refunded":
+        charge = data_object
+        payment_intent_id = charge.get("payment_intent")
+        if payment_intent_id:
+            rides = await db_supabase.get_rows(
+                "rides",
+                {"payment_intent_id": payment_intent_id},
+                limit=1,
+            )
+            if rides:
+                ride = rides[0]
+                ride_id = ride["id"]
+                refunded_amount = charge.get("amount_refunded", 0) / 100  # cents → dollars
+                await db_supabase.update_one(
+                    "rides",
+                    {"id": ride_id},
+                    {
+                        "payment_status": "refunded",
+                        "refund_amount": str(refunded_amount),
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
+                logger.info(
+                    f"Stripe refund: ride {ride_id} marked refunded (${refunded_amount:.2f})",
+                    extra={"domain": "payments", "ride_id": ride_id, "event_id": event_id},
+                )
+                rider_id = ride.get("rider_id")
+                if rider_id:
+                    try:
+                        await send_push_notification(
+                            rider_id,
+                            "Refund processed",
+                            f"Your refund of ${refunded_amount:.2f} has been processed by your bank.",
+                            data={"type": "refund_processed", "ride_id": ride_id},
+                        )
+                    except Exception as _e:
+                        logger.debug(f"Refund push failed: {_e}")
+            else:
+                logger.warning(
+                    f"charge.refunded: no ride found for payment_intent {payment_intent_id}",
+                    extra={"domain": "payments", "event_id": event_id},
+                )
+        else:
+            logger.warning(
+                "charge.refunded: charge has no payment_intent — skipping ride update",
+                extra={"domain": "payments", "event_id": event_id},
+            )
+
+    elif event_type == "customer.subscription.deleted":
+        subscription = data_object
+        stripe_customer_id = subscription.get("customer")
+        if stripe_customer_id:
+            # Look up the user by their Stripe customer ID, then find the linked driver
+            user_row = await db_supabase.find_one("users", {"stripe_customer_id": stripe_customer_id})
+            if user_row:
+                user_id = user_row["id"]
+                driver_row = await db_supabase.find_one("drivers", {"user_id": user_id})
+                if driver_row:
+                    driver_id = driver_row["id"]
+                    # Cancel the active driver_subscriptions row for this driver
+                    active_sub = await db_supabase.find_one(
+                        "driver_subscriptions",
+                        {"driver_id": driver_id, "status": "active"},
+                    )
+                    if active_sub:
+                        await db_supabase.update_one(
+                            "driver_subscriptions",
+                            {"id": active_sub["id"]},
+                            {
+                                "status": "cancelled",
+                                "cancelled_at": datetime.now(timezone.utc).isoformat(),
+                                "updated_at": datetime.now(timezone.utc).isoformat(),
+                            },
+                        )
+                        logger.info(
+                            f"Stripe subscription cancelled for driver {driver_id} "
+                            f"(subscription row {active_sub['id']})",
+                            extra={"domain": "drivers", "driver_id": driver_id, "event_id": event_id},
+                        )
+                    else:
+                        logger.info(
+                            f"customer.subscription.deleted: no active subscription row for driver {driver_id}",
+                            extra={"domain": "drivers", "driver_id": driver_id, "event_id": event_id},
+                        )
+                    try:
+                        await send_push_notification(
+                            user_id,
+                            "Subscription cancelled",
+                            "Your Spinr subscription has been cancelled. Renew to continue accepting rides.",
+                            data={"type": "subscription_cancelled", "deeplink": "/driver/subscription"},
+                        )
+                    except Exception as _e:
+                        logger.debug(f"Subscription cancel push failed: {_e}")
+                else:
+                    logger.warning(
+                        f"customer.subscription.deleted: no driver found for user {user_id}",
+                        extra={"domain": "drivers", "event_id": event_id},
+                    )
+            else:
+                logger.warning(
+                    "customer.subscription.deleted: no user found for stripe_customer_id",
+                    extra={"domain": "drivers", "event_id": event_id},
+                )
+        else:
+            logger.warning(
+                "customer.subscription.deleted: event has no customer field — skipping",
+                extra={"domain": "drivers", "event_id": event_id},
+            )
+
     else:
-        logger.info(f"Unhandled Stripe event type: {event_type}")
+        if event_type in _STRIPE_HANDLED_EVENTS:
+            logger.error(
+                "[WEBHOOK] Event type %r matched allowlist but fell through dispatch — "
+                "handler logic gap; check for missing elif branch",
+                event_type,
+                extra={"domain": "payments", "event_id": event_id},
+            )
+        else:
+            logger.warning(
+                "[WEBHOOK] Unhandled Stripe event type %r — not in _STRIPE_HANDLED_EVENTS. "
+                "Update Stripe dashboard to send only subscribed events.",
+                event_type,
+                extra={"domain": "payments", "event_id": event_id},
+            )
+        # Leave processed_at NULL for unknown/unhandled events so the nightly
+        # reconciliation job can replay them if they later become actionable.
+        # Return 200 to Stripe so it does not retry indefinitely.
+        return {"received": True, "unhandled": True, "event_id": event_id}
 
     # Success — stamp processed_at. Non-fatal if this fails (we've
     # already finished the side effects, and Stripe won't retry a 2xx).

@@ -1,8 +1,8 @@
+import hashlib
 import secrets
 import string
-import hashlib
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, Any
+from typing import Optional
 
 import jwt
 from fastapi import Depends, HTTPException
@@ -20,9 +20,13 @@ from loguru import logger
 try:
     from . import db_supabase
     from .core.config import settings
+    from .utils.error_handling import DatabaseError, ServiceUnavailableException
+    from .utils.redis_client import redis_get
 except ImportError:
     import db_supabase
     from core.config import settings
+    from utils.error_handling import DatabaseError, ServiceUnavailableException
+    from utils.redis_client import redis_get
 
 db = db_supabase  # legacy alias
 
@@ -34,6 +38,12 @@ db = db_supabase  # legacy alias
 # with DIFFERENT secrets — a silent auth hazard. Unified here so both
 # `routes/admin/auth.py` and this module share the same source of truth.
 JWT_ALGORITHM = "HS256"
+# Audience constants — present in every token we mint so cross-environment
+# token reuse is rejected at decode time (rider token can't hit admin endpoint
+# and vice-versa). Missing aud is tolerated during the 15-min rollout window
+# when old tokens (no aud) are still in circulation; wrong aud is always rejected.
+JWT_AUD_MOBILE = "spinr:rider"
+JWT_AUD_ADMIN = "spinr:admin"
 OTP_EXPIRY_MINUTES = 5
 # Product decision: 4-digit OTP across the whole app (login + ride pickup).
 # Trade-off: 1/10,000 guess odds per attempt vs 1/1,000,000 for 6 digits.
@@ -92,6 +102,7 @@ def create_jwt_token(
     payload: dict = {
         "user_id": user_id,
         "phone": phone,
+        "aud": JWT_AUD_MOBILE,
         "iat": now,
         "exp": now + ttl,
         "token_version": int(token_version or 0),
@@ -101,9 +112,10 @@ def create_jwt_token(
 
     return jwt.encode(payload, settings.JWT_SECRET, algorithm=JWT_ALGORITHM)
 
+
 def verify_jwt_token(token: str) -> dict:
     try:
-        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[JWT_ALGORITHM], options={"verify_aud": False})
         return payload
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token has expired") from None
@@ -144,6 +156,16 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             payload = None
 
         if payload:
+            # R-P1-12 / B-P1-1 / DV-10: enforce rider app audience unconditionally.
+            # Production fails fast in core/config._guard_production_secrets when
+            # FIREBASE_RIDER_APP_ID is unset, so the empty-string branch below is
+            # only reachable in dev/test.
+            rider_app_id = getattr(settings, "FIREBASE_RIDER_APP_ID", None) or ""
+            if not rider_app_id:
+                raise HTTPException(status_code=503, detail="Rider Firebase audience not configured")
+            if payload.get("aud") != rider_app_id:
+                raise HTTPException(status_code=401, detail="ERR_TOKEN_AUDIENCE")
+
             uid = payload.get("uid") or payload.get("user_id")
             # Try to find user by Firebase UID
             user = await db_supabase.get_user_by_id(uid)
@@ -158,16 +180,25 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
                         "id": uid,
                         "phone": phone or "",
                         "role": "rider",  # Always default — never trust token claims
-                        "created_at": datetime.utcnow(),
+                        "created_at": datetime.now(timezone.utc),
                         "profile_complete": False,
                     }
                     await db_supabase.create_user(new_user)
                     user = new_user
 
+            # R-P1-13: Apply same revocation checks as the JWT path so that
+            # /auth/logout-all also invalidates Firebase-authenticated sessions.
             if user:
-                driver = (lambda _r: _r[0] if _r else None)(
-                    await db_supabase.get_rows("drivers", {"user_id": user["id"]}, limit=1)
-                )
+                if _token_version_mismatch({}, user):
+                    raise HTTPException(status_code=401, detail="ERR_SESSION_REVOKED")
+                token_session = payload.get("session_id")
+                db_session = user.get("current_session_id")
+                if db_session and token_session and token_session != db_session:
+                    raise HTTPException(status_code=401, detail="ERR_SESSION_EXPIRED")
+                # Cached (30s) — get_current_user runs on every
+                # authenticated request so this lookup used to dominate
+                # the Supabase read load.
+                driver = await db_supabase.get_driver_by_user_id_cached(user["id"])
                 user["is_driver"] = True if driver else False
             return user
     except HTTPException:
@@ -181,16 +212,62 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         logger.error(f"JWT verification failed: {e}")
         raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}") from e
 
-    # Admin tokens are minted by routes/admin/auth.py and carry `role` +
-    # `email` + `modules` claims that regular rider/driver tokens do not
-    # have. Since the token is signed with our own JWT_SECRET, we can
-    # trust these claims and return the user directly without a DB lookup.
-    # Without this check, admin-001 (which has no users row) would be
-    # auto-created as a rider and fail the get_admin_user role check.
+    # Audience enforcement — reject cross-environment token reuse.
+    # Tokens minted before this fix carry no 'aud' claim; allow them through
+    # for one 15-minute TTL window, then they naturally expire and new tokens
+    # carry the claim. A present-but-wrong aud is always rejected immediately.
+    #
+    # S-3: Admin status is determined by the 'aud' claim, not the 'role' claim.
+    # Trusting payload.get("role") to route the token was the legacy path that
+    # allowed a crafted mobile JWT with an admin role claim to enter the admin
+    # code path. aud=JWT_AUD_ADMIN is the canonical signal; role claims in
+    # admin tokens are still trusted (per CLAUDE.md) but only after aud is confirmed.
     _admin_roles = {"admin", "super_admin", "operations", "support", "finance", "custom"}
-    if payload.get("role") in _admin_roles and payload.get("email"):
+    _token_aud = payload.get("aud")
+    # A token is admin only when aud explicitly says so, or (legacy: no aud present)
+    # when both role and email admin claims are present. Once all tokens carry aud
+    # (after one 15-min TTL window) the legacy branch is unreachable.
+    _is_admin_payload = _token_aud == JWT_AUD_ADMIN or (
+        _token_aud is None and payload.get("role") in _admin_roles and bool(payload.get("email"))
+    )
+    _expected_aud = JWT_AUD_ADMIN if _is_admin_payload else JWT_AUD_MOBILE
+    if _token_aud is not None and _token_aud != _expected_aud:
+        raise HTTPException(status_code=401, detail="ERR_TOKEN_AUDIENCE")
+    if _is_admin_payload and payload.get("role") in _admin_roles and payload.get("email"):
+        user_id = payload["user_id"]
+        jti = payload.get("jti")
+        if jti and await redis_get(f"admin:revoked:{jti}"):
+            raise HTTPException(status_code=401, detail="ERR_TOKEN_REVOKED")
+        if user_id != "admin-001":
+            staff_rows = await db_supabase.get_rows("admin_staff", {"id": user_id}, limit=1)
+            staff = staff_rows[0] if staff_rows else None
+            if not staff or not staff.get("is_active", True):
+                raise HTTPException(status_code=401, detail="ERR_ACCOUNT_INACTIVE")
+            if _token_version_mismatch(payload, staff):
+                raise HTTPException(status_code=401, detail="ERR_SESSION_REVOKED")
+            # Server-side idle timeout: 30 min of inactivity → force re-login
+            # (audit A-P2-2). admin-001 has no DB row so this only runs for
+            # staff accounts.
+            _IDLE_SECONDS = 30 * 60
+            last_active_raw = staff.get("last_activity_at")
+            if last_active_raw:
+                try:
+                    last_active = datetime.fromisoformat(last_active_raw.replace("Z", "+00:00"))
+                    if (datetime.now(timezone.utc) - last_active).total_seconds() > _IDLE_SECONDS:
+                        raise HTTPException(status_code=401, detail="ERR_IDLE_TIMEOUT")
+                except HTTPException:
+                    raise
+                except Exception as _ts_err:
+                    logger.warning(f"Malformed last_activity_at for staff {user_id} — letting through: {_ts_err}")
+            # Fire-and-forget activity timestamp update (best-effort; auth must not fail here)
+            try:
+                await db_supabase.update_one(
+                    "admin_staff", {"id": user_id}, {"last_activity_at": datetime.now(timezone.utc).isoformat()}
+                )
+            except Exception as _upd_err:
+                logger.warning(f"Could not update last_activity_at for staff {user_id}: {_upd_err}")
         return {
-            "id": payload["user_id"],
+            "id": user_id,
             "email": payload.get("email"),
             "phone": payload.get("phone", ""),
             "role": payload["role"],
@@ -200,18 +277,37 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             "is_driver": False,
         }
 
-    user = None
+    # Look up the user row. A transient Supabase failure here MUST surface
+    # as a 503 so the client retries — not be silently swallowed, which
+    # previously cascaded into the "create new user" path below and
+    # produced phantom duplicates (see CLAUDE.md: "Never logger.warning
+    # and continue on a DB/auth error").
     try:
         user = await db_supabase.get_user_by_id(payload["user_id"])
+    except (DatabaseError, ServiceUnavailableException):
+        # run_sync already retried the transient error — it's genuinely
+        # unreachable. Let the DB error propagate to the global handler
+        # which returns a clean 503.
+        raise
     except Exception as e:
-        logger.warning(f"Could not look up user from DB: {e}")
+        logger.error(f"Unexpected error looking up user from DB: {e}", exc_info=True)
+        raise DatabaseError(details={"original": str(e)}) from e
 
     if user:
-        # Enforce single-device login: check if the session_id matches the one in DB
         token_session = payload.get("session_id")
+        # Fast-path Redis check: login writes session:{user_id} → session_id with
+        # the access-token TTL. A mismatch here means the user logged in from
+        # another device and this token is stale — reject immediately without
+        # the Postgres read latency. Falls back to the DB comparison when the
+        # key has expired or Redis is unavailable (redis_get returns None).
+        if token_session:
+            redis_session = await redis_get(f"session:{user['id']}")
+            if redis_session is not None and redis_session != token_session:
+                raise HTTPException(status_code=401, detail="ERR_SESSION_EXPIRED")
+        # Enforce single-device login: check if the session_id matches the one in DB
         db_session = user.get("current_session_id")
         if db_session and token_session != db_session:
-            raise HTTPException(status_code=401, detail="Session expired. Logged in from another device.")
+            raise HTTPException(status_code=401, detail="ERR_SESSION_EXPIRED")
         # Revocation gate — if the user's token_version has been bumped
         # (admin force-logout-all, password reset, suspected compromise)
         # every access token issued before the bump must be rejected.
@@ -221,7 +317,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         if _token_version_mismatch(payload, user):
             raise HTTPException(
                 status_code=401,
-                detail="Session revoked — please log in again.",
+                detail="ERR_SESSION_REVOKED",
             )
         # Role is always determined by the DB — never trust JWT role claims.
         # A forged JWT with "role": "super_admin" must not grant escalated access.
@@ -233,24 +329,37 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
             "id": payload["user_id"],
             "phone": payload.get("phone", ""),
             "role": "rider",
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
             "profile_complete": False,
         }
         try:
             await db_supabase.create_user(user)
             logger.info(f"Created new user {user['id']} from JWT")
+        except (DatabaseError, ServiceUnavailableException):
+            # Same rule as the lookup above — surface DB outages as a
+            # clean 503 rather than returning a user dict whose backing
+            # row doesn't exist. That used to cause cascading 401/500s
+            # on every subsequent authenticated call in the session.
+            raise
         except Exception as e:
-            logger.warning(f"Could not insert user into DB: {e}")
+            logger.error(f"Unexpected error inserting user into DB: {e}", exc_info=True)
+            raise DatabaseError(details={"original": str(e)}) from e
         user["is_driver"] = False
         return user
 
     try:
-        driver = (lambda _r: _r[0] if _r else None)(
-            await db_supabase.get_rows("drivers", {"user_id": user["id"]}, limit=1)
-        )
+        # Cached driver-by-user lookup (30s). Same reason as the Firebase
+        # path above — this is the JWT hot path for every API call.
+        driver = await db_supabase.get_driver_by_user_id_cached(user["id"])
         user["is_driver"] = True if driver else False
-    except Exception:
-        user["is_driver"] = False
+    except (DatabaseError, ServiceUnavailableException):
+        # Treat the drivers lookup the same as the users lookup — if the
+        # DB is flaking, 503 so the client retries. Silently defaulting
+        # is_driver=False caused drivers to see the rider UI mid-outage.
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error looking up driver row: {e}", exc_info=True)
+        raise DatabaseError(details={"original": str(e)}) from e
     return user
 
 
@@ -260,6 +369,36 @@ async def get_admin_user(current_user: dict = Depends(get_current_user)) -> dict
     if role not in ("admin", "super_admin", "operations", "support", "finance", "custom"):
         raise HTTPException(status_code=403, detail="Admin access required")
     return current_user
+
+
+def require_module(module: str):
+    """Return a FastAPI dependency that enforces module-level RBAC.
+
+    Usage::
+
+        @router.post("/wallet/credit")
+        async def credit(admin: dict = Depends(require_module("earnings"))):
+            ...
+
+    Or at include_router time::
+
+        admin_router.include_router(wallet_router, dependencies=[Depends(require_module("earnings"))])
+
+    super_admin always passes regardless of the modules claim.
+    """
+
+    async def _check(current_user: dict = Depends(get_admin_user)) -> dict:
+        if current_user.get("role") == "super_admin":
+            return current_user
+        modules: list = current_user.get("modules") or []
+        if module not in modules:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Access denied — module '{module}' not in your role permissions",
+            )
+        return current_user
+
+    return _check
 
 
 # Alias for backward compatibility

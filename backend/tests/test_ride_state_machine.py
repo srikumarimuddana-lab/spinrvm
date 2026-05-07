@@ -25,10 +25,13 @@ class TestRequireRideInState:
         """
         Return a context manager that patches backend.routes.drivers.db
         so find_one returns results in the order given.
+
+        The production code calls the flat Supabase API:
+            db.find_one("rides", {...})
+        not the MongoDB-style collection attribute approach.
         """
         mock_db = MagicMock()
-        mock_db.rides = MagicMock()
-        mock_db.rides.find_one = AsyncMock(side_effect=find_results)
+        mock_db.find_one = AsyncMock(side_effect=find_results)
         return mock_db
 
     async def test_returns_ride_when_in_allowed_state(self):
@@ -147,6 +150,98 @@ class TestRequireRideInState:
                 await _require_ride_in_state("r1", "d1", START_FROM_STATES)
 
             assert exc_info.value.status_code == 409
+
+
+@pytest.mark.asyncio
+class TestCancelStateGuardRider:
+    """Pin the rider-side cancel state guard (_require_ride_in_state_rider).
+
+    The cancel endpoint only allows pre-trip states; in_progress and
+    completed must be rejected with 409.
+    """
+
+    # States accepted by cancel_ride_rider (mirrors the inline tuple in rides.py).
+    CANCEL_ALLOWED = ("requested", "searching", "driver_assigned", "en_route", "driver_arrived")
+
+    async def _patched_rides_db(self, find_results):
+        mock_db = MagicMock()
+        mock_db.find_one = AsyncMock(side_effect=find_results)
+        return mock_db
+
+    async def test_cancel_rejects_in_progress_ride(self):
+        """Critical invariant: in_progress → cancelled MUST be rejected with 409."""
+        mock_db = await self._patched_rides_db(
+            [
+                None,  # not found with status filter (in_progress not in CANCEL_ALLOWED)
+                {"id": "r1", "rider_id": "u1", "status": "in_progress"},  # found without filter
+            ]
+        )
+
+        with patch("backend.routes.rides.db", mock_db):
+            from backend.routes.rides import _require_ride_in_state_rider
+            from backend.utils.error_handling import SpinrException
+
+            with pytest.raises(SpinrException) as exc_info:
+                await _require_ride_in_state_rider("r1", "u1", self.CANCEL_ALLOWED)
+
+            assert exc_info.value.status_code == 409
+            assert "in_progress" in exc_info.value.message
+
+    async def test_complete_allowed_from_in_progress(self):
+        """Completing an in_progress ride must pass the state guard."""
+        ride = {"id": "r1", "driver_id": "d1", "status": "in_progress"}
+        mock_db = MagicMock()
+        mock_db.find_one = AsyncMock(side_effect=[ride])
+
+        with patch("backend.routes.drivers.db", mock_db):
+            from backend.routes.drivers import (
+                COMPLETE_FROM_STATES,
+                _require_ride_in_state,
+            )
+
+            result = await _require_ride_in_state("r1", "d1", COMPLETE_FROM_STATES)
+            assert result == ride
+
+    async def test_cancel_allowed_from_searching(self):
+        """Cancel must succeed when ride is in searching state."""
+        ride = {"id": "r1", "rider_id": "u1", "status": "searching"}
+        mock_db = await self._patched_rides_db([ride])
+
+        with patch("backend.routes.rides.db", mock_db):
+            from backend.routes.rides import _require_ride_in_state_rider
+
+            result = await _require_ride_in_state_rider("r1", "u1", self.CANCEL_ALLOWED)
+            assert result == ride
+
+    async def test_cancel_allowed_from_driver_assigned(self):
+        """Cancel must succeed when a driver has been assigned but trip not started."""
+        ride = {"id": "r1", "rider_id": "u1", "status": "driver_assigned"}
+        mock_db = await self._patched_rides_db([ride])
+
+        with patch("backend.routes.rides.db", mock_db):
+            from backend.routes.rides import _require_ride_in_state_rider
+
+            result = await _require_ride_in_state_rider("r1", "u1", self.CANCEL_ALLOWED)
+            assert result == ride
+
+    async def test_cancel_rejects_completed_ride(self):
+        """Cancel must be rejected with 409 when ride is already completed."""
+        mock_db = await self._patched_rides_db(
+            [
+                None,  # not found with status filter (completed not in CANCEL_ALLOWED)
+                {"id": "r1", "rider_id": "u1", "status": "completed"},  # found without filter
+            ]
+        )
+
+        with patch("backend.routes.rides.db", mock_db):
+            from backend.routes.rides import _require_ride_in_state_rider
+            from backend.utils.error_handling import SpinrException
+
+            with pytest.raises(SpinrException) as exc_info:
+                await _require_ride_in_state_rider("r1", "u1", self.CANCEL_ALLOWED)
+
+            assert exc_info.value.status_code == 409
+            assert "completed" in exc_info.value.message
 
 
 def test_state_constants_are_disjoint_from_terminal():

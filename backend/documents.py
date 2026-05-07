@@ -1,6 +1,6 @@
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -32,7 +32,7 @@ def _is_valid_uuid(value: str) -> bool:
 # --- File Upload Security ---
 ALLOWED_MIME_TYPES = {
     "image/jpeg",
-    "image/jpg",   # alias — some devices/pickers send this
+    "image/jpg",  # alias — some devices/pickers send this
     "image/png",
     "image/gif",
     "image/webp",
@@ -47,12 +47,12 @@ _MAGIC_BYTES = {
     b"%PDF": "application/pdf",
 }
 
-ALLOWED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.pdf'}
+ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf"}
 
 
 def _is_valid_webp(data: bytes) -> bool:
     """Return True only if data has both the RIFF container and WEBP marker."""
-    return data[:4] == b'RIFF' and data[8:12] == b'WEBP'
+    return data[:4] == b"RIFF" and data[8:12] == b"WEBP"
 
 
 def _validate_file_type(content: bytes, declared_type: str) -> None:
@@ -204,7 +204,7 @@ async def _supersede_and_flag_pending_review(
         if side is not None:
             query["side"] = side
         await db_supabase.update_one(
-            "driver_documents", query, {"status": "superseded", "updated_at": datetime.utcnow()}
+            "driver_documents", query, {"status": "superseded", "updated_at": datetime.now(timezone.utc)}
         )
     except Exception as e:
         logger.warning(f"Could not supersede prior docs for driver {driver_id}: {e}")
@@ -216,12 +216,42 @@ async def _supersede_and_flag_pending_review(
             await db_supabase.update_one(
                 "drivers",
                 {"id": driver_id},
-                {"status": "needs_review", "is_online": False, "is_available": False, "updated_at": datetime.utcnow()},
+                {
+                    "status": "needs_review",
+                    "is_online": False,
+                    "is_available": False,
+                    "updated_at": datetime.now(timezone.utc),
+                },
             )
         else:
-            await db_supabase.update_one("drivers", {"id": driver_id}, {"updated_at": datetime.utcnow()})
+            await db_supabase.update_one("drivers", {"id": driver_id}, {"updated_at": datetime.now(timezone.utc)})
     except Exception as e:
         logger.warning(f"Could not flag driver {driver_id} for review: {e}")
+
+
+def _extract_signed_url(res: Any) -> str:
+    """
+    Pull the URL out of supabase-py's create_signed_url() response, tolerating
+    both the legacy object-with-`.data.signed_url` shape and the current dict
+    shape with a `signedURL` / `signedUrl` / `signed_url` key. Railway was
+    500-ing with "'dict' object has no attribute 'data'" after supabase-py
+    flipped the return type.
+    """
+    if isinstance(res, dict):
+        url = res.get("signedURL") or res.get("signedUrl") or res.get("signed_url")
+        if not url:
+            raise RuntimeError(f"create_signed_url returned no URL: {res!r}")
+        return url
+    data = getattr(res, "data", None)
+    if data is None:
+        raise RuntimeError(f"create_signed_url returned unexpected shape: {res!r}")
+    if isinstance(data, dict):
+        url = data.get("signedURL") or data.get("signedUrl") or data.get("signed_url")
+    else:
+        url = getattr(data, "signed_url", None) or getattr(data, "signedURL", None)
+    if not url:
+        raise RuntimeError(f"create_signed_url missing URL field: {res!r}")
+    return url
 
 
 async def save_upload(file: UploadFile) -> str:
@@ -236,7 +266,7 @@ async def save_upload(file: UploadFile) -> str:
         )
 
         url_res = supabase.storage.from_("driver-documents").create_signed_url(filename, 3600)
-        return url_res.data.signed_url
+        return _extract_signed_url(url_res)
     except Exception as e:
         logger.error(f"Failed to upload to Supabase Storage: {e}")
         raise HTTPException(status_code=500, detail=f"Could not save file: {e}") from e
@@ -318,7 +348,7 @@ async def get_document_requirements(
                         "is_mandatory": doc.get("required", True),
                         "requires_back_side": doc.get("requires_back_side", False),
                         "has_expiry": doc.get("has_expiry", False),
-                        "created_at": area.get("created_at", datetime.utcnow().isoformat()),
+                        "created_at": area.get("created_at", datetime.now(timezone.utc).isoformat()),
                     }
                 )
             return result
@@ -372,7 +402,7 @@ async def link_driver_document(doc_data: LinkDocumentRequest, current_user: dict
             "total_rides": 0,
             "lat": 0,
             "lng": 0,
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
         }
         await db.insert_one("drivers", driver)
         await db.update_one(
@@ -382,12 +412,14 @@ async def link_driver_document(doc_data: LinkDocumentRequest, current_user: dict
         )
         logger.info(f"Auto-created driver row for user_id={current_user['id']} during document upload")
 
-    # Validate requirement exists — check global table first (if UUID), then
-    # fall back to the driver's service area required_documents list
-    # (since we moved to per-area docs, requirement_id is now the area doc key).
-    req = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows("document_requirements", {"id": doc_data.requirement_id}, limit=1)
-    )
+    # Validate requirement exists — check global table first (only if the id
+    # looks like a UUID; the driver app now sends area-doc slugs like
+    # "drivers_license" which would otherwise trip the UUID cast in Postgres
+    # and raise 22P02 before we reach the service-area fallback below).
+    req = None
+    if _is_valid_uuid(doc_data.requirement_id):
+        rows = await db_supabase.get_rows("document_requirements", {"id": doc_data.requirement_id}, limit=1)
+        req = rows[0] if rows else None
     if not req:
         # Try looking it up from the driver's service area
         area_req = None
@@ -467,8 +499,8 @@ async def link_driver_document(doc_data: LinkDocumentRequest, current_user: dict
         "document_url": doc_data.document_url,
         "side": doc_data.side,
         "status": "pending",
-        "uploaded_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow(),
+        "uploaded_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
     }
 
     try:
@@ -560,8 +592,8 @@ async def upload_driver_document(
         "document_url": url,
         "side": side,
         "status": "pending",
-        "uploaded_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow(),
+        "uploaded_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
     }
 
     await db_supabase.insert_one("driver_documents", doc_record)
@@ -571,6 +603,44 @@ async def upload_driver_document(
     if expiry_iso:
         doc_record["expiry_date"] = expiry_iso
     return doc_record
+
+
+@documents_router.delete("/documents/{document_id}")
+async def delete_driver_document(
+    document_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Remove one of the authenticated driver's uploaded documents.
+
+    Drivers can delete pending documents (e.g. wrong side uploaded,
+    replaced with a clearer photo). Once the document is approved by
+    an admin the delete is blocked — approved records must be kept
+    for audit and are rotated only by uploading a replacement that
+    supersedes them via the requirement linkage.
+    """
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    )
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver profile not found")
+
+    doc = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("driver_documents", {"id": document_id}, limit=1)
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    if doc.get("driver_id") != driver["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this document")
+
+    if doc.get("status") == "approved":
+        raise HTTPException(
+            status_code=409,
+            detail="Approved documents cannot be deleted. Upload a replacement to supersede it.",
+        )
+
+    await db_supabase.delete_many("driver_documents", {"id": document_id})
+    return {"success": True}
 
 
 # --- Admin Endpoints ---
@@ -592,7 +662,7 @@ async def admin_create_requirement(req: CreateRequirementRequest):
         "description": req.description,
         "is_mandatory": req.is_mandatory,
         "requires_back_side": req.requires_back_side,
-        "created_at": datetime.utcnow(),
+        "created_at": datetime.now(timezone.utc),
     }
     await db_supabase.insert_one("document_requirements", new_req)
     return new_req
@@ -671,7 +741,7 @@ async def admin_review_document(doc_id: str, req: ReviewDocumentRequest):
     # Only write columns that exist on the driver_documents Supabase table.
     # `expiry_date` is NOT a column — we propagate it to the legacy
     # drivers.*_expiry_date column below instead.
-    update_data: Dict[str, Any] = {"status": req.status, "updated_at": datetime.utcnow()}
+    update_data: Dict[str, Any] = {"status": req.status, "updated_at": datetime.now(timezone.utc)}
     if req.rejection_reason is not None:
         update_data["rejection_reason"] = req.rejection_reason
 
@@ -724,7 +794,7 @@ async def admin_review_document(doc_id: str, req: ReviewDocumentRequest):
                 await db_supabase.update_one(
                     "drivers",
                     {"id": existing.get("driver_id")},
-                    {legacy_field: new_val, "updated_at": datetime.utcnow()},
+                    {legacy_field: new_val, "updated_at": datetime.now(timezone.utc)},
                 )
             except Exception as e:
                 logger.warning(
@@ -765,8 +835,14 @@ async def upload_file(
     returns the public URL. The previous base64-in-DB approach caused
     2+ minute timeouts for large images.
     """
+    logger.info(
+        "[upload] hit /api/v1/upload user=%s filename=%s content_type=%s",
+        (current_user or {}).get("id"),
+        getattr(file, "filename", None),
+        getattr(file, "content_type", None),
+    )
     try:
-        content_length = request.headers.get('content-length')
+        content_length = request.headers.get("content-length")
         if content_length and int(content_length) > MAX_FILE_SIZE:
             raise FileTooLargeError()
 
@@ -794,18 +870,26 @@ async def upload_file(
         storage_key = f"{uuid.uuid4()}{ext}"
         # Generate a safe display name from doc type and timestamp — never
         # echo the original filename back to the caller (12-8).
-        upload_ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        upload_ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         safe_name = f"document_{upload_ts}{ext}"
 
         try:
-            supabase.storage.from_("driver-documents").upload(
+            logger.info("[upload] storage.upload begin key=%s size=%s", storage_key, size)
+            upload_res = supabase.storage.from_("driver-documents").upload(
                 file=content,
                 path=storage_key,
                 file_options={"content-type": content_type},
             )
-            public_url = supabase.storage.from_("driver-documents").create_signed_url(storage_key, 3600).data.signed_url
+            logger.info("[upload] storage.upload done type=%s", type(upload_res).__name__)
+            signed_res = supabase.storage.from_("driver-documents").create_signed_url(storage_key, 3600)
+            logger.info(
+                "[upload] create_signed_url returned type=%s repr=%r",
+                type(signed_res).__name__,
+                signed_res,
+            )
+            public_url = _extract_signed_url(signed_res)
         except Exception as e:
-            logger.error(f"Supabase Storage upload failed: {e}")
+            logger.exception("Supabase Storage upload failed: %s", e)
             raise HTTPException(status_code=500, detail=f"Storage upload failed: {e}") from e
 
         return {

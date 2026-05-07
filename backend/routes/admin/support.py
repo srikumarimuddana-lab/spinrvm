@@ -1,15 +1,20 @@
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 try:
     from ... import db_supabase
+    from ...dependencies import get_admin_user
+    from ...utils.audit_logger import log_admin_action
 except ImportError:
     import db_supabase
+    from dependencies import get_admin_user  # noqa: F401
+    from utils.audit_logger import log_admin_action  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -36,35 +41,123 @@ class ComplaintResolveRequest(BaseModel):
     resolution: str
 
 
+class DisputeCreateRequest(BaseModel):
+    ride_id: Optional[str] = None
+    user_id: Optional[str] = None
+    user_name: str = ""
+    user_type: str = "rider"
+    reason: str = ""
+    description: str = ""
+    refund_amount: float = 0
+
+
+class DisputeUpdateRequest(BaseModel):
+    reason: Optional[str] = None
+    description: Optional[str] = None
+    status: Optional[str] = None
+    refund_amount: Optional[float] = None
+    user_type: Optional[str] = None
+
+
+class DisputeResolveRequest(BaseModel):
+    status: Optional[str] = None  # resolved, rejected, pending
+    notes: Optional[str] = None
+
+
+class TicketCreateRequest(BaseModel):
+    subject: str = ""
+    category: str = "general"
+    message: str = ""
+    priority: str = "medium"
+    user_id: Optional[str] = None
+    user_name: str = "Admin"
+    user_email: str = ""
+
+
+class TicketReplyRequest(BaseModel):
+    message: str
+    status: Optional[str] = None
+
+
+class TicketUpdateRequest(BaseModel):
+    subject: Optional[str] = None
+    category: Optional[str] = None
+    priority: Optional[str] = None
+    status: Optional[str] = None
+
+
 # ---------- Disputes ----------
 
 
 @router.get("/disputes")
-async def admin_get_disputes():
-    """Get all disputes."""
+async def admin_get_disputes(
+    limit: int = 50,
+    offset: int = 0,
+    status: Optional[str] = None,
+):
+    """Get disputes with pagination. Optional `status` filter."""
+    filters: Dict[str, Any] = {}
+    if status and status != "all":
+        filters["status"] = status
     try:
-        disputes = await db_supabase.get_rows("disputes", order="created_at", desc=True, limit=500)
+        disputes = await db_supabase.get_rows(
+            "disputes",
+            filters,
+            order="created_at",
+            desc=True,
+            limit=limit,
+            offset=offset,
+        )
     except Exception:
         logger.warning("disputes table may not exist yet")
         return []
     return disputes
 
 
+@router.get("/disputes/stats")
+async def admin_get_dispute_stats():
+    """Aggregate dispute counts and refund totals across all rows."""
+    try:
+        rows = await db_supabase.get_rows("disputes", {}, limit=10000)
+    except Exception:
+        logger.warning("disputes table may not exist yet")
+        return {
+            "open": 0,
+            "under_review": 0,
+            "resolved": 0,
+            "rejected": 0,
+            "total_refunded": 0,
+        }
+
+    counts = {"open": 0, "under_review": 0, "resolved": 0, "rejected": 0}
+    total_refunded = Decimal(0)
+    for d in rows or []:
+        s = d.get("status")
+        if s in counts:
+            counts[s] += 1
+        if s == "resolved":
+            try:
+                total_refunded += Decimal(str(d.get("refund_amount") or 0))
+            except (TypeError, ValueError):
+                pass
+    return {**counts, "total_refunded": float(round(total_refunded, 2))}
+
+
 @router.post("/disputes")
-async def admin_create_dispute(dispute: Dict[str, Any]):
+async def admin_create_dispute(dispute: DisputeCreateRequest):
     """Create a dispute manually from admin."""
     doc = {
         "id": str(uuid.uuid4()),
-        "ride_id": dispute.get("ride_id"),
-        "user_id": dispute.get("user_id"),
-        "user_name": dispute.get("user_name", ""),
-        "user_type": dispute.get("user_type", "rider"),
-        "reason": dispute.get("reason", ""),
-        "description": dispute.get("description", ""),
+        "ride_id": dispute.ride_id,
+        "user_id": dispute.user_id,
+        "user_name": dispute.user_name,
+        "user_type": dispute.user_type,
+        "reason": dispute.reason,
+        "description": dispute.description,
         "status": "pending",
-        "refund_amount": dispute.get("refund_amount", 0),
-        "created_at": datetime.utcnow().isoformat(),
-        "updated_at": datetime.utcnow().isoformat(),
+        "refund_amount": dispute.refund_amount,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     await db_supabase.insert_one("disputes", doc)
     return {"success": True, "dispute": doc}
@@ -77,34 +170,49 @@ async def admin_get_dispute_details(dispute_id: str):
     if not dispute:
         raise HTTPException(status_code=404, detail="Dispute not found")
 
-    # Get related ride information
     ride = await db_supabase.get_ride(dispute.get("ride_id"))
-
     return {**dispute, "ride_details": ride}
 
 
 @router.put("/disputes/{dispute_id}")
-async def admin_update_dispute(dispute_id: str, dispute: Dict[str, Any]):
+async def admin_update_dispute(dispute_id: str, dispute: DisputeUpdateRequest):
     """Update a dispute."""
-    allowed = ["reason", "description", "status", "refund_amount", "user_type"]
-    updates = {k: v for k, v in dispute.items() if k in allowed and v is not None}
+    updates: Dict[str, Any] = {}
+    if dispute.reason is not None:
+        updates["reason"] = dispute.reason
+    if dispute.description is not None:
+        updates["description"] = dispute.description
+    if dispute.status is not None:
+        updates["status"] = dispute.status
+    if dispute.refund_amount is not None:
+        updates["refund_amount"] = dispute.refund_amount
+    if dispute.user_type is not None:
+        updates["user_type"] = dispute.user_type
     if updates:
-        updates["updated_at"] = datetime.utcnow().isoformat()
+        updates["updated_at"] = datetime.now(timezone.utc).isoformat()
         await db_supabase.update_one("disputes", {"id": dispute_id}, updates)
     return {"message": "Dispute updated"}
 
 
 @router.put("/disputes/{dispute_id}/resolve")
-async def admin_resolve_dispute(dispute_id: str, resolution: Dict[str, Any]):
-    """Resolve a dispute."""
+async def admin_resolve_dispute(
+    dispute_id: str, resolution: DisputeResolveRequest, admin: dict = Depends(get_admin_user)
+):
+    """Resolve a dispute. resolved_by is set from the authenticated admin (F-32)."""
     resolution_data = {
-        "resolution_status": resolution.get("status"),  # resolved, rejected, pending
-        "resolution_notes": resolution.get("notes", ""),
-        "resolved_at": datetime.utcnow().isoformat(),
-        "resolved_by": resolution.get("resolved_by", "admin"),
+        "resolution_status": resolution.status,
+        "resolution_notes": resolution.notes or "",
+        "resolved_at": datetime.now(timezone.utc).isoformat(),
+        "resolved_by": admin["id"],
     }
-
     await db_supabase.update_one("disputes", {"id": dispute_id}, resolution_data)
+    await log_admin_action(
+        admin,
+        "dispute_resolved",
+        "disputes",
+        dispute_id,
+        {"status": resolution.status, "notes": resolution.notes},
+    )
     return {"message": "Dispute resolved"}
 
 
@@ -119,27 +227,44 @@ async def admin_delete_dispute(dispute_id: str):
 
 
 @router.get("/tickets")
-async def admin_get_tickets():
-    """Get all support tickets."""
-    tickets = await db_supabase.get_rows("support_tickets", order="created_at", desc=True, limit=500)
+async def admin_get_tickets(
+    limit: int = 50,
+    offset: int = 0,
+    status: Optional[str] = None,
+    service_area_id: Optional[str] = None,
+):
+    """Get support tickets with pagination. Optional `status` / `service_area_id` filters."""
+    filters: Dict[str, Any] = {}
+    if status and status != "all":
+        filters["status"] = status
+    if service_area_id and service_area_id != "all":
+        filters["service_area_id"] = service_area_id
+    tickets = await db_supabase.get_rows(
+        "support_tickets",
+        filters,
+        order="created_at",
+        desc=True,
+        limit=limit,
+        offset=offset,
+    )
     return tickets
 
 
 @router.post("/tickets")
-async def admin_create_ticket(ticket: Dict[str, Any]):
+async def admin_create_ticket(ticket: TicketCreateRequest):
     """Create a support ticket manually from admin."""
     doc = {
         "id": str(uuid.uuid4()),
-        "subject": ticket.get("subject", ""),
-        "category": ticket.get("category", "general"),
-        "message": ticket.get("message", ""),
-        "priority": ticket.get("priority", "medium"),
-        "user_id": ticket.get("user_id"),
-        "user_name": ticket.get("user_name", "Admin"),
-        "user_email": ticket.get("user_email", ""),
+        "subject": ticket.subject,
+        "category": ticket.category,
+        "message": ticket.message,
+        "priority": ticket.priority,
+        "user_id": ticket.user_id,
+        "user_name": ticket.user_name,
+        "user_email": ticket.user_email,
         "status": "open",
-        "created_at": datetime.utcnow().isoformat(),
-        "updated_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     await db_supabase.insert_one("support_tickets", doc)
     return {"success": True, "ticket": doc}
@@ -154,34 +279,36 @@ async def admin_get_ticket_details(ticket_id: str):
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
 
-    # Get ticket messages
     messages = await db_supabase.get_rows("support_messages", {"ticket_id": ticket_id}, order="created_at", limit=100)
-
     return {**ticket, "messages": messages}
 
 
 @router.post("/tickets/{ticket_id}/reply")
-async def admin_reply_to_ticket(ticket_id: str, reply: Dict[str, Any]):
-    """Reply to a support ticket."""
+async def admin_reply_to_ticket(ticket_id: str, reply: TicketReplyRequest, admin: dict = Depends(get_admin_user)):
+    """Reply to a support ticket. sender_id is set from the authenticated admin (F-29)."""
     message_doc = {
         "ticket_id": ticket_id,
         "sender_type": "admin",
-        "sender_id": "admin-001",  # Could be dynamic based on current admin
-        "message": reply.get("message", ""),
-        "created_at": datetime.utcnow().isoformat(),
+        "sender_id": admin["id"],
+        "message": reply.message,
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
-
-    # Insert message
     await db_supabase.insert_one("support_messages", message_doc)
 
-    # Update ticket status if needed
-    if reply.get("status"):
+    if reply.status:
         await db_supabase.update_one(
             "support_tickets",
             {"id": ticket_id},
-            {"status": reply.get("status"), "updated_at": datetime.utcnow().isoformat()},
+            {"status": reply.status, "updated_at": datetime.now(timezone.utc).isoformat()},
         )
 
+    await log_admin_action(
+        admin,
+        "ticket_reply",
+        "support_tickets",
+        ticket_id,
+        {"status": reply.status},
+    )
     return {"message": "Reply sent"}
 
 
@@ -189,18 +316,25 @@ async def admin_reply_to_ticket(ticket_id: str, reply: Dict[str, Any]):
 async def admin_close_ticket(ticket_id: str):
     """Close a support ticket."""
     await db_supabase.update_one(
-        "support_tickets", {"id": ticket_id}, {"status": "closed", "closed_at": datetime.utcnow().isoformat()}
+        "support_tickets", {"id": ticket_id}, {"status": "closed", "closed_at": datetime.now(timezone.utc).isoformat()}
     )
     return {"message": "Ticket closed"}
 
 
 @router.put("/tickets/{ticket_id}")
-async def admin_update_ticket(ticket_id: str, ticket: Dict[str, Any]):
+async def admin_update_ticket(ticket_id: str, ticket: TicketUpdateRequest):
     """Update a support ticket."""
-    allowed = ["subject", "category", "priority", "status"]
-    updates = {k: v for k, v in ticket.items() if k in allowed and v is not None}
+    updates: Dict[str, Any] = {}
+    if ticket.subject is not None:
+        updates["subject"] = ticket.subject
+    if ticket.category is not None:
+        updates["category"] = ticket.category
+    if ticket.priority is not None:
+        updates["priority"] = ticket.priority
+    if ticket.status is not None:
+        updates["status"] = ticket.status
     if updates:
-        updates["updated_at"] = datetime.utcnow().isoformat()
+        updates["updated_at"] = datetime.now(timezone.utc).isoformat()
         await db_supabase.update_one("support_tickets", {"id": ticket_id}, updates)
     return {"message": "Ticket updated"}
 
@@ -216,7 +350,7 @@ async def admin_delete_ticket(ticket_id: str):
 
 
 @router.post("/rides/{ride_id}/flag")
-async def admin_flag_ride_participant(ride_id: str, req: FlagRequest):
+async def admin_flag_ride_participant(ride_id: str, req: FlagRequest, admin: dict = Depends(get_admin_user)):
     """Flag a rider or driver from a ride. 3 active flags = auto-ban."""
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
@@ -239,8 +373,14 @@ async def admin_flag_ride_participant(ride_id: str, req: FlagRequest):
         "flagged_by": "admin",
         "is_active": True,
     }
-
     result = await db_supabase.create_flag(flag_data)
+    await log_admin_action(
+        admin,
+        "flag_created",
+        "flags",
+        flag_data["id"],
+        {"ride_id": ride_id, "target_type": req.target_type, "target_id": target_id, "reason": req.reason},
+    )
     return result
 
 
@@ -248,18 +388,29 @@ async def admin_flag_ride_participant(ride_id: str, req: FlagRequest):
 async def admin_list_flags(
     limit: int = 100,
     offset: int = 0,
+    target_type: Optional[str] = None,
+    service_area_id: Optional[str] = None,
+    is_active: Optional[bool] = None,
 ):
-    """List all flags with optional pagination."""
-    flags = await db_supabase.get_rows("flags", order="created_at", desc=True, limit=limit, offset=offset)
+    """List all flags. Optional `target_type` / `service_area_id` / `is_active` filters."""
+    filters: Dict[str, Any] = {}
+    if target_type and target_type != "all":
+        filters["target_type"] = target_type
+    if service_area_id and service_area_id != "all":
+        filters["service_area_id"] = service_area_id
+    if is_active is not None:
+        filters["is_active"] = is_active
+    flags = await db_supabase.get_rows("flags", filters, order="created_at", desc=True, limit=limit, offset=offset)
     return flags
 
 
 @router.put("/flags/{flag_id}/deactivate")
-async def admin_deactivate_flag(flag_id: str):
+async def admin_deactivate_flag(flag_id: str, admin: dict = Depends(get_admin_user)):
     """Deactivate a flag (soft delete)."""
     result = await db_supabase.update_one("flags", {"id": flag_id}, {"$set": {"is_active": False}})
     if not result:
         raise HTTPException(status_code=404, detail="Flag not found")
+    await log_admin_action(admin, "flag_deactivated", "flags", flag_id, {})
     return {"message": "Flag deactivated"}
 
 
@@ -297,32 +448,53 @@ async def admin_create_complaint(ride_id: str, req: ComplaintRequest):
         "status": "open",
         "created_by": "admin",
     }
-
     complaint = await db_supabase.create_complaint(complaint_data)
     return complaint
 
 
 @router.put("/complaints/{complaint_id}/resolve")
-async def admin_resolve_complaint(complaint_id: str, req: ComplaintResolveRequest):
-    """Resolve or dismiss a complaint."""
+async def admin_resolve_complaint(
+    complaint_id: str, req: ComplaintResolveRequest, admin: dict = Depends(get_admin_user)
+):
+    """Resolve or dismiss a complaint. resolved_by is set from the authenticated admin (F-32)."""
     result = await db_supabase.resolve_complaint(
         complaint_id,
         {
             "status": req.status,
             "resolution": req.resolution,
-            "resolved_by": "admin",
-            "updated_at": datetime.utcnow().isoformat(),
+            "resolved_by": admin["id"],
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         },
     )
     if not result:
         raise HTTPException(status_code=404, detail="Complaint not found")
+    await log_admin_action(
+        admin,
+        "complaint_resolved",
+        "complaints",
+        complaint_id,
+        {"status": req.status},
+    )
     return result
 
 
 @router.get("/complaints")
-async def admin_list_complaints(limit: int = 100, offset: int = 0):
-    """List all complaints."""
-    return await db_supabase.get_rows("complaints", order="created_at", desc=True, limit=limit, offset=offset)
+async def admin_list_complaints(
+    limit: int = 100,
+    offset: int = 0,
+    status: Optional[str] = None,
+    against_type: Optional[str] = None,
+    service_area_id: Optional[str] = None,
+):
+    """List all complaints. Optional `status` / `against_type` / `service_area_id` filters."""
+    filters: Dict[str, Any] = {}
+    if status and status != "all":
+        filters["status"] = status
+    if against_type and against_type != "all":
+        filters["against_type"] = against_type
+    if service_area_id and service_area_id != "all":
+        filters["service_area_id"] = service_area_id
+    return await db_supabase.get_rows("complaints", filters, order="created_at", desc=True, limit=limit, offset=offset)
 
 
 @router.delete("/complaints/{complaint_id}")

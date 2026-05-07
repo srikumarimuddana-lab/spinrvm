@@ -108,7 +108,7 @@ export default function LoginScreen() {
     try {
       // Always use backend OTP — Twilio sends real SMS in production,
       // falls back to code 1234 in dev when Twilio is not configured.
-      const response = await api.post('/auth/send-otp', { phone: formattedNumber });
+      const response = await api.post<{ success: boolean }>('/auth/send-otp', { phone: formattedNumber });
       if (response.data.success) {
         router.push({
           pathname: '/otp',
@@ -138,7 +138,7 @@ export default function LoginScreen() {
 
   return (
     <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       style={styles.container}
     >
       <StatusBar barStyle="dark-content" />

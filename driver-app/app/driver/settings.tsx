@@ -19,6 +19,12 @@ import { useAuthStore } from '@shared/store/authStore';
 import { useLanguageStore } from '../../store/languageStore';
 import { languages, Language } from '../../i18n';
 import api from '@shared/api/client';
+import {
+    useNotificationPreferences,
+    useUpdateNotificationPreferences,
+    useDriverMe,
+    useUpdateDriverMe,
+} from '@shared/hooks/queries';
 import CustomAlert from '@shared/components/CustomAlert';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -56,25 +62,53 @@ export default function SettingsScreen() {
     const [soundEffects, setSoundEffects] = useState(true);
     const [vibration, setVibration] = useState(true);
 
-    useEffect(() => {
-        api.get('/notifications/preferences').then((prefs: any) => {
-            if (prefs == null) return;
-            if (prefs.push_notifications != null) setPushNotifications(Boolean(prefs.push_notifications));
-            if (prefs.ride_alerts != null) setRideAlerts(Boolean(prefs.ride_alerts));
-            if (prefs.earnings_summary != null) setEarningsSummary(Boolean(prefs.earnings_summary));
-            if (prefs.promotions != null) setPromotions(Boolean(prefs.promotions));
-            if (prefs.sound_effects != null) setSoundEffects(Boolean(prefs.sound_effects));
-            if (prefs.vibration != null) setVibration(Boolean(prefs.vibration));
-        }).catch(() => {/* keep defaults on network failure */});
-    }, []);
+    // /notifications/preferences is owned by the useNotificationPreferences
+    // hook. The persisted cache means revisiting Settings shows toggles
+    // instantly with no spinner; the background refetch keeps them honest.
+    const { data: prefsResponse } = useNotificationPreferences();
+    const updatePreferences = useUpdateNotificationPreferences();
 
-    const savePreference = (key: string, value: boolean) => {
-        api.put('/notifications/preferences', { [key]: value }).catch(() => {/* fire-and-forget */});
+    // WAV capability — driver declares whether their vehicle is wheelchair-accessible.
+    // SK Transportation Act requires WAV requests to be fulfilled when a WAV
+    // driver is online in the service area.
+    const { data: driverMeRaw } = useDriverMe();
+    const driverMe = driverMeRaw as { is_wav?: boolean | null } | undefined;
+    const updateDriverMe = useUpdateDriverMe();
+    const [isWav, setIsWav] = useState(false);
+    useEffect(() => {
+        const driverMeData = driverMe as { is_wav?: boolean | null } | null;
+        if (driverMeData?.is_wav != null) setIsWav(Boolean(driverMeData.is_wav));
+    }, [(driverMe as any)?.is_wav]);
+    useEffect(() => {
+        // Server can return null when the row hasn't been created yet;
+        // keep the defaults set above in that case.
+        const prefs: any = prefsResponse;
+        if (prefs == null) return;
+        if (prefs.push_notifications != null) setPushNotifications(Boolean(prefs.push_notifications));
+        if (prefs.ride_alerts != null) setRideAlerts(Boolean(prefs.ride_alerts));
+        if (prefs.earnings_summary != null) setEarningsSummary(Boolean(prefs.earnings_summary));
+        if (prefs.promotions != null) setPromotions(Boolean(prefs.promotions));
+        if (prefs.sound_effects != null) setSoundEffects(Boolean(prefs.sound_effects));
+        if (prefs.vibration != null) setVibration(Boolean(prefs.vibration));
+    }, [prefsResponse]);
+
+    const savePreference = (key: string, value: boolean, revert: () => void) => {
+        updatePreferences.mutate({ [key]: value }, {
+            onError: () => {
+                revert();
+                setFeedbackAlert({
+                    visible: true,
+                    title: 'Preference not saved',
+                    message: 'Could not reach the server. Your setting has been reverted — please try again.',
+                    variant: 'danger',
+                });
+            },
+        });
     };
 
     const handleToggle = (key: string, setter: (v: boolean) => void) => (value: boolean) => {
         setter(value);
-        savePreference(key, value);
+        savePreference(key, value, () => setter(!value));
     };
     const [navApp, setNavApp] = useState<'default' | 'google' | 'waze'>('default');
 
@@ -123,7 +157,12 @@ export default function SettingsScreen() {
             return;
         }
         try {
-            await api.delete('/users/profile');
+            // PIPEDA-compliant 30-day grace window: DELETE /users/account
+            // schedules the deletion rather than executing it immediately, so
+            // drivers can recover the account by contacting support within 30
+            // days. DELETE /users/profile (immediate, irreversible) is reserved
+            // for internal admin tooling.
+            await api.delete('/users/account');
             setShowDeleteStep2(false);
             await logout();
             router.replace('/login' as any);
@@ -239,6 +278,38 @@ export default function SettingsScreen() {
                     </View>
                 </View>
 
+                {/* Vehicle Accessibility */}
+                <View style={styles.section}>
+                    <Text style={styles.sectionTitle}>Vehicle Accessibility</Text>
+                    <View style={styles.card}>
+                        {renderToggle(
+                            'Wheelchair-Accessible Vehicle (WAV)',
+                            'Enables you to receive ride requests from riders who need an accessible vehicle (SK Transportation Act)',
+                            isWav,
+                            (value) => {
+                                setIsWav(value);
+                                updateDriverMe.mutate({ is_wav: value }, {
+                                    onError: () => {
+                                        setIsWav(!value);
+                                        setFeedbackAlert({
+                                            visible: true,
+                                            title: 'Could not save',
+                                            message: 'WAV setting could not be updated. Please try again.',
+                                            variant: 'danger',
+                                        });
+                                    },
+                                });
+                            },
+                            'accessibility',
+                            '#0EA5E9',
+                        )}
+                    </View>
+                    <Text style={styles.wavHint}>
+                        When enabled, you will appear in searches for wheelchair-accessible rides.
+                        Ensure your vehicle meets WAV requirements before enabling.
+                    </Text>
+                </View>
+
                 {/* Account */}
                 <View style={styles.section}>
                     <Text style={styles.sectionTitle}>Account</Text>
@@ -266,19 +337,12 @@ export default function SettingsScreen() {
                             <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
                         </TouchableOpacity>
                         <View style={styles.cardDivider} />
-                        <TouchableOpacity style={styles.actionRow} onPress={() => router.push('/legal?type=tos' as any)}>
+                        <TouchableOpacity style={styles.actionRow} onPress={() => router.push('/legal' as any)}>
                             <View style={[styles.settingIcon, { backgroundColor: `${colors.primary}12` }]}>
                                 <Ionicons name="document-text" size={18} color={colors.primary} />
                             </View>
-                            <Text style={styles.settingLabel}>Terms of Service</Text>
-                            <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
-                        </TouchableOpacity>
-                        <View style={styles.cardDivider} />
-                        <TouchableOpacity style={styles.actionRow} onPress={() => router.push('/legal?type=privacy' as any)}>
-                            <View style={[styles.settingIcon, { backgroundColor: `${colors.primary}12` }]}>
-                                <Ionicons name="shield" size={18} color={colors.primary} />
-                            </View>
-                            <Text style={styles.settingLabel}>Privacy Policy</Text>
+                            <Text style={styles.settingLabel}>Legal</Text>
+                            <Text style={styles.settingValue}>Terms & Privacy</Text>
                             <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
                         </TouchableOpacity>
                         <View style={styles.cardDivider} />
@@ -413,7 +477,7 @@ export default function SettingsScreen() {
             <CustomAlert
                 visible={showDeleteStep1}
                 title="Delete Account"
-                message={'This action is PERMANENT and cannot be undone.\n\nAll your data, earnings history, ride records, and account information will be permanently deleted.'}
+                message={'Your account will be scheduled for deletion with a 30-day recovery window.\n\nYou can reactivate by contacting support within 30 days; after that, all your data, earnings history, and ride records are permanently deleted.'}
                 variant="danger"
                 icon="trash-outline"
                 buttons={[
@@ -567,6 +631,13 @@ function createStyles(colors: ThemeColors) {
             borderColor: 'rgba(255,71,87,0.2)',
         },
         deleteText: { color: colors.error, fontSize: 14, fontWeight: '600' },
+        wavHint: {
+            color: colors.textDim,
+            fontSize: 11,
+            marginTop: 8,
+            lineHeight: 16,
+            paddingHorizontal: 4,
+        },
         version: {
             color: colors.textDim,
             textAlign: 'center',

@@ -1,62 +1,171 @@
-name: EAS Build (Mobile)
+name: EAS Mobile (Build + Update)
+
+# ─── What this does ────────────────────────────────────────────────────────
+# On every push to main that touches rider-app / driver-app / shared:
+#   → Publishes an OTA JS-only update to the `production` channel for the
+#     affected app. Phones on that channel pick it up on next launch.
+#
+# Only when the commit message contains `[build]` OR when dispatched manually
+# with action=build:
+#   → Runs `eas build` to produce a new native binary. Required for changes
+#     that touch native modules, plugins, Info.plist, permissions, or the
+#     `version` / `runtimeVersion` in app.config.ts.
+#
+# OTA updates are JS-only. Native changes (new deps with native side, plugin
+# changes, Info.plist, permission additions, runtimeVersion bumps) still
+# require a full build. Rule of thumb: if you only edited .ts/.tsx/.js under
+# rider-app/ or driver-app/, an OTA update is enough.
 
 on:
   push:
     branches: [main]
     paths:
-      - "frontend/**"
-      - "!frontend/web/**"
+      - "rider-app/**"
+      - "driver-app/**"
+      - "shared/**"
   workflow_dispatch:
     inputs:
-      platform:
-        description: "Platform to build"
+      app:
+        description: "Which app"
         required: true
-        default: "all"
+        default: "both"
         type: choice
-        options:
-          - all
-          - ios
-          - android
+        options: [rider-app, driver-app, both]
+      action:
+        description: "update = OTA JS-only (fast), build = native binary (slow)"
+        required: true
+        default: "update"
+        type: choice
+        options: [update, build]
       profile:
-        description: "EAS build profile"
+        description: "Build profile / OTA channel"
         required: true
         default: "production"
         type: choice
-        options:
-          - development
-          - preview
-          - production
+        options: [test, preview, production]
 
+# Detect which app(s) changed so push-triggered runs only process the affected
+# app. Shared changes hit both.
 jobs:
-  build:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      rider: ${{ steps.filter.outputs.rider }}
+      driver: ${{ steps.filter.outputs.driver }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dorny/paths-filter@v4
+        id: filter
+        with:
+          filters: |
+            rider:
+              - 'rider-app/**'
+              - 'shared/**'
+            driver:
+              - 'driver-app/**'
+              - 'shared/**'
+
+  rider:
+    needs: detect
+    if: |
+      (github.event_name == 'push' && needs.detect.outputs.rider == 'true') ||
+      (github.event_name == 'workflow_dispatch' && (github.event.inputs.app == 'rider-app' || github.event.inputs.app == 'both'))
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: frontend
+        working-directory: rider-app
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: 20
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Setup EAS CLI
-        uses: expo/expo-github-action@v8
+      - uses: expo/expo-github-action@v8
         with:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
+      - run: yarn install --frozen-lockfile
 
-      - name: Install dependencies
-        run: npm ci --legacy-peer-deps || npm install --legacy-peer-deps
+      # OTA update — runs on every qualifying push, and on manual dispatch
+      # when action=update. Channel mirrors the profile name.
+      - name: Publish OTA update
+        if: |
+          github.event_name == 'push' ||
+          github.event.inputs.action == 'update'
+        env:
+          CHANNEL: ${{ github.event.inputs.profile || 'production' }}
+          MSG: ${{ github.event.head_commit.message }}
+        run: |
+          MESSAGE="${MSG:-manual update}"
+          # eas update truncates at 1024 chars; keep just the first line.
+          MESSAGE=$(echo "$MESSAGE" | head -1 | cut -c1-1000)
+          eas update --channel "$CHANNEL" --auto --non-interactive --message "$MESSAGE"
 
-      - name: Build (auto-triggered)
-        if: github.event_name == 'push'
-        run: eas build --platform all --non-interactive --profile production
+      # Pre-build gate: runs only when a native build is about to happen.
+      # Blocks the expensive EAS build credit spend on broken code.
+      - name: Pre-build validation (lint + type-check + tests)
+        if: |
+          (github.event_name == 'push' && contains(github.event.head_commit.message, '[build]')) ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'build')
+        run: |
+          yarn tsc --noEmit
+          yarn lint --max-warnings 0
+          yarn test --ci --passWithNoTests
 
-      - name: Build (manual)
-        if: github.event_name == 'workflow_dispatch'
-        run: eas build --platform ${{ github.event.inputs.platform }} --non-interactive --profile ${{ github.event.inputs.profile }}
+      # Native build — only on explicit opt-in via `[build]` commit marker or
+      # manual dispatch. Expensive (~20min) and queues against EAS credits.
+      - name: Native build
+        if: |
+          (github.event_name == 'push' && contains(github.event.head_commit.message, '[build]')) ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'build')
+        env:
+          PROFILE: ${{ github.event.inputs.profile || 'production' }}
+        run: eas build --platform all --non-interactive --profile "$PROFILE"
+
+  driver:
+    needs: detect
+    if: |
+      (github.event_name == 'push' && needs.detect.outputs.driver == 'true') ||
+      (github.event_name == 'workflow_dispatch' && (github.event.inputs.app == 'driver-app' || github.event.inputs.app == 'both'))
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: driver-app
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+      - run: yarn install --frozen-lockfile
+
+      - name: Publish OTA update
+        if: |
+          github.event_name == 'push' ||
+          github.event.inputs.action == 'update'
+        env:
+          CHANNEL: ${{ github.event.inputs.profile || 'production' }}
+          MSG: ${{ github.event.head_commit.message }}
+        run: |
+          MESSAGE="${MSG:-manual update}"
+          MESSAGE=$(echo "$MESSAGE" | head -1 | cut -c1-1000)
+          eas update --channel "$CHANNEL" --auto --non-interactive --message "$MESSAGE"
+
+      - name: Pre-build validation (lint + type-check + tests)
+        if: |
+          (github.event_name == 'push' && contains(github.event.head_commit.message, '[build]')) ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'build')
+        run: |
+          yarn tsc --noEmit
+          yarn lint --max-warnings 0
+          yarn test --ci --passWithNoTests
+
+      - name: Native build
+        if: |
+          (github.event_name == 'push' && contains(github.event.head_commit.message, '[build]')) ||
+          (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'build')
+        env:
+          PROFILE: ${{ github.event.inputs.profile || 'production' }}
+        run: eas build --platform all --non-interactive --profile "$PROFILE"

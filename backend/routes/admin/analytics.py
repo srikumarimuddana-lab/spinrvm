@@ -5,25 +5,30 @@ Provides aggregated operational intelligence for the admin dashboard.
 
 import logging
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 try:
     from ...db import db
     from ...dependencies import get_admin_user
+    from ...utils.redis_client import redis_get, redis_set
 except ImportError:
     from db import db
     from dependencies import get_admin_user
+    from utils.redis_client import redis_get, redis_set  # noqa: F401
 
 logger = logging.getLogger(__name__)
 api_router = APIRouter(prefix="/analytics", tags=["Admin Analytics"])
 
+_OVERVIEW_CACHE_TTL = 300  # 5 minutes
+
 
 def _parse_date_range(date_range: str) -> datetime:
     """Convert a shorthand range like '7d', '30d', '90d' to a start datetime."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     mapping = {
         "today": timedelta(days=1),
         "7d": timedelta(days=7),
@@ -48,21 +53,18 @@ async def get_cancellation_breakdown(
     start_date = _parse_date_range(date_range)
 
     try:
-        filters = {"status": "cancelled"}
-        rides = await db.get_rows("rides", filters, limit=10000, order="created_at")
+        filters: dict = {
+            "status": "cancelled",
+            "created_at": {"$gte": start_date.isoformat()},
+        }
+        if service_area_id:
+            filters["service_area_id"] = service_area_id
+        filtered = await db.get_rows("rides", filters, limit=5000, order="created_at")
     except Exception as e:
-        logger.error(f"Failed to fetch cancelled rides: {e}")
-        rides = []
+        logger.error(f"Failed to fetch cancelled rides: {e}", exc_info=True)
+        from fastapi import HTTPException as _HTTPException
 
-    # Filter by date and optionally by service area
-    filtered = []
-    for r in rides:
-        created = r.get("created_at", "")
-        if isinstance(created, str) and created < start_date.isoformat():
-            continue
-        if service_area_id and r.get("service_area_id") != service_area_id:
-            continue
-        filtered.append(r)
+        raise _HTTPException(status_code=503, detail="Analytics data unavailable — database error") from e
 
     # Categorize cancellation reasons
     reason_counter = Counter()
@@ -141,32 +143,48 @@ async def get_driver_acceptance_rates(
     try:
         drivers = await db.get_rows("drivers", {}, limit=500)
     except Exception as e:
-        logger.error(f"Failed to fetch drivers: {e}")
-        drivers = []
+        logger.error(f"Failed to fetch drivers: {e}", exc_info=True, extra={"domain": "admin"})
+        raise HTTPException(status_code=503, detail="analytics_unavailable") from e
 
     if service_area_id:
         drivers = [d for d in drivers if d.get("service_area_id") == service_area_id]
 
-    result = []
-    for driver in drivers:
-        driver_id = driver["id"]
+    driver_ids = [d["id"] for d in drivers]
+    user_ids = [d["user_id"] for d in drivers if d.get("user_id")]
+
+    # Batch-fetch all rides and users in 2 queries instead of 2N (F-48).
+    all_rides: list = []
+    if driver_ids:
         try:
             all_rides = await db.get_rows(
                 "rides",
-                {"driver_id": driver_id},
-                limit=500,
-                order="created_at",
+                {"driver_id": {"$in": driver_ids}, "created_at": {"$gte": start_date.isoformat()}},
+                limit=10000,
             )
-        except Exception:
-            all_rides = []
+        except Exception as e:
+            logger.error(f"Failed to fetch rides for acceptance stats: {e}", exc_info=True, extra={"domain": "admin"})
+            raise HTTPException(status_code=503, detail="analytics_unavailable") from e
 
-        # Filter by date range
-        period_rides = [
-            r
-            for r in all_rides
-            if isinstance(r.get("created_at", ""), str) and r.get("created_at", "") >= start_date.isoformat()
-        ]
+    users_list: list = []
+    if user_ids:
+        try:
+            users_list = await db.get_rows("users", {"id": {"$in": user_ids}}, limit=len(user_ids))
+        except Exception as e:
+            logger.error(f"Failed to fetch users for acceptance stats: {e}", exc_info=True, extra={"domain": "admin"})
+            raise HTTPException(status_code=503, detail="analytics_unavailable") from e
 
+    rides_by_driver: dict = {}
+    for r in all_rides:
+        did = r.get("driver_id")
+        if did:
+            rides_by_driver.setdefault(did, []).append(r)
+
+    users_map = {u["id"]: u for u in users_list if u.get("id")}
+
+    result = []
+    for driver in drivers:
+        driver_id = driver["id"]
+        period_rides = rides_by_driver.get(driver_id, [])
         total_assigned = len(period_rides)
         completed = sum(1 for r in period_rides if r.get("status") == "completed")
         cancelled_by_driver = sum(
@@ -178,8 +196,7 @@ async def get_driver_acceptance_rates(
         acceptance_rate = round((completed / total_assigned * 100), 1) if total_assigned > 0 else 0
         cancellation_rate = round((cancelled_by_driver / total_assigned * 100), 1) if total_assigned > 0 else 0
 
-        # Get driver name
-        user = await db.find_one("users", {"id": driver.get("user_id")})
+        user = users_map.get(driver.get("user_id"))
         name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else "Unknown"
 
         result.append(
@@ -222,20 +239,31 @@ async def get_analytics_overview(
     date_range: str = Query("30d", pattern="^(today|7d|30d|90d|1y)$"),
     admin: dict = Depends(get_admin_user),
 ):
-    """High-level operational metrics for the analytics dashboard."""
+    """High-level operational metrics for the analytics dashboard. Cached 5 min (F-50)."""
+    import json as _json
+
+    cache_key = f"analytics:overview:{date_range}"
+    cached = await redis_get(cache_key)
+    if cached:
+        try:
+            return _json.loads(cached)
+        except Exception:  # noqa: S110
+            pass  # corrupt cache entry — fall through to fresh fetch
+
     start_date = _parse_date_range(date_range)
 
     try:
-        all_rides = await db.get_rows("rides", {}, limit=10000, order="created_at")
+        period_rides = await db.get_rows(
+            "rides",
+            {"created_at": {"$gte": start_date.isoformat()}},
+            limit=10000,
+            order="created_at",
+        )
     except Exception as e:
-        logger.error(f"Failed to fetch rides: {e}")
-        all_rides = []
+        logger.error(f"Failed to fetch rides: {e}", exc_info=True)
+        from fastapi import HTTPException as _HTTPException
 
-    period_rides = [
-        r
-        for r in all_rides
-        if isinstance(r.get("created_at", ""), str) and r.get("created_at", "") >= start_date.isoformat()
-    ]
+        raise _HTTPException(status_code=503, detail="Analytics data unavailable — database error") from e
 
     total = len(period_rides)
     completed = sum(1 for r in period_rides if r.get("status") == "completed")
@@ -249,8 +277,12 @@ async def get_analytics_overview(
     completion_rate = round(completed / total * 100, 1) if total > 0 else 0
     cancellation_rate = round(cancelled / total * 100, 1) if total > 0 else 0
 
-    total_revenue = sum(float(r.get("total_fare") or 0) for r in period_rides if r.get("status") == "completed")
-    total_tips = sum(float(r.get("tip_amount") or 0) for r in period_rides if r.get("status") == "completed")
+    total_revenue = float(
+        sum(Decimal(str(r.get("total_fare") or 0)) for r in period_rides if r.get("status") == "completed")
+    )
+    total_tips = float(
+        sum(Decimal(str(r.get("tip_amount") or 0)) for r in period_rides if r.get("status") == "completed")
+    )
     avg_fare = round(total_revenue / completed, 2) if completed > 0 else 0
 
     # Daily ride counts for chart
@@ -279,7 +311,7 @@ async def get_analytics_overview(
 
     peak_hours = sorted(hourly.items(), key=lambda x: x[1], reverse=True)[:5]
 
-    return {
+    result = {
         "date_range": date_range,
         "total_rides": total,
         "completed": completed,
@@ -295,6 +327,11 @@ async def get_analytics_overview(
         "daily_chart": daily_chart,
         "peak_hours": [{"hour": h, "rides": c} for h, c in peak_hours],
     }
+    try:
+        await redis_set(cache_key, _json.dumps(result), ttl=_OVERVIEW_CACHE_TTL)
+    except Exception:  # noqa: S110
+        pass  # Redis unavailable — return fresh result uncached
+    return result
 
 
 # ── Demand Forecasting ──────────────────────────────────────────────
@@ -340,7 +377,7 @@ async def get_surge_history(
     admin: dict = Depends(get_admin_user),
 ):
     """Get surge pricing history for a specific service area (last N hours)."""
-    cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
     try:
         records = await db.get_rows(
             "surge_pricing",
@@ -365,5 +402,7 @@ async def get_surge_history(
         filtered.reverse()
         return {"area_id": area_id, "hours": hours, "history": filtered}
     except Exception as e:
-        logger.error(f"Failed to fetch surge history: {e}")
-        return {"area_id": area_id, "hours": hours, "history": []}
+        logger.error(f"Failed to fetch surge history: {e}", exc_info=True, extra={"domain": "admin"})
+        from fastapi import HTTPException as _HTTPException
+
+        raise _HTTPException(status_code=503, detail="Surge history unavailable — database error") from e

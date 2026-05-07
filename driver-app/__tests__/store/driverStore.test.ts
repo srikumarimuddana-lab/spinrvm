@@ -37,7 +37,7 @@ describe('driverStore', () => {
     pickup_lng: -104.6,
     dropoff_lat: 50.46,
     dropoff_lng: -104.7,
-    fare: 15.50,
+    fare: '15.50',
     distance_km: 5.2,
     duration_minutes: 12,
     rider_name: 'Jane Doe',
@@ -84,7 +84,9 @@ describe('driverStore', () => {
   describe('acceptRide', () => {
     it('should accept ride and transition to navigating_to_pickup', async () => {
       api.post.mockResolvedValueOnce({ data: {} });
-      api.get.mockResolvedValueOnce({ data: { ride: { id: 'ride-1', status: 'driver_assigned' } } });
+      // After acceptance, backend returns driver_accepted (not driver_assigned).
+      // driver_assigned = offer dispatched; driver_accepted = driver confirmed.
+      api.get.mockResolvedValueOnce({ data: { ride: { id: 'ride-1', status: 'driver_accepted' } } });
 
       useDriverStore.getState().setIncomingRide(mockIncomingRide);
       await useDriverStore.getState().acceptRide('ride-1');
@@ -153,7 +155,9 @@ describe('driverStore', () => {
 
       await useDriverStore.getState().fetchActiveRide();
 
-      expect(useDriverStore.getState().rideState).toBe('navigating_to_pickup');
+      // driver_assigned = backend dispatched offer, driver hasn't accepted yet →
+      // resume ride_offered countdown screen rather than navigating_to_pickup.
+      expect(useDriverStore.getState().rideState).toBe('ride_offered');
     });
 
     it('should set rideState for driver_arrived', async () => {
@@ -190,7 +194,11 @@ describe('driverStore', () => {
       useDriverStore.setState({
         rideState: 'trip_in_progress',
         incomingRide: mockIncomingRide,
-        activeRide: { ride: {}, rider: {}, vehicle_type: {} },
+        activeRide: {
+          ride: { id: 'ride-1', status: 'in_progress', pickup_address: '123 Main', dropoff_address: '456 Elm', pickup_lat: 50, pickup_lng: -104, dropoff_lat: 50.1, dropoff_lng: -104.1, total_fare: '15.00', distance_km: 5, duration_minutes: 10, rider_id: 'rider-1', created_at: '2024-01-01' },
+          rider: { id: 'rider-1' },
+          vehicle_type: { id: 'vt-1', name: 'Standard' },
+        },
         countdownSeconds: 10,
         error: 'some error',
       });

@@ -1,4 +1,4 @@
-"""Refresh-token helpers (audit P0-S3).
+"""Refresh-token helpers (audit P0-S3, B-P1-3 reuse detection).
 
 Access tokens stay as short-ish-lived JWTs; refresh tokens are OPAQUE
 (unguessable random bytes, sha256-hashed on the way into the DB) and
@@ -15,15 +15,17 @@ logged in". This split means:
 
 Rotation policy: every successful /auth/refresh call revokes the old
 row and inserts a new one, with replaced_by chaining them. Re-using an
-already-rotated refresh token is treated as theft — the full chain is
-revoked (cascading revocation is a follow-up; for now we log and
-revoke the single replayed token).
+already-rotated refresh token is treated as theft (legitimate clients
+always step forward and never present an old value). On detection we
+escalate per OAuth2 BCP — see _handle_refresh_token_reuse.
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 import secrets
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -35,6 +37,13 @@ try:
 except ImportError:  # pragma: no cover — package-relative fallback
     from core.config import settings
     from db import db
+
+# audiences for which token_version lives on the `users` table; admin
+# audiences live on `admin_staff`. Anything else is rejected at the
+# rotation step in routes/auth.py — listed here so the cascade in
+# _handle_refresh_token_reuse picks the right table.
+_USERS_TABLE_AUDIENCES = {"rider", "driver"}
+_ADMIN_STAFF_AUDIENCES = {"admin"}
 
 # 48 random bytes → 64 base64url chars. 384 bits of entropy comfortably
 # exceeds any practical brute-force budget.
@@ -102,7 +111,7 @@ async def issue_refresh_token(
                 {"$set": {"replaced_by": row_id, "revoked_at": now.isoformat()}},
             )
         except Exception as e:  # pragma: no cover
-            logger.warning(f"Could not chain refresh token {replaces} → {row_id}: {e}")
+            logger.error(f"Could not chain refresh token {replaces} → {row_id}: {e}", exc_info=True)
 
     return raw, row_id, expires_at
 
@@ -127,14 +136,14 @@ async def lookup_refresh_token(raw: str) -> Optional[dict]:
     if not row:
         return None
 
-    # revoked?
+    # Replay attack guard: a revoked refresh token presented by a real
+    # client is a strong signal of theft. Legitimate clients always step
+    # forward to the latest token they were issued and never return to
+    # an old value. We escalate per OAuth2 BCP §4.14.2: cascade-revoke
+    # every session for the user, bump token_version (kills in-flight
+    # access tokens), and write a high-signal audit_logs row.
     if row.get("revoked_at"):
-        # Presenting a revoked token is suspicious — log once, revoke
-        # any successor (possible replay) and return nothing.
-        logger.warning(
-            f"Refresh token presented after revocation "
-            f"(id={row.get('id')}, user={row.get('user_id')}, audience={row.get('audience')})"
-        )
+        await _handle_refresh_token_reuse(row)
         return None
 
     expires_at = row.get("expires_at")
@@ -151,6 +160,117 @@ async def lookup_refresh_token(raw: str) -> Optional[dict]:
     return row
 
 
+async def _handle_refresh_token_reuse(row: dict) -> None:
+    """Escalate when a revoked refresh token is replayed (B-P1-3).
+
+    Steps (each best-effort, none crash the caller):
+      1. logger.error with full context — security ops needs this loud.
+      2. Bump token_version on users (rider/driver) or admin_staff
+         (admin), invalidating every in-flight access token on next
+         request (dependencies.py re-reads the row).
+      3. Revoke every refresh token for the user (cascade). Conservative
+         — we don't know which device is the attacker, so blow them all
+         away and force re-auth on every device.
+      4. Insert an audit_logs row tagged action='refresh_token_reuse_detected'
+         so admin dashboard + the 7y forensic record both surface it.
+
+    Caller (lookup_refresh_token) returns None to the auth route either
+    way, so the client sees a generic 401. No oracle leakage.
+    """
+    user_id = row.get("user_id") or ""
+    audience = row.get("audience") or ""
+    row_id = row.get("id") or ""
+
+    logger.error(
+        f"REFRESH TOKEN REUSE DETECTED — possible theft. "
+        f"row_id={row_id} user_id={user_id} audience={audience} "
+        f"original_revoked_at={row.get('revoked_at')} replaced_by={row.get('replaced_by')}"
+    )
+
+    # Step 2: token_version bump. Pick the right table by audience.
+    new_version: Optional[int] = None
+    target_table: Optional[str] = None
+    try:
+        if audience in _USERS_TABLE_AUDIENCES:
+            target_table = "users"
+        elif audience in _ADMIN_STAFF_AUDIENCES and user_id and user_id != "admin-001":
+            # admin-001 is the env-var-creds super admin — has no row to bump.
+            target_table = "admin_staff"
+        if target_table and user_id:
+            current = await db.find_one(target_table, {"id": user_id})
+            new_version = int((current or {}).get("token_version") or 0) + 1
+            await db.update_one(
+                target_table,
+                {"id": user_id},
+                {"$set": {"token_version": new_version}},
+            )
+    except Exception as e:
+        logger.error(f"reuse-cascade: token_version bump failed (table={target_table} user={user_id}): {e}")
+
+    # Step 3: refresh-token cascade.
+    revoked_count = 0
+    try:
+        revoked_count = await revoke_all_for_user(user_id) if user_id else 0
+    except Exception as e:
+        logger.error(f"reuse-cascade: revoke_all_for_user failed (user={user_id}): {e}")
+
+    # Step 3.5 (B-P1-11): kick live WebSocket sockets for the user.
+    # Without this, an attacker holding the access token paired with
+    # the replayed refresh token keeps their WS open until the heartbeat
+    # tick (≤30s) — long enough to receive ride state for the victim.
+    # Best-effort: a kick failure does not skip the audit_logs insert,
+    # and the heartbeat re-validation closes the socket on next tick
+    # regardless.
+    if user_id:
+        try:
+            try:
+                from ..socket_manager import manager as ws_manager
+            except ImportError:  # pragma: no cover — package-relative fallback
+                from socket_manager import manager as ws_manager  # type: ignore
+            if audience in _USERS_TABLE_AUDIENCES:
+                await ws_manager.kick_user(
+                    user_id,
+                    client_types=["rider", "driver"],
+                    reason="refresh_token_reuse",
+                )
+            elif audience in _ADMIN_STAFF_AUDIENCES:
+                await ws_manager.kick_user(
+                    user_id,
+                    client_types=["admin"],
+                    reason="refresh_token_reuse",
+                )
+        except Exception as e:
+            logger.error(f"reuse-cascade: WS kick failed (user={user_id} audience={audience}): {e}")
+
+    # Step 4: audit_logs row. Production schema (migration 57):
+    # id TEXT PK / action / entity_type / entity_id / actor_id / details TEXT.
+    try:
+        details_payload = {
+            "replayed_row_id": row_id,
+            "audience": audience,
+            "replayed_user_agent": row.get("user_agent"),
+            "replayed_ip": row.get("ip"),
+            "original_revoked_at": row.get("revoked_at"),
+            "replaced_by": row.get("replaced_by"),
+            "cascade_token_version": new_version,
+            "cascade_refresh_revoked": revoked_count,
+            "detected_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.insert_one(
+            "audit_logs",
+            {
+                "id": str(uuid.uuid4()),
+                "action": "refresh_token_reuse_detected",
+                "entity_type": "user",
+                "entity_id": user_id or "unknown",
+                "actor_id": "system:refresh_reuse_detector",
+                "details": json.dumps(details_payload),
+            },
+        )
+    except Exception as e:
+        logger.error(f"reuse-cascade: audit_logs insert failed (user={user_id}): {e}")
+
+
 async def revoke_refresh_token(raw: str) -> bool:
     """Stamp revoked_at on the row for ``raw``. Returns True if a row
     was actually revoked (i.e. the token was valid); False otherwise.
@@ -162,7 +282,7 @@ async def revoke_refresh_token(raw: str) -> bool:
     try:
         row = await db.find_one("refresh_tokens", {"token_hash": token_hash})
     except Exception as e:
-        logger.warning(f"revoke_refresh_token lookup failed: {e}")
+        logger.error(f"revoke_refresh_token lookup failed: {e}", exc_info=True)
         return False
     if not row or row.get("revoked_at"):
         return False
@@ -174,7 +294,7 @@ async def revoke_refresh_token(raw: str) -> bool:
         )
         return True
     except Exception as e:
-        logger.warning(f"revoke_refresh_token update failed: {e}")
+        logger.error(f"revoke_refresh_token update failed: {e}", exc_info=True)
         return False
 
 
@@ -195,7 +315,7 @@ async def revoke_all_for_user(user_id: str) -> int:
     try:
         rows = await db.get_rows("refresh_tokens", {"user_id": user_id}, limit=1000)
     except Exception as e:
-        logger.warning(f"refresh_tokens scan failed for user {user_id}: {e}")
+        logger.error(f"refresh_tokens scan failed for user {user_id}: {e}", exc_info=True)
         return 0
     n = 0
     for row in rows or []:
@@ -209,5 +329,5 @@ async def revoke_all_for_user(user_id: str) -> int:
             )
             n += 1
         except Exception as e:  # pragma: no cover
-            logger.warning(f"revoke_all_for_user: could not revoke {row.get('id')}: {e}")
+            logger.error(f"revoke_all_for_user: could not revoke {row.get('id')}: {e}", exc_info=True)
     return n

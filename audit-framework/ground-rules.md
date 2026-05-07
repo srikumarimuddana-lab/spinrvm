@@ -87,3 +87,40 @@ When uncertain about severity, ask these questions:
 - **Is this an inconvenience or a dev-only issue?** → LOW
 - **Is this already working correctly?** → PASS
 - **Is this a "nice to have" or future feature?** → RECOMMENDATION
+
+For a quantitative score, multiply severity × blast × likelihood per the
+formula in `reports/audits/OPEN-ITEMS-TRACKER.md`.
+
+---
+
+### 7. Incident → Audit Feedback Rule
+
+Whenever a real-world incident (outage, near-miss, customer complaint with
+security implications, vendor breach, regulatory inquiry) occurs:
+
+1. Post-mortem author files a new row in `OPEN-ITEMS-TRACKER.md` tagged
+   `source: incident-YYYY-MM-DD-slug`.
+2. If the incident reveals a dimension gap (e.g., "monitoring didn't catch X"),
+   append a checklist item to the relevant dimension doc within 7 days.
+3. If three consecutive incidents trace back to the same dimension, that
+   dimension is due for a focused re-audit (schedule within 30 days).
+4. Post-mortems retained in `reports/postmortems/YYYY-MM-DD-slug.md` for ≥ 3
+   years (SOC2 CC7.3).
+
+**Why:** Audits are hypotheses about risk. Incidents are ground truth. The
+framework must evolve from real events or it becomes stale.
+
+---
+
+### 8. Auditor Independence
+
+The engineer or agent that wrote a remediation item must not be the sole
+verifier. Rules:
+
+- Verification runs produce a `reviewed_by` field in every YAML entry, naming a
+  second party (different engineer, different agent call with independent inputs,
+  or external reviewer).
+- For CRITICAL/HIGH findings: the remediation PR and the verification run must
+  be by different parties.
+- External pen-test findings (see `docs/external-testing.md`) are always
+  considered independent and may be used as the verification signal.

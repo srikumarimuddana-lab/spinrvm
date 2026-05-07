@@ -1,4 +1,4 @@
-import { initializeApp, getApps } from 'firebase/app';
+import { initializeApp, getApps, FirebaseApp } from 'firebase/app';
 import { getAuth, Auth } from 'firebase/auth';
 
 /**
@@ -30,7 +30,7 @@ const firebaseConfig = {
 };
 
 // Initialize Firebase (avoid duplicate init on hot reload)
-let app;
+let app: FirebaseApp | undefined;
 let auth: Auth;
 
 if (!firebaseConfig.apiKey || !firebaseConfig.projectId) {
@@ -47,8 +47,8 @@ if (!firebaseConfig.apiKey || !firebaseConfig.projectId) {
       ? initializeApp(firebaseConfig)
       : existingApps.find(a => a.name === '[DEFAULT]') || existingApps[0];
     auth = getAuth(app);
-  } catch (error: any) {
-    console.warn('[Firebase] init error:', error.message);
+  } catch (error: unknown) {
+    console.warn('[Firebase] init error:', error instanceof Error ? error.message : String(error));
     auth = {} as Auth;
   }
 }

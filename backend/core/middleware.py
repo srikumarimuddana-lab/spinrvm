@@ -1,3 +1,4 @@
+import uuid
 from urllib.parse import urlparse
 
 from fastapi import Request
@@ -10,27 +11,63 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from core.config import settings
 from utils.rate_limiter import default_limiter, rate_limit_exceeded_handler
 
+# ── CSRF double-submit constants ─────────────────────────────────────
+_CSRF_COOKIE = "csrf_token"
+_CSRF_HEADER = "x-csrf-token"
+_CSRF_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
+# Paths that have no established session yet — no CSRF cookie exists.
+# Pre-auth endpoints and server-to-server paths are exempt.
+_CSRF_EXEMPT_EXACT = frozenset(
+    {
+        "/health",
+        "/docs",
+        "/redoc",
+        "/openapi.json",
+        "/api/v1/auth/send-otp",
+        "/api/v1/auth/verify-otp",
+        "/api/v1/auth/firebase",
+        "/api/admin/auth/login",
+        "/api/v1/stripe/webhook",
+    }
+)
+_CSRF_EXEMPT_PREFIXES = ("/ws/",)
+
 # ── Firebase App Check Middleware ─────────────────────────────────────
-# When enforcement_enabled=True the middleware rejects any request to a
-# protected path that is missing a valid X-Firebase-AppCheck token with
-# HTTP 401. Set to False during development or before Firebase Console
-# registration is complete (see IMPORTANT note below).
+# Enforcement is tied to ENV: on in production, off in development/staging.
+# When off, missing or invalid tokens are logged but requests still go
+# through — this lets dev builds (Expo Go, unregistered debug devices)
+# reach the API without Firebase Console setup.
 #
-# IMPORTANT — manual steps required before enabling enforcement:
+# IMPORTANT — before flipping ENV=production, complete these manual steps:
 #   iOS  : register bundle ID with Apple DeviceCheck in
 #          Firebase Console → App Check → Apps
 #   Android: register package name with Play Integrity in
 #          Firebase Console → App Check → Apps
-# Until those steps are done, real devices will be rejected. During local
-# development you can add your debug token in Firebase Console → App Check
-# → Apps → overflow menu → "Manage debug tokens".
-_APP_CHECK_ENFORCEMENT = True
+# Until those steps are done, production devices will get 401s. For local
+# dev builds, add a debug token in Firebase Console → App Check → Apps →
+# overflow menu → "Manage debug tokens".
 
 # Paths that must never require App Check:
 #   - WebSocket connections (no HTTP headers)
 #   - OpenAPI docs served by FastAPI
 #   - Health / readiness probes
-_APP_CHECK_EXEMPT_PREFIXES = ("/ws/", "/docs", "/redoc", "/openapi.json", "/health")
+#   - Admin dashboard API (/api/admin/*): the dashboard is a Next.js web
+#     app, not a Firebase-registered mobile build, so it cannot attach a
+#     X-Firebase-AppCheck header. Admin endpoints are already gated by the
+#     admin JWT (get_admin_user dependency, see routes/admin/__init__.py)
+#     and the login endpoint is rate-limited (5/min/IP in
+#     routes/admin/auth.py), so the attack surface is bounded. Without this
+#     exemption /api/admin/auth/login returns 401 "App Check token
+#     required" before the login handler runs, and the dashboard at
+#     spinrvm.vercel.app can never authenticate.
+_APP_CHECK_EXEMPT_PREFIXES = (
+    "/ws/",
+    "/docs",
+    "/redoc",
+    "/openapi.json",
+    "/health",
+    "/api/admin/",
+)
 
 
 class FirebaseAppCheckMiddleware(BaseHTTPMiddleware):
@@ -56,33 +93,70 @@ class FirebaseAppCheckMiddleware(BaseHTTPMiddleware):
         if not path.startswith("/api"):
             return await call_next(request)
 
+        # B-P2-3: bind request_id explicitly into App Check log lines.
+        # RequestIDMiddleware contextualises loguru, but App Check runs
+        # *outside* that context (it dispatches before the call_next that
+        # establishes the contextualize block — which it then never re-
+        # enters when it short-circuits with a 401). Read directly from
+        # request.state for correlation in those reject paths.
+        request_id = getattr(request.state, "request_id", "-")
+
         token = request.headers.get("X-Firebase-AppCheck")
+        # Prefer the request_id already set by RequestIDMiddleware; fall back
+        # to the caller-supplied header so App Check failures are always
+        # cross-correlatable even if middleware ordering changes.
+        _req_id = getattr(request.state, "request_id", None) or request.headers.get("X-Request-ID", "-")
 
         if not token:
             if self._enforce:
-                logger.warning("App Check: missing token for %s", path)
+                logger.warning("App Check: missing token for {} req_id={}", path, request_id)
                 return JSONResponse(
                     status_code=401,
                     content={"detail": "App Check token required"},
                 )
             # Enforcement off — let the request through but log it.
-            logger.debug("App Check: token absent (enforcement disabled) for %s", path)
+            logger.debug("App Check: token absent (enforcement disabled) for {} req_id={}", path, request_id)
             return await call_next(request)
 
         # Verify the token with the Firebase Admin SDK.
         try:
             import firebase_admin.app_check as app_check  # noqa: PLC0415
+
             app_check.verify_token(token)
         except Exception as exc:
             if self._enforce:
-                logger.warning("App Check: invalid token for %s — %s", path, exc)
+                logger.warning("App Check: invalid token for {} req_id={} — {}", path, request_id, exc)
                 return JSONResponse(
                     status_code=401,
                     content={"detail": "Invalid App Check token"},
                 )
-            logger.debug("App Check: token verification failed (enforcement disabled): %s", exc)
+            logger.debug("App Check: token verification failed (enforcement disabled) req_id={}: {}", request_id, exc)
 
         return await call_next(request)
+
+
+# ── Correlation / Request-ID middleware ──────────────────────────────
+# Each request gets a UUID in X-Request-ID (caller may supply their own).
+# The ID is echoed back in the response header and bound to the loguru
+# context so every log line emitted during that request carries it —
+# enabling full end-to-end tracing from mobile client to DB query.
+
+
+class RequestIDMiddleware(BaseHTTPMiddleware):
+    """Attach a unique X-Request-ID to every request/response pair."""
+
+    async def dispatch(self, request: Request, call_next):
+        request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+        request.state.request_id = request_id
+        with logger.contextualize(request_id=request_id):
+            response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        # OTel/W3C-compatible alias: clients that look for X-Trace-ID
+        # (per OTel HTTP semantic conventions) get the same UUID without
+        # us having to introduce a separate trace ID generator yet.
+        response.headers["X-Trace-ID"] = request_id
+        return response
+
 
 # ── Security response headers ─────────────────────────────────────────
 # Baseline for an API backend. Critical protections: X-Frame-Options
@@ -96,7 +170,7 @@ class FirebaseAppCheckMiddleware(BaseHTTPMiddleware):
 _BASE_SECURITY_HEADERS: dict[str, str] = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
-    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Referrer-Policy": "no-referrer",
     "Permissions-Policy": "geolocation=(), microphone=(), camera=(), payment=()",
     "Cross-Origin-Opener-Policy": "same-origin",
     "Cross-Origin-Resource-Policy": "same-site",
@@ -152,6 +226,56 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         _apply_security_headers(response, request.url.path, self._enable_hsts)
         return response
+
+
+class CSRFMiddleware(BaseHTTPMiddleware):
+    """Double-submit cookie CSRF protection for state-changing requests.
+
+    Only enforced when the request carries an Origin header (browser context).
+    Native mobile apps and server-to-server calls lack Origin and are implicitly
+    exempt — CSRF is impossible without a cookie-based session attack vector.
+
+    Validation: X-CSRF-Token header must equal the csrf_token cookie value.
+    Both values are set by the server on login/refresh (see core/csrf.py).
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        if request.method.upper() in _CSRF_SAFE_METHODS:
+            return await call_next(request)
+
+        path = request.url.path
+        if path in _CSRF_EXEMPT_EXACT or any(path.startswith(p) for p in _CSRF_EXEMPT_PREFIXES):
+            return await call_next(request)
+
+        # Only enforce for browser-originated requests (Origin header present).
+        if not request.headers.get("origin"):
+            return await call_next(request)
+
+        csrf_cookie = request.cookies.get(_CSRF_COOKIE)
+        csrf_header = request.headers.get(_CSRF_HEADER)
+
+        if not csrf_cookie or not csrf_header:
+            logger.warning("CSRF token missing: %s %s", request.method, path)
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "CSRF token missing"},
+            )
+
+        import hmac as _hmac  # noqa: PLC0415
+
+        if not _hmac.compare_digest(csrf_cookie.encode(), csrf_header.encode()):
+            logger.warning(
+                "CSRF token mismatch: %s %s origin=%s",
+                request.method,
+                path,
+                request.headers.get("origin"),
+            )
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "CSRF token invalid"},
+            )
+
+        return await call_next(request)
 
 
 _INSECURE_JWT_DEFAULTS = {
@@ -307,7 +431,15 @@ def init_middleware(app):
     origins = [origin.strip() for origin in settings.ALLOWED_ORIGINS.split(",") if origin.strip()]
 
     # Always allow the admin and default apps explicitly regardless of env variables
-    always_allowed = ["https://spinr-admin.vercel.app", "http://localhost:3000", "http://localhost:3001"]
+    always_allowed = [
+        "https://spinr-admin.vercel.app",
+        "https://spinr.app",
+        "https://www.spinr.app",
+        "https://spinr-track.app",
+        "https://www.spinr-track.app",
+        "http://localhost:3000",
+        "http://localhost:3001",
+    ]
     origins.extend(always_allowed)
     # Remove empty strings and duplicates (preserve order for determinism)
     origins = list(dict.fromkeys(o for o in origins if o))
@@ -335,8 +467,20 @@ def init_middleware(app):
         CORSMiddleware,
         allow_origins=origins,
         allow_credentials=allow_credentials,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "X-Requested-With",
+            "Idempotency-Key",
+            "X-Forwarded-For",
+            "Accept",
+            "Accept-Language",
+            "Cache-Control",
+            "X-CSRF-Token",
+            "X-Request-ID",
+            "X-Deadline-Ms",
+        ],
     )
 
     # Security headers — applied after CORS so that every response
@@ -345,13 +489,18 @@ def init_middleware(app):
     # plain-HTTP dev would cause browsers to pin the dev host to HTTPS.
     app.add_middleware(SecurityHeadersMiddleware, enable_hsts=is_production)
 
+    # Request ID — outermost layer so X-Request-ID is present on every
+    # response, including CORS preflights and error responses.
+    app.add_middleware(RequestIDMiddleware)
+
     # Firebase App Check — verify that requests originate from genuine
-    # Spinr builds. Enforcement is enabled; see _APP_CHECK_ENFORCEMENT above
-    # and the IMPORTANT comment for the manual Firebase Console steps needed.
-    app.add_middleware(FirebaseAppCheckMiddleware, enforcement_enabled=_APP_CHECK_ENFORCEMENT)
+    # Spinr builds. Enforced in production; logged-only in dev/staging so
+    # unregistered debug devices aren't blocked. See the IMPORTANT comment
+    # above FirebaseAppCheckMiddleware for the manual Firebase Console
+    # steps required before shipping to production.
+    app.add_middleware(FirebaseAppCheckMiddleware, enforcement_enabled=is_production)
 
     # FIX: Add CORS headers to exception responses (FastAPI bug fix)
-    @app.exception_handler(Exception)
     async def cors_exception_handler(request: Request, exc: Exception):
         origin = request.headers.get("origin")
 
@@ -371,7 +520,11 @@ def init_middleware(app):
                 if allow_credentials:
                     response.headers["Access-Control-Allow-Credentials"] = "true"
                 response.headers["Access-Control-Allow-Methods"] = "*"
-                response.headers["Access-Control-Allow-Headers"] = "*"
+                response.headers["Access-Control-Allow-Headers"] = (
+                    "Authorization, Content-Type, X-Requested-With, "
+                    "Idempotency-Key, X-Forwarded-For, Accept, Accept-Language, Cache-Control, "
+                    "X-CSRF-Token, X-Request-ID, X-Deadline-Ms"
+                )
                 response.headers["Vary"] = "Origin"
             elif wildcard:
                 # Wildcard (dev only) — credentials already disabled above
@@ -385,6 +538,8 @@ def init_middleware(app):
         _apply_security_headers(response, request.url.path, enable_hsts=is_production)
 
         return response
+
+    app.add_exception_handler(Exception, cors_exception_handler)
 
     # Relative-redirect middleware — when FastAPI issues a 307 trailing-slash
     # redirect the Location header contains an absolute backend URL
@@ -408,10 +563,57 @@ def init_middleware(app):
 
     app.add_middleware(RelativeRedirectMiddleware)
 
+    # Deadline propagation — clients send `X-Deadline-Ms: <epoch-ms>`
+    # (derived from their local axios / fetch timeout). The backend
+    # stashes the deadline on a contextvar so any code running inside
+    # the request coroutine can consult it — most importantly
+    # db_supabase.run_sync, which checks remaining budget before each
+    # retry sleep. If the client has already given up, we skip the
+    # retry and fail fast instead of burning thread-pool workers on a
+    # doomed request.
+    #
+    # Absent header = no deadline enforced (current behaviour).
+    from utils.deadline import set_request_deadline
+
+    class DeadlineMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: Request, call_next):
+            deadline_header = request.headers.get("x-deadline-ms")
+            token = None
+            if deadline_header:
+                try:
+                    deadline_epoch_ms = int(deadline_header)
+                    import time as _t
+
+                    now_epoch_ms = int(_t.time() * 1000)
+                    remaining_ms = deadline_epoch_ms - now_epoch_ms
+                    # Convert the client's epoch deadline into a
+                    # monotonic-clock one so comparisons inside the
+                    # request (which may run for many seconds) aren't
+                    # affected by system clock jumps.
+                    monotonic_deadline = _t.monotonic() + (remaining_ms / 1000.0)
+                    request.state.deadline_monotonic = monotonic_deadline
+                    token = set_request_deadline(monotonic_deadline)
+                except (ValueError, TypeError):
+                    # Malformed header — ignore silently. Not worth a 400.
+                    pass
+            try:
+                return await call_next(request)
+            finally:
+                if token is not None:
+                    set_request_deadline(None, reset_token=token)
+
+    app.add_middleware(DeadlineMiddleware)
+
+    # CSRF double-submit cookie protection — validates X-CSRF-Token header
+    # against the csrf_token cookie on every state-changing browser request.
+    # Mobile apps and server-to-server calls (no Origin header) bypass this.
+    app.add_middleware(CSRFMiddleware)
+
     # Rate Limiting Middleware
     app.state.limiter = default_limiter
     app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
     logger.info(
-        f"Middleware initialized: CORS, Security Headers (HSTS={'on' if is_production else 'off'}), Rate Limiting"
+        f"Middleware initialized: CORS, CSRF, Security Headers (HSTS={'on' if is_production else 'off'}), "
+        f"App Check enforcement={'on' if is_production else 'off'}, Rate Limiting"
     )

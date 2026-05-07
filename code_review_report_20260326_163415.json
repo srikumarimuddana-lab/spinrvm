@@ -1,9 +1,0 @@
-{
-  "date": "2026-03-26 16:34:15",
-  "reviewer": "TestReviewer",
-  "commit_range": "HEAD~1",
-  "files_reviewed": 15,
-  "lines_changed": 4016,
-  "findings": [
-    {
-      "severity": 

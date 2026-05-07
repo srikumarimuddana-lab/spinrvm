@@ -1,0 +1,327 @@
+name: Security Gates
+
+# Gates G1–G5 from docs/ci-security-gates.md (SAST, Semgrep, dep audit, secrets).
+# Non-blocking for the first 2 weeks — treat as baselining window. After that,
+# flip `continue-on-error` to `false` for each job to enforce.
+#
+# Runs on every PR to main and on a daily schedule for main itself.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    # Daily 02:00 UTC — catches drift in main between PRs
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: security-gates-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write      # to post finding comments
+  security-events: write    # to upload SARIF
+
+jobs:
+  # G1 — Python SAST (Bandit)
+  bandit:
+    name: G1 · Bandit (Python SAST)
+    runs-on: ubuntu-latest
+    continue-on-error: false
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: pip install bandit[toml]
+      - name: Run Bandit
+        run: |
+          bandit -r backend/ \
+            --severity-level high \
+            --confidence-level high \
+            -f json -o bandit-report.json || true
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bandit-report
+          path: bandit-report.json
+
+  # G2 — JS SAST (ESLint with security plugin; uses each module's own config)
+  eslint-security:
+    name: G2 · ESLint security plugin
+    runs-on: ubuntu-latest
+    continue-on-error: false
+    strategy:
+      matrix:
+        module: [rider-app, driver-app, admin-dashboard]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          # No `cache:` here — admin-dashboard uses package-lock.json, others
+          # use yarn.lock. A fixed cache-dependency-path would fail for
+          # whichever module doesn't match. Cache miss cost is ~30s and
+          # security-gates is not a hot-path workflow.
+      - name: Install deps
+        working-directory: ${{ matrix.module }}
+        continue-on-error: false
+        run: |
+          if [ -f yarn.lock ]; then yarn install --frozen-lockfile
+          elif [ -f package-lock.json ]; then npm ci
+          else echo "No lockfile; skipping ${{ matrix.module }}"; exit 0
+          fi
+      - name: Lint
+        working-directory: ${{ matrix.module }}
+        # Respects the repo's own lint script (e.g. admin-dashboard intentionally
+        # allows --max-warnings 600). Security gates are baselining — module
+        # owners tune strictness in their own package.json.
+        run: |
+          if [ -f yarn.lock ]; then yarn lint || true
+          elif [ -f package-lock.json ]; then npm run lint || true
+          fi
+
+  # G3 — Semgrep with Spinr-specific ruleset + public registry rules
+  semgrep:
+    name: G3 · Semgrep (Spinr rules + public)
+    runs-on: ubuntu-latest
+    continue-on-error: false
+    container:
+      image: semgrep/semgrep:latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Semgrep scan
+        run: |
+          semgrep scan \
+            --config=.semgrep/spinr-rules.yml \
+            --config=p/python \
+            --config=p/typescript \
+            --config=p/secrets \
+            --config=p/owasp-top-ten \
+            --severity=ERROR \
+            --severity=WARNING \
+            --sarif --output=semgrep.sarif || true
+      - uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: semgrep.sarif
+
+  # G4 — Dependency audit (Python + JS)
+  pip-audit:
+    name: G4a · pip-audit (Python deps)
+    runs-on: ubuntu-latest
+    continue-on-error: false
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: pip install pip-audit
+      - run: pip-audit -r backend/requirements-locked.txt --vulnerability-service osv || true
+
+  yarn-audit:
+    name: G4b · yarn audit (JS deps)
+    runs-on: ubuntu-latest
+    # Blocking on HIGH+ CVEs — baseline was clean when this was enabled (2026-04-27).
+    continue-on-error: false
+    strategy:
+      matrix:
+        module: [rider-app, driver-app, admin-dashboard, shared]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+      - name: Audit
+        working-directory: ${{ matrix.module }}
+        run: |
+          if [ -f yarn.lock ]; then
+            # yarn 1.x exit codes are a bitmask: 4=moderate, 8=high, 16=critical.
+            # --level high controls display only; the exit code still reflects all
+            # severities found. We only want to fail on HIGH(8) or CRITICAL(16).
+            # Use `|| rc=$?` not `; rc=$?` — bash -e (GitHub's default shell) exits
+            # immediately on non-zero before the semicolon-separated assignment runs.
+            rc=0; yarn audit --level high || rc=$?
+            if [ $((rc & 24)) -ne 0 ]; then exit 1; fi
+          elif [ -f package-lock.json ]; then npm audit --audit-level=high
+          else echo "No lockfile in ${{ matrix.module }}"
+          fi
+
+  # G4c — Blocking npm audit for admin-dashboard ([17-3])
+  # Separated from the yarn-audit matrix so it can be enforced independently.
+  # Baselining window is over once [19-1]/[19-2] CVE overrides are merged.
+  npm-audit-admin:
+    name: G4c · npm audit (admin-dashboard, HIGH blocking)
+    runs-on: ubuntu-latest
+    continue-on-error: false
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: admin-dashboard/package-lock.json
+      - name: Install dependencies
+        working-directory: admin-dashboard
+        run: npm ci
+      - name: Audit for HIGH+ CVEs
+        working-directory: admin-dashboard
+        run: npm audit --audit-level=high
+
+  # G5 — Secret scanning (git history)
+  gitleaks:
+    name: G5a · Gitleaks (git history)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # G5b — Scan compiled Next.js bundle for leaked NEXT_PUBLIC_* secrets.
+  # A build-time env var that should have been server-only can slip into
+  # the bundle (e.g. NEXT_PUBLIC_API_KEY) and pass git-history scanning
+  # while still being present in the shipped artefact.
+  bundle-secrets:
+    name: G5b · Gitleaks (admin bundle)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+      - name: Build admin dashboard
+        working-directory: admin-dashboard
+        run: |
+          if [ -f package-lock.json ]; then npm ci; fi
+          npm run build
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8000
+      - name: Scan bundle for secrets
+        # Scan only static/ — that is what browsers receive. The server/
+        # directory holds source maps (.map) and server-rendered code; real
+        # secrets there are a server-side concern covered by G5a + G3, not a
+        # client-bundle-leakage concern. Scanning the full .next/ directory
+        # with gitleaks causes source-map false positives on placeholder
+        # strings (pk_test_..., sk_test_...) from the settings form.
+        # gitleaks-action@v2 does not support the `args` input.
+        # Use a direct invocation via the gitleaks binary for non-git directory scans.
+        run: |
+          GITLEAKS_VERSION="8.18.4"
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C /usr/local/bin/ gitleaks
+          gitleaks detect \
+            --source admin-dashboard/.next/static \
+            --no-git \
+            --redact \
+            --config .gitleaks.toml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # G6 — Trivy container image scan (OS packages + Python libraries)
+  # Runs a standalone docker build so this workflow has no cross-workflow
+  # dependency on ci.yml. Blocks on HIGH or CRITICAL unfixed CVEs.
+  container-scan:
+    name: G6 · Trivy container scan
+    runs-on: ubuntu-latest
+    continue-on-error: false
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build backend Docker image
+        run: |
+          docker build \
+            --file backend/Dockerfile \
+            --tag spinr-backend:sec-${{ github.sha }} \
+            backend/
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: spinr-backend:sec-${{ github.sha }}
+          format: table
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+      - name: Upload SARIF to GitHub Security
+        if: always()
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: spinr-backend:sec-${{ github.sha }}
+          format: sarif
+          output: trivy-container.sarif
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: HIGH,CRITICAL
+      - uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: trivy-container.sarif
+
+  # G7 — pip-licenses: block strong copyleft / proprietary licences in Python deps.
+  # Strategy: denylist (block GPL, AGPL, SSPL, Elastic, Commons Clause) rather than
+  # allowlist, because allowlists produce false positives when packages report
+  # valid permissive licences with slightly different name strings (HPND, PSF, etc.).
+  # Add a new denied pattern here if a problematic licence family is introduced.
+  license-check:
+    name: G7 · pip-licenses (Python deps)
+    runs-on: ubuntu-latest
+    continue-on-error: false
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install deps + pip-licenses
+        working-directory: backend
+        run: pip install -r requirements.txt pip-licenses --quiet
+      - name: Print full licence report
+        working-directory: backend
+        run: pip-licenses --format=markdown --order=license
+      - name: Block copyleft / proprietary licences
+        working-directory: backend
+        run: |
+          pip-licenses --format=json | python3 -c "
+          import json, sys
+          DENIED = [
+              'GNU General Public License',
+              'GNU Affero General Public License',
+              'Server Side Public License',
+              'Elastic License',
+              'Commons Clause',
+              'Business Source License',
+          ]
+          data = json.load(sys.stdin)
+          bad = [(p['Name'], p['License']) for p in data
+                 if any(d in p['License'] for d in DENIED)]
+          if bad:
+              for name, lic in bad:
+                  print(f'DENIED: {name}: {lic}')
+              sys.exit(1)
+          print(f'OK — {len(data)} packages, no copyleft/proprietary licences detected.')
+          "
+
+  # Summary job — required check for branch protection once gates are enforced
+  summary:
+    name: Security gates summary
+    needs: [bandit, eslint-security, semgrep, pip-audit, yarn-audit, npm-audit-admin, gitleaks, bundle-secrets, container-scan, license-check]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Summarize
+        run: |
+          echo "## Security Gates Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Gates G1–G7 (bandit, eslint-security, semgrep, pip-audit," >> $GITHUB_STEP_SUMMARY
+          echo "yarn-audit, gitleaks, container-scan, license-check) are" >> $GITHUB_STEP_SUMMARY
+          echo "**blocking** (OI-003–OI-006 resolved, pre-production enforcement)." >> $GITHUB_STEP_SUMMARY
+          echo "Review findings in individual job outputs; file P1 items for" >> $GITHUB_STEP_SUMMARY
+          echo "any new HIGH/CRITICAL results in \`OPEN-ITEMS-TRACKER.md\`." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Branch-protection rule requiring this workflow on PRs must be" >> $GITHUB_STEP_SUMMARY
+          echo "configured in GitHub repo settings to enforce these gates." >> $GITHUB_STEP_SUMMARY

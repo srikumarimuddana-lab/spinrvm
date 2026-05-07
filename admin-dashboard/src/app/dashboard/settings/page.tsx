@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getSettings, updateSettings } from "@/lib/api";
+import { getSettings, updateSettings, mfaStatus, mfaDisable } from "@/lib/api";
+import { MfaEnrollDialog } from "@/components/mfa-enroll-dialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,20 +17,53 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
-import { Save, Check } from "lucide-react";
+import { Save, Check, ShieldCheck, ShieldOff } from "lucide-react";
+import { useToast } from "@/components/ui/use-toast";
 
 export default function SettingsPage() {
+    const { toast } = useToast();
     const [settings, setSettings] = useState<any>(null);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [saved, setSaved] = useState(false);
+
+    const [mfaEnabled, setMfaEnabled] = useState(false);
+    const [mfaLoading, setMfaLoading] = useState(true);
+    const [showEnrollDialog, setShowEnrollDialog] = useState(false);
+    const [showDisableForm, setShowDisableForm] = useState(false);
+    const [disableTotp, setDisableTotp] = useState("");
+    const [disablePassword, setDisablePassword] = useState("");
+    const [disabling, setDisabling] = useState(false);
+    const [disableError, setDisableError] = useState("");
 
     useEffect(() => {
         getSettings()
             .then(setSettings)
             .catch(() => { })
             .finally(() => setLoading(false));
+
+        mfaStatus()
+            .then((d) => setMfaEnabled(d.mfa_enabled))
+            .catch(() => { })
+            .finally(() => setMfaLoading(false));
     }, []);
+
+    const handleDisableMfa = async () => {
+        setDisabling(true);
+        setDisableError("");
+        try {
+            await mfaDisable(disableTotp, disablePassword);
+            setMfaEnabled(false);
+            setShowDisableForm(false);
+            setDisableTotp("");
+            setDisablePassword("");
+            toast({ title: "MFA disabled", description: "Two-factor authentication has been removed from your account." });
+        } catch (e: any) {
+            setDisableError(e.message || "Failed to disable MFA. Check your code and password.");
+        } finally {
+            setDisabling(false);
+        }
+    };
 
     const handleSave = async () => {
         if (!settings) return;
@@ -127,19 +161,57 @@ export default function SettingsPage() {
                         </CardContent>
                     </Card>
 
-                    {/* SMS / Twilio */}
+                    {/* Email / SendGrid */}
                     <Card className="border-border/50">
                         <CardHeader>
-                            <CardTitle className="text-base">SMS / Twilio</CardTitle>
+                            <CardTitle className="text-base">Email (SendGrid)</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-4">
+                            <p className="text-xs text-muted-foreground">
+                                Used to send ride receipt emails to riders. If <strong>From Email</strong> is
+                                blank, the <code>email_from</code> setting is used as a fallback.
+                            </p>
+                            <div className="space-y-2">
+                                <Label>API Key</Label>
+                                <Input
+                                    type="password"
+                                    value={settings.sendgrid_api_key || ""}
+                                    onChange={(e) =>
+                                        update("sendgrid_api_key", e.target.value)
+                                    }
+                                    placeholder="SG...."
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>From Email</Label>
+                                <Input
+                                    type="email"
+                                    value={settings.sendgrid_from_email || ""}
+                                    onChange={(e) =>
+                                        update("sendgrid_from_email", e.target.value)
+                                    }
+                                    placeholder="receipts@spinr.ca"
+                                />
+                            </div>
+                        </CardContent>
+                    </Card>
+
+                    {/* Telephony / Twilio */}
+                    <Card className="border-border/50">
+                        <CardHeader>
+                            <CardTitle className="text-base">Telephony (Twilio)</CardTitle>
                         </CardHeader>
                         <Separator />
                         <CardContent className="pt-4 space-y-4">
                             <p className="text-xs text-muted-foreground">
                                 When not configured, OTP defaults to <strong>1234</strong> for testing.
+                                The Proxy Service SID enables anonymous in-ride calling.
                             </p>
                             <div className="space-y-2">
                                 <Label>Account SID</Label>
                                 <Input
+                                    type="password"
                                     value={settings.twilio_account_sid || ""}
                                     onChange={(e) =>
                                         update("twilio_account_sid", e.target.value)
@@ -167,6 +239,20 @@ export default function SettingsPage() {
                                     }
                                     placeholder="+1234567890"
                                 />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>Proxy Service SID</Label>
+                                <Input
+                                    type="password"
+                                    value={settings.twilio_proxy_service_sid || ""}
+                                    onChange={(e) =>
+                                        update("twilio_proxy_service_sid", e.target.value)
+                                    }
+                                    placeholder="KS..."
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    From Twilio Console &rarr; Proxy &rarr; Services
+                                </p>
                             </div>
                         </CardContent>
                     </Card>
@@ -256,29 +342,91 @@ export default function SettingsPage() {
                         </CardContent>
                     </Card>
 
-                    {/* General */}
+                    {/* Two-Factor Authentication */}
                     <Card className="border-border/50">
                         <CardHeader>
-                            <CardTitle className="text-base">General</CardTitle>
+                            <CardTitle className="text-base">Two-Factor Authentication</CardTitle>
                         </CardHeader>
                         <Separator />
                         <CardContent className="pt-4 space-y-4">
-                            <div className="space-y-2">
-                                <Label>App Name</Label>
-                                <Input
-                                    value={settings.app_name || "Spinr"}
-                                    onChange={(e) => update("app_name", e.target.value)}
-                                />
-                            </div>
-                            <div className="space-y-2">
-                                <Label>Support Email</Label>
-                                <Input
-                                    type="email"
-                                    value={settings.support_email || ""}
-                                    onChange={(e) => update("support_email", e.target.value)}
-                                    placeholder="support@spinr.app"
-                                />
-                            </div>
+                            {mfaLoading ? (
+                                <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                            ) : mfaEnabled ? (
+                                <>
+                                    <div className="flex items-center gap-2 text-sm text-green-600 dark:text-green-400">
+                                        <ShieldCheck className="h-4 w-4" />
+                                        MFA is enabled on your account.
+                                    </div>
+                                    {showDisableForm ? (
+                                        <div className="space-y-3">
+                                            {disableError && (
+                                                <div className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
+                                                    {disableError}
+                                                </div>
+                                            )}
+                                            <div className="space-y-1">
+                                                <Label htmlFor="disable-totp">Authenticator Code</Label>
+                                                <Input
+                                                    id="disable-totp"
+                                                    type="text"
+                                                    inputMode="numeric"
+                                                    placeholder="000000"
+                                                    maxLength={8}
+                                                    value={disableTotp}
+                                                    onChange={(e) => setDisableTotp(e.target.value.toUpperCase())}
+                                                />
+                                            </div>
+                                            <div className="space-y-1">
+                                                <Label htmlFor="disable-password">Current Password</Label>
+                                                <Input
+                                                    id="disable-password"
+                                                    type="password"
+                                                    placeholder="••••••••"
+                                                    value={disablePassword}
+                                                    onChange={(e) => setDisablePassword(e.target.value)}
+                                                />
+                                            </div>
+                                            <div className="flex gap-2">
+                                                <Button
+                                                    variant="destructive"
+                                                    onClick={handleDisableMfa}
+                                                    disabled={disabling || disableTotp.length < 6 || !disablePassword}
+                                                >
+                                                    {disabling ? "Disabling…" : "Disable MFA"}
+                                                </Button>
+                                                <Button
+                                                    variant="outline"
+                                                    onClick={() => { setShowDisableForm(false); setDisableError(""); }}
+                                                >
+                                                    Cancel
+                                                </Button>
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <Button
+                                            variant="outline"
+                                            className="gap-2"
+                                            onClick={() => setShowDisableForm(true)}
+                                        >
+                                            <ShieldOff className="h-4 w-4" />
+                                            Disable MFA
+                                        </Button>
+                                    )}
+                                </>
+                            ) : (
+                                <>
+                                    <p className="text-sm text-muted-foreground">
+                                        Protect your account with an authenticator app. Required for all staff with elevated permissions.
+                                    </p>
+                                    <Button
+                                        className="gap-2"
+                                        onClick={() => setShowEnrollDialog(true)}
+                                    >
+                                        <ShieldCheck className="h-4 w-4" />
+                                        Enable MFA
+                                    </Button>
+                                </>
+                            )}
                         </CardContent>
                     </Card>
 
@@ -309,8 +457,67 @@ export default function SettingsPage() {
                             </div>
                         </CardContent>
                     </Card>
+
+                    {/* Company Info — surfaced in rider & driver apps
+                        via GET /api/company-info (public endpoint). */}
+                    <Card className="border-border/50 lg:col-span-2">
+                        <CardHeader>
+                            <CardTitle className="text-base">Company Info (shown in apps)</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 grid gap-4 sm:grid-cols-2">
+                            <div className="space-y-2">
+                                <Label>Company Name</Label>
+                                <Input
+                                    value={settings.company_name || ""}
+                                    onChange={(e) => update("company_name", e.target.value)}
+                                    placeholder="Spinr"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>Phone</Label>
+                                <Input
+                                    value={settings.company_phone || ""}
+                                    onChange={(e) => update("company_phone", e.target.value)}
+                                    placeholder="+1 306 555 0100"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>Email</Label>
+                                <Input
+                                    type="email"
+                                    value={settings.company_email || ""}
+                                    onChange={(e) => update("company_email", e.target.value)}
+                                    placeholder="support@spinr.ca"
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>Website</Label>
+                                <Input
+                                    value={settings.company_website || ""}
+                                    onChange={(e) => update("company_website", e.target.value)}
+                                    placeholder="https://spinr.ca"
+                                />
+                            </div>
+                            <div className="space-y-2 sm:col-span-2">
+                                <Label>Address</Label>
+                                <Textarea
+                                    value={settings.company_address || ""}
+                                    onChange={(e) => update("company_address", e.target.value)}
+                                    placeholder="123 Example St, Saskatoon, SK S7K 1A1"
+                                    className="min-h-[70px]"
+                                />
+                            </div>
+                        </CardContent>
+                    </Card>
                 </div>
             )}
+
+            <MfaEnrollDialog
+                open={showEnrollDialog}
+                onOpenChange={setShowEnrollDialog}
+                onEnrolled={() => setMfaEnabled(true)}
+            />
         </div>
     );
 }

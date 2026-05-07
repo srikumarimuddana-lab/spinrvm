@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, Share, Platform, BackHandler,
+  View, Text, StyleSheet, TouchableOpacity, Share, Platform, BackHandler, ActivityIndicator,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -10,6 +10,8 @@ import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import { useRideStore } from '../store/rideStore';
+import { useRiderSocket } from '../hooks/useRiderSocket';
+import { RideStatus } from '../constants/rideStatus';
 import { CarMarker } from '@shared/components/CarMarker';
 import api from '@shared/api/client';
 import CustomAlert from '@shared/components/CustomAlert';
@@ -23,7 +25,8 @@ const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 export default function DriverArrivedScreen() {
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
-  const { currentRide, currentDriver, fetchRide, cancelRide, clearRide } = useRideStore();
+  const { currentRide, currentDriver, fetchRide, cancelRide, clearRide, triggerEmergency } = useRideStore();
+  const { wsConnected } = useRiderSocket();
   const mapRef = React.useRef<MapView>(null);
   const bottomSheetRef = React.useRef<BottomSheet>(null);
   const snapPoints = useMemo(() => ['42%', '70%', '92%'], []);
@@ -39,7 +42,7 @@ export default function DriverArrivedScreen() {
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
-  const fare = currentRide?.total_fare || 0;
+  const fare = parseFloat(currentRide?.total_fare || '0');
   // Use server-provided cancellation fee; fall back to $3 default (matches app_settings).
   // The old Math.min(5, fare * 0.2) formula did not match the server-side value.
   const cancellationFee = (currentRide as any)?.cancellation_fee ?? 3.0;
@@ -70,16 +73,15 @@ export default function DriverArrivedScreen() {
   }, [currentRide?.total_fare]);
 
   useEffect(() => {
-    if (rideId) {
-      fetchRide(rideId);
-      // Fallback poll — WS delivers updates in real-time.
-      const interval = setInterval(() => fetchRide(rideId), 15000);
-      return () => clearInterval(interval);
-    }
-  }, [rideId]);
+    if (!rideId) return;
+    fetchRide(rideId);
+    if (wsConnected) return;
+    const interval = setInterval(() => fetchRide(rideId), 15000);
+    return () => clearInterval(interval);
+  }, [rideId, wsConnected]);
 
   useEffect(() => {
-    if (currentRide?.status === 'in_progress') {
+    if (currentRide?.status === RideStatus.IN_PROGRESS) {
       router.replace({ pathname: '/ride-in-progress', params: { rideId } } as any);
     }
   }, [currentRide?.status]);
@@ -112,7 +114,7 @@ export default function DriverArrivedScreen() {
       `📍 Dropoff: ${currentRide?.dropoff_address || ''}`,
       `🔑 OTP: ${pickupOtp}`,
     ].join('\n');
-    try { await Share.share({ message: info }); } catch {}
+    try { await Share.share({ message: info }); } catch (err) { console.error('[driver-arrived]', err); }
   };
 
   const handleCopyOtp = async () => {
@@ -126,7 +128,7 @@ export default function DriverArrivedScreen() {
       {currentRide ? (
         <MapView
           ref={mapRef}
-          style={StyleSheet.absoluteFillObject}
+          style={StyleSheet.absoluteFill}
           provider={MAP_PROVIDER}
           initialRegion={{
             latitude: currentRide.pickup_lat,
@@ -138,6 +140,7 @@ export default function DriverArrivedScreen() {
           showsMyLocationButton={false}
           userInterfaceStyle={isDark ? "dark" : "light"}
         >
+
           {/* Route: pickup → dropoff */}
           {GOOGLE_MAPS_API_KEY && (
             <MapViewDirections
@@ -203,7 +206,17 @@ export default function DriverArrivedScreen() {
             />
           )}
         </MapView>
-      ) : null}
+      ) : (
+        <View style={styles.mapErrorContainer}>
+          <ActivityIndicator size="large" color="#EE2B2B" />
+          <Text style={styles.mapErrorText}>Loading map…</Text>
+          {rideId ? (
+            <TouchableOpacity style={styles.mapRetryButton} onPress={() => fetchRide(rideId)}>
+              <Text style={styles.mapRetryText}>Retry</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+      )}
 
       {/* Header */}
       <SafeAreaView edges={['top']} style={styles.headerOverlay}>
@@ -213,11 +226,9 @@ export default function DriverArrivedScreen() {
           </TouchableOpacity>
           <View style={styles.arrivedChip}>
             <View style={styles.pulseGreen} />
-            <Text style={styles.arrivedChipText}>Driver has arrived</Text>
+            <Text style={styles.arrivedChipText} allowFontScaling={false}>Driver has arrived</Text>
           </View>
-          <SOSButton rideId={rideId as string} onTrigger={async (id, lat, lng) => {
-            try { await api.post(`/rides/${id}/emergency`, { latitude: lat, longitude: lng }); } catch {}
-          }} />
+          <SOSButton rideId={rideId as string} onTrigger={triggerEmergency} />
         </View>
       </SafeAreaView>
 
@@ -241,7 +252,7 @@ export default function DriverArrivedScreen() {
               <View style={styles.otpDigits}>
                 {pickupOtp.split('').map((d, i) => (
                   <View key={i} style={styles.otpBox}>
-                    <Text style={styles.otpNum}>{d}</Text>
+                    <Text style={styles.otpNum} allowFontScaling={false}>{d}</Text>
                   </View>
                 ))}
               </View>
@@ -383,6 +394,18 @@ export default function DriverArrivedScreen() {
 function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: '#E8E8E8' },
+    mapErrorContainer: {
+      ...StyleSheet.absoluteFill,
+      backgroundColor: '#D4E4D4',
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    mapErrorText: { marginTop: 12, fontSize: 16, fontWeight: '500', color: '#555' },
+    mapRetryButton: {
+      marginTop: 16, paddingHorizontal: 28, paddingVertical: 12,
+      backgroundColor: '#EE2B2B', borderRadius: 24,
+    },
+    mapRetryText: { color: '#FFF', fontSize: 15, fontWeight: '700' },
 
     // Map markers
     pickupMarkerWrap: { alignItems: 'center', justifyContent: 'center', width: 56, height: 56 },

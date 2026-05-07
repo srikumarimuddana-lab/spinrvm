@@ -1,7 +1,8 @@
 import React, { useEffect, useState, useMemo } from 'react';
+import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput,
-  Platform, ActivityIndicator, BackHandler, Share, KeyboardAvoidingView,
+  Platform, ActivityIndicator, BackHandler, Share, KeyboardAvoidingView, Clipboard,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -14,14 +15,23 @@ import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import Analytics from '@shared/analytics';
+import { useStripe } from '@stripe/stripe-react-native';
+import { attemptRidePayment, PaymentAlertButton } from '../utils/attemptRidePayment';
+import { useSpinrPaymentSheet } from '../hooks/useSpinrPaymentSheet';
 
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 
-export default function RideCompletedScreen() {
+function RideCompletedScreenContent() {
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
   const { currentRide, currentDriver, fetchRide, rateRide, clearRide } = useRideStore();
+
+  // P0-5: confirmPayment is called when the backend returns
+  // requires_action for 3DS / SCA. StripeProvider is wired at the app
+  // root in app/_layout.tsx so useStripe() resolves here.
+  const { confirmPayment } = useStripe();
+  const { presentSheet, isLoading: sheetLoading } = useSpinrPaymentSheet();
 
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -67,39 +77,55 @@ export default function RideCompletedScreen() {
     return () => sub.remove();
   }, []);
 
-  const handleShareInvoice = async () => {
+  const buildReceiptText = () => {
     const tipAmount = selectedTip || (customTip ? parseFloat(customTip) || 0 : 0);
     const total = fare + tipAmount;
-    const invoice = [
-      `SPINR RIDE RECEIPT`,
-      `──────────────────`,
-      `Date: ${currentRide?.ride_completed_at ? new Date(currentRide.ride_completed_at).toLocaleString() : new Date().toLocaleString()}`,
+    const rideDate = currentRide?.ride_completed_at
+      ? new Date(currentRide.ride_completed_at).toLocaleString('en-CA', {
+          weekday: 'short', year: 'numeric', month: 'short', day: 'numeric',
+          hour: '2-digit', minute: '2-digit',
+        })
+      : new Date().toLocaleString('en-CA', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+    return [
+      `╔══════════════════════════════╗`,
+      `║      SPINR RIDE RECEIPT      ║`,
+      `║   Saskatoon · Regina, SK     ║`,
+      `╚══════════════════════════════╝`,
       ``,
-      `Pickup: ${currentRide?.pickup_address || '—'}`,
-      `Dropoff: ${currentRide?.dropoff_address || '—'}`,
-      `Distance: ${distance.toFixed(1)} km`,
-      `Duration: ${duration} min`,
+      `📅 ${rideDate}`,
+      // Prefer the human-readable SPR-XXXXXX ride_code (migration 40);
+      // fall back to a truncated UUID for rides that predate the code.
+      `🆔 Ride: ${currentRide?.ride_code || currentRide?.id?.slice(0, 8).toUpperCase() || '—'}`,
       ``,
+      `▸ FROM  ${currentRide?.pickup_address || '—'}`,
+      `▸ TO    ${currentRide?.dropoff_address || '—'}`,
+      ``,
+      `━━━━━━ FARE BREAKDOWN ━━━━━━`,
       `Base fare:     $${(currentRide?.base_fare || 0).toFixed(2)}`,
-      `Distance:      $${(currentRide?.distance_fare || 0).toFixed(2)}`,
-      `Time:          $${(currentRide?.time_fare || 0).toFixed(2)}`,
+      `Distance fare: $${(currentRide?.distance_fare || 0).toFixed(2)}  (${distance.toFixed(1)} km)`,
+      `Time fare:     $${(currentRide?.time_fare || 0).toFixed(2)}  (${duration} min)`,
       `Booking fee:   $${(currentRide?.booking_fee || 0).toFixed(2)}`,
-      tipAmount > 0 ? `Tip:           $${tipAmount.toFixed(2)}` : '',
-      `──────────────────`,
+      tipAmount > 0 ? `Tip:           $${tipAmount.toFixed(2)}` : null,
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
       `TOTAL:         $${total.toFixed(2)} CAD`,
       ``,
-      `Payment: Card •••• ${currentRide?.card_last4 || '4242'}`,
+      `💳 Card •••• ${currentRide?.card_last4 || '4242'}  ✅ PAID`,
       ``,
-      `Driver: ${currentDriver?.name || 'Driver'}`,
-      `Vehicle: ${currentDriver?.vehicle_color || ''} ${currentDriver?.vehicle_make || ''} ${currentDriver?.vehicle_model || ''}`,
-      `Plate: ${currentDriver?.license_plate || '—'}`,
+      `👤 Driver: ${currentDriver?.name || 'Driver'}`,
+      `🚙 ${currentDriver?.vehicle_color || ''} ${currentDriver?.vehicle_make || ''} ${currentDriver?.vehicle_model || ''}`,
+      `🪪 Plate: ${currentDriver?.license_plate || '—'}`,
       ``,
-      `Spinr Technologies Inc. · Saskatoon, SK`,
-      `support@spinr.ca`,
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+      `Spinr Technologies Inc.`,
+      `support@spinr.ca · spinr.ca`,
+      `Mon–Fri 9am–6pm CST`,
     ].filter(Boolean).join('\n');
+  };
 
+  const handleShareInvoice = async () => {
     try {
-      await Share.share({ message: invoice, title: 'Spinr Ride Receipt' });
+      await Share.share({ message: buildReceiptText(), title: 'Spinr Ride Receipt' });
     } catch {}
   };
 
@@ -116,25 +142,64 @@ export default function RideCompletedScreen() {
     }
   };
 
+  /**
+   * Map a PaymentAttemptResult's alert (pure data) to the local
+   * alertState shape (with onPress handlers). Split from the attempt
+   * itself so the attempt stays pure-data and unit-testable.
+   */
+  const showPaymentAlert = (alert: NonNullable<Awaited<ReturnType<typeof attemptRidePayment>>['alert']>) => {
+    const buttons = (alert.buttons || []).map((b: PaymentAlertButton) => ({
+      text: b.text,
+      style: (b.kind === 'cancel' ? 'cancel' : 'default') as 'default' | 'cancel',
+      onPress: b.kind === 'change_card' ? () => router.push('/manage-cards' as any) : undefined,
+    }));
+    setAlertState({
+      visible: true,
+      title: alert.title,
+      message: alert.message,
+      variant: alert.variant,
+      buttons: buttons.length ? buttons : [{ text: 'OK' }],
+    });
+  };
+
   const handleSubmit = async () => {
     if (isSubmitting) return; // prevent double tap
     setIsSubmitting(true);
     try {
-      const tipAmount = selectedTip || (customTip ? parseFloat(customTip) : 0);
+      const tipAmount = selectedTip || (customTip ? parseFloat(customTip) || 0 : 0);
 
-      // 1. Rate the driver (always, even if already paid)
+      // 1. Rate the driver first — this is fire-and-forget because
+      //    rating may fail if already rated (idempotent upstream).
       try {
         await rateRide(rideId as string, rating, comment || undefined, tipAmount > 0 ? tipAmount : undefined);
       } catch { /* rating may fail if already rated */ }
 
-      // 2. Process payment only if not already paid
+      // 2. Process payment. If the rider has already paid (came back to
+      //    this screen), skip the attempt entirely.
+      let paymentOk = alreadyPaid;
+      let chargedAmount: number | undefined;
       if (!alreadyPaid) {
-        try {
-          await api.post(`/rides/${rideId}/process-payment`, { tip_amount: tipAmount });
-          const total = (currentRide?.total_fare || 0) + (tipAmount || 0);
-          Analytics.paymentCompleted({ method: 'default', amount: total });
-        } catch { /* backend handles idempotency */ }
+        const result = await attemptRidePayment({
+          api,
+          stripe: { confirmPayment },
+          rideId: rideId as string,
+          tipAmount,
+        });
+        paymentOk = result.ok;
+        chargedAmount = result.charged;
+        if (!paymentOk && result.alert) {
+          showPaymentAlert(result.alert);
+        }
       }
+
+      // If payment failed, stay on this screen so the rider can fix
+      // their card and retry. Alert has already been shown.
+      if (!paymentOk) {
+        return;
+      }
+
+      const total = (currentRide?.total_fare || 0) + (tipAmount || 0);
+      Analytics.paymentCompleted({ method: 'default', amount: chargedAmount ?? total });
 
       Analytics.rideCompleted({
         fare: currentRide?.total_fare || 0,
@@ -156,6 +221,33 @@ export default function RideCompletedScreen() {
     }
   };
 
+  // Google Pay path — presents the Stripe PaymentSheet modal so riders can
+  // pay without re-entering a card. Only shown for card payment rides on
+  // Android (Apple Pay uses the same sheet on iOS via handleSubmit in future).
+  const handleGooglePay = async () => {
+    if (isSubmitting || sheetLoading || alreadyPaid) return;
+    const tipAmount = selectedTip || (customTip ? parseFloat(customTip) || 0 : 0);
+    const result = await presentSheet({
+      rideId: rideId as string,
+      amount: currentRide?.total_fare || 0,
+      tipAmount,
+    });
+    if (!result.ok) {
+      if (result.errorMessage !== 'Payment cancelled.') {
+        setAlertState({ visible: true, title: 'Payment failed', message: result.errorMessage || 'Please try again.', variant: 'danger' });
+      }
+      return;
+    }
+    try {
+      await rateRide(rideId as string, rating, comment || undefined, tipAmount > 0 ? tipAmount : undefined);
+    } catch { /* already rated guard */ }
+    const total = (currentRide?.total_fare || 0) + tipAmount;
+    Analytics.paymentCompleted({ method: 'google_pay', amount: total });
+    Analytics.rideCompleted({ fare: currentRide?.total_fare || 0, distance_km: currentRide?.distance_km });
+    clearRide();
+    router.replace('/(tabs)');
+  };
+
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
@@ -174,17 +266,51 @@ export default function RideCompletedScreen() {
 
         {/* Post-Trip Actions */}
         <View style={styles.postTripActions}>
-          <TouchableOpacity style={styles.invoiceBtn} onPress={handleShareInvoice}>
-            <Ionicons name="receipt-outline" size={18} color={colors.primary} />
-            <Text style={styles.invoiceBtnText}>Share Invoice</Text>
-            <Ionicons name="share-outline" size={16} color={colors.textDim} />
-          </TouchableOpacity>
+          <View style={styles.receiptRow}>
+            <TouchableOpacity
+              style={[styles.invoiceBtn, { flex: 1 }]}
+              onPress={handleShareInvoice}
+              accessibilityRole="button"
+              accessibilityLabel="Share receipt"
+              accessibilityHint="Shares your trip receipt"
+            >
+              <Ionicons name="receipt-outline" size={18} color={colors.primary} />
+              <Text style={styles.invoiceBtnText}>Share Receipt</Text>
+              <Ionicons name="share-outline" size={16} color={colors.textDim} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.copyReceiptBtn}
+              onPress={() => {
+                Clipboard.setString(buildReceiptText());
+                setAlertState({ visible: true, title: 'Copied!', message: 'Receipt copied to clipboard.', variant: 'success' });
+              }}
+              accessibilityRole="button"
+              accessibilityLabel="Copy receipt to clipboard"
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            >
+              <Ionicons name="copy-outline" size={18} color={colors.textDim} />
+            </TouchableOpacity>
+          </View>
           <TouchableOpacity
             style={styles.chatBtn}
             onPress={() => router.push(`/chat-driver?rideId=${rideId}` as any)}
+            accessibilityRole="button"
+            accessibilityLabel="Message driver"
+            accessibilityHint="Opens a chat with your driver"
           >
             <Ionicons name="chatbubble-ellipses-outline" size={18} color="#3B82F6" />
             <Text style={styles.chatBtnText}>Message Driver</Text>
+            <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.viewReceiptBtn}
+            onPress={() => router.push(`/receipt/${rideId}` as any)}
+            accessibilityRole="button"
+            accessibilityLabel="View receipt"
+            accessibilityHint="Opens the detailed fare breakdown for this ride"
+          >
+            <Ionicons name="document-text-outline" size={18} color={colors.text} />
+            <Text style={styles.viewReceiptBtnText}>View Receipt</Text>
             <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
           </TouchableOpacity>
         </View>
@@ -284,7 +410,7 @@ export default function RideCompletedScreen() {
 
         {/* Fare Card */}
         <View style={styles.fareCard}>
-          <Text style={styles.fareAmount}>${fare.toFixed(2)}</Text>
+          <Text style={styles.fareAmount} allowFontScaling={false}>${fare.toFixed(2)}</Text>
           <View style={styles.paymentBadge}>
             <Ionicons name="card" size={14} color={colors.textDim} />
             <Text style={styles.paymentText}>
@@ -293,7 +419,7 @@ export default function RideCompletedScreen() {
             {alreadyPaid && (
               <>
                 <Ionicons name="checkmark-circle" size={14} color="#10B981" />
-                <Text style={{ fontSize: 11, fontWeight: '700', color: '#10B981' }}>PAID</Text>
+                <Text style={{ fontSize: 11, fontWeight: '700', color: '#10B981' }} allowFontScaling={false}>PAID</Text>
               </>
             )}
           </View>
@@ -302,19 +428,19 @@ export default function RideCompletedScreen() {
           <View style={styles.statsRow}>
             <View style={styles.stat}>
               <Ionicons name="time-outline" size={18} color={colors.textDim} />
-              <Text style={styles.statVal}>{duration} min</Text>
+              <Text style={styles.statVal} allowFontScaling={false}>{duration} min</Text>
               <Text style={styles.statLbl}>Duration</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.stat}>
               <Ionicons name="speedometer-outline" size={18} color={colors.textDim} />
-              <Text style={styles.statVal}>{distance.toFixed(1)} km</Text>
+              <Text style={styles.statVal} allowFontScaling={false}>{distance.toFixed(1)} km</Text>
               <Text style={styles.statLbl}>Distance</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.stat}>
               <Ionicons name="cash-outline" size={18} color={colors.textDim} />
-              <Text style={styles.statVal}>${fare.toFixed(2)}</Text>
+              <Text style={styles.statVal} allowFontScaling={false}>${fare.toFixed(2)}</Text>
               <Text style={styles.statLbl}>Total</Text>
             </View>
           </View>
@@ -337,7 +463,14 @@ export default function RideCompletedScreen() {
           <Text style={styles.rateLabel}>How was your ride?</Text>
           <View style={styles.starsRow}>
             {[1, 2, 3, 4, 5].map((star) => (
-              <TouchableOpacity key={star} onPress={() => setRating(star)} style={styles.starBtn}>
+              <TouchableOpacity
+                key={star}
+                onPress={() => setRating(star)}
+                style={styles.starBtn}
+                accessibilityLabel={`Rate ${star} star${star > 1 ? 's' : ''}`}
+                accessibilityRole="button"
+                accessibilityState={{ selected: rating === star }}
+              >
                 <Ionicons
                   name={star <= rating ? 'star' : 'star-outline'}
                   size={36}
@@ -377,6 +510,9 @@ export default function RideCompletedScreen() {
                   key={amt}
                   style={[styles.tipBtn, selectedTip === amt && styles.tipBtnActive]}
                   onPress={() => { setSelectedTip(amt); setCustomTip(''); }}
+                  accessibilityRole="radio"
+                  accessibilityLabel={`Tip $${amt}`}
+                  accessibilityState={{ checked: selectedTip === amt }}
                 >
                   <Text style={[styles.tipBtnText, selectedTip === amt && styles.tipBtnTextActive]}>${amt}</Text>
                 </TouchableOpacity>
@@ -390,6 +526,7 @@ export default function RideCompletedScreen() {
                   keyboardType="decimal-pad"
                   value={customTip}
                   onChangeText={(t) => { setCustomTip(t); setSelectedTip(null); }}
+                  returnKeyType="done"
                 />
               </View>
             </View>
@@ -401,11 +538,35 @@ export default function RideCompletedScreen() {
 
       {/* Submit Button */}
       <View style={styles.bottomBar}>
+        {/* Google Pay button — Android only, card payments, not yet paid */}
+        {Platform.OS === 'android' && !alreadyPaid && currentRide?.payment_method === 'card' && (
+          <TouchableOpacity
+            style={[styles.submitBtn, styles.googlePayBtn]}
+            onPress={handleGooglePay}
+            disabled={isSubmitting || sheetLoading}
+            activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityLabel="Pay with Google Pay"
+            accessibilityState={{ disabled: isSubmitting || sheetLoading }}
+          >
+            {sheetLoading ? (
+              <ActivityIndicator size="small" color="#FFF" />
+            ) : (
+              <>
+                <Ionicons name="logo-google" size={18} color="#FFF" />
+                <Text style={styles.submitBtnText}>Pay with Google Pay</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        )}
         <TouchableOpacity
           style={styles.submitBtn}
           onPress={handleSubmit}
-          disabled={isSubmitting}
+          disabled={isSubmitting || sheetLoading}
           activeOpacity={0.8}
+          accessibilityRole="button"
+          accessibilityLabel={alreadyPaid ? 'Rate and finish' : `Pay and finish`}
+          accessibilityState={{ disabled: isSubmitting || sheetLoading, busy: isSubmitting }}
         >
           {isSubmitting ? (
             <ActivityIndicator size="small" color="#FFF" />
@@ -434,6 +595,14 @@ export default function RideCompletedScreen() {
   );
 }
 
+export default function RideCompletedScreen() {
+  return (
+    <ErrorBoundary>
+      <RideCompletedScreenContent />
+    </ErrorBoundary>
+  );
+}
+
 function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.surface },
@@ -449,12 +618,18 @@ function createStyles(colors: ThemeColors) {
     subtitle: { fontSize: 14, color: colors.textDim },
 
     // Invoice
+    receiptRow: { flexDirection: 'row', gap: 8, marginBottom: 8 },
     invoiceBtn: {
-      flexDirection: 'row', alignItems: 'center', gap: 8, width: '100%',
-      backgroundColor: colors.surfaceLight, borderRadius: 14, padding: 14, marginBottom: 16,
+      flexDirection: 'row', alignItems: 'center', gap: 8,
+      backgroundColor: colors.surfaceLight, borderRadius: 14, padding: 14,
       borderWidth: 1, borderColor: '#ECECEC',
     },
     invoiceBtnText: { flex: 1, fontSize: 14, fontWeight: '600', color: colors.text },
+    copyReceiptBtn: {
+      backgroundColor: colors.surfaceLight, borderRadius: 14, paddingHorizontal: 16,
+      alignItems: 'center', justifyContent: 'center',
+      borderWidth: 1, borderColor: '#ECECEC',
+    },
     postTripActions: { width: '100%', gap: 8, marginBottom: 8 },
     chatBtn: {
       flexDirection: 'row', alignItems: 'center', gap: 8, width: '100%',
@@ -462,6 +637,12 @@ function createStyles(colors: ThemeColors) {
       borderWidth: 1, borderColor: '#DBEAFE',
     },
     chatBtnText: { flex: 1, fontSize: 14, fontWeight: '600', color: '#3B82F6' },
+    viewReceiptBtn: {
+      flexDirection: 'row', alignItems: 'center', gap: 8, width: '100%',
+      backgroundColor: colors.surfaceLight, borderRadius: 14, padding: 14,
+      borderWidth: 1, borderColor: colors.border,
+    },
+    viewReceiptBtnText: { flex: 1, fontSize: 14, fontWeight: '600', color: colors.text },
 
     // Route Map
     mapCard: {
@@ -511,7 +692,7 @@ function createStyles(colors: ThemeColors) {
     driverMeta: { fontSize: 12, color: colors.textDim, marginTop: 2 },
     rateLabel: { fontSize: 15, fontWeight: '600', color: colors.text, textAlign: 'center', marginBottom: 12 },
     starsRow: { flexDirection: 'row', justifyContent: 'center', gap: 8, marginBottom: 6 },
-    starBtn: { padding: 4 },
+    starBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
     ratingText: { fontSize: 13, color: colors.textDim, textAlign: 'center', marginBottom: 14 },
     commentInput: {
       backgroundColor: colors.surface, borderRadius: 14, padding: 14, fontSize: 14, color: colors.text,
@@ -527,6 +708,7 @@ function createStyles(colors: ThemeColors) {
     tipBtn: {
       paddingHorizontal: 20, paddingVertical: 12, borderRadius: 14,
       backgroundColor: colors.surface, borderWidth: 1.5, borderColor: colors.border,
+      minHeight: 44, justifyContent: 'center', alignItems: 'center',
     },
     tipBtnActive: { backgroundColor: `${colors.primary}15`, borderColor: colors.primary },
     tipBtnText: { fontSize: 16, fontWeight: '700', color: colors.text },
@@ -553,6 +735,9 @@ function createStyles(colors: ThemeColors) {
     submitBtn: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
       backgroundColor: colors.primary, paddingVertical: 16, borderRadius: 28,
+    },
+    googlePayBtn: {
+      backgroundColor: '#3C4043', marginBottom: 10,
     },
     submitBtnText: { fontSize: 17, fontWeight: '700', color: '#FFF' },
   });

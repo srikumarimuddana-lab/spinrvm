@@ -1,0 +1,121 @@
+{
+  "common": {
+    "loading": "Loading...",
+    "error": "Error",
+    "success": "Success",
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "save": "Save",
+    "back": "Back",
+    "done": "Done",
+    "ok": "OK",
+    "close": "Close",
+    "retry": "Try Again"
+  },
+  "home": {
+    "whereToGo": "Where to go?",
+    "searchPlaceholder": "Search destination",
+    "nearbyDrivers": "Nearby drivers",
+    "scheduledRides": "Scheduled rides"
+  },
+  "ride": {
+    "chooseRide": "Choose a ride",
+    "confirmRide": "Confirm Ride",
+    "scheduleLater": "Schedule later",
+    "noDrivers": "No cars available right now",
+    "findingRides": "Finding best rides...",
+    "shareInvoice": "Share Receipt",
+    "rideComplete": "Ride Complete!",
+    "howWasRide": "How was your ride?"
+  },
+  "wallet": {
+    "title": "Wallet",
+    "balance": "Available Balance",
+    "topUp": "Top Up",
+    "transfer": "Transfer",
+    "recentActivity": "Recent Activity",
+    "noTransactions": "No transactions yet",
+    "transferTo": "Transfer to",
+    "recipientPhone": "Recipient phone number",
+    "amount": "Amount",
+    "transferSuccess": "Transfer sent successfully"
+  },
+  "loyalty": {
+    "title": "Rewards",
+    "points": "Points",
+    "tier": "Tier",
+    "lifetime": "Lifetime Points",
+    "redeem": "Redeem Points",
+    "history": "Points History",
+    "noHistory": "No points history yet",
+    "redeemSuccess": "Points redeemed successfully"
+  },
+  "support": {
+    "title": "Contact Support",
+    "howCanWeHelp": "How can we help you today?",
+    "submitReport": "Submit Report",
+    "faq": "FAQ",
+    "chat": "Chat with AI Assistant",
+    "chatPlaceholder": "Ask a question...",
+    "submitting": "Submitting..."
+  },
+  "settings": {
+    "title": "Settings",
+    "notifications": "Notifications",
+    "appearance": "Appearance",
+    "darkMode": "Dark Mode",
+    "language": "Language",
+    "account": "Account",
+    "about": "About",
+    "selectLanguage": "Select Language"
+  },
+  "languages": {
+    "en": "English",
+    "fr": "French",
+    "es": "Spanish",
+    "zh": "Chinese (Simplified)"
+  },
+  "errors": {
+    "auth": {
+      "account_suspended": "Your account has been suspended. Please contact support.",
+      "otp_invalid": "That code didn't match. Check the SMS and try again.",
+      "otp_expired": "That code has expired. Tap Resend to get a new one.",
+      "otp_locked": "Too many failed tries. Please wait a moment before trying again.",
+      "invalid_credentials": "Sign-in details didn't match. Please try again.",
+      "token_expired": "Your session has expired. Please sign in again."
+    },
+    "driver": {
+      "documents_expired": "Your documents have expired. Please renew them to keep driving.",
+      "documents_pending": "Your documents are still under review. We'll notify you once approved.",
+      "documents_rejected": "Some of your documents were rejected. Please review and resubmit.",
+      "subscription_required": "An active Spinr Pass subscription is required to continue.",
+      "not_available": "This driver isn't available right now.",
+      "offline": "The driver is currently offline."
+    },
+    "ride": {
+      "not_found": "We couldn't find that ride. It may have been removed.",
+      "already_cancelled": "This ride has already been cancelled.",
+      "invalid_status": "This action isn't allowed for the current ride state.",
+      "no_drivers_available": "No drivers are available right now. Please try again in a few minutes.",
+      "price_mismatch": "The price has changed since you last saw it. Please review and confirm again.",
+      "taken": "Another driver took this ride. We'll find you the next one."
+    },
+    "payment": {
+      "failed": "Your payment didn't go through. Please try again or use another method.",
+      "method_invalid": "That payment method isn't valid. Please add a different one.",
+      "insufficient_funds": "Not enough in your wallet. Please top up or use a card.",
+      "refund_failed": "We couldn't process the refund right now. Please contact support."
+    },
+    "wallet": {
+      "transfer_self": "You can't transfer funds to yourself.",
+      "transfer_recipient_not_found": "We couldn't find that recipient. Please double-check and try again."
+    },
+    "system": {
+      "internal": "Something went wrong on our end. Please try again.",
+      "service_unavailable": "Spinr is temporarily unavailable. Please try again shortly.",
+      "rate_limited": "You're going a bit fast. Please slow down and try again in a moment.",
+      "database": "We're having trouble reaching our systems. Please try again."
+    },
+    "unknown": "Something went wrong. Please try again."
+  }
+}

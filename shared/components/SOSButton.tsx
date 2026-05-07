@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Alert, Animated,
-  Linking, Platform, Vibration,
+  Linking, Vibration,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
@@ -16,27 +16,35 @@ interface SOSButtonProps {
  * SOS Emergency Button — long press to activate.
  * 1. Vibrates device
  * 2. Calls backend emergency endpoint (notifies admin + emergency contacts)
- * 3. Prompts to call 911
- * 4. Shares GPS location
+ * 3. Only shows success + 911 prompt AFTER backend confirms (fail-safe)
+ * 4. On network failure: shows retry dialog AND button stays in FAILED state
+ *    until the alert is confirmed by the backend — a dismissed alert does NOT
+ *    reset the button to idle so the driver always knows the alert was not sent.
+ * 5. While in FAILED state a single tap (no hold) retries immediately.
  */
-const SOS_HOLD_MS = 1200; // was 2000
+const SOS_HOLD_MS = 1200;
+const SOS_RETRY_DELAY_MS = 2000;
+const SOS_MAX_ATTEMPTS = 2;
 
 export function SOSButton({ rideId, onTrigger, size = 'small' }: SOSButtonProps) {
   const [triggered, setTriggered] = useState(false);
+  const [sending, setSending] = useState(false);
   const [pressing, setPressing] = useState(false);
+  // Persistent failure flag: stays true until the backend confirms the alert.
+  // Dismissing the failure dialog does NOT clear it — the button stays amber
+  // so the driver always has a visible reminder that the alert was NOT sent.
+  const [failed, setFailed] = useState(false);
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const startPress = () => {
     setPressing(true);
-    // Start pulse animation
     Animated.loop(
       Animated.sequence([
         Animated.timing(pulseAnim, { toValue: 1.15, duration: 400, useNativeDriver: true }),
         Animated.timing(pulseAnim, { toValue: 1, duration: 400, useNativeDriver: true }),
       ])
     ).start();
-
     pressTimer.current = setTimeout(() => {
       triggerSOS();
     }, SOS_HOLD_MS);
@@ -52,28 +60,7 @@ export function SOSButton({ rideId, onTrigger, size = 'small' }: SOSButtonProps)
     }
   };
 
-  const triggerSOS = async () => {
-    setPressing(false);
-    setTriggered(true);
-    Vibration.vibrate([0, 200, 100, 200, 100, 200]); // SOS vibration pattern
-
-    // Get current location
-    let lat: number | undefined;
-    let lng: number | undefined;
-    try {
-      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-      lat = loc.coords.latitude;
-      lng = loc.coords.longitude;
-    } catch {}
-
-    // Call backend
-    if (rideId) {
-      try {
-        await onTrigger(rideId, lat, lng);
-      } catch {}
-    }
-
-    // Show options
+  const showSuccessAlert = () => {
     Alert.alert(
       '🚨 Emergency Alert Sent',
       'Your location has been shared with Spinr support and your emergency contacts.\n\nDo you want to call 911?',
@@ -84,7 +71,7 @@ export function SOSButton({ rideId, onTrigger, size = 'small' }: SOSButtonProps)
           onPress: () => Linking.openURL('tel:911'),
         },
         {
-          text: 'I\'m OK',
+          text: "I'm OK",
           style: 'cancel',
           onPress: () => setTriggered(false),
         },
@@ -92,7 +79,103 @@ export function SOSButton({ rideId, onTrigger, size = 'small' }: SOSButtonProps)
     );
   };
 
+  const showFailureAlert = (retry: () => void) => {
+    Alert.alert(
+      '⚠️ Alert Not Sent',
+      'Could not reach Spinr. The button will stay red — tap it to retry.\n\nYou can call 911 directly right now.',
+      [
+        {
+          text: 'Call 911',
+          style: 'destructive',
+          onPress: () => Linking.openURL('tel:911'),
+        },
+        {
+          text: 'Retry Now',
+          onPress: retry,
+        },
+        // "Dismiss" intentionally does NOT reset the button — failed state
+        // persists so the driver always knows the alert was not sent.
+        { text: 'Dismiss', style: 'cancel' },
+      ]
+    );
+  };
+
+  const triggerSOS = async () => {
+    // Clear any prior failure so the button transitions to "Sending…" visually.
+    setFailed(false);
+    setPressing(false);
+    setSending(true);
+    Vibration.vibrate([0, 200, 100, 200, 100, 200]);
+
+    let lat: number | undefined;
+    let lng: number | undefined;
+    try {
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      lat = loc.coords.latitude;
+      lng = loc.coords.longitude;
+    } catch (locationErr) {
+      console.warn('[SOS] Location fetch failed — proceeding without coordinates:',
+        locationErr instanceof Error ? locationErr.message : String(locationErr));
+    }
+
+    // Attempt backend call with one retry before declaring failure.
+    // Never treat missing rideId as success — that would show "Alert Sent"
+    // without any backend notification going out.
+    let backendOk = false;
+    if (rideId) {
+      for (let attempt = 0; attempt < SOS_MAX_ATTEMPTS && !backendOk; attempt++) {
+        if (attempt > 0) {
+          await new Promise<void>((r) => setTimeout(r, SOS_RETRY_DELAY_MS));
+        }
+        try {
+          await onTrigger(rideId, lat, lng);
+          backendOk = true;
+        } catch {}
+      }
+    }
+
+    setSending(false);
+
+    if (!rideId) {
+      // No active ride context — direct user to call 911 immediately.
+      Alert.alert(
+        'No Active Ride',
+        'Emergency alert requires an active ride. Call 911 directly for immediate help.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Call 911', style: 'destructive', onPress: () => Linking.openURL('tel:911') },
+        ],
+      );
+    } else if (backendOk) {
+      setTriggered(true);
+      showSuccessAlert();
+    } else {
+      // Mark failed BEFORE showing the alert so the button is already amber
+      // when the dialog appears. Dismissing the dialog leaves failed=true.
+      setFailed(true);
+      showFailureAlert(triggerSOS);
+    }
+  };
+
   const isLarge = size === 'large';
+
+  const iconName = triggered
+    ? 'checkmark-circle'
+    : sending
+    ? 'hourglass'
+    : failed
+    ? 'alert-circle'
+    : 'shield';
+
+  const labelText = pressing
+    ? 'Hold...'
+    : sending
+    ? 'Sending…'
+    : triggered
+    ? 'Alert Sent'
+    : failed
+    ? 'FAILED'
+    : 'SOS';
 
   return (
     <Animated.View style={[{ transform: [{ scale: pressing ? pulseAnim : 1 }] }]}>
@@ -101,26 +184,43 @@ export function SOSButton({ rideId, onTrigger, size = 'small' }: SOSButtonProps)
           styles.btn,
           isLarge ? styles.btnLarge : styles.btnSmall,
           triggered && styles.btnTriggered,
+          sending && styles.btnSending,
           pressing && styles.btnPressing,
+          failed && styles.btnFailed,
         ]}
-        onPressIn={startPress}
-        onPressOut={endPress}
+        // In failed state a single tap retries immediately — no hold required.
+        onPressIn={sending || triggered ? undefined : (failed ? triggerSOS : startPress)}
+        onPressOut={sending || triggered || failed ? undefined : endPress}
         activeOpacity={0.9}
+        disabled={sending}
+        accessibilityLabel={
+          triggered
+            ? 'Emergency alert sent'
+            : sending
+            ? 'Sending emergency alert'
+            : failed
+            ? 'Emergency alert failed — tap to retry'
+            : 'Emergency SOS'
+        }
+        accessibilityRole="button"
+        accessibilityHint={failed ? "Alert failed — double tap to retry" : triggered ? "Alert sent" : "Double tap to send SOS alert"}
+        accessibilityState={{
+          selected: triggered,
+          busy: sending,
+          disabled: sending,
+        }}
       >
-        <Ionicons
-          name={triggered ? 'checkmark-circle' : 'shield'}
-          size={isLarge ? 28 : 20}
-          color="#FFF"
-        />
-        {isLarge && (
-          <Text style={styles.btnText}>
-            {pressing ? 'Hold...' : triggered ? 'Alert Sent' : 'SOS'}
-          </Text>
-        )}
+        <Ionicons name={iconName} size={isLarge ? 28 : 20} color="#FFF" />
+        {isLarge && <Text style={styles.btnText}>{labelText}</Text>}
       </TouchableOpacity>
       {pressing && (
         <View style={[styles.holdHint, isLarge && { bottom: -24 }]}>
           <Text style={styles.holdHintText}>Hold for 1.2 seconds</Text>
+        </View>
+      )}
+      {failed && !sending && (
+        <View style={[styles.holdHint, isLarge && { bottom: -24 }]}>
+          <Text style={styles.holdHintText}>Tap to retry</Text>
         </View>
       )}
     </Animated.View>
@@ -148,8 +248,18 @@ const styles = StyleSheet.create({
   btnPressing: {
     backgroundColor: '#B91C1C',
   },
+  btnSending: {
+    backgroundColor: '#D97706',
+  },
   btnTriggered: {
     backgroundColor: '#10B981',
+  },
+  // Distinct amber style for failed state — clearly different from normal red.
+  // Border draws attention even on dark backgrounds.
+  btnFailed: {
+    backgroundColor: '#92400E',
+    borderWidth: 2,
+    borderColor: '#FCD34D',
   },
   btnText: {
     color: '#FFF', fontSize: 12, fontWeight: '800', letterSpacing: 0.5,

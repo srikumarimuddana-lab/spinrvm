@@ -27,6 +27,7 @@ export const MOCK_TOKEN = 'e2e-rider-jwt-token';
 export const MOCK_RIDE = {
   id: 'ride_e2e_1',
   rider_id: MOCK_USER.id,
+  driver_id: null as string | null,
   status: 'searching',
   total_fare: 18.5,
   grand_total: 18.5,
@@ -40,6 +41,49 @@ export const MOCK_ESTIMATES = [
   { id: 'comfort', type: 'comfort', name: 'Comfort', price: 24.0, eta_minutes: 5, seats: 4 },
   { id: 'xl', type: 'xl', name: 'XL', price: 32.0, eta_minutes: 7, seats: 6 },
 ];
+
+/**
+ * Possible responses for POST /rides/{id}/process-payment.
+ * Mirrors the structured outcomes from backend/utils/stripe_charge.py
+ * (P0-5 Phase A). Specs pick one of these and pass to `mockBackend`.
+ */
+export const PAYMENT_RESPONSES = {
+  success: {
+    status: 200,
+    body: { success: true, charged_amount: 18.5, email_sent: false },
+  },
+  requiresAction: {
+    status: 200,
+    body: {
+      success: false,
+      status: 'requires_action',
+      client_secret: 'pi_3ds_test_secret_xyz',
+      payment_intent_id: 'pi_3ds_test',
+    },
+  },
+  cardDeclined: {
+    status: 402,
+    body: {
+      detail: {
+        code: 'card_declined',
+        decline_code: 'insufficient_funds',
+        message: 'Your card has insufficient funds.',
+        suggested_action: 'change_card',
+      },
+    },
+  },
+  processorError: {
+    status: 502,
+    body: {
+      detail: {
+        code: 'payment_processor_error',
+        message: 'Stripe rate limit',
+      },
+    },
+  },
+} as const;
+
+export type PaymentResponseKey = keyof typeof PAYMENT_RESPONSES;
 
 /**
  * Inject auth token and mock third-party SDKs before any app script runs.
@@ -83,10 +127,24 @@ export async function mockBackend(
   opts: {
     activeRide?: typeof MOCK_RIDE | null;
     rideStatusSequence?: Array<typeof MOCK_RIDE>;
+    /**
+     * P0-5: per-spec override for POST /rides/{id}/process-payment.
+     * The default is `success`. Specs that exercise the decline or 3DS
+     * branches pass e.g. `paymentResponse: 'cardDeclined'`.
+     *
+     * When set to a function, the callback receives the call-index
+     * (0-based) and must return a PAYMENT_RESPONSES shape. This lets
+     * a 3DS spec serve requires_action on the 1st call and success on
+     * the 2nd (post-confirmPayment finalize).
+     */
+    paymentResponse?:
+      | PaymentResponseKey
+      | ((callIndex: number) => { status: number; body: unknown });
   } = {}
 ) {
-  const { activeRide = null, rideStatusSequence = [] } = opts;
+  const { activeRide = null, rideStatusSequence = [], paymentResponse = 'success' } = opts;
   let statusIndex = 0;
+  let paymentCallIndex = 0;
 
   await page.route('**/api/v1/**', async (route: Route) => {
     const url = new URL(route.request().url());
@@ -127,8 +185,31 @@ export async function mockBackend(
       return json(200, { ...MOCK_RIDE, status: 'searching' });
     }
 
+    // P0-5: Ride payment endpoint. Route first (matches more specifically)
+    // before the generic ride-detail regex below would swallow it.
+    if (method === 'POST' && /^\/rides?\/[^/]+\/process-payment$/.test(path)) {
+      const picked =
+        typeof paymentResponse === 'function'
+          ? paymentResponse(paymentCallIndex)
+          : PAYMENT_RESPONSES[paymentResponse];
+      paymentCallIndex += 1;
+      return json(picked.status, picked.body);
+    }
+
+    // Rating endpoint
+    if (method === 'POST' && /^\/rides?\/[^/]+\/rate$/.test(path)) {
+      return json(200, { success: true });
+    }
+
     // Ride detail
     if (path.match(/^\/rides?\/ride_/)) return json(200, MOCK_RIDE);
+
+    // Public settings — the rider-app fetches the Stripe publishable
+    // key here at boot (app/_layout.tsx:147). An empty string is fine
+    // for E2E: useStripe() still mounts but confirmPayment is stubbed.
+    if (path === '/settings' || path === '/settings/') {
+      return json(200, { stripe_publishable_key: '' });
+    }
 
     // Wallet / loyalty / promos / saved addresses
     if (path === '/wallet') return json(200, { id: 'w1', balance: 50, currency: 'CAD', is_active: true });

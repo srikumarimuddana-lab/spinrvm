@@ -1,5 +1,8 @@
 # ── Build stage ──────────────────────────────────────────────────────────────
-FROM python:3.12.9-slim AS builder
+# Q-5: SHA256 digest pin — same image as backend/Dockerfile, same digest.
+# Prevents a Docker Hub re-tag from silently changing the dev/CI build environment.
+# Refresh quarterly or on Trivy/Grype alert: see docs/runbooks/docker-image-pinning.md
+FROM python:3.12.9-slim@sha256:48a11b7ba705fd53bf15248d1f94d36c39549903c5d59edcfa2f3f84126e7b44 AS builder
 
 WORKDIR /build
 
@@ -19,7 +22,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
-FROM python:3.12.9-slim AS runtime
+FROM python:3.12.9-slim@sha256:48a11b7ba705fd53bf15248d1f94d36c39549903c5d59edcfa2f3f84126e7b44 AS runtime
 
 # Install required RUNTIME system libraries (matching the builder stage)
 RUN apt-get update && apt-get install -y --no-install-recommends \

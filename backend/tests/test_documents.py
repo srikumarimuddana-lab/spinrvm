@@ -5,7 +5,7 @@ Tests cover document requirements, driver documents, file uploads, and document 
 
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -103,7 +103,7 @@ class TestDriverDocuments:
             "document_type": "license",
             "file_url": "https://storage.example.com/license.pdf",
             "status": "pending",
-            "uploaded_at": datetime.utcnow().isoformat(),
+            "uploaded_at": datetime.now(timezone.utc).isoformat(),
         }
 
     @pytest.mark.asyncio
@@ -425,7 +425,7 @@ class TestDocumentRegressions:
         included in server.py, causing all WebSocket upgrade requests to return
         403 Forbidden instead of 101 Switching Protocols.
         """
-        from server import app
+        from backend.server import app
 
         ws_routes = [r for r in app.routes if hasattr(r, "path") and r.path.startswith("/ws/")]
         assert len(ws_routes) > 0, (
@@ -439,14 +439,69 @@ class TestDocumentRegressions:
 
         Previously the endpoint raised HTTPException(404) during onboarding,
         which crashed the Documents screen in the driver app.
-        """
-        mock_db = MagicMock()
-        mock_db.drivers.find_one = AsyncMock(return_value=None)  # no driver profile
 
+        The production code uses the flat Supabase API:
+            db_supabase.get_rows("drivers", {"user_id": user_id}, limit=1)
+        so we patch that, not the old MongoDB-style db.drivers.find_one.
+        """
         mock_user = {"id": "user_999", "role": "driver", "is_driver": False}
 
-        with patch("documents.db", mock_db):
+        with patch("documents.db_supabase.get_rows", AsyncMock(return_value=[])):
             from documents import get_driver_documents
 
             result = await get_driver_documents(current_user=mock_user)
             assert result == [], "Expected empty list when driver profile is absent, not an exception"
+
+
+class TestExtractSignedUrl:
+    """
+    Pins the fix for Railway 500 "'dict' object has no attribute 'data'".
+    supabase-py's create_signed_url() return shape changed between versions;
+    the helper now tolerates both dict and object responses so uploads don't
+    500 after a library bump.
+    """
+
+    def test_dict_with_signed_url_camel(self):
+        from documents import _extract_signed_url
+
+        res = {"signedURL": "https://cdn.example/abc?token=1", "path": "abc.pdf"}
+        assert _extract_signed_url(res) == "https://cdn.example/abc?token=1"
+
+    def test_dict_with_signed_url_snake(self):
+        from documents import _extract_signed_url
+
+        res = {"signed_url": "https://cdn.example/def?token=2"}
+        assert _extract_signed_url(res) == "https://cdn.example/def?token=2"
+
+    def test_dict_with_signed_url_lower_camel(self):
+        from documents import _extract_signed_url
+
+        res = {"signedUrl": "https://cdn.example/ghi?token=3"}
+        assert _extract_signed_url(res) == "https://cdn.example/ghi?token=3"
+
+    def test_legacy_object_shape(self):
+        """The old supabase-py shape: APIResponse.data.signed_url."""
+        from documents import _extract_signed_url
+
+        data = MagicMock(signed_url="https://cdn.example/legacy?token=4")
+        res = MagicMock(data=data)
+        assert _extract_signed_url(res) == "https://cdn.example/legacy?token=4"
+
+    def test_object_with_dict_data(self):
+        """Hybrid shape: object wrapper, dict payload."""
+        from documents import _extract_signed_url
+
+        res = MagicMock(data={"signedURL": "https://cdn.example/hybrid?token=5"})
+        assert _extract_signed_url(res) == "https://cdn.example/hybrid?token=5"
+
+    def test_dict_missing_url_raises(self):
+        from documents import _extract_signed_url
+
+        with pytest.raises(RuntimeError, match="no URL"):
+            _extract_signed_url({"path": "abc.pdf"})
+
+    def test_unknown_shape_raises(self):
+        from documents import _extract_signed_url
+
+        with pytest.raises(RuntimeError, match="unexpected shape"):
+            _extract_signed_url("just a string")

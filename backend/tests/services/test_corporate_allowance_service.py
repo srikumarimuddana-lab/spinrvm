@@ -1,4 +1,5 @@
 """Allowance service tests — thin wrapper over the apply-delta RPC."""
+
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -6,12 +7,14 @@ import pytest
 
 def _rpc_ok():
     r = MagicMock()
-    r.data = [{
-        "master_txn_id": "t_m",
-        "member_txn_id": "t_u",
-        "master_balance_after": 900,
-        "allowance_used_after": -100,
-    }]
+    r.data = [
+        {
+            "master_txn_id": "t_m",
+            "member_txn_id": "t_u",
+            "master_balance_after": 900,
+            "allowance_used_after": -100,
+        }
+    ]
     return r
 
 
@@ -20,26 +23,35 @@ async def test_apply_grant_calls_rpc_with_correct_params():
     with patch("services.corporate_allowance_service.supabase") as mock_sb:
         mock_sb.rpc.return_value.execute.return_value = _rpc_ok()
         from services.corporate_allowance_service import apply_grant
+
         out = await apply_grant(
-            wallet_id="w1", allowance_id="a1", member_id="m1",
-            amount=100, actor_user_id="admin1", notes="monthly topup",
+            wallet_id="w1",
+            allowance_id="a1",
+            member_id="m1",
+            amount=100,
+            actor_user_id="admin1",
+            notes="monthly topup",
             floor=-50,
         )
     assert out["master_balance_after"] == 900
     called_name, called_params = mock_sb.rpc.call_args[0]
     assert called_name == "corporate_allowance_apply_delta"
     assert called_params["p_type"] == "allowance_grant"
-    assert called_params["p_amount"] == 100
-    assert called_params["p_floor"] == -50
+    assert called_params["p_amount"] == "100"
+    assert called_params["p_floor"] == "-50"
 
 
 @pytest.mark.asyncio
 async def test_apply_grant_rejects_non_positive():
     from services.corporate_allowance_service import apply_grant
+
     with pytest.raises(ValueError):
         await apply_grant(
-            wallet_id="w1", allowance_id="a1", member_id="m1",
-            amount=0, actor_user_id="admin1",
+            wallet_id="w1",
+            allowance_id="a1",
+            member_id="m1",
+            amount=0,
+            actor_user_id="admin1",
         )
 
 
@@ -48,13 +60,16 @@ async def test_apply_reset_uses_zero_amount():
     with patch("services.corporate_allowance_service.supabase") as mock_sb:
         mock_sb.rpc.return_value.execute.return_value = _rpc_ok()
         from services.corporate_allowance_service import apply_reset
+
         await apply_reset(
-            wallet_id="w1", allowance_id="a1", member_id="m1",
+            wallet_id="w1",
+            allowance_id="a1",
+            member_id="m1",
             actor_user_id="system",
         )
     _, params = mock_sb.rpc.call_args[0]
     assert params["p_type"] == "allowance_reset"
-    assert params["p_amount"] == 0
+    assert params["p_amount"] == "0"
 
 
 @pytest.mark.asyncio
@@ -62,10 +77,15 @@ async def test_apply_rollback_positive_delta():
     with patch("services.corporate_allowance_service.supabase") as mock_sb:
         mock_sb.rpc.return_value.execute.return_value = _rpc_ok()
         from services.corporate_allowance_service import apply_rollback
+
         await apply_rollback(
-            wallet_id="w1", allowance_id="a1", member_id="m1",
-            amount=50, actor_user_id="admin1", notes="refund grant",
+            wallet_id="w1",
+            allowance_id="a1",
+            member_id="m1",
+            amount=50,
+            actor_user_id="admin1",
+            notes="refund grant",
         )
     _, params = mock_sb.rpc.call_args[0]
     assert params["p_type"] == "allowance_rollback"
-    assert params["p_amount"] == 50
+    assert params["p_amount"] == "50"

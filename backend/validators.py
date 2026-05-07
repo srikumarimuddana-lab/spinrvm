@@ -7,7 +7,7 @@ to ensure data integrity and prevent security vulnerabilities.
 
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Optional, Tuple, Union
 
@@ -30,19 +30,11 @@ _SUSPICIOUS_PATTERN = re.compile(
 
 def validate_phone(phone: str, raise_exception: bool = True) -> Tuple[bool, Optional[str]]:
     """
-    Validate phone number in E.164 format.
+    Validate phone number in NANP format (+1 + 10 digits).
 
-    E.164 format: +[country code][number] (e.g., +1234567890, +447911123456)
-
-    Args:
-        phone: Phone number string to validate
-        raise_exception: If True, raise HTTPException on failure
-
-    Returns:
-        Tuple of (is_valid, normalized_phone)
-
-    Raises:
-        HTTPException: If raise_exception is True and validation fails
+    Spinr operates in Saskatchewan, Canada. Only North American Numbering Plan
+    (+1) numbers are accepted — this covers all Canadian and US area codes while
+    rejecting international numbers that can't receive a Saskatchewan ride.
     """
     if not phone or not isinstance(phone, str):
         if raise_exception:
@@ -52,22 +44,27 @@ def validate_phone(phone: str, raise_exception: bool = True) -> Tuple[bool, Opti
     # Remove common separators and whitespace
     cleaned = re.sub(r"[\s\-\.\(\)]", "", phone)
 
-    # Must start with + followed by digits
-    e164_pattern = re.compile(r"^\+[1-9]\d{6,14}$")
-
-    if e164_pattern.match(cleaned):
+    # NANP: +1 followed by exactly 10 digits, area code must start with 2-9
+    nanp_pattern = re.compile(r"^\+1[2-9]\d{9}$")
+    if nanp_pattern.match(cleaned):
         return True, cleaned
 
-    # Try to normalize a bare number (add +1 for North America as fallback)
-    bare_pattern = re.compile(r"^[1-9]\d{6,14}$")
-    if bare_pattern.match(cleaned):
+    # Bare 10-digit NANP number — prepend +1
+    bare_10_pattern = re.compile(r"^[2-9]\d{9}$")
+    if bare_10_pattern.match(cleaned):
+        normalized = f"+1{cleaned}"
+        return True, normalized
+
+    # Bare 11-digit with leading 1 (e.g. 14165551234)
+    bare_11_pattern = re.compile(r"^1[2-9]\d{9}$")
+    if bare_11_pattern.match(cleaned):
         normalized = f"+{cleaned}"
-        logger.info(f"Normalized phone number {phone} to {normalized}")
         return True, normalized
 
     if raise_exception:
         raise HTTPException(
-            status_code=400, detail="Invalid phone number format. Please use E.164 format (e.g., +1234567890)"
+            status_code=400,
+            detail="Invalid phone number. Spinr accepts Canadian and US numbers (+1).",
         )
 
     return False, None
@@ -351,9 +348,12 @@ def sanitize_string(
         value = re.sub(r"<[^>]*>", "", value)
 
     if _SUSPICIOUS_PATTERN.search(value):
-        if raise_exception:
-            raise HTTPException(status_code=400, detail="Invalid input: suspicious content detected")
-        return False, None
+        # Log for security monitoring but do not reject — these patterns appear
+        # in legitimate inputs such as street addresses (#4), SQL keywords in
+        # user-supplied notes, and inline comments. Rejecting them silently
+        # breaks valid use-cases without meaningfully blocking injections
+        # (which are stopped at the parameterised-query level in Supabase).
+        logger.warning(f"Suspicious pattern detected in user input (logged, not rejected): {value[:80]!r}")
 
     return True, value
 
@@ -414,7 +414,7 @@ def validate_datetime(
             raise HTTPException(status_code=400, detail="Invalid datetime format. Use ISO 8601 format.") from None
         return False, None
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     if not allow_future and parsed_dt > now:
         if raise_exception:
@@ -553,13 +553,24 @@ def pydantic_coordinates_validator(v: Union[float, int, str]) -> float:
 # ============================================================================
 
 _BN_FORMAT = re.compile(r"^\d{9}(?:R[CMPRTZ]\d{4})?$")
-_CA_TAX_REGIONS = frozenset({
-    "ON", "QC", "BC", "AB", "SK", "MB",
-    "NS", "NB", "NL", "PE", "YT", "NT", "NU",
-})
-_DOMAIN_RE = re.compile(
-    r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$"
+_CA_TAX_REGIONS = frozenset(
+    {
+        "ON",
+        "QC",
+        "BC",
+        "AB",
+        "SK",
+        "MB",
+        "NS",
+        "NB",
+        "NL",
+        "PE",
+        "YT",
+        "NT",
+        "NU",
+    }
 )
+_DOMAIN_RE = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
 
 
 def validate_cra_business_number(bn: str) -> str:
@@ -595,7 +606,7 @@ def validate_license_plate(plate: str) -> str:
     if not isinstance(plate, str):
         raise ValueError("Licence plate must be a string")
     normalized = plate.strip().upper()
-    if not re.match(r'^[A-Z0-9]{2,8}$', normalized):
+    if not re.match(r"^[A-Z0-9]{2,8}$", normalized):
         raise ValueError("Licence plate must be 2–8 uppercase alphanumeric characters")
     return normalized
 
@@ -605,7 +616,7 @@ def validate_vin(vin: str) -> str:
     if not isinstance(vin, str):
         raise ValueError("VIN must be a string")
     normalized = vin.strip().upper()
-    if not re.match(r'^[A-HJ-NPR-Z0-9]{17}$', normalized):
+    if not re.match(r"^[A-HJ-NPR-Z0-9]{17}$", normalized):
         raise ValueError("VIN must be exactly 17 valid VIN characters (I, O, Q not allowed)")
     return normalized
 

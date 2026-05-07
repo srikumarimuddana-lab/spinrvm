@@ -116,6 +116,45 @@ export function fmtTime(d: string) {
     }
 }
 
+/**
+ * Format a kilometre value for display / CSV export. Returns "" when the
+ * value is missing so the column stays blank rather than "0.00" (which
+ * would misrepresent rides that predate phase-distance tracking).
+ */
+export function fmtKm(v: unknown): string {
+    if (v == null || v === "") return "";
+    const n = typeof v === "number" ? v : Number(v);
+    if (!Number.isFinite(n)) return "";
+    return n.toFixed(2);
+}
+
+/**
+ * Extract the SGI-relevant per-ride distance breakdown, preferring the
+ * GPS-tracked `phase_distances` JSONB (computed at ride completion in
+ * backend/routes/drivers.py) and falling back to the older scalar
+ * columns for rides that predate phase tracking.
+ */
+export function rideDistances(r: Record<string, any>): {
+    toPickupKm: number | null;
+    tripKm: number | null;
+    totalKm: number | null;
+} {
+    const pd = r?.phase_distances || {};
+    const toPickupRaw = pd.navigating_to_pickup ?? r.pickup_to_driver_km ?? null;
+    const tripRaw = pd.trip_in_progress ?? r.actual_distance_km ?? r.distance_km ?? null;
+    const toPickup = toPickupRaw == null ? null : Number(toPickupRaw);
+    const trip = tripRaw == null ? null : Number(tripRaw);
+    const total =
+        toPickup == null && trip == null
+            ? null
+            : (toPickup ?? 0) + (trip ?? 0);
+    return {
+        toPickupKm: toPickup,
+        tripKm: trip,
+        totalKm: total,
+    };
+}
+
 export function isRideLive(status: string) {
     return ["searching", "driver_assigned", "driver_arrived", "in_progress"].includes(status);
 }

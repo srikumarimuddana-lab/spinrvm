@@ -35,7 +35,7 @@ interface DriverData {
 }
 
 interface Earnings {
-  total_earnings?: number;
+  total_earnings?: string; // MoneyString
 }
 
 interface IdlePanelProps {

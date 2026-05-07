@@ -1,17 +1,24 @@
 import logging
 import uuid
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 try:
     from ... import db_supabase
+    from ...dependencies import get_admin_user
     from ...features import send_push_notification
+    from ...utils.audit_logger import log_admin_action
+    from ...utils.datetime_utils import parse_iso_utc
 except ImportError:
     import db_supabase
+    from dependencies import get_admin_user  # noqa: F401
     from features import send_push_notification
+    from utils.audit_logger import log_admin_action  # noqa: F401
+    from utils.datetime_utils import parse_iso_utc
 
 db = db_supabase  # legacy alias
 
@@ -79,11 +86,11 @@ async def _log_driver_activity(
                 "description": description,
                 "metadata": metadata or {},
                 "actor": actor,
-                "created_at": datetime.utcnow().isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
             },
         )
     except Exception as e:
-        logger.warning(f"Failed to log driver activity: {e}")
+        logger.error(f"Failed to log driver activity: {e}", exc_info=True)
 
 
 # ---------- Pydantic models ----------
@@ -94,12 +101,12 @@ class DriverVerifyRequest(BaseModel):
 
 
 class DriverActionRequest(BaseModel):
-    action: str  # approve, reject, suspend, ban, unban, reactivate
+    action: Literal["approve", "reject", "suspend", "ban", "unban", "reactivate"]
     reason: Optional[str] = None
 
 
 class DriverStatusOverride(BaseModel):
-    status: str  # pending, active, rejected, suspended, banned
+    status: Literal["pending", "active", "rejected", "suspended", "banned"]
     is_verified: Optional[bool] = None
     reason: Optional[str] = None
 
@@ -116,9 +123,12 @@ class DriverNoteCreate(BaseModel):
 async def admin_get_drivers(
     limit: int = 50,
     offset: int = 0,
+    search: Optional[str] = None,
     is_verified: Optional[bool] = None,
     is_online: Optional[bool] = None,
+    is_available: Optional[bool] = None,
     status: Optional[str] = None,
+    service_area_id: Optional[str] = None,
 ):
     """Get drivers with filters, enriched with user name/email/phone.
 
@@ -127,13 +137,43 @@ async def admin_get_drivers(
     We still collapse by phone/user_id here so that if a legacy snapshot
     ever restores old state, the admin UI won't show duplicate rows.
     """
+    import re
+
     filters = {}
     if is_verified is not None:
         filters["is_verified"] = is_verified
     if is_online is not None:
         filters["is_online"] = is_online
+    if is_available is not None:
+        filters["is_available"] = is_available
     if status:
         filters["status"] = status
+    if service_area_id:
+        filters["service_area_id"] = service_area_id
+
+    # Find matching user IDs first if search is provided
+    if search:
+        term = search.strip()
+        if term:
+            user_filters = {
+                "$or": [
+                    {"phone": {"$regex": re.escape(term), "$options": "i"}},
+                    {"email": {"$regex": re.escape(term), "$options": "i"}},
+                    {"first_name": {"$regex": re.escape(term), "$options": "i"}},
+                    {"last_name": {"$regex": re.escape(term), "$options": "i"}},
+                ]
+            }
+            matching_users = await db_supabase.get_rows("users", user_filters, limit=100)
+            matching_uids = [u["id"] for u in matching_users if u.get("id")]
+
+            # Match driver rows by phone/plate directly OR by user_id from user search above.
+            # `name` is not a column on drivers — it's derived from the joined users row.
+            filters["$or"] = [
+                {"phone": {"$regex": re.escape(term), "$options": "i"}},
+                {"license_plate": {"$regex": re.escape(term), "$options": "i"}},
+            ]
+            if matching_uids:
+                filters["$or"].append({"user_id": {"$in": matching_uids}})
 
     drivers = await db_supabase.get_rows("drivers", filters, order="created_at", desc=True, limit=limit, offset=offset)
 
@@ -173,6 +213,27 @@ async def admin_get_drivers(
     return out
 
 
+class DriverSearchRequest(BaseModel):
+    search: str
+    limit: int = 5
+    is_online: Optional[bool] = None
+    is_available: Optional[bool] = None
+
+
+@router.post("/drivers/search")
+async def admin_search_drivers(
+    body: DriverSearchRequest,
+    admin_user: dict = Depends(get_admin_user),
+):
+    """Typeahead search for drivers via POST body to keep search terms out of server logs."""
+    return await admin_get_drivers(
+        limit=body.limit,
+        search=body.search,
+        is_online=body.is_online,
+        is_available=body.is_available,
+    )
+
+
 @router.get("/drivers/stats")
 async def admin_get_driver_stats(
     service_area_id: Optional[str] = None,
@@ -186,19 +247,19 @@ async def admin_get_driver_stats(
     """
     from collections import defaultdict
 
-    now = datetime.utcnow()
-    # Default date range: last 30 days
-    if start_date:
-        range_start = datetime.fromisoformat(start_date.replace("Z", "+00:00").replace("+00:00", ""))
-    else:
+    now = datetime.now(timezone.utc)
+    # Default date range: last 30 days. parse_iso_utc always returns a
+    # UTC-aware datetime (or None) so comparisons below match `now`.
+    range_start = parse_iso_utc(start_date) if start_date else None
+    if range_start is None:
         range_start = now - timedelta(days=30)
     range_start = range_start.replace(hour=0, minute=0, second=0, microsecond=0)
 
-    if end_date:
-        range_end = datetime.fromisoformat(end_date.replace("Z", "+00:00").replace("+00:00", ""))
-        range_end = range_end.replace(hour=23, minute=59, second=59, microsecond=0)
-    else:
+    range_end = parse_iso_utc(end_date) if end_date else None
+    if range_end is None:
         range_end = now
+    else:
+        range_end = range_end.replace(hour=23, minute=59, second=59, microsecond=0)
 
     # Fetch all service areas for lookups
     service_areas = await db_supabase.get_rows("service_areas", order="name", limit=200)
@@ -217,11 +278,13 @@ async def admin_get_driver_stats(
     )
     users_map: Dict[str, Any] = {u["id"]: u for u in users_list if u.get("id")}
 
-    # Auto-detect needs_review: active drivers with expired docs or pending re-uploads
-    all_docs = await db_supabase.get_rows("driver_documents", {"status": "pending"}, limit=10000)
+    # Auto-detect needs_review: active drivers with expired docs or pending re-uploads.
+    # Capped at 500 for the inline needs_review flag; full paginated list via
+    # GET /documents/pending (A-P4-4).
+    all_docs = await db_supabase.get_rows("driver_documents", {"status": "pending"}, limit=500)
     pending_doc_driver_ids = {d.get("driver_id") for d in all_docs if d.get("driver_id")}
 
-    now_iso = datetime.utcnow().isoformat()
+    now_iso = datetime.now(timezone.utc).isoformat()
     expiry_fields = [
         "license_expiry_date",
         "insurance_expiry_date",
@@ -265,7 +328,7 @@ async def admin_get_driver_stats(
     suspended_count = sum(1 for d in enriched_drivers if d.get("status") == "suspended")
     banned_count = sum(1 for d in enriched_drivers if d.get("status") == "banned")
     total_rides_sum = sum(int(d.get("total_rides") or 0) for d in enriched_drivers)
-    total_earnings_sum = sum(float(d.get("total_earnings") or 0) for d in enriched_drivers)
+    total_earnings_sum = float(sum(Decimal(str(d.get("total_earnings") or 0)) for d in enriched_drivers))
     avg_rating = 0.0
     rated = [d for d in enriched_drivers if d.get("rating") and float(d.get("rating", 0)) > 0]
     if rated:
@@ -294,7 +357,9 @@ async def admin_get_driver_stats(
         else:
             area_stats[aid]["unverified"] += 1
         area_stats[aid]["total_rides"] += int(d.get("total_rides") or 0)
-        area_stats[aid]["total_earnings"] += float(d.get("total_earnings") or 0)
+        area_stats[aid]["total_earnings"] = float(
+            Decimal(str(area_stats[aid]["total_earnings"])) + Decimal(str(d.get("total_earnings") or 0))
+        )
 
     # ── Daily charts (within date range) ──
     num_days = (range_end - range_start).days + 1
@@ -304,12 +369,8 @@ async def admin_get_driver_stats(
     # Driver joins per day
     daily_joins: Dict[str, int] = defaultdict(int)
     for d in enriched_drivers:
-        ca = d.get("created_at")
-        if not ca:
-            continue
-        try:
-            dt = datetime.fromisoformat(str(ca).replace("Z", "+00:00").replace("+00:00", ""))
-        except Exception:  # noqa: S112
+        dt = parse_iso_utc(d.get("created_at"))
+        if dt is None:
             continue
         if range_start <= dt <= range_end:
             day_key = dt.strftime("%Y-%m-%d")
@@ -318,7 +379,7 @@ async def admin_get_driver_stats(
     # Rides + earnings per day (for drivers matching the service_area filter)
     driver_ids_set = {d["id"] for d in enriched_drivers}
     ride_filters: Dict[str, Any] = {"created_at": {"$gte": range_start.isoformat()}}
-    all_rides = await db_supabase.get_rows("rides", ride_filters, order="created_at", desc=True, limit=50000)
+    all_rides = await db_supabase.get_rows("rides", ride_filters, order="created_at", desc=True, limit=5000)
 
     # Filter rides to only those belonging to our driver set
     relevant_rides = [r for r in all_rides if r.get("driver_id") in driver_ids_set] if service_area_id else all_rides
@@ -326,18 +387,16 @@ async def admin_get_driver_stats(
     daily_rides: Dict[str, int] = defaultdict(int)
     daily_earnings: Dict[str, float] = defaultdict(float)
     for r in relevant_rides:
-        ca = r.get("created_at")
-        if not ca:
-            continue
-        try:
-            dt = datetime.fromisoformat(str(ca).replace("Z", "+00:00").replace("+00:00", ""))
-        except Exception:  # noqa: S112
+        dt = parse_iso_utc(r.get("created_at"))
+        if dt is None:
             continue
         if range_start <= dt <= range_end:
             day_key = dt.strftime("%Y-%m-%d")
             daily_rides[day_key] += 1
             if r.get("status") == "completed":
-                daily_earnings[day_key] += float(r.get("driver_earnings") or 0)
+                daily_earnings[day_key] = float(
+                    Decimal(str(daily_earnings[day_key])) + Decimal(str(r.get("driver_earnings") or 0))
+                )
 
     # Build chart arrays
     joins_chart = []
@@ -378,7 +437,7 @@ async def admin_get_driver_stats(
 
 
 @router.put("/drivers/{driver_id}")
-async def admin_update_driver(driver_id: str, updates: Dict[str, Any]):
+async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: dict = Depends(get_admin_user)):
     """Update driver details from admin dashboard."""
     allowed = {
         "first_name",
@@ -413,13 +472,19 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any]):
     try:
         await db_supabase.update_one("drivers", {"id": driver_id}, filtered)
     except Exception as e:
-        logger.error(f"Failed to update driver {driver_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to update driver: {e}") from e
+        # B-P3-leak-cleanup: full traceback to logs, generic detail
+        # to client. Supabase / postgrest errors carry table internals.
+        logger.exception(f"Failed to update driver {driver_id}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to update driver.",
+        ) from e
+    await log_admin_action(admin, "driver_updated", "drivers", driver_id, {"updated_fields": list(filtered.keys())})
     return {"message": "Driver updated", "updated_fields": list(filtered.keys())}
 
 
 @router.post("/drivers/{driver_id}/verify")
-async def admin_verify_driver(driver_id: str, req: DriverVerifyRequest):
+async def admin_verify_driver(driver_id: str, req: DriverVerifyRequest, admin: dict = Depends(get_admin_user)):
     """Verify or unverify a driver.
 
     NOTE: the Supabase `drivers` table in production was created from
@@ -442,8 +507,13 @@ async def admin_verify_driver(driver_id: str, req: DriverVerifyRequest):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to update driver {driver_id} verify flag: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to update driver: {e}") from e
+        # B-P3-leak-cleanup: full traceback to logs, generic detail
+        # to client.
+        logger.exception(f"Failed to update driver {driver_id} verify flag")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to update driver.",
+        ) from e
     # G4: Notify the driver via push so they know their verification status
     # changed without having to manually check the Documents screen.
     try:
@@ -465,11 +535,12 @@ async def admin_verify_driver(driver_id: str, req: DriverVerifyRequest):
     except Exception as e:
         logger.warning(f"[ADMIN] Push notification failed for driver {driver_id}: {e}")
 
+    await log_admin_action(admin, "driver_verified", "drivers", driver_id, {"verified": req.verified})
     return {"message": f"Driver {'verified' if req.verified else 'unverified'}"}
 
 
 @router.post("/drivers/{driver_id}/action")
-async def admin_driver_action(driver_id: str, req: DriverActionRequest):
+async def admin_driver_action(driver_id: str, req: DriverActionRequest, admin: dict = Depends(get_admin_user)):
     """Perform a lifecycle action on a driver.
 
     Actions: approve, reject, suspend, ban, unban, reactivate.
@@ -481,7 +552,7 @@ async def admin_driver_action(driver_id: str, req: DriverActionRequest):
         raise HTTPException(status_code=404, detail="Driver not found")
 
     current_status = driver.get("status", "pending")
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     updates: Dict[str, Any] = {"updated_at": now}
 
     if req.action == "approve":
@@ -535,7 +606,7 @@ async def admin_driver_action(driver_id: str, req: DriverActionRequest):
         await db_supabase.update_one("drivers", {"id": driver_id}, updates)
     except Exception as e:
         logger.error(f"Failed driver action {req.action} on {driver_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
 
     logger.info(f"[ADMIN] Driver {driver_id} action={req.action} reason={req.reason}")
 
@@ -554,6 +625,13 @@ async def admin_driver_action(driver_id: str, req: DriverActionRequest):
         action_titles.get(req.action, f"Action: {req.action}"),
         req.reason or "",
         {"old_status": current_status, "new_status": updates.get("status"), "reason": req.reason},
+    )
+    await log_admin_action(
+        admin,
+        f"driver_{req.action}",
+        "drivers",
+        driver_id,
+        {"action": req.action, "reason": req.reason, "old_status": current_status, "new_status": updates.get("status")},
     )
 
     # G4: Notify the driver about their status change. Critical for
@@ -598,7 +676,9 @@ async def admin_driver_action(driver_id: str, req: DriverActionRequest):
 
 
 @router.put("/drivers/{driver_id}/status-override")
-async def admin_override_driver_status(driver_id: str, req: DriverStatusOverride):
+async def admin_override_driver_status(
+    driver_id: str, req: DriverStatusOverride, admin: dict = Depends(get_admin_user)
+):
     """Manually move a driver to any status. Use with caution."""
     valid = {"pending", "active", "needs_review", "suspended", "banned"}
     if req.status not in valid:
@@ -608,7 +688,7 @@ async def admin_override_driver_status(driver_id: str, req: DriverStatusOverride
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     updates: Dict[str, Any] = {"status": req.status, "updated_at": now}
 
     # Sync is_verified with status
@@ -632,6 +712,13 @@ async def admin_override_driver_status(driver_id: str, req: DriverStatusOverride
         "status_override",
         f"Status changed to {req.status}",
         req.reason or "Manual admin override",
+        {"old_status": driver.get("status"), "new_status": req.status, "reason": req.reason},
+    )
+    await log_admin_action(
+        admin,
+        "driver_status_override",
+        "drivers",
+        driver_id,
         {"old_status": driver.get("status"), "new_status": req.status, "reason": req.reason},
     )
     return {"message": f"Driver status set to {req.status}"}
@@ -659,7 +746,7 @@ async def admin_add_driver_note(driver_id: str, req: DriverNoteCreate):
         "driver_id": driver_id,
         "note": req.note.strip(),
         "category": req.category,
-        "created_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db_supabase.insert_one("driver_notes", doc)
     await _log_driver_activity(
@@ -696,10 +783,16 @@ async def admin_get_driver_activity(driver_id: str, limit: int = 100):
 
 
 @router.get("/drivers/{driver_id}/rides")
-async def admin_get_driver_rides(driver_id: str):
-    """Get all rides for a specific driver."""
-    rides = await db_supabase.get_rows("rides", {"driver_id": driver_id}, order="created_at", desc=True, limit=500)
-    return rides
+async def admin_get_driver_rides(
+    driver_id: str,
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+):
+    """Get rides for a driver with pagination (max 500 per page)."""
+    rides = await db_supabase.get_rows("rides", {"driver_id": driver_id}, order="created_at", desc=True, limit=limit)
+    # Apply offset in-process (Supabase helper doesn't expose OFFSET natively)
+    page = rides[offset : offset + limit]
+    return {"rides": page, "total": len(rides), "offset": offset, "limit": limit}
 
 
 @router.get("/drivers/{driver_id}/daily-stats")
@@ -710,9 +803,9 @@ async def admin_get_driver_daily_stats(
 ):
     """Get aggregated daily stats for a driver. Default: last 30 days."""
     if not end_date:
-        end_date = datetime.utcnow().date().isoformat()
+        end_date = datetime.now(timezone.utc).date().isoformat()
     if not start_date:
-        start_date = (datetime.utcnow().date() - timedelta(days=30)).isoformat()
+        start_date = (datetime.now(timezone.utc).date() - timedelta(days=30)).isoformat()
 
     stats = await db_supabase.get_rows(
         "driver_daily_stats",
@@ -738,7 +831,7 @@ async def admin_assign_driver_area(driver_id: str, service_area_id: str):
         {"id": driver_id},
         {
             "service_area_id": service_area_id,
-            "updated_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         },
     )
     return {"message": f"Driver assigned to area {service_area_id}"}
@@ -750,7 +843,7 @@ async def admin_get_driver_location_trail(
     hours: int = Query(24),
 ):
     """Get driver's location history (table: driver_location_history)."""
-    cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
     locations = await db_supabase.get_rows(
         "driver_location_history",
         {"driver_id": driver_id, "timestamp": {"$gte": cutoff}},

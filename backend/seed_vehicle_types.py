@@ -8,7 +8,7 @@ env_path = Path(__file__).resolve().parent / ".env"
 load_dotenv(env_path)
 
 import uuid  # noqa: E402
-from datetime import datetime  # noqa: E402
+from datetime import datetime, timezone  # noqa: E402
 
 import db_supabase  # noqa: E402
 
@@ -24,7 +24,7 @@ async def seed_vehicle_types():
             "icon": "car-compact",
             "capacity": 4,
             "is_active": True,
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
         },
         {
             "id": str(uuid.uuid4()),
@@ -33,7 +33,7 @@ async def seed_vehicle_types():
             "icon": "car-sport",
             "capacity": 4,
             "is_active": True,
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
         },
         {
             "id": str(uuid.uuid4()),
@@ -42,7 +42,7 @@ async def seed_vehicle_types():
             "icon": "bus",
             "capacity": 6,
             "is_active": True,
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
         },
         {
             "id": str(uuid.uuid4()),
@@ -51,7 +51,7 @@ async def seed_vehicle_types():
             "icon": "bus-outline",
             "capacity": 6,
             "is_active": True,
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
         },
     ]
 

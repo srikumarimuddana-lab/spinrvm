@@ -4,7 +4,7 @@ disputes.py – Payment dispute/refund request endpoints for Spinr.
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, Optional
 
@@ -13,14 +13,17 @@ from pydantic import BaseModel
 
 try:
     from .. import db_supabase
-    from ..dependencies import get_current_user
+    from ..dependencies import get_admin_user, get_current_user
+    from ..features import send_push_notification
     from ..settings_loader import get_app_settings
+    from ..utils.audit_logger import log_admin_action
 except ImportError:
     import db_supabase
-    from dependencies import get_current_user
+    from dependencies import get_admin_user, get_current_user
     from settings_loader import get_app_settings
 
 db = db_supabase  # legacy alias
+get_current_admin = get_admin_user
 
 logger = logging.getLogger(__name__)
 
@@ -74,11 +77,24 @@ async def create_dispute(
         "requested_amount": req.requested_amount or ride.get("total_fare", 0),
         "original_fare": ride.get("total_fare", 0),
         "status": "open",
-        "created_at": datetime.utcnow().isoformat(),
-        "updated_at": datetime.utcnow().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
     await db_supabase.insert_one("disputes", dispute)
+
+    rider_id = ride.get("rider_id") or current_user["id"]
+    if rider_id:
+        try:
+            await send_push_notification(
+                rider_id,
+                "Dispute received",
+                "We've received your dispute and will review it within 1-2 business days.",
+                data={"type": "dispute_created", "dispute_id": str(dispute["id"])},
+            )
+        except Exception as notif_err:
+            logger.debug(f"Dispute created notification failed: {notif_err}")
+
     return {"success": True, "dispute": dispute}
 
 
@@ -108,7 +124,7 @@ async def get_dispute(dispute_id: str, current_user: dict = Depends(get_current_
 
 # ============ Admin Dispute Endpoints ============
 
-admin_router = APIRouter(prefix="/admin/disputes", tags=["Admin Disputes"])
+admin_router = APIRouter(prefix="/disputes", tags=["Admin Disputes"])
 
 
 @admin_router.get("")
@@ -116,6 +132,7 @@ async def admin_get_disputes(
     status: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
+    current_admin: dict = Depends(get_current_admin),
 ):
     """Get all disputes with optional status filter."""
     filters: Dict[str, Any] = {}
@@ -125,16 +142,23 @@ async def admin_get_disputes(
         "disputes", filters, order="created_at", desc=True, limit=limit, offset=offset
     )
 
-    # Enrich with user + ride info
+    # Batch-fetch users and rides in 2 queries instead of 2×N per-dispute calls.
+    # user_phone intentionally omitted from response — P1-9 (PIPEDA: no PII in bulk list).
+    user_ids = list({d["user_id"] for d in disputes if d.get("user_id")})
+    ride_ids = list({d["ride_id"] for d in disputes if d.get("ride_id")})
+    users = await db_supabase.get_rows("users", {"id": {"$in": user_ids}}, limit=len(user_ids)) if user_ids else []
+    rides = await db_supabase.get_rows("rides", {"id": {"$in": ride_ids}}, limit=len(ride_ids)) if ride_ids else []
+    users_by_id = {u["id"]: u for u in (users or [])}
+    rides_by_id = {r["id"]: r for r in (rides or [])}
+
     enriched = []
     for d in disputes:
-        user = await db_supabase.get_user_by_id(d.get("user_id")) if d.get("user_id") else None
-        ride = await db_supabase.get_ride(d.get("ride_id")) if d.get("ride_id") else None
+        user = users_by_id.get(d.get("user_id"))
+        ride = rides_by_id.get(d.get("ride_id"))
         enriched.append(
             {
                 **d,
                 "user_name": f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else "Unknown",
-                "user_phone": user.get("phone") if user else None,
                 "ride_status": ride.get("status") if ride else None,
                 "ride_fare": ride.get("total_fare") if ride else None,
             }
@@ -143,7 +167,11 @@ async def admin_get_disputes(
 
 
 @admin_router.put("/{dispute_id}/resolve")
-async def admin_resolve_dispute(dispute_id: str, req: ResolveDisputeRequest):
+async def admin_resolve_dispute(
+    dispute_id: str,
+    req: ResolveDisputeRequest,
+    current_admin: dict = Depends(get_current_admin),
+):
     """Resolve a dispute (approve/reject refund)."""
     dispute = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("disputes", {"id": dispute_id}, limit=1))
     if not dispute:
@@ -152,22 +180,19 @@ async def admin_resolve_dispute(dispute_id: str, req: ResolveDisputeRequest):
     if dispute.get("status") in ("resolved", "rejected"):
         raise HTTPException(status_code=400, detail="Dispute already resolved")
 
-    update_data = {
-        "status": "resolved" if req.resolution != "rejected" else "rejected",
-        "resolution": req.resolution,
-        "refund_amount": req.refund_amount or 0,
-        "admin_note": req.admin_note or "",
-        "resolved_at": datetime.utcnow().isoformat(),
-        "updated_at": datetime.utcnow().isoformat(),
-    }
+    # Stripe refund runs BEFORE we mark the dispute resolved.
+    # If Stripe fails we raise 502 — the dispute stays open so the admin can retry.
+    original_fare = Decimal(str(dispute.get("original_fare") or 0))
+    if req.refund_amount and req.refund_amount > original_fare:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Refund amount ${req.refund_amount} exceeds original fare ${original_fare}",
+        )
 
-    await db_supabase.update_one("disputes", {"id": dispute_id}, update_data)
-
-    # If approved/partial, initiate Stripe refund against the ride's PaymentIntent
     refund_result: Dict[str, Any] = {}
     if req.resolution in ("approved", "partial_refund") and req.refund_amount:
-        refund_amount_cents = int(float(req.refund_amount) * 100)
-        ride = await db.find_one("rides", {"id": dispute.get("ride_id")})
+        refund_amount_cents = int(req.refund_amount * Decimal("100"))
+        ride = await db_supabase.get_ride(dispute.get("ride_id"))
         payment_intent_id = (ride or {}).get("stripe_charge_id") or (ride or {}).get("payment_intent_id")
 
         if not payment_intent_id:
@@ -177,18 +202,19 @@ async def admin_resolve_dispute(dispute_id: str, req: ResolveDisputeRequest):
             )
             refund_result = {"status": "manual_required", "reason": "no_payment_intent"}
         else:
+            import stripe as _stripe  # noqa: PLC0415
+
+            settings = await get_app_settings()
+            stripe_secret = settings.get("stripe_secret_key", "")
+            if not stripe_secret:
+                raise HTTPException(status_code=503, detail="Stripe not configured")
+
             try:
-                import stripe as _stripe  # noqa: PLC0415
-
-                settings = await get_app_settings()
-                stripe_secret = settings.get("stripe_secret_key", "")
-                if not stripe_secret:
-                    raise ValueError("Stripe secret key not configured")
-
                 refund = _stripe.Refund.create(
                     payment_intent=payment_intent_id,
                     amount=refund_amount_cents,
                     reason="requested_by_customer",
+                    idempotency_key=f"refund-dispute-{dispute_id}",
                     metadata={
                         "dispute_id": dispute_id,
                         "ride_id": str(dispute.get("ride_id")),
@@ -201,18 +227,56 @@ async def admin_resolve_dispute(dispute_id: str, req: ResolveDisputeRequest):
                     f"[REFUND] Stripe refund {refund.id} ({refund.status}) "
                     f"${req.refund_amount} for dispute {dispute_id}"
                 )
-            except Exception as refund_err:  # noqa: BLE001
-                # Don't roll back the resolved status — log and surface the error so
-                # the admin knows they may need to issue the refund manually.
+            except Exception as refund_err:
                 logger.error(f"[REFUND] Stripe refund failed for dispute {dispute_id}: {refund_err}")
-                refund_result = {"status": "failed", "error": str(refund_err)}
+                raise HTTPException(
+                    status_code=502, detail="Stripe refund failed — retry to reuse idempotency key"
+                ) from refund_err
 
-        # Persist refund outcome on the dispute record
-        await db.update_one(
-            "disputes",
-            {"id": dispute_id},
-            {"$set": {"refund_result": refund_result, "updated_at": datetime.utcnow().isoformat()}},
+    # Stripe succeeded (or not required) — persist the resolved status
+    update_data: Dict[str, Any] = {
+        "status": "resolved" if req.resolution != "rejected" else "rejected",
+        "resolution": req.resolution,
+        "refund_amount": req.refund_amount or 0,
+        "admin_note": req.admin_note or "",
+        "resolved_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if refund_result:
+        update_data["refund_result"] = refund_result
+
+    await db_supabase.update_one("disputes", {"id": dispute_id}, update_data)
+
+    await log_admin_action(
+        current_admin,
+        "dispute_resolved",
+        "dispute",
+        dispute_id,
+        {
+            "resolution": req.resolution,
+            "refund_amount": str(req.refund_amount or 0),
+            "admin_note": req.admin_note or "",
+        },
+    )
+
+    # Notify rider of outcome
+    rider_id = dispute.get("user_id")
+    if rider_id:
+        resolution_label = "approved" if req.resolution == "refund" else "reviewed"
+        amount_text = (
+            f" A refund of ${req.refund_amount:.2f} has been issued."
+            if req.resolution in ("approved", "partial_refund") and req.refund_amount
+            else ""
         )
+        try:
+            await send_push_notification(
+                rider_id,
+                "Dispute update",
+                f"Your dispute has been {resolution_label}.{amount_text}",
+                data={"type": "dispute_resolved", "dispute_id": str(dispute_id), "resolution": req.resolution},
+            )
+        except Exception as notif_err:
+            logger.debug(f"Dispute resolved notification failed: {notif_err}")
 
     return {
         "success": True,

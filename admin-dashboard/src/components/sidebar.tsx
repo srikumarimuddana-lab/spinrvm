@@ -5,13 +5,14 @@ import { useRouter, usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
     LayoutDashboard, Car, Users, DollarSign, Settings, MapPin, Ticket,
-    HelpCircle, Flame, Building2, LifeBuoy,
-    LogOut, Menu, FileText, X, CreditCard, ChevronLeft, ChevronRight,
-    Sun, Moon, Shield, Cloud, Trophy, TrendingUp,
+    Flame, Building2, LifeBuoy, HelpCircle,
+    LogOut, Menu, X, ChevronLeft, ChevronRight,
+    Sun, Moon, Shield, Cloud, Trophy, TrendingUp, Activity,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useState, useEffect } from "react";
 import { useAuthStore } from "@/store/authStore";
+import { logoutAllAdmin } from "@/lib/api";
 import { useTheme } from "next-themes";
 
 interface NavItem {
@@ -50,7 +51,8 @@ const NAV_GROUPS: NavGroup[] = [
         items: [
             { href: "/dashboard/service-areas", label: "Service Areas", icon: MapPin, module: "service_areas" },
             { href: "/dashboard/vehicle-types", label: "Vehicle Types", icon: Car, module: "pricing" },
-            { href: "/dashboard/pricing", label: "Pricing & Billing", icon: DollarSign, module: "pricing" },
+            // Pricing & Billing, including surge, is managed per-area under
+            // Service Areas → Vehicle Pricing. No standalone pricing page.
             { href: "/dashboard/promotions", label: "Promotions", icon: Ticket, module: "promotions" },
             { href: "/dashboard/quests", label: "Quests & Bonuses", icon: Trophy, module: "promotions" },
         ],
@@ -67,12 +69,14 @@ const NAV_GROUPS: NavGroup[] = [
         items: [
             { href: "/dashboard/support", label: "Support & Issues", icon: LifeBuoy, module: "support" },
             { href: "/dashboard/disputes", label: "Disputes & Refunds", icon: Shield, module: "support" },
+            { href: "/dashboard/faqs", label: "FAQs", icon: HelpCircle, module: "support" },
             { href: "/dashboard/cloud-messaging", label: "Cloud Messaging", icon: Cloud, module: "notifications" },
         ],
     },
     {
         title: "System",
         items: [
+            { href: "/dashboard/monitoring/redis", label: "Redis & Infra", icon: Activity, module: "settings" },
             { href: "/dashboard/audit-logs", label: "Audit Logs", icon: Shield, module: "settings" },
             { href: "/dashboard/settings", label: "Settings", icon: Settings, module: "settings" },
             { href: "/dashboard/staff", label: "Staff", icon: Users, module: "staff" },
@@ -112,13 +116,33 @@ export function Sidebar() {
 
     const handleLogout = () => { logout(); router.push('/login'); };
 
+    // Sign out of every admin session for this account. Bumps
+    // admin_staff.token_version (kills in-flight access tokens) and
+    // revokes every refresh token. Refused server-side for the env-var
+    // super admin (admin-001) — rotate ADMIN_PASSWORD instead.
+    // See docs/runbooks/auth-tokens.md for incident-response context.
+    const handleLogoutEverywhere = async () => {
+        if (!window.confirm('Sign out every admin session for this account? You will be signed out everywhere this admin is logged in. Use this if your laptop was lost or you suspect compromise.')) return;
+        try {
+            await logoutAllAdmin();
+        } catch (e: any) {
+            // Surface server-side rejection (e.g. super-admin guard) but
+            // still tear down the local session — leaving the operator on
+            // a screen that thinks they're signed in is the worse failure.
+            window.alert(e?.message || 'Sign-out-everywhere request failed; clearing this session anyway.');
+        } finally {
+            logout();
+            router.push('/login');
+        }
+    };
+
     return (
         <>
             <Button variant="ghost" size="icon" className="fixed top-4 left-4 z-50 md:hidden" onClick={() => setMobileOpen(!mobileOpen)}>
                 {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
             </Button>
 
-            {mobileOpen && <div className="fixed inset-0 z-40 bg-black/50 md:hidden" onClick={() => setMobileOpen(false)} />}
+            {mobileOpen && <div className="fixed inset-0 z-40 bg-black/50 md:hidden" role="button" tabIndex={0} aria-label="Close navigation menu" onClick={() => setMobileOpen(false)} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setMobileOpen(false); } }} />}
 
             <aside className={cn(
                 "fixed inset-y-0 left-0 z-40 flex flex-col border-r border-sidebar-border bg-sidebar transition-all duration-200 md:translate-x-0",
@@ -206,6 +230,14 @@ export function Sidebar() {
                         <LogOut className="h-4 w-4" />
                         {!collapsed && "Sign Out"}
                     </button>
+                    {!collapsed && (
+                        <button onClick={handleLogoutEverywhere}
+                            className="flex w-full items-center gap-2.5 px-2.5 py-[6px] mt-0.5 rounded-lg text-[11px] font-medium text-sidebar-foreground/60 hover:bg-destructive/10 hover:text-destructive transition-colors"
+                            title="Bumps token_version + revokes all refresh tokens for this admin account">
+                            <Shield className="h-3.5 w-3.5" />
+                            Sign out everywhere
+                        </button>
+                    )}
                 </div>
             </aside>
         </>

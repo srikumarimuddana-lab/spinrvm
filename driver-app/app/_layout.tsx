@@ -1,19 +1,27 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Stack } from 'expo-router';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { View, ActivityIndicator, StyleSheet, Text, Platform } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold, PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import * as SplashScreen from 'expo-splash-screen';
+
+// Keep the native splash up until our React-rendered splash is mounted,
+// otherwise the driver home (which contains the SOSButton) momentarily
+// flashes through during the boot transition.
+SplashScreen.preventAutoHideAsync().catch(() => {});
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { useAuthStore } from '@shared/store/authStore';
 import { useLocationStore } from '@shared/store/locationStore';
+import { useDriverStore } from '../store/driverStore';
 import SpinrConfig from '@shared/config/spinr.config';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { OfflineBanner } from '@shared/components/OfflineBanner';
 import { ThemeProvider, useTheme } from '@shared/theme/ThemeContext';
+import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
+import { queryClient, asyncStoragePersister, QUERY_CACHE_BUSTER } from '@shared/api/queryClient';
 import { captureMessage, setUser } from '@shared/services/errorReporting';
-import LogRocket from '@logrocket/react-native';
 import {
   initFirebaseServices,
   requestPushPermissionAndGetToken,
@@ -32,6 +40,18 @@ if (canUseNotifications) {
     Notifications = require('expo-notifications');
   } catch (e) {
     console.log('[Push] expo-notifications unavailable:', e);
+  }
+}
+
+// @logrocket/react-native ships a native module that isn't linked in Expo Go
+// — importing it eagerly throws on module-load. Lazy-require so the app
+// mounts in Expo Go / web, and no-op the init/identify calls there.
+let LogRocket: any = null;
+if (!isExpoGo && Platform.OS !== 'web') {
+  try {
+    LogRocket = require('@logrocket/react-native').default ?? require('@logrocket/react-native');
+  } catch (e) {
+    console.log('[LogRocket] unavailable:', e);
   }
 }
 
@@ -56,12 +76,92 @@ if (Notifications) {
 // 2. Background FCM handler. Must be registered at module top level,
 //    outside of any React component, so the JS runtime wakes when a
 //    message arrives while the app is backgrounded or killed.
-//    The OS notification itself is rendered by the Android channel
-//    configured below (or APNs on iOS); this handler just keeps the
-//    runtime alive long enough to let RN Firebase do its thing.
+//    Persists the full ride-offer payload to AsyncStorage so the driver
+//    home screen can hydrate the offer panel instantly on cold start
+//    (useDriverDashboard.ts reads PENDING_OFFER_KEY on mount).
+const PENDING_OFFER_KEY = 'spinr_pending_ride_offer';
 setBackgroundMessageHandler(async (remoteMessage: any) => {
-  console.log('[Push] Background FCM:', remoteMessage?.data?.type || remoteMessage?.notification?.title);
+  const data = remoteMessage?.data || {};
+  if (data?.type === 'new_ride_assignment' && data?.ride_id) {
+    try {
+      const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+      await AsyncStorage.setItem(
+        PENDING_OFFER_KEY,
+        JSON.stringify({
+          ride_id: data.ride_id,
+          pickup_address: data.pickup_address || '',
+          dropoff_address: data.dropoff_address || '',
+          pickup_lat: parseFloat(data.pickup_lat || '0'),
+          pickup_lng: parseFloat(data.pickup_lng || '0'),
+          dropoff_lat: parseFloat(data.dropoff_lat || '0'),
+          dropoff_lng: parseFloat(data.dropoff_lng || '0'),
+          fare: parseFloat(data.fare || '0'),
+          distance_km: data.distance_km ? parseFloat(data.distance_km) : undefined,
+          duration_minutes: data.duration_minutes ? parseFloat(data.duration_minutes) : undefined,
+          rider_name: data.rider_name || undefined,
+          rider_rating: data.rider_rating ? parseFloat(data.rider_rating) : undefined,
+        }),
+      );
+    } catch (e) {
+      console.warn('[Push] Failed to persist background ride offer:', e);
+    }
+  }
 });
+
+// DV-9: Route push-notification taps to the correct in-app screen.
+// new_ride_assignment → driver home (offer panel hydrates from AsyncStorage);
+// everything else → notifications inbox as the safe fallback so the driver
+// can read the notification content rather than landing on a random screen.
+function usePushNotificationRouter() {
+  const router = useRouter();
+
+  // Foreground / backgrounded-tap listener (fires when app is already running).
+  useEffect(() => {
+    if (!Notifications) return;
+    const sub = Notifications.addNotificationResponseReceivedListener(
+      (response: any) => {
+        const data = response?.notification?.request?.content?.data ?? {};
+        if (data?.type === 'new_ride_assignment') {
+          router.push('/driver/');
+        } else {
+          router.push('/driver/notifications');
+        }
+      },
+    );
+    return () => sub?.remove?.();
+  }, [router]);
+
+  // Killed-state deep linking — getInitialNotificationResponseAsync() returns
+  // the tapped notification when the app was fully killed. The routing call is
+  // deferred 100ms to ensure the Expo Router Stack is fully mounted before
+  // navigation is attempted — calls fired before hydration are silently dropped.
+  // This hook is only mounted after isAuthInitialized is true (the loading gate
+  // in RootLayout blocks DriverRootLayoutInner until then).
+  useEffect(() => {
+    if (!canUseNotifications || !Notifications) return;
+    let timer: ReturnType<typeof setTimeout>;
+    (async () => {
+      try {
+        const response = await Notifications.getInitialNotificationResponseAsync?.();
+        if (response?.notification?.request?.content?.data) {
+          const data = response.notification.request.content.data as Record<string, string>;
+          console.log('[Push] Driver killed-state notification tap — routing from data:', data);
+          // Add a small defer to ensure Stack is mounted
+          timer = setTimeout(() => {
+            if (data?.type === 'new_ride_assignment') {
+              router.push('/driver/');
+            } else {
+              router.push('/driver/notifications');
+            }
+          }, 100);
+        }
+      } catch (e) {
+        console.log('[Push] Driver getInitialNotification failed:', e);
+      }
+    })();
+    return () => clearTimeout(timer);
+  }, [router]);
+}
 
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
@@ -76,13 +176,23 @@ export default function RootLayout() {
   const [isOffline, setIsOffline] = useState(false);
   // Guard so we only register the FCM token once per auth session.
   const fcmRegisteredRef = useRef(false);
+  const prevAuthTokenRef = useRef(authToken);
+
+  // Clear driver ride state on logout so a re-login doesn't see the
+  // previous session's in-progress offer / active ride.
+  useEffect(() => {
+    if (prevAuthTokenRef.current && !authToken) {
+      useDriverStore.getState().resetRideState();
+    }
+    prevAuthTokenRef.current = authToken;
+  }, [authToken]);
 
   // ── LogRocket session recording ──
   // Guard against Expo Go — @logrocket/react-native ships a native module
   // that isn't linked there, so calling init would throw. Same gating
   // pattern as @shared/services/firebase.
   useEffect(() => {
-    if (isExpoGo) return;
+    if (!LogRocket) return;
     try {
       LogRocket.init('gfuign/spinr');
     } catch (e) {
@@ -180,7 +290,7 @@ export default function RootLayout() {
         const uid = useAuthStore.getState().user?.id;
         if (uid) {
           setUser(uid, { role: 'driver' });
-          if (!isExpoGo) {
+          if (LogRocket) {
             try { LogRocket.identify(uid, { role: 'driver' }); } catch (e) { console.log('[LogRocket] identify failed:', e); }
           }
         }
@@ -213,10 +323,14 @@ export default function RootLayout() {
     };
   }, [isAuthInitialized, authToken]);
 
+  const onLoadingLayout = useCallback(() => {
+    SplashScreen.hideAsync().catch(() => {});
+  }, []);
+
   if (!fontsLoaded || fontError || !isAuthInitialized || !isLocationInitialized) {
     return (
       <ErrorBoundary>
-        <View style={styles.loadingContainer}>
+        <View style={styles.loadingContainer} onLayout={onLoadingLayout}>
           <Text style={styles.logoText}>Spinr</Text>
           <ActivityIndicator size="large" color="#FFFFFF" style={{ marginTop: 20 }} />
         </View>
@@ -225,9 +339,20 @@ export default function RootLayout() {
   }
 
   return (
-    <ThemeProvider>
-      <DriverRootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} />
-    </ThemeProvider>
+    <PersistQueryClientProvider
+      client={queryClient}
+      persistOptions={{
+        persister: asyncStoragePersister,
+        // 24h max age — anything older is dropped on rehydrate, so the
+        // app can't boot with a week-old earnings number on screen.
+        maxAge: 24 * 60 * 60 * 1000,
+        buster: QUERY_CACHE_BUSTER,
+      }}
+    >
+      <ThemeProvider>
+        <DriverRootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} />
+      </ThemeProvider>
+    </PersistQueryClientProvider>
   );
 }
 
@@ -239,6 +364,7 @@ function DriverRootLayoutInner({
   setIsOffline: (v: boolean) => void;
 }) {
   const { isDark } = useTheme();
+  usePushNotificationRouter();
   return (
     <ErrorBoundary>
       <OfflineBanner visible={isOffline} onVisibilityChange={setIsOffline} />
@@ -251,12 +377,14 @@ function DriverRootLayoutInner({
               animation: 'slide_from_right',
             }}
           >
-            <Stack.Screen name="index" />
+            <Stack.Screen name="index" options={{ animation: 'none' }} />
             <Stack.Screen name="login" />
             <Stack.Screen name="otp" />
             <Stack.Screen name="profile-setup" options={{ gestureEnabled: false }} />
             <Stack.Screen name="become-driver" options={{ gestureEnabled: false }} />
-            <Stack.Screen name="driver" options={{ animation: "fade", gestureEnabled: false }} />
+            {/* Instant cut so the driver home's SOSButton doesn't flash
+                through a cross-fade out of the splash. */}
+            <Stack.Screen name="driver" options={{ animation: "none", gestureEnabled: false }} />
           </Stack>
         </SafeAreaProvider>
       </GestureHandlerRootView>

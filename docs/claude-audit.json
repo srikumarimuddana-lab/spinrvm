@@ -1,0 +1,292 @@
+{
+  "timestamp": "2026-04-22T16:53:00Z",
+  "delta_timestamp": "2026-04-25T00:00:00Z",
+  "repo": "srikumarimuddana-lab/spinrvm",
+  "branch_at_audit": "claude/config-audit-inventory-HZugv",
+  "branch_at_delta": "claude/claude-config-guide-jZC61",
+  "model_pinned": "claude-opus-4-7",
+  "model_running_at_delta": "claude-sonnet-4-6",
+  "model_in_attribution": "claude-opus-4-7",
+  "stats": {
+    "total_commands": 9,
+    "settings_allow_rules": 45,
+    "settings_deny_rules": 14,
+    "local_settings_allow_rules": 0,
+    "local_settings_deny_rules": 0,
+    "enabled_plugins": 1,
+    "marketplaces": 1,
+    "subagents": 3,
+    "commit_trailers_claude": 54,
+    "commits_with_opus_47": 19,
+    "commits_with_sonnet_46": 28,
+    "total_commits_history": 310,
+    "graphify_nodes": 4804,
+    "graphify_edges": 9726,
+    "graphify_communities": 413,
+    "findings_p0_original": 6,
+    "findings_p0_resolved": 5,
+    "findings_p0_open": 1,
+    "findings_p1_original": 7,
+    "findings_p1_resolved": 0,
+    "findings_p1_partial": 1,
+    "findings_p1_new": 1,
+    "findings_p1_open": 7,
+    "findings_p2_original": 8,
+    "findings_p2_resolved": 1,
+    "findings_p2_new": 3,
+    "findings_p2_open": 10,
+    "claude_md_lines": 450,
+    "hook_installed": true,
+    "settings_local_present": false
+  },
+  "findings": [
+    {
+      "id": "P0-001",
+      "severity": "P0",
+      "status": "RESOLVED",
+      "resolved_date": "2026-04-24",
+      "resolution": "settings.local.json deleted via merge conflict resolution",
+      "category": "permissions-conflict",
+      "title": "settings.local.json silently overrides deny rules in settings.json",
+      "file": ".claude/settings.local.json:7-11,37-38"
+    },
+    {
+      "id": "P0-002",
+      "severity": "P0",
+      "status": "RESOLVED",
+      "resolved_date": "2026-04-24",
+      "resolution": ".git/hooks/pre-commit installed (-rwxr-xr-x, Apr 24 17:03)",
+      "category": "hooks-not-installed",
+      "title": "Pre-commit hook is not installed in .git/hooks/",
+      "file": ".git/hooks/pre-commit"
+    },
+    {
+      "id": "P0-003",
+      "severity": "P0",
+      "status": "RESOLVED",
+      "resolved_date": "2026-04-24",
+      "resolution": "settings.local.json deleted",
+      "category": "arbitrary-code-execution",
+      "title": "Broad interpreter and shell patterns in settings.local.json",
+      "file": ".claude/settings.local.json:35-36,51-52,58"
+    },
+    {
+      "id": "P0-004",
+      "severity": "P0",
+      "status": "RESOLVED",
+      "resolved_date": "2026-04-24",
+      "resolution": "settings.json:7 attribution updated to claude-opus-4-7",
+      "category": "model-drift",
+      "title": "Attribution trailer pinned to stale model name (claude-sonnet-4-6)",
+      "file": ".claude/settings.json:7"
+    },
+    {
+      "id": "P0-005",
+      "severity": "P0",
+      "status": "RESOLVED",
+      "resolved_date": "2026-04-24",
+      "resolution": "settings.local.json deleted",
+      "category": "dead-windows-paths",
+      "title": "Windows-machine paths embedded in settings.local.json",
+      "file": ".claude/settings.local.json:20,25,26,28,45,46,57"
+    },
+    {
+      "id": "P0-006",
+      "severity": "P0",
+      "status": "OPEN",
+      "category": "launch-config-swap",
+      "title": "launch.json has rider-app / driver-app swapped",
+      "file": ".claude/launch.json:11-21",
+      "details": "'Rider App (Metro)' launches --prefix frontend on 8081. 'Driver App (Metro)' launches --prefix rider-app on 8082. Confirmed still present on 2026-04-25.",
+      "remediation": "Rider App → --prefix rider-app. Driver App → --prefix driver-app. Remove or rename the legacy 'frontend/' entry."
+    },
+    {
+      "id": "P1-001",
+      "severity": "P1",
+      "status": "OPEN",
+      "category": "plugin-supply-chain",
+      "title": "andrej-karpathy-skills plugin is unpinned",
+      "file": ".claude/settings.json:82",
+      "remediation": "Pin to an explicit commit SHA or tag via the marketplace manifest."
+    },
+    {
+      "id": "P1-002",
+      "severity": "P1",
+      "status": "PARTIAL",
+      "resolved_date": "2026-04-24",
+      "resolution": "SessionStart / PreToolUse / PostToolUse hooks added to settings.json. Stop / PreCompact / UserPromptSubmit / Notification / SubagentStop still absent.",
+      "category": "hook-coverage",
+      "title": "No SessionStart / UserPromptSubmit / PreToolUse / PostToolUse / PreCompact hooks",
+      "file": ".claude/settings.json"
+    },
+    {
+      "id": "P1-003",
+      "severity": "P1",
+      "status": "OPEN",
+      "category": "doc-triangulation",
+      "title": "Contradictions across CLAUDE.md, ARCHITECTURE.md, .agents/docs/architecture.md",
+      "file": ".agents/docs/architecture.md:41,22",
+      "remediation": "Mark .agents/docs/architecture.md as superseded or update to match CLAUDE.md."
+    },
+    {
+      "id": "P1-004",
+      "severity": "P1",
+      "status": "OPEN",
+      "category": "hook-gate-gap",
+      "title": "Secret regex missing GitHub fine-grained token prefixes",
+      "file": ".claude/hooks/pre-commit:23",
+      "remediation": "Change 'ghp_[a-zA-Z0-9]{36}' to 'gh[pousr]_[a-zA-Z0-9]{36}'. Add AWS AKIA, Slack webhook patterns."
+    },
+    {
+      "id": "P1-005",
+      "severity": "P1",
+      "status": "OPEN",
+      "category": "hook-gate-gap",
+      "title": "PII-in-logs regex only checks ADDED lines (--diff-filter=A)",
+      "file": ".claude/hooks/pre-commit:62",
+      "remediation": "Drop --diff-filter=A from PII gate. Scan any added line regardless of file novelty."
+    },
+    {
+      "id": "P1-006",
+      "severity": "P1",
+      "status": "OPEN",
+      "category": "permissions-dead-path",
+      "title": "Write(frontend/**) allows writes to legacy surface",
+      "file": ".claude/settings.json:44",
+      "remediation": "Remove 'Write(frontend/**)' from settings.json allow list."
+    },
+    {
+      "id": "P1-007",
+      "severity": "P1",
+      "status": "OPEN",
+      "category": "attribution-consistency",
+      "title": "256 of 310 historical commits have no Claude attribution trailer",
+      "file": "git history",
+      "remediation": "Not retroactively fixable. Ensure /commit slash command emits correct claude-opus-4-7 trailer going forward."
+    },
+    {
+      "id": "P2-001",
+      "severity": "P2",
+      "status": "OPEN",
+      "category": "empty-dirs",
+      "title": "memory/ and discovery/ are stale scaffolding",
+      "file": "memory/.gitkeep, discovery/"
+    },
+    {
+      "id": "P2-002",
+      "severity": "P2",
+      "status": "OPEN",
+      "category": "adjacent-dirs",
+      "title": ".kilo/, .emergent/, .maestro/, audit-framework/ are undocumented in CLAUDE.md",
+      "file": ".kilo/, .emergent/, .maestro/, audit-framework/"
+    },
+    {
+      "id": "P2-003",
+      "severity": "P2",
+      "status": "OPEN",
+      "category": "dead-files",
+      "title": "8 duplicate code_review_report_2026*.json files in repo root",
+      "file": "code_review_report_*.json (7 files)"
+    },
+    {
+      "id": "P2-004",
+      "severity": "P2",
+      "status": "PARTIAL",
+      "resolution": "session-start.sh hook fires; per-surface dep-warming not verified",
+      "category": "sessionstart-readiness",
+      "title": "No surface has a SessionStart hook to pre-warm deps",
+      "file": ".claude/settings.json"
+    },
+    {
+      "id": "P2-005",
+      "severity": "P2",
+      "status": "OPEN",
+      "category": "graphify-freshness",
+      "title": "Graphify graph is stale — 6 days behind as of 2026-04-25",
+      "file": "graphify-out/manifest.json",
+      "details": "Graph last generated 2026-04-19. 16 commits unincorporated. Rebuild: python3 -c 'from graphify.watch import _rebuild_code; from pathlib import Path; _rebuild_code(Path(\".\"))'",
+      "remediation": "Rebuild at start of next code-editing session."
+    },
+    {
+      "id": "P2-006",
+      "severity": "P2",
+      "status": "RESOLVED",
+      "resolved_date": "2026-04-24",
+      "resolution": "settings.local.json deleted",
+      "category": "legacy-settings",
+      "title": "sprint1/* force-push allow rules are outdated",
+      "file": ".claude/settings.local.json:9-11"
+    },
+    {
+      "id": "P2-007",
+      "severity": "P2",
+      "status": "OPEN",
+      "category": "god-node-cross-ref",
+      "title": "Graphify god nodes partially unreferenced in CLAUDE.md",
+      "file": "CLAUDE.md"
+    },
+    {
+      "id": "P2-008",
+      "severity": "P2",
+      "status": "OPEN",
+      "category": "hook-test-coverage",
+      "title": "Pre-commit hook has no unit tests",
+      "file": ".claude/hooks/pre-commit"
+    },
+    {
+      "id": "N-001",
+      "severity": "advisory",
+      "status": "OPEN",
+      "introduced": "2026-04-25",
+      "category": "model-drift",
+      "title": "Session model (claude-sonnet-4-6) diverges from settings.json pin (claude-opus-4-7)",
+      "file": ".claude/settings.json:2",
+      "details": "User ran /model claude-sonnet-4-6 on 2026-04-25 for cost savings. Attribution trailer references opus-4-7. Commits made this session carry wrong model attribution. Intentional drift — not a security issue.",
+      "remediation": "Either update settings.json:2 and attribution to claude-sonnet-4-6, or accept per-session drift. If model is set to sonnet permanently, update settings.json."
+    },
+    {
+      "id": "N-002",
+      "severity": "P1",
+      "status": "OPEN",
+      "introduced": "2026-04-24",
+      "category": "ci-config",
+      "title": "claude-review.yml permanently fails without ANTHROPIC_API_KEY repo secret",
+      "file": ".github/workflows/claude-review.yml:53",
+      "details": "Job fires on every non-draft PR. Without the secret, anthropics/claude-code-action@v1 exits immediately. Confirmed failing on PR #51, check run 72971136054. Advisory (not a required check) but creates permanent red CI status.",
+      "remediation": "Option 1: Set ANTHROPIC_API_KEY repo secret. Option 2: Delete claude-review.yml and use local /review. Option 3: Change trigger to issue_comment only (/claude review) for opt-in behavior."
+    },
+    {
+      "id": "N-003",
+      "severity": "P2",
+      "status": "OPEN",
+      "introduced": "2026-04-24",
+      "category": "context-budget",
+      "title": "CLAUDE.md 3× expansion increases session token cost",
+      "file": "CLAUDE.md",
+      "details": "Grew from 156 to 450 lines. Adds ~3,600 incremental tokens per session. Currently ~2.5% of 200K budget — acceptable. Flag if file exceeds 700 lines.",
+      "remediation": "No immediate action. If CLAUDE.md reaches 700+ lines, split domain sections into @.claude/context/ imports."
+    },
+    {
+      "id": "N-004",
+      "severity": "P2",
+      "status": "OPEN",
+      "introduced": "2026-04-24",
+      "category": "untested-commands",
+      "title": "4 new slash commands not yet exercised in any transcript",
+      "file": ".claude/commands/adr.md, fare-audit.md, incident.md, migration-check.md",
+      "details": "Commands added in PR #51. None appear in transcript history. Cannot confirm end-to-end function until first invocation.",
+      "remediation": "Exercise each on next relevant task."
+    },
+    {
+      "id": "N-005",
+      "severity": "info",
+      "status": "RESOLVED",
+      "introduced": "2026-04-24",
+      "resolved_date": "2026-04-24",
+      "category": "hook-fix",
+      "title": "Pre-commit hook patched with meta-doc exclude list (commit e42ad76)",
+      "file": ".claude/hooks/pre-commit",
+      "details": "SECRET_SCAN_EXCLUDES added to skip docs/claude-audit*, docs/proposed-claude-audit-*, and .claude/hooks/pre-commit from secret-pattern scan. Fixes false-positive that blocked merge commit on 2026-04-24. No security regression."
+    }
+  ]
+}

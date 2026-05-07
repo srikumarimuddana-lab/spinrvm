@@ -1,0 +1,710 @@
+================================================================================
+SPINR ADMIN PANEL — PRODUCTION-READINESS AUDIT v1
+================================================================================
+Date        : 2026-04-25
+Branch      : claude/fix-audit-prompt-length-AJpQN
+Auditor     : Claude (claude-sonnet-4-6) via automated audit framework
+Scope       : backend/routes/admin/ · admin-dashboard/src/
+Platform    : FastAPI Python 3.12 + Next.js 16
+
+AUDIT GROUND RULES
+──────────────────
+• Severity scale: CRITICAL | HIGH | MEDIUM | LOW | PASS | RECOMMENDATION
+• See audit-framework/ground-rules.md for full list.
+• Admin panel is the highest-risk attack surface in the system.
+• Admin JWTs are fully trusted (role+email+modules in claims) per CLAUDE.md.
+
+================================================================================
+FINDINGS
+================================================================================
+
+================================================================================
+TASK 01 — FEATURE COMPLETENESS (admin panel)
+================================================================================
+
+[01-1] HIGH | FAQ/Knowledge Base Backend Has No Frontend Management UI
+File: backend/routes/admin/faqs.py (endpoint exists), admin-dashboard (no /faqs page)
+Finding: Full CRUD endpoints exist for FAQs (/admin/faqs) but there is no corresponding
+  admin dashboard page. Admins cannot manage customer-facing FAQs from the panel; any
+  changes require direct API calls or database edits.
+Fix: Add /dashboard/faqs page with list + edit form wired to the existing endpoints.
+  Effort: 4 hours.
+
+[01-2] MEDIUM | Document Requirements Backend Has No Frontend Configuration UI
+File: backend/routes/admin/documents.py (requirements endpoints), admin-dashboard (no UI)
+Finding: Endpoints exist for creating/updating/deleting document requirement types
+  (/admin/documents/requirements) but there is no admin UI to configure them.
+  Document types are effectively hardcoded from the admin's perspective.
+Fix: Add document requirements configuration section to /dashboard/documents.
+  Effort: 4–6 hours.
+
+[01-3] MEDIUM | Subscription Plan Management UI Is Incomplete
+File: admin-dashboard/src/app/dashboard/subscriptions/ (page exists)
+  backend/routes/admin/subscriptions.py (plan CRUD exists)
+Finding: Frontend subscriptions page exists but backend plan create/edit/delete routes
+  may not be fully wired. Driver subscription listing and management is partially missing.
+Fix: Audit and wire all subscription CRUD actions to matching backend endpoints.
+  Effort: 3–4 hours.
+
+[01-4] MEDIUM | Payout Management Has No Dedicated Admin Page
+File: backend/routes/admin/drivers.py (payouts endpoints), admin-dashboard (no /payouts page)
+Finding: GET /payouts and /payouts/stats exist in backend but there is no admin page
+  to review, approve, or retry failed driver payouts. Finance staff must use direct API access.
+Fix: Create /dashboard/earnings/payouts sub-page for payout review and manual retry.
+  Effort: 6–8 hours.
+
+[01-5] HIGH | Force-Cancel Ride Has No Dedicated Admin UI
+File: backend/routes/admin/rides.py (cancel endpoint exists)
+Finding: POST /admin/rides/{id}/cancel is a powerful action with no dedicated UI beyond
+  inline action in Live Monitoring. No confirmation modal, no reason field, no audit trail UI.
+Fix: Add force-cancel action with reason selector to the Rides drawer in /dashboard/rides.
+  Effort: 3 hours.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 01 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     2 |
+| MEDIUM          |     3 |
+| LOW             |     0 |
+| PASS            |    20 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |    25 |
+
+================================================================================
+TASK 02 — AUTHENTICATION & SESSION MANAGEMENT
+================================================================================
+
+[02-1] CRITICAL | Admin Access Token TTL Is 12 Hours — Too Long for Privileged Account
+File: backend/core/config.py:39
+Finding: Admin access tokens are issued with a 12-hour lifetime
+  (ADMIN_ACCESS_TOKEN_TTL_HOURS = 12). Admin accounts have full access to PII,
+  payment data, and driver/rider management. A 12-hour window means a stolen token
+  remains valid for up to half a workday. OWASP recommends ≤1 hour for privileged tokens.
+Fix: Reduce to 1 hour. Implement silent refresh in admin-dashboard (timer-based token
+  renewal 5 minutes before expiry). Effort: 4 hours.
+
+[02-2] CRITICAL | Admin JWT Stored in sessionStorage — Accessible to Any XSS Payload
+File: admin-dashboard/src/store/authStore.ts:131
+Finding: Zustand store uses createJSONStorage(() => sessionStorage) to persist the
+  admin access token. Any XSS (malicious npm package, DOM injection) can exfiltrate
+  the token with localStorage.getItem() / sessionStorage.getItem(). The token is also
+  dual-written to a client-readable cookie (no HttpOnly flag).
+Fix: Store token only in an HttpOnly, Secure, SameSite=Strict cookie. Remove
+  sessionStorage persistence. Serve JWT via secure cookie to API requests. Effort: 8–16 hours.
+
+[02-3] HIGH | Logout Does Not Invalidate the Current Access Token
+File: backend/routes/admin/auth.py:333–350
+Finding: /admin/auth/logout revokes the refresh token but not the access token.
+  The access token remains valid until its TTL expires. An admin who logs out on a
+  shared or compromised machine can still be impersonated until the 12-hour window closes.
+Fix: Maintain a Redis-backed access token blacklist. On logout, add token hash to the
+  blacklist. Check blacklist in get_current_user dependency. Effort: 6 hours.
+
+[02-4] HIGH | No Idle Session Timeout
+File: admin-dashboard/src/store/authStore.ts:10
+Finding: Session cookie max-age is 8 hours with no idle tracking. An admin who leaves
+  their browser open and unattended has a valid session for the full duration. There is
+  no last-activity tracking in the backend either.
+Fix: Client-side: auto-logout after 30 minutes inactivity; warn at 25 minutes.
+  Server-side: store last_activity in admin_staff, reject tokens inactive >30 min.
+  Effort: 6–8 hours.
+
+[02-5] MEDIUM | No Multi-Factor Authentication (MFA/TOTP)
+File: backend/routes/admin/auth.py (entire file — no MFA code)
+Finding: Admin login is password-only. No TOTP, email OTP, hardware key, or SMS
+  second factor is implemented. This is a critical gap given admin accounts can access
+  every rider and driver's PII and financial data.
+Fix: Implement TOTP using pyotp. Add mfa_enabled and totp_secret columns to admin_staff.
+  Require second factor on login; provide backup codes on enrollment. Effort: 12–16 hours.
+
+[02-6] MEDIUM | Super-Admin Password Compared as Plaintext from ENV Var
+File: backend/routes/admin/auth.py:182
+  backend/core/config.py:52
+Finding: The super-admin (first account) password is compared directly:
+  body.password == settings.ADMIN_PASSWORD. If the environment variable is leaked
+  (e.g., via /env debug endpoint, CI log, or deployment manifest) the plaintext
+  password is exposed. All other staff passwords use bcrypt (cost=12) correctly.
+Fix: Hash ADMIN_PASSWORD with bcrypt at startup. Replace plaintext comparison with
+  bcrypt.checkpw(). Effort: 2 hours.
+
+[02-7] MEDIUM | Admin Login Rate Limit Is Too Permissive (5/min = 300/hr per IP)
+File: backend/routes/admin/auth.py:36–40
+Finding: Login is rate-limited at 5 requests per minute per IP — equivalent to 300
+  attempts per hour. The rider OTP endpoint enforces 5 attempts per hour with a 24-hour
+  lockout. Admin accounts are higher-value targets and should have stricter limits.
+Fix: 3 attempts per 30 minutes, with account-level lockout (not just IP-based) that
+  triggers after 5 failures in 1 hour. Store lockout in admin_staff table. Effort: 3–4 hours.
+
+[02-8] MEDIUM | No MFA / IP Restriction on Admin Login
+File: backend/routes/admin/auth.py:177–178
+Finding: client_ip is logged but never used to enforce restrictions. Admin login is
+  accessible from any IP globally with no VPN requirement or IP whitelist.
+Fix: Add allowed_ips (JSON array) column to admin_staff. On login, verify client IP
+  against the list; reject with 403 if not matched. Effort: 4–6 hours.
+
+[02-9] MEDIUM | No Forgot-Password Flow for Admin Staff
+File: backend/routes/admin/auth.py (no /forgot-password endpoint)
+Finding: There is a /change-password endpoint for authenticated sessions but no
+  self-service password-reset flow. A locked-out or forgotten-password admin requires
+  manual DB intervention by a super-admin.
+Fix: POST /admin/auth/forgot-password → signed email link (JWT, 15-min TTL).
+  POST /admin/auth/reset-password → validate link, set new password.
+  Rate-limit to 3 resets per email per hour. Effort: 6–8 hours.
+
+[02-10] LOW | Admin Password Policy Minimum Is 12 Chars — Should Be 20
+File: backend/routes/admin/auth.py:443
+Finding: /change-password enforces ≥12 characters. The startup check for the
+  super-admin password is 20 characters. There is inconsistency and no complexity
+  requirements (uppercase, digits, symbols) or common-password blacklist.
+Fix: Enforce ≥20 chars, require uppercase + digit + symbol, check against common
+  password list. Effort: 2–3 hours.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 02 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     2 |
+| HIGH            |     2 |
+| MEDIUM          |     6 |
+| LOW             |     1 |
+| PASS            |     3 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |    14 |
+
+
+================================================================================
+TASK 03 — AUTHORIZATION & RBAC
+================================================================================
+
+[03-1] CRITICAL | Module-Level Access Control Defined But Never Enforced on API Endpoints
+File: backend/routes/admin/staff.py:49–61 (ROLE_PRESETS)
+  backend/dependencies/__init__.py:308–318 (get_admin_user)
+Finding: The system defines fine-grained role presets — e.g., "support" staff should
+  only access ["dashboard", "support", "disputes", "notifications", "users"]. Modules
+  are stored in the JWT claims. However, get_admin_user only checks that role is any
+  admin role; it does NOT verify that the accessed endpoint's module is in the user's
+  modules list. A "support" staff member can call POST /admin/wallet/credit, GET
+  /admin/analytics/*, PUT /admin/service-areas/*, and all other admin endpoints.
+  The module system is purely cosmetic (frontend nav filtering) with zero backend enforcement.
+Fix: Create a require_module("wallet") dependency factory. Add it to every endpoint group:
+  e.g., wallet.py gets Depends(require_module("wallet")), analytics.py gets
+  Depends(require_module("analytics")). The dependency reads modules from the JWT and
+  raises 403 if the required module is absent. Effort: 8–10 hours.
+
+[03-2] HIGH | Deactivating a Staff Member Does Not Invalidate Their Existing Token
+File: backend/routes/admin/staff.py:177–189
+Finding: When a staff member is set is_active=False, the update only writes to the
+  admin_staff table. The existing access token remains valid (JWT is trusted from claims,
+  no DB re-check per dependencies/__init__.py:204–219). A terminated employee retains
+  admin access for up to 12 hours after deactivation.
+Fix: On is_active → False, increment token_version in admin_staff. The token validation
+  path already checks token_version for staff tokens (auth.py:183) — bumping it will
+  immediately invalidate all existing sessions for that user. Effort: 2 hours.
+
+[03-3] HIGH | Deleting a Staff Member Does Not Invalidate Their Existing Token
+File: backend/routes/admin/staff.py:194–197
+Finding: DELETE /staff/{staff_id} removes the row from admin_staff but does NOT revoke
+  any existing tokens. The JWT is self-contained and will keep granting access until
+  TTL expiry. An admin who is fired and whose account is deleted can continue using their
+  12-hour token.
+Fix: Before deletion, invalidate tokens by adding the token to a Redis blacklist OR by
+  issuing a final DB record that the token validation path checks. Alternatively reduce
+  admin token TTL to 1 hour (see 02-1) to bound the exposure window. Effort: 3 hours.
+
+[03-4] MEDIUM | staff.py super_admin Check Is Manual, Not Systematic
+File: backend/routes/admin/staff.py:99
+Finding: The create_staff endpoint manually checks if admin.get("role") != "super_admin".
+  Other sensitive staff operations (update role, delete staff) do not repeat this check.
+  A "finance" role staff member could in theory call PUT /staff/{id} to update their own
+  role to "super_admin" if the endpoint lacks the guard.
+Fix: Add a super_admin role check to update_staff and delete_staff endpoints, or add a
+  require_module("staff") dependency (module "staff" is only in super_admin preset).
+  Effort: 1 hour.
+
+[03-5] MEDIUM | super_admin Can Promote Any Staff to super_admin With No Confirmation or Audit
+File: backend/routes/admin/staff.py:167–189
+Finding: A super_admin can update any staff member's role to "super_admin" with a single
+  PUT /staff/{id} call. No second factor, no confirmation email to the promoted user, and
+  no audit log entry is created. A compromised super_admin account could silently elevate
+  any account.
+Fix: Require re-authentication (password re-entry) when promoting to super_admin. Log
+  the promotion to admin_audit_log with actor, target, timestamp. Effort: 3 hours.
+
+[03-6] PASS | Router-Level Auth Gate Is Correctly Applied
+File: backend/routes/admin/__init__.py:53–56
+Finding: admin_router uses dependencies=[Depends(get_admin_user)] at the router level.
+  All 19 sub-routers are included under admin_router, so every endpoint is gated.
+  The auth/login endpoints are mounted on admin_auth_router (no auth dependency) as required.
+
+[03-7] PASS | Staff Module Created Only by super_admin (Manual Check)
+File: backend/routes/admin/staff.py:99
+Finding: create_staff checks role == "super_admin" before proceeding. Only the top-level
+  admin can create new admin accounts.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 03 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     1 |
+| HIGH            |     2 |
+| MEDIUM          |     2 |
+| LOW             |     0 |
+| PASS            |     2 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |     7 |
+
+
+================================================================================
+TASK 04 — INPUT VALIDATION
+================================================================================
+
+[04-1] HIGH | Cloud Messaging Endpoint Accepts Raw Dict — No Schema Validation
+File: backend/routes/admin/messaging.py:22
+Finding: admin_send_cloud_message accepts payload: Dict[str, Any] — a raw dictionary
+  with no Pydantic schema. The only validation is a manual `if not title or not description`
+  check. There are no constraints on title/description length (a 1 MB string would be
+  accepted), no enum check on audience values, no validation of channel names or
+  scheduled_at format. A typo in audience value silently sends to zero users.
+Fix: Replace Dict[str, Any] with a Pydantic CloudMessageRequest model with: title
+  (min=1, max=100), description (min=1, max=500), audience (Literal["customers",
+  "drivers","particular_customer","particular_driver","all"]), channels (List[Literal[
+  "push","sms","email"]]), scheduled_at (Optional[datetime]). Effort: 2 hours.
+
+[04-2] HIGH | Service Areas Endpoint Accepts Raw Dict on ALL Operations
+File: backend/routes/admin/service_areas.py:42, 80, 139, 192, 212, 257
+Finding: Every POST/PUT endpoint in service_areas.py uses Dict[str, Any] as the body
+  type. There is no validation of coordinates (lat/lng bounds), name length, surge
+  multiplier range (a surge of 999x would be accepted), or fee amount range. The fee
+  endpoints do float() casting but without range checks.
+Fix: Define Pydantic models: ServiceAreaRequest (name, coordinates list with lat/lng
+  bounds), SurgePricingRequest (multiplier: float = Field(ge=1.0, le=5.0)), FeeRequest
+  (amount: Decimal = Field(gt=0, le=100)). Effort: 4 hours.
+
+[04-3] MEDIUM | Driver Action and Status Override Accept Unvalidated String Fields
+File: backend/routes/admin/drivers.py:98–107
+Finding: DriverActionRequest.action is plain str — accepts any value including garbage
+  strings. DriverStatusOverride.status is also plain str. Neither field uses
+  Literal["approve","reject","suspend","ban","unban","reactivate"] or an Enum.
+  An invalid action value will fail silently or raise a KeyError inside the handler.
+Fix: Use Literal types: action: Literal["approve","reject","suspend","ban","unban",
+  "reactivate"] and status: Literal["pending","active","rejected","suspended","banned"].
+  Effort: 30 minutes.
+
+[04-4] MEDIUM | Settings Float Fields Have No Range Constraints
+File: backend/routes/admin/settings.py:36–40
+Finding: platform_fee_percent, cancellation_fee_admin/driver, min_driver_rating, and
+  search_radius_km are Optional[float] with no gt/lt bounds. A typo of 500 for
+  platform_fee_percent would set a 500% fee. The model does use extra="forbid" (good)
+  but numeric ranges are unchecked.
+Fix: Add Field constraints: platform_fee_percent (ge=0, le=1.0), cancellation fees
+  (ge=0, le=50), min_driver_rating (ge=1.0, le=5.0), search_radius_km (ge=1, le=100).
+  Effort: 1 hour.
+
+[04-5] MEDIUM | Admin Cancel Ride Reason Has No Length Constraint
+File: backend/routes/admin/rides.py:139–141
+Finding: AdminCancelRideRequest.reason is Optional[str] — no min or max length.
+  A very long reason string would be stored in the DB without truncation, potentially
+  wasting storage or causing index issues.
+Fix: Add max_length=500 to the reason field. Effort: 15 minutes.
+
+[04-6] PASS | Wallet Credit/Debit Requests Are Well-Validated
+File: backend/routes/admin/wallet.py:35–44
+Finding: AdminCreditRequest and AdminDebitRequest use Field(gt=0, le=10_000) for
+  amount and min_length=3, max_length=200 for reason. This is the best pattern in
+  the admin panel and should be adopted elsewhere.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 04 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     2 |
+| MEDIUM          |     3 |
+| LOW             |     0 |
+| PASS            |     1 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |     6 |
+
+
+================================================================================
+TASK 05 — AUDIT LOGGING & COMPLIANCE
+================================================================================
+
+[05-1] HIGH | User Status Changes (Suspend/Ban) Are Not Audit-Logged
+File: backend/routes/admin/users.py:79–91
+Finding: admin_update_user_status() directly calls db_supabase.update_one() with no
+  audit log write. Banning or suspending a rider leaves no trail of who performed
+  the action, when, or the previous state. Under PIPEDA, actions affecting personal
+  data must be traceable. An admin could ban any user with no accountability record.
+Fix: After every status update, insert a row into audit_logs:
+  {action: "status_change", entity_type: "user", entity_id: user_id,
+  actor_id: admin["id"], old_value: old_status, new_value: new_status, timestamp}.
+  Effort: 2 hours.
+
+[05-2] HIGH | Wallet Credit/Debit by Admin Are Not Audit-Logged
+File: backend/routes/admin/wallet.py:96–160
+Finding: admin_credit_wallet and admin_debit_wallet perform financial transactions
+  with no write to audit_logs. If a fraudulent credit is issued by a rogue admin, the
+  only evidence would be the wallet_transactions table (if it exists) — there is no
+  admin action record linking the transaction to the staff actor.
+Fix: Insert into audit_logs on every credit/debit:
+  {action: "wallet_credit"/"wallet_debit", entity_type: "user", entity_id: user_id,
+  actor_id: admin["id"], amount: amount, reason: reason}. Effort: 1 hour.
+
+[05-3] HIGH | Staff Create/Update/Delete Not Audit-Logged
+File: backend/routes/admin/staff.py:95–197
+Finding: Creating, updating roles for, or deleting a staff member generates no audit
+  log entry. A super_admin could create a backdoor account or elevate an existing
+  account to super_admin with no record. This is the highest-risk unlogged action in
+  the system.
+Fix: Insert into audit_logs on every staff mutation:
+  {action: "staff_created"/"staff_updated"/"staff_deleted", entity_type: "staff",
+  entity_id: staff_id, actor_id: admin["id"], changes: diff}. Effort: 2 hours.
+
+[05-4] MEDIUM | Force-Cancel Ride By Admin Not Written to audit_logs
+File: backend/routes/admin/rides.py (cancel endpoint)
+Finding: Admin force-cancel calls the cancel logic but adds no audit_logs entry
+  linking the admin actor to the cancellation. Drivers who dispute a forced cancellation
+  have no visibility into who triggered it.
+Fix: On successful admin cancel, insert into audit_logs:
+  {action: "ride_cancelled", entity_type: "ride", entity_id: ride_id,
+  actor_id: admin["id"], reason: reason}. Effort: 1 hour.
+
+[05-5] MEDIUM | Audit Log Page Expects entity_type/actor Fields That Current audit_logs Schema May Not Have
+File: admin-dashboard/src/app/dashboard/audit-logs/page.tsx:44–55
+Finding: The frontend ACTION_CONFIG lists actions: created, updated, deleted, login,
+  status_change — but the actual audit_logs table currently only stores ride_declined
+  entries (from routes/drivers.py:1870). The frontend audit-logs page will display
+  empty results for all admin panel actions because nothing writes those action types.
+Fix: Standardise audit_logs schema to include: entity_type, entity_id, actor_id,
+  action, old_value, new_value, created_at. Then populate from admin endpoints as
+  described in findings 05-1 through 05-4. Effort: 3 hours (schema + backfill query).
+
+[05-6] PASS | Driver Actions (Verify, Suspend, Ban) Logged to driver_activity_log
+File: backend/routes/admin/drivers.py:64–90, 548, 627, 662
+Finding: Admin driver actions call _log_driver_activity() which inserts into
+  driver_activity_log with event_type, title, description, and metadata. This is
+  the correct pattern and should be extended to other entity types.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 05 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     3 |
+| MEDIUM          |     2 |
+| LOW             |     0 |
+| PASS            |     1 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |     6 |
+
+
+================================================================================
+TASK 06 — TEST COVERAGE
+================================================================================
+
+[06-1] HIGH | No Tests for Admin Business Logic (Driver Actions, Wallet, Users, Rides)
+File: backend/tests/test_admin_routes_auth.py (75 lines — auth only)
+Finding: The entire admin test suite consists of 3 files totalling 304 lines.
+  test_admin_routes_auth.py only tests that unauthenticated requests return 401.
+  There are NO tests for: driver approve/reject/suspend/ban, wallet credit/debit,
+  user suspend/ban, force-cancel ride, staff creation, service area CRUD,
+  promotion create/edit, cloud message dispatch. A single regression in any of these
+  flows could go undetected indefinitely.
+Fix: Add one test file per admin domain: test_admin_drivers.py, test_admin_wallet.py,
+  test_admin_users.py, test_admin_rides.py. Cover the happy path and at least one
+  rejection case (wrong role, invalid input) per endpoint. Effort: 2–3 days.
+
+[06-2] HIGH | No RBAC/Module Enforcement Tests
+File: backend/tests/ (no module enforcement tests)
+Finding: Given finding [03-1] (module access not enforced), there are also no tests
+  that verify a "support" role cannot reach wallet or analytics endpoints. Until
+  module enforcement is implemented AND tested, any regression will be silent.
+Fix: Add test_admin_rbac.py with parametrized cases: each role × each sensitive
+  endpoint → assert 403 for roles without the required module. Effort: 4 hours.
+
+[06-3] MEDIUM | Admin Dashboard Frontend Tests Cover Only Login and Auth Store
+File: admin-dashboard/src/__tests__/ (4 test files, 248 lines total)
+Finding: Frontend unit tests only cover login.test.tsx and authStore.test.ts. All
+  25+ dashboard pages (drivers, rides, users, wallet, staff, promotions, etc.) have
+  zero unit tests. The E2E Playwright suite only checks page navigation loads (4 pages).
+Fix: Add Vitest unit tests for critical page-level logic: pagination, filter state,
+  table rendering, form submission with mock API. Effort: 1–2 days.
+
+[06-4] MEDIUM | No Tests for Admin Auth Security Scenarios
+File: backend/tests/test_admin_routes_auth.py
+Finding: No test covers: brute-force lockout (5 failures), staff token invalidation
+  on deactivation, logout access-token persistence, or role escalation prevention.
+  These are the most critical security properties and all are untested.
+Fix: Add security test cases to test_admin_routes_auth.py:
+  - test_login_lockout_after_5_failures
+  - test_deactivated_staff_token_is_rejected
+  - test_support_role_cannot_access_wallet
+  - test_only_super_admin_can_create_staff
+  Effort: 4 hours.
+
+[06-5] PASS | Corporate Admin Routes Have Targeted Tests
+File: backend/tests/test_corporate_admin_routes.py
+Finding: Corporate account listing with status filters is tested, including enum
+  validation rejection. This is a good pattern to replicate for other admin domains.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 06 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     2 |
+| MEDIUM          |     2 |
+| LOW             |     0 |
+| PASS            |     1 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |     5 |
+
+
+================================================================================
+TASK 07 — ERROR HANDLING & SECURITY HEADERS
+================================================================================
+
+[07-1] HIGH | Analytics Endpoints Fall Back to Empty Data on DB Failure — Violates CLAUDE.md
+File: backend/routes/admin/analytics.py:53–55, 143, 230, 367
+Finding: When a DB query fails, analytics endpoints catch the exception, log it,
+  and continue with rides = [] (or similar). This violates the "do not silently swallow
+  errors" convention in CLAUDE.md: "Never logger.warning and continue on a DB error."
+  Admins see empty charts that look like real data, not error indicators.
+Fix: Replace fallback-to-empty patterns with raise HTTPException(status_code=503,
+  detail="Analytics data unavailable — database error"). Let the frontend display an
+  error state. Effort: 2 hours.
+
+[07-2] MEDIUM | Admin Dashboard Has No Security Headers (X-Frame-Options, CSP, HSTS)
+File: admin-dashboard/next.config.ts
+Finding: The Next.js config has no headers() function — no X-Frame-Options, no
+  Content-Security-Policy, no X-Content-Type-Options, no HSTS, no Referrer-Policy.
+  The backend sets these on API responses, but the admin dashboard HTML pages
+  themselves (served by Next.js/Vercel) have no headers. This makes the admin UI
+  vulnerable to clickjacking and MIME-sniffing on the frontend itself.
+Fix: Add a headers() export to next.config.ts with at minimum:
+  X-Frame-Options: DENY, X-Content-Type-Options: nosniff,
+  Referrer-Policy: strict-origin-when-cross-origin,
+  Content-Security-Policy: script-src 'self', HSTS: max-age=31536000.
+  Effort: 2 hours.
+
+[07-3] MEDIUM | documents.py Silently Ignores Requirement Lookup Failure
+File: backend/routes/admin/documents.py:183
+Finding: When fetching the document requirement row fails (except Exception: req_name = None),
+  the fallback silently continues with a None requirement name, which causes the legacy
+  field mapping to be skipped. A DB failure here means the driver's expiry is not
+  propagated to the legacy column, leaving them potentially unable to go online — with
+  no error surfaced to the admin.
+Fix: Log the exception at logger.error level with the full exception details. Do not
+  silently swallow — either surface the error or clearly document the intended fallback
+  as a compensating control. Effort: 30 minutes.
+
+[07-4] MEDIUM | Internal Error Details Leaked in HTTPException detail Field
+File: backend/routes/admin/documents.py:163
+  raise HTTPException(status_code=500, detail=f"Failed to update document: {e}")
+Finding: The exception message is interpolated directly into the HTTP response detail
+  field. DB error messages can contain table names, column names, constraint names,
+  or query fragments — valuable information for attackers. Multiple admin routes do
+  this pattern.
+Fix: Log the full exception internally; return a generic detail in the HTTP response:
+  detail="Document update failed. Please try again." Effort: 1 hour.
+
+[07-5] PASS | Backend Security Headers Are Comprehensive
+File: backend/core/middleware.py:123–173
+Finding: Backend sets X-Content-Type-Options: nosniff, X-Frame-Options: DENY,
+  X-Permitted-Cross-Domain-Policies: none, Referrer-Policy: same-origin,
+  Strict-Transport-Security, and Content-Security-Policy. CORS fails fast
+  with wildcard in production. This is well-implemented.
+
+[07-6] PASS | Wallet Error Handling Is Clean (No Swallowing)
+File: backend/routes/admin/wallet.py
+Finding: Wallet credit/debit endpoints let all DB errors propagate naturally
+  without try/except — errors will surface as 500s with the global exception
+  handler. No silent fallbacks.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 07 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     0 |
+| HIGH            |     1 |
+| MEDIUM          |     3 |
+| LOW             |     0 |
+| PASS            |     2 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |     6 |
+
+
+================================================================================
+TASK 08 — PERFORMANCE & SCALABILITY
+================================================================================
+
+[08-1] CRITICAL | GPS Points Query Uses limit=1,000,000 — Will OOM in Production
+File: backend/routes/admin/maintenance.py:122
+Finding: The daily stats rollup fetches driver GPS points with limit=1000000.
+  A fleet of 100 drivers online for 8 hours each emits ~1 GPS point per second
+  = 2,880,000 points per day. At even 50% coverage this is 1.4M rows loaded into
+  memory per rollup request, which will exhaust server RAM and time out.
+Fix: Replace the in-memory aggregation with a SQL aggregation query (e.g., a
+  Supabase RPC that groups by driver_id and computes online minutes server-side).
+  Never paginate analytics data through Python — push it to the DB. Effort: 4 hours.
+
+[08-2] HIGH | Analytics Overview Loads ALL Rides Into Memory, Filters in Python
+File: backend/routes/admin/analytics.py:229
+Finding: get_analytics_overview fetches all rides with no date filter at the DB level
+  (limit=10000, filter={}), then filters in Python by start_date. Once the platform
+  has >10,000 rides the analytics silently truncates — the "30d" view may miss recent
+  data because older rides fill the limit. This is both a correctness and a performance bug.
+Fix: Pass the date filter to the DB query: {"created_at": {"$gte": start_date.isoformat()}}.
+  Remove Python-level date filtering. Same fix applies to get_cancellation_breakdown.
+  Effort: 2 hours.
+
+[08-3] HIGH | Bulk Cloud Message Send Is N+1 Push Calls in a Single Request
+File: backend/routes/admin/messaging.py:69–81
+Finding: When sending to "customers" (all riders) or "drivers", the endpoint first
+  loads up to 10,000 user rows, then calls send_push_notification() sequentially for
+  each user in a for loop. With 5,000 riders this is 5,000 sequential async calls
+  within a single HTTP request — it will hit timeout limits and block the event loop
+  for tens of seconds.
+Fix: Move bulk sends to a background task (fastapi.BackgroundTasks or a queue).
+  Return 202 Accepted immediately. Use asyncio.gather() with a concurrency limiter
+  (asyncio.Semaphore(100)) for parallel push delivery. Effort: 4 hours.
+
+[08-4] MEDIUM | Promotions Stats Loads All Promo Usage Into Memory
+File: backend/routes/admin/promotions.py:196–198
+Finding: get_promotion_stats loads all_promos (limit=10000) and all_usage (limit=10000)
+  into memory for in-Python aggregation. As promo usage grows, this will be slow and
+  will silently cap at 10,000 rows.
+Fix: Compute aggregations in SQL (COUNT, SUM GROUP BY promo_id). Return counts
+  directly from DB. Effort: 2 hours.
+
+[08-5] MEDIUM | Driver Documents "Pending" List Loads Up to 10,000 Documents In-Memory
+File: backend/routes/admin/drivers.py:226
+Finding: admin_get_pending_documents fetches up to 10,000 pending documents in one
+  query with no pagination and no response limit enforced. As the driver base grows
+  this will be slow and may hit the request timeout.
+Fix: Add cursor-based or offset pagination with a max of 100 documents per page.
+  The endpoint already accepts limit/offset Query params but passes them to the
+  underlying query — verify the limit is enforced. Effort: 1 hour.
+
+[08-6] MEDIUM | Driver Ride History Loads Up to 50,000 Rides in One Query
+File: backend/routes/admin/drivers.py:322
+Finding: admin_get_driver_rides fetches up to 50,000 rides per driver (limit=50000).
+  A long-tenured driver with high ride volume will cause this to load 50K rows into
+  memory for a single admin page view.
+Fix: Cap at limit=500 with offset pagination. The admin UI only shows a table of
+  recent rides — it does not need the full history in one request. Effort: 30 minutes.
+
+[08-7] PASS | Drivers List Uses Server-Side Pagination Correctly
+File: backend/routes/admin/drivers.py:117–145
+Finding: GET /drivers accepts limit (ge=1, le=200) and offset Query params and passes
+  them to the DB layer. This is the correct pattern — DB-level pagination.
+
+────────────────────────────────────────────────────────────────────────────────
+TASK 08 TALLY
+────────────────────────────────────────────────────────────────────────────────
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     1 |
+| HIGH            |     2 |
+| MEDIUM          |     3 |
+| LOW             |     0 |
+| PASS            |     1 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |     7 |
+
+
+================================================================================
+AUDIT COMPLETE — all 8 dimensions
+================================================================================
+FINAL AUDIT TALLY — ALL 8 DIMENSIONS
+================================================================================
+| Severity        | Count |
+|-----------------|-------|
+| CRITICAL        |     4 |
+| HIGH            |    18 |
+| MEDIUM          |    20 |
+| LOW             |     1 |
+| PASS            |    12 |
+| RECOMMENDATION  |     0 |
+| TOTAL           |    55 |
+
+================================================================================
+SPRINT BREAKDOWN
+================================================================================
+
+── P0: FIX BEFORE ANY DEVICE/BROWSER TESTING ────────────────────────────────
+
+P0-1  [02-2] Remove JWT from sessionStorage; use HttpOnly cookie exclusively.
+              JWT accessible to XSS in browser sessionStorage.
+P0-2  [02-1] Reduce admin access token TTL from 12h → 1h; add silent refresh.
+              12-hour window is too large for privileged accounts.
+P0-3  [08-1] Replace GPS points limit=1,000,000 with SQL aggregation in maintenance.py.
+              Will OOM the server in production with any reasonable fleet size.
+
+── P1: FIX BEFORE BETA TESTING ───────────────────────────────────────────────
+
+P1-1  [03-1] Implement require_module() dependency; enforce it on all admin endpoints.
+              Module access control is defined but never backend-enforced.
+P1-2  [03-2] Bump token_version when staff is deactivated.
+              Deactivated staff can use existing token for up to 12 hours.
+P1-3  [03-3] Invalidate tokens on staff deletion (Redis blacklist or token_version bump).
+P1-4  [05-1] Add audit_logs write for user status changes (suspend/ban).
+P1-5  [05-2] Add audit_logs write for wallet credit/debit admin actions.
+P1-6  [05-3] Add audit_logs write for staff create/update/delete.
+P1-7  [02-3] Add access token revocation on logout (Redis blacklist).
+P1-8  [08-2] Pass date filter to DB in analytics queries; remove Python-level filtering.
+P1-9  [08-3] Move bulk push notification delivery to background task + asyncio.gather.
+P1-10 [07-1] Replace analytics empty-fallback error handling with 503 responses.
+P1-11 [01-1] Build FAQ management UI in admin dashboard (/dashboard/faqs).
+
+── P2: FIX BEFORE PUBLIC LAUNCH ──────────────────────────────────────────────
+
+P2-1  [02-5] Implement TOTP multi-factor authentication for admin login.
+P2-2  [02-4] Add 30-minute idle session timeout (client + server-side).
+P2-3  [04-1] Replace Dict[str,Any] in messaging.py with Pydantic CloudMessageRequest.
+P2-4  [04-2] Replace Dict[str,Any] in service_areas.py with typed Pydantic models.
+P2-5  [04-3] Use Literal types for DriverActionRequest.action and StatusOverride.status.
+P2-6  [04-4] Add numeric range constraints to settings float fields.
+P2-7  [06-1] Write backend admin business logic tests (drivers, wallet, users, rides).
+P2-8  [06-2] Write RBAC module enforcement tests.
+P2-9  [07-2] Add security headers to Next.js admin dashboard (next.config.ts).
+P2-10 [05-4] Audit-log admin force-cancel ride action.
+P2-11 [08-4] Replace promotions stats in-memory aggregation with SQL GROUP BY.
+P2-12 [08-6] Cap driver ride history query at limit=500 with pagination.
+
+── P3: HARDENING ─────────────────────────────────────────────────────────────
+
+P3-1  [02-6] Hash ADMIN_PASSWORD at startup; replace plaintext comparison.
+P3-2  [02-7] Tighten login rate limit: 3 attempts/30 min with account lockout.
+P3-3  [02-8] Add optional IP whitelist per staff member.
+P3-4  [02-9] Implement forgot-password flow for staff accounts.
+P3-5  [03-4] Add super_admin role check to staff update/delete endpoints.
+P3-6  [03-5] Require re-authentication when promoting a staff member to super_admin.
+P3-7  [06-3] Add Vitest unit tests for admin dashboard page components.
+P3-8  [06-4] Add security test cases to test_admin_routes_auth.py.
+P3-9  [07-3] Log requirement lookup failure at error level; document fallback.
+P3-10 [07-4] Replace interpolated exception messages in HTTP responses with generic details.
+P3-11 [01-3] Wire all subscription CRUD actions to backend in the subscriptions page.
+P3-12 [05-5] Standardise audit_logs schema; populate from all admin action endpoints.
+
+── P4: FUTURE FEATURES ───────────────────────────────────────────────────────
+
+P4-1  [01-2] Build document requirements configuration UI in admin dashboard.
+P4-2  [01-4] Build payout management page (/dashboard/earnings/payouts).
+P4-3  [02-10] Add password complexity enforcement and common-password blacklist.
+P4-4  [08-5] Add cursor pagination to pending documents list endpoint.
+
+================================================================================
+END OF AUDIT — spinr admin panel v1 (8 tasks)
+Audit date: 2026-04-25 | Branch: claude/fix-audit-prompt-length-AJpQN
+================================================================================

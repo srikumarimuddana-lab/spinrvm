@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
     getTickets, replyToTicket, closeTicket, createTicket, updateTicket, deleteTicket,
     getFaqs, createFaq, updateFaq, deleteFaq,
@@ -16,8 +16,16 @@ import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { MessageSquare, CheckCircle, Plus, Trash2, Pencil, Send, Search, RefreshCw, HelpCircle, Clock, Inbox } from "lucide-react";
+import { Pagination } from "@/components/ui/pagination";
+import { MessageSquare, CheckCircle, Plus, Trash2, Pencil, Send, Search, RefreshCw, HelpCircle } from "lucide-react";
 import { useServiceAreas, ServiceAreaFilter, ServiceAreaSelect } from "../_components/service-area-select";
+import { useToast } from "@/components/ui/use-toast";
+import {
+    AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+    AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+
+const PAGE_SIZE = 50;
 
 const CATEGORIES = ["general", "rides", "payments", "account", "safety", "driver", "technical"];
 const PRIORITIES = ["low", "medium", "high", "urgent"];
@@ -40,6 +48,8 @@ export default function TicketsTab() {
 }
 
 function TicketsList() {
+    const { toast } = useToast();
+    const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
     const { areas } = useServiceAreas();
     const [tickets, setTickets] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
@@ -53,39 +63,52 @@ function TicketsList() {
     const [editing, setEditing] = useState<any>(null);
     const [saving, setSaving] = useState(false);
     const [form, setForm] = useState({ subject: "", category: "general", priority: "medium", message: "", user_name: "", user_email: "", service_area_id: "" });
+    const [page, setPage] = useState(0);
+    const [hasNextPage, setHasNextPage] = useState(false);
+    const reqIdRef = useRef(0);
 
-    const load = () => { setLoading(true); getTickets().then(setTickets).catch(() => setTickets([])).finally(() => setLoading(false)); };
-    useEffect(() => { load(); }, []);
+    const load = useCallback(() => {
+        setLoading(true);
+        const reqId = ++reqIdRef.current;
+        const opts: any = { limit: PAGE_SIZE + 1, offset: page * PAGE_SIZE };
+        if (statusFilter !== "all") opts.status = statusFilter;
+        if (areaFilter !== "all") opts.service_area_id = areaFilter;
+        getTickets(opts)
+            .then((rows) => {
+                if (reqId !== reqIdRef.current) return;
+                const arr = Array.isArray(rows) ? rows : [];
+                setHasNextPage(arr.length > PAGE_SIZE);
+                setTickets(arr.slice(0, PAGE_SIZE));
+            })
+            .catch(() => { if (reqId === reqIdRef.current) { setTickets([]); setHasNextPage(false); } })
+            .finally(() => { if (reqId === reqIdRef.current) setLoading(false); });
+    }, [page, statusFilter, areaFilter]);
+    useEffect(() => { load(); }, [load]);
+    useEffect(() => { setPage(0); }, [statusFilter, areaFilter]);
 
-    const stats = { total: tickets.length, open: tickets.filter((t) => t.status === "open" || t.status === "in_progress").length, closed: tickets.filter((t) => t.status === "closed").length };
+    // Search filters the current page client-side; full-text server search is not implemented.
     const filtered = tickets.filter((t) => {
-        const ms = !search || t.subject?.toLowerCase().includes(search.toLowerCase()) || t.user_name?.toLowerCase().includes(search.toLowerCase());
-        const ma = areaFilter === "all" || t.service_area_id === areaFilter;
-        return ms && ma && (statusFilter === "all" || t.status === statusFilter);
+        if (!search) return true;
+        const q = search.toLowerCase();
+        return t.subject?.toLowerCase().includes(q) || t.user_name?.toLowerCase().includes(q);
     });
 
     const reset = () => { setForm({ subject: "", category: "general", priority: "medium", message: "", user_name: "", user_email: "", service_area_id: "" }); setEditing(null); };
 
     const handleSave = async () => {
-        if (!form.subject.trim()) { alert("Enter a subject."); return; }
+        if (!form.subject.trim()) { toast({ title: "Missing subject", variant: "destructive" }); return; }
         setSaving(true);
         try {
             if (editing) await updateTicket(editing.id, { subject: form.subject, category: form.category, priority: form.priority, service_area_id: form.service_area_id || null });
             else await createTicket({ ...form, service_area_id: form.service_area_id || null });
             setDialogOpen(false); reset(); load();
-        } catch (e: any) { alert(e.message); } finally { setSaving(false); }
+        } catch (e: any) { toast({ title: "Failed to save ticket", description: e.message, variant: "destructive" }); } finally { setSaving(false); }
     };
 
     const areaName = (id: string) => areas.find((a) => a.id === id)?.name || "";
 
     return (
         <div className="space-y-4">
-            <div className="grid grid-cols-3 gap-3">
-                <Card><CardContent className="pt-3 pb-2"><div className="flex items-center gap-2"><Inbox className="h-4 w-4 text-violet-500" /><div><p className="text-[10px] text-muted-foreground">Total</p><p className="text-xl font-bold">{stats.total}</p></div></div></CardContent></Card>
-                <Card><CardContent className="pt-3 pb-2"><div className="flex items-center gap-2"><Clock className="h-4 w-4 text-amber-500" /><div><p className="text-[10px] text-muted-foreground">Open</p><p className="text-xl font-bold">{stats.open}</p></div></div></CardContent></Card>
-                <Card><CardContent className="pt-3 pb-2"><div className="flex items-center gap-2"><CheckCircle className="h-4 w-4 text-emerald-500" /><div><p className="text-[10px] text-muted-foreground">Closed</p><p className="text-xl font-bold">{stats.closed}</p></div></div></CardContent></Card>
-            </div>
-
             <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-2 flex-1 flex-wrap">
                     <div className="relative flex-1 max-w-xs"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Search..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9 h-9" /></div>
@@ -113,11 +136,13 @@ function TicketsList() {
                                 <TableCell className="text-[10px] text-muted-foreground">{formatDate(t.created_at)}</TableCell>
                                 <TableCell className="text-right"><div className="flex justify-end gap-0.5">
                                     <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); setEditing(t); setForm({ subject: t.subject || "", category: t.category || "general", priority: t.priority || "medium", message: t.message || "", user_name: t.user_name || "", user_email: t.user_email || "", service_area_id: t.service_area_id || "" }); setDialogOpen(true); }}><Pencil className="h-3.5 w-3.5" /></Button>
-                                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={(e) => { e.stopPropagation(); if (confirm("Delete?")) { deleteTicket(t.id).then(load); if (selected?.id === t.id) setSelected(null); } }}><Trash2 className="h-3.5 w-3.5" /></Button>
+                                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={(e) => { e.stopPropagation(); setDeleteTarget(t.id); }}><Trash2 className="h-3.5 w-3.5" /></Button>
                                 </div></TableCell>
                             </TableRow>
                         ))}</TableBody></Table>}
-                </CardContent></Card>
+                </CardContent>
+                <Pagination page={page} pageSize={PAGE_SIZE} hasNextPage={hasNextPage} onPageChange={setPage} />
+                </Card>
 
                 <Card className="h-fit">
                     {selected ? (
@@ -172,11 +197,25 @@ function TicketsList() {
                     </div>
                 </DialogContent>
             </Dialog>
+
+            <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Delete ticket?</AlertDialogTitle>
+                        <AlertDialogDescription>This cannot be undone.</AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction onClick={() => { if (deleteTarget) { deleteTicket(deleteTarget).then(load); if (selected?.id === deleteTarget) setSelected(null); setDeleteTarget(null); } }} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </div>
     );
 }
 
 function FaqsList() {
+    const [faqDeleteTarget, setFaqDeleteTarget] = useState<string | null>(null);
     const [faqs, setFaqs] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [dialogOpen, setDialogOpen] = useState(false);
@@ -199,7 +238,7 @@ function FaqsList() {
                         <TableRow key={f.id}><TableCell className="font-medium max-w-[280px] truncate text-sm">{f.question}</TableCell><TableCell className="text-xs text-muted-foreground">{f.category || "General"}</TableCell>
                             <TableCell className="text-right"><div className="flex justify-end gap-0.5">
                                 <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setEditing(f); setForm({ question: f.question || "", answer: f.answer || "", category: f.category || "" }); setDialogOpen(true); }}><Pencil className="h-3.5 w-3.5" /></Button>
-                                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => { if (confirm("Delete?")) deleteFaq(f.id).then(load); }}><Trash2 className="h-3.5 w-3.5" /></Button>
+                                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => setFaqDeleteTarget(f.id)}><Trash2 className="h-3.5 w-3.5" /></Button>
                             </div></TableCell>
                         </TableRow>
                     ))}</TableBody></Table>}
@@ -214,6 +253,19 @@ function FaqsList() {
                     </div>
                 </DialogContent>
             </Dialog>
+
+            <AlertDialog open={!!faqDeleteTarget} onOpenChange={(open) => { if (!open) setFaqDeleteTarget(null); }}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Delete FAQ?</AlertDialogTitle>
+                        <AlertDialogDescription>This cannot be undone.</AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction onClick={() => { if (faqDeleteTarget) deleteFaq(faqDeleteTarget).then(load).finally(() => setFaqDeleteTarget(null)); }} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </div>
     );
 }

@@ -14,6 +14,8 @@ interface FreeCancelTimerProps {
   cancellationFee?: number;
   /** Compact single-line layout for use inside dialogs. Default false. */
   compact?: boolean;
+  /** Called once when the free-cancel window expires (secondsLeft reaches 0). */
+  onExpire?: () => void;
 }
 
 /**
@@ -31,6 +33,7 @@ export function FreeCancelTimer({
   freeCancelWindowSeconds = 120,
   cancellationFee = 3.0,
   compact = false,
+  onExpire,
 }: FreeCancelTimerProps) {
   const [secondsLeft, setSecondsLeft] = useState<number>(() => {
     if (!driverAcceptedAt) return freeCancelWindowSeconds;
@@ -45,7 +48,10 @@ export function FreeCancelTimer({
       const elapsed = Math.floor((Date.now() - new Date(driverAcceptedAt).getTime()) / 1000);
       const remaining = Math.max(0, freeCancelWindowSeconds - elapsed);
       setSecondsLeft(remaining);
-      if (remaining === 0) clearInterval(interval);
+      if (remaining === 0) {
+        clearInterval(interval);
+        onExpire?.();
+      }
     }, 1000);
 
     return () => clearInterval(interval);
@@ -77,7 +83,13 @@ export function FreeCancelTimer({
         {isWindowOpen ? (
           <>
             <Text style={styles.freeLabel}>Free cancellation</Text>
-            <Text style={styles.freeTimer}>{timerLabel} remaining</Text>
+            <Text
+              style={styles.freeTimer}
+              accessibilityLiveRegion="polite"
+              accessibilityLabel={`${timerLabel} remaining for free cancellation`}
+            >
+              {timerLabel} remaining
+            </Text>
           </>
         ) : (
           <>

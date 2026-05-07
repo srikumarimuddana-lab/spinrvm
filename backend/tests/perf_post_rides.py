@@ -31,10 +31,10 @@ import logging
 import os
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from statistics import mean
 from typing import Any, Dict, List, Optional
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 # ---------------------------------------------------------------------------
 # Path bootstrap (mirrors perf_baseline.py)
@@ -271,10 +271,9 @@ def percentile(data: List[float], pct: float) -> float:
 # Benchmark
 # ---------------------------------------------------------------------------
 async def bench_create_ride(samples: int) -> Dict[str, Any]:
-    from backend.server import app  # noqa: E402
-
     import db_supabase  # noqa: E402
     import dependencies  # noqa: E402
+    from backend.server import app  # noqa: E402
     from utils.rate_limiter import default_limiter  # noqa: E402
 
     counter = CallCounter()
@@ -372,7 +371,7 @@ async def bench_create_ride(samples: int) -> Dict[str, Any]:
 def print_report(current: Dict[str, Any], baseline: Optional[Dict[str, Any]]) -> None:
     divider = "-" * 72
     print("\n" + divider)
-    print(" POST /api/v1/rides -- perf snapshot -- " + datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"))
+    print(" POST /api/v1/rides -- perf snapshot -- " + datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"))
     print(divider)
     if current.get("samples", 0) == 0:
         print("  ERR: no successful samples")
@@ -387,7 +386,9 @@ def print_report(current: Dict[str, Any], baseline: Optional[Dict[str, Any]]) ->
     print(f"  min/max:    {current['min_ms']} / {current['max_ms']} ms")
     counts = current["db_calls_per_request"]
     total = counts["total_max"]
-    print(f"  DB calls/req (total):    {counts['total_min']}-{counts['total_max']}  (get_rows: {counts['get_rows_max']}, direct: {counts['direct_max']})")
+    print(
+        f"  DB calls/req (total):    {counts['total_min']}-{counts['total_max']}  (get_rows: {counts['get_rows_max']}, direct: {counts['direct_max']})"
+    )
     print("  calls by table (last sample):")
     for tbl, n in sorted(counts["by_table_last_sample"].items(), key=lambda kv: -kv[1]):
         print(f"    {tbl:<24} {n}")
@@ -399,7 +400,9 @@ def print_report(current: Dict[str, Any], baseline: Optional[Dict[str, Any]]) ->
         if baseline.get("p95_ms"):
             p95_delta = current["p95_ms"] - baseline["p95_ms"]
             p95_pct = (p95_delta / baseline["p95_ms"] * 100) if baseline["p95_ms"] else 0
-            print(f"  vs baseline -- P95:      {baseline['p95_ms']} -> {current['p95_ms']} ms  ({p95_delta:+.2f} ms, {p95_pct:+.1f}%)")
+            print(
+                f"  vs baseline -- P95:      {baseline['p95_ms']} -> {current['p95_ms']} ms  ({p95_delta:+.2f} ms, {p95_pct:+.1f}%)"
+            )
     print(divider + "\n")
 
 

@@ -7,26 +7,12 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
-import api from '@shared/api/client';
+import api, { getAuthHeader } from '@shared/api/client';
 import { useAuthStore } from '@shared/store/authStore';
 import SpinrConfig from '@shared/config/spinr.config';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
-// Resolve the stored auth token the same way the shared api client does.
-// Used for the raw fetch() upload below — we can't reuse axios for multipart
-// because its FormData handling is fragile in React Native.
-const getAuthToken = async (): Promise<string | null> => {
-    try {
-        if (Platform.OS === 'web' && typeof window !== 'undefined') {
-            return localStorage.getItem('auth_token');
-        }
-        const SecureStore = require('expo-secure-store');
-        return await SecureStore.getItemAsync('auth_token');
-    } catch {
-        return null;
-    }
-};
 
 // Derive a proper MIME type from a file URI / name.
 // expo-image-picker returns asset.type = 'image' (not a MIME), so we check
@@ -56,7 +42,9 @@ interface Requirement {
 
 interface DriverDocument {
     id: string;
-    requirement_id: string;
+    requirement_id: string | null;
+    requirement_key?: string | null;
+    document_type?: string | null;
     document_url: string;
     status: 'pending' | 'approved' | 'rejected';
     rejection_reason?: string;
@@ -87,17 +75,12 @@ export default function DocumentsScreen() {
     const loadData = async () => {
         try {
             const [reqRes, docRes] = await Promise.all([
-                api.get('/drivers/requirements'),
-                api.get('/drivers/documents')
+                api.get<Requirement[]>('/drivers/requirements'),
+                api.get<DriverDocument[]>('/drivers/documents')
             ]);
-            setRequirements(reqRes.data);
-            setDocuments(docRes.data);
+            setRequirements(reqRes.data as Requirement[]);
+            setDocuments(docRes.data as DriverDocument[]);
         } catch (err: any) {
-            console.error("Documents load error:", err);
-            if (err.response) {
-                console.error("Error status:", err.response.status);
-                console.error("Error data:", err.response.data);
-            }
             showAlert('Error', `Failed to load documents: ${err.message}`, 'danger');
         } finally {
             setLoading(false);
@@ -127,25 +110,59 @@ export default function DocumentsScreen() {
             // axios's default transformRequest tries to JSON.stringify the
             // FormData. fetch() in React Native handles multipart bodies
             // natively and sets the boundary correctly, so we use it here.
-            const formData = new FormData();
-            formData.append('file', {
-                uri,
-                name,
-                type: mimeType,
-            } as any);
+            //
+            // Build a fresh FormData per attempt — React Native consumes it
+            // on the first send and passing the same instance into a retry
+            // fires an empty body.
+            const buildFormData = () => {
+                const fd = new FormData();
+                fd.append('file', {
+                    uri,
+                    name,
+                    type: mimeType,
+                } as any);
+                return fd;
+            };
 
-            const token = await getAuthToken();
             const uploadUrl = `${SpinrConfig.backendUrl}/api/v1/upload`;
 
-            const resp = await fetch(uploadUrl, {
-                method: 'POST',
-                headers: {
-                    // Do NOT set Content-Type — fetch generates it with the boundary.
-                    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-                    Accept: 'application/json',
-                },
-                body: formData as any,
-            });
+            const doUpload = async (token: string | null): Promise<Response> => {
+                return fetch(uploadUrl, {
+                    method: 'POST',
+                    headers: {
+                        // Do NOT set Content-Type — fetch generates it with the boundary.
+                        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                        Accept: 'application/json',
+                    },
+                    body: buildFormData() as any,
+                });
+            };
+
+            // Mirror the axios client's silent-refresh-on-401 behavior. Raw
+            // fetch skips the interceptor, so if the access token expired
+            // between screens we have to refresh and retry manually — or the
+            // user sees "No authorization token provided" instead of their
+            // session being transparently restored.
+            let token = await getAuthHeader();
+            if (!token) {
+                const refreshed = await useAuthStore.getState().refreshTokens();
+                token = refreshed ? await getAuthHeader() : null;
+                if (!token) {
+                    throw new Error('Your session has expired. Please log in again.');
+                }
+            }
+
+            let resp = await doUpload(token);
+
+            if (resp.status === 401) {
+                const refreshed = await useAuthStore.getState().refreshTokens();
+                if (refreshed) {
+                    const freshToken = await getAuthHeader();
+                    if (freshToken) {
+                        resp = await doUpload(freshToken);
+                    }
+                }
+            }
 
             if (!resp.ok) {
                 const text = await resp.text().catch(() => '');
@@ -185,7 +202,6 @@ export default function DocumentsScreen() {
                 err?.message ||
                 (typeof err === 'string' ? err : JSON.stringify(err)) ||
                 'Something went wrong';
-            console.log('Upload error:', err);
             showAlert('Upload Failed', String(detail), 'danger');
         } finally {
             setUploading(null);
@@ -272,13 +288,16 @@ export default function DocumentsScreen() {
 
     const getDocStatus = (reqId: string, side: 'front' | 'back' = 'front') => {
         const req = requirements.find(r => r.id === reqId);
-        // Primary match: by requirement_id (UUID-based requirements)
-        // Fallback: by document_type name (service-area requirements stored with null requirement_id)
-        const doc = documents.find(d =>
-            (d.requirement_id === reqId ||
-             (!d.requirement_id && req && d.document_type === req.name)) &&
-            (d.side === side || !d.side)
-        );
+        // Match strategies in order: requirement_key (slug, authoritative when
+        // migration 28 is applied) → requirement_id (UUID or legacy slug) →
+        // document_type name (fallback for rows missing requirement_key).
+        const doc = documents.find(d => {
+            const matches =
+                (d.requirement_key && d.requirement_key === reqId) ||
+                (d.requirement_id && d.requirement_id === reqId) ||
+                (!d.requirement_id && !d.requirement_key && req && d.document_type === req.name);
+            return matches && (d.side === side || !d.side);
+        });
         if (!doc) return 'missing';
         return doc;
     };

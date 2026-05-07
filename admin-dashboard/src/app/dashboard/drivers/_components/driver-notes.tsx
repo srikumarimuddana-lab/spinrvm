@@ -3,7 +3,11 @@
 import { useEffect, useState } from "react";
 import { getDriverNotes, addDriverNote, deleteDriverNote } from "@/lib/api";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { useToast } from "@/components/ui/use-toast";
+import {
+    AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+    AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
     MessageSquare, Plus, Trash2, AlertTriangle, FileText, ShieldCheck,
     Flag, Clock, Loader2, StickyNote,
@@ -28,6 +32,8 @@ function fmtDateTime(d: string) {
 }
 
 export default function DriverNotes({ driverId }: { driverId: string }) {
+    const { toast } = useToast();
+    const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
     const [notes, setNotes] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [adding, setAdding] = useState(false);
@@ -57,24 +63,30 @@ export default function DriverNotes({ driverId }: { driverId: string }) {
             setAdding(false);
             loadNotes();
         } catch (e: any) {
-            alert(e?.message || "Failed to add note");
+            toast({ title: "Failed to add note", description: e?.message, variant: "destructive" });
         }
         setSaving(false);
     };
 
-    const handleDelete = async (noteId: string) => {
-        if (!confirm("Delete this note?")) return;
-        setDeleting(noteId);
+    const handleDelete = (noteId: string) => {
+        setDeleteTarget(noteId);
+    };
+
+    const confirmDelete = async () => {
+        if (!deleteTarget) return;
+        setDeleting(deleteTarget);
         try {
-            await deleteDriverNote(noteId);
+            await deleteDriverNote(deleteTarget);
             loadNotes();
         } catch {}
         setDeleting(null);
+        setDeleteTarget(null);
     };
 
     const getCategoryConfig = (cat: string) => CATEGORIES.find(c => c.value === cat) || CATEGORIES[0];
 
     return (
+        <>
         <div className="space-y-4">
             <div className="flex items-center justify-between">
                 <div>
@@ -161,5 +173,19 @@ export default function DriverNotes({ driverId }: { driverId: string }) {
                 </div>
             )}
         </div>
+
+        <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+            <AlertDialogContent>
+                <AlertDialogHeader>
+                    <AlertDialogTitle>Delete note?</AlertDialogTitle>
+                    <AlertDialogDescription>This cannot be undone.</AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction onClick={confirmDelete} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
+                </AlertDialogFooter>
+            </AlertDialogContent>
+        </AlertDialog>
+        </>
     );
 }

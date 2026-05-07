@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getComplaints, resolveComplaint, deleteComplaint, createRideComplaint } from "@/lib/api";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,9 +11,17 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { FileWarning, Search, CheckCircle, XCircle, Clock, Plus, Trash2, Eye, RefreshCw, AlertCircle } from "lucide-react";
+import { Pagination } from "@/components/ui/pagination";
+import { FileWarning, Search, CheckCircle, XCircle, Plus, Trash2, Eye, RefreshCw } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { useServiceAreas, ServiceAreaFilter, ServiceAreaSelect } from "../_components/service-area-select";
+import { useToast } from "@/components/ui/use-toast";
+import {
+    AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+    AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+
+const PAGE_SIZE = 50;
 
 const S_CFG: Record<string, { l: string; c: string }> = {
     open: { l: "Open", c: "bg-amber-500/15 text-amber-600" },
@@ -24,6 +32,8 @@ const S_CFG: Record<string, { l: string; c: string }> = {
 const CATS = ["rude_behavior", "unsafe_driving", "vehicle_condition", "route_issue", "overcharge", "harassment", "other"];
 
 export default function ComplaintsTab() {
+    const { toast } = useToast();
+    const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
     const { areas } = useServiceAreas();
     const [items, setItems] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
@@ -35,40 +45,53 @@ export default function ComplaintsTab() {
     const [dialogOpen, setDialogOpen] = useState(false);
     const [saving, setSaving] = useState(false);
     const [form, setForm] = useState({ ride_id: "", against_type: "driver", category: "other", description: "", service_area_id: "" });
+    const [page, setPage] = useState(0);
+    const [hasNextPage, setHasNextPage] = useState(false);
+    const reqIdRef = useRef(0);
 
-    const load = () => { setLoading(true); getComplaints().then((d) => setItems(d || [])).catch(() => setItems([])).finally(() => setLoading(false)); };
-    useEffect(() => { load(); }, []);
+    const load = useCallback(() => {
+        setLoading(true);
+        const reqId = ++reqIdRef.current;
+        const opts: any = { limit: PAGE_SIZE + 1, offset: page * PAGE_SIZE };
+        if (statusFilter !== "all") opts.status = statusFilter;
+        if (areaFilter !== "all") opts.service_area_id = areaFilter;
+        getComplaints(opts)
+            .then((rows) => {
+                if (reqId !== reqIdRef.current) return;
+                const arr = Array.isArray(rows) ? rows : [];
+                setHasNextPage(arr.length > PAGE_SIZE);
+                setItems(arr.slice(0, PAGE_SIZE));
+            })
+            .catch(() => { if (reqId === reqIdRef.current) { setItems([]); setHasNextPage(false); } })
+            .finally(() => { if (reqId === reqIdRef.current) setLoading(false); });
+    }, [page, statusFilter, areaFilter]);
+    useEffect(() => { load(); }, [load]);
+    useEffect(() => { setPage(0); }, [statusFilter, areaFilter]);
 
-    const stats = { open: items.filter((i) => i.status === "open").length, investigating: items.filter((i) => i.status === "investigating").length, resolved: items.filter((i) => i.status === "resolved").length, dismissed: items.filter((i) => i.status === "dismissed").length };
+    // Search filters the current page client-side; full-text server search is not implemented.
     const filtered = items.filter((i) => {
-        const ms = !search || i.category?.toLowerCase().includes(search.toLowerCase()) || i.description?.toLowerCase().includes(search.toLowerCase());
-        const ma = areaFilter === "all" || i.service_area_id === areaFilter;
-        return ms && (statusFilter === "all" || i.status === statusFilter) && ma;
+        if (!search) return true;
+        const q = search.toLowerCase();
+        return i.category?.toLowerCase().includes(q) || i.description?.toLowerCase().includes(q);
     });
     const areaName = (id: string) => areas.find((a) => a.id === id)?.name || "";
 
     const handleCreate = async () => {
-        if (!form.ride_id.trim() || !form.description.trim()) { alert("Enter ride ID and description."); return; }
+        if (!form.ride_id?.trim()) { toast({ title: "Ride ID is required", variant: "destructive" }); return; }
+        if (!form.description?.trim()) { toast({ title: "Description is required", variant: "destructive" }); return; }
         setSaving(true);
         try { await createRideComplaint(form.ride_id, { against_type: form.against_type, category: form.category, description: form.description, service_area_id: form.service_area_id || null }); setDialogOpen(false); setForm({ ride_id: "", against_type: "driver", category: "other", description: "", service_area_id: "" }); load(); }
-        catch (e: any) { alert(e.message); } finally { setSaving(false); }
+        catch (e: any) { toast({ title: "Failed to create complaint", description: e.message, variant: "destructive" }); } finally { setSaving(false); }
     };
 
     const handleResolve = async (status: string) => {
         if (!selected) return;
         try { await resolveComplaint(selected.id, { status, resolution: resolution.trim() || status }); setSelected(null); setResolution(""); load(); }
-        catch (e: any) { alert(e.message); }
+        catch (e: any) { toast({ title: "Failed to resolve complaint", description: e.message, variant: "destructive" }); }
     };
 
     return (
         <div className="space-y-4">
-            <div className="grid grid-cols-4 gap-3">
-                <Card><CardContent className="pt-3 pb-2"><div className="flex items-center gap-2"><Clock className="h-4 w-4 text-amber-500" /><div><p className="text-[10px] text-muted-foreground">Open</p><p className="text-xl font-bold">{stats.open}</p></div></div></CardContent></Card>
-                <Card><CardContent className="pt-3 pb-2"><div className="flex items-center gap-2"><AlertCircle className="h-4 w-4 text-blue-500" /><div><p className="text-[10px] text-muted-foreground">Investigating</p><p className="text-xl font-bold">{stats.investigating}</p></div></div></CardContent></Card>
-                <Card><CardContent className="pt-3 pb-2"><div className="flex items-center gap-2"><CheckCircle className="h-4 w-4 text-emerald-500" /><div><p className="text-[10px] text-muted-foreground">Resolved</p><p className="text-xl font-bold">{stats.resolved}</p></div></div></CardContent></Card>
-                <Card><CardContent className="pt-3 pb-2"><div className="flex items-center gap-2"><XCircle className="h-4 w-4 text-zinc-500" /><div><p className="text-[10px] text-muted-foreground">Dismissed</p><p className="text-xl font-bold">{stats.dismissed}</p></div></div></CardContent></Card>
-            </div>
-
             <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex items-center gap-2 flex-1">
                     <div className="relative flex-1 max-w-xs"><Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" /><Input placeholder="Search..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-9 h-9" /></div>
@@ -95,11 +118,13 @@ export default function ComplaintsTab() {
                             <TableCell className="text-[10px] text-muted-foreground">{formatDate(c.created_at)}</TableCell>
                             <TableCell className="text-right"><div className="flex justify-end gap-0.5">
                                 <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e) => { e.stopPropagation(); setSelected(c); setResolution(""); }}><Eye className="h-3.5 w-3.5" /></Button>
-                                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={(e) => { e.stopPropagation(); if (confirm("Delete?")) deleteComplaint(c.id).then(load); }}><Trash2 className="h-3.5 w-3.5" /></Button>
+                                <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={(e) => { e.stopPropagation(); setDeleteTarget(c.id); }}><Trash2 className="h-3.5 w-3.5" /></Button>
                             </div></TableCell>
                         </TableRow>
                     ))}</TableBody></Table>}
             </CardContent></Card>
+
+            <Pagination page={page} pageSize={PAGE_SIZE} hasNextPage={hasNextPage} onPageChange={setPage} />
 
             {/* Review Dialog */}
             <Dialog open={!!selected && !dialogOpen} onOpenChange={(o) => { if (!o) setSelected(null); }}>
@@ -139,6 +164,19 @@ export default function ComplaintsTab() {
                     </div>
                 </DialogContent>
             </Dialog>
+
+            <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>Delete complaint?</AlertDialogTitle>
+                        <AlertDialogDescription>This cannot be undone.</AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel>Cancel</AlertDialogCancel>
+                        <AlertDialogAction onClick={() => { if (deleteTarget) deleteComplaint(deleteTarget).then(load).finally(() => setDeleteTarget(null)); }} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </div>
     );
 }

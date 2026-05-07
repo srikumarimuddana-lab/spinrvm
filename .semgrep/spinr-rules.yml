@@ -1,0 +1,184 @@
+# Spinr-specific Semgrep rules. See docs/ci-security-gates.md for context.
+#
+# These rules catch patterns unique to this codebase that generic rulesets miss.
+# They are executed by .github/workflows/security-gates.yml on every PR.
+
+rules:
+  # SR-01: MongoDB-style $set wrapper on Supabase update (DV-2)
+  - id: spinr-supabase-no-mongo-wrappers
+    patterns:
+      - pattern-either:
+          - pattern: $DB.update($TABLE, {"$set": ...}, ...)
+          - pattern: $DB.update($TABLE, {"$set": ...})
+          - pattern: supabase.table($TABLE).update({"$set": ...})
+    message: |
+      Supabase is not MongoDB. Do not wrap update payloads in {"$set": ...}.
+      The key is treated as a column name and the update silently writes nothing.
+      See DV-2 in reports/remediation/driver-new-issues-2026-04-23.md.
+    severity: ERROR
+    languages: [python]
+
+  # SR-02: Swallowed DB / auth / payment errors (CLAUDE.md rule)
+  - id: spinr-no-warning-on-critical-errors
+    patterns:
+      - pattern-either:
+          - pattern: |
+              try:
+                  ...
+              except DatabaseError:
+                  logger.warning(...)
+                  ...
+          - pattern: |
+              try:
+                  ...
+              except $AUTHERR:
+                  logger.warning(...)
+                  ...
+      - metavariable-regex:
+          metavariable: $AUTHERR
+          regex: ".*(Auth|Payment|Stripe|Webhook).*Error"
+    message: |
+      DB / auth / payment errors must surface loudly. Use logger.error with the
+      full exception (for DatabaseError, include e.details['original']).
+      See CLAUDE.md "Do not silently swallow errors".
+    severity: ERROR
+    languages: [python]
+
+  # SR-03: Float arithmetic in money-handling code
+  - id: spinr-no-float-in-money
+    patterns:
+      - pattern-either:
+          - pattern: float($X)
+          - pattern: $AMOUNT * 1.0
+          - pattern: $AMOUNT / 1.0
+    paths:
+      include:
+        - "backend/routes/fares.py"
+        - "backend/routes/payments.py"
+        - "backend/routes/wallet.py"
+        - "backend/routes/fare_split.py"
+        - "backend/services/fare_service.py"
+        - "backend/services/corporate_wallet.py"
+    message: |
+      Money arithmetic must use Decimal. Use _d(), _round(), _f() helpers.
+      See CLAUDE.md "Money arithmetic" rule.
+    severity: ERROR
+    languages: [python]
+
+  # SR-04: Direct ride-state update bypasses state-machine guard
+  - id: spinr-ride-state-needs-guard
+    patterns:
+      - pattern-either:
+          - pattern: $DB.update("rides", {"status": "$STATE", ...}, ...)
+          - pattern: supabase.table("rides").update({"status": "$STATE", ...})
+    paths:
+      exclude:
+        - "backend/routes/rides.py"
+        - "backend/tests/"
+    message: |
+      Ride state changes must go through _require_ride_in_state() in
+      routes/rides.py. Direct updates bypass the guard and can create
+      invalid transitions (e.g. COMPLETED from SEARCHING).
+    severity: WARNING
+    languages: [python]
+
+  # SR-05: Collision-prone Stripe idempotency key (DV-4)
+  - id: spinr-stripe-idempotency-static
+    patterns:
+      - pattern-regex: |
+          idempotency_key\s*=\s*f?"intent-\{[^}]+\}-\{[^}]+\}"
+    message: |
+      Static idempotency key "intent-{user}-{amount}" collides on legitimate
+      same-amount retries and returns the wrong PaymentIntent. Use a UUID v4
+      provided by the client per request.
+      See DV-4 in reports/remediation/driver-new-issues-2026-04-23.md.
+    severity: ERROR
+    languages: [python]
+
+  # SR-06: OTP verify without lockout check
+  - id: spinr-otp-requires-lockout-check
+    patterns:
+      - pattern: await verify_otp($PHONE, $CODE)
+      - pattern-not-inside: |
+          if await otp_lockout_active($PHONE): ...
+          ...
+      - pattern-not-inside: |
+          if await is_locked_out($PHONE): ...
+          ...
+    message: |
+      OTP verify must be gated by otp_lockout_active() / is_locked_out() check.
+      Without it, brute-force protection is bypassed.
+    severity: WARNING
+    languages: [python]
+
+  # SR-07: New background loop should use atomic claim / idempotency
+  - id: spinr-background-loop-needs-idempotency
+    patterns:
+      - pattern: |
+          while True:
+              ...
+              await $ACTION(...)
+    paths:
+      include:
+        - "backend/core/lifespan.py"
+    message: |
+      New background loops run on every replica concurrently. Verify the
+      action uses an atomic DB claim, idempotency key, or reminder_sent
+      flag. See CLAUDE.md "Background task safety".
+    severity: INFO
+    languages: [python]
+
+  # SR-08: JWT role trusted for non-admin (CLAUDE.md rule)
+  - id: spinr-jwt-role-must-reread
+    patterns:
+      - pattern: $TOKEN.get("role")
+      - pattern-not-inside: |
+          def _verify_admin_token(...):
+              ...
+      - pattern-not-inside: |
+          if $X.get("is_admin"):
+              ...
+    message: |
+      Rider / driver role must always be re-read from the users table on
+      every request. Never trust the JWT role claim for non-admin tokens.
+      Admin JWTs are the only fully-trusted tokens.
+      See CLAUDE.md "JWT trust model".
+    severity: WARNING
+    languages: [python]
+
+  # SR-09: Stripe webhook without idempotency claim
+  - id: spinr-stripe-webhook-needs-idempotency
+    patterns:
+      - pattern: |
+          @$APP.$METHOD("/stripe/webhook", ...)
+          async def $F(...):
+              ...
+      - pattern-not-inside: |
+          @$APP.$METHOD(...)
+          async def $F(...):
+              ...
+              await claim_stripe_event($EVENT_ID)
+              ...
+    message: |
+      Stripe webhook handlers must call claim_stripe_event(event_id) in
+      stripe_events table before processing. Silently skip if already
+      claimed. See CLAUDE.md "Stripe idempotency".
+    severity: WARNING
+    languages: [python]
+
+  # SR-10: Raw phone / address in log statement
+  - id: spinr-pii-in-logs
+    patterns:
+      - pattern-either:
+          - pattern: logger.$LEVEL($MSG, phone=$PHONE, ...)
+          - pattern: logger.$LEVEL($MSG, address=$ADDR, ...)
+          - pattern: logger.$LEVEL($MSG, email=$EMAIL, ...)
+          - pattern: logger.$LEVEL(f"...{phone}...")
+          - pattern: logger.$LEVEL(f"...{address}...")
+          - pattern: print(f"...{phone}...")
+    message: |
+      Do not log raw PII. Use redactor: +1***XXXX for phone, j***@domain for
+      email, redact addresses entirely.
+      See docs/data-classification.md "Log Fields".
+    severity: ERROR
+    languages: [python]

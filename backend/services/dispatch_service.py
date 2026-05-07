@@ -20,9 +20,11 @@ from typing import Any, Dict, List, Optional, Tuple
 try:
     from ..geo_utils import calculate_distance
     from ..settings_loader import get_app_settings
+    from ..utils.driver_presence import present_driver_ids
 except ImportError:  # pragma: no cover - allow direct module imports in tests
     from geo_utils import calculate_distance
     from settings_loader import get_app_settings
+    from utils.driver_presence import present_driver_ids
 
 
 # Valid algorithm values. ``nearest`` is the production default.
@@ -69,11 +71,17 @@ def filter_and_rank_drivers(
     pickup_lng = ride["pickup_lng"]
     needs_rating = algorithm in ("rating_based", "combined")
 
+    wav_required = bool(ride.get("requires_wav"))
+
     result: List[Tuple[Dict[str, Any], float]] = []
     for d in candidate_drivers:
         if not _is_dispatchable_driver(d):
             continue
         if needs_rating and float(d.get("rating") or 5.0) < min_rating:
+            continue
+        # Saskatchewan Transportation Act s.22: when the rider requests a WAV,
+        # only match drivers whose vehicle has an approved wheelchair lift/ramp.
+        if wav_required and not d.get("is_wav"):
             continue
         dist_km = calculate_distance(pickup_lat, pickup_lng, d["lat"], d["lng"])
         if dist_km <= search_radius_km:
@@ -168,16 +176,49 @@ class DispatchService:
         return algorithm, min_rating, search_radius_km
 
     async def find_candidate_drivers(self, ride: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Online + available drivers for the ride's vehicle type."""
-        return await self.db.get_rows(
+        """Online + available + verified + *present* drivers for this ride.
+
+        is_verified + status='active' gate unverified / suspended / needs_review
+        drivers out of dispatch even if their is_online flag got left on (e.g.
+        status flipped server-side after they toggled online).
+
+        Presence filter (Uber/Lyft-style): we only dispatch to drivers whose
+        short-TTL Redis heartbeat is still alive. Without this filter, a
+        driver whose app was killed mid-shift stays ``is_online=true`` until
+        someone notices — and the dispatcher routes a ride to a phone that
+        won't ring.
+
+        Safety valve: if Redis is unreachable or returns no presence keys
+        at all, we fall back to the raw DB query so a Redis outage can't
+        take every driver offline. An empty presence set is an ambiguous
+        signal (bootstrap, Redis failover, dev with REDIS_URL unset); we
+        prefer dispatching to "online-per-DB" drivers over dispatching to
+        nobody.
+        """
+        driver_filter: Dict[str, Any] = {
+            "is_online": True,
+            "is_available": True,
+            "is_verified": True,
+            "status": "active",
+            "vehicle_type_id": ride["vehicle_type_id"],
+        }
+        if ride.get("requires_wav"):
+            driver_filter["is_wav"] = True
+        rows = await self.db.get_rows(
             "drivers",
-            {
-                "is_online": True,
-                "is_available": True,
-                "vehicle_type_id": ride["vehicle_type_id"],
-            },
+            driver_filter,
             limit=500,
         )
+        if not rows:
+            return rows
+
+        try:
+            present = await present_driver_ids([d["id"] for d in rows])
+        except Exception:
+            return rows
+        if not present:
+            return rows
+        return [d for d in rows if d["id"] in present]
 
     async def claim_driver(self, driver_id: str) -> bool:
         """
@@ -224,6 +265,7 @@ class DispatchService:
                 "$set": {
                     "driver_id": driver_id,
                     "status": "driver_assigned",
+                    "assigned_at": now,
                     "driver_notified_at": now,
                     "updated_at": now,
                 }
@@ -236,6 +278,10 @@ class DispatchService:
         recently assigned ride. Returns None if no ride has ever been
         assigned (first-dispatch case).
         """
-        _last_rides = await self.db.get_rows("rides", {"driver_id": {"$ne": None}}, order="created_at", desc=True, limit=1)
+        # assigned_at is indexed by idx_rides_driver_assigned_at (migration 54);
+        # ordering by it is semantically correct and uses the index.
+        _last_rides = await self.db.get_rows(
+            "rides", {"driver_id": {"$ne": None}}, order="assigned_at", desc=True, limit=1
+        )
         last_ride = _last_rides[0] if _last_rides else None
         return last_ride["driver_id"] if last_ride else None

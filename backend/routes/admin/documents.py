@@ -1,13 +1,18 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
 try:
     from ... import db_supabase
+    from ...dependencies import get_admin_user
+    from ...utils.audit_logger import log_admin_action
 except ImportError:
     import db_supabase
+    from dependencies import get_admin_user  # noqa: F401
+    from utils.audit_logger import log_admin_action  # noqa: F401
 
 from .drivers import _log_driver_activity
 
@@ -15,7 +20,24 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+
 # ---------- Document Requirements ----------
+
+
+class DocumentRequirementCreateRequest(BaseModel):
+    name: Optional[str] = None
+    description: str = ""
+    document_type: Optional[str] = None
+    is_required: bool = True
+    applicable_to: str = "driver"
+
+
+class DocumentRequirementUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    document_type: Optional[str] = None
+    is_required: Optional[bool] = None
+    applicable_to: Optional[str] = None
 
 
 @router.get("/documents/requirements")
@@ -26,37 +48,37 @@ async def admin_get_document_requirements():
 
 
 @router.post("/documents/requirements")
-async def admin_create_document_requirement(requirement: Dict[str, Any]):
+async def admin_create_document_requirement(requirement: DocumentRequirementCreateRequest):
     """Create a new document requirement."""
     doc = {
-        "name": requirement.get("name"),
-        "description": requirement.get("description", ""),
-        "document_type": requirement.get("document_type"),
-        "is_required": requirement.get("is_required", True),
-        "applicable_to": requirement.get("applicable_to", "driver"),  # driver, rider, vehicle
-        "created_at": datetime.utcnow().isoformat(),
+        "name": requirement.name,
+        "description": requirement.description,
+        "document_type": requirement.document_type,
+        "is_required": requirement.is_required,
+        "applicable_to": requirement.applicable_to,
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
     row = await db_supabase.insert_one("document_requirements", doc)
     return {"requirement_id": str(row.get("id") if row and isinstance(row, dict) else "")}
 
 
 @router.put("/documents/requirements/{requirement_id}")
-async def admin_update_document_requirement(requirement_id: str, requirement: Dict[str, Any]):
+async def admin_update_document_requirement(requirement_id: str, requirement: DocumentRequirementUpdateRequest):
     """Update a document requirement."""
-    updates = {}
-    if requirement.get("name") is not None:
-        updates["name"] = requirement.get("name")
-    if requirement.get("description") is not None:
-        updates["description"] = requirement.get("description")
-    if requirement.get("document_type") is not None:
-        updates["document_type"] = requirement.get("document_type")
-    if requirement.get("is_required") is not None:
-        updates["is_required"] = requirement.get("is_required")
-    if requirement.get("applicable_to") is not None:
-        updates["applicable_to"] = requirement.get("applicable_to")
+    updates: Dict[str, Any] = {}
+    if requirement.name is not None:
+        updates["name"] = requirement.name
+    if requirement.description is not None:
+        updates["description"] = requirement.description
+    if requirement.document_type is not None:
+        updates["document_type"] = requirement.document_type
+    if requirement.is_required is not None:
+        updates["is_required"] = requirement.is_required
+    if requirement.applicable_to is not None:
+        updates["applicable_to"] = requirement.applicable_to
 
     if updates:
-        updates["updated_at"] = datetime.utcnow().isoformat()
+        updates["updated_at"] = datetime.now(timezone.utc).isoformat()
         await db_supabase.update_one("document_requirements", {"id": requirement_id}, updates)
     return {"message": "Document requirement updated"}
 
@@ -66,6 +88,43 @@ async def admin_delete_document_requirement(requirement_id: str):
     """Delete a document requirement."""
     await db_supabase.delete_one("document_requirements", {"id": requirement_id})
     return {"message": "Document requirement deleted"}
+
+
+# ---------- Pending Documents (cursor-paginated, A-P4-4) ----------
+
+
+from fastapi import Query  # noqa: E402  (placed here to avoid circular at module top)
+
+
+@router.get("/documents/pending")
+async def admin_get_pending_documents(
+    limit: int = Query(50, ge=1, le=100),
+    cursor: Optional[str] = None,
+    status: str = Query("pending"),
+):
+    """Paginated list of driver documents awaiting review.
+
+    Cursor is the ``id`` of the last item from the previous page.
+    Pass it back as-is on subsequent requests to advance the window.
+    Returns at most ``limit`` items (max 100) plus a ``next_cursor``
+    field (null when the last page has been reached).
+    """
+    filters: Dict[str, Any] = {"status": status}
+    if cursor:
+        filters["id"] = {"$gt": cursor}
+
+    docs = await db_supabase.get_rows(
+        "driver_documents",
+        filters,
+        order="id",
+        limit=limit + 1,
+    )
+    has_more = len(docs) > limit
+    items = docs[:limit]
+    return {
+        "items": items,
+        "next_cursor": items[-1]["id"] if items and has_more else None,
+    }
 
 
 # ---------- Driver Documents ----------
@@ -110,8 +169,18 @@ def _legacy_expiry_field_for_requirement(req_name: Optional[str]) -> Optional[st
     return None
 
 
+class DocumentReviewRequest(BaseModel):
+    status: str
+    rejection_reason: Optional[str] = None
+    expiry_date: Optional[str] = None
+
+
 @router.post("/documents/{document_id}/review")
-async def admin_review_driver_document(document_id: str, review_data: Dict[str, Any]):
+async def admin_review_driver_document(
+    document_id: str,
+    review_data: DocumentReviewRequest,
+    admin: dict = Depends(get_admin_user),
+):
     """Review and approve/reject a driver document.
 
     On approval, if an ``expiry_date`` is provided (or already stored on the
@@ -120,9 +189,9 @@ async def admin_review_driver_document(document_id: str, review_data: Dict[str, 
     ``update_driver_status`` sees the new date instead of the stale
     onboarding-time value (which used to leave drivers blocked offline).
     """
-    status = review_data.get("status")
-    rejection_reason = review_data.get("rejection_reason")
-    expiry_raw = review_data.get("expiry_date")
+    status = review_data.status
+    rejection_reason = review_data.rejection_reason
+    expiry_raw = review_data.expiry_date
 
     if status not in ["approved", "rejected", "pending"]:
         raise HTTPException(status_code=400, detail="Invalid status")
@@ -150,7 +219,7 @@ async def admin_review_driver_document(document_id: str, review_data: Dict[str, 
     # which is why this endpoint has been silently failing in production.
     updates: Dict[str, Any] = {
         "status": status,
-        "updated_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     if rejection_reason:
         updates["rejection_reason"] = rejection_reason
@@ -158,23 +227,44 @@ async def admin_review_driver_document(document_id: str, review_data: Dict[str, 
     try:
         await db_supabase.update_one("driver_documents", {"id": document_id}, updates)
     except Exception as e:
-        logger.error(f"Failed to update driver_document {document_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to update document: {e}") from e
+        # B-P3-leak-cleanup: full traceback to logs, generic detail
+        # to client. Supabase / postgrest errors carry table internals.
+        logger.exception(f"Failed to update driver_document {document_id}")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to update document.",
+        ) from e
 
     # On approval, propagate the expiry to the legacy drivers.* column so the
     # go-online check stops blocking based on stale onboarding-time values.
     if status == "approved":
         effective_expiry_iso = new_expiry_iso
 
-        req_row = None
-        try:
-            req_row = (lambda _r: _r[0] if _r else None)(
-                await db_supabase.get_rows("document_requirements", {"id": existing.get("requirement_id")}, limit=1)
-            )
-        except Exception:
-            req_row = None
+        # Derive a requirement name for keyword-based legacy-field mapping.
+        # Service-area uploads store the slug in requirement_key and the human
+        # label in document_type; requirement_id is NULL. Fall back through
+        # those so the license/insurance/inspection/background keywords in
+        # _legacy_expiry_field_for_requirement still match.
+        req_name: Optional[str] = None
+        existing_req_id = existing.get("requirement_id")
+        if existing_req_id:
+            try:
+                req_row = (lambda _r: _r[0] if _r else None)(
+                    await db_supabase.get_rows("document_requirements", {"id": existing_req_id}, limit=1)
+                )
+                if req_row:
+                    req_name = req_row.get("name")
+            except Exception as _req_err:
+                logger.error(
+                    "document requirement lookup failed — expiry won't propagate to legacy field",
+                    extra={"req_id": existing_req_id, "doc_id": document_id},
+                    exc_info=True,
+                )
+                req_name = None
+        if not req_name:
+            req_name = existing.get("document_type") or existing.get("requirement_key")
 
-        legacy_field = _legacy_expiry_field_for_requirement(req_row.get("name") if req_row else None)
+        legacy_field = _legacy_expiry_field_for_requirement(req_name)
         if legacy_field:
             # If admin did not supply a new expiry, clear the stale legacy
             # value (None) so the go-online check skips it instead of
@@ -185,12 +275,15 @@ async def admin_review_driver_document(document_id: str, review_data: Dict[str, 
                     {"id": existing.get("driver_id")},
                     {
                         legacy_field: effective_expiry_iso,
-                        "updated_at": datetime.utcnow().isoformat(),
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
                     },
                 )
-            except Exception as e:
-                logger.warning(
-                    f"Could not update legacy expiry field {legacy_field} for driver {existing.get('driver_id')}: {e}"
+            except Exception:
+                logger.error(
+                    "Could not update legacy expiry field %s for driver %s",
+                    legacy_field,
+                    existing.get("driver_id"),
+                    exc_info=True,
                 )
 
     # After approving, check if this driver has no more pending docs → clear needs_review
@@ -221,6 +314,18 @@ async def admin_review_driver_document(document_id: str, review_data: Dict[str, 
         f"Document {status}: {doc_type}",
         rejection_reason or "",
         {"document_id": document_id, "document_type": doc_type, "status": status},
+    )
+    await log_admin_action(
+        admin,
+        f"document_{status}",
+        "driver_documents",
+        document_id,
+        {
+            "driver_id": existing.get("driver_id"),
+            "document_type": doc_type,
+            "status": status,
+            "rejection_reason": rejection_reason,
+        },
     )
 
     return {"message": f"Document {status}"}

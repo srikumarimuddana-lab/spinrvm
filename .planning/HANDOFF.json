@@ -1,0 +1,112 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-05-05T07:47:00-06:00",
+  "phase": "fix/rider-app-expo-sdk55",
+  "phase_name": "Expo SDK 55 + Redis Fix + EAS Build Validation",
+  "status": "paused",
+
+  "completed_tasks": [
+    {
+      "id": 1,
+      "name": "Remove react-native-worklets from all surfaces",
+      "status": "done",
+      "commit": "378f03e2",
+      "detail": "Removed from shared/package.json (root cause), expo.install.exclude in rider-app and driver-app, ran yarn upgrade @spinr/shared to purge lockfiles. 0 worklets references confirmed."
+    },
+    {
+      "id": 2,
+      "name": "Fix rate_limiter.py + create root .dockerignore",
+      "status": "done",
+      "commit": "a6d2b684",
+      "detail": "rate_limiter.py reads os.environ.get('RATE_LIMIT_REDIS_URL') first before pydantic-settings. Root .dockerignore created — Railway build context is repo root, backend/.dockerignore was never applied."
+    },
+    {
+      "id": 3,
+      "name": "Add /settings/debug-env diagnostic endpoint",
+      "status": "done",
+      "commit": "967fa801",
+      "detail": "Temporary GET /api/v1/settings/debug-env endpoint shows masked first 20 chars of REDIS_URL, RATE_LIMIT_REDIS_URL, WS_REDIS_URL, ENV from os.environ. Double-mounted — also at /settings/debug-env. Deploy in progress when session paused; user got 404 (deploy not yet complete)."
+    }
+  ],
+
+  "remaining_tasks": [
+    {
+      "id": 4,
+      "name": "CRITICAL: Read debug-env once Railway deploy completes",
+      "status": "in_progress",
+      "detail": "Hit https://spinr-backend-production.up.railway.app/api/v1/settings/debug-env after Railway shows green for 967fa801. If vars show NOT_SET: check Railway environment scope. If values show: investigate rate_limiter import-time execution."
+    },
+    {
+      "id": 5,
+      "name": "Remove debug-env endpoint after Redis confirmed",
+      "status": "not_started",
+      "detail": "Remove handler + import os from backend/routes/settings.py. Commit and push."
+    },
+    {
+      "id": 6,
+      "name": "EAS Build #9 — validate Expo SDK 55 on Android",
+      "status": "not_started",
+      "detail": "cd rider-app && eas build --profile development --platform android. Validates worklets removal + Kotlin 2.1.20 + Gradle 8.13 + New Arch disabled. Do NOT merge PR #418 until green."
+    },
+    {
+      "id": 7,
+      "name": "Admin 429 UX: show 'try again at HH:MM'",
+      "status": "not_started",
+      "detail": "admin-dashboard/src/app/login/page.tsx ~line 95: parse retryAfterSeconds from RateLimitError and display specific retry time."
+    },
+    {
+      "id": 8,
+      "name": "Merge PR #418 to main",
+      "status": "not_started",
+      "detail": "Only after: Redis confirmed (4), debug endpoint removed (5), EAS build green (6)."
+    },
+    {
+      "id": 9,
+      "name": "Google Maps API key restrictions",
+      "status": "not_started",
+      "detail": "Restrict to 4 APIs; set $0 budget alert; SHA fingerprint after EAS build confirms final SHA."
+    }
+  ],
+
+  "blockers": [
+    {
+      "description": "Railway NOT injecting REDIS_URL, RATE_LIMIT_REDIS_URL, WS_REDIS_URL into backend container. Variables confirmed in service Variables tab with actual URLs but os.environ.get() returns empty.",
+      "type": "technical",
+      "workaround": "Debug endpoint at /api/v1/settings/debug-env (commit 967fa801) — hit it once Railway deploy completes."
+    }
+  ],
+
+  "human_actions_pending": [
+    {
+      "action": "Wait for Railway deploy of 967fa801 to go green, then hit /api/v1/settings/debug-env",
+      "context": "Shows definitively whether Railway is injecting env vars",
+      "blocking": true
+    },
+    {
+      "action": "If all vars show NOT_SET: verify vars are in backend SERVICE Variables tab under production environment (not staging scope)",
+      "context": "Railway environments can scope variables — service vars set in staging don't appear in production deploys",
+      "blocking": true
+    }
+  ],
+
+  "key_decisions": [
+    "os.environ.get() preferred over pydantic-settings for Redis URL — avoids import-time CRLF .env parse issues on Windows",
+    "Root .dockerignore needed because Railway build context is repo root, not backend/",
+    "settings_router double-mounted at root and /api/v1 prefix — debug endpoint available at both paths",
+    "Do NOT merge PR #418 until Redis confirmed working + EAS build green"
+  ],
+
+  "infra_state": {
+    "railway_backend_url": "https://spinr-backend-production.up.railway.app",
+    "redis_vars_status": "Set in Railway backend service Variables tab with actual URLs — NOT injecting as of last session",
+    "backend_dot_env": "backend/.env has all 3 Redis URLs — excluded from container via root .dockerignore",
+    "active_branch": "fix/rider-app-expo-sdk55",
+    "head_commit": "967fa801",
+    "commits_ahead_of_main": 24,
+    "admin_login": "admin@spinr.ca / SpinrDev2026! — confirmed working",
+    "local_backend": "python3 -m backend.server — must be started fresh each session",
+    "local_admin": "cd admin-dashboard && npm run dev"
+  },
+
+  "next_action": "Check Railway dashboard for 967fa801 deploy status → once green hit /api/v1/settings/debug-env → read the 3 Redis values → if NOT_SET check Railway environment scope for the service variables"
+}

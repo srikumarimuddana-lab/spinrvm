@@ -1,0 +1,756 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>011 — Driver SOS</title>
+<link rel="stylesheet" href="../themes/default.css">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: var(--font); background: #0a0a0f; color: var(--mob-text); min-height: 100vh; }
+
+  .page-header { background: #12121a; border-bottom: 1px solid rgba(255,255,255,0.06); padding: 20px 32px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; }
+  .sketch-label { font-size: 11px; color: rgba(255,255,255,0.25); font-family: var(--font-mono); }
+  .design-q { font-size: 12px; color: rgba(255,255,255,0.5); margin-top: 2px; font-style: italic; }
+  .page-header h1 { font-size: 13px; font-weight: 500; color: rgba(255,255,255,0.4); letter-spacing: 0.08em; text-transform: uppercase; }
+
+  .variants-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 32px; padding: 36px; align-items: start; }
+  .variant-wrap { display: flex; flex-direction: column; gap: 14px; align-items: center; }
+  .variant-label { display: flex; align-items: center; gap: 10px; align-self: stretch; }
+  .variant-letter { width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; flex-shrink: 0; }
+  .la .variant-letter { background: rgba(66,153,225,0.2); color: #4299E1; }
+  .lb .variant-letter { background: rgba(56,161,105,0.2); color: #38A169; }
+  .lc .variant-letter { background: rgba(229,62,62,0.2); color: #E53E3E; }
+  .variant-name { font-size: 13px; font-weight: 600; color: rgba(255,255,255,0.8); }
+  .variant-desc { font-size: 11px; color: rgba(255,255,255,0.35); margin-top: 1px; }
+  .winner-badge { margin-left: auto; font-size: 10px; font-weight: 700; letter-spacing: 0.06em; padding: 3px 8px; border-radius: 4px; background: rgba(229,62,62,0.2); color: #E53E3E; }
+
+  /* ── Phone frame ── */
+  .phone { width: 220px; height: 460px; border-radius: 36px; background: #000; box-shadow: var(--shadow-phone); overflow: hidden; position: relative; flex-shrink: 0; }
+  .phone-label { font-size: 10px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: rgba(255,255,255,0.25); text-align: center; margin-top: 8px; }
+
+  /* ── Map ── */
+  .map-bg { position: absolute; inset: 0; background: var(--map-base); overflow: hidden; }
+  .map-road-h { position: absolute; background: var(--map-road-main); height: 7px; left: 0; right: 0; }
+  .map-road-v { position: absolute; background: var(--map-road-main); width: 7px; top: 0; bottom: 0; }
+  .map-block   { position: absolute; background: rgba(255,255,255,0.025); border-radius: 4px; }
+  /* Route line */
+  .route-line { position: absolute; background: var(--spinr-red); opacity: 0.8; border-radius: 3px; }
+
+  /* ── Status bar ── */
+  .status-bar { padding: 12px 18px 4px; display: flex; justify-content: space-between; align-items: center; font-size: 11px; font-weight: 600; color: var(--mob-text); position: relative; z-index: 5; }
+
+  /* ── Driver bottom panel ── */
+  .driver-panel { position: absolute; bottom: 0; left: 0; right: 0; background: var(--mob-surface); border-radius: 20px 20px 0 0; padding: 10px 14px 18px; }
+  .dp-handle { width: 36px; height: 4px; background: rgba(255,255,255,0.12); border-radius: 2px; margin: 0 auto 10px; }
+  .dp-status { font-size: 9.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--spinr-red); margin-bottom: 6px; }
+  .dp-rider { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .dp-avatar { width: 30px; height: 30px; border-radius: 50%; background: #2a3a5a; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 800; color: white; flex-shrink: 0; }
+  .dp-rider-name { font-size: 12.5px; font-weight: 700; color: var(--mob-text); }
+  .dp-rider-sub  { font-size: 10.5px; color: var(--mob-text-muted); margin-top: 1px; }
+  .dp-dest { background: var(--mob-surface-2); border-radius: 10px; padding: 8px 10px; margin-bottom: 8px; font-size: 11px; color: var(--mob-text-muted); }
+  .dp-dest strong { color: var(--mob-text); display: block; font-size: 12px; margin-top: 1px; }
+  .dp-row { display: flex; gap: 8px; }
+  .dp-btn { flex: 1; padding: 9px 0; border-radius: 10px; font-size: 11px; font-weight: 700; text-align: center; background: var(--mob-surface-2); color: var(--mob-text); border: none; cursor: pointer; }
+
+  /* ── Analysis ── */
+  .analysis-box { background: rgba(0,0,0,0.3); border-radius: 8px; padding: 14px 16px; align-self: stretch; }
+  .cf-label { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(255,255,255,0.3); margin-bottom: 8px; }
+  .cf-item { font-size: 12px; color: rgba(255,255,255,0.5); display: flex; align-items: flex-start; gap: 6px; margin-bottom: 4px; }
+  .cf-item::before { content: '·'; color: rgba(255,255,255,0.2); flex-shrink: 0; }
+  .cf-verdict { margin-top: 10px; font-size: 12px; font-weight: 700; }
+  .verdict-yes { color: #38A169; }
+  .verdict-no  { color: #E53E3E; }
+  .verdict-med { color: #ED8936; }
+
+  .tap-count { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; padding: 3px 8px; border-radius: 10px; display: inline-block; margin-bottom: 6px; }
+  .taps-1 { background: rgba(56,161,105,0.2); color: #38A169; }
+  .taps-2 { background: rgba(214,158,46,0.2); color: #D69E2E; }
+
+  /* ══════════════════════════════════════════
+     VARIANT A — Visible SOS Button
+  ══════════════════════════════════════════ */
+  .sos-visible-btn {
+    position: absolute; top: 50px; right: 12px; z-index: 10;
+    background: var(--spinr-red);
+    border-radius: 24px; padding: 8px 14px;
+    font-size: 12px; font-weight: 900; color: white; letter-spacing: 0.04em;
+    box-shadow: 0 0 0 3px rgba(229,62,62,0.3), 0 4px 14px rgba(229,62,62,0.5);
+    cursor: pointer; border: none;
+    display: flex; align-items: center; gap: 6px;
+  }
+  /* Flash modal — clearly visible to passenger = bad */
+  .sos-modal-visible {
+    position: absolute; inset: 0; z-index: 50;
+    background: rgba(229,62,62,0.96);
+    display: none; flex-direction: column; align-items: center; justify-content: center;
+    padding: 24px;
+  }
+  .sos-modal-visible.open { display: flex; }
+  .smv-icon  { font-size: 52px; margin-bottom: 12px; }
+  .smv-title { font-size: 22px; font-weight: 900; color: white; margin-bottom: 6px; text-align: center; }
+  .smv-sub   { font-size: 12px; color: rgba(255,255,255,0.75); text-align: center; margin-bottom: 24px; }
+  .smv-btn { width: 100%; padding: 16px; border-radius: 14px; border: none; font-size: 14px; font-weight: 800; cursor: pointer; margin-bottom: 10px; }
+  .smv-911  { background: white; color: var(--spinr-red); }
+  .smv-alert { background: rgba(0,0,0,0.2); color: white; }
+  .smv-cancel { background: transparent; color: rgba(255,255,255,0.5); border: 1px solid rgba(255,255,255,0.2); font-size: 13px; }
+
+  /* ══════════════════════════════════════════
+     VARIANT B — Hardware Shortcut
+  ══════════════════════════════════════════ */
+  .hw-instruction {
+    position: absolute; top: 50px; left: 12px; right: 12px; z-index: 10;
+    background: rgba(0,0,0,0.6); backdrop-filter: blur(8px);
+    border-radius: 12px; padding: 10px 12px;
+    font-size: 11px; color: rgba(255,255,255,0.65);
+    border: 1px solid rgba(255,255,255,0.08);
+  }
+  .hw-instruction strong { color: white; display: block; margin-bottom: 3px; font-size: 12px; }
+  .vol-btn-diagram {
+    position: absolute; left: -8px; top: 80px;
+    width: 8px; height: 60px;
+    background: rgba(255,255,255,0.15);
+    border-radius: 3px 0 0 3px;
+    display: flex; flex-direction: column; align-items: center; justify-content: space-around;
+    padding: 6px 0;
+    cursor: pointer;
+  }
+  .vol-pip { width: 5px; height: 5px; background: rgba(255,255,255,0.4); border-radius: 1px; }
+  .vol-pip.active { background: var(--spinr-red); box-shadow: 0 0 6px rgba(229,62,62,0.8); }
+
+  /* B sent state */
+  .hw-sent {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+    background: rgba(0,0,0,0.85); backdrop-filter: blur(10px);
+    border-radius: 20px; padding: 20px 28px; text-align: center;
+    border: 1px solid rgba(255,255,255,0.08);
+    display: none; z-index: 50;
+  }
+  .hw-sent.show { display: block; }
+  .hw-sent-icon  { font-size: 36px; margin-bottom: 8px; }
+  .hw-sent-title { font-size: 15px; font-weight: 800; color: white; margin-bottom: 4px; }
+  .hw-sent-sub   { font-size: 11px; color: rgba(255,255,255,0.5); }
+
+  /* ══════════════════════════════════════════
+     VARIANT C — Discreet Hold Shield (WINNER)
+  ══════════════════════════════════════════ */
+
+  /* Shield — bottom-right, natural right-thumb rest during driving */
+  .drv-shield {
+    position: absolute; bottom: 178px; right: 12px; z-index: 10;
+    width: 46px; height: 46px; border-radius: 50%;
+    background: rgba(10,10,20,0.8); border: 1.5px solid rgba(229,62,62,0.3);
+    backdrop-filter: blur(10px);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px; cursor: pointer;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+    transition: all 0.2s;
+    user-select: none; -webkit-user-select: none;
+  }
+  .drv-shield:hover { border-color: rgba(229,62,62,0.6); background: rgba(229,62,62,0.12); }
+
+  /* Subtle "sent" badge — appears on shield icon after alert sent */
+  .shield-sent-badge {
+    position: absolute; top: -4px; right: -4px;
+    width: 14px; height: 14px; border-radius: 50%;
+    background: var(--online-green);
+    border: 2px solid #000;
+    display: none;
+    font-size: 8px; color: white; align-items: center; justify-content: center;
+    font-weight: 900;
+  }
+  .shield-sent-badge.visible { display: flex; }
+
+  /* Hold progress ring around the shield */
+  .shield-ring-wrap {
+    position: absolute; bottom: 175px; right: 9px; z-index: 9;
+    width: 52px; height: 52px; pointer-events: none;
+  }
+  .ring-svg { width: 52px; height: 52px; transform: rotate(-90deg); }
+  .ring-track { fill: none; stroke: rgba(229,62,62,0.15); stroke-width: 3; }
+  .ring-fill  { fill: none; stroke: var(--spinr-red); stroke-width: 3; stroke-linecap: round;
+    stroke-dasharray: 138; stroke-dashoffset: 138;
+    transition: stroke-dashoffset 3s linear; }
+  .ring-fill.filling { stroke-dashoffset: 0; }
+
+  /* ── Safety overlay (opens explicitly, not from hold) ── */
+  .drv-overlay {
+    position: absolute; inset: 0; z-index: 50;
+    background: rgba(4,4,10,0.97);
+    display: flex; flex-direction: column;
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.2s;
+  }
+  .drv-overlay.visible { opacity: 1; pointer-events: auto; }
+
+  /* Discreet mode banner */
+  .discreet-banner {
+    margin: 48px 16px 0;
+    background: rgba(56,161,105,0.1); border: 1px solid rgba(56,161,105,0.25);
+    border-radius: 10px; padding: 8px 12px;
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11px; color: rgba(56,161,105,0.9); font-weight: 600;
+  }
+  .db-toggle { margin-left: auto; font-size: 11px; color: rgba(255,255,255,0.35); cursor: pointer; }
+
+  .dov-top { padding: 12px 16px 8px; display: flex; align-items: center; gap: 10px; }
+  .dov-title { flex: 1; font-size: 17px; font-weight: 900; color: white; }
+  .dov-close { width: 34px; height: 34px; border-radius: 50%; background: rgba(255,255,255,0.08); display: flex; align-items: center; justify-content: center; font-size: 18px; color: rgba(255,255,255,0.5); cursor: pointer; border: none; }
+  .dov-loc { margin: 0 16px 12px; background: rgba(255,255,255,0.05); border-radius: 10px; padding: 9px 12px; display: flex; align-items: center; gap: 8px; }
+  .loc-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--online-green); animation: lp 2s infinite; }
+  @keyframes lp { 0%,100%{opacity:1}50%{opacity:0.3} }
+  .loc-text { font-size: 11px; color: rgba(255,255,255,0.6); }
+  .loc-live { margin-left: auto; font-size: 9px; color: rgba(56,161,105,0.8); font-weight: 700; letter-spacing: 0.06em; }
+
+  .dov-actions { flex: 1; padding: 0 16px; display: flex; flex-direction: column; gap: 8px; }
+
+  /* Main hold-to-alert — styled prominently */
+  .drv-hold-btn {
+    padding: 16px 16px 16px;
+    border-radius: 16px;
+    background: rgba(237,137,54,0.1); border: 1.5px solid rgba(237,137,54,0.3);
+    cursor: pointer; position: relative; overflow: hidden;
+    display: flex; align-items: center; gap: 12px; text-align: left;
+    user-select: none; -webkit-user-select: none; border: none;
+    transition: background 0.15s;
+  }
+  .drv-hold-btn:hover { background: rgba(237,137,54,0.16); }
+  .dhb-icon  { font-size: 22px; flex-shrink: 0; }
+  .dhb-text  { flex: 1; }
+  .dhb-label { font-size: 13.5px; font-weight: 800; color: var(--mob-text); }
+  .dhb-sub   { font-size: 10.5px; color: rgba(255,255,255,0.4); margin-top: 2px; }
+  .dhb-hint  { font-size: 10px; color: rgba(237,137,54,0.8); font-weight: 700; white-space: nowrap; }
+  .dhb-bar   { position: absolute; bottom: 0; left: 0; height: 3px; background: var(--warning-amber); width: 0%; border-radius: 0 2px 2px 0; transition: none; }
+  .dhb-bar.filling { width: 100%; transition: width 3s linear; }
+
+  /* 911 button */
+  .drv-911-btn {
+    padding: 16px 16px; border-radius: 16px;
+    background: var(--spinr-red); border: none; cursor: pointer;
+    display: flex; align-items: center; gap: 12px; text-align: left;
+    box-shadow: 0 4px 20px rgba(229,62,62,0.35);
+    transition: all 0.15s;
+  }
+  .drv-911-btn:hover { background: var(--spinr-red-dark); }
+  .d911-icon  { font-size: 22px; flex-shrink: 0; }
+  .d911-label { font-size: 13.5px; font-weight: 900; color: white; flex: 1; }
+  .d911-sub   { font-size: 10.5px; color: rgba(255,255,255,0.6); display: block; margin-top: 2px; }
+  .d911-arrow { font-size: 16px; color: rgba(255,255,255,0.5); }
+
+  /* Share */
+  .drv-share-btn {
+    padding: 12px 16px; border-radius: 14px;
+    background: rgba(66,153,225,0.1); border: none; cursor: pointer;
+    display: flex; align-items: center; gap: 12px; text-align: left;
+    transition: background 0.15s;
+  }
+  .drv-share-btn:hover { background: rgba(66,153,225,0.16); }
+  .ds-icon  { font-size: 18px; flex-shrink: 0; }
+  .ds-label { font-size: 12.5px; font-weight: 700; color: var(--mob-text); flex: 1; }
+  .ds-sub   { font-size: 10.5px; color: rgba(255,255,255,0.35); display: block; margin-top: 2px; }
+
+  .dov-safe { margin: 8px 16px 24px; padding: 12px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.07); background: transparent; color: rgba(255,255,255,0.4); font-size: 12.5px; font-weight: 700; cursor: pointer; }
+
+  /* Sent state inside overlay */
+  .dov-sent {
+    position: absolute; inset: 0; background: rgba(4,4,10,0.97);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 28px; opacity: 0; pointer-events: none; transition: opacity 0.25s;
+  }
+  .dov-sent.visible { opacity: 1; pointer-events: auto; }
+  .ds-big-icon { font-size: 52px; margin-bottom: 14px; }
+  .ds-title    { font-size: 18px; font-weight: 900; color: white; margin-bottom: 6px; text-align: center; }
+  .ds-sub-text { font-size: 12px; color: rgba(255,255,255,0.45); text-align: center; line-height: 1.5; margin-bottom: 20px; }
+  .ds-contacts { background: rgba(255,255,255,0.05); border-radius: 10px; padding: 10px 14px; width: 100%; margin-bottom: 16px; }
+  .dsc-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid rgba(255,255,255,0.04); }
+  .dsc-row:last-child { border-bottom: none; }
+  .dsc-icon { font-size: 13px; }
+  .dsc-name { font-size: 11.5px; color: rgba(255,255,255,0.7); }
+  .dsc-ok   { margin-left: auto; font-size: 10px; color: var(--online-green); font-weight: 700; }
+  .ds-continue { width: 100%; padding: 13px; border-radius: 12px; background: rgba(255,255,255,0.07); border: none; color: var(--mob-text); font-size: 12.5px; font-weight: 700; cursor: pointer; }
+
+  /* Discreet toast — what happens when driver uses hold WITHOUT opening overlay */
+  .discreet-toast {
+    position: absolute; top: 50px; left: 12px; right: 12px; z-index: 60;
+    background: rgba(15,20,15,0.9); border: 1px solid rgba(56,161,105,0.3);
+    border-radius: 12px; padding: 10px 14px;
+    backdrop-filter: blur(12px);
+    display: flex; align-items: center; gap: 10px;
+    opacity: 0; transform: translateY(-8px);
+    transition: all 0.25s;
+    pointer-events: none;
+  }
+  .discreet-toast.show { opacity: 1; transform: translateY(0); }
+  .dt-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--online-green); flex-shrink: 0; }
+  .dt-text { font-size: 11.5px; color: rgba(255,255,255,0.8); font-weight: 600; }
+  .dt-sub  { font-size: 10px; color: rgba(255,255,255,0.4); margin-top: 1px; }
+
+  /* ── Summary ── */
+  .summary-bar { padding: 0 36px 40px; }
+  .sum-inner { background: #12121a; border-radius: 12px; border: 1px solid rgba(255,255,255,0.06); padding: 24px; }
+  .sum-label { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(255,255,255,0.3); margin-bottom: 16px; }
+  .sum-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 24px; }
+  .sum-col-title { font-size: 13px; font-weight: 700; color: rgba(255,255,255,0.7); margin-bottom: 6px; }
+  .sum-winner { color: #E53E3E; }
+  .sum-col-body { font-size: 12px; color: rgba(255,255,255,0.4); line-height: 1.6; }
+
+  /* danger chip for Variant A critique */
+  .danger-note { font-size: 10.5px; color: rgba(229,62,62,0.8); background: rgba(229,62,62,0.08); border-radius: 6px; padding: 6px 10px; margin-top: 6px; align-self: stretch; text-align: center; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<div class="page-header">
+  <div>
+    <div class="sketch-label">011 / driver-sos</div>
+    <div class="design-q">"Can a driver call for help with one hand while driving?"</div>
+  </div>
+  <h1>Spinr Sketch System</h1>
+</div>
+
+<div class="variants-grid">
+
+  <!-- ═══ VARIANT A — Visible SOS Button ═══ -->
+  <div class="variant-wrap">
+    <div class="variant-label la">
+      <div class="variant-letter">A</div>
+      <div>
+        <div class="variant-name">Visible SOS Button</div>
+        <div class="variant-desc">Prominent red SOS pill — fast trigger, zero discretion</div>
+      </div>
+    </div>
+    <div class="tap-count taps-2">1 tap → loud red modal</div>
+    <div class="danger-note">⚠ Visible to passenger in back seat</div>
+
+    <div class="phone">
+      <div class="map-bg">
+        <div class="map-road-h" style="top:35%"></div>
+        <div class="map-road-h" style="top:58%"></div>
+        <div class="map-road-v" style="left:28%"></div>
+        <div class="map-road-v" style="left:68%"></div>
+        <div class="map-block" style="top:40%;left:6%;width:20%;height:16%"></div>
+        <div class="map-block" style="top:40%;left:32%;width:34%;height:16%"></div>
+        <div class="map-block" style="top:20%;left:32%;width:34%;height:13%"></div>
+        <div class="route-line" style="top:32%;left:40%;width:5px;height:18%;transform:rotate(8deg)"></div>
+        <div style="position:absolute;top:34%;left:41%;font-size:16px">🚗</div>
+      </div>
+      <div class="status-bar"><span style="font-weight:700">9:41</span><span style="font-size:10px">●●● WiFi 🔋</span></div>
+
+      <!-- Big red SOS — passenger can clearly see this -->
+      <button class="sos-visible-btn" onclick="document.getElementById('modalA').classList.toggle('open')">
+        🚨 SOS
+      </button>
+
+      <!-- Driver panel -->
+      <div class="driver-panel">
+        <div class="dp-handle"></div>
+        <div class="dp-status">IN PROGRESS · 12 MIN LEFT</div>
+        <div class="dp-rider">
+          <div class="dp-avatar">SP</div>
+          <div>
+            <div class="dp-rider-name">Sarah P.</div>
+            <div class="dp-rider-sub">4.9 ★ · 42 rides</div>
+          </div>
+          <div style="margin-left:auto;text-align:right">
+            <div style="font-size:15px;font-weight:800;color:var(--mob-text)">12</div>
+            <div style="font-size:10px;color:var(--mob-text-muted)">min left</div>
+          </div>
+        </div>
+        <div class="dp-dest">Drop-off <strong>2102 Lorne St, Regina SK</strong></div>
+        <div class="dp-row">
+          <div class="dp-btn">📞 Call</div>
+          <div class="dp-btn">🗺 Nav</div>
+          <div class="dp-btn">⋯ More</div>
+        </div>
+      </div>
+
+      <!-- Loud red modal — visible in back seat -->
+      <div class="sos-modal-visible" id="modalA">
+        <div class="smv-icon">🚨</div>
+        <div class="smv-title">EMERGENCY SOS</div>
+        <div class="smv-sub">Your location is being shared with Spinr Safety. Choose an option:</div>
+        <button class="smv-btn smv-911" onclick="alert('Opens tel:911 — your phone dialer')">📞 Call 911</button>
+        <button class="smv-btn smv-alert" onclick="alert('Sending alert to emergency contacts + Spinr Safety')">🚨 Alert My Contacts</button>
+        <button class="smv-btn smv-cancel" onclick="document.getElementById('modalA').classList.remove('open')">Cancel — I'm Safe</button>
+      </div>
+    </div>
+    <div class="phone-label">Tap SOS → red modal visible to all</div>
+
+    <div class="analysis-box">
+      <div class="cf-label">Analysis</div>
+      <div class="cf-item">Fast — one tap to SOS panel</div>
+      <div class="cf-item">Easy to find — prominent persistent button</div>
+      <div class="cf-item">Full-screen red flash is visible to the passenger</div>
+      <div class="cf-item">Could escalate a dangerous situation immediately</div>
+      <div class="cf-item">No one-handed hold mechanic — misfire risk while driving</div>
+      <div class="cf-verdict verdict-no">✗ Zero discretion — dangerous in the scenario that needs it most</div>
+    </div>
+  </div>
+
+  <!-- ═══ VARIANT B — Hardware Volume Shortcut ═══ -->
+  <div class="variant-wrap">
+    <div class="variant-label lb">
+      <div class="variant-letter">B</div>
+      <div>
+        <div class="variant-name">Hardware Shortcut</div>
+        <div class="variant-desc">Volume-down triple-press → silent alert, no screen change</div>
+      </div>
+    </div>
+    <div class="tap-count taps-1">0 screen taps — hardware only</div>
+
+    <div class="phone" id="phoneB">
+      <!-- Volume button diagram on side -->
+      <div class="vol-btn-diagram" id="volBtns" onclick="simulateVolPress()">
+        <div class="vol-pip" id="vp1"></div>
+        <div class="vol-pip" id="vp2"></div>
+        <div class="vol-pip" id="vp3"></div>
+      </div>
+
+      <div class="map-bg">
+        <div class="map-road-h" style="top:35%"></div>
+        <div class="map-road-h" style="top:58%"></div>
+        <div class="map-road-v" style="left:28%"></div>
+        <div class="map-road-v" style="left:68%"></div>
+        <div class="map-block" style="top:40%;left:6%;width:20%;height:16%"></div>
+        <div class="map-block" style="top:40%;left:32%;width:34%;height:16%"></div>
+        <div class="map-block" style="top:20%;left:32%;width:34%;height:13%"></div>
+        <div class="route-line" style="top:32%;left:40%;width:5px;height:18%;transform:rotate(8deg)"></div>
+        <div style="position:absolute;top:34%;left:41%;font-size:16px">🚗</div>
+      </div>
+      <div class="status-bar"><span style="font-weight:700">9:41</span><span style="font-size:10px">●●● WiFi 🔋</span></div>
+
+      <!-- Hardware instruction -->
+      <div class="hw-instruction">
+        <strong>🔒 Silent SOS shortcut active</strong>
+        Press volume ▼ three times quickly to send a silent alert
+      </div>
+
+      <!-- Sent toast (appears after vol press, screen barely changes) -->
+      <div class="hw-sent" id="hwSentB">
+        <div class="hw-sent-icon">✅</div>
+        <div class="hw-sent-title">Alert Sent Silently</div>
+        <div class="hw-sent-sub">Mom, James T. + Spinr Safety notified</div>
+      </div>
+
+      <!-- Driver panel -->
+      <div class="driver-panel">
+        <div class="dp-handle"></div>
+        <div class="dp-status">IN PROGRESS · 12 MIN LEFT</div>
+        <div class="dp-rider">
+          <div class="dp-avatar">SP</div>
+          <div>
+            <div class="dp-rider-name">Sarah P.</div>
+            <div class="dp-rider-sub">4.9 ★ · 42 rides</div>
+          </div>
+          <div style="margin-left:auto;text-align:right">
+            <div style="font-size:15px;font-weight:800;color:var(--mob-text)">12</div>
+            <div style="font-size:10px;color:var(--mob-text-muted)">min left</div>
+          </div>
+        </div>
+        <div class="dp-dest">Drop-off <strong>2102 Lorne St, Regina SK</strong></div>
+        <div class="dp-row">
+          <div class="dp-btn">📞 Call</div>
+          <div class="dp-btn">🗺 Nav</div>
+          <div class="dp-btn">⋯ More</div>
+        </div>
+      </div>
+    </div>
+    <div class="phone-label">Click side button to simulate</div>
+
+    <div class="analysis-box">
+      <div class="cf-label">Analysis</div>
+      <div class="cf-item">Completely discreet — no screen change visible to passenger</div>
+      <div class="cf-item">Truly one-handed — pocket or dashboard, no looking needed</div>
+      <div class="cf-item">Relies on driver memorizing a gesture during onboarding</div>
+      <div class="cf-item">Volume keys behave differently across Android/iOS models</div>
+      <div class="cf-item">No visual feedback when driving normally — driver can't confirm</div>
+      <div class="cf-item">Cannot offer 911 call — hardware shortcut can only send app alerts</div>
+      <div class="cf-verdict verdict-med">~ Best discretion, weakest reliability + discoverability</div>
+    </div>
+  </div>
+
+  <!-- ═══ VARIANT C — Discreet Hold Shield (WINNER) ═══ -->
+  <div class="variant-wrap">
+    <div class="variant-label lc">
+      <div class="variant-letter">C</div>
+      <div>
+        <div class="variant-name">Discreet Hold Shield</div>
+        <div class="variant-desc">Thumb-zone hold → silent alert, tiny badge, no red flash</div>
+      </div>
+      <div class="winner-badge">WINNER</div>
+    </div>
+    <div class="tap-count taps-1">Hold 3s → silent · or tap → overlay</div>
+
+    <div class="phone" id="phoneC">
+      <div class="map-bg">
+        <div class="map-road-h" style="top:35%"></div>
+        <div class="map-road-h" style="top:58%"></div>
+        <div class="map-road-v" style="left:28%"></div>
+        <div class="map-road-v" style="left:68%"></div>
+        <div class="map-block" style="top:40%;left:6%;width:20%;height:16%"></div>
+        <div class="map-block" style="top:40%;left:32%;width:34%;height:16%"></div>
+        <div class="map-block" style="top:20%;left:32%;width:34%;height:13%"></div>
+        <div class="route-line" style="top:32%;left:40%;width:5px;height:18%;transform:rotate(8deg)"></div>
+        <div style="position:absolute;top:34%;left:41%;font-size:16px">🚗</div>
+      </div>
+      <div class="status-bar"><span style="font-weight:700">9:41</span><span style="font-size:10px">●●● WiFi 🔋</span></div>
+
+      <!-- Progress ring (SVG, invisible until hold starts) -->
+      <div class="shield-ring-wrap">
+        <svg class="ring-svg" viewBox="0 0 52 52">
+          <circle class="ring-track" cx="26" cy="26" r="22"/>
+          <circle class="ring-fill" id="ringFillC" cx="26" cy="26" r="22"/>
+        </svg>
+      </div>
+
+      <!-- ★ Shield — thumb zone, discreet border -->
+      <div class="drv-shield"
+        onmousedown="startDrvHold()" onmouseup="cancelDrvHold()" onmouseleave="cancelDrvHold()"
+        ontouchstart="startDrvHold(event)" ontouchend="cancelDrvHold()" ontouchcancel="cancelDrvHold()"
+        onclick="checkTap()"
+        id="drvShield">
+        🛡
+        <div class="shield-sent-badge" id="shieldBadge">✓</div>
+      </div>
+
+      <!-- Discreet toast — minimal, small, dark -->
+      <div class="discreet-toast" id="discreetToast">
+        <div class="dt-dot"></div>
+        <div>
+          <div class="dt-text">Silent alert sent</div>
+          <div class="dt-sub">Mom, James T. + Spinr Safety notified</div>
+        </div>
+      </div>
+
+      <!-- Driver panel -->
+      <div class="driver-panel">
+        <div class="dp-handle"></div>
+        <div class="dp-status">IN PROGRESS · 12 MIN LEFT</div>
+        <div class="dp-rider">
+          <div class="dp-avatar">SP</div>
+          <div>
+            <div class="dp-rider-name">Sarah P.</div>
+            <div class="dp-rider-sub">4.9 ★ · 42 rides</div>
+          </div>
+          <div style="margin-left:auto;text-align:right">
+            <div style="font-size:15px;font-weight:800;color:var(--mob-text)">12</div>
+            <div style="font-size:10px;color:var(--mob-text-muted)">min left</div>
+          </div>
+        </div>
+        <div class="dp-dest">Drop-off <strong>2102 Lorne St, Regina SK</strong></div>
+        <div class="dp-row">
+          <div class="dp-btn">📞 Call</div>
+          <div class="dp-btn">🗺 Nav</div>
+          <div class="dp-btn" onclick="openDrvOverlay()">🛡 Safety</div>
+        </div>
+      </div>
+
+      <!-- Explicit safety overlay (tap-open path) -->
+      <div class="drv-overlay" id="drvOverlay">
+        <div class="discreet-banner">
+          <span>🔒 Discreet mode on</span>
+          <span style="color:rgba(255,255,255,0.45);font-weight:400;font-size:10.5px">Alerts send silently — no red screen</span>
+          <span class="db-toggle">Change</span>
+        </div>
+        <div class="dov-top">
+          <div class="dov-title">🛡 Safety</div>
+          <button class="dov-close" onclick="closeDrvOverlay()">✕</button>
+        </div>
+        <div class="dov-loc">
+          <div class="loc-dot"></div>
+          <div class="loc-text">Victoria Ave &amp; Albert St, Regina SK</div>
+          <div class="loc-live">LIVE</div>
+        </div>
+        <div class="dov-actions">
+          <!-- Hold to alert — the primary action -->
+          <button class="drv-hold-btn" id="drvHoldBtnOverlay"
+            onmousedown="startOverlayHold()" onmouseup="cancelOverlayHold()" onmouseleave="cancelOverlayHold()"
+            ontouchstart="startOverlayHold(event)" ontouchend="cancelOverlayHold()" ontouchcancel="cancelOverlayHold()">
+            <span class="dhb-icon">🚨</span>
+            <div class="dhb-text">
+              <div class="dhb-label">Alert Emergency Contacts</div>
+              <div class="dhb-sub">Mom, James T. + Spinr Safety (silent)</div>
+            </div>
+            <span class="dhb-hint">Hold 3s</span>
+            <div class="dhb-bar" id="overlayHoldBar"></div>
+          </button>
+
+          <!-- 911 — immediate tap -->
+          <button class="drv-911-btn" onclick="alert('Opens tel:911 — your phone dialer.\n\nSpinr never auto-calls 911.\nYou decide whether to connect.')">
+            <span class="d911-icon">📞</span>
+            <div style="flex:1">
+              <div class="d911-label">Call 911</div>
+              <span class="d911-sub">Opens your phone dialer — you decide</span>
+            </div>
+            <span class="d911-arrow">↗</span>
+          </button>
+
+          <button class="drv-share-btn" onclick="alert('Live trip link copied.\nShare it with anyone to let them track this ride.')">
+            <span class="ds-icon">📤</span>
+            <div>
+              <div class="ds-label">Share Live Trip Link</div>
+              <span class="ds-sub">Anyone with the link can track this ride</span>
+            </div>
+          </button>
+        </div>
+        <button class="dov-safe" onclick="closeDrvOverlay()">I'm Safe — Close</button>
+
+        <!-- Sent confirmation inside overlay -->
+        <div class="dov-sent" id="drvSentState">
+          <div class="ds-big-icon">✅</div>
+          <div class="ds-title">Alert Sent Silently</div>
+          <div class="ds-sub-text">Your contacts and Spinr Safety have been notified. They can see your live location.</div>
+          <div class="ds-contacts">
+            <div class="dsc-row"><span class="dsc-icon">👩</span><span class="dsc-name">Mom (Sarah)</span><span class="dsc-ok">✓ Notified</span></div>
+            <div class="dsc-row"><span class="dsc-icon">👤</span><span class="dsc-name">James T.</span><span class="dsc-ok">✓ Notified</span></div>
+            <div class="dsc-row"><span class="dsc-icon">🛡</span><span class="dsc-name">Spinr Safety Team</span><span class="dsc-ok">✓ Monitoring</span></div>
+          </div>
+          <button class="ds-continue" onclick="closeDrvOverlay()">Continue My Ride</button>
+        </div>
+      </div>
+    </div>
+    <div class="phone-label">Hold shield 3s (silent) · or tap → overlay</div>
+
+    <div class="analysis-box">
+      <div class="cf-label">Analysis</div>
+      <div class="cf-item">Hold 3s sends silent alert — no red flash, no passenger awareness</div>
+      <div class="cf-item">Tiny green badge on shield: driver knows, passenger can't see</div>
+      <div class="cf-item">Ring progress gives tactile feedback without sound/light</div>
+      <div class="cf-item">Tap (not hold) opens full overlay when driver can safely look</div>
+      <div class="cf-item">Discreet mode labelled — driver understands default behaviour</div>
+      <div class="cf-item">911 always one tap away in the overlay, never auto-dialed</div>
+      <div class="cf-verdict verdict-yes">✓ Silent by default · one-hand hold · badge confirms without alarm</div>
+    </div>
+  </div>
+
+</div>
+
+<div class="summary-bar">
+  <div class="sum-inner">
+    <div class="sum-label">Design Decision Summary</div>
+    <div class="sum-grid">
+      <div>
+        <div class="sum-col-title">A — Visible SOS Button</div>
+        <div class="sum-col-body">Maximally discoverable and fast. But a full-screen red alarm is visible to any passenger in the back seat — the exact scenario where a driver most needs help. Trades discretion for speed in a context where discretion is non-negotiable. Suitable for a solo use case (breakdown, medical), not a threat-from-passenger scenario.</div>
+      </div>
+      <div>
+        <div class="sum-col-title">B — Hardware Shortcut</div>
+        <div class="sum-col-body">Zero screen visibility to the passenger — the most discreet option. But reliability is device-dependent (iOS vs Android volume key behaviour varies), discoverability requires onboarding, and there's no way to offer a 911 call path from a hardware gesture. A strong secondary mechanism, not a primary one.</div>
+      </div>
+      <div>
+        <div class="sum-col-title sum-winner">C — Discreet Hold Shield ← Winner</div>
+        <div class="sum-col-body">Dual-mode: hold (3s) for the silent discreet path, tap for the full overlay when safe. The ring progress and tiny badge confirm the alert went through without any visible alarm. Right-thumb placement means the driver never takes their hand off a natural position. Discreet mode is the default and is clearly labelled so drivers understand what will happen before an emergency occurs.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  /* ── Variant B: Volume button simulation ── */
+  let volPresses = 0;
+  let volTimer = null;
+
+  function simulateVolPress() {
+    volPresses++;
+    const pip = document.getElementById('vp' + volPresses);
+    if (pip) pip.classList.add('active');
+
+    clearTimeout(volTimer);
+    if (volPresses >= 3) {
+      setTimeout(() => {
+        document.getElementById('hwSentB').classList.add('show');
+        setTimeout(() => document.getElementById('hwSentB').classList.remove('show'), 3000);
+        document.querySelectorAll('.vol-pip').forEach(p => p.classList.remove('active'));
+        volPresses = 0;
+      }, 300);
+    } else {
+      volTimer = setTimeout(() => {
+        document.querySelectorAll('.vol-pip').forEach(p => p.classList.remove('active'));
+        volPresses = 0;
+      }, 1500);
+    }
+  }
+
+  /* ── Variant C: Shield hold (without overlay) ── */
+  let drvHoldTimer = null;
+  let drvHoldActive = false;
+  let wasTap = true;
+
+  function startDrvHold(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    wasTap = true;
+    drvHoldActive = true;
+
+    const ring = document.getElementById('ringFillC');
+    ring.style.transition = 'none';
+    ring.style.strokeDashoffset = '138';
+    void ring.offsetWidth;
+    ring.classList.add('filling');
+
+    drvHoldTimer = setTimeout(() => {
+      drvHoldActive = false;
+      ring.classList.remove('filling');
+      ring.style.strokeDashoffset = '138';
+      wasTap = false;
+
+      /* Show discreet badge */
+      document.getElementById('shieldBadge').classList.add('visible');
+      /* Show minimal dark toast */
+      const toast = document.getElementById('discreetToast');
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 3500);
+    }, 3000);
+  }
+
+  function cancelDrvHold() {
+    if (drvHoldTimer) { clearTimeout(drvHoldTimer); drvHoldTimer = null; }
+    drvHoldActive = false;
+    const ring = document.getElementById('ringFillC');
+    ring.classList.remove('filling');
+    ring.style.transition = 'none';
+    ring.style.strokeDashoffset = '138';
+  }
+
+  function checkTap() {
+    if (!wasTap) { wasTap = true; return; }
+    /* Short tap — open overlay */
+    openDrvOverlay();
+  }
+
+  /* ── Overlay ── */
+  function openDrvOverlay()  { document.getElementById('drvOverlay').classList.add('visible'); }
+  function closeDrvOverlay() {
+    document.getElementById('drvOverlay').classList.remove('visible');
+    document.getElementById('drvSentState').classList.remove('visible');
+    cancelOverlayHold();
+  }
+
+  /* ── Hold inside overlay ── */
+  let overlayHoldTimer = null;
+
+  function startOverlayHold(e) {
+    if (e && e.preventDefault) e.preventDefault();
+    const bar = document.getElementById('overlayHoldBar');
+    bar.style.transition = 'none';
+    bar.style.width = '0%';
+    void bar.offsetWidth;
+    bar.classList.add('filling');
+
+    overlayHoldTimer = setTimeout(() => {
+      bar.classList.remove('filling');
+      bar.style.width = '0%';
+      document.getElementById('shieldBadge').classList.add('visible');
+      document.getElementById('drvSentState').classList.add('visible');
+    }, 3000);
+  }
+
+  function cancelOverlayHold() {
+    if (overlayHoldTimer) { clearTimeout(overlayHoldTimer); overlayHoldTimer = null; }
+    const bar = document.getElementById('overlayHoldBar');
+    bar.classList.remove('filling');
+    bar.style.transition = 'none';
+    bar.style.width = '0%';
+  }
+</script>
+</body>
+</html>

@@ -5,6 +5,7 @@ import { reportLostItem, resolveLostItem } from "@/lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { PackageSearch, CheckCircle, Clock, XCircle, Bell } from "lucide-react";
 import { Sec } from "./ride-ui-helpers";
+import { useToast } from "@/components/ui/use-toast";
 
 const STATUS_ICONS: Record<string, { icon: any; color: string }> = {
     reported: { icon: Clock, color: "text-amber-500" },
@@ -20,6 +21,7 @@ interface Props {
 }
 
 export default function RideLostFound({ rideId, items, onRefresh }: Props) {
+    const { toast } = useToast();
     const [showForm, setShowForm] = useState(false);
     const [description, setDescription] = useState("");
     const [loading, setLoading] = useState(false);
@@ -29,12 +31,12 @@ export default function RideLostFound({ rideId, items, onRefresh }: Props) {
         setLoading(true);
         try {
             await reportLostItem(rideId, { item_description: description });
-            alert("Lost item reported. Driver has been notified.");
+            toast({ title: "Lost item reported", description: "Driver has been notified." });
             setShowForm(false);
             setDescription("");
             onRefresh();
         } catch (e: any) {
-            alert(e.message || "Failed to report item");
+            toast({ title: "Failed to report item", description: e.message, variant: "destructive" });
         } finally {
             setLoading(false);
         }
@@ -45,7 +47,7 @@ export default function RideLostFound({ rideId, items, onRefresh }: Props) {
             await resolveLostItem(itemId, { status });
             onRefresh();
         } catch (e: any) {
-            alert(e.message || "Failed to update");
+            toast({ title: "Failed to update item", description: e.message, variant: "destructive" });
         }
     };
 

@@ -3,14 +3,27 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Radio, X } from "lucide-react";
 import { useAuthStore } from "@/store/authStore";
+import { useToast } from "@/components/ui/use-toast";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
-import { adminCancelRide, getMonitoringDrivers, getMonitoringRides, getServiceAreas, getVehicleTypes } from "@/lib/api";
+import { adminCancelRide, getFareConfigs, getMonitoringDrivers, getMonitoringRides, getServiceAreas, getVehicleTypes } from "@/lib/api";
 import { useMonitoringSocket } from "@/hooks/use-monitoring-socket";
 
 import { MonitoringMap, MapHandles, MonitoringServiceArea } from "./monitoring-map";
 import { MonitoringToolbar } from "./toolbar";
 import { DriverPanel } from "./driver-panel";
 import { RidePanel } from "./ride-panel";
+import { AlertFeed } from "./alert-feed";
+import { useRequireModule } from "@/hooks/useRequireModule";
 import type {
   AlertEvent,
   MonitoringCounts,
@@ -24,6 +37,8 @@ import type {
 const POLL_INTERVAL_MS = 15_000;
 
 export default function MonitoringPage() {
+  const { allowed } = useRequireModule("rides");
+  const { toast } = useToast();
   // ── Refs: source-of-truth maps (never trigger re-renders) ──────────
   const driversMapRef = useRef<Map<string, MonitoringDriver>>(new Map());
   const ridesMapRef = useRef<Map<string, MonitoringRide>>(new Map());
@@ -47,7 +62,16 @@ export default function MonitoringPage() {
   const [selectedRide, setSelectedRide] = useState<MonitoringRide | null>(null);
   const [serviceAreas, setServiceAreas] = useState<MonitoringServiceArea[]>([]);
   const [vehicleTypes, setVehicleTypes] = useState<{ id: string; name: string }[]>([]);
+  // serviceAreaId → set of vehicle_type_ids with an active fare config.
+  // Used to narrow the toolbar's vehicle-type dropdown when an area is
+  // selected (e.g. picking "Regina" hides vehicle types that have no
+  // Regina fare config). An empty/missing set means the area has no
+  // configured vehicle types; the dropdown shows "No vehicles configured".
+  const [vehicleTypesByArea, setVehicleTypesByArea] = useState<Record<string, Set<string>>>({});
   const [alerts, setAlerts] = useState<AlertEvent[]>([]);
+  const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
+  const [cancelReason, setCancelReason] = useState("Cancelled by admin");
+  const [pendingCancelId, setPendingCancelId] = useState<string | null>(null);
 
   // ── Auth token for WebSocket ────────────────────────────────────────
   const token = useAuthStore((s) => s.token);
@@ -146,7 +170,7 @@ export default function MonitoringPage() {
         break;
       }
       case "ride_completed": {
-        const ride = ridesMapRef.current.get(event.ride_id);
+        const _ride = ridesMapRef.current.get(event.ride_id);
         ridesMapRef.current.delete(event.ride_id);
         mapHandlesRef.current?.removeRideMarkers(event.ride_id);
         refreshCounts();
@@ -214,29 +238,126 @@ export default function MonitoringPage() {
     refreshCounts();
   }, [applyDriver, applyRide, refreshCounts]);
 
-  // Load service areas + vehicle types once
+  // Load service areas + vehicle types + pricing sources once. The
+  // serviceAreaId → vehicleTypeId map is unioned from BOTH pricing
+  // stores (fare_configs table AND service_areas.vehicle_pricing
+  // JSONB) — admins can configure vehicles in either place, and
+  // reading only one source caused the drawer to complain "No fare
+  // configs" even when pricing was set via the Service Areas admin.
   useEffect(() => {
-    getServiceAreas()
-      .then((areas: any[]) =>
-        setServiceAreas(
-          areas.map((a) => ({
-            id: a.id,
-            name: a.name,
-            geojson: a.geojson ?? null,
-            fallbackCenter: a.center_lat && a.center_lng
-              ? { lat: a.center_lat, lng: a.center_lng }
-              : null,
-          }))
-        )
-      )
-      .catch(() => {});
+    Promise.all([
+      getServiceAreas(),
+      getVehicleTypes().catch(() => [] as any[]),
+      getFareConfigs().catch(() => [] as any[]),
+    ])
+      .then(([rawAreas, vt, configs]) => {
+        const areas: any[] = rawAreas || [];
 
-    getVehicleTypes()
-      .then((vt: any[]) =>
-        setVehicleTypes(vt.map((v) => ({ id: v.id, name: v.name })))
-      )
+        setServiceAreas(
+          areas.map((a) => {
+            // Backend stores the shape under `polygon` (may be a raw
+            // GeoJSON Polygon or an array of {lat,lng} — see
+            // getAreaPolygon() in the service-areas admin page).
+            // Normalise to a GeoJSON Polygon for fitBoundsToGeoJSON(), and
+            // compute a centroid fallback so fitArea() can still centre
+            // the map when the area has no polygon drawn yet.
+            const raw = a.polygon ?? a.geojson;
+            let geojson: GeoJSON.Polygon | null = null;
+            let fallbackCenter: { lat: number; lng: number } | null = null;
+            if (raw?.type === "Polygon" && Array.isArray(raw.coordinates)) {
+              geojson = raw as GeoJSON.Polygon;
+            } else if (Array.isArray(raw) && raw.length > 0 && raw[0]?.lat !== undefined) {
+              const ring = raw.map(
+                (p: { lat: number; lng: number }) => [p.lng, p.lat] as GeoJSON.Position,
+              );
+              const first = ring[0];
+              const last = ring[ring.length - 1];
+              if (first[0] !== last[0] || first[1] !== last[1]) ring.push(first);
+              geojson = { type: "Polygon", coordinates: [ring] };
+            }
+            if (geojson) {
+              const ring = geojson.coordinates[0];
+              const pts =
+                ring.length > 1 &&
+                ring[0][0] === ring[ring.length - 1][0] &&
+                ring[0][1] === ring[ring.length - 1][1]
+                  ? ring.slice(0, -1)
+                  : ring;
+              const sum = pts.reduce(
+                (acc, [lng, lat]) => ({ lng: acc.lng + lng, lat: acc.lat + lat }),
+                { lng: 0, lat: 0 },
+              );
+              fallbackCenter = { lng: sum.lng / pts.length, lat: sum.lat / pts.length };
+            } else if (a.center_lat && a.center_lng) {
+              fallbackCenter = { lat: a.center_lat, lng: a.center_lng };
+            }
+            return { id: a.id, name: a.name, geojson, fallbackCenter };
+          }),
+        );
+
+        const types = (vt || []).map((v: any) => ({ id: v.id, name: v.name }));
+        setVehicleTypes(types);
+        const byName: Record<string, string> = {};
+        for (const t of types) byName[t.name] = t.id;
+
+        const map: Record<string, Set<string>> = {};
+        // From fare_configs (direct id refs)
+        for (const c of configs || []) {
+          if (c?.is_active === false) continue;
+          const aId = c?.service_area_id;
+          const vtId = c?.vehicle_type_id;
+          if (!aId || !vtId) continue;
+          if (!map[aId]) map[aId] = new Set<string>();
+          map[aId].add(vtId);
+        }
+        // From service_areas.vehicle_pricing JSONB (name-based)
+        for (const area of areas) {
+          const pricing = Array.isArray(area?.vehicle_pricing) ? area.vehicle_pricing : [];
+          for (const row of pricing) {
+            const name = row?.vehicle_type;
+            if (!name) continue;
+            const vtId = byName[name];
+            if (!vtId) continue;
+            if (!map[area.id]) map[area.id] = new Set<string>();
+            map[area.id].add(vtId);
+          }
+        }
+        setVehicleTypesByArea(map);
+      })
       .catch(() => {});
   }, []);
+
+  // Vehicle types available for the current area filter. When no area is
+  // selected we show all; when an area is selected we narrow to the
+  // vehicle types configured for it (empty allowed — the toolbar surfaces
+  // an "empty" hint so the operator knows there's nothing to pick).
+  const availableVehicleTypes = useMemo(() => {
+    if (!filters.serviceAreaId) return vehicleTypes;
+    const allowed = vehicleTypesByArea[filters.serviceAreaId];
+    if (!allowed) return [];
+    return vehicleTypes.filter((v) => allowed.has(v.id));
+  }, [filters.serviceAreaId, vehicleTypes, vehicleTypesByArea]);
+
+  // If the selected vehicle type is no longer valid for the chosen area,
+  // auto-clear it so the filter doesn't silently hide every driver.
+  useEffect(() => {
+    if (!filters.vehicleTypeId) return;
+    if (availableVehicleTypes.some((v) => v.id === filters.vehicleTypeId)) return;
+    setFilters((f) => ({ ...f, vehicleTypeId: null }));
+  }, [availableVehicleTypes, filters.vehicleTypeId]);
+
+  // When the operator picks a different service area (Saskatoon → Regina,
+  // etc.), fly the map to that area so they actually see the city they
+  // just selected. serviceAreas is a dep so the fit re-runs once the
+  // list loads in — if the user somehow lands on the page with a
+  // preselected area, we still centre on it. We deliberately don't move
+  // the map when "All Areas" is chosen; the driver auto-fit handles that.
+  useEffect(() => {
+    if (!filters.serviceAreaId) return;
+    const area = serviceAreas.find((a) => a.id === filters.serviceAreaId);
+    if (!area) return;
+    mapHandlesRef.current?.fitArea(filters.serviceAreaId);
+  }, [filters.serviceAreaId, serviceAreas]);
 
   // Poll data
   useEffect(() => {
@@ -249,6 +370,22 @@ export default function MonitoringPage() {
   useEffect(() => {
     driversMapRef.current.forEach((d) => applyDriver(d));
   }, [applyDriver]);
+
+  // Auto-select the first match when search query is unambiguous
+  useEffect(() => {
+    if (searchQuery.length < 3) return;
+    const q = searchQuery.toLowerCase();
+    // Check rides first (ID match is unambiguous)
+    const rideMatch = Array.from(ridesMapRef.current.values()).find(
+      (r) => r.id.includes(q) || r.rider_name?.toLowerCase().includes(q)
+    );
+    if (rideMatch) { handleSelectRide(rideMatch.id); return; }
+    // Then check driver name
+    const driverMatch = Array.from(driversMapRef.current.values()).find(
+      (d) => d.name?.toLowerCase().includes(q)
+    );
+    if (driverMatch) handleSelectDriver(driverMatch.id);
+  }, [searchQuery]); // intentionally omit handleSelect* — they're stable useCallbacks
 
   // ── Selection handlers ──────────────────────────────────────────────
   const handleSelectDriver = useCallback((id: string) => {
@@ -269,12 +406,26 @@ export default function MonitoringPage() {
     mapHandlesRef.current?.panTo(ride.pickup_lat, ride.pickup_lng);
   }, []);
 
+  const handleAlertEventClick = useCallback((event: AlertEvent) => {
+    if (event.driver_id) {
+      const driver = driversMapRef.current.get(event.driver_id);
+      if (driver) handleSelectDriver(event.driver_id);
+    } else if (event.ride_id) {
+      const ride = ridesMapRef.current.get(event.ride_id);
+      if (ride) handleSelectRide(event.ride_id);
+    }
+  }, [handleSelectDriver, handleSelectRide]);
+
   const handleAreaFit = useCallback((areaId: string) => {
     mapHandlesRef.current?.fitArea(areaId);
   }, []);
 
-  // Filter active rides list by service area
+  // Filter active rides list by service area.
+  // The WS tick writes into ridesMapRef.current without re-rendering; we
+  // recompute visibleRides whenever the `counts` state bumps, which is the
+  // signal the map has new data. Reading ref.current here is intentional.
   const visibleRides = useMemo(() => {
+    // eslint-disable-next-line react-hooks/refs
     const rides = Array.from(ridesMapRef.current.values());
     return rides.filter((r) => {
       if (filters.serviceAreaId) {
@@ -292,9 +443,7 @@ export default function MonitoringPage() {
     });
   }, [filters.serviceAreaId, searchQuery, counts]); // counts triggers recompute on poll
 
-  const alertIconMap: Record<AlertEvent["icon"], string> = {
-    online: "🟢", offline: "⚫", ride_new: "🚗", ride_done: "✅", ride_cancelled: "❌",
-  };
+  if (!allowed) return null;
 
   return (
     <div className="flex h-[calc(100vh-4rem)] flex-col overflow-hidden">
@@ -320,9 +469,19 @@ export default function MonitoringPage() {
         followMode={followMode}
         onFollowToggle={() => setFollowMode((f) => !f)}
         serviceAreas={serviceAreas}
-        vehicleTypes={vehicleTypes}
+        vehicleTypes={availableVehicleTypes}
         wsStatus={wsStatus}
       />
+
+      {/* Stale-data warning banner — visible whenever live feed is interrupted */}
+      {wsStatus !== "connected" && (
+        <div className="flex items-center gap-2 bg-yellow-50 border-b border-yellow-200 px-4 py-2 text-sm text-yellow-800 dark:bg-yellow-900/20 dark:border-yellow-800 dark:text-yellow-300">
+          <span className="font-medium">Live data paused</span>
+          <span className="text-yellow-700 dark:text-yellow-400">
+            — map and ride list may be stale ({wsStatus === "connecting" ? "reconnecting…" : "connection lost"})
+          </span>
+        </div>
+      )}
 
       {/* Main 3-column layout */}
       <div className="flex flex-1 overflow-hidden">
@@ -370,24 +529,12 @@ export default function MonitoringPage() {
             )}
           </div>
 
-          {/* Recent alerts */}
-          <div className="border-t border-border">
-            <div className="px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Activity
-            </div>
-            <div className="max-h-40 overflow-y-auto">
-              {alerts.length === 0 ? (
-                <p className="pb-3 text-center text-xs text-muted-foreground">No activity yet</p>
-              ) : (
-                alerts.slice(0, 15).map((a) => (
-                  <div key={a.id} className="flex items-start gap-1.5 px-3 py-1 text-[11px]">
-                    <span>{alertIconMap[a.icon]}</span>
-                    <span className="flex-1 text-muted-foreground">{a.message}</span>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
+          {/* Activity feed (clickable) */}
+          <AlertFeed
+            events={alerts}
+            onClear={() => setAlerts([])}
+            onEventClick={handleAlertEventClick}
+          />
         </div>
 
         {/* ── Centre: Map ─────────────────────────────────────────── */}
@@ -440,8 +587,9 @@ export default function MonitoringPage() {
               <button
                 onClick={() => { setSelected(null); setSelectedDriver(null); }}
                 className="absolute right-2 top-2 z-10 rounded-full p-1 hover:bg-muted"
+                aria-label="Close driver panel"
               >
-                <X className="h-3.5 w-3.5" />
+                <X className="h-3.5 w-3.5" aria-hidden="true" />
               </button>
               <DriverPanel
                 driver={selectedDriver}
@@ -453,29 +601,29 @@ export default function MonitoringPage() {
               <button
                 onClick={() => { setSelected(null); setSelectedRide(null); }}
                 className="absolute right-2 top-2 z-10 rounded-full p-1 hover:bg-muted"
+                aria-label="Close ride panel"
               >
-                <X className="h-3.5 w-3.5" />
+                <X className="h-3.5 w-3.5" aria-hidden="true" />
               </button>
               <RidePanel
                 ride={selectedRide}
                 onDriverClick={handleSelectDriver}
-                onCancelRide={async (id) => {
-                  const reason = window.prompt(
-                    "Cancellation reason (shown to rider + driver):",
-                    "Cancelled by admin",
-                  );
-                  if (reason === null) return; // user hit Cancel on the prompt
+                onCancelRide={(id) => {
+                  setPendingCancelId(id);
+                  setCancelReason("Cancelled by admin");
+                  setCancelDialogOpen(true);
+                }}
+                onCompleteRide={async (id) => {
                   try {
-                    await adminCancelRide(id, reason || "Cancelled by admin");
+                    const { adminCompleteRide } = await import("@/lib/api");
+                    await adminCompleteRide(id);
                     ridesMapRef.current.delete(id);
                     mapHandlesRef.current?.removeRideMarkers(id);
                     refreshCounts();
                     setSelected(null);
                     setSelectedRide(null);
                   } catch (err: any) {
-                    window.alert(
-                      `Failed to cancel ride: ${err?.message ?? "unknown error"}`,
-                    );
+                    toast({ title: "Failed to complete ride", description: err?.message ?? "Unknown error", variant: "destructive" });
                   }
                 }}
               />
@@ -483,6 +631,51 @@ export default function MonitoringPage() {
           ) : null}
         </div>
       </div>
+
+      {/* Cancel ride dialog */}
+      <Dialog open={cancelDialogOpen} onOpenChange={(open) => { if (!open) setCancelDialogOpen(false); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Cancel Ride</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2 py-2">
+            <Label htmlFor="cancel-reason">Cancellation reason (shown to rider &amp; driver)</Label>
+            <Input
+              id="cancel-reason"
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+              placeholder="Cancelled by admin"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCancelDialogOpen(false)}>
+              Back
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={async () => {
+                if (!pendingCancelId) return;
+                const id = pendingCancelId;
+                const reason = cancelReason.trim() || "Cancelled by admin";
+                setCancelDialogOpen(false);
+                setPendingCancelId(null);
+                try {
+                  await adminCancelRide(id, reason);
+                  ridesMapRef.current.delete(id);
+                  mapHandlesRef.current?.removeRideMarkers(id);
+                  refreshCounts();
+                  setSelected(null);
+                  setSelectedRide(null);
+                } catch (err: any) {
+                  toast({ title: "Failed to cancel ride", description: err?.message ?? "Unknown error", variant: "destructive" });
+                }
+              }}
+            >
+              Confirm Cancel
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

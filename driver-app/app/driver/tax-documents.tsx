@@ -23,7 +23,7 @@ interface TaxDocument {
     id: string;
     type: string;
     tax_year: number;
-    file_url: string;
+    file_url: string | null;
     generated_at: string | null;
 }
 
@@ -52,10 +52,23 @@ function TaxDocumentsScreen() {
 
     const fetchDocuments = async () => {
         try {
-            const res = await api.get('/payouts/tax-documents');
-            setDocuments(res.data.documents || res.data || []);
-        } catch (err) {
-            console.log('Error fetching tax documents:', err);
+            // There is no server-side listing endpoint for tax documents yet —
+            // T4A summaries are generated per-year on demand via
+            // GET /drivers/t4a/{year}. Synthesize a list client-side for the
+            // last three completed tax years; the actual summary is fetched
+            // when the driver taps Download.
+            const now = new Date();
+            const latestCompletedYear = now.getFullYear() - 1;
+            const years = [latestCompletedYear, latestCompletedYear - 1, latestCompletedYear - 2];
+            const synthesized: TaxDocument[] = years.map((year) => ({
+                id: `t4a-${year}`,
+                type: 'T4A',
+                tax_year: year,
+                file_url: null,
+                generated_at: null,
+            }));
+            setDocuments(synthesized);
+        } catch {
             showAlert('Error', 'Failed to load tax documents. Please try again.', 'danger');
         } finally {
             setLoading(false);
@@ -73,6 +86,21 @@ function TaxDocumentsScreen() {
         try {
             if (doc.file_url) {
                 await Linking.openURL(doc.file_url);
+                return;
+            }
+
+            // T4A: fetch the per-year summary and either open the signed URL
+            // (once the PDF generator ships) or display the summary inline.
+            const res = await api.get<{ url?: string; file_url?: string; total_earnings?: string; year?: number; total_trips?: number; net_earnings?: string }>(`/drivers/t4a/${doc.tax_year}`);
+            const url = res.data?.url || res.data?.file_url;
+            if (url) {
+                await Linking.openURL(url);
+            } else if (res.data?.total_earnings != null) {
+                showAlert(
+                    `T4A Summary — ${res.data.year}`,
+                    `Total earnings: $${Number(res.data.total_earnings).toFixed(2)}\nTotal trips: ${res.data.total_trips}\nNet earnings: $${Number(res.data.net_earnings).toFixed(2)}\n\nA downloadable PDF will be available once tax documents are finalized.`,
+                    'info',
+                );
             } else {
                 showAlert('Unavailable', 'This document is not yet available for download.', 'warning');
             }

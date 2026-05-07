@@ -3,6 +3,7 @@
 Uses sync MagicMock on supabase.rpc(...).execute() because the service
 wraps the sync call with run_sync (see plan header re: supabase-py 2.x).
 """
+
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -34,7 +35,9 @@ async def test_topup_calls_rpc_with_positive_delta():
     rpc.assert_called_once()
     fn_name, params = rpc.call_args.args
     assert fn_name == "corporate_wallet_apply_delta"
-    assert params["p_delta"] == 100
+    # Money values cross the JSON boundary as decimal strings (Audit-17 P0-1).
+    # Postgres' numeric type accepts string literals losslessly.
+    assert params["p_delta"] == "100.00"
     assert params["p_type"] == "topup"
     assert params["p_scope"] == "master"
     assert params["p_stripe_pi"] == "pi_123"
@@ -48,12 +51,8 @@ async def test_idempotent_on_duplicate_stripe_pi():
         mock_sb.rpc = rpc
         from services.corporate_wallet_service import apply_topup
 
-        a = await apply_topup(
-            wallet_id="w1", amount=100, stripe_payment_intent_id="pi_123"
-        )
-        b = await apply_topup(
-            wallet_id="w1", amount=100, stripe_payment_intent_id="pi_123"
-        )
+        a = await apply_topup(wallet_id="w1", amount=100, stripe_payment_intent_id="pi_123")
+        b = await apply_topup(wallet_id="w1", amount=100, stripe_payment_intent_id="pi_123")
     assert a == b
 
 
@@ -74,8 +73,8 @@ async def test_adjustment_routes_through_rpc_with_floor():
         )
     params = rpc.call_args.args[1]
     assert params["p_type"] == "adjustment"
-    assert params["p_delta"] == -25
-    assert params["p_floor"] == -50
+    assert params["p_delta"] == "-25.00"
+    assert params["p_floor"] == "-50.00"
     assert params["p_notes"] == "manual correction"
     assert params["p_actor_user_id"] == "admin_1"
 
@@ -95,9 +94,7 @@ async def test_adjustment_rejects_zero_amount():
     from services.corporate_wallet_service import apply_adjustment
 
     with pytest.raises(ValueError, match="zero"):
-        await apply_adjustment(
-            wallet_id="w1", amount=0, notes="noop", actor_user_id="a1"
-        )
+        await apply_adjustment(wallet_id="w1", amount=0, notes="noop", actor_user_id="a1")
 
 
 @pytest.mark.asyncio
@@ -116,7 +113,7 @@ async def test_refund_routes_with_ride_id():
         )
     params = rpc.call_args.args[1]
     assert params["p_type"] == "refund"
-    assert params["p_delta"] == 10
+    assert params["p_delta"] == "10.00"
     assert params["p_ride_id"] == "ride_1"
 
 
@@ -128,6 +125,4 @@ async def test_raises_when_rpc_returns_empty():
         from services.corporate_wallet_service import apply_topup
 
         with pytest.raises(RuntimeError, match="no row"):
-            await apply_topup(
-                wallet_id="w1", amount=100, stripe_payment_intent_id="pi_x"
-            )
+            await apply_topup(wallet_id="w1", amount=100, stripe_payment_intent_id="pi_x")

@@ -19,6 +19,7 @@ import { useRouter } from 'expo-router';
 import { useDriverStore } from '../../store/driverStore';
 import { useAuthStore } from '@shared/store/authStore';
 import api from '@shared/api/client';
+import { useDriverMe, useUpdateDriverMe } from '@shared/hooks/queries';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
@@ -44,9 +45,14 @@ function PayoutScreen() {
     const [stripeOnboarding, setStripeOnboarding] = useState(false);
     const [downloadingT4A, setDownloadingT4A] = useState(false);
     const [downloadingCSV, setDownloadingCSV] = useState(false);
+    // gst_number is part of the driver row served by useDriverMe — keep
+    // a local form state for the input field but seed it from the cached
+    // server value (also re-seeds from the background refetch).
+    const { data: driverMeRaw } = useDriverMe();
+    const driverMe = driverMeRaw as { gst_number?: string } | undefined;
+    const updateDriverMe = useUpdateDriverMe();
     const [gstNumber, setGstNumber] = useState('');
     const [showGstForm, setShowGstForm] = useState(false);
-    const [savingGst, setSavingGst] = useState(false);
     const [stripeAccountStatus, setStripeAccountStatus] = useState<string | null>(null);
     const [initialLoading, setInitialLoading] = useState(true);
     const [alert, setAlert] = useState<{
@@ -70,7 +76,7 @@ function PayoutScreen() {
                 fetchDriverBalance(),
                 fetchBankAccount(),
                 loadStripeStatus(),
-                loadGstNumber(),
+                // GST is sourced from useDriverMe — no manual fetch needed.
             ]);
         } catch (err) {
             // Errors are handled individually in each function
@@ -81,7 +87,7 @@ function PayoutScreen() {
 
     const loadStripeStatus = async () => {
         try {
-            const res = await api.get('/drivers/balance');
+            const res = await api.get<{ stripe_account_onboarded?: boolean }>('/drivers/balance');
             setStripeAccountStatus(
                 res.data.stripe_account_onboarded ? 'active' : 'not_onboarded'
             );
@@ -90,14 +96,12 @@ function PayoutScreen() {
         }
     };
 
-    const loadGstNumber = async () => {
-        try {
-            const res = await api.get('/drivers/me');
-            setGstNumber(res.data.gst_number || '');
-        } catch {
-            // Not critical
-        }
-    };
+    // Seed the GST input from the cached driver row whenever it changes.
+    // The hook has its own cache + background refetch, so this replaces
+    // the legacy `loadGstNumber()` round-trip entirely.
+    useEffect(() => {
+        if (driverMe) setGstNumber(driverMe.gst_number || '');
+    }, [driverMe]);
 
     useEffect(() => {
         if (error) {
@@ -109,7 +113,7 @@ function PayoutScreen() {
     const handleStripeOnboarding = async () => {
         setStripeOnboarding(true);
         try {
-            const res = await api.post('/drivers/stripe-onboard');
+            const res = await api.post<{ url?: string; mock?: boolean }>('/drivers/stripe-onboard');
             const { url, mock } = res.data;
 
             if (mock) {
@@ -136,15 +140,12 @@ function PayoutScreen() {
             return;
         }
 
-        setSavingGst(true);
         try {
-            await api.put('/drivers/me', { gst_number: cleaned || null });
+            await updateDriverMe.mutateAsync({ gst_number: cleaned || null });
             setShowGstForm(false);
             showAlert('Saved', 'GST/BN number updated successfully', 'success');
         } catch (err: any) {
             showAlert('Error', err.response?.data?.detail || 'Failed to save GST number', 'danger');
-        } finally {
-            setSavingGst(false);
         }
     };
 
@@ -158,8 +159,8 @@ function PayoutScreen() {
             showAlert('Error', 'Minimum payout amount is $10', 'danger');
             return;
         }
-        if (driverBalance && amount > driverBalance.available_balance) {
-            showAlert('Error', `Insufficient balance. Available: $${driverBalance.available_balance.toFixed(2)}`, 'danger');
+        if (driverBalance && amount > parseFloat(driverBalance.payable_balance)) {
+            showAlert('Error', `Insufficient balance. Available: $${parseFloat(driverBalance.payable_balance).toFixed(2)}`, 'danger');
             return;
         }
 
@@ -173,10 +174,19 @@ function PayoutScreen() {
     const handleDownloadT4A = async () => {
         setDownloadingT4A(true);
         try {
-            const res = await api.get('/payouts/t4a');
+            // CRA T4A is generated per tax year — default to the most recently
+            // completed year so drivers don't get an in-progress year's partial total.
+            const year = new Date().getFullYear() - 1;
+            const res = await api.get<{ url?: string; file_url?: string; total_earnings?: string; year?: number; total_trips?: number; net_earnings?: string }>(`/drivers/t4a/${year}`);
             const url = res.data?.url || res.data?.file_url;
             if (url) {
                 await Linking.openURL(url);
+            } else if (res.data?.total_earnings != null) {
+                showAlert(
+                    `T4A Summary — ${res.data.year}`,
+                    `Total earnings: $${Number(res.data.total_earnings).toFixed(2)}\nTotal trips: ${res.data.total_trips}\nNet earnings: $${Number(res.data.net_earnings).toFixed(2)}\n\nA downloadable PDF will be available once tax documents are finalized.`,
+                    'info',
+                );
             } else {
                 showAlert('Unavailable', 'T4A document is not yet available. Please try again later.', 'warning');
             }
@@ -190,10 +200,16 @@ function PayoutScreen() {
     const handleDownloadCSV = async () => {
         setDownloadingCSV(true);
         try {
-            const res = await api.get('/payouts/csv');
+            const year = new Date().getFullYear();
+            const res = await api.get<{ url?: string; file_url?: string; data?: string }>(`/drivers/earnings/export?year=${year}`);
             const url = res.data?.url || res.data?.file_url;
             if (url) {
                 await Linking.openURL(url);
+            } else if (res.data?.data) {
+                // Backend returns { data: <csv-string>, filename }. Open a data: URL
+                // so the OS share sheet can hand it to Mail/Drive/Files.
+                const encoded = encodeURIComponent(res.data.data);
+                await Linking.openURL(`data:text/csv;charset=utf-8,${encoded}`);
             } else {
                 showAlert('Unavailable', 'Earnings CSV is not yet available. Please try again later.', 'warning');
             }
@@ -204,7 +220,7 @@ function PayoutScreen() {
         }
     };
 
-    const formatCurrency = (amount: number) => `$${amount.toFixed(2)}`;
+    const formatCurrency = (amount: string | number) => `$${parseFloat(String(amount)).toFixed(2)}`;
 
     const isStripeReady = stripeAccountStatus === 'active' || hasBankAccount;
 
@@ -231,14 +247,14 @@ function PayoutScreen() {
                 </View>
             </LinearGradient>
 
-            <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+            <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
             <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 140 }} keyboardShouldPersistTaps="handled"
                     automaticallyAdjustKeyboardInsets={true} showsVerticalScrollIndicator={false}>
                 {/* Balance Card */}
                 <View style={styles.balanceCard}>
                     <Text style={styles.balanceLabel}>AVAILABLE BALANCE</Text>
                     <Text style={styles.balanceAmount}>
-                        {driverBalance ? formatCurrency(driverBalance.available_balance) : '$0.00'}
+                        {driverBalance ? formatCurrency(driverBalance.payable_balance) : '$0.00'}
                     </Text>
 
                     <View style={styles.balanceDetails}>
@@ -367,9 +383,9 @@ function PayoutScreen() {
                                 <TouchableOpacity
                                     style={styles.saveBtn}
                                     onPress={handleSaveGst}
-                                    disabled={savingGst}
+                                    disabled={updateDriverMe.isPending}
                                 >
-                                    {savingGst ? (
+                                    {updateDriverMe.isPending ? (
                                         <ActivityIndicator size="small" color="#fff" />
                                     ) : (
                                         <Text style={styles.saveBtnText}>Save</Text>
@@ -415,7 +431,7 @@ function PayoutScreen() {
                 )}
 
                 {/* Payout Request */}
-                {isStripeReady && driverBalance && driverBalance.available_balance > 0 && (
+                {isStripeReady && driverBalance && parseFloat(driverBalance.payable_balance) > 0 && (
                     <View style={styles.section}>
                         <Text style={styles.sectionTitle}>Request Payout</Text>
                         <View style={styles.payoutCard}>
@@ -445,10 +461,10 @@ function PayoutScreen() {
                                 </TouchableOpacity>
                             </View>
                             <TouchableOpacity
-                                onPress={() => setPayoutAmount(driverBalance.available_balance.toString())}
+                                onPress={() => setPayoutAmount(driverBalance.payable_balance)}
                             >
                                 <Text style={styles.maxAmount}>
-                                    Available: {formatCurrency(driverBalance.available_balance)} · Min $10.00
+                                    Available: {formatCurrency(driverBalance.payable_balance)} · Min $10.00
                                 </Text>
                             </TouchableOpacity>
                         </View>

@@ -34,6 +34,11 @@ status_check.txt
 status_full.txt
 .claude/worktrees/
 .claude/settings.local.json
+**/.claude/settings.local.json
+
+# Node artefacts that should never appear in the Python backend dir
+backend/package.json
+backend/package-lock.json
 
 # Graphify knowledge graph output (generated, not source)
 graphify-out/
@@ -43,4 +48,7 @@ graphify-out/
 coverage.xml
 htmlcov/
 .pytest_cache/
+
+# Generated code-review artifacts (audit output — not source)
+code_review_report_*.json
 

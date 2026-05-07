@@ -65,7 +65,7 @@ export default function DriverCharts({ charts, loading }: { charts: ChartData | 
             {/* Daily Driver Joins */}
             <ChartCard title="Driver Joins" subtitle="New driver registrations per day" icon={UserPlus}>
                 <ResponsiveContainer width="100%" height={200}>
-                    <BarChart data={charts.daily_joins} barSize={18}>
+                    <BarChart data={charts.daily_joins ?? []} barSize={18}>
                         <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
                         <XAxis dataKey="date" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
                         <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} allowDecimals={false} axisLine={false} tickLine={false} />
@@ -78,7 +78,7 @@ export default function DriverCharts({ charts, loading }: { charts: ChartData | 
             {/* Daily Rides */}
             <ChartCard title="Daily Rides" subtitle="Number of rides per day" icon={Car}>
                 <ResponsiveContainer width="100%" height={200}>
-                    <BarChart data={charts.daily_rides} barSize={18}>
+                    <BarChart data={charts.daily_rides ?? []} barSize={18}>
                         <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
                         <XAxis dataKey="date" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
                         <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} allowDecimals={false} axisLine={false} tickLine={false} />
@@ -91,7 +91,7 @@ export default function DriverCharts({ charts, loading }: { charts: ChartData | 
             {/* Daily Earnings */}
             <ChartCard title="Driver Earnings" subtitle="Total driver earnings per day" icon={DollarSign}>
                 <ResponsiveContainer width="100%" height={200}>
-                    <LineChart data={charts.daily_earnings}>
+                    <LineChart data={charts.daily_earnings ?? []}>
                         <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
                         <XAxis dataKey="date" tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false} />
                         <YAxis tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} axisLine={false} tickLine={false}

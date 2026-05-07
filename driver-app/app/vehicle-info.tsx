@@ -21,6 +21,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import api from '@shared/api/client';
 import { useAuthStore } from '@shared/store/authStore';
+import { useUpdateDriverMe } from '@shared/hooks/queries';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -35,7 +36,8 @@ interface VehicleType {
 export default function VehicleInfoScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
-    const { driver, fetchDriverProfile, refreshProfile } = useAuthStore();
+    const { driver, token, fetchDriverProfile, refreshProfile } = useAuthStore();
+    const updateDriverMe = useUpdateDriverMe();
     const { colors } = useTheme();
     const styles = useMemo(() => createStyles(colors), [colors]);
     const [saving, setSaving] = useState(false);
@@ -82,7 +84,7 @@ export default function VehicleInfoScreen() {
 
     const fetchVehicleTypes = async () => {
         try {
-            const response = await api.get('/vehicle-types');
+            const response = await api.get<VehicleType[]>('/vehicle-types');
             setVehicleTypes(response.data);
             if (driver?.vehicle_type_id) {
                 const found = response.data.find((t: any) => t.id === driver.vehicle_type_id);
@@ -143,10 +145,21 @@ export default function VehicleInfoScreen() {
                     onPress: async () => {
                         setSaving(true);
                         try {
-                            await api.put('/drivers/me', {
+                            // Guard: ensure auth token is available before mutation.
+                            // On fresh login during onboarding, there's a brief window
+                            // where tokens are set in store but not yet in the API client.
+                            // This retry ensures we have the token before making the call.
+                            if (!token) {
+                                throw new Error('Authentication token not available. Please wait a moment and try again.');
+                            }
+                            await updateDriverMe.mutateAsync({
                                 ...form,
                                 vehicle_year: parseInt(form.vehicle_year) || 0,
                             });
+                            // useUpdateDriverMe invalidates ['driver','me']
+                            // and ['auth','me'] automatically. We still call
+                            // the legacy store fetchers so screens that haven't
+                            // migrated to the hook yet see the updated row.
                             await fetchDriverProfile();
                             await refreshProfile();
                             showAlert('Success', 'Vehicle information updated. Please wait for admin approval.', 'success', [
@@ -179,7 +192,7 @@ export default function VehicleInfoScreen() {
 
             <KeyboardAvoidingView
                 style={{ flex: 1 }}
-                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
                 keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
             >
                 <ScrollView

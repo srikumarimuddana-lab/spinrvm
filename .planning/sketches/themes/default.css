@@ -1,0 +1,97 @@
+/* Spinr Design System — Shared Theme
+   Brand: Grounded Trust — warm, honest, clarity-first
+   Canadian ride-share, 0% driver commission
+   -------------------------------------------------- */
+
+:root {
+  /* Brand */
+  --spinr-red:          #E53E3E;
+  --spinr-red-dark:     #C53030;
+  --spinr-red-light:    #FEB2B2;
+  --spinr-red-muted:    rgba(229, 62, 62, 0.15);
+
+  /* Status */
+  --online-green:       #38A169;
+  --online-green-dark:  #276749;
+  --online-green-muted: rgba(56, 161, 105, 0.15);
+  --earnings-gold:      #D69E2E;
+  --earnings-gold-dark: #B7791F;
+  --earnings-gold-muted:rgba(214, 158, 46, 0.15);
+  --info-blue:          #4299E1;
+  --info-blue-muted:    rgba(66, 153, 225, 0.15);
+  --warning-amber:      #ED8936;
+  --danger-red:         #E53E3E;
+
+  /* Mobile Dark (primary) */
+  --mob-bg:             #000000;
+  --mob-surface:        #1C1C1E;
+  --mob-surface-2:      #2C2C2E;
+  --mob-surface-3:      #3A3A3C;
+  --mob-border:         rgba(255,255,255,0.1);
+  --mob-text:           #F2F2F7;
+  --mob-text-muted:     rgba(255,255,255,0.5);
+  --mob-text-dim:       rgba(255,255,255,0.3);
+
+  /* Map (dark mode) */
+  --map-base:           #1a1e2d;
+  --map-road:           #2d3555;
+  --map-road-main:      #394070;
+  --map-water:          #1a2a4a;
+  --map-park:           #1a2d1a;
+
+  /* Admin Light */
+  --adm-bg:             #F9FAFB;
+  --adm-surface:        #FFFFFF;
+  --adm-surface-2:      #F3F4F6;
+  --adm-border:         #E5E7EB;
+  --adm-text:           #111827;
+  --adm-text-muted:     #6B7280;
+  --adm-text-dim:       #9CA3AF;
+  --adm-sidebar:        #0F172A;
+  --adm-sidebar-text:   rgba(255,255,255,0.75);
+  --adm-sidebar-active: rgba(229,62,62,0.15);
+
+  /* Typography */
+  --font:               -apple-system, 'SF Pro Display', 'Inter', system-ui, sans-serif;
+  --font-mono:          'SF Mono', 'Fira Code', monospace;
+
+  /* Text scale */
+  --text-xs:   0.75rem;   /* 12px */
+  --text-sm:   0.8125rem; /* 13px */
+  --text-base: 0.9375rem; /* 15px */
+  --text-md:   1.0625rem; /* 17px */
+  --text-lg:   1.125rem;  /* 18px */
+  --text-xl:   1.25rem;   /* 20px */
+  --text-2xl:  1.5rem;    /* 24px */
+  --text-3xl:  1.875rem;  /* 30px */
+  --text-4xl:  2.125rem;  /* 34px */
+  --text-hero: 3.25rem;   /* 52px */
+
+  /* Spacing */
+  --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px; --sp-4: 16px;
+  --sp-5: 20px; --sp-6: 24px; --sp-8: 32px; --sp-10: 40px;
+
+  /* Radii */
+  --r-sm:   8px;
+  --r-md:   12px;
+  --r-lg:   16px;
+  --r-xl:   20px;
+  --r-2xl:  24px;
+  --r-pill: 9999px;
+
+  /* Shadows */
+  --shadow-sm:  0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08);
+  --shadow-md:  0 4px 6px rgba(0,0,0,0.07), 0 2px 4px rgba(0,0,0,0.06);
+  --shadow-lg:  0 10px 15px rgba(0,0,0,0.1), 0 4px 6px rgba(0,0,0,0.05);
+  --shadow-xl:  0 20px 40px rgba(0,0,0,0.15);
+  --shadow-phone: 0 0 0 2px #333, 0 30px 60px rgba(0,0,0,0.5), inset 0 0 0 1px rgba(255,255,255,0.1);
+
+  /* Motion */
+  --ease-out:  cubic-bezier(0.0, 0.0, 0.2, 1);
+  --ease-in:   cubic-bezier(0.4, 0.0, 1, 1);
+  --ease-std:  cubic-bezier(0.4, 0.0, 0.2, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --dur-fast:  120ms;
+  --dur-std:   200ms;
+  --dur-slow:  350ms;
+}

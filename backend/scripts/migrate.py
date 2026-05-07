@@ -31,6 +31,18 @@ logging.basicConfig(
 logger = logging.getLogger("migrate")
 
 
+def load_dotenv():
+    """Load local .env variables if not already set in environment."""
+    env_path = Path(__file__).resolve().parent.parent / ".env"
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            name, value = line.split("=", 1)
+            os.environ.setdefault(name.strip(), value.strip())
+
+
 def get_db_connection():
     """
     Return a psycopg2 connection to Supabase Postgres.
@@ -45,6 +57,7 @@ def get_db_connection():
         logger.error("psycopg2 not installed. Run: pip install psycopg2-binary")
         sys.exit(1)
 
+    load_dotenv()
     supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
     service_role_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 

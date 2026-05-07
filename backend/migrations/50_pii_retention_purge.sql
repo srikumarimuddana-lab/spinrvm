@@ -40,6 +40,20 @@
 -- =============================================================================
 
 -- ─────────────────────────────────────────────────────────────────────────────
+-- 0. Ensure ride_messages exists. In environments bootstrapped without
+--    08_complete_schema.sql the table may be absent. IF NOT EXISTS makes this
+--    a no-op when the table already exists.
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS ride_messages (
+    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    ride_id     TEXT        NOT NULL,
+    sender_id   TEXT        NOT NULL,
+    sender_role TEXT        NOT NULL,
+    message     TEXT        NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ─────────────────────────────────────────────────────────────────────────────
 -- 1. Add anonymization marker on rides so the 3y-step is idempotent.
 --    `gps_anonymized_at IS NULL` is the gate; once stamped, the UPDATE is a no-op.
 -- ─────────────────────────────────────────────────────────────────────────────

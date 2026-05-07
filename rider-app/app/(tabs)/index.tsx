@@ -160,7 +160,7 @@ export default function HomeScreen() {
     // R-P2-48: refresh unread notification badge count each time home mounts
     api.get('/notifications?limit=1').then((res: any) => {
       setUnreadNotifCount(res.data?.unread_count ?? 0);
-    }).catch(() => {});
+    }).catch((e) => console.warn('[Home] Notification badge fetch failed:', e?.message ?? e));
   }, [refreshLocation, fetchSavedAddresses]);
 
   useFocusEffect(

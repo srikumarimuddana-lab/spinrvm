@@ -19,20 +19,13 @@ import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Save, Check, ShieldCheck, ShieldOff } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
-import { useRequireModule } from "@/hooks/useRequireModule";
-import {
-    AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
-    AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 
 export default function SettingsPage() {
-    const { allowed } = useRequireModule("settings");
     const { toast } = useToast();
     const [settings, setSettings] = useState<any>(null);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [saved, setSaved] = useState(false);
-    const [confirmSave, setConfirmSave] = useState(false);
 
     const [mfaEnabled, setMfaEnabled] = useState(false);
     const [mfaLoading, setMfaLoading] = useState(true);
@@ -81,8 +74,7 @@ export default function SettingsPage() {
             setSettings(updated);
             setSaved(true);
             setTimeout(() => setSaved(false), 2000);
-        } catch (e: any) {
-            toast({ title: "Failed to save settings", description: e?.message || "Unknown error", variant: "destructive" });
+        } catch {
         } finally {
             setSaving(false);
         }
@@ -100,8 +92,6 @@ export default function SettingsPage() {
         );
     }
 
-    if (!allowed) return null;
-
     return (
         <div className="space-y-6">
             <div className="flex items-center justify-between">
@@ -111,7 +101,7 @@ export default function SettingsPage() {
                         Configure platform-wide settings.
                     </p>
                 </div>
-                <Button onClick={() => setConfirmSave(true)} disabled={saving}>
+                <Button onClick={handleSave} disabled={saving}>
                     {saved ? (
                         <>
                             <Check className="mr-2 h-4 w-4" /> Saved!
@@ -140,7 +130,7 @@ export default function SettingsPage() {
                                     onChange={(e) =>
                                         update("stripe_publishable_key", e.target.value)
                                     }
-                                    placeholder="Stripe publishable key"
+                                    placeholder="pk_test_..."
                                 />
                             </div>
                             <div className="space-y-2">
@@ -151,7 +141,7 @@ export default function SettingsPage() {
                                     onChange={(e) =>
                                         update("stripe_secret_key", e.target.value)
                                     }
-                                    placeholder="Stripe secret key"
+                                    placeholder="sk_test_..."
                                 />
                             </div>
                             <div className="space-y-2">
@@ -162,7 +152,7 @@ export default function SettingsPage() {
                                     onChange={(e) =>
                                         update("stripe_webhook_secret", e.target.value)
                                     }
-                                    placeholder="Stripe webhook secret"
+                                    placeholder="whsec_..."
                                 />
                                 <p className="text-xs text-muted-foreground">
                                     From Stripe Dashboard &rarr; Developers &rarr; Webhooks
@@ -171,19 +161,57 @@ export default function SettingsPage() {
                         </CardContent>
                     </Card>
 
-                    {/* SMS / Twilio */}
+                    {/* Email / SendGrid */}
                     <Card className="border-border/50">
                         <CardHeader>
-                            <CardTitle className="text-base">SMS / Twilio</CardTitle>
+                            <CardTitle className="text-base">Email (SendGrid)</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-4">
+                            <p className="text-xs text-muted-foreground">
+                                Used to send ride receipt emails to riders. If <strong>From Email</strong> is
+                                blank, the <code>email_from</code> setting is used as a fallback.
+                            </p>
+                            <div className="space-y-2">
+                                <Label>API Key</Label>
+                                <Input
+                                    type="password"
+                                    value={settings.sendgrid_api_key || ""}
+                                    onChange={(e) =>
+                                        update("sendgrid_api_key", e.target.value)
+                                    }
+                                    placeholder="SG...."
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>From Email</Label>
+                                <Input
+                                    type="email"
+                                    value={settings.sendgrid_from_email || ""}
+                                    onChange={(e) =>
+                                        update("sendgrid_from_email", e.target.value)
+                                    }
+                                    placeholder="receipts@spinr.ca"
+                                />
+                            </div>
+                        </CardContent>
+                    </Card>
+
+                    {/* Telephony / Twilio */}
+                    <Card className="border-border/50">
+                        <CardHeader>
+                            <CardTitle className="text-base">Telephony (Twilio)</CardTitle>
                         </CardHeader>
                         <Separator />
                         <CardContent className="pt-4 space-y-4">
                             <p className="text-xs text-muted-foreground">
                                 When not configured, OTP defaults to <strong>1234</strong> for testing.
+                                The Proxy Service SID enables anonymous in-ride calling.
                             </p>
                             <div className="space-y-2">
                                 <Label>Account SID</Label>
                                 <Input
+                                    type="password"
                                     value={settings.twilio_account_sid || ""}
                                     onChange={(e) =>
                                         update("twilio_account_sid", e.target.value)
@@ -211,6 +239,20 @@ export default function SettingsPage() {
                                     }
                                     placeholder="+1234567890"
                                 />
+                            </div>
+                            <div className="space-y-2">
+                                <Label>Proxy Service SID</Label>
+                                <Input
+                                    type="password"
+                                    value={settings.twilio_proxy_service_sid || ""}
+                                    onChange={(e) =>
+                                        update("twilio_proxy_service_sid", e.target.value)
+                                    }
+                                    placeholder="KS..."
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    From Twilio Console &rarr; Proxy &rarr; Services
+                                </p>
                             </div>
                         </CardContent>
                     </Card>
@@ -476,24 +518,6 @@ export default function SettingsPage() {
                 onOpenChange={setShowEnrollDialog}
                 onEnrolled={() => setMfaEnabled(true)}
             />
-
-            <AlertDialog open={confirmSave} onOpenChange={setConfirmSave}>
-                <AlertDialogContent>
-                    <AlertDialogHeader>
-                        <AlertDialogTitle>Save live credentials?</AlertDialogTitle>
-                        <AlertDialogDescription>
-                            This will overwrite Stripe, Twilio, and other live credentials immediately.
-                            Make sure your values are correct before proceeding.
-                        </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                        <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <AlertDialogAction onClick={() => { setConfirmSave(false); handleSave(); }}>
-                            Save Changes
-                        </AlertDialogAction>
-                    </AlertDialogFooter>
-                </AlertDialogContent>
-            </AlertDialog>
         </div>
     );
 }

@@ -542,7 +542,10 @@ class TestStripeWebhookClaimException:
 
 
 class TestStripeWebhookRideNotFound:
-    def test_update_ride_returns_none_logs_warning(self):
+    def test_update_ride_returns_none_raises_500(self):
+        """When update_ride returns None (ride not found), handler raises 500 so Stripe retries."""
+        from fastapi import HTTPException
+
         from backend.routes import webhooks as wh
 
         async def mock_get_app_settings():
@@ -569,13 +572,14 @@ class TestStripeWebhookRideNotFound:
             patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
             patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
             patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
-            # update_ride returns None → ride not found path
+            # update_ride returns None → ride not found → handler must raise 500 so Stripe retries
             patch("backend.routes.webhooks.db_supabase.update_ride", AsyncMock(return_value=None)),
             patch("backend.routes.webhooks.send_push_notification", AsyncMock()),
         ):
-            result = asyncio.run(wh.stripe_webhook(request=req))
+            with pytest.raises(HTTPException) as exc_info:
+                asyncio.run(wh.stripe_webhook(request=req))
 
-        assert result["received"] is True
+        assert exc_info.value.status_code == 500
 
 
 class TestStripeWebhookPushNotificationFails:

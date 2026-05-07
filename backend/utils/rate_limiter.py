@@ -90,7 +90,6 @@ default_limiter = Limiter(
     storage_uri=_rate_limit_storage_uri,
 )
 
-
 # ============================================================================
 # Custom Key Functions
 # ============================================================================
@@ -117,7 +116,7 @@ def get_client_identifier(request: Request) -> str:
         # Note: This is a best-effort attempt, body may already be consumed
         # For actual phone-based limiting, apply decorator directly with phone param
     except Exception:  # noqa: S110
-        pass
+        logger.warning("rate_limiter: get_rate_limit_key: body parse failed; falling back to IP", exc_info=True)
 
     # Fallback to real IP (respects X-Forwarded-For behind proxies)
     return f"ip:{get_ipaddr(request)}"
@@ -381,6 +380,7 @@ class RedisRateLimiter:
             # Fail-closed for OTP keys: in-memory fallback is unsafe on
             # multi-replica deployments because each replica tracks its own
             # counter, multiplying the effective limit by N_replicas.
+            # See module-level comment on _OTP_KEY_FRAGMENTS for the rationale.
             if _is_otp_key(key):
                 raise HTTPException(
                     status_code=503,

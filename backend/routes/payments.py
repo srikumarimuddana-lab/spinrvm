@@ -15,7 +15,8 @@ try:
     )
     from ..utils.error_keys import ErrorKeys
     from ..utils.idempotency import idempotent_endpoint
-    from ..utils.rate_limiter import api_rate_limit, payment_action_limit
+    from ..utils.money import dollars_to_cents
+    from ..utils.rate_limiter import payment_action_limit
 except ImportError:
     import db_supabase
     from dependencies import get_current_user
@@ -27,6 +28,7 @@ except ImportError:
     )
     from utils.error_keys import ErrorKeys
     from utils.idempotency import idempotent_endpoint
+    from utils.money import dollars_to_cents
     from utils.rate_limiter import payment_action_limit
 import logging
 
@@ -75,7 +77,9 @@ async def get_or_create_stripe_customer(user_id: str, stripe_secret: str):
         # Re-read to use the authoritative value in case a concurrent replica wrote first.
         # (The loser's Stripe customer is unused but harmless; deduplication can run offline.)
         fresh = await db_supabase.get_user_by_id(user_id)
-        stripe_customer_id = (fresh or {}).get("stripe_customer_id", stripe_customer_id)
+        if not fresh:
+            raise HTTPException(status_code=404, detail="User not found during Stripe customer creation")
+        stripe_customer_id = fresh["stripe_customer_id"]
 
     return stripe_customer_id
 
@@ -119,7 +123,10 @@ async def create_payment_intent(
                     action_hint="Refresh the fare estimate",
                 )
 
-        amount = int(Decimal(str(body.amount)).quantize(Decimal("0.01")) * 100)
+        # Decimal-safe dollars→cents (HALF_UP). ``int(body.amount * 100)``
+        # would undercharge by 1¢ on values like $0.29, $1.13, $17.81 due
+        # to binary-float drift. See backend/utils/money.py.
+        amount = dollars_to_cents(body.amount)
 
         # Get or create customer for saved payments
         stripe_customer_id = await get_or_create_stripe_customer(current_user["id"], stripe_secret)
@@ -178,8 +185,32 @@ async def confirm_payment(
     payment_intent_id = body.get("payment_intent_id")
     ride_id = body.get("ride_id")
 
+    if ride_id:
+        ride = await db_supabase.get_ride(ride_id)
+        if not ride:
+            raise HTTPException(status_code=404, detail="Ride not found")
+        if ride["rider_id"] != current_user["id"]:
+            raise HTTPException(status_code=403, detail="forbidden")
+
+        # C-3: Idempotency check — if a prior webhook already settled this payment,
+        # return early with a clear signal rather than re-entering the Stripe flow.
+        # This covers the case where the rider app retries confirm_payment after a
+        # network timeout when the webhook has already processed the payment.
+        # HTTP 200 (not 409) because the payment succeeded — this is not an error.
+        payment_status = ride.get("payment_status")
+        if payment_status in ("paid", "processing"):
+            logger.info(
+                "confirm_payment: ride %s already in payment_status=%s, returning early (C-3 idempotency)",
+                ride_id,
+                payment_status,
+            )
+            return {"status": "already_processed", "payment_status": payment_status}
+
+        claimed = await db_supabase.claim_ride_payment_processing(ride_id)
+        if not claimed:
+            raise HTTPException(status_code=409, detail="payment_already_processing")
+
     if payment_intent_id and payment_intent_id.startswith("pi_mock_"):
-        # Mock payment
         if ride_id:
             await db_supabase.update_ride(ride_id, {"payment_status": "paid", "payment_intent_id": payment_intent_id})
         return {"status": "succeeded", "mock": True}
@@ -190,6 +221,9 @@ async def confirm_payment(
     if stripe_secret:
         try:
             intent = stripe.PaymentIntent.retrieve(payment_intent_id, api_key=stripe_secret)
+
+            if intent.metadata.get("user_id") != str(current_user["id"]):
+                raise HTTPException(status_code=403, detail="Not authorized to confirm this payment")
 
             if ride_id:
                 await db_supabase.update_ride(
@@ -466,12 +500,6 @@ async def add_card(request: Request = None, current_user: dict = Depends(get_cur
             "setup_intent_id": si.id,
             "setup_intent_status": si.status,
         }
-    except stripe.error.CardError as e:
-        raise PaymentMethodInvalidException(
-            message=e.user_message or "Card declined",
-            message_key=ErrorKeys.PAYMENT_METHOD_INVALID,
-            action_hint="Add a different card",
-        ) from e
     except stripe.error.CardError as e:
         raise PaymentMethodInvalidException(
             message=e.user_message or "Card declined",

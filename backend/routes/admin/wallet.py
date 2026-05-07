@@ -18,12 +18,12 @@ try:
     from ...db import db
     from ...dependencies import get_admin_user
     from ...utils.rate_limiter import admin_wallet_limit
-    from ..wallet import _record_transaction, get_or_create_wallet
+    from ..wallet import _money_str, _record_transaction, get_or_create_wallet
 except ImportError:
     import db_supabase
     from db import db
     from dependencies import get_admin_user
-    from routes.wallet import _record_transaction, get_or_create_wallet
+    from routes.wallet import _money_str, _record_transaction, get_or_create_wallet
     from utils.rate_limiter import admin_wallet_limit
 
 router = APIRouter(prefix="/wallet", tags=["Admin Wallet"])
@@ -85,7 +85,7 @@ async def admin_get_wallet(
         },
         "wallet": {
             "id": wallet["id"],
-            "balance": str(_q(wallet.get("balance", 0))),
+            "balance": _money_str(wallet.get("balance", 0)),
             "currency": wallet.get("currency", "CAD"),
             "is_active": wallet.get("is_active", True),
         },
@@ -93,8 +93,8 @@ async def admin_get_wallet(
             {
                 "id": t["id"],
                 "type": t["type"],
-                "amount": t["amount"],
-                "balance_after": t["balance_after"],
+                "amount": _money_str(t["amount"]),
+                "balance_after": _money_str(t["balance_after"]),
                 "description": t.get("description"),
                 "reference_id": t.get("reference_id"),
                 "metadata": t.get("metadata") or {},
@@ -123,7 +123,7 @@ async def admin_credit_wallet(
         )
         if existing_txns:
             t = existing_txns[0]
-            return {"balance": str(_q(t["balance_after"])), "transaction_id": t["id"]}
+            return {"balance": _money_str(t["balance_after"]), "transaction_id": t["id"]}
 
     user = await db_supabase.get_user_by_id(req.user_id)
     if not user:
@@ -146,8 +146,8 @@ async def admin_credit_wallet(
         wallet_id=wallet["id"],
         user_id=req.user_id,
         txn_type="admin_credit",
-        amount=str(credit),
-        balance_after=str(new_balance),
+        amount=_money_str(credit),
+        balance_after=_money_str(new_balance),
         reference_id=req.idempotency_key,
         description=f"Admin credit: {req.reason}",
         metadata={"admin_id": admin["id"], "reason": req.reason},
@@ -163,9 +163,9 @@ async def admin_credit_wallet(
             "resource": "user",
             "resource_id": req.user_id,
             "details": {
-                "amount": str(credit),
-                "old_balance": str(old_balance),
-                "new_balance": str(new_balance),
+                "amount": _money_str(credit),
+                "old_balance": _money_str(old_balance),
+                "new_balance": _money_str(new_balance),
                 "reason": req.reason,
                 "transaction_id": txn["id"],
             },
@@ -174,7 +174,7 @@ async def admin_credit_wallet(
     )
 
     return {
-        "balance": str(new_balance),
+        "balance": _money_str(new_balance),
         "transaction_id": txn["id"],
     }
 
@@ -196,7 +196,7 @@ async def admin_debit_wallet(
         )
         if existing_txns:
             t = existing_txns[0]
-            return {"balance": str(_q(t["balance_after"])), "transaction_id": t["id"]}
+            return {"balance": _money_str(t["balance_after"]), "transaction_id": t["id"]}
 
     user = await db_supabase.get_user_by_id(req.user_id)
     if not user:
@@ -221,8 +221,8 @@ async def admin_debit_wallet(
         wallet_id=wallet["id"],
         user_id=req.user_id,
         txn_type="admin_debit",
-        amount=str(-debit),
-        balance_after=str(new_balance),
+        amount="-" + _money_str(debit),
+        balance_after=_money_str(new_balance),
         reference_id=req.idempotency_key,
         description=f"Admin debit: {req.reason}",
         metadata={"admin_id": admin["id"], "reason": req.reason},
@@ -238,9 +238,9 @@ async def admin_debit_wallet(
             "resource": "user",
             "resource_id": req.user_id,
             "details": {
-                "amount": str(debit),
-                "old_balance": str(old_balance),
-                "new_balance": str(new_balance),
+                "amount": _money_str(debit),
+                "old_balance": _money_str(old_balance),
+                "new_balance": _money_str(new_balance),
                 "reason": req.reason,
                 "transaction_id": txn["id"],
             },
@@ -249,6 +249,6 @@ async def admin_debit_wallet(
     )
 
     return {
-        "balance": str(new_balance),
+        "balance": _money_str(new_balance),
         "transaction_id": txn["id"],
     }

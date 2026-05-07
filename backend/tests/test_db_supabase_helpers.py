@@ -32,12 +32,15 @@ class TestSerializeForApi:
         result = _serialize_for_api({"expiry": d})
         assert result["expiry"] == d.isoformat()
 
-    def test_serializes_decimal_to_float(self):
+    def test_serializes_decimal_to_string(self):
+        # Audit-17 P0-1: money crosses the wire as a decimal string, never
+        # as IEEE-754 float. _serialize_for_api preserves Decimal precision
+        # by emitting the str() form.
         from backend.db_supabase import _serialize_for_api
 
         result = _serialize_for_api({"fare": Decimal("18.50")})
-        assert result["fare"] == 18.50
-        assert isinstance(result["fare"], float)
+        assert result["fare"] == "18.50"
+        assert isinstance(result["fare"], str)
 
     def test_passes_through_string(self):
         from backend.db_supabase import _serialize_for_api
@@ -49,13 +52,13 @@ class TestSerializeForApi:
 
         payload = {"outer": {"inner": Decimal("5.00")}}
         result = _serialize_for_api(payload)
-        assert result["outer"]["inner"] == 5.0
+        assert result["outer"]["inner"] == "5.00"
 
     def test_list_of_items(self):
         from backend.db_supabase import _serialize_for_api
 
         result = _serialize_for_api([Decimal("1.00"), Decimal("2.00")])
-        assert result == [1.0, 2.0]
+        assert result == ["1.00", "2.00"]
 
     def test_none_passthrough(self):
         from backend.db_supabase import _serialize_for_api

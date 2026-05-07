@@ -77,7 +77,8 @@ export default function ComplaintsTab() {
     const areaName = (id: string) => areas.find((a) => a.id === id)?.name || "";
 
     const handleCreate = async () => {
-        if (!form.ride_id.trim() || !form.description.trim()) { toast({ title: "Missing fields", description: "Enter ride ID and description.", variant: "destructive" }); return; }
+        if (!form.ride_id?.trim()) { toast({ title: "Ride ID is required", variant: "destructive" }); return; }
+        if (!form.description?.trim()) { toast({ title: "Description is required", variant: "destructive" }); return; }
         setSaving(true);
         try { await createRideComplaint(form.ride_id, { against_type: form.against_type, category: form.category, description: form.description, service_area_id: form.service_area_id || null }); setDialogOpen(false); setForm({ ride_id: "", against_type: "driver", category: "other", description: "", service_area_id: "" }); load(); }
         catch (e: any) { toast({ title: "Failed to create complaint", description: e.message, variant: "destructive" }); } finally { setSaving(false); }

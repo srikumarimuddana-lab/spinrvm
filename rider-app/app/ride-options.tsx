@@ -134,8 +134,14 @@ function RideOptionsScreenContent() {
   }, [estimates]);
 
   useEffect(() => {
+    // Bug 1 guard: bail out early if estimates is empty to avoid estimates[0] crash
+    if (!estimates || estimates.length === 0) return;
+
+    // Bug 2 guard: clamp selectedIndex to valid range whenever estimates array changes
+    setSelectedIndex(prev => (prev >= estimates.length ? 0 : prev));
+
     // Auto-select first AVAILABLE vehicle
-    if (estimates.length > 0 && !selectedVehicle) {
+    if (!selectedVehicle) {
       const firstAvailableIndex = estimates.findIndex(e => e.available);
       if (firstAvailableIndex !== -1) {
         setSelectedIndex(firstAvailableIndex);
@@ -579,11 +585,11 @@ function RideOptionsScreenContent() {
 
                 {/* Price — with promo struck-through */}
                 <View style={[styles.optionPriceContainer, !isAvailable && { opacity: 0.4 }]}>
-                  {appliedPromo && appliedPromo.discount_amount > 0 && isSelected ? (
+                  {appliedPromo && appliedPromo.discount_value > 0 && isSelected ? (
                     <View style={{ alignItems: 'flex-end' }}>
                       <Text style={styles.optionPriceStruck} allowFontScaling={false}>${parseFloat(estimate.total_fare || '0').toFixed(2)}</Text>
                       <Text style={styles.optionPriceDiscounted} allowFontScaling={false}>
-                        ${Math.max(0, parseFloat(estimate.total_fare || '0') - appliedPromo.discount_amount).toFixed(2)}
+                        ${Math.max(0, parseFloat(estimate.total_fare || '0') - appliedPromo.discount_value).toFixed(2)}
                       </Text>
                     </View>
                   ) : (

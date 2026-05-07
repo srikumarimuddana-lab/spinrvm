@@ -1,0 +1,241 @@
+name: Migration Safety Check
+
+on:
+  pull_request:
+    paths:
+      - 'backend/migrations/*.sql'
+
+concurrency:
+  group: migration-check-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  migration-safety:
+    name: Migration Safety Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout PR branch (full history)
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Detect changed migration files
+        id: changed
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.event.pull_request.head.sha }}"
+          # List all SQL files touched in this PR (added, modified, deleted)
+          git diff --name-only --diff-filter=ACDMRT "$BASE" "$HEAD" -- 'backend/migrations/*.sql' \
+            > /tmp/changed_migrations.txt
+          echo "Changed files:"
+          cat /tmp/changed_migrations.txt
+          echo "base_sha=$BASE" >> "$GITHUB_OUTPUT"
+
+      - name: Run migration safety checks
+        id: check
+        run: |
+          python3 - << 'PYEOF'
+          import os
+          import re
+          import sys
+
+          MIGRATIONS_DIR = "backend/migrations"
+          CHANGED_FILE = "/tmp/changed_migrations.txt"
+
+          # ── ANSI colours for GitHub Actions log readability ──────────────────
+          GREEN  = "\033[32m"
+          YELLOW = "\033[33m"
+          RED    = "\033[31m"
+          RESET  = "\033[0m"
+
+          STATUS_OK   = "✅"
+          STATUS_WARN = "⚠️ "
+          STATUS_FAIL = "❌"
+
+          errors   = []   # hard failures → exit 1
+          warnings = []   # soft warnings → exit 0
+
+          # ── Load changed files ───────────────────────────────────────────────
+          with open(CHANGED_FILE) as fh:
+              changed = [l.strip() for l in fh if l.strip()]
+
+          if not changed:
+              print("No migration files changed. Nothing to check.")
+              sys.exit(0)
+
+          # ── Discover all migrations already in the repo (on HEAD) ────────────
+          all_migrations = sorted(
+              f for f in os.listdir(MIGRATIONS_DIR) if f.endswith(".sql")
+          )
+
+          def seq_num(filename):
+              """Return the leading integer prefix, or None if not parseable."""
+              m = re.match(r'^(\d+)_', os.path.basename(filename))
+              return int(m.group(1)) if m else None
+
+          existing_nums = sorted(
+              n for n in (seq_num(f) for f in all_migrations) if n is not None
+          )
+
+          # ── Determine files that were NEW vs already existed on base branch ──
+          import subprocess
+          base_sha = os.environ.get("BASE_SHA", "")
+          if not base_sha:
+              # fall back: read from the output written by the previous step
+              base_sha = subprocess.check_output(
+                  ["git", "rev-parse", "origin/" + os.environ.get("GITHUB_BASE_REF", "main")],
+                  text=True,
+              ).strip()
+
+          def file_existed_on_base(rel_path):
+              result = subprocess.run(
+                  ["git", "cat-file", "-e", f"{base_sha}:{rel_path}"],
+                  capture_output=True,
+              )
+              return result.returncode == 0
+
+          # ── Summary table header ─────────────────────────────────────────────
+          rows = []   # (filename, check_name, status_icon, message)
+
+          def record(filename, check, icon, msg):
+              rows.append((filename, check, icon, msg))
+
+          # ── Per-file checks ──────────────────────────────────────────────────
+          for rel_path in changed:
+              filename = os.path.basename(rel_path)
+              short    = filename
+
+              # ── CHECK F: append-only (no edits to existing migrations) ───────
+              if file_existed_on_base(rel_path):
+                  msg = "Append-only: never edit a merged migration"
+                  record(short, "append-only", STATUS_FAIL, msg)
+                  errors.append(f"{short}: {msg}")
+                  # Skip further checks for this file — it shouldn't exist as a change
+                  continue
+
+              # ── CHECK A: naming convention ────────────────────────────────────
+              naming_ok = bool(re.match(r'^\d{2,}_[a-z0-9_]+\.sql$', filename))
+              if naming_ok:
+                  record(short, "naming", STATUS_OK, "matches NN_description.sql")
+              else:
+                  msg = f"filename '{filename}' does not match ^\\d{{2,}}_[a-z0-9_]+\\.sql$"
+                  record(short, "naming", STATUS_FAIL, msg)
+                  errors.append(f"{short}: {msg}")
+
+              # ── CHECK B: sequence gap / collision ────────────────────────────
+              file_num = seq_num(filename)
+              if file_num is not None and existing_nums:
+                  # The highest number currently in the repo (including this new file)
+                  # When checking a new file, compare against the highest EXCLUDING itself.
+                  others = [n for n in existing_nums if n != file_num]
+                  if others:
+                      expected = max(others) + 1
+                      if file_num == expected:
+                          record(short, "sequence", STATUS_OK, f"prefix {file_num} is next after {max(others)}")
+                      elif file_num < expected:
+                          msg = f"prefix {file_num} collides with or precedes existing max {max(others)} (expected {expected})"
+                          record(short, "sequence", STATUS_WARN, msg)
+                          warnings.append(f"{short}: {msg}")
+                      else:
+                          msg = f"sequence gap — expected {expected}, got {file_num} (missing numbers in between)"
+                          record(short, "sequence", STATUS_WARN, msg)
+                          warnings.append(f"{short}: {msg}")
+
+              # ── Read file content ─────────────────────────────────────────────
+              try:
+                  with open(rel_path) as fh:
+                      content = fh.read()
+              except FileNotFoundError:
+                  record(short, "readable", STATUS_FAIL, "file not found in working tree")
+                  errors.append(f"{short}: file not found (deleted in PR?)")
+                  continue
+
+              content_upper = content.upper()
+
+              # ── CHECK C: RLS on new tables ────────────────────────────────────
+              has_create_table = bool(re.search(r'\bCREATE\s+TABLE\b', content, re.IGNORECASE))
+              if has_create_table:
+                  has_rls    = bool(re.search(r'\bROW\s+LEVEL\s+SECURITY\b', content, re.IGNORECASE))
+                  has_policy = bool(re.search(r'\bCREATE\s+POLICY\b',         content, re.IGNORECASE))
+                  if has_rls and has_policy:
+                      record(short, "RLS", STATUS_OK, "CREATE TABLE has ROW LEVEL SECURITY + CREATE POLICY")
+                  else:
+                      missing = []
+                      if not has_rls:    missing.append("ROW LEVEL SECURITY")
+                      if not has_policy: missing.append("CREATE POLICY")
+                      msg = f"CREATE TABLE without {' and '.join(missing)}"
+                      record(short, "RLS", STATUS_FAIL, msg)
+                      errors.append(f"{short}: {msg}")
+              else:
+                  record(short, "RLS", STATUS_OK, "no CREATE TABLE — RLS check skipped")
+
+              # ── CHECK D: rollback comment ─────────────────────────────────────
+              has_rollback = bool(re.search(r'^--\s+[Rr]ollback:', content, re.MULTILINE))
+              if has_rollback:
+                  record(short, "rollback-comment", STATUS_OK, "rollback comment found")
+              else:
+                  msg = "missing '-- rollback:' or '-- Rollback:' comment"
+                  record(short, "rollback-comment", STATUS_FAIL, msg)
+                  errors.append(f"{short}: {msg}")
+
+              # ── CHECK E: dangerous operations (warn only) ─────────────────────
+              dangerous = []
+              if re.search(r'\bDROP\s+TABLE\b',                    content, re.IGNORECASE): dangerous.append("DROP TABLE")
+              if re.search(r'\bTRUNCATE\b',                        content, re.IGNORECASE): dangerous.append("TRUNCATE")
+              if re.search(r'\bALTER\s+TABLE\b.*\bDROP\s+COLUMN\b', content, re.IGNORECASE): dangerous.append("ALTER TABLE ... DROP COLUMN")
+
+              if dangerous:
+                  msg = f"contains destructive operation(s): {', '.join(dangerous)} — verify intent"
+                  record(short, "dangerous-ops", STATUS_WARN, msg)
+                  warnings.append(f"{short}: {msg}")
+              else:
+                  record(short, "dangerous-ops", STATUS_OK, "no destructive operations")
+
+          # ── Print summary table ───────────────────────────────────────────────
+          print()
+          print("=" * 72)
+          print("  MIGRATION SAFETY CHECK SUMMARY")
+          print("=" * 72)
+          print(f"  {'File':<40} {'Check':<22} {'Result'}")
+          print("-" * 72)
+          for fname, check, icon, msg in rows:
+              # truncate long filenames for table display
+              display = fname[:38] + ".." if len(fname) > 40 else fname
+              print(f"  {display:<40} {check:<22} {icon}  {msg}")
+          print("=" * 72)
+
+          if warnings:
+              print()
+              print(f"{YELLOW}WARNINGS ({len(warnings)}):{RESET}")
+              for w in warnings:
+                  print(f"  {STATUS_WARN} {w}")
+
+          if errors:
+              print()
+              print(f"{RED}FAILURES ({len(errors)}) — workflow will exit 1:{RESET}")
+              for e in errors:
+                  print(f"  {STATUS_FAIL} {e}")
+              print()
+              print(f"{RED}Fix the above before merging.{RESET}")
+              sys.exit(1)
+          else:
+              print()
+              print(f"{GREEN}All hard checks passed.{RESET}")
+              if warnings:
+                  print(f"{YELLOW}Review warnings above before merging.{RESET}")
+              sys.exit(0)
+
+          PYEOF
+        env:
+          BASE_SHA: ${{ steps.changed.outputs.base_sha }}
+          GITHUB_BASE_REF: ${{ github.base_ref }}

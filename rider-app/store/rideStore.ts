@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { Alert, Linking } from 'react-native';
 import api from '@shared/api/client';
-import { useAuthStore } from '@shared/store/authStore';
+import { useAuthStore, registerLogoutCallback } from '@shared/store/authStore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { RideStatus } from '../constants/rideStatus';
 import { recordNonFatal } from '../utils/crashlytics';
@@ -131,7 +131,7 @@ interface Promo {
   [key: string]: unknown;
 }
 
-interface ChatMessage {
+export interface ChatMessage {
   id: string;
   text: string;
   sender: string;
@@ -157,7 +157,6 @@ interface RideState {
   userLocation: { latitude: number; longitude: number } | null;
   availablePromos: Promo[];
   appliedPromo: Promo | null;
-  requiresWav: boolean;
   quietMode: boolean;
   riderNotes: string;
   isLoading: boolean;
@@ -232,7 +231,6 @@ export const useRideStore = create<RideState>((set, get) => ({
   riderNotes: '',
   scheduledTime: null,
   scheduledRides: [],
-  requiresWav: false,
   userLocation: null,
   isLoading: false,
   error: null,
@@ -715,10 +713,17 @@ export const useRideStore = create<RideState>((set, get) => ({
     // while the next poll (reduced to 15 s via the WS fallback) fills
     // in any remaining details the WS message doesn't carry.
     const updated = { ...currentRide, status, ...(extra || {}) };
-    // Keep currentDriver so the ride-completed receipt screen can still show
-    // driver name/vehicle until the user taps Done. clearRide() will null it.
-    set({ currentRide: updated });
-    _persistRide(updated, currentDriver);
+    // Clear currentDriver and driverEtaSeconds on terminal states so stale
+    // driver location data doesn't persist into the next booking session.
+    // The receipt screen reads driver info from currentRide.driver, not
+    // currentDriver, so clearing here doesn't break the post-trip flow.
+    if (TERMINAL_STATUSES.has(status)) {
+      set({ currentRide: updated, currentDriver: null, driverEtaSeconds: null });
+      _persistRide(updated, null);
+    } else {
+      set({ currentRide: updated });
+      _persistRide(updated, currentDriver);
+    }
   },
 
   // ── Offline hydration ────────────────────────────────────────────
@@ -759,3 +764,21 @@ export const useRideStore = create<RideState>((set, get) => ({
     }
   },
 }));
+
+// Register a logout callback so that when authStore.logout() fires, all
+// per-session ride state is wiped. This prevents ghost data (currentRide,
+// currentDriver, chatMessages, estimates) from leaking to the next user who
+// logs in on the same device.
+registerLogoutCallback(() => {
+  useRideStore.setState({
+    currentRide: null,
+    currentDriver: null,
+    driverEtaSeconds: null,
+    chatMessages: [],
+    estimates: [],
+    nearbyDrivers: [],
+    appliedPromo: null,
+    error: null,
+  });
+  AsyncStorage.removeItem(ACTIVE_RIDE_KEY).catch(() => {});
+});

@@ -68,8 +68,7 @@ function TaxDocumentsScreen() {
                 generated_at: null,
             }));
             setDocuments(synthesized);
-        } catch (err) {
-            console.log('Error fetching tax documents:', err);
+        } catch {
             showAlert('Error', 'Failed to load tax documents. Please try again.', 'danger');
         } finally {
             setLoading(false);

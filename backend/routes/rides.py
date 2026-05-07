@@ -1136,7 +1136,7 @@ async def create_ride(body: CreateRideRequest, request: Request = None, current_
         _allowance = _policy_result.allowance
         _policy = _policy_result.policy
         if _allowance.get("type") != "unlimited":
-            _remaining = _d(str(_allowance.get("amount") or 0)) - _d(str(max(float(_allowance.get("used") or 0), 0.0)))
+            _remaining = _d(str(_allowance.get("amount") or 0)) - max(_d(str(_allowance.get("used") or 0)), _d("0"))
             _master_permitted = _policy.get("allowed_payment_source", "both") in ("master_only", "both")
             if _remaining < _round(_d(str(_f(total_fare))) * _d("1.5")) and not _master_permitted:
                 raise HTTPException(
@@ -1751,7 +1751,7 @@ async def process_payment(
             _master_debit = _round(Decimal("0"))
         else:
             _remaining = _round(
-                _d(str(_corp_allowance.get("amount") or 0)) - _d(str(max(float(_corp_allowance.get("used") or 0), 0.0)))
+                _d(str(_corp_allowance.get("amount") or 0)) - max(_d(str(_corp_allowance.get("used") or 0)), _d("0"))
             )
             _remaining = max(_remaining, _round(Decimal("0")))
             _allowance_debit = min(_remaining, _total)

@@ -208,6 +208,70 @@ export function RidePanel({ ride, onDriverClick, onCancelRide, onCompleteRide }:
                                 </Button>
                             )}
                         </div>
+
+                        <div className="my-1 mx-2 h-px bg-border/60" />
+
+                        {/* Driver */}
+                        {ride.driver_id ? (
+                            <div
+                                role="button"
+                                tabIndex={0}
+                                className="group flex cursor-pointer items-center gap-3 rounded-lg p-2.5 transition-all hover:bg-muted/60 active:scale-[0.99]"
+                                onClick={() => ride.driver_id && onDriverClick(ride.driver_id)}
+                                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); ride.driver_id && onDriverClick(ride.driver_id); } }}
+                            >
+                                <div className="relative shrink-0">
+                                    <Avatar className="h-11 w-11 border-2 border-background shadow-sm">
+                                        <AvatarFallback className="bg-purple-100 text-sm font-bold text-purple-700">
+                                            {(ride.driver_name ?? "DR").slice(0, 2).toUpperCase()}
+                                        </AvatarFallback>
+                                    </Avatar>
+                                    <div className="absolute -bottom-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-purple-500 ring-2 ring-card">
+                                        <Car className="h-2.5 w-2.5 text-white" />
+                                    </div>
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                    <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                                        Driver
+                                    </p>
+                                    <p className="truncate text-sm font-semibold text-foreground">
+                                        {ride.driver_name ?? "Driver assigned"}
+                                    </p>
+                                    {ride.driver_phone && (
+                                        <p className="truncate text-[11px] font-mono text-muted-foreground">
+                                            {ride.driver_phone}
+                                        </p>
+                                    )}
+                                </div>
+                                <div className="flex items-center gap-1">
+                                    {ride.driver_phone && (
+                                        <Button
+                                            size="icon"
+                                            variant="outline"
+                                            className="h-9 w-9 rounded-full shadow-sm transition-colors hover:border-purple-200 hover:bg-purple-50 hover:text-purple-600"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                window.open(`tel:${ride.driver_phone}`);
+                                            }}
+                                            title="Call driver"
+                                        >
+                                            <Phone className="h-3.5 w-3.5" />
+                                        </Button>
+                                    )}
+                                    <ChevronRight className="h-5 w-5 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="flex items-center gap-3 rounded-lg border border-dashed border-amber-300 bg-amber-50/50 p-3 text-amber-700">
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                                <div className="text-xs">
+                                    <p className="font-semibold">Searching for a driver…</p>
+                                    <p className="text-[11px] text-amber-600/80">
+                                        No driver matched yet. Dispatch is still scanning.
+                                    </p>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 )}
 

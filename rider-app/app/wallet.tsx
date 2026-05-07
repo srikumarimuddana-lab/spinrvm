@@ -62,7 +62,7 @@ export default function WalletScreen() {
 
   useEffect(() => {
     clearError();
-    Promise.all([fetchWallet(), fetchTransactions(30)]);
+    void Promise.all([fetchWallet(), fetchTransactions(30)]).catch(() => {});
   }, []);
 
   const handleTopUp = async (amount: number) => {
@@ -158,7 +158,7 @@ export default function WalletScreen() {
         {storeError ? (
           <TouchableOpacity onPress={() => {
             clearError();
-            Promise.all([fetchWallet(), fetchTransactions(30)]);
+            void Promise.all([fetchWallet(), fetchTransactions(30)]).catch(() => {});
           }}>
             <Text style={[styles.balanceAmount, { fontSize: 18 }]}>Balance unavailable</Text>
             <Text style={{ color: '#FFF', opacity: 0.8, textAlign: 'center', marginTop: 4 }}>Tap to retry</Text>

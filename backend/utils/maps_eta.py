@@ -107,7 +107,7 @@ async def get_ride_eta_seconds(
                 eta_seconds = _haversine_eta_seconds(driver_lat, driver_lng, dest_lat, dest_lng)
 
         except Exception:
-            logger.warning("[ETA] Maps API call failed — using haversine fallback", exc_info=False)
+            logger.error("[ETA] Maps API call failed — using haversine fallback", exc_info=True)
             eta_seconds = _haversine_eta_seconds(driver_lat, driver_lng, dest_lat, dest_lng)
     else:
         # No API key configured — haversine only

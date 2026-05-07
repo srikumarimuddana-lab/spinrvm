@@ -26,7 +26,7 @@ import asyncio
 import logging
 import random
 import time
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 import stripe
 
@@ -89,10 +89,12 @@ async def _process_one(wallet: dict, stripe_secret: str) -> None:
         logger.error("wallet %s has no stripe_customer_id", wallet["id"])
         return
 
-    topup_amount = Decimal(str(wallet["auto_topup_amount"]))
-    daily_cap = Decimal(str(wallet.get("auto_topup_daily_cap") or 5000))
+    topup_amount = Decimal(str(wallet["auto_topup_amount"])).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    daily_cap = Decimal(str(wallet.get("auto_topup_daily_cap") or "5000")).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP
+    )
     today_sum = await sum_autotopups_today(wallet["id"])
-    if today_sum + topup_amount > daily_cap:
+    if Decimal(str(today_sum)) + topup_amount > daily_cap:
         logger.info(
             "autotopup: wallet %s at daily cap (%s + %s > %s)",
             wallet["id"],
@@ -104,7 +106,7 @@ async def _process_one(wallet: dict, stripe_secret: str) -> None:
 
     pm_id = await get_default_payment_method(company["stripe_customer_id"], stripe_secret)
     if not pm_id:
-        logger.warning("wallet %s has no default payment method", wallet["id"])
+        logger.error("autotopup: wallet %s has no default payment method — skipping", wallet["id"])
         return
 
     # Replay-safe idempotency key — two replicas seeing the same
@@ -122,22 +124,26 @@ async def _process_one(wallet: dict, stripe_secret: str) -> None:
     )
     idempotency_key = hashlib.sha256(seed.encode()).hexdigest()
 
-    stripe.PaymentIntent.create(
-        amount=int(topup_amount * 100),
-        currency="cad",
-        customer=company["stripe_customer_id"],
-        payment_method=pm_id,
-        off_session=True,
-        confirm=True,
-        metadata={
-            "scope": "corporate_topup",
-            "company_id": company["id"],
-            "wallet_id": wallet["id"],
-            "initiated_by": "autotopup",
-        },
-        api_key=stripe_secret,
-        idempotency_key=idempotency_key,
-    )
+    try:
+        stripe.PaymentIntent.create(
+            amount=int(topup_amount * 100),
+            currency="cad",
+            customer=company["stripe_customer_id"],
+            payment_method=pm_id,
+            off_session=True,
+            confirm=True,
+            metadata={
+                "scope": "corporate_topup",
+                "company_id": company["id"],
+                "wallet_id": wallet["id"],
+                "initiated_by": "autotopup",
+            },
+            api_key=stripe_secret,
+            idempotency_key=idempotency_key,
+        )
+    except stripe.StripeError as e:
+        logger.error("autotopup: Stripe error for wallet %s: %s", wallet["id"], e, exc_info=True)
+        return
     logger.info("autotopup: kicked intent for wallet %s (%s CAD)", wallet["id"], topup_amount)
 
 

@@ -371,7 +371,7 @@ function createStyles(colors: ThemeColors) {
     return StyleSheet.create({
         container: { flex: 1, backgroundColor: colors.background },
         mapContainer: { height: 250, position: 'relative' },
-        map: { ...StyleSheet.absoluteFillObject },
+        map: { ...StyleSheet.absoluteFill },
         backBtn: {
             position: 'absolute',
             top: Platform.OS === 'ios' ? 50 : 35,

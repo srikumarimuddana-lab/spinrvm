@@ -212,6 +212,9 @@ async def confirm_payment(
 
     if payment_intent_id and payment_intent_id.startswith("pi_mock_"):
         if ride_id:
+            _ride = await db_supabase.get_ride(ride_id)
+            if not _ride or _ride.get("rider_id") != current_user["id"]:
+                raise HTTPException(status_code=403, detail="Not authorized to confirm payment for this ride")
             await db_supabase.update_ride(ride_id, {"payment_status": "paid", "payment_intent_id": payment_intent_id})
         return {"status": "succeeded", "mock": True}
 
@@ -226,6 +229,9 @@ async def confirm_payment(
                 raise HTTPException(status_code=403, detail="Not authorized to confirm this payment")
 
             if ride_id:
+                _ride = await db_supabase.get_ride(ride_id)
+                if not _ride or _ride.get("rider_id") != current_user["id"]:
+                    raise HTTPException(status_code=403, detail="Not authorized to confirm payment for this ride")
                 await db_supabase.update_ride(
                     ride_id, {"payment_status": intent.status, "payment_intent_id": payment_intent_id}
                 )
@@ -600,6 +606,8 @@ async def create_payment_sheet(
         ride = await db_supabase.get_ride(body.ride_id)
         if not ride:
             raise HTTPException(status_code=404, detail="Ride not found")
+        if ride.get("rider_id") != current_user["id"]:
+            raise HTTPException(status_code=403, detail="Not authorized to pay for this ride")
         ride_fare = Decimal(str(ride.get("total_fare", 0)))
         requested = Decimal(str(body.amount))
         if requested != ride_fare:

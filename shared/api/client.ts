@@ -487,6 +487,7 @@ const handleApiError = async (response: Response, method: string, url: string, r
     return Promise.reject(response) as Promise<never>;
   }
 
+
   // On 401, attempt a single silent token refresh then retry the original request.
   if (response.status === 401 && _refreshCallback && retryFn) {
     try {

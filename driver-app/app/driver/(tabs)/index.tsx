@@ -28,6 +28,20 @@ const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || '';
 // Use Google Maps on Android, Apple Maps (native) on iOS
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 
+// Distance in metres between two lat/lng pairs. Used by the Directions
+// refresh ticker to decide whether the driver has moved far enough to
+// warrant a new API call.
+function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371000;
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
 function DriverDashboard() {
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -126,18 +140,40 @@ function DriverDashboard() {
     prevRideStateRef.current = rideState;
   }, [rideState]);
 
-  // Live ETA from Google Directions — updated every 30s via the
-  // directionsKey mechanism below.
+  // Live ETA from Google Directions — refreshed every 60s, with a stationary
+  // skip so a parked driver doesn't burn API calls when nothing has changed.
   const [routeEtaMinutes, setRouteEtaMinutes] = useState<number | null>(null);
   const [routeDistanceKm, setRouteDistanceKm] = useState<number | null>(null);
 
-  // Force MapViewDirections to re-compute every 30 seconds by changing
-  // a key prop. This gives the driver a road-aware ETA that accounts
-  // for traffic and route changes without hammering the Directions API.
+  // Last origin actually fetched + a mirror of the live driver location, both
+  // held in refs so the interval callback sees fresh values without
+  // re-subscribing on every render.
+  const lastDirectionsFetchRef = useRef<{ lat: number; lng: number; ts: number } | null>(null);
+  const currentLocationRef = useRef<{ lat: number; lng: number } | null>(null);
+  useEffect(() => {
+    if (location?.coords?.latitude != null && location?.coords?.longitude != null) {
+      currentLocationRef.current = { lat: location.coords.latitude, lng: location.coords.longitude };
+    }
+  }, [location]);
+
+  // Force MapViewDirections to re-compute by changing a key prop. The bare
+  // 30s ticker was the dominant Maps-API burn on long trips; bumped to 60s
+  // and gated on driver movement (>= 100 m since last fetch) with a 5-min
+  // safety floor so traffic shifts still surface for a stationary driver.
   const [directionsKey, setDirectionsKey] = useState(0);
   useEffect(() => {
     if (rideState !== 'navigating_to_pickup' && rideState !== 'trip_in_progress') return;
-    const interval = setInterval(() => setDirectionsKey((k) => k + 1), 30000);
+    const interval = setInterval(() => {
+      const now = Date.now();
+      const last = lastDirectionsFetchRef.current;
+      const cur = currentLocationRef.current;
+      if (last && cur) {
+        const movedMeters = haversineMeters(last.lat, last.lng, cur.lat, cur.lng);
+        const elapsedMs = now - last.ts;
+        if (movedMeters < 100 && elapsedMs < 5 * 60_000) return;
+      }
+      setDirectionsKey((k) => k + 1);
+    }, 60000);
     return () => clearInterval(interval);
   }, [rideState]);
 
@@ -516,8 +552,12 @@ function DriverDashboard() {
             jitter doesn't refetch the Directions API and flicker the
             polyline every render. */}
         {GOOGLE_MAPS_API_KEY && ride && (rideState === 'ride_offered' || rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup' || rideState === 'trip_in_progress') && (() => {
-          const driverLat = location?.coords?.latitude != null ? Math.round(location.coords.latitude * 10000) / 10000 : null;
-          const driverLng = location?.coords?.longitude != null ? Math.round(location.coords.longitude * 10000) / 10000 : null;
+          // Round to 3 decimals (~110 m) so micro-movements during normal
+          // driving don't churn the origin prop and trigger a Directions
+          // refetch on every GPS tick. The interval below + onReady record
+          // are the canonical refetch triggers.
+          const driverLat = location?.coords?.latitude != null ? Math.round(location.coords.latitude * 1000) / 1000 : null;
+          const driverLng = location?.coords?.longitude != null ? Math.round(location.coords.longitude * 1000) / 1000 : null;
 
           let origin: { latitude: number; longitude: number };
           let destination: { latitude: number; longitude: number };
@@ -552,6 +592,11 @@ function DriverDashboard() {
                   setRouteCoords(result.coordinates);
                   if (result.duration != null) setRouteEtaMinutes(Math.round(result.duration));
                   if (result.distance != null) setRouteDistanceKm(Math.round(result.distance * 10) / 10);
+                  lastDirectionsFetchRef.current = {
+                    lat: origin.latitude,
+                    lng: origin.longitude,
+                    ts: Date.now(),
+                  };
                   if (directionsKey === 0 && mapRef.current && result.coordinates?.length > 1) {
                     mapRef.current.fitToCoordinates(result.coordinates, {
                       edgePadding: { top: 100, right: 60, bottom: 300, left: 60 },

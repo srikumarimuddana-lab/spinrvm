@@ -42,6 +42,16 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
             'applinks:spinr.app',
             'applinks:spinr-track.app',
         ],
+        // Purpose strings — Apple rejects uploads with ITMS-90683 if any
+        // dependency calls a permission-gated API without a matching string.
+        // Only declare keys for capabilities actually used; declaring unused
+        // permissions triggers App Review questions.
+        infoPlist: {
+            NSCameraUsageDescription:
+                'Spinr uses your camera so you can take a profile photo for your rider account.',
+            NSPhotoLibraryUsageDescription:
+                'Spinr accesses your photo library so you can choose an existing image as your profile photo.',
+        },
         // Required by Apple for any app using required-reason APIs (enforced from May 2024).
         // Missing this causes App Store / TestFlight rejection at upload time (ITMS-91053).
         privacyManifests: {

@@ -376,8 +376,27 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
         return
 
     selected_driver = None
+    _rpc_claimed = False
 
-    if algorithm == "nearest" or algorithm == "combined":
+    if algorithm == "nearest":
+        # Fast path: let the DB atomically find-and-claim the nearest driver
+        # via the PostGIS `match_and_claim_driver` RPC (migration 77).
+        # Falls back to the Python-sort path if the RPC returns None
+        # (PostGIS unavailable, no driver found, or any error).
+        rpc_result = await db_supabase.match_and_claim_driver(
+            vehicle_type_id=ride["vehicle_type_id"],
+            pickup_lat=ride["pickup_lat"],
+            pickup_lng=ride["pickup_lng"],
+            radius_km=search_radius,
+            min_rating=min_rating,
+        )
+        if rpc_result:
+            selected_driver = rpc_result
+            _rpc_claimed = True
+        else:
+            drivers_with_distance.sort(key=lambda x: x[1])
+            selected_driver = drivers_with_distance[0][0] if drivers_with_distance else None
+    elif algorithm == "combined":
         drivers_with_distance.sort(key=lambda x: x[1])
         selected_driver = drivers_with_distance[0][0]
     elif algorithm == "rating_based":
@@ -397,20 +416,23 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
             selected_driver = drivers_with_distance[0][0]
 
     if selected_driver:
-        # Attempt to atomically claim the driver (only if still available)
-        claim_result = await db_supabase.claim_driver_atomic(selected_driver["id"])
+        # Attempt to atomically claim the driver (only if still available).
+        # Skipped when _rpc_claimed is True — the PostGIS RPC already performed
+        # the atomic claim with SELECT ... FOR UPDATE SKIP LOCKED.
+        if not _rpc_claimed:
+            claim_result = await db_supabase.claim_driver_atomic(selected_driver["id"])
 
-        if not claim_result:
-            # Driver was taken by another process; try to find next candidate
-            claimed = False
-            for d, _ in drivers_with_distance:
-                if await db_supabase.claim_driver_atomic(d["id"]):
-                    selected_driver = d
-                    claimed = True
-                    break
-            if not claimed:
-                # No drivers could be claimed
-                return
+            if not claim_result:
+                # Driver was taken by another process; try to find next candidate
+                claimed = False
+                for d, _ in drivers_with_distance:
+                    if await db_supabase.claim_driver_atomic(d["id"]):
+                        selected_driver = d
+                        claimed = True
+                        break
+                if not claimed:
+                    # No drivers could be claimed
+                    return
 
         # Guard: re-verify the claimed driver is still online. A driver can
         # toggle offline between the candidate read and the atomic claim write,
@@ -532,6 +554,7 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
                         "rider_rating": str((rider_user or {}).get("rating") or ""),
                         "deeplink": "/driver/",
                     },
+                    priority="dispatch",
                 )
                 logger.info(f"[DISPATCH] push new_ride_assignment sent to user_id={selected_driver['user_id']}")
             except Exception as e:
@@ -753,7 +776,7 @@ async def estimate_ride(
             pickup_lng=body.pickup_lng,
             dropoff_lat=body.dropoff_lat,
             dropoff_lng=body.dropoff_lng,
-            surge_multiplier=_f(surge),
+            surge_multiplier=round(float(surge), 2),
             total_fare=_f(total_fare),
         )
 
@@ -769,7 +792,7 @@ async def estimate_ride(
                 # surge_multiplier is a ratio, not money, but the Ride model
                 # types it as float — keep float on the wire so existing
                 # rider-app parsers don't trip on a string.
-                "surge_multiplier": _f(surge),
+                "surge_multiplier": round(float(surge), 2),
                 "total_fare": _money_str(total_fare),
                 "available": is_available,
                 "eta_minutes": eta_minutes,
@@ -912,12 +935,12 @@ async def create_ride(body: CreateRideRequest, request: Request = None, current_
         logger.error(f"Failed to fetch service areas: {e}", exc_info=True)
 
     # Resolve the pickup service area once and pass the match downstream.
-    matched_area = None
-    for area in all_areas:
-        poly = get_service_area_polygon(area)
-        if poly and point_in_polygon(body.pickup_lat, body.pickup_lng, poly):
-            matched_area = area
-            break
+    matched_area = await db_supabase.get_service_area_for_point(body.pickup_lat, body.pickup_lng)
+    if matched_area is None and all_areas:
+        matched_area = next(
+            (a for a in all_areas if get_service_area_polygon(a) and point_in_polygon(body.pickup_lat, body.pickup_lng, get_service_area_polygon(a))),
+            None,
+        )
     service_area_id = matched_area["id"] if matched_area else None
 
     # Vehicle types are also needed by fare building — fetch once, reuse.
@@ -1083,7 +1106,7 @@ async def create_ride(body: CreateRideRequest, request: Request = None, current_
         distance_fare=_f(distance_fare),
         time_fare=_f(time_fare),
         booking_fee=_f(booking_fee),
-        surge_multiplier=_f(surge),
+        surge_multiplier=round(float(surge), 2),
         total_fare=_f(total_fare),
         stops=body.stops,
         is_scheduled=body.is_scheduled,

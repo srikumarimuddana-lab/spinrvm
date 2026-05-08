@@ -30,6 +30,23 @@ config.resolver.nodeModulesPaths = [
   path.resolve(__dirname, 'node_modules'),
 ];
 
+// Block .d.ts files and the entire @types/ tree from being bundled.
+// React 19 bundles its own types — the standalone @types/react package
+// is only present transitively (via @types/react-test-renderer) and its
+// patched main field would otherwise cause Metro to try parsing index.d.ts
+// (which uses `export =` syntax that Babel can't process).
+config.resolver.blockList = [
+  /.*\.d\.ts$/,
+  /node_modules[\\/]@types[\\/].*/,
+];
+
+// Force `react` and `react-dom` to resolve to the actual packages, not @types
+config.resolver.extraNodeModules = {
+  ...config.resolver.extraNodeModules,
+  react: path.resolve(__dirname, 'node_modules/react'),
+  'react-dom': path.resolve(__dirname, 'node_modules/react-dom'),
+};
+
 // ── Web build: stub native-only packages ──────────────────────────────────
 // react-native-maps and react-native-maps-directions are native-only.
 // On web, Metro resolves them to thin stubs so `expo export --platform web`
@@ -48,6 +65,13 @@ const WEB_STUBS = {
 const NATIVE_COMPONENT_STUB = path.resolve(__dirname, '__stubs__/emptyNativeComponent.js');
 
 config.resolver.resolveRequest = (context, moduleName, platform) => {
+  // Skip @types packages during bundling — TypeScript-only, never bundled.
+  // Prevents SyntaxError from `export =` in .d.ts and resolves transitive deps
+  // from @types/react-test-renderer → @types/react.
+  if (moduleName.startsWith('@types/')) {
+    return { type: 'empty' };
+  }
+
   if (platform === 'web') {
     // Stub file-based native-only packages (react-native-maps, etc.)
     if (WEB_STUBS[moduleName]) {
@@ -80,4 +104,3 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
 };
 
 module.exports = config;
-

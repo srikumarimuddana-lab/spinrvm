@@ -14,7 +14,8 @@
     "test:coverage": "jest --coverage",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "build:web": "expo export --platform web"
+    "build:web": "expo export --platform web",
+    "postinstall": "node -e \"const fs=require('fs'),path=require('path');const p=path.join(__dirname,'node_modules','@types','react','package.json');if(fs.existsSync(p)){const pkg=JSON.parse(fs.readFileSync(p,'utf8'));pkg.main='index.d.ts';fs.writeFileSync(p,JSON.stringify(pkg,null,2))}\""
   },
   "dependencies": {
     "@expo-google-fonts/plus-jakarta-sans": "^0.4.2",
@@ -22,7 +23,7 @@
     "@expo/vector-icons": "^15.0.3",
     "@gorhom/bottom-sheet": "^5.2.13",
     "@logrocket/react-native": "^2.3.1",
-    "@react-native-async-storage/async-storage": "3.0.2",
+    "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-community/datetimepicker": "8.6.0",
     "@react-native-community/netinfo": "11.5.2",
     "@react-native-firebase/app": "^24.0.0",
@@ -85,7 +86,6 @@
     "@testing-library/jest-native": "^5.4.3",
     "@testing-library/react-native": "^12.4.0",
     "@types/jest": "^29.5.14",
-    "@types/react": "~19.2.0",
     "babel-plugin-module-resolver": "^5.0.2",
     "cross-env": "^10.1.0",
     "eslint": "^8.57.0",
@@ -96,17 +96,18 @@
     "typescript": "~5.9.2"
   },
   "overrides": {
-    "@types/react": "~19.2.0",
+    "@types/react": "19.0.0",
     "@tootallnate/once": "^3.0.1",
     "protobufjs": "^7.5.5",
     "@xmldom/xmldom": "^0.8.13"
   },
   "resolutions": {
-    "@types/react": "~19.2.0",
+    "@types/react": "19.0.0",
     "@tootallnate/once": "^3.0.1",
     "protobufjs": "^7.5.5",
     "@xmldom/xmldom": "^0.8.13",
     "@react-native-community/netinfo": "11.5.2",
+    "@react-native-async-storage/async-storage": "2.2.0",
     "expo-modules-core": "55.0.25",
     "postcss": ">=8.5.10"
   },

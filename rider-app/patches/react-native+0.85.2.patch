@@ -1,0 +1,46 @@
+diff --git a/node_modules/react-native/Libraries/Components/ActivityIndicator/ActivityIndicator.js b/node_modules/react-native/Libraries/Components/ActivityIndicator/ActivityIndicator.js
+index 0000000..0000001 100644
+--- a/node_modules/react-native/Libraries/Components/ActivityIndicator/ActivityIndicator.js
++++ b/node_modules/react-native/Libraries/Components/ActivityIndicator/ActivityIndicator.js
+@@ -17,10 +17,37 @@ import StyleSheet, {type ColorValue} from '../../StyleSheet/StyleSheet';
+ import View from '../View/View';
+ import * as React from 'react';
+
+-const PlatformActivityIndicator =
+-  Platform.OS === 'android'
+-    ? require('../ProgressBarAndroid/ProgressBarAndroid').default
+-    : require('./ActivityIndicatorViewNativeComponent').default;
++// PATCH (spinr rider-app/driver-app):
++// RN 0.85.2's Android ActivityIndicator path imports ProgressBarAndroid, whose
++// codegenNativeComponent('AndroidProgressBar', { interfaceOnly: true }) returns
++// a non-renderable object under the New Architecture (Bridgeless), throwing
++// "Element type is invalid... got: object" at render time.
++// JS-only fallback below renders a styled View. Honors `animating`,
++// `hidesWhenStopped`, `color`, and forwards size via the parent's `style`.
++function AndroidActivityIndicatorJSFallback(props: $FlowFixMe): React.Node {
++  const {animating, color, hidesWhenStopped, style, ...rest} = props;
++  if (animating === false && hidesWhenStopped !== false) {
++    return null;
++  }
++  return (
++    <View
++      style={[
++        {
++          borderRadius: 9999,
++          backgroundColor: color != null ? color : '#999999',
++          opacity: animating === false ? 0 : 0.55,
++        },
++        style,
++      ]}
++      {...rest}
++    />
++  );
++}
++
++const PlatformActivityIndicator =
++  Platform.OS === 'android'
++    ? AndroidActivityIndicatorJSFallback
++    : require('./ActivityIndicatorViewNativeComponent').default;
+
+ const GRAY = '#999999';
+

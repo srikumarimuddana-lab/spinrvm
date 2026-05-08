@@ -11,7 +11,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { SpinrConfig } from '@shared/config/spinr.config';
+import api from '@shared/api/client';
 import CustomAlert from '@shared/components/CustomAlert';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -37,15 +37,8 @@ export default function ReportSafetyScreen() {
         }
 
         setSubmitting(true);
-        // Submit to the safety-report endpoint
         try {
-            await fetch(`${SpinrConfig.backendUrl}/support/tickets/safety-report`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ description: issue })
-            });
-
-
+            await api.post('/support/tickets/safety-report', { description: issue });
             setAlertState({
                 visible: true,
                 title: 'Report Submitted',

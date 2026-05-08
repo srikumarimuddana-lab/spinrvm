@@ -74,7 +74,7 @@ const AUTH_FAILED_ALERT = (message: string): PaymentAlert => ({
 
 const PROCESSOR_ERROR_ALERT: PaymentAlert = {
   title: "Can't process payment right now",
-  message: 'Please try again in a moment.',
+  message: 'Payment service is temporarily unavailable. Please try again shortly.',
   variant: 'warning',
 };
 

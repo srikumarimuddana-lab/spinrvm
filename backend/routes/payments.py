@@ -344,7 +344,8 @@ async def create_setup_intent(request: Request = None, current_user: dict = Depe
 
 
 @api_router.get("/methods")
-async def get_payment_methods(current_user: dict = Depends(get_current_user)):
+@payment_action_limit
+async def get_payment_methods(request: Request = None, current_user: dict = Depends(get_current_user)):
     """Get saved payment methods for the user"""
     settings = await get_app_settings()
     stripe_secret = settings.get("stripe_secret_key", "")
@@ -387,7 +388,8 @@ async def get_payment_methods(current_user: dict = Depends(get_current_user)):
 
 
 @api_router.get("/cards")
-async def get_cards(current_user: dict = Depends(get_current_user)):
+@payment_action_limit
+async def get_cards(request: Request = None, current_user: dict = Depends(get_current_user)):
     """Get user's saved cards from Stripe. Last4, brand, expiry all from Stripe."""
     settings = await get_app_settings()
     stripe_secret = settings.get("stripe_secret_key", "")

@@ -150,7 +150,7 @@ export default function BecomeDriverScreen() {
       }));
       setAlertState({ visible: true, title: 'Success', message: 'Document uploaded successfully', variant: 'success' });
     } catch (err: any) {
-      setAlertState({ visible: true, title: 'Upload Failed', message: err.message, variant: 'danger' });
+      setAlertState({ visible: true, title: 'Upload Failed', message: (err as any)?.statusCode ? 'Please try again.' : 'Something went wrong. Please try again.', variant: 'danger' });
     } finally {
       setUploadingDoc(null);
     }
@@ -278,7 +278,7 @@ export default function BecomeDriverScreen() {
         ],
       });
     } catch (err: any) {
-      setAlertState({ visible: true, title: 'Registration Failed', message: err.message, variant: 'danger' });
+      setAlertState({ visible: true, title: 'Registration Failed', message: (err as any)?.statusCode ? 'Please try again.' : 'Something went wrong. Please try again.', variant: 'danger' });
     }
   };
 

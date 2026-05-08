@@ -103,7 +103,7 @@ export default function AccountScreen() {
       await updateProfileImage(uri);
       showFeedback('Photo Updated', 'Your profile photo has been submitted for review.', 'success');
     } catch (err: any) {
-      showFeedback('Upload Failed', err.message || 'Failed to upload', 'danger');
+      showFeedback('Upload Failed', 'Photo upload failed. Please try again.', 'danger');
     } finally {
       setIsUploadingPhoto(false);
     }

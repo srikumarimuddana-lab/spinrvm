@@ -11,11 +11,11 @@ const BACKEND_URL = (() => {
     process.env.NEXT_PUBLIC_API_URL ||
     (process.env.NODE_ENV !== "production" ? "http://127.0.0.1:8000" : "");
   if (!url) {
-    throw new Error(
+    console.warn(
       "BACKEND_URL env var is required in production. Set it in your Railway / Vercel environment.",
     );
   }
-  return url;
+  return url || "http://127.0.0.1:8000";
 })();
 
 const RT_COOKIE = "spinr_admin_rt";

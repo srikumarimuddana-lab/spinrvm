@@ -160,6 +160,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // requested 36 — keeping this plugin AFTER expo-build-properties guarantees
         // useExpoVersionCatalog() sees 36 when it seeds the expoLibs catalog.
         './plugins/withForceCompileSdk',
+        // Pin Stripe Android SDK to 21.6.0 (last Kotlin-2.0.21-compatible release).
+        // stripe-react-native@0.63.0 defaults to 23.3.+ which is Kotlin 2.2.x and
+        // produces metadata-version-mismatch errors against our Kotlin 2.0.21
+        // compiler. See plugin comments for trade-offs.
+        './plugins/withStripeAndroidPin',
         '@logrocket/react-native',
     ],
     experiments: {

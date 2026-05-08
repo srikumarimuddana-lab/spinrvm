@@ -10,8 +10,8 @@ import { useRideStore } from '../store/rideStore';
 import CustomAlert from '@shared/components/CustomAlert';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-
-const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
+import api from '@shared/api/client';
+import { newPlacesSessionToken } from '../utils/placesSession';
 
 const PLACE_TYPES = [
   { key: 'Home', icon: 'home', color: '#FF3B30', bg: '#FEF2F2' },
@@ -45,6 +45,7 @@ export default function SavedPlacesScreen() {
   const [selectedPlace, setSelectedPlace] = useState<{ address: string; lat: number; lng: number } | null>(null);
   const [searching, setSearching] = useState(false);
   const searchTimeout = React.useRef<any>(null);
+  const sessionToken = React.useRef<string>(newPlacesSessionToken());
   const [alertState, setAlertState] = useState<{
     visible: boolean;
     title: string;
@@ -66,7 +67,7 @@ export default function SavedPlacesScreen() {
   const searchPlaces = (query: string) => {
     setSearchText(query);
     setSelectedPlace(null);
-    if (!query || query.length < 2 || !GOOGLE_MAPS_API_KEY) {
+    if (!query || query.length < 2) {
       setPredictions([]);
       return;
     }
@@ -74,26 +75,35 @@ export default function SavedPlacesScreen() {
     searchTimeout.current = setTimeout(async () => {
       setSearching(true);
       try {
-        const url = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(query)}&key=${GOOGLE_MAPS_API_KEY}&language=en&components=country:ca`;
-        const res = await fetch(url);
-        const data = await res.json();
-        setPredictions(data.predictions || []);
+        const params = new URLSearchParams({
+          input: query,
+          session_token: sessionToken.current,
+        });
+        const { data } = await api.get<{ predictions: Prediction[] }>(
+          `/maps/places/autocomplete?${params.toString()}`,
+        );
+        setPredictions(data?.predictions || []);
       } catch {}
       finally { setSearching(false); }
     }, 300);
   };
 
   const selectPrediction = async (prediction: Prediction) => {
-    if (!GOOGLE_MAPS_API_KEY) return;
     try {
-      const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${prediction.place_id}&fields=geometry,formatted_address&key=${GOOGLE_MAPS_API_KEY}`;
-      const res = await fetch(url);
-      const data = await res.json();
-      if (data.result) {
+      const params = new URLSearchParams({
+        place_id: prediction.place_id,
+        session_token: sessionToken.current,
+      });
+      const { data } = await api.get<{ lat: number | null; lng: number | null; formatted_address: string }>(
+        `/maps/places/details?${params.toString()}`,
+      );
+      // Selection closes the billing session — start a fresh one for the next save.
+      sessionToken.current = newPlacesSessionToken();
+      if (data && data.lat != null && data.lng != null) {
         setSelectedPlace({
-          address: data.result.formatted_address,
-          lat: data.result.geometry.location.lat,
-          lng: data.result.geometry.location.lng,
+          address: data.formatted_address,
+          lat: data.lat,
+          lng: data.lng,
         });
         setSearchText(prediction.structured_formatting?.main_text || prediction.description);
         setPredictions([]);

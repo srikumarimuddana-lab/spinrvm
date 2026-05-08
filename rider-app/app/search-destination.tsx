@@ -21,8 +21,8 @@ import { useAuthStore } from '@shared/store/authStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import CustomAlert from '@shared/components/CustomAlert';
-
-const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
+import api from '@shared/api/client';
+import { newPlacesSessionToken } from '../utils/placesSession';
 
 interface PlacePrediction {
   place_id: string;
@@ -66,6 +66,7 @@ export default function SearchDestinationScreen() {
   const dropoffRef = useRef<TextInput>(null);
   const stopRefs = useRef<(TextInput | null)[]>([]);
   const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sessionToken = useRef<string>(newPlacesSessionToken());
 
   // Handle return from map picker
   useEffect(() => {
@@ -142,7 +143,7 @@ export default function SearchDestinationScreen() {
   }, [activeField]);
 
   const searchPlaces = async (query: string) => {
-    if (!query || query.length < 2 || !GOOGLE_MAPS_API_KEY) {
+    if (!query || query.length < 2) {
       setPredictions([]);
       return;
     }
@@ -152,13 +153,14 @@ export default function SearchDestinationScreen() {
     searchTimeout.current = setTimeout(async () => {
       setIsSearching(true);
       try {
-        const locationBias = userLocation
-          ? `&location=${userLocation.latitude},${userLocation.longitude}&radius=50000`
-          : '';
-        const url = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(query)}&key=${GOOGLE_MAPS_API_KEY}&language=en&components=country:ca${locationBias}`;
-        const response = await fetch(url);
-        const data = await response.json();
-        if (data.predictions) {
+        const params = new URLSearchParams({
+          input: query,
+          session_token: sessionToken.current,
+        });
+        const { data } = await api.get<{ predictions: PlacePrediction[] }>(
+          `/maps/places/autocomplete?${params.toString()}`,
+        );
+        if (data?.predictions) {
           setPredictions(data.predictions);
         }
       } catch (error) {
@@ -170,16 +172,21 @@ export default function SearchDestinationScreen() {
   };
 
   const getPlaceDetails = async (placeId: string): Promise<{ lat: number; lng: number; address: string } | null> => {
-    if (!GOOGLE_MAPS_API_KEY) return null;
     try {
-      const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${placeId}&fields=geometry,formatted_address&key=${GOOGLE_MAPS_API_KEY}`;
-      const response = await fetch(url);
-      const data = await response.json();
-      if (data.result) {
+      const params = new URLSearchParams({
+        place_id: placeId,
+        session_token: sessionToken.current,
+      });
+      const { data } = await api.get<{ lat: number | null; lng: number | null; formatted_address: string }>(
+        `/maps/places/details?${params.toString()}`,
+      );
+      // Selection closes the billing session — start a fresh one for the next field.
+      sessionToken.current = newPlacesSessionToken();
+      if (data && data.lat != null && data.lng != null) {
         return {
-          lat: data.result.geometry.location.lat,
-          lng: data.result.geometry.location.lng,
-          address: data.result.formatted_address,
+          lat: data.lat,
+          lng: data.lng,
+          address: data.formatted_address,
         };
       }
     } catch (error) {

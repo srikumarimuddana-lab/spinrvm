@@ -125,6 +125,7 @@ from routes.fares import api_router as fares_router
 from routes.favorites import api_router as favorites_router
 from routes.legal_documents import api_router as legal_documents_router
 from routes.loyalty import api_router as loyalty_router
+from routes.maps_proxy import api_router as maps_router
 from routes.notifications import api_router as notifications_router
 from routes.payments import api_router as payments_router
 from routes.promotions import api_router as promotions_router
@@ -250,6 +251,7 @@ v1_api_router.include_router(faqs_router)
 v1_api_router.include_router(legal_documents_router)
 v1_api_router.include_router(safety_router)
 v1_api_router.include_router(service_areas_router)
+v1_api_router.include_router(maps_router)
 
 # Include API routers
 app.include_router(v1_api_router, prefix="/api/v1")

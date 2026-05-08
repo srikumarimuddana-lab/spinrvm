@@ -15,7 +15,7 @@
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "build:web": "expo export --platform web",
-    "postinstall": "node -e \"const fs=require('fs'),path=require('path');const p=path.join(__dirname,'node_modules','@types','react','package.json');if(fs.existsSync(p)){const pkg=JSON.parse(fs.readFileSync(p,'utf8'));pkg.main='index.d.ts';fs.writeFileSync(p,JSON.stringify(pkg,null,2))}\""
+    "postinstall": "patch-package && node -e \"const fs=require('fs'),path=require('path');const p=path.join(__dirname,'node_modules','@types','react','package.json');if(fs.existsSync(p)){const pkg=JSON.parse(fs.readFileSync(p,'utf8'));pkg.main='index.d.ts';fs.writeFileSync(p,JSON.stringify(pkg,null,2))}\""
   },
   "dependencies": {
     "@expo-google-fonts/plus-jakarta-sans": "^0.4.2",

@@ -213,18 +213,16 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
             ios: { appCheckProviderFactory: 'DeviceCheck' },
             android: { appCheckProviderFactory: 'playIntegrity' },
         }],
-        // SDK 55 / RN 0.85.2 ships androidx.* deps (browser:1.9.0, core:1.17.0,
-        // activity:1.12.4, navigationevent:1.0.2) that require compileSdk 36.
-        // Build tools 36.0.0 already provisioned by EAS — bumping compile/target
-        // from 35 to 36 unlocks AAR metadata check at :app:checkReleaseAarMetadata.
-        // Kotlin 2.1.20 from @react-native/gradle-plugin libs.versions.toml.
-        // LogRocket native module requires minSdkVersion 25.
+        // SDK 55 / RN 0.85.2 androidx.* deps require compileSdk 36. LogRocket
+        // requires minSdkVersion 25. Kotlin pinned to 2.0.21 (NOT 2.1.20) to
+        // match ksp 2.0.21-1.0.28 that EAS ships — Kotlin 2.1.20 + ksp 2.0.21
+        // = NoSuchMethodError at :expo-updates:kspReleaseKotlin.
         ['expo-build-properties', {
             android: {
                 minSdkVersion: 25,
                 compileSdkVersion: 36,
                 targetSdkVersion: 36,
-                kotlinVersion: '2.1.20',
+                kotlinVersion: '2.0.21',
             }
         }],
         '@logrocket/react-native',

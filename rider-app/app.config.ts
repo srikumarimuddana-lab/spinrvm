@@ -138,14 +138,17 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         '@react-native-firebase/messaging',
         '@react-native-firebase/crashlytics',
         '@react-native-firebase/app-check',
-        // SDK 55 / RN 0.85.2 requires compileSdkVersion 35 + Kotlin 2.1.20 (from @react-native/gradle-plugin libs.versions.toml).
-        // Stripe 0.63.0 and react-native-reanimated 4.x both floor-check these.
+        // SDK 55 / RN 0.85.2 ships androidx.* deps (browser:1.9.0, core:1.17.0,
+        // activity:1.12.4, navigationevent:1.0.2) that require compileSdk 36.
+        // Build tools 36.0.0 already provisioned by EAS — bumping compile/target
+        // from 35 to 36 unlocks AAR metadata check at :app:checkReleaseAarMetadata.
+        // Kotlin 2.1.20 from @react-native/gradle-plugin libs.versions.toml.
         // LogRocket native module requires minSdkVersion 25.
         ['expo-build-properties', {
             android: {
                 minSdkVersion: 25,
-                compileSdkVersion: 35,
-                targetSdkVersion: 35,
+                compileSdkVersion: 36,
+                targetSdkVersion: 36,
                 kotlinVersion: '2.1.20',
             }
         }],

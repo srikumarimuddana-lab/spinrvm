@@ -1,6 +1,8 @@
 import uuid
 from urllib.parse import urlparse
 
+import jwt
+
 from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
@@ -142,13 +144,30 @@ class FirebaseAppCheckMiddleware(BaseHTTPMiddleware):
 # enabling full end-to-end tracing from mobile client to DB query.
 
 
+def _extract_user_id(request: Request) -> str | None:
+    try:
+        auth = request.headers.get("Authorization", "")
+        if not auth.startswith("Bearer "):
+            return None
+        token = auth[len("Bearer "):]
+        payload = jwt.decode(token, options={"verify_signature": False})
+        sub = payload.get("sub")
+        return str(sub) if sub is not None else None
+    except Exception:
+        return None
+
+
 class RequestIDMiddleware(BaseHTTPMiddleware):
     """Attach a unique X-Request-ID to every request/response pair."""
 
     async def dispatch(self, request: Request, call_next):
         request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
         request.state.request_id = request_id
-        with logger.contextualize(request_id=request_id):
+        user_id = _extract_user_id(request)
+        ctx = {"request_id": request_id}
+        if user_id is not None:
+            ctx["user_id"] = user_id
+        with logger.contextualize(**ctx):
             response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
         # OTel/W3C-compatible alias: clients that look for X-Trace-ID

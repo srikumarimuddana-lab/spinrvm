@@ -78,6 +78,7 @@ interface Props {
 export default function RideDetailModal({ rideId, open, onClose }: Props) {
     const [ride, setRide] = useState<any>(null);
     const [loading, setLoading] = useState(false);
+    const [loadError, setLoadError] = useState<string | null>(null);
     const [flagTarget, setFlagTarget] = useState<{ type: "rider" | "driver"; name: string } | null>(null);
     const [showComplaint, setShowComplaint] = useState(false);
     const [selectedPhase, setSelectedPhase] = useState<"pickup" | "actual" | "planned">("actual");
@@ -85,11 +86,14 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
     const loadRide = useCallback(async () => {
         if (!rideId) return;
         setLoading(true);
+        setLoadError(null);
         try {
             const data = await getRideDetails(rideId);
             setRide(data);
-        } catch { }
-        finally { setLoading(false); }
+        } catch (err) {
+            console.error('[RideDetailModal] Failed to load ride:', err);
+            setLoadError('Failed to load ride details. Please try again.');
+        } finally { setLoading(false); }
     }, [rideId]);
 
     useEffect(() => {
@@ -143,7 +147,11 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                         {ride ? `Ride ${ride.ride_code || ride.id}` : "Ride Details"}
                     </DialogTitle>
 
-                    {loading || !ride ? (
+                    {loadError ? (
+                        <div className="flex flex-col items-center justify-center py-24">
+                            <p className="text-sm text-red-600 dark:text-red-400">{loadError}</p>
+                        </div>
+                    ) : loading || !ride ? (
                         <div className="flex flex-col items-center justify-center py-24">
                             <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
                             <p className="text-sm text-muted-foreground mt-3">Loading ride details...</p>

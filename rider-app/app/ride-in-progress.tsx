@@ -164,7 +164,15 @@ function RideInProgressScreenContent() {
           onPress: () => {
             // Fire-and-forget — 911 is the primary action regardless of backend result.
             // .catch() prevents unhandled rejection now that triggerEmergency rethrows.
-            if (rideId) void triggerEmergency(rideId as string).catch((e) => console.warn('[RideInProgress] Emergency trigger failed:', e?.message ?? e));
+            if (rideId) void triggerEmergency(rideId as string).catch(() => {
+              setAlertState({
+                visible: true,
+                title: 'Alert Not Sent',
+                message: "We couldn't reach Spinr's emergency service. Please call 911 directly.",
+                variant: 'danger',
+                buttons: [{ text: 'Call 911', style: 'destructive', onPress: () => Linking.openURL('tel:911') }],
+              });
+            });
             Linking.openURL('tel:911');
           },
         },

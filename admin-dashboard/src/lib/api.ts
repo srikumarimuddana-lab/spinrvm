@@ -223,7 +223,7 @@ export const mfaChallenge = (mfa_token: string, totp_code: string) =>
     });
 
 export const mfaStatus = () =>
-    request<{ mfa_enabled: boolean }>("/api/admin/auth/mfa/status");
+    request<{ mfa_enabled: boolean; available: boolean }>("/api/admin/auth/mfa/status");
 
 export const mfaEnroll = () =>
     request<{ secret: string; otpauth_uri: string }>("/api/admin/auth/mfa/enroll", { method: "POST" });

@@ -11,17 +11,17 @@ const BACKEND_URL = (() => {
     process.env.NEXT_PUBLIC_API_URL ||
     (process.env.NODE_ENV !== "production" ? "http://127.0.0.1:8000" : "");
   if (!url) {
-    throw new Error(
+    console.warn(
       "BACKEND_URL env var is required in production. Set it in your Railway / Vercel environment.",
     );
   }
-  return url;
+  return url || "http://127.0.0.1:8000";
 })();
 
 const RT_COOKIE = "spinr_admin_rt";
 const CSRF_COOKIE = "spinr_admin_csrf";
 // Both cookies live as long as the refresh token so they expire together.
-const SESSION_MAX_AGE = 30 * 24 * 60 * 60; // 30 days — matches backend refresh token TTL
+const SESSION_MAX_AGE = 7 * 24 * 60 * 60; // 7 days
 
 export async function POST(req: NextRequest) {
   const request_id = randomUUID();

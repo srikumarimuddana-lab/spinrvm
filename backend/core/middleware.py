@@ -2,7 +2,6 @@ import uuid
 from urllib.parse import urlparse
 
 import jwt
-
 from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
@@ -149,7 +148,7 @@ def _extract_user_id(request: Request) -> str | None:
         auth = request.headers.get("Authorization", "")
         if not auth.startswith("Bearer "):
             return None
-        token = auth[len("Bearer "):]
+        token = auth[len("Bearer ") :]
         payload = jwt.decode(token, options={"verify_signature": False})
         sub = payload.get("sub")
         return str(sub) if sub is not None else None

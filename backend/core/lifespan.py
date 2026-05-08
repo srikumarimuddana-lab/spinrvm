@@ -288,6 +288,27 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to import T4A annual job loop: {e}", exc_info=True)
 
+    # Stuck ride sweeper — cancels rides that have been in 'searching' for
+    # more than 5 minutes. Recovers rides whose in-process asyncio timeout
+    # was lost due to a pod restart. Atomic claim pattern ensures only one
+    # replica acts on each ride.
+    try:
+        from utils.stuck_ride_sweeper import stuck_ride_sweeper_loop
+
+        _spawn("stuck_ride_sweeper (60s)", stuck_ride_sweeper_loop)
+    except Exception as e:
+        logger.error(f"Failed to import stuck ride sweeper: {e}", exc_info=True)
+
+    # Push notification retry loop — re-attempts FCM/Expo deliveries for
+    # dispatch and safety priority pushes that failed on first attempt.
+    # Uses exponential back-off (60 s × 2^attempt) up to _MAX_ATTEMPTS=5.
+    try:
+        from utils.push_retry import push_retry_loop
+
+        _spawn("push_retry (30s)", push_retry_loop)
+    except Exception as e:
+        logger.error(f"Failed to import push retry loop: {e}", exc_info=True)
+
     # Loop watchdog — scans heartbeats every 5 minutes and posts a
     # Slack-compatible alert when any loop has gone stale.  No-op when
     # ALERT_WEBHOOK_URL is unset.
@@ -305,6 +326,8 @@ async def lifespan(app: FastAPI):
             "retention_purge (24h)",
             "stripe_reconcile (24h)",
             "t4a_annual_job (yearly Feb 28)",
+            "stuck_ride_sweeper (60s)",
+            "push_retry (30s)",
         ]
     )
 

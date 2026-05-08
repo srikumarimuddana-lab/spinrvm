@@ -1134,12 +1134,33 @@ async def _send_expo_push(token: str, title: str, body: str, data: Dict[str, str
         return False
 
 
-async def send_push_notification(user_id: str, title: str, body: str, data: Dict[str, str] | None = None):
+async def send_push_notification(
+    user_id: str,
+    title: str,
+    body: str,
+    data: Dict[str, str] | None = None,
+    priority: str = "normal",
+):
     """Send a push notification to a user.
 
     Routes automatically: Expo push tokens go via Expo's REST API; all other
     tokens are assumed to be FCM and sent via Firebase Admin SDK.
+
+    Dispatch and safety priority pushes are written to the push_retry_queue
+    table first so that a transient FCM/Expo outage doesn't silently drop a
+    ride offer or SOS alert.  Normal (informational) pushes continue to use
+    the existing direct-send path.
     """
+    if priority in ("dispatch", "safety"):
+        try:
+            from utils.push_retry import enqueue_push
+            await enqueue_push(user_id, title, body, data, priority=priority)
+            return True
+        except Exception as exc:
+            logger.warning(
+                f"push enqueue failed, falling back to direct send: {exc}"
+            )
+
     user = await db.find_one("users", {"id": user_id})
     if not user or not user.get("fcm_token"):
         logger.info(f"No push token for user {user_id}")

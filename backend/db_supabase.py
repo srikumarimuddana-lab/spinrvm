@@ -716,6 +716,26 @@ async def get_driver_by_user_id_cached(user_id: str) -> Optional[Dict[str, Any]]
     return driver
 
 
+async def get_service_area_for_point(lat: float, lng: float) -> Optional[Dict[str, Any]]:
+    """Return the first active service area containing (lat, lng) via PostGIS RPC, or None."""
+    if not supabase:
+        return None
+
+    def _call():
+        res = supabase.rpc(
+            "get_service_area_for_point",
+            {"lat": lat, "lng": lng},
+        ).execute()
+        rows = _rows_from_res(res)
+        return rows[0] if rows else None
+
+    try:
+        return await run_sync(_call)
+    except Exception as exc:
+        logger.error(f"get_service_area_for_point failed: {exc}", exc_info=True)
+        return None
+
+
 async def find_nearby_drivers(lat: float, lng: float, radius_meters: float) -> List[Dict[str, Any]]:
     """Use PostGIS RPC to find nearby drivers."""
     if not supabase:
@@ -781,6 +801,45 @@ async def set_driver_available(driver_id: str, available: bool = True, total_rid
     user_id = result.get("user_id") if isinstance(result, dict) else None
     await invalidate_driver_cache(driver_id=driver_id, user_id=user_id)
     return result
+
+
+async def match_and_claim_driver(
+    vehicle_type_id: str,
+    pickup_lat: float,
+    pickup_lng: float,
+    radius_km: float,
+    min_rating: float = 0.0,
+) -> Optional[Dict[str, Any]]:
+    """Atomically find and claim the nearest available driver via PostGIS RPC.
+
+    Returns the claimed driver row, or None if no eligible driver is available.
+    Uses SELECT ... FOR UPDATE SKIP LOCKED in the DB — safe under concurrent dispatch.
+    """
+    if not supabase:
+        return None
+
+    def _call():
+        res = supabase.rpc(
+            "match_and_claim_driver",
+            {
+                "p_vehicle_type_id": vehicle_type_id,
+                "p_pickup_lat": pickup_lat,
+                "p_pickup_lng": pickup_lng,
+                "p_radius_km": radius_km,
+                "p_min_rating": min_rating,
+            },
+        ).execute()
+        rows = _rows_from_res(res)
+        return rows[0] if rows else None
+
+    try:
+        result = await run_sync(_call)
+        if result:
+            await invalidate_driver_cache(driver_id=result["id"])
+        return result
+    except Exception as exc:
+        logger.error(f"match_and_claim_driver RPC failed: {exc}", exc_info=True)
+        return None
 
 
 async def claim_driver_atomic(driver_id: str) -> bool:

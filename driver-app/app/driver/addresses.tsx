@@ -21,25 +21,35 @@ import api from '@shared/api/client';
 import { useLanguageStore } from '../../store/languageStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { newPlacesSessionToken } from '../../utils/placesSession';
 
-const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || '';
+interface AutocompletePrediction {
+    place_id: string;
+    description: string;
+}
 
-/** Geocode a free-text address into {lat, lng}.
- *  Falls back to null if the API is unavailable or returns no results. */
+/** Geocode a free-text address into {lat, lng} via the backend Places proxy.
+ *  Uses one Places billing session (autocomplete → details = $0.017 flat)
+ *  instead of a direct Geocoding API call. Falls back to null on no result. */
 async function geocodeAddress(address: string): Promise<{ lat: number; lng: number } | null> {
-    if (!GOOGLE_MAPS_API_KEY) return null;
+    const sessionToken = newPlacesSessionToken();
     try {
-        const encoded = encodeURIComponent(address);
-        const res = await fetch(
-            `https://maps.googleapis.com/maps/api/geocode/json?address=${encoded}&key=${GOOGLE_MAPS_API_KEY}`
+        const acParams = new URLSearchParams({ input: address, session_token: sessionToken });
+        const ac = await api.get<{ predictions: AutocompletePrediction[] }>(
+            `/maps/places/autocomplete?${acParams.toString()}`,
         );
-        const data = await res.json();
-        if (data.status === 'OK' && data.results?.length > 0) {
-            const { lat, lng } = data.results[0].geometry.location;
-            return { lat, lng };
-        }
+        const placeId = ac.data?.predictions?.[0]?.place_id;
+        if (!placeId) return null;
+
+        const detailsParams = new URLSearchParams({ place_id: placeId, session_token: sessionToken });
+        const details = await api.get<{ lat: number | null; lng: number | null }>(
+            `/maps/places/details?${detailsParams.toString()}`,
+        );
+        const { lat, lng } = details.data || {};
+        if (lat == null || lng == null) return null;
+        return { lat, lng };
     } catch {
-        // Network or parse error — caller handles null
+        // Network, auth, or budget-circuit-breaker error — caller handles null
     }
     return null;
 }

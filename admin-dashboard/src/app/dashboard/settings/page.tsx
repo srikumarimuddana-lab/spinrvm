@@ -78,6 +78,9 @@ export default function SettingsPage() {
             setSettings(updated);
             setSaved(true);
             setTimeout(() => setSaved(false), 2000);
+            if (updated?.audit_log_id) {
+                toast({ title: "Settings saved", description: `Ref: ${updated.audit_log_id}` });
+            }
         } catch {
         } finally {
             setSaving(false);

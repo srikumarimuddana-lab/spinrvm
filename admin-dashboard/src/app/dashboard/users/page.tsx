@@ -42,11 +42,13 @@ import { Users, Search, Mail, Phone, MapPin, Star, Calendar, Car, ShieldCheck, D
 import { formatDate } from "@/lib/utils";
 import { getUsersPaginated, updateUserStatus, getStats, getUserWallet, creditUserWallet, debitUserWallet } from "@/lib/api";
 import { useRequireModule } from "@/hooks/useRequireModule";
+import { useToast } from "@/components/ui/use-toast";
 
 const PAGE_SIZE = 50;
 
 export default function UsersPage() {
     const { allowed } = useRequireModule("users");
+    const { toast } = useToast();
     const [users, setUsers] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
@@ -98,11 +100,15 @@ export default function UsersPage() {
         setWalletError("");
         try {
             const fn = action === "credit" ? creditUserWallet : debitUserWallet;
-            await fn(selectedUser.id, parseFloat(walletAmount), walletReason.trim()); // backend converts to Decimal
+            const result = await fn(selectedUser.id, parseFloat(walletAmount), walletReason.trim()); // backend converts to Decimal
             const refreshed = await getUserWallet(selectedUser.id);
             setWalletData(refreshed);
             setWalletAmount("");
             setWalletReason("");
+            toast({
+                title: `Wallet ${action === "credit" ? "credited" : "debited"}`,
+                description: result?.audit_log_id ? `Ref: ${result.audit_log_id}` : "Operation successful",
+            });
         } catch (e: any) {
             setWalletError(e?.message || `Failed to ${action}`);
         } finally {

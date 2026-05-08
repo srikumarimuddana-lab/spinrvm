@@ -129,10 +129,11 @@ async def admin_update_settings(settings: SettingsUpdateRequest, admin: dict = D
 
     # Audit log — record which keys changed, never the values.
     changed_keys = list(update_fields.keys())
+    audit_id = str(uuid.uuid4())
     await db_supabase.insert_one(
         "audit_logs",
         {
-            "id": str(uuid.uuid4()),
+            "id": audit_id,
             "actor_id": admin["id"],
             "actor_role": admin.get("role"),
             "action": "settings_updated",
@@ -143,7 +144,7 @@ async def admin_update_settings(settings: SettingsUpdateRequest, admin: dict = D
         },
     )
 
-    return {"message": "Settings updated"}
+    return {"message": "Settings updated", "audit_log_id": audit_id}
 
 
 # ---------- Heat Map Settings ----------

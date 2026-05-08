@@ -153,10 +153,11 @@ async def admin_credit_wallet(
         metadata={"admin_id": admin["id"], "reason": req.reason},
     )
 
+    audit_id = str(uuid.uuid4())
     await db_supabase.insert_one(
         "audit_logs",
         {
-            "id": str(uuid.uuid4()),
+            "id": audit_id,
             "actor_id": admin["id"],
             "actor_role": admin.get("role"),
             "action": "wallet_credit",
@@ -176,6 +177,7 @@ async def admin_credit_wallet(
     return {
         "balance": _money_str(new_balance),
         "transaction_id": txn["id"],
+        "audit_log_id": audit_id,
     }
 
 
@@ -228,10 +230,11 @@ async def admin_debit_wallet(
         metadata={"admin_id": admin["id"], "reason": req.reason},
     )
 
+    audit_id = str(uuid.uuid4())
     await db_supabase.insert_one(
         "audit_logs",
         {
-            "id": str(uuid.uuid4()),
+            "id": audit_id,
             "actor_id": admin["id"],
             "actor_role": admin.get("role"),
             "action": "wallet_debit",
@@ -251,4 +254,5 @@ async def admin_debit_wallet(
     return {
         "balance": _money_str(new_balance),
         "transaction_id": txn["id"],
+        "audit_log_id": audit_id,
     }

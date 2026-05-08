@@ -135,6 +135,67 @@ async def test_skips_when_company_not_active():
 
 
 @pytest.mark.asyncio
+async def test_concurrent_replicas_use_same_stripe_idempotency_key():
+    """Two replica instances processing the same wallet simultaneously must
+    produce the same Stripe idempotency_key so Stripe deduplicates the charge.
+
+    The key is derived from (wallet_id, date, today_sum_cents, topup_amount_cents).
+    Both replicas see the same today_sum (no top-up has cleared between reads),
+    so the key is identical and Stripe fires only one charge.
+    """
+    import asyncio
+
+    wallets = [
+        {
+            "id": "w1",
+            "company_id": "c1",
+            "balance": "30.00",
+            "auto_topup_enabled": True,
+            "auto_topup_threshold": "100.00",
+            "auto_topup_amount": "500.00",
+            "auto_topup_daily_cap": "5000.00",
+        }
+    ]
+    company = {"id": "c1", "stripe_customer_id": "cus_X", "status": "active"}
+    intent = MagicMock(id="pi_auto")
+    captured_keys: list[str] = []
+
+    def capture_idempotency(**kwargs):
+        captured_keys.append(kwargs.get("idempotency_key", ""))
+        return intent
+
+    with (
+        patch(
+            "utils.corporate_autotopup.list_wallets_needing_autotopup",
+            AsyncMock(return_value=wallets),
+        ),
+        patch(
+            "utils.corporate_autotopup.get_corporate_account_by_id",
+            AsyncMock(return_value=company),
+        ),
+        patch(
+            "utils.corporate_autotopup.sum_autotopups_today",
+            AsyncMock(return_value=0),
+        ),
+        patch(
+            "utils.corporate_autotopup.get_default_payment_method",
+            AsyncMock(return_value="pm_1"),
+        ),
+        patch("stripe.PaymentIntent.create", side_effect=capture_idempotency),
+        patch(
+            "utils.corporate_autotopup.get_app_settings",
+            AsyncMock(return_value={"stripe_secret_key": "sk_test"}),
+        ),
+    ):
+        from utils.corporate_autotopup import run_autotopup_tick
+
+        await asyncio.gather(run_autotopup_tick(), run_autotopup_tick())
+
+    assert len(captured_keys) == 2, "Both replicas called Stripe"
+    assert captured_keys[0] == captured_keys[1], "Idempotency keys must match so Stripe deduplicates the charge"
+
+
+@pytest.mark.asyncio
 async def test_no_op_when_stripe_secret_missing():
     with (
         patch(

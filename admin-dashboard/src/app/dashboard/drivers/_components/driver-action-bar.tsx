@@ -80,7 +80,10 @@ export default function DriverActionBar({ driver, onActionComplete }: DriverActi
                 const targetStatus = actionDialog.action.replace("override_", "");
                 await overrideDriverStatus(driver.id, targetStatus, reason.trim() || undefined);
             } else {
-                await driverAction(driver.id, actionDialog.action, reason.trim() || undefined);
+                const result = await driverAction(driver.id, actionDialog.action, reason.trim() || undefined);
+                if (result?.audit_log_id) {
+                    toast({ title: "Action recorded", description: `Ref: ${result.audit_log_id}` });
+                }
             }
             setActionDialog(null);
             onActionComplete();

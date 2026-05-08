@@ -140,18 +140,16 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         '@react-native-firebase/app-check',
         // SDK 55 / RN 0.85.2 androidx.* deps require compileSdk 36 (build tools
         // 36.0.0 provisioned by EAS). LogRocket requires minSdkVersion 25.
-        // Kotlin pinned to 2.0.21 (NOT 2.1.20) to match ksp 2.0.21-1.0.28 that
-        // EAS ships — Kotlin 2.1.20 + ksp 2.0.21 = NoSuchMethodError at
-        // :expo-updates:kspReleaseKotlin (KotlinTypeMapper$Companion API moved
-        // between versions). The build log warning is explicit: "ksp-2.0.21-
-        // 1.0.28 is too old for kotlin-2.1.20. ... downgrade kotlin-gradle-
-        // plugin to 2.0.21".
+        // Kotlin pinned to 2.2.21 — Option C strategy. See docs/android-build-strategy.md
+        // for full context. Summary: Stripe SDK 23.3+ is built with Kotlin 2.2.21 metadata,
+        // so we bump our compiler to match rather than pin Stripe back. ksp must match
+        // (handled by withKspVersion plugin below).
         ['expo-build-properties', {
             android: {
                 minSdkVersion: 25,
                 compileSdkVersion: 36,
                 targetSdkVersion: 36,
-                kotlinVersion: '2.0.21',
+                kotlinVersion: '2.2.21',
             }
         }],
         // Belt-and-suspenders: re-stamps android.compileSdkVersion=36 and
@@ -160,11 +158,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // requested 36 — keeping this plugin AFTER expo-build-properties guarantees
         // useExpoVersionCatalog() sees 36 when it seeds the expoLibs catalog.
         './plugins/withForceCompileSdk',
-        // Pin Stripe Android SDK to 21.6.0 (last Kotlin-2.0.21-compatible release).
-        // stripe-react-native@0.63.0 defaults to 23.3.+ which is Kotlin 2.2.x and
-        // produces metadata-version-mismatch errors against our Kotlin 2.0.21
-        // compiler. See plugin comments for trade-offs.
-        './plugins/withStripeAndroidPin',
+        // Pin ksp gradle plugin to match our Kotlin (2.2.21 → 2.2.21-2.0.5). Defeats the
+        // timing bug in expo-updates/android/build.gradle that resolves stale ksp
+        // versions when rootProject.kotlinVersion isn't yet set at buildscript-eval time.
+        // See plugin file comments for the full diagnosis.
+        './plugins/withKspVersion',
         '@logrocket/react-native',
     ],
     experiments: {

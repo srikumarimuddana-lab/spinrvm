@@ -214,15 +214,15 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
             android: { appCheckProviderFactory: 'playIntegrity' },
         }],
         // SDK 55 / RN 0.85.2 androidx.* deps require compileSdk 36. LogRocket
-        // requires minSdkVersion 25. Kotlin pinned to 2.0.21 (NOT 2.1.20) to
-        // match ksp 2.0.21-1.0.28 that EAS ships — Kotlin 2.1.20 + ksp 2.0.21
-        // = NoSuchMethodError at :expo-updates:kspReleaseKotlin.
+        // requires minSdkVersion 25. Kotlin pinned to 2.2.21 — Option C strategy.
+        // See docs/android-build-strategy.md. ksp must match (handled by
+        // withKspVersion plugin below).
         ['expo-build-properties', {
             android: {
                 minSdkVersion: 25,
                 compileSdkVersion: 36,
                 targetSdkVersion: 36,
-                kotlinVersion: '2.0.21',
+                kotlinVersion: '2.2.21',
             }
         }],
         // Belt-and-suspenders: re-stamps android.compileSdkVersion=36 and
@@ -231,6 +231,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // requested 36 — keeping this plugin AFTER expo-build-properties guarantees
         // useExpoVersionCatalog() sees 36 when it seeds the expoLibs catalog.
         './plugins/withForceCompileSdk',
+        // Pin ksp gradle plugin to match our Kotlin (2.2.21 → 2.2.21-2.0.5). Defeats the
+        // timing bug in expo-updates/android/build.gradle that resolves stale ksp
+        // versions when rootProject.kotlinVersion isn't yet set at buildscript-eval time.
+        // See plugin file comments for the full diagnosis.
+        './plugins/withKspVersion',
         '@logrocket/react-native',
     ],
     experiments: {

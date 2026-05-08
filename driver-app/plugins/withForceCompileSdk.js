@@ -19,6 +19,11 @@ const path = require('path');
 // SDK 55 / RN 0.85.2 androidx.* deps (browser:1.9.0, core:1.17.0, activity:1.12.4,
 // navigationevent:1.0.2) require compileSdk 36; otherwise :app:checkReleaseAarMetadata
 // fails the build.
+//
+// Removal criteria: delete this plugin when Expo SDK ≥56 ships compileSdk 36 as default
+// AND useExpoVersionCatalog() bridges gradle.properties values reliably on EAS
+// (verified by a build whose [ExpoRootProject] log line shows compileSdk: 36 with this
+// plugin DISABLED in app.config.ts). See docs/android-build-strategy.md.
 const COMPILE_SDK = '36';
 const TARGET_SDK = '36';
 

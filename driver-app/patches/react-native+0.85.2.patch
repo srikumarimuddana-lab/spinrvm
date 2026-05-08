@@ -1,0 +1,157 @@
+diff --git a/node_modules/react-native/Libraries/Components/ActivityIndicator/ActivityIndicator.js b/node_modules/react-native/Libraries/Components/ActivityIndicator/ActivityIndicator.js
+index 0000000..0000001 100644
+--- a/node_modules/react-native/Libraries/Components/ActivityIndicator/ActivityIndicator.js
++++ b/node_modules/react-native/Libraries/Components/ActivityIndicator/ActivityIndicator.js
+@@ -17,10 +17,37 @@ import StyleSheet, {type ColorValue} from '../../StyleSheet/StyleSheet';
+ import View from '../View/View';
+ import * as React from 'react';
+
+-const PlatformActivityIndicator =
+-  Platform.OS === 'android'
+-    ? require('../ProgressBarAndroid/ProgressBarAndroid').default
+-    : require('./ActivityIndicatorViewNativeComponent').default;
++// PATCH (spinr rider-app/driver-app):
++// RN 0.85.2's Android ActivityIndicator path imports ProgressBarAndroid, whose
++// codegenNativeComponent('AndroidProgressBar', { interfaceOnly: true }) returns
++// a non-renderable object under the New Architecture (Bridgeless), throwing
++// "Element type is invalid... got: object" at render time.
++// JS-only fallback below renders a styled View. Honors `animating`,
++// `hidesWhenStopped`, `color`, and forwards size via the parent's `style`.
++function AndroidActivityIndicatorJSFallback(props: $FlowFixMe): React.Node {
++  const {animating, color, hidesWhenStopped, style, ...rest} = props;
++  if (animating === false && hidesWhenStopped !== false) {
++    return null;
++  }
++  return (
++    <View
++      style={[
++        {
++          borderRadius: 9999,
++          backgroundColor: color != null ? color : '#999999',
++          opacity: animating === false ? 0 : 0.55,
++        },
++        style,
++      ]}
++      {...rest}
++    />
++  );
++}
++
++const PlatformActivityIndicator =
++  Platform.OS === 'android'
++    ? AndroidActivityIndicatorJSFallback
++    : require('./ActivityIndicatorViewNativeComponent').default;
+
+ const GRAY = '#999999';
+
+diff --git a/node_modules/react-native/Libraries/Modal/Modal.js b/node_modules/react-native/Libraries/Modal/Modal.js
+index 0000000..0000002 100644
+--- a/node_modules/react-native/Libraries/Modal/Modal.js
++++ b/node_modules/react-native/Libraries/Modal/Modal.js
+@@ -17,8 +17,105 @@ import type {DirectEventHandler} from '../Types/CodegenTypes';
+ import {type ColorValue} from '../StyleSheet/StyleSheet';
+ import {type EventSubscription} from '../vendor/emitter/EventEmitter';
+ import NativeModalManager from './NativeModalManager';
+-import RCTModalHostView from './RCTModalHostViewNativeComponent';
++import _NativeRCTModalHostView from './RCTModalHostViewNativeComponent';
+ import VirtualizedLists from '@react-native/virtualized-lists';
++import BackHandler from '../Utilities/BackHandler';
+ import * as React from 'react';
+
++// PATCH (spinr rider-app/driver-app):
++// RN 0.85.2's RCTModalHostView is declared as
++// codegenNativeComponent('ModalHostView', { interfaceOnly: true,
++// paperComponentName: 'RCTModalHostView' }). Under the New Architecture
++// (Bridgeless), the runtime fallback `requireNativeComponent` returns a
++// non-renderable object, throwing "Element type is invalid... got: object"
++// at the moment Modal renders <RCTModalHostView>. This blocks every
++// callsite that uses Modal (CustomAlert and ~10 dialogs across both apps).
++//
++// Strategy: keep the native path for iOS (works correctly there). On
++// Android, render a JS-only View overlay that preserves the props that
++// matter to existing callsites:
++//   - visible / transparent / backdrop
++//   - onRequestClose for hardware back
++//   - onShow lifecycle
++//   - onStartShouldSetResponder touch isolation
++//   - testID for tests/accessibility
++// Trade-offs: skips fade/slide animation (CustomAlert does its own
++// animation; other callsites rarely rely on built-in fade); status bar
++// control delegates to whatever the calling screen does. The overlay uses
++// position:absolute + zIndex/elevation 99999 — sufficient for all current
++// callsites which render at screen level. When upstream RN fixes the
++// codegen issue this patch becomes a no-op and can be deleted with no
++// app-code changes.
++function AndroidJSModalFallback(props: $FlowFixMe): React.Node {
++  const {
++    children,
++    visible,
++    transparent,
++    backdropColor,
++    onRequestClose,
++    onShow,
++    onStartShouldSetResponder,
++    testID,
++  } = props;
++
++  React.useEffect(() => {
++    if (visible !== true) {
++      return;
++    }
++    if (typeof onShow === 'function') {
++      onShow();
++    }
++    if (typeof onRequestClose !== 'function') {
++      return;
++    }
++    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
++      onRequestClose();
++      return true;
++    });
++    return () => {
++      sub.remove();
++    };
++  }, [visible, onShow, onRequestClose]);
++
++  if (visible !== true) {
++    return null;
++  }
++
++  return (
++    <View
++      testID={testID}
++      collapsable={false}
++      pointerEvents="box-none"
++      onStartShouldSetResponder={onStartShouldSetResponder}
++      style={{
++        position: 'absolute',
++        top: 0,
++        left: 0,
++        right: 0,
++        bottom: 0,
++        zIndex: 99999,
++        elevation: 99999,
++        backgroundColor:
++          transparent === true ? 'transparent' : (backdropColor != null ? backdropColor : 'white'),
++      }}>
++      {children}
++    </View>
++  );
++}
++
++// `Platform` is declared via require() further down in this file (commonJS
++// style). To avoid a temporal-dead-zone reference here, we resolve the
++// platform branch lazily inside a forwardRef wrapper. The Android JS
++// fallback ignores `ref` (no native instance to measure); iOS forwards
++// the ref to the native RCTModalHostView so existing modalRef consumers
++// keep working.
++const RCTModalHostView: $FlowFixMe = React.forwardRef(
++  function RCTModalHostView(props: $FlowFixMe, ref: $FlowFixMe): React.Node {
++    if (Platform.OS === 'android') {
++      return <AndroidJSModalFallback {...props} />;
++    }
++    return <_NativeRCTModalHostView {...props} ref={ref} />;
++  },
++);
++
+ const ScrollView = require('../Components/ScrollView/ScrollView').default;

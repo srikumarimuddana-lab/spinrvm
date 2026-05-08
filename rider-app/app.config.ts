@@ -154,6 +154,12 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
                 kotlinVersion: '2.0.21',
             }
         }],
+        // Belt-and-suspenders: re-stamps android.compileSdkVersion=36 and
+        // android.targetSdkVersion=36 into gradle.properties. EAS build #59fcaa6b
+        // showed [ExpoRootProject] compileSdk: 35 even though expo-build-properties
+        // requested 36 — keeping this plugin AFTER expo-build-properties guarantees
+        // useExpoVersionCatalog() sees 36 when it seeds the expoLibs catalog.
+        './plugins/withForceCompileSdk',
         '@logrocket/react-native',
     ],
     experiments: {

@@ -626,7 +626,7 @@ async def admin_driver_action(driver_id: str, req: DriverActionRequest, admin: d
         req.reason or "",
         {"old_status": current_status, "new_status": updates.get("status"), "reason": req.reason},
     )
-    await log_admin_action(
+    audit_id = await log_admin_action(
         admin,
         f"driver_{req.action}",
         "drivers",
@@ -672,6 +672,7 @@ async def admin_driver_action(driver_id: str, req: DriverActionRequest, admin: d
     return {
         "message": f"Driver {req.action}d successfully",
         "new_status": updates.get("status", current_status),
+        "audit_log_id": audit_id,
     }
 
 

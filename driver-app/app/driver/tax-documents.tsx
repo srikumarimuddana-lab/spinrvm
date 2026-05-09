@@ -7,8 +7,8 @@ import {
     FlatList,
     ActivityIndicator,
     Linking,
-    RefreshControl,
 } from 'react-native';
+import SafeRefreshControl from '../../components/SafeRefreshControl';
 import CustomAlert, { AlertButton } from '@shared/components/CustomAlert';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -208,7 +208,7 @@ function TaxDocumentsScreen() {
                     }
                     ListEmptyComponent={renderEmpty}
                     refreshControl={
-                        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
+                        <SafeRefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
                     }
                 />
             )}

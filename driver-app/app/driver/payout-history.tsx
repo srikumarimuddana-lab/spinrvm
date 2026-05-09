@@ -5,8 +5,8 @@ import {
     StyleSheet,
     FlatList,
     TouchableOpacity,
-    RefreshControl,
 } from 'react-native';
+import SafeRefreshControl from '../../components/SafeRefreshControl';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -150,7 +150,7 @@ export default function PayoutHistoryScreen() {
                 removeClippedSubviews={true}
                 ListEmptyComponent={renderEmpty}
                 refreshControl={
-                    <RefreshControl
+                    <SafeRefreshControl
                         refreshing={isLoading}
                         onRefresh={() => fetchPayoutHistory()}
                         tintColor={colors.primary}

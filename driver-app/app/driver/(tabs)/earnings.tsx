@@ -8,9 +8,9 @@ import {
   Dimensions,
   Platform,
   ActivityIndicator,
-  RefreshControl,
   FlatList,
 } from 'react-native';
+import SafeRefreshControl from '../../../components/SafeRefreshControl';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -229,7 +229,7 @@ function EarningsScreen() {
         style={styles.content}
         contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) + 24 }}
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
+        refreshControl={<SafeRefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
       >
         {/* Weekly Earnings Forecast (Feature B) */}
         {forecast && (

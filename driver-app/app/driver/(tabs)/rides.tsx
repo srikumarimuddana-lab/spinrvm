@@ -7,9 +7,9 @@ import {
   FlatList,
   Platform,
   ActivityIndicator,
-  RefreshControl,
   Animated,
 } from 'react-native';
+import SafeRefreshControl from '../../../components/SafeRefreshControl';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -302,7 +302,7 @@ export default function RidesScreen() {
             index,
           })}
           refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
+            <SafeRefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
           }
           ListEmptyComponent={
             <View style={styles.emptyStateContainer}>

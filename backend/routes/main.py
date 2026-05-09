@@ -32,11 +32,12 @@ async def health_check(request: Request = None):
     """
     # ── DB check ────────────────────────────────────────────────────────────
     db_ok = False
+    db_info: dict = {}
     db_error: str = ""
     try:
         import db_supabase  # noqa: PLC0415
 
-        await db_supabase.ping()
+        db_info = await db_supabase.ping()
         db_ok = True
     except Exception:  # noqa: S110
         logger.warning("health_check: db_supabase absolute import failed", exc_info=True)
@@ -44,10 +45,12 @@ async def health_check(request: Request = None):
         try:
             from .. import db_supabase as _db  # noqa: PLC0415
 
-            await _db.ping()
+            db_info = await _db.ping()
             db_ok = True
         except Exception as exc:
             db_error = str(exc)
+            if hasattr(exc, "details"):
+                db_info = exc.details
 
     # ── Loop liveness ────────────────────────────────────────────────────────
     loop_status: dict = {"healthy": True, "loops": {}}
@@ -73,9 +76,10 @@ async def health_check(request: Request = None):
 
     # ── Aggregate ────────────────────────────────────────────────────────────
     overall_healthy = db_ok and loop_status.get("healthy", True)
+    db_payload = {"status": "ok", **db_info} if db_ok else {"status": "error", "error": db_error, **db_info}
     payload = {
         "status": "healthy" if overall_healthy else "degraded",
-        "db": "ok" if db_ok else db_error,
+        "db": db_payload,
         "loops": loop_status.get("loops", {}),
     }
     if not overall_healthy:

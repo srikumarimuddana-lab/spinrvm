@@ -491,6 +491,25 @@ async def invalidate_driver_cache(driver_id: Optional[str] = None, user_id: Opti
         logger.debug(f"[CACHE] Failed to invalidate driver cache d={driver_id} u={user_id}: {exc}")
 
 
+async def _pre_invalidate_for_table(
+    table: str,
+    filters: Optional[Dict[str, Any]],
+) -> None:
+    """Pre-write cache eviction to close the read-between-write-and-delete
+    race window. A concurrent reader that misses cache after this call will
+    hit the DB; the post-write invalidation then cleans up any reader that
+    slipped in between."""
+    if not isinstance(filters, dict):
+        return
+    if table == "users":
+        await invalidate_user_cache(filters.get("id"))
+    elif table == "drivers":
+        await invalidate_driver_cache(
+            driver_id=filters.get("id"),
+            user_id=filters.get("user_id"),
+        )
+
+
 # ============ Corporate Accounts Functions ============
 
 
@@ -772,6 +791,8 @@ async def set_driver_available(driver_id: str, available: bool = True, total_rid
         logger.warning("[GO-ONLINE] set_driver_available: supabase client is None!")
         return None
 
+    await invalidate_driver_cache(driver_id=driver_id)
+
     def _update():
         payload: Dict[str, Any] = {"is_available": available}
         logger.info(
@@ -846,6 +867,8 @@ async def claim_driver_atomic(driver_id: str) -> bool:
     """Atomically set is_available = false for driver if currently available."""
     if not supabase:
         return False
+
+    await invalidate_driver_cache(driver_id=driver_id)
 
     def _claim():
         res = (
@@ -1246,6 +1269,8 @@ async def update_one(table: str, filters: Dict[str, Any], update: Dict[str, Any]
             logger.warning("[GO-ONLINE] db_supabase.update_one: supabase client is None!")
         return None
 
+    await _pre_invalidate_for_table(table, filters)
+
     def _fn():
         update_data = update.get("$set", update)
         update_data = _serialize_for_api(update_data)
@@ -1310,6 +1335,8 @@ async def update_one(table: str, filters: Dict[str, Any], update: Dict[str, Any]
 async def delete_many(table: str, filters: Dict[str, Any]):
     if not supabase:
         return None
+
+    await _pre_invalidate_for_table(table, filters)
 
     def _fn():
         q = supabase.table(table).delete()
@@ -2729,12 +2756,48 @@ async def upsert_corporate_policy(company_id: str, patch: Dict[str, Any]) -> Dic
     return await run_sync(_ins)
 
 
-async def ping() -> None:
-    """Minimal liveness probe — executes a trivial Supabase query to verify
-    the DB connection is functional. Raises on any error so callers can
-    return 503 to load-balancers."""
+async def ping() -> dict:
+    """Liveness probe with latency and circuit breaker telemetry.
+
+    Returns a dict with ping_ms and circuit_state for the health
+    endpoint. Raises DatabaseError (not raw exceptions) so callers
+    get a structured 503 with diagnostics.
+    """
 
     def _check():
         supabase.table("app_settings").select("key").limit(1).execute()
 
-    await run_sync(_check)
+    t0 = _time.monotonic()
+    try:
+        await run_sync(_check)
+        latency_ms = (_time.monotonic() - t0) * 1000
+        _metric_gauge("spinr_db_ping_duration_ms", latency_ms)
+        _metric_inc("spinr_db_ping_total", {"outcome": "success"})
+        _metric_gauge(
+            "spinr_db_circuit_state",
+            {"closed": 0, "half_open": 0.5, "open": 1}.get(_breaker._state, 0),
+            {"state": _breaker._state},
+        )
+        return {
+            "ping_ms": round(latency_ms, 1),
+            "circuit_state": _breaker._state,
+        }
+    except Exception as exc:
+        latency_ms = (_time.monotonic() - t0) * 1000
+        _metric_gauge("spinr_db_ping_duration_ms", latency_ms)
+        _metric_inc("spinr_db_ping_total", {"outcome": "failed"})
+        _metric_gauge(
+            "spinr_db_circuit_state",
+            {"closed": 0, "half_open": 0.5, "open": 1}.get(_breaker._state, 0),
+            {"state": _breaker._state},
+        )
+        logger.error(
+            f"[DB] ping failed in {latency_ms:.0f}ms, circuit={_breaker._state}: {exc}"
+        )
+        raise DatabaseError(
+            details={
+                "original": str(exc),
+                "ping_ms": round(latency_ms, 1),
+                "circuit_state": _breaker._state,
+            }
+        ) from exc

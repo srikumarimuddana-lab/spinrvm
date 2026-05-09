@@ -807,6 +807,22 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                             msg_data["type"] = "chat_message"
                             await manager.send_personal_message(msg_data, target)
 
+            elif data.get("type") in ("get_drivers_snapshot", "get_rides_snapshot") and client_type == "admin":
+                try:
+                    from ..routes.admin.monitoring import fetch_monitoring_drivers, fetch_monitoring_rides
+                except ImportError:
+                    from routes.admin.monitoring import fetch_monitoring_drivers, fetch_monitoring_rides  # type: ignore[no-redef]
+                try:
+                    if data["type"] == "get_drivers_snapshot":
+                        drivers = await fetch_monitoring_drivers()
+                        await websocket.send_json({"type": "drivers_snapshot", "drivers": drivers})
+                    else:
+                        rides = await fetch_monitoring_rides()
+                        await websocket.send_json({"type": "rides_snapshot", "rides": rides})
+                except Exception as _snap_exc:
+                    logger.warning(f"[WS] snapshot fetch failed for {connection_key}: {_snap_exc}")
+                    await websocket.send_json({"type": "error", "message": "snapshot_failed"})
+
             else:
                 logger.warning(f"Unknown WS message type: {data.get('type')}")
 

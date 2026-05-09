@@ -34,10 +34,20 @@ try:
     from . import db_supabase
     from .dependencies import get_current_user
     from .geo_utils import get_service_area_polygon
+    from .models.ride_status import RideStatus
+    from .services.fare_service import DEFAULT_FARE, calculate_fare
+    from .services.fare_service import _d as _fare_d
+    from .services.fare_service import _f as _fare_f
+    from .utils.surge_engine import SURGE_CAP
 except ImportError:
     import db_supabase
     from dependencies import get_current_user
     from geo_utils import get_service_area_polygon
+    from models.ride_status import RideStatus
+    from services.fare_service import DEFAULT_FARE, calculate_fare
+    from services.fare_service import _d as _fare_d
+    from services.fare_service import _f as _fare_f
+    from utils.surge_engine import SURGE_CAP
 
 # Legacy alias for call sites that still reference the pre-refactor ``db`` module.
 db = db_supabase
@@ -340,7 +350,7 @@ async def admin_reply_ticket(ticket_id: str, req: ReplyToTicketRequest):
         {"id": ticket_id},
         {
             "replies": replies,
-            "status": "in_progress",
+            "status": RideStatus.IN_PROGRESS,
             "updated_at": datetime.now(timezone.utc),
         },
     )
@@ -771,33 +781,39 @@ async def fare_estimate(
     vehicle_type_id: str = Query(...),
 ):
     """Full fare estimate including base fare, area fees, and taxes."""
-    # Get fare config
     fare_config = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("fare_configs", {"vehicle_type_id": vehicle_type_id}, limit=1)
     )
-    if fare_config:
-        base_fare = fare_config.get("base_fare", 3.50)
-        distance_fare = distance_km * fare_config.get("per_km_rate", 1.50)
-        time_fare = duration_minutes * fare_config.get("per_minute_rate", 0.25)
-        booking_fee = fare_config.get("booking_fee", 2.0)
-        minimum_fare = fare_config.get("minimum_fare", 8.0)
-    else:
-        base_fare, distance_fare = 3.50, distance_km * 1.50
-        time_fare, booking_fee, minimum_fare = duration_minutes * 0.25, 2.0, 8.0
+    fare_info = fare_config if fare_config else dict(DEFAULT_FARE)
 
-    subtotal = max(base_fare + distance_fare + time_fare + booking_fee, minimum_fare)
+    # Resolve surge from the service area covering the pickup point
+    all_areas = await db_supabase.get_rows("service_areas", {"is_active": True}, limit=100)
+    surge = Decimal("1")
+    for area in all_areas:
+        poly = get_service_area_polygon(area)
+        if poly and point_in_polygon(pickup_lat, pickup_lng, poly):
+            if area.get("surge_active") and area.get("surge_multiplier", 1.0) > 1.0:
+                surge = min(_fare_d(area["surge_multiplier"]), _fare_d(SURGE_CAP))
+            break
+
+    fb = calculate_fare(fare_info, distance_km, duration_minutes, surge=surge)
+    subtotal = _fare_f(fb.total_fare)
 
     # Calculate area fees + taxes
-    fees_result = await calculate_all_fees(pickup_lat, pickup_lng, dropoff_lat, dropoff_lng, distance_km, subtotal)
+    fees_result = await calculate_all_fees(
+        pickup_lat, pickup_lng, dropoff_lat, dropoff_lng, distance_km, subtotal,
+        _all_areas=all_areas,
+    )
 
     grand_total = round(subtotal + fees_result["fees_total"] + fees_result["tax_amount"], 2)
 
     return {
-        "base_fare": round(base_fare, 2),
-        "distance_fare": round(distance_fare, 2),
-        "time_fare": round(time_fare, 2),
-        "booking_fee": booking_fee,
-        "subtotal": round(subtotal, 2),
+        "base_fare": _fare_f(fb.base_fare),
+        "distance_fare": _fare_f(fb.distance_fare),
+        "time_fare": _fare_f(fb.time_fare),
+        "booking_fee": _fare_f(fb.booking_fee),
+        "surge_multiplier": _fare_f(fb.surge_multiplier),
+        "subtotal": subtotal,
         "area_fees": fees_result["fees"],
         "area_fees_total": fees_result["fees_total"],
         "tax_amount": fees_result["tax_amount"],
@@ -882,43 +898,19 @@ async def schedule_ride(req: ScheduleRideRequest):
     if scheduled_dt < datetime.now(timezone.utc) + timedelta(minutes=15):
         raise HTTPException(status_code=400, detail="Scheduled time must be at least 15 minutes from now.")
 
-    # Compute fare like a normal ride
-    # Look up fare config
-    areas = await db_supabase.get_rows("service_areas", None, limit=100)
-    # For simplicity, use first active area (in production, match pickup location to area polygon)
     fare_config = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("fare_configs", {"vehicle_type_id": req.vehicle_type_id}, limit=1)
     )
+    fare_info = fare_config if fare_config else dict(DEFAULT_FARE)
 
-    if fare_config:
-        base_fare = fare_config.get("base_fare", 3.50)
-        distance_fare = req.distance_km * fare_config.get("per_km_rate", 1.50)
-        time_fare = req.duration_minutes * fare_config.get("per_minute_rate", 0.25)
-        booking_fee = fare_config.get("booking_fee", 2.0)
-        total = max(base_fare + distance_fare + time_fare + booking_fee, fare_config.get("minimum_fare", 8.0))
-    else:
-        base_fare = 3.50
-        distance_fare = req.distance_km * 1.50
-        time_fare = req.duration_minutes * 0.25
-        booking_fee = 2.0
-        total = max(base_fare + distance_fare + time_fare + booking_fee, 8.0)
+    # CLAUDE.md: "Never apply surge to scheduled rides booked outside the
+    # surge window" — scheduled rides lock the fare at booking time at 1.0×.
+    surge = Decimal("1")
 
-    # Apply surge if active
-    for area in areas:
-        if area.get("surge_active") and area.get("surge_multiplier", 1.0) > 1.0:
-            surge = area["surge_multiplier"]
-            distance_fare *= surge
-            time_fare *= surge
-            total = max(
-                base_fare + distance_fare + time_fare + booking_fee,
-                fare_config.get("minimum_fare", 8.0) if fare_config else 8.0,
-            )
-            break
-
-    # Apply airport fee if pickup or dropoff is in an airport zone
     airport_result = await calculate_airport_fee(req.pickup_lat, req.pickup_lng, req.dropoff_lat, req.dropoff_lng)
     airport_fee = airport_result["airport_fee"]
-    total += airport_fee
+
+    fb = calculate_fare(fare_info, req.distance_km, req.duration_minutes, surge=surge, airport_fee=airport_fee)
 
     ride = {
         "id": str(uuid.uuid4()),
@@ -932,16 +924,16 @@ async def schedule_ride(req: ScheduleRideRequest):
         "dropoff_lng": req.dropoff_lng,
         "distance_km": req.distance_km,
         "duration_minutes": req.duration_minutes,
-        "base_fare": round(base_fare, 2),
-        "distance_fare": round(distance_fare, 2),
-        "time_fare": round(time_fare, 2),
-        "booking_fee": booking_fee,
-        "airport_fee": round(airport_fee, 2),
+        "base_fare": _fare_f(fb.base_fare),
+        "distance_fare": _fare_f(fb.distance_fare),
+        "time_fare": _fare_f(fb.time_fare),
+        "booking_fee": _fare_f(fb.booking_fee),
+        "airport_fee": _fare_f(fb.airport_fee),
         "airport_zone_name": airport_result.get("airport_zone_name"),
-        "total_fare": round(total, 2),
-        "driver_earnings": round(total - booking_fee, 2),
-        "admin_earnings": round(booking_fee + airport_fee, 2),
-        "status": "scheduled",
+        "total_fare": _fare_f(fb.total_fare),
+        "driver_earnings": _fare_f(fb.driver_earnings),
+        "admin_earnings": _fare_f(fb.admin_earnings),
+        "status": RideStatus.SCHEDULED,
         "is_scheduled": True,
         "scheduled_time": scheduled_dt,
         "stops": req.stops,
@@ -967,10 +959,10 @@ async def cancel_scheduled_ride(ride_id: str):
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
-    if ride.get("status") != "scheduled":
+    if ride.get("status") != RideStatus.SCHEDULED:
         raise HTTPException(status_code=400, detail="Only scheduled rides can be cancelled this way")
 
-    await db_supabase.update_ride(ride_id, {"status": "cancelled", "cancelled_at": datetime.now(timezone.utc)})
+    await db_supabase.update_ride(ride_id, {"status": RideStatus.CANCELLED, "cancelled_at": datetime.now(timezone.utc)})
     return {"cancelled": True}
 
 
@@ -983,7 +975,7 @@ async def add_stop(ride_id: str, req: AddStopRequest):
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
-    if ride.get("status") in ["completed", "cancelled"]:
+    if ride.get("status") in RideStatus.terminal_statuses():
         raise HTTPException(status_code=400, detail="Cannot add stops to completed/cancelled rides")
 
     stops = ride.get("stops", [])
@@ -1259,7 +1251,7 @@ async def check_scheduled_rides():
             scheduled = await db_supabase.get_rows(
                 "rides",
                 {
-                    "status": "scheduled",
+                    "status": RideStatus.SCHEDULED,
                     "is_scheduled": True,
                 },
                 limit=50,
@@ -1275,7 +1267,7 @@ async def check_scheduled_rides():
                     await db_supabase.update_ride(
                         ride["id"],
                         {
-                            "status": "searching",
+                            "status": RideStatus.SEARCHING,
                             "ride_requested_at": datetime.now(timezone.utc),
                             "updated_at": datetime.now(timezone.utc),
                         },

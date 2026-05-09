@@ -251,19 +251,14 @@ index 1fabac7..2beef39 100644
  const View = require('../Components/View/View').default;
  const AppContainer = require('../ReactNative/AppContainer').default;
 diff --git a/node_modules/react-native/src/private/components/virtualview/VirtualViewNativeComponent.js b/node_modules/react-native/src/private/components/virtualview/VirtualViewNativeComponent.js
-index 4ba5b68..feb51d0 100644
+index 4ba5b68..a746a97 100644
 --- a/node_modules/react-native/src/private/components/virtualview/VirtualViewNativeComponent.js
 +++ b/node_modules/react-native/src/private/components/virtualview/VirtualViewNativeComponent.js
-@@ -18,45 +18,21 @@ import type {HostComponent} from '../../types/HostComponent';
+@@ -18,46 +18,12 @@ import type {HostComponent} from '../../types/HostComponent';
  
  import codegenNativeComponent from '../../../../Libraries/Utilities/codegenNativeComponent';
  
-+// PATCH (spinr driver-app):
-+// The @react-native/babel-plugin-codegen parser cannot resolve nested Readonly<>
-+// event types (throws "Unable to determine event arguments for onModeChange").
-+// Flatten the struct so codegen can parse it. VirtualView is an internal RN
-+// component not used by the app — this patch just prevents the build error.
- export type NativeModeChangeEvent = Readonly<{
+-export type NativeModeChangeEvent = Readonly<{
 -  /**
 -   * Virtualization mode of the target view.
 -   *
@@ -274,7 +269,7 @@ index 4ba5b68..feb51d0 100644
 -   * WORKAROUND: As of this writing, codegen doesn't support enums, so we need
 -   * to convert `number` into an enum in `VirtualView`.
 -   */
-   mode: Int32,
+-  mode: Int32,
 -
 -  /**
 -   * Rect of the target view, relative to the nearest ancestor scroll container.
@@ -302,14 +297,35 @@ index 4ba5b68..feb51d0 100644
 -    width: Double,
 -    height: Double,
 -  }>,
-+  targetRectX: Double,
-+  targetRectY: Double,
-+  targetRectWidth: Double,
-+  targetRectHeight: Double,
-+  thresholdRectX: Double,
-+  thresholdRectY: Double,
-+  thresholdRectWidth: Double,
-+  thresholdRectHeight: Double,
- }>;
+-}>;
++// PATCH (spinr driver-app):
++// The @react-native/babel-plugin-codegen parser cannot resolve type aliases
++// for event types (throws "Unable to determine event arguments for onModeChange").
++// Inline the event struct directly in DirectEventHandler<> so codegen can parse it.
++// VirtualView is an internal RN component not used by the app — this just
++// prevents the build error.
  
  type VirtualViewNativeProps = Readonly<{
+   ...ViewProps,
+@@ -85,10 +51,17 @@ type VirtualViewNativeProps = Readonly<{
+    */
+   renderState: Int32,
+ 
+-  /**
+-   * See `NativeModeChangeEvent`.
+-   */
+-  onModeChange?: ?DirectEventHandler<NativeModeChangeEvent>,
++  onModeChange?: ?DirectEventHandler<$ReadOnly<{
++    mode: Int32,
++    targetRectX: Double,
++    targetRectY: Double,
++    targetRectWidth: Double,
++    targetRectHeight: Double,
++    thresholdRectX: Double,
++    thresholdRectY: Double,
++    thresholdRectWidth: Double,
++    thresholdRectHeight: Double,
++  }>>,
+ }>;
+ 
+ export default codegenNativeComponent<VirtualViewNativeProps>('VirtualView', {

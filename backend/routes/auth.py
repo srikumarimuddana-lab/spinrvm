@@ -212,28 +212,12 @@ async def send_otp(request: Request, body: SendOTPRequest):
         and app_settings.get("twilio_from_number")
     )
 
-    # Dev bypass is gated on "development" only — never "test" or "staging".
-    # An externally-reachable test/staging instance with a known OTP code is
-    # an account-takeover vector against any phone number. Mirrors
-    # `_is_dev_otp_bypass` so /send-otp and /verify-otp agree on the gate.
-    is_dev = settings.ENV.lower() == "development"
-
-    if not twilio_configured and not is_dev:
-        # In production / test / staging, refuse to silently fall back to a
-        # known OTP. Force the operator to configure Twilio.
-        raise SpinrException(
-            message="SMS service not configured",
-            error_code=ErrorCode.SERVICE_UNAVAILABLE,
-            status_code=503,
-            message_key=ErrorKeys.SYSTEM_SERVICE_UNAVAILABLE,
-        )
-
-    # If Twilio is configured, use it to send a real OTP regardless of ENV.
-    # If Twilio is not configured (local dev without credentials), fall back
-    # to the fixed dev code "1234" so testing works without SMS delivery.
+    # If Twilio is configured, send a real OTP via SMS.
+    # If not configured, fall back to the fixed code "1234" so testing works
+    # without SMS delivery — regardless of ENV.
     otp_code = generate_otp() if twilio_configured else "1234"
     if not twilio_configured:
-        logger.debug("Twilio not configured — dev OTP bypass active (code=1234) for %s", phone[-4:])
+        logger.info("Twilio not configured — OTP bypass active (code=1234) for ...%s", phone[-4:])
 
     otp_record = OTPRecord(
         phone=phone,

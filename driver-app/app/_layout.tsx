@@ -1,7 +1,14 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { View, ActivityIndicator, StyleSheet, Text, Platform } from 'react-native';
+import { View, ActivityIndicator, StyleSheet, Text, Platform, LogBox } from 'react-native';
+
+// LogBox's notification container uses a codegen native component that's
+// broken under Bridgeless mode (RN 0.85.2). Disable it in dev to prevent
+// the "_LogBoxNotificationContainer" crash. Errors still appear in Metro.
+if (__DEV__) {
+  LogBox.ignoreAllLogs(true);
+}
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold, PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans';
 import { SafeAreaProvider } from 'react-native-safe-area-context';

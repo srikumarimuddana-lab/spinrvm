@@ -34,7 +34,7 @@ import type {
   SelectedItem,
 } from "./types";
 
-const POLL_INTERVAL_MS = 15_000;
+const POLL_INTERVAL_MS = 60_000;
 
 export default function MonitoringPage() {
   const { allowed } = useRequireModule("rides");
@@ -196,10 +196,40 @@ export default function MonitoringPage() {
         }
         break;
       }
+      case "drivers_snapshot": {
+        const incomingIds = new Set<string>();
+        for (const d of event.drivers) {
+          incomingIds.add(d.id);
+          applyDriver(d);
+        }
+        for (const id of driversMapRef.current.keys()) {
+          if (!incomingIds.has(id)) {
+            mapHandlesRef.current?.removeDriverMarker(id);
+            driversMapRef.current.delete(id);
+          }
+        }
+        refreshCounts();
+        break;
+      }
+      case "rides_snapshot": {
+        const incomingIds = new Set<string>();
+        for (const r of event.rides) {
+          incomingIds.add(r.id);
+          applyRide(r);
+        }
+        for (const id of ridesMapRef.current.keys()) {
+          if (!incomingIds.has(id)) {
+            mapHandlesRef.current?.removeRideMarkers(id);
+            ridesMapRef.current.delete(id);
+          }
+        }
+        refreshCounts();
+        break;
+      }
     }
   }, [applyDriver, applyRide, followMode, pushAlert, refreshCounts, selected]);
 
-  const { status: wsStatus } = useMonitoringSocket({ token, onEvent: handleWsEvent });
+  const { status: wsStatus, requestSnapshots } = useMonitoringSocket({ token, onEvent: handleWsEvent });
 
   // ── Initial data load + polling ─────────────────────────────────────
   const loadData = useCallback(async () => {

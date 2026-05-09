@@ -15,12 +15,14 @@ try:
     from .. import db_supabase
     from ..db_supabase import increment_promo_uses
     from ..dependencies import get_admin_user, get_current_user
+    from ..models.ride_status import RideStatus
     from ..utils.datetime_utils import parse_iso_utc
     from ..utils.rate_limiter import promo_available_limit, promo_validate_limit
 except ImportError:
     import db_supabase
     from db_supabase import increment_promo_uses
     from dependencies import get_admin_user, get_current_user
+    from models.ride_status import RideStatus
     from utils.datetime_utils import parse_iso_utc
     from utils.rate_limiter import promo_available_limit, promo_validate_limit
 
@@ -151,7 +153,7 @@ async def validate_promo(
 
     # 6. First ride only
     if promo.get("first_ride_only"):
-        ride_count = await db_supabase.count_documents("rides", {"rider_id": current_user["id"], "status": "completed"})
+        ride_count = await db_supabase.count_documents("rides", {"rider_id": current_user["id"], "status": RideStatus.COMPLETED})
         if ride_count > 0:
             raise HTTPException(status_code=400, detail="This promo is for first-time riders only")
 
@@ -172,7 +174,7 @@ async def validate_promo(
             "rides",
             {
                 "rider_id": current_user["id"],
-                "status": "completed",
+                "status": RideStatus.COMPLETED,
                 "ride_completed_at": {"$gte": cutoff},
             },
         )
@@ -186,7 +188,7 @@ async def validate_promo(
     max_rides = promo.get("max_total_rides", 0)
     if min_rides > 0 or max_rides > 0:
         total_rides = await db_supabase.count_documents(
-            "rides", {"rider_id": current_user["id"], "status": "completed"}
+            "rides", {"rider_id": current_user["id"], "status": RideStatus.COMPLETED}
         )
         if min_rides > 0 and total_rides < min_rides:
             raise HTTPException(
@@ -287,13 +289,13 @@ async def get_available_promos(
 
     # Pre-fetch user data for targeting checks
     user = await db_supabase.get_user_by_id(current_user["id"])
-    total_rides = await db_supabase.count_documents("rides", {"rider_id": current_user["id"], "status": "completed"})
+    total_rides = await db_supabase.count_documents("rides", {"rider_id": current_user["id"], "status": RideStatus.COMPLETED})
     recent_cutoff_30 = (now - timedelta(days=30)).isoformat()
     await db_supabase.count_documents(
         "rides",
         {
             "rider_id": current_user["id"],
-            "status": "completed",
+            "status": RideStatus.COMPLETED,
             "ride_completed_at": {"$gte": recent_cutoff_30},
         },
     )
@@ -357,7 +359,7 @@ async def get_available_promos(
                 cutoff = (now - timedelta(days=inactive_days)).isoformat()
                 recent = await db_supabase.count_documents(
                     "rides",
-                    {"rider_id": current_user["id"], "status": "completed", "ride_completed_at": {"$gte": cutoff}},
+                    {"rider_id": current_user["id"], "status": RideStatus.COMPLETED, "ride_completed_at": {"$gte": cutoff}},
                 )
                 if recent > 0:
                     continue  # noqa: E701

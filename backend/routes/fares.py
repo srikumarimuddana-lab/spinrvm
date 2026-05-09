@@ -10,11 +10,13 @@ from fastapi import APIRouter, Query
 try:
     from .. import db_supabase
     from ..geo_utils import get_service_area_polygon, point_in_polygon
+    from ..services.fare_service import DEFAULT_FARE
     from ..utils.redis_client import redis_delete_pattern, redis_get, redis_set
     from ..utils.surge_engine import SURGE_CAP
 except ImportError:
     import db_supabase
     from geo_utils import get_service_area_polygon, point_in_polygon
+    from services.fare_service import DEFAULT_FARE
     from utils.redis_client import redis_delete_pattern, redis_get, redis_set
     from utils.surge_engine import SURGE_CAP
 
@@ -106,18 +108,18 @@ async def get_public_service_areas():
 def _build_default_fares(vt_list, surge=1.0):
     """Default fare rows when no service area / fare_configs apply.
 
-    Money values serialised as exact 2-dp Decimal strings; surge_multiplier
-    stays float (it is a ratio, not a money amount).
+    Values sourced from fare_service.DEFAULT_FARE so there is exactly one
+    place to update platform defaults.
     """
     return [
         serialize_doc(
             {
                 "vehicle_type": vt,
-                "base_fare": _money_str(3.50),
-                "per_km_rate": _money_str(1.50),
-                "per_minute_rate": _money_str(0.25),
-                "minimum_fare": _money_str(8.00),
-                "booking_fee": _money_str(2.00),
+                "base_fare": _money_str(DEFAULT_FARE["base_fare"]),
+                "per_km_rate": _money_str(DEFAULT_FARE["per_km_rate"]),
+                "per_minute_rate": _money_str(DEFAULT_FARE["per_minute_rate"]),
+                "minimum_fare": _money_str(DEFAULT_FARE["minimum_fare"]),
+                "booking_fee": _money_str(DEFAULT_FARE["booking_fee"]),
                 "surge_multiplier": _fd(surge),
             }
         )

@@ -28,12 +28,15 @@ if SUPABASE_URL and SUPABASE_KEY:
             headers=dict(_old.headers),
             http2=False,
             timeout=httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0),
+            limits=httpx.Limits(keepalive_expiry=15),
+            transport=httpx.HTTPTransport(retries=1),
             verify=True,
         )
-    except Exception:  # noqa: S110
-        # If the internal API changes, fall back gracefully — the retry
-        # in run_sync still handles the transient error.
-        pass
+    except Exception as _patch_exc:
+        import logging as _logging
+        _logging.getLogger(__name__).warning(
+            "Failed to patch Supabase postgrest client to HTTP/1.1: %s", _patch_exc
+        )
 else:
     # Supabase not configured; code should handle supabase being None
     supabase = None

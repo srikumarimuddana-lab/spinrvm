@@ -1102,15 +1102,14 @@ async def admin_get_payouts(
         logger.error(f"Failed to fetch payouts: {e}")
         payouts = []
 
-    # Enrich with driver names
+    driver_ids = list({p["driver_id"] for p in payouts if p.get("driver_id")})
+    drivers_map, users_map = await _batch_fetch_drivers_and_users([], driver_ids)
+
     enriched = []
     for p in payouts:
-        driver = await db.find_one("drivers", {"id": p.get("driver_id")}) if p.get("driver_id") else None
-        driver_name = "Unknown"
-        if driver and driver.get("user_id"):
-            user = await db.find_one("users", {"id": driver["user_id"]})
-            if user:
-                driver_name = _user_display_name(user)
+        driver = drivers_map.get(p.get("driver_id")) or {}
+        user = users_map.get(driver.get("user_id")) if driver.get("user_id") else None
+        driver_name = _user_display_name(user) if user else "Unknown"
         enriched.append({**p, "driver_name": driver_name})
     return enriched
 

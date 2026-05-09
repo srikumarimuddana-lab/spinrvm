@@ -21,6 +21,7 @@ try:
     from ..services.dispatch_service import (
         filter_and_rank_drivers,
     )
+    from ..services.fare_service import calculate_fare
     from ..settings_loader import get_app_settings
     from ..sms_service import send_sms
     from ..socket_manager import manager
@@ -55,6 +56,7 @@ except ImportError:
         DispatchService,
         filter_and_rank_drivers,
     )
+    from services.fare_service import calculate_fare
     from settings_loader import get_app_settings
     from sms_service import send_sms
     from socket_manager import manager
@@ -458,7 +460,7 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
             ride_id,
             {
                 "driver_id": selected_driver["id"],
-                "status": "driver_assigned",
+                "status": RideStatus.DRIVER_ASSIGNED,
                 "driver_notified_at": datetime.now(timezone.utc),
                 "updated_at": datetime.now(timezone.utc),
             },
@@ -615,7 +617,7 @@ async def _offer_timeout_handler(
             return
 
         # Only act if the ride hasn't progressed past assignment.
-        if ride.get("status") != "driver_assigned" or ride.get("driver_id") != driver_id:
+        if ride.get("status") != RideStatus.DRIVER_ASSIGNED or ride.get("driver_id") != driver_id:
             return
 
         logger.info(
@@ -637,7 +639,7 @@ async def _offer_timeout_handler(
             {"id": ride_id},
             {
                 "$set": {
-                    "status": "searching",
+                    "status": RideStatus.SEARCHING,
                     "driver_id": None,
                     "driver_notified_at": None,
                     "updated_at": datetime.now(timezone.utc),
@@ -745,13 +747,8 @@ async def estimate_ride(
 
     estimates = []
     for fare_info in fares:
-        # Use Decimal for all monetary arithmetic (CQ-009 — eliminates float rounding errors)
         surge = Decimal("1.0") if corporate_bypass else _d(fare_info.get("surge_multiplier", 1.0))
-        distance_fare = _round(_d(fare_info["per_km_rate"]) * _d(distance_km) * surge)
-        time_fare = _round(_d(fare_info["per_minute_rate"]) * _d(duration_minutes) * surge)
-        booking_fee = _d(fare_info.get("booking_fee", 2.0))
-        total_fare = _round(_d(fare_info["base_fare"]) + distance_fare + time_fare + booking_fee + _d(airport_fee))
-        total_fare = max(total_fare, _d(fare_info["minimum_fare"]))
+        fb = calculate_fare(fare_info, distance_km, duration_minutes, surge=surge, airport_fee=airport_fee)
 
         # Check real driver availability for this vehicle type
         vt_id = fare_info["vehicle_type"].get("id")
@@ -777,7 +774,7 @@ async def estimate_ride(
             dropoff_lat=body.dropoff_lat,
             dropoff_lng=body.dropoff_lng,
             surge_multiplier=round(float(surge), 2),
-            total_fare=_f(total_fare),
+            total_fare=_f(fb.total_fare),
         )
 
         estimates.append(
@@ -785,15 +782,12 @@ async def estimate_ride(
                 "vehicle_type": fare_info["vehicle_type"],
                 "distance_km": round(distance_km, 2),
                 "duration_minutes": duration_minutes,
-                "base_fare": _money_str(_d(fare_info["base_fare"])),
-                "distance_fare": _money_str(distance_fare),
-                "time_fare": _money_str(time_fare),
-                "booking_fee": _money_str(booking_fee),
-                # surge_multiplier is a ratio, not money, but the Ride model
-                # types it as float — keep float on the wire so existing
-                # rider-app parsers don't trip on a string.
+                "base_fare": _money_str(fb.base_fare),
+                "distance_fare": _money_str(fb.distance_fare),
+                "time_fare": _money_str(fb.time_fare),
+                "booking_fee": _money_str(fb.booking_fee),
                 "surge_multiplier": round(float(surge), 2),
-                "total_fare": _money_str(total_fare),
+                "total_fare": _money_str(fb.total_fare),
                 "available": is_available,
                 "eta_minutes": eta_minutes,
                 "driver_count": driver_count,
@@ -817,10 +811,10 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
     await asyncio.sleep(timeout_seconds)
     try:
         current_ride = await db_supabase.get_ride(r_id)
-        if current_ride and current_ride.get("status") == "searching":
+        if current_ride and current_ride.get("status") == RideStatus.SEARCHING:
             now = datetime.now(timezone.utc)
             base_update = {
-                "status": "cancelled",
+                "status": RideStatus.CANCELLED,
                 "cancelled_at": now,
                 "cancellation_reason": "No nearby drivers found. Please try again.",
                 "updated_at": now,
@@ -848,7 +842,7 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
             )
             await manager.broadcast_ride_status(
                 r_id,
-                "cancelled",
+                RideStatus.CANCELLED,
                 rider_id=current_ride["rider_id"],
                 reason="no_drivers_found",
                 is_auto=True,
@@ -905,7 +899,7 @@ async def create_ride(body: CreateRideRequest, request: Request = None, current_
         if not rider_row or not rider_row.get("stripe_customer_id"):
             raise HTTPException(status_code=400, detail="No payment method on file. Please add a card first.")
 
-    active_statuses = ["searching", "driver_assigned", "driver_accepted", "driver_arrived", "in_progress"]
+    active_statuses = list(RideStatus.active_statuses())
     existing_ride = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows(
             "rides",
@@ -1013,11 +1007,6 @@ async def create_ride(body: CreateRideRequest, request: Request = None, current_
         logger.info(f"Scheduled ride: surge reset from {float(surge)} to 1.0 for rider={current_user['id']}")
         surge = Decimal("1.0")
 
-    distance_fare = _round(_d(fare_info["per_km_rate"]) * _d(distance_km) * surge)
-    time_fare = _round(_d(fare_info["per_minute_rate"]) * _d(duration_minutes) * surge)
-    booking_fee = _d(fare_info.get("booking_fee", 2.0))
-    base_fare = _d(fare_info["base_fare"])
-
     # Airport surcharge (pickup, dropoff, or any stop in airport sub-region).
     # Reuses the same all_areas list — filters for is_airport locally.
     airport_result = await calculate_airport_fee(
@@ -1031,8 +1020,14 @@ async def create_ride(body: CreateRideRequest, request: Request = None, current_
     airport_fee = _d(airport_result.get("airport_fee", 0.0))
     airport_zone_name = airport_result.get("airport_zone_name")
 
-    total_fare = _round(base_fare + distance_fare + time_fare + booking_fee + airport_fee)
-    total_fare = max(total_fare, _d(fare_info["minimum_fare"]))
+    fb = calculate_fare(fare_info, distance_km, duration_minutes, surge=surge, airport_fee=airport_fee)
+    base_fare = fb.base_fare
+    distance_fare = fb.distance_fare
+    time_fare = fb.time_fare
+    booking_fee = fb.booking_fee
+    total_fare = fb.total_fare
+    driver_earnings = fb.driver_earnings
+    admin_earnings = fb.admin_earnings
 
     # Calculate area fees + taxes (reuses all_areas + pre-resolved match)
     fees_result = {}
@@ -1053,10 +1048,6 @@ async def create_ride(body: CreateRideRequest, request: Request = None, current_
     area_fees_total = fees_result.get("fees_total", 0)
     tax_amount = fees_result.get("tax_amount", 0)
     grand_total = _f(_round(total_fare + _d(area_fees_total) + _d(tax_amount)))
-
-    # Earnings split: Distance fare goes to driver, booking + airport fee goes to admin
-    driver_earnings = _round(base_fare + distance_fare + time_fare)
-    admin_earnings = _round(booking_fee + airport_fee)
 
     # Pre-dispatch corporate policy check (spec §4 — booking phase).
     # Only runs when rider explicitly books with company_allowance payment method.
@@ -1121,7 +1112,7 @@ async def create_ride(body: CreateRideRequest, request: Request = None, current_
         # NOTE: ``requires_wav`` was passed twice (once at line ~1090, again
         # here) — Python 3.11+ raises SyntaxError, blocking module import
         # and the entire test suite. Drop-in fix unblocks Audit-17 Phase 1c.
-        status="searching",
+        status=RideStatus.SEARCHING,
         pickup_otp=hash_otp(pickup_otp_plain),
         ride_requested_at=datetime.now(timezone.utc),
     )
@@ -1273,7 +1264,7 @@ async def create_ride(body: CreateRideRequest, request: Request = None, current_
     def serialize_doc(doc):
         return doc
 
-    if updated_ride and updated_ride.get("status") == "searching":
+    if updated_ride and updated_ride.get("status") == RideStatus.SEARCHING:
         asyncio.create_task(ride_search_timeout(ride.id))
 
     asyncio.create_task(
@@ -1282,7 +1273,7 @@ async def create_ride(body: CreateRideRequest, request: Request = None, current_
             "ride_created",
             "rides",
             ride.id,
-            {"status": updated_ride.get("status") if updated_ride else "searching"},
+            {"status": updated_ride.get("status") if updated_ride else RideStatus.SEARCHING},
         )
     )
     return serialize_doc(updated_ride)
@@ -1297,7 +1288,7 @@ async def get_active_ride(request: Request = None, current_user: dict = Depends(
     """Get rider's current active/pending ride (if any). Used on app launch to resume."""
     # First check for rides that need payment (completed but not paid)
     # Then check for active rides
-    active_statuses = ["searching", "driver_assigned", "driver_accepted", "driver_arrived", "in_progress"]
+    active_statuses = list(RideStatus.active_statuses())
 
     # Check for unpaid completed ride first (must pay before new ride).
     # ``waived_admin`` is the terminal value written by admin force-complete
@@ -1308,7 +1299,7 @@ async def get_active_ride(request: Request = None, current_user: dict = Depends(
             "rides",
             {
                 "rider_id": current_user["id"],
-                "status": "completed",
+                "status": RideStatus.COMPLETED,
                 "payment_status": {"$nin": ["paid", "waived_admin"]},
             },
             limit=1,
@@ -1383,7 +1374,7 @@ async def get_ride_history(
 
     filters: dict = {
         "rider_id": current_user["id"],
-        "status": {"$in": ["completed", "cancelled"]},
+        "status": {"$in": list(RideStatus.terminal_statuses())},
     }
     if cursor_ts:
         filters["created_at"] = {"$lt": cursor_ts}
@@ -1403,7 +1394,7 @@ async def get_ride_history(
     rides = [
         r
         for r in candidates
-        if r.get("status") == "completed" or (r.get("status") == "cancelled" and r.get("driver_id"))
+        if r.get("status") == RideStatus.COMPLETED or (r.get("status") == RideStatus.CANCELLED and r.get("driver_id"))
     ][:limit]
 
     next_cursor = rides[-1]["id"] if len(rides) == limit else None
@@ -1506,7 +1497,7 @@ async def get_ride(ride_id: str, request: Request = None, current_user: dict = D
     # M-4: Expose offer expiry so the rider app can show an accurate
     # countdown progress bar while waiting for the driver to accept.
     # Only meaningful in driver_assigned state; cleared once accepted.
-    if ride.get("status") == "driver_assigned":
+    if ride.get("status") == RideStatus.DRIVER_ASSIGNED:
         driver_notified_at = ride.get("driver_notified_at")
         offer_timeout_seconds = 15
         if get_app_settings:
@@ -1541,7 +1532,7 @@ async def get_ride(ride_id: str, request: Request = None, current_user: dict = D
     # while the trip is active. Retaining exact addresses post-completion
     # enables address-based stalking (attack tree RAT-1). Riders retain their
     # own address history (is_rider check).
-    if is_driver and not is_rider and ride.get("status") in ("completed", "cancelled"):
+    if is_driver and not is_rider and ride.get("status") in RideStatus.terminal_statuses():
         for _addr_key in (
             "pickup_address",
             "dropoff_address",
@@ -1580,7 +1571,7 @@ async def add_tip(
     if ride.get("rider_id") != current_user.get("id"):
         raise HTTPException(status_code=403, detail="Not authorized to tip this ride")
 
-    if ride.get("status") != "completed":
+    if ride.get("status") != RideStatus.COMPLETED:
         raise HTTPException(status_code=400, detail="Can only tip completed rides")
 
     # R-P1-20: Block duplicate tips — one tip per ride.
@@ -2098,7 +2089,7 @@ async def get_share_trip_link(ride_id: str, current_user: dict = Depends(get_cur
     if ride.get("rider_id") != current_user["id"]:
         raise HTTPException(status_code=403, detail="Not authorized to share this ride")
 
-    if ride.get("status") in ["completed", "cancelled"]:
+    if ride.get("status") in RideStatus.terminal_statuses():
         raise HTTPException(status_code=400, detail="Cannot share a completed or cancelled ride")
 
     # Generate or reuse a share token (with creation timestamp for expiry)
@@ -2133,7 +2124,7 @@ async def share_trip_with_contact(
         raise HTTPException(status_code=404, detail="Ride not found")
     if ride.get("rider_id") != current_user["id"]:
         raise HTTPException(status_code=403, detail="Not authorized")
-    if ride.get("status") in ["completed", "cancelled"]:
+    if ride.get("status") in RideStatus.terminal_statuses():
         raise HTTPException(status_code=400, detail="Cannot share a completed or cancelled ride")
 
     # Get or create share token
@@ -2226,7 +2217,7 @@ async def track_shared_ride(share_token: str):
             pass  # Malformed timestamp — allow access but log
             logger.error(f"Malformed shared_trip_token_created_at for ride {ride.get('id')}")
 
-    if ride.get("status") in ["completed", "cancelled"]:
+    if ride.get("status") in RideStatus.terminal_statuses():
         return {
             "status": ride.get("status"),
             "message": "This ride has ended.",
@@ -2269,7 +2260,7 @@ async def rate_driver(
     if not ride or ride.get("rider_id") != current_user["id"]:
         raise HTTPException(status_code=404, detail="Ride not found or unauthorized")
 
-    if ride.get("status") != "completed":
+    if ride.get("status") != RideStatus.COMPLETED:
         raise HTTPException(status_code=400, detail="Ride must be completed before rating")
 
     # Save rating using existing columns (rider_rating = rating rider gave the driver)
@@ -2362,7 +2353,7 @@ async def cancel_ride_rider(ride_id: str, request: Request = None, current_user:
     ride = await _require_ride_in_state_rider(
         ride_id,
         current_user["id"],
-        ("requested", "searching", "driver_assigned", "en_route", "driver_arrived"),
+        ("requested", RideStatus.SEARCHING, RideStatus.DRIVER_ASSIGNED, "en_route", RideStatus.DRIVER_ARRIVED),
     )
     diag_logger.info(
         f"[CANCEL] entry ride_id={ride_id} pre_status={ride.get('status')} driver_id={ride.get('driver_id')}"
@@ -2380,7 +2371,7 @@ async def cancel_ride_rider(ride_id: str, request: Request = None, current_user:
     # Flat $5.00 fee when the driver has already arrived — overrides the
     # time-based check below because the driver has made the full trip to
     # the pickup and the wait is no longer relevant.
-    if ride.get("status") == "driver_arrived" and driver_id:
+    if ride.get("status") == RideStatus.DRIVER_ARRIVED and driver_id:
         charged_admin = cancellation_fee_admin
         charged_driver = Decimal("5.00")
 
@@ -2452,7 +2443,7 @@ async def cancel_ride_rider(ride_id: str, request: Request = None, current_user:
 
     _now = datetime.now(timezone.utc)
     _base_update = {
-        "status": "cancelled",
+        "status": RideStatus.CANCELLED,
         "cancelled_at": _now,
         "cancellation_fee_admin": charged_admin,
         "cancellation_fee_driver": charged_driver,
@@ -2487,7 +2478,7 @@ async def cancel_ride_rider(ride_id: str, request: Request = None, current_user:
         f"post_cancelled_at={verify_ride.get('cancelled_at') if verify_ride else 'ROW_GONE'}"
     )
 
-    if not verify_ride or verify_ride.get("status") != "cancelled":
+    if not verify_ride or verify_ride.get("status") != RideStatus.CANCELLED:
         diag_logger.info(
             f"[CANCEL] SILENT NO-OP: ride_id={ride_id} did not flip to "
             f"'cancelled'. Likely a missing column in the rides table "
@@ -2520,7 +2511,7 @@ async def cancel_ride_rider(ride_id: str, request: Request = None, current_user:
                 f"driver_{driver['user_id']}",
             )
 
-    await manager.broadcast_ride_status(ride_id, "cancelled", reason="rider_cancelled")
+    await manager.broadcast_ride_status(ride_id, RideStatus.CANCELLED, reason="rider_cancelled")
     try:
         await manager.broadcast_to_admins({"type": "ride_cancelled", "ride_id": ride_id, "reason": "rider_cancelled"})
     except Exception as _exc:  # pragma: no cover - best effort
@@ -2559,7 +2550,7 @@ async def add_stop_mid_trip(
         raise HTTPException(status_code=404, detail="Ride not found")
     if ride.get("rider_id") != current_user["id"]:
         raise HTTPException(status_code=403, detail="Not authorized")
-    if ride.get("status") not in ("driver_accepted", "driver_arrived", "in_progress"):
+    if ride.get("status") not in (RideStatus.DRIVER_ACCEPTED, RideStatus.DRIVER_ARRIVED, RideStatus.IN_PROGRESS):
         raise HTTPException(status_code=400, detail="Can only edit stops on an active ride")
 
     stops = ride.get("stops") or []
@@ -2605,7 +2596,7 @@ async def remove_stop_mid_trip(
         raise HTTPException(status_code=404, detail="Ride not found")
     if ride.get("rider_id") != current_user["id"]:
         raise HTTPException(status_code=403, detail="Not authorized")
-    if ride.get("status") not in ("driver_accepted", "driver_arrived", "in_progress"):
+    if ride.get("status") not in (RideStatus.DRIVER_ACCEPTED, RideStatus.DRIVER_ARRIVED, RideStatus.IN_PROGRESS):
         raise HTTPException(status_code=400, detail="Can only edit stops on an active ride")
 
     stops = ride.get("stops") or []
@@ -2747,10 +2738,10 @@ async def get_chat_status(ride_id: str, current_user: dict = Depends(get_current
         raise HTTPException(status_code=404, detail="Ride not found")
 
     status = ride.get("status", "")
-    if status == "cancelled":
+    if status == RideStatus.CANCELLED:
         return {"available": False, "reason": "Ride was cancelled"}
 
-    if status == "completed":
+    if status == RideStatus.COMPLETED:
         completed_at = parse_iso_utc(ride.get("ride_completed_at") or ride.get("updated_at"))
         if completed_at:
             elapsed = (datetime.now(timezone.utc) - completed_at).total_seconds()
@@ -2778,7 +2769,7 @@ async def get_call_info(ride_id: str, current_user: dict = Depends(get_current_u
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
-    if ride.get("status") in ("completed", "cancelled"):
+    if ride.get("status") in RideStatus.terminal_statuses():
         raise HTTPException(status_code=400, detail="Cannot call on a completed or cancelled ride")
 
     is_rider = ride.get("rider_id") == current_user["id"]
@@ -2884,11 +2875,11 @@ async def send_ride_message(
         raise HTTPException(status_code=404, detail="Ride not found")
 
     # Block chat on cancelled rides
-    if ride.get("status") == "cancelled":
+    if ride.get("status") == RideStatus.CANCELLED:
         raise HTTPException(status_code=400, detail="Cannot send messages on a cancelled ride")
 
     # Post-trip chat window: allow messages for 24h after completion
-    if ride.get("status") == "completed":
+    if ride.get("status") == RideStatus.COMPLETED:
         completed_at = parse_iso_utc(ride.get("ride_completed_at") or ride.get("updated_at"))
         if completed_at and (datetime.now(timezone.utc) - completed_at).total_seconds() > 86400:
             raise HTTPException(status_code=400, detail="Post-trip chat window has expired (24 hours)")
@@ -2948,7 +2939,7 @@ async def cancel_scheduled_ride(ride_id: str, request: Request = None, current_u
             ride_id=ride_id,
             message_key=ErrorKeys.RIDE_NOT_FOUND,
         )
-    if ride.get("status") in ["completed", "cancelled"]:
+    if ride.get("status") in RideStatus.terminal_statuses():
         raise SpinrException(
             message="Ride is already completed or cancelled",
             error_code=ErrorCode.RIDE_ALREADY_CANCELLED,
@@ -2958,7 +2949,7 @@ async def cancel_scheduled_ride(ride_id: str, request: Request = None, current_u
 
     _now = datetime.now(timezone.utc)
     _base = {
-        "status": "cancelled",
+        "status": RideStatus.CANCELLED,
         "cancelled_at": _now,
         "cancellation_reason": "Cancelled by rider (scheduled)",
         "updated_at": _now,
@@ -2991,7 +2982,7 @@ async def simulate_driver_arrival(
     await db_supabase.update_ride(
         ride_id,
         {
-            "status": "driver_arrived",
+            "status": RideStatus.DRIVER_ARRIVED,
             "driver_arrived_at": datetime.now(timezone.utc),
             "updated_at": datetime.now(timezone.utc),
         },
@@ -3016,13 +3007,13 @@ async def rider_start_ride(ride_id: str, request: Request = None, current_user: 
     )
     if not driver_row or ride.get("driver_id") != driver_row["id"]:
         raise HTTPException(status_code=403, detail="Not authorized")
-    if ride.get("status") not in ["driver_arrived"]:
+    if ride.get("status") != RideStatus.DRIVER_ARRIVED:
         raise HTTPException(status_code=400, detail=f"Cannot start ride with status: {ride.get('status')}")
 
     await db_supabase.update_ride(
         ride_id,
         {
-            "status": "in_progress",
+            "status": RideStatus.IN_PROGRESS,
             "ride_started_at": datetime.now(timezone.utc),
             "updated_at": datetime.now(timezone.utc),
         },
@@ -3053,7 +3044,7 @@ async def get_ride_receipt(ride_id: str, current_user: dict = Depends(get_curren
     if ride.get("rider_id") != current_user["id"]:
         raise HTTPException(status_code=403, detail="Not authorized to view this receipt")
 
-    if ride.get("status") not in ["completed", "cancelled"]:
+    if ride.get("status") not in RideStatus.terminal_statuses():
         raise HTTPException(status_code=400, detail="Receipts are only available for completed or cancelled rides")
 
     driver = None
@@ -3092,7 +3083,7 @@ async def get_ride_receipt(ride_id: str, current_user: dict = Depends(get_curren
         "airport_fee": ride.get("airport_fee", 0),
         "booking_fee": ride.get("booking_fee", 0),
         "cancellation_fee": (ride.get("cancellation_fee_admin", 0) + ride.get("cancellation_fee_driver", 0))
-        if ride.get("status") == "cancelled"
+        if ride.get("status") == RideStatus.CANCELLED
         else 0,
         # Itemised charges so the rider receipt and the support audit can
         # reconcile to the cent. tax_breakdown / area_fees_breakdown were
@@ -3155,7 +3146,7 @@ async def safety_checkin_response(
     ride = await db_supabase.get_rows("rides", {"id": ride_id, "rider_id": user_id}, limit=1)
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
-    if ride[0].get("status") != "in_progress":
+    if ride[0].get("status") != RideStatus.IN_PROGRESS:
         raise HTTPException(status_code=409, detail="Ride is not in progress")
 
     # 4-hour TTL mirrors the sent/escalated keys in safety_checkin_loop.

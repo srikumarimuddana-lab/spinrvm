@@ -51,9 +51,8 @@ _FLUSHABLE_PREFIXES = {
 }
 
 
-@router.get("/drivers")
-async def get_monitoring_drivers(current_admin: dict = Depends(get_admin_user)) -> List[Dict[str, Any]]:
-    """Return all drivers with current location and status for the live map."""
+async def fetch_monitoring_drivers() -> List[Dict[str, Any]]:
+    """Core fetcher for driver monitoring data. Called by REST and WS handlers."""
     drivers_res = await run_sync(
         lambda: (
             supabase.table("drivers")
@@ -72,11 +71,6 @@ async def get_monitoring_drivers(current_admin: dict = Depends(get_admin_user)) 
     user_ids = [d["user_id"] for d in drivers if d.get("user_id")]
     driver_ids = [d["id"] for d in drivers]
 
-    # Fan out the three dependent lookups concurrently. They each only
-    # depend on the drivers result; serialising them previously turned
-    # every /drivers call into 4x the PostgREST round-trip time, which
-    # on a Railway → Supabase flake could balloon past 90s before the
-    # circuit breaker tripped.
     users_res, rides_res, present_ids = await asyncio.gather(
         run_sync(
             lambda: (
@@ -95,10 +89,6 @@ async def get_monitoring_drivers(current_admin: dict = Depends(get_admin_user)) 
                 .execute()
             )
         ),
-        # Uber/Lyft-style presence: the DB `is_online` flag is "intent"
-        # (the driver tapped Go Online), presence is "proof" (their app
-        # is still talking to us). A driver is truly online iff both
-        # are true.
         present_driver_ids(driver_ids),
     )
     users_by_id = {u["id"]: u for u in _rows_from_res(users_res)}
@@ -119,13 +109,7 @@ async def get_monitoring_drivers(current_admin: dict = Depends(get_admin_user)) 
                 "photo_url": user.get("profile_image"),
                 "lat": d.get("lat"),
                 "lng": d.get("lng"),
-                # Effective online state (what dashboards should show as the
-                # green badge). Intent AND proof — stops admins seeing ghost
-                # drivers whose sockets died an hour ago.
                 "is_online": intent_online and is_present,
-                # Raw signals, kept on the payload so the dashboard can
-                # tell an operator "intent says yes, but we haven't heard
-                # from them in 90s" when the two disagree.
                 "intent_online": intent_online,
                 "is_present": is_present,
                 "presence_ttl": PRESENCE_TTL,
@@ -144,9 +128,8 @@ async def get_monitoring_drivers(current_admin: dict = Depends(get_admin_user)) 
     return result
 
 
-@router.get("/rides")
-async def get_monitoring_rides(current_admin: dict = Depends(get_admin_user)) -> List[Dict[str, Any]]:
-    """Return all active rides with rider/driver info for the live map."""
+async def fetch_monitoring_rides() -> List[Dict[str, Any]]:
+    """Core fetcher for ride monitoring data. Called by REST and WS handlers."""
     rides_res = await run_sync(
         lambda: (
             supabase.table("rides")
@@ -167,11 +150,6 @@ async def get_monitoring_rides(current_admin: dict = Depends(get_admin_user)) ->
     rider_ids = list({r["rider_id"] for r in rides if r.get("rider_id")})
     driver_ids = list({r["driver_id"] for r in rides if r.get("driver_id")})
 
-    # Riders and the drivers-table lookup are independent — gather them
-    # so the endpoint pays one PostgREST round-trip instead of two.
-    # The driver_users lookup still waits on drivers_map_res because it
-    # needs the user_ids from that row, but everything before it now
-    # runs in parallel.
     riders_res, drivers_map_res = await asyncio.gather(
         run_sync(
             lambda: (
@@ -225,6 +203,18 @@ async def get_monitoring_rides(current_admin: dict = Depends(get_admin_user)) ->
             }
         )
     return result
+
+
+@router.get("/drivers")
+async def get_monitoring_drivers(current_admin: dict = Depends(get_admin_user)) -> List[Dict[str, Any]]:
+    """Return all drivers with current location and status for the live map."""
+    return await fetch_monitoring_drivers()
+
+
+@router.get("/rides")
+async def get_monitoring_rides(current_admin: dict = Depends(get_admin_user)) -> List[Dict[str, Any]]:
+    """Return all active rides with rider/driver info for the live map."""
+    return await fetch_monitoring_rides()
 
 
 # ── Redis monitoring + actions ────────────────────────────────────────

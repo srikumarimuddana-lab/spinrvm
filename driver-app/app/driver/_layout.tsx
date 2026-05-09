@@ -1,5 +1,7 @@
 import React from 'react';
 import { Stack } from 'expo-router';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { queryClient } from '@shared/api/queryClient';
 
 /**
  * Driver stack — wraps the tab group so detail screens (settings, payout,
@@ -23,26 +25,28 @@ import { Stack } from 'expo-router';
  */
 export default function DriverStackLayout() {
   return (
-    <Stack
-      screenOptions={{
-        headerShown: false,
-        animation: 'slide_from_right',
-      }}
-    >
-      <Stack.Screen name="(tabs)" options={{ animation: 'fade' }} />
-      <Stack.Screen name="settings" />
-      <Stack.Screen name="notifications" />
-      <Stack.Screen name="payout" />
-      <Stack.Screen name="payout-history" />
-      <Stack.Screen name="tax-documents" />
-      <Stack.Screen name="referral" />
-      <Stack.Screen name="addresses" />
-      <Stack.Screen name="subscription" />
-      <Stack.Screen name="quests" />
-      <Stack.Screen name="emergency-contacts" />
-      <Stack.Screen name="faq" />
-      <Stack.Screen name="chat" />
-      <Stack.Screen name="ride-detail" />
-    </Stack>
+    <QueryClientProvider client={queryClient}>
+      <Stack
+        screenOptions={{
+          headerShown: false,
+          animation: 'slide_from_right',
+        }}
+      >
+        <Stack.Screen name="(tabs)" options={{ animation: 'fade' }} />
+        <Stack.Screen name="settings" />
+        <Stack.Screen name="notifications" />
+        <Stack.Screen name="payout" />
+        <Stack.Screen name="payout-history" />
+        <Stack.Screen name="tax-documents" />
+        <Stack.Screen name="referral" />
+        <Stack.Screen name="addresses" />
+        <Stack.Screen name="subscription" />
+        <Stack.Screen name="quests" />
+        <Stack.Screen name="emergency-contacts" />
+        <Stack.Screen name="faq" />
+        <Stack.Screen name="chat" />
+        <Stack.Screen name="ride-detail" />
+      </Stack>
+    </QueryClientProvider>
   );
 }

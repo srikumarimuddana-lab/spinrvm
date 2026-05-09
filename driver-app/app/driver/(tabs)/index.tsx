@@ -23,6 +23,8 @@ import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { queryClient } from '@shared/api/queryClient';
 
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || '';
 
@@ -989,8 +991,10 @@ function createStyles(colors: ThemeColors) {
 
 export default function DriverDashboardScreen() {
   return (
-    <ErrorBoundary>
-      <DriverDashboard />
-    </ErrorBoundary>
+    <QueryClientProvider client={queryClient}>
+      <ErrorBoundary>
+        <DriverDashboard />
+      </ErrorBoundary>
+    </QueryClientProvider>
   );
 }

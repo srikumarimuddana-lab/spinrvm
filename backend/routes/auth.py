@@ -286,6 +286,10 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
     phone = body.phone.strip()
     code = body.code.strip()
 
+    # Normalize to E.164 so it matches what send-otp stored
+    _, normalized = validate_phone(phone)
+    phone = normalized or phone
+
     # SEC-008: Reject locked-out phones before touching the DB
     await _check_otp_lockout(phone)
     otp_record = None

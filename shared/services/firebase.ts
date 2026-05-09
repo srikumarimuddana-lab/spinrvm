@@ -57,11 +57,26 @@ export async function initFirebaseServices() {
   }
 
   // 2. App Check — verify requests come from real app
+  // The provider factory ('playIntegrity' / 'deviceCheck') is set natively
+  // via the @react-native-firebase/app-check config plugin in app.config.ts.
+  // Here we configure the runtime provider to match. Without configure(),
+  // initializeAppCheck() throws "no provider or no provider options defined".
   if (appCheck) {
     try {
-      const provider = Platform.OS === 'android'
-        ? appCheck().newReactNativeFirebaseAppCheckProvider()
-        : appCheck().newReactNativeFirebaseAppCheckProvider();
+      const provider = appCheck().newReactNativeFirebaseAppCheckProvider();
+      provider.configure({
+        android: {
+          provider: 'playIntegrity',
+        },
+        apple: {
+          provider: 'deviceCheck',
+        },
+        web: {
+          // Required by the type signature; not used on native.
+          provider: 'reCaptchaV3',
+          siteKey: 'unused',
+        },
+      });
 
       await appCheck().initializeAppCheck({
         provider,

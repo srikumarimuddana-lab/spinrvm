@@ -1,6 +1,6 @@
 # Review Queue
 
-**Pending:** 1
+**Pending:** 2
 **Oldest staged:** 2026-05-04T00:02:54.175468+00:00
 
 Run `python .agent/tools/list_candidates.py` for detail, then:
@@ -10,4 +10,5 @@ Run `python .agent/tools/list_candidates.py` for detail, then:
 
 ## Priority order (top 10)
 
+- **45a2f5eaa1da** (priority=45.90, size=3, rejections=0) — FAILURE in claude-code: Command failed: cd /usr/local/lib/hermes-agent && uv ven
 - **6e3cc3fc1443** (priority=27.69, size=2, rejections=0) — FAILURE in claude-code: Command failed: cd /usr/local/lib/hermes-agent && uv ven

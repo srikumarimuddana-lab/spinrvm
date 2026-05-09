@@ -1,0 +1,30 @@
+{
+  "id": "45a2f5eaa1da",
+  "key": "pattern_claude-code_command_failure_45a2f5",
+  "name": "pattern_claude-code_command_failure_45a2f5",
+  "claim": "FAILURE in claude-code: Command failed: cd /usr/local/lib/hermes-agent && uv venv .venv && rtk uv pip install -e '.[all]' 2>&1 | tail -15. Error: Shell cwd was reset to /home/user/spinrvm | THIS SKILL HAS FAILED 3 TIMES IN 14d. Flag for rewrite.",
+  "conditions": [
+    "bash",
+    "claude-code",
+    "command",
+    "failed",
+    "failure"
+  ],
+  "evidence_ids": [
+    "2026-05-04T00:01:50.165527+00:00",
+    "2026-05-04T00:02:22.344049+00:00",
+    "2026-05-09T17:36:55.936310+00:00"
+  ],
+  "cluster_size": 3,
+  "canonical_salience": 15.299999999999999,
+  "staged_at": "2026-05-09T17:40:23.913544+00:00",
+  "status": "staged",
+  "decisions": [
+    {
+      "ts": "2026-05-09T17:40:23.913544+00:00",
+      "action": "staged",
+      "reviewer": "auto_dream"
+    }
+  ],
+  "rejection_count": 0
+}

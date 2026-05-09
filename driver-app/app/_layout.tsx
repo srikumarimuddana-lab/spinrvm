@@ -19,6 +19,7 @@ import SpinrConfig from '@shared/config/spinr.config';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { OfflineBanner } from '@shared/components/OfflineBanner';
 import { ThemeProvider, useTheme } from '@shared/theme/ThemeContext';
+import { QueryClientProvider } from '@tanstack/react-query';
 import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
 import { queryClient, asyncStoragePersister, QUERY_CACHE_BUSTER } from '@shared/api/queryClient';
 import { captureMessage, setUser } from '@shared/services/errorReporting';
@@ -329,12 +330,14 @@ export default function RootLayout() {
 
   if (!fontsLoaded || fontError || !isAuthInitialized || !isLocationInitialized) {
     return (
-      <ErrorBoundary>
-        <View style={styles.loadingContainer} onLayout={onLoadingLayout}>
-          <Text style={styles.logoText}>Spinr</Text>
-          <ActivityIndicator size="large" color="#FFFFFF" style={{ marginTop: 20 }} />
-        </View>
-      </ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <ErrorBoundary>
+          <View style={styles.loadingContainer} onLayout={onLoadingLayout}>
+            <Text style={styles.logoText}>Spinr</Text>
+            <ActivityIndicator size="large" color="#FFFFFF" style={{ marginTop: 20 }} />
+          </View>
+        </ErrorBoundary>
+      </QueryClientProvider>
     );
   }
 

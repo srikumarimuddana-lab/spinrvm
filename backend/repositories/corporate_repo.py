@@ -1,0 +1,834 @@
+"""Corporate accounts repository — B2B CRUD, members, allowances, wallets, domains.
+
+Extracted from db_supabase.py (Phase 2 of god-object decomposition).
+"""
+
+import re
+from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+from typing import Any, Dict, List, Optional
+
+from loguru import logger
+
+try:
+    from ._base import (
+        _rows_from_res,
+        _serialize_for_api,
+        _single_row_from_res,
+        run_sync,
+        supabase,
+    )
+except ImportError:
+    from repositories._base import (
+        _rows_from_res,
+        _serialize_for_api,
+        _single_row_from_res,
+        run_sync,
+        supabase,
+    )
+
+
+# ============ Corporate Accounts Functions ============
+
+
+async def get_all_corporate_accounts(
+    skip: int = 0, limit: int = 100, search: Optional[str] = None, is_active: Optional[bool] = None
+) -> List[Dict[str, Any]]:
+    """
+    Get all corporate accounts with optional filtering and pagination.
+
+    Args:
+        skip: Number of records to skip
+        limit: Maximum number of records to return
+        search: Search term for company name, contact name, or email
+        is_active: Filter by active status
+
+    Returns:
+        List of corporate accounts
+    """
+    if not supabase:
+        return []
+
+    def _fn():
+        query = supabase.table("corporate_accounts").select("*").range(skip, skip + limit - 1)
+
+        if search:
+            # Escape special PostgREST ilike characters to prevent filter injection
+            safe = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            # Strip characters that could break PostgREST filter syntax
+            safe = re.sub(r"[,\.\(\)]", "", safe)
+            query = query.or_(f"name.ilike.%{safe}%,contact_name.ilike.%{safe}%,contact_email.ilike.%{safe}%")
+
+        if is_active is not None:
+            query = query.eq("is_active", is_active)
+
+        query = query.order("created_at", desc=True)
+        return _rows_from_res(query.execute())
+
+    return await run_sync(_fn)
+
+
+async def get_corporate_account_by_id(validated_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Get a corporate account by ID.
+
+    Args:
+        validated_id: Validated corporate account ID
+
+    Returns:
+        Corporate account data or None if not found
+    """
+    if not supabase:
+        return None
+
+    def _fn():
+        try:
+            res = supabase.table("corporate_accounts").select("*").eq("id", validated_id).single().execute()
+            return _single_row_from_res(res)
+        except Exception as e:
+            # If no rows found, Supabase raises an exception
+            logger.debug(f"No corporate account found with ID {validated_id}: {e}")
+            return None
+
+    return await run_sync(_fn)
+
+
+async def insert_corporate_account(account_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    Insert a new corporate account.
+
+    Args:
+        account_data: Corporate account data to insert
+
+    Returns:
+        Created corporate account data or None if failed
+    """
+    if not supabase:
+        raise RuntimeError("Supabase client not configured")
+
+    account_data = _serialize_for_api(account_data)
+
+    def _fn():
+        res = supabase.table("corporate_accounts").insert(account_data).execute()
+        return _single_row_from_res(res)
+
+    return await run_sync(_fn)
+
+
+async def update_corporate_account(account_id: str, update_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    Update an existing corporate account.
+
+    Args:
+        account_id: ID of the account to update
+        update_data: Data to update
+
+    Returns:
+        Updated corporate account data or None if failed
+    """
+    if not supabase:
+        return None
+
+    update_data = _serialize_for_api(update_data)
+
+    def _fn():
+        res = supabase.table("corporate_accounts").update(update_data).eq("id", account_id).execute()
+        return _single_row_from_res(res)
+
+    return await run_sync(_fn)
+
+
+async def delete_corporate_account(account_id: str) -> bool:
+    """
+    Delete a corporate account.
+
+    Args:
+        account_id: ID of the account to delete
+
+    Returns:
+        True if successful, False otherwise
+    """
+    if not supabase:
+        return False
+
+    def _fn():
+        res = supabase.table("corporate_accounts").delete().eq("id", account_id).execute()
+        # If deletion was successful, affected rows will be > 0
+        return res.count > 0 if res.count is not None else False
+
+    return await run_sync(_fn)
+
+
+# ── Corporate Accounts (B2B v1) ──────────────────────────────────────
+
+
+async def list_corporate_accounts_filtered(
+    *,
+    status: Optional[str],
+    size_tier: Optional[str],
+    search: Optional[str],
+    skip: int,
+    limit: int,
+) -> List[Dict[str, Any]]:
+    """List corporate accounts with optional status / size-tier / name-search filters."""
+
+    def _fn():
+        q = supabase.table("corporate_accounts").select("*")
+        if status:
+            q = q.eq("status", status)
+        if size_tier:
+            q = q.eq("size_tier", size_tier)
+        if search:
+            # Escape PostgREST ilike special chars to prevent filter injection
+            # (same pattern as get_all_corporate_accounts above).
+            safe = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            safe = re.sub(r"[,\.\(\)]", "", safe)
+            q = q.or_(f"name.ilike.%{safe}%,legal_name.ilike.%{safe}%")
+        q = q.order("created_at", desc=True).range(skip, skip + limit - 1)
+        return _rows_from_res(q.execute())
+
+    return await run_sync(_fn)
+
+
+async def update_corporate_account_status(company_id: str, status: str) -> Optional[Dict[str, Any]]:
+    def _fn():
+        res = supabase.table("corporate_accounts").update({"status": status}).eq("id", company_id).execute()
+        return _single_row_from_res(res)
+
+    return await run_sync(_fn)
+
+
+async def record_kyb_decision(
+    *,
+    company_id: str,
+    reviewer_id: str,
+    approved: bool,
+    note: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """Record a KYB approve/reject decision. Approval flips status to active.
+
+    Rejection flips status to suspended so the company can re-upload and be
+    re-reviewed without creating a fresh account.
+    """
+    new_status = "active" if approved else "suspended"
+    patch = {
+        "status": new_status,
+        "kyb_reviewed_at": datetime.now(timezone.utc).isoformat(),
+        "kyb_reviewed_by": reviewer_id,
+    }
+    if note:
+        patch["kyb_review_note"] = note  # column added in a follow-up migration if desired
+
+    def _fn():
+        res = supabase.table("corporate_accounts").update(patch).eq("id", company_id).execute()
+        return _single_row_from_res(res)
+
+    return await run_sync(_fn)
+
+
+async def get_corporate_wallet_by_company(company_id: str) -> Optional[Dict[str, Any]]:
+    """Return the master wallet row for a company, or None."""
+
+    def _fn():
+        res = supabase.table("corporate_wallets").select("*").eq("company_id", company_id).limit(1).execute()
+        return _rows_from_res(res)
+
+    rows = await run_sync(_fn)
+    return rows[0] if rows else None
+
+
+async def update_corporate_stripe_customer_id(*, company_id: str, stripe_customer_id: str) -> None:
+    """Persist the Stripe customer id for a corporate account."""
+
+    def _fn():
+        supabase.table("corporate_accounts").update({"stripe_customer_id": stripe_customer_id}).eq(
+            "id", company_id
+        ).execute()
+
+    await run_sync(_fn)
+
+
+async def ensure_corporate_wallet(*, company_id: str) -> Dict[str, Any]:
+    """Idempotently create the master wallet for a company. Returns the row."""
+
+    def _select():
+        res = supabase.table("corporate_wallets").select("*").eq("company_id", company_id).limit(1).execute()
+        return _rows_from_res(res)
+
+    existing = await run_sync(_select)
+    if existing:
+        return existing[0]
+
+    def _insert():
+        res = (
+            supabase.table("corporate_wallets")
+            .insert({"company_id": company_id, "balance": 0, "currency": "CAD"})
+            .execute()
+        )
+        return _single_row_from_res(res)
+
+    created = await run_sync(_insert)
+    return created or {}
+
+
+async def get_corporate_members_for_user(user_id: str) -> List[Dict[str, Any]]:
+    """Return all corporate_members rows for a user where status='active'.
+
+    Hot path: called on every work-profile check.
+    """
+
+    def _fn():
+        res = (
+            supabase.table("corporate_members")
+            .select("id, company_id, role, policy_override")
+            .eq("user_id", user_id)
+            .eq("status", "active")
+            .execute()
+        )
+        return _rows_from_res(res)
+
+    return await run_sync(_fn)
+
+
+_KYB_CONTENT_EXT = {
+    "application/pdf": "pdf",
+    "image/png": "png",
+    "image/jpeg": "jpg",
+}
+
+
+async def create_kyb_upload_url(*, company_id: str, content_type: str, ttl_seconds: int = 3600) -> Dict[str, Any]:
+    """Return a short-lived signed upload URL for a KYB document.
+
+    The bucket 'kyb-documents' is private; the caller uploads with the
+    returned URL and we later record the object path on the corporate
+    account when review completes.
+    """
+    import uuid
+
+    ext = _KYB_CONTENT_EXT[content_type]
+    path = f"kyb/{company_id}/{uuid.uuid4()}.{ext}"
+
+    def _fn():
+        return supabase.storage.from_("kyb-documents").create_signed_upload_url(path)
+
+    signed = await run_sync(_fn)
+    expires_at = (datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)).isoformat()
+    return {
+        "signed_url": signed["signed_url"],
+        "path": signed.get("path", path),
+        "expires_at": expires_at,
+    }
+
+
+async def list_wallets_needing_autotopup() -> List[Dict[str, Any]]:
+    """Return wallets where auto_topup_enabled and balance < threshold.
+
+    Threshold is filtered in Python because supabase-py doesn't support
+    cross-column comparisons in .filter().
+    """
+
+    def _fn():
+        return supabase.table("corporate_wallets").select("*").eq("auto_topup_enabled", True).execute()
+
+    res = await run_sync(_fn)
+    rows = _rows_from_res(res)
+    return [
+        r
+        for r in rows
+        if r.get("auto_topup_threshold") is not None
+        and Decimal(str(r["balance"])) < Decimal(str(r["auto_topup_threshold"]))
+    ]
+
+
+async def sum_autotopups_today(wallet_id: str) -> Decimal:
+    """Sum of today's successful top-ups for a wallet (for daily-cap enforcement)."""
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    def _fn():
+        return (
+            supabase.table("corporate_wallet_transactions")
+            .select("amount")
+            .eq("wallet_id", wallet_id)
+            .eq("type", "topup")
+            .gte("created_at", today_start.isoformat())
+            .execute()
+        )
+
+    res = await run_sync(_fn)
+    rows = _rows_from_res(res)
+    return sum((Decimal(str(r["amount"])) for r in rows), Decimal("0"))
+
+
+async def get_default_payment_method(stripe_customer_id: str, stripe_secret: str) -> Optional[str]:
+    """Return the Stripe customer's first card payment method, if any."""
+    import stripe
+
+    def _fn():
+        return stripe.PaymentMethod.list(customer=stripe_customer_id, type="card", api_key=stripe_secret)
+
+    methods = await run_sync(_fn)
+    data = getattr(methods, "data", None) or []
+    return data[0].id if data else None
+
+
+async def list_wallets_low_balance_no_autotopup() -> List[Dict[str, Any]]:
+    """Wallets with auto-topup disabled whose balance has dipped below threshold."""
+
+    def _fn():
+        return supabase.table("corporate_wallets").select("*").eq("auto_topup_enabled", False).execute()
+
+    res = await run_sync(_fn)
+    rows = _rows_from_res(res)
+    return [
+        r
+        for r in rows
+        if r.get("auto_topup_threshold") is not None
+        and Decimal(str(r["balance"])) < Decimal(str(r["auto_topup_threshold"]))
+    ]
+
+
+async def mark_low_balance_notified(*, wallet_id: str) -> None:
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    def _fn():
+        supabase.table("corporate_wallets").update({"low_balance_notified_at": now_iso}).eq("id", wallet_id).execute()
+
+    await run_sync(_fn)
+
+
+async def list_wallet_transactions(*, wallet_id: str, skip: int = 0, limit: int = 50) -> List[Dict[str, Any]]:
+    """Return the most recent ledger entries for a wallet, newest first."""
+    upper = skip + max(limit, 1) - 1
+
+    def _fn():
+        return (
+            supabase.table("corporate_wallet_transactions")
+            .select("*")
+            .eq("wallet_id", wallet_id)
+            .order("created_at", desc=True)
+            .range(skip, upper)
+            .execute()
+        )
+
+    res = await run_sync(_fn)
+    return _rows_from_res(res)
+
+
+async def update_corporate_wallet_config(*, wallet_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Patch one or more configuration columns on a corporate_wallets row."""
+
+    def _fn():
+        res = supabase.table("corporate_wallets").update(patch).eq("id", wallet_id).execute()
+        return _single_row_from_res(res)
+
+    return await run_sync(_fn)
+
+
+# ============================================================
+# Corporate B2B Plan 3 — members, allowances, requests, domains
+# ============================================================
+
+
+# ---------- Members ----------
+async def insert_corporate_member_invite(
+    *,
+    company_id: str,
+    email: str,
+    role: str,
+    invite_token: str,
+    invited_by: str,
+    policy_override: bool = False,
+) -> Dict[str, Any]:
+    def _fn():
+        res = (
+            supabase.table("corporate_members")
+            .insert(
+                {
+                    "company_id": company_id,
+                    "invited_email": email,
+                    "role": role,
+                    "invite_token": invite_token,
+                    "invited_at": datetime.now(timezone.utc).isoformat(),
+                    "invited_by": invited_by,
+                    "policy_override": policy_override,
+                    "status": "invited",
+                }
+            )
+            .execute()
+        )
+        return _single_row_from_res(res) or {}
+
+    return await run_sync(_fn)
+
+
+async def list_company_members(
+    *,
+    company_id: str,
+    statuses: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    def _fn():
+        q = supabase.table("corporate_members").select("*").eq("company_id", company_id)
+        if statuses:
+            q = q.in_("status", statuses)
+        res = q.order("created_at", desc=False).execute()
+        return _rows_from_res(res)
+
+    return await run_sync(_fn)
+
+
+async def get_corporate_member_by_id(member_id: str) -> Optional[Dict[str, Any]]:
+    def _fn():
+        res = supabase.table("corporate_members").select("*").eq("id", member_id).limit(1).execute()
+        return _single_row_from_res(res)
+
+    return await run_sync(_fn)
+
+
+async def get_member_by_invite_token(token: str) -> Optional[Dict[str, Any]]:
+    def _fn():
+        res = supabase.table("corporate_members").select("*").eq("invite_token", token).limit(1).execute()
+        return _single_row_from_res(res)
+
+    return await run_sync(_fn)
+
+
+async def list_active_memberships_for_user(user_id: str) -> List[Dict[str, Any]]:
+    def _fn():
+        res = supabase.table("corporate_members").select("*").eq("user_id", user_id).eq("status", "active").execute()
+        return _rows_from_res(res)
+
+    return await run_sync(_fn)
+
+
+async def update_corporate_member(member_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if not patch:
+        return await get_corporate_member_by_id(member_id)
+    patch = {**patch, "updated_at": datetime.now(timezone.utc).isoformat()}
+
+    def _fn():
+        res = supabase.table("corporate_members").update(patch).eq("id", member_id).execute()
+        return _single_row_from_res(res)
+
+    return await run_sync(_fn)
+
+
+async def accept_member_invite(*, member_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+    """Atomically flip invited -> active and stamp user_id + joined_at.
+
+    Guarded by `.eq("status", "invited")` so we only flip pending invites,
+    preventing replay against an already-consumed token.
+    """
+    patch = {
+        "status": "active",
+        "user_id": user_id,
+        "joined_at": datetime.now(timezone.utc).isoformat(),
+        "invite_token": None,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    def _fn():
+        res = supabase.table("corporate_members").update(patch).eq("id", member_id).eq("status", "invited").execute()
+        return _single_row_from_res(res)
+
+    return await run_sync(_fn)
+
+
+# ---------- Allowances ----------
+async def get_member_allowance(member_id: str) -> Optional[Dict[str, Any]]:
+    def _fn():
+        res = supabase.table("corporate_member_allowances").select("*").eq("member_id", member_id).limit(1).execute()
+        return _single_row_from_res(res)
+
+    return await run_sync(_fn)
+
+
+async def upsert_member_allowance(*, member_id: str, patch: Dict[str, Any]) -> Dict[str, Any]:
+    """Insert if no allowance row exists, else update. Returns the row."""
+    existing = await get_member_allowance(member_id)
+    if existing:
+
+        def _upd():
+            res = (
+                supabase.table("corporate_member_allowances")
+                .update({**patch, "updated_at": datetime.now(timezone.utc).isoformat()})
+                .eq("id", existing["id"])
+                .execute()
+            )
+            return _single_row_from_res(res) or existing
+
+        return await run_sync(_upd)
+
+    def _ins():
+        res = (
+            supabase.table("corporate_member_allowances")
+            .insert({"member_id": member_id, "used": 0, "status": "active", **patch})
+            .execute()
+        )
+        return _single_row_from_res(res) or {}
+
+    return await run_sync(_ins)
+
+
+async def list_company_allowances(company_id: str) -> List[Dict[str, Any]]:
+    """Join allowances with their members, scoped to one company."""
+
+    def _fn():
+        res = (
+            supabase.table("corporate_member_allowances")
+            .select("*, member:corporate_members!inner(id,company_id,user_id,invited_email,status,role)")
+            .eq("member.company_id", company_id)
+            .execute()
+        )
+        return _rows_from_res(res)
+
+    return await run_sync(_fn)
+
+
+async def list_allowances_due_for_reset(as_of: str) -> List[Dict[str, Any]]:
+    """Active fixed_recurring allowances whose period_end < as_of (ISO date)."""
+
+    def _fn():
+        res = (
+            supabase.table("corporate_member_allowances")
+            .select("*")
+            .eq("type", "fixed_recurring")
+            .eq("status", "active")
+            .lt("period_end", as_of)
+            .execute()
+        )
+        return _rows_from_res(res)
+
+    return await run_sync(_fn)
+
+
+async def reset_allowance_period(*, allowance_id: str, period_start: str, period_end: str) -> Optional[Dict[str, Any]]:
+    def _fn():
+        res = (
+            supabase.table("corporate_member_allowances")
+            .update(
+                {
+                    "period_start": period_start,
+                    "period_end": period_end,
+                    "auto_approved_this_period": 0,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            .eq("id", allowance_id)
+            .execute()
+        )
+        return _single_row_from_res(res)
+
+    return await run_sync(_fn)
+
+
+# ---------- Allowance requests ----------
+async def insert_allowance_request(
+    *, member_id: str, amount: float, reason: str, status: str = "pending"
+) -> Dict[str, Any]:
+    def _fn():
+        res = (
+            supabase.table("corporate_allowance_requests")
+            .insert(
+                {
+                    "member_id": member_id,
+                    "amount": amount,
+                    "reason": reason,
+                    "status": status,
+                }
+            )
+            .execute()
+        )
+        return _single_row_from_res(res) or {}
+
+    return await run_sync(_fn)
+
+
+async def list_pending_allowance_requests_for_member(
+    member_id: str,
+) -> List[Dict[str, Any]]:
+    def _fn():
+        res = (
+            supabase.table("corporate_allowance_requests")
+            .select("*")
+            .eq("member_id", member_id)
+            .eq("status", "pending")
+            .order("created_at", desc=True)
+            .execute()
+        )
+        return _rows_from_res(res)
+
+    return await run_sync(_fn)
+
+
+async def list_company_allowance_requests(
+    company_id: str,
+    statuses: Optional[List[str]] = None,
+    member_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    def _fn():
+        q = (
+            supabase.table("corporate_allowance_requests")
+            .select("*, member:corporate_members!inner(id,company_id,invited_email,user_id)")
+            .eq("member.company_id", company_id)
+        )
+        if member_id:
+            q = q.eq("member_id", member_id)
+        if statuses:
+            q = q.in_("status", statuses)
+        res = q.order("created_at", desc=True).execute()
+        return _rows_from_res(res)
+
+    return await run_sync(_fn)
+
+
+async def get_allowance_request_by_id(
+    request_id: str,
+) -> Optional[Dict[str, Any]]:
+    def _fn():
+        res = supabase.table("corporate_allowance_requests").select("*").eq("id", request_id).limit(1).execute()
+        return _single_row_from_res(res)
+
+    return await run_sync(_fn)
+
+
+async def update_allowance_request(
+    *,
+    request_id: str,
+    status: str,
+    reviewed_by: Optional[str],
+    decision_notes: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    patch = {
+        "status": status,
+        "reviewed_by": reviewed_by,
+        "reviewed_at": datetime.now(timezone.utc).isoformat(),
+        "decision_notes": decision_notes,
+    }
+
+    def _fn():
+        res = supabase.table("corporate_allowance_requests").update(patch).eq("id", request_id).execute()
+        return _single_row_from_res(res)
+
+    return await run_sync(_fn)
+
+
+# ---------- Allowed domains ----------
+async def add_allowed_domain(*, company_id: str, domain: str) -> Dict[str, Any]:
+    def _fn():
+        res = supabase.table("corporate_allowed_domains").insert({"company_id": company_id, "domain": domain}).execute()
+        return _single_row_from_res(res) or {"company_id": company_id, "domain": domain}
+
+    return await run_sync(_fn)
+
+
+async def list_allowed_domains(company_id: str) -> List[Dict[str, Any]]:
+    def _fn():
+        res = supabase.table("corporate_allowed_domains").select("*").eq("company_id", company_id).execute()
+        return _rows_from_res(res)
+
+    return await run_sync(_fn)
+
+
+async def delete_allowed_domain(*, company_id: str, domain: str) -> None:
+    def _fn():
+        supabase.table("corporate_allowed_domains").delete().eq("company_id", company_id).eq("domain", domain).execute()
+
+    await run_sync(_fn)
+
+
+async def find_companies_by_email_domain(domain: str) -> List[Dict[str, Any]]:
+    """Active companies that whitelist this email domain for auto-match."""
+
+    def _fn():
+        res = (
+            supabase.table("corporate_allowed_domains")
+            .select("company_id, corporate_accounts:corporate_accounts!inner(id,name,status)")
+            .eq("domain", domain)
+            .eq("corporate_accounts.status", "active")
+            .execute()
+        )
+        return _rows_from_res(res)
+
+    return await run_sync(_fn)
+
+
+# ---------- Billing (Plan 6) ----------
+async def list_company_ride_payment_sources(
+    *,
+    company_id: str,
+    from_iso: Optional[str] = None,
+    to_iso: Optional[str] = None,
+    member_id: Optional[str] = None,
+    limit: int = 500,
+    offset: int = 0,
+) -> List[Dict[str, Any]]:
+    """Return ride_payment_sources rows for a company, newest first.
+
+    Each row is the source of truth for a work ride's billing split:
+    allowance_debit_amount + master_fallback_amount = total billed to company.
+    """
+    upper = offset + max(limit, 1) - 1
+
+    def _fn():
+        q = supabase.table("ride_payment_sources").select("*").eq("company_id", company_id)
+        if member_id:
+            q = q.eq("member_id", member_id)
+        if from_iso:
+            q = q.gte("created_at", from_iso)
+        if to_iso:
+            q = q.lte("created_at", to_iso)
+        res = q.order("created_at", desc=True).range(offset, upper).execute()
+        return _rows_from_res(res)
+
+    return await run_sync(_fn)
+
+
+async def get_corporate_policy(company_id: str) -> Optional[Dict[str, Any]]:
+    """Fetch the active corporate_policies row for a company."""
+
+    def _fn():
+        res = (
+            supabase.table("corporate_policies")
+            .select("*")
+            .eq("company_id", company_id)
+            .eq("active", True)
+            .limit(1)
+            .execute()
+        )
+        return _single_row_from_res(res)
+
+    return await run_sync(_fn)
+
+
+async def upsert_corporate_policy(company_id: str, patch: Dict[str, Any]) -> Dict[str, Any]:
+    """Insert or update the company's policy row.
+
+    The table has a UNIQUE constraint on company_id so we upsert on that
+    column.  Callers pass only the fields they want to change; for a full
+    replace they pass the complete desired state.
+    """
+    existing = await get_corporate_policy(company_id)
+    now = datetime.now(timezone.utc).isoformat()
+    if existing:
+        update_patch = {**patch, "updated_at": now}
+
+        def _upd():
+            res = supabase.table("corporate_policies").update(update_patch).eq("id", existing["id"]).execute()
+            return _single_row_from_res(res) or {**existing, **update_patch}
+
+        return await run_sync(_upd) or existing
+
+    insert_doc = {
+        "company_id": company_id,
+        "active": True,
+        "created_at": now,
+        "updated_at": now,
+        **patch,
+    }
+
+    def _ins():
+        res = supabase.table("corporate_policies").insert(insert_doc).execute()
+        return _single_row_from_res(res) or insert_doc
+
+    return await run_sync(_ins)

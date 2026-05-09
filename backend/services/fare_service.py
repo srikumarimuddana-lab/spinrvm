@@ -9,6 +9,7 @@ Pure helpers (`_fd`, `build_default_fares`) are static so they can be
 tested without instantiating the service.
 """
 
+from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, List, Optional
 
@@ -118,6 +119,101 @@ def merge_fare_configs_with_vehicle_types(
                 }
             )
     return result
+
+
+@dataclass(frozen=True)
+class FareBreakdown:
+    """Result of a single fare calculation — all values are Decimal."""
+
+    base_fare: Decimal
+    distance_fare: Decimal
+    time_fare: Decimal
+    booking_fee: Decimal
+    airport_fee: Decimal
+    total_fare: Decimal
+    minimum_fare: Decimal
+    surge_multiplier: Decimal
+    driver_earnings: Decimal
+    admin_earnings: Decimal
+
+
+def calculate_fare(
+    fare_info: Dict[str, Any],
+    distance_km: float,
+    duration_minutes: float,
+    surge: Decimal = Decimal("1"),
+    airport_fee: Any = 0,
+) -> FareBreakdown:
+    """Single source of truth for fare arithmetic.
+
+    Pure function — no DB or external calls. All intermediate math uses
+    Decimal; callers convert at the serialization boundary.
+    """
+    base_fare = _d(fare_info["base_fare"])
+    per_km = _d(fare_info["per_km_rate"])
+    per_min = _d(fare_info["per_minute_rate"])
+    booking = _d(fare_info.get("booking_fee", DEFAULT_FARE["booking_fee"]))
+    minimum = _d(fare_info.get("minimum_fare", DEFAULT_FARE["minimum_fare"]))
+    ap_fee = _d(airport_fee)
+
+    distance_fare = _round(per_km * _d(distance_km) * surge)
+    time_fare = _round(per_min * _d(duration_minutes) * surge)
+
+    subtotal = _round(base_fare + distance_fare + time_fare + booking + ap_fee)
+    total_fare = max(subtotal, minimum)
+
+    driver_earnings = _round(base_fare + distance_fare + time_fare)
+    admin_earnings = _round(booking + ap_fee)
+
+    return FareBreakdown(
+        base_fare=base_fare,
+        distance_fare=distance_fare,
+        time_fare=time_fare,
+        booking_fee=booking,
+        airport_fee=ap_fee,
+        total_fare=total_fare,
+        minimum_fare=minimum,
+        surge_multiplier=surge,
+        driver_earnings=driver_earnings,
+        admin_earnings=admin_earnings,
+    )
+
+
+def recalculate_fare_for_distance(
+    ride: Dict[str, Any],
+    actual_distance_km: float,
+) -> Dict[str, Any]:
+    """Recalculate fare when actual distance differs from the estimate.
+
+    Derives the effective per-km rate from the stored ride row, then
+    reapplies it to the actual distance. Returns the update fields dict
+    (empty if planned distance is zero).
+    """
+    planned = _d(ride.get("distance_km") or ride.get("planned_distance_km") or 0)
+    if planned <= 0:
+        return {}
+
+    per_km_rate = _d(ride.get("distance_fare", 0)) / planned
+    new_distance_fare = _round(per_km_rate * _d(actual_distance_km))
+    new_total_fare = _round(
+        _d(ride.get("base_fare", 0))
+        + new_distance_fare
+        + _d(ride.get("time_fare", 0))
+        + _d(ride.get("booking_fee", 0))
+        + _d(ride.get("airport_fee") or 0)
+    )
+    new_driver_earnings = _round(
+        _d(ride.get("base_fare", 0))
+        + new_distance_fare
+        + _d(ride.get("time_fare", 0))
+    )
+
+    return {
+        "distance_km": round(actual_distance_km, 2),
+        "distance_fare": _f(new_distance_fare),
+        "total_fare": _f(new_total_fare),
+        "driver_earnings": _f(new_driver_earnings),
+    }
 
 
 class FareService:

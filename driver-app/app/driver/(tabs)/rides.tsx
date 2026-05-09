@@ -329,8 +329,8 @@ function createStyles(colors: ThemeColors) {
     },
     // Header Hero
     headerHero: {
-      paddingHorizontal: 20,
-      paddingBottom: 30,
+      paddingHorizontal: 16,
+      paddingBottom: 24,
       borderBottomLeftRadius: 32,
       borderBottomRightRadius: 32,
       shadowColor: '#000',
@@ -571,13 +571,13 @@ function createStyles(colors: ThemeColors) {
     // Empty state
     emptyStateContainer: {
       alignItems: 'center',
-      paddingVertical: 60,
-      paddingHorizontal: 30,
+      paddingVertical: 40,
+      paddingHorizontal: 20,
     },
     emptyIconCircle: {
-      width: 90,
-      height: 90,
-      borderRadius: 45,
+      width: 80,
+      height: 80,
+      borderRadius: 40,
       backgroundColor: colors.surface,
       justifyContent: 'center',
       alignItems: 'center',

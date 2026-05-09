@@ -1,8 +1,6 @@
 import { Platform } from 'react-native';
-import { auth } from '../config/firebaseConfig';
 import SpinrConfig from '../config/spinr.config';
 
-const isFirebaseConfigured = typeof auth.onAuthStateChanged === 'function';
 
 const API_URL = SpinrConfig.backendUrl;
 
@@ -161,11 +159,7 @@ export const getAuthHeader = async (): Promise<string | null> => {
     if (_inMemoryToken) {
       return _inMemoryToken;
     }
-    // 2. Firebase token
-    if (isFirebaseConfigured && auth.currentUser) {
-      return await auth.currentUser.getIdToken();
-    }
-    // 3. SecureStore fallback (for cold starts where in-memory is empty)
+    // 2. SecureStore fallback (for cold starts where in-memory is empty)
     return await getStoredToken();
   } catch (error: unknown) {
     console.error('[API] Error getting auth token:', error instanceof Error ? error.message : error);

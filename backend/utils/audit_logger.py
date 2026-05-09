@@ -34,8 +34,9 @@ async def log_admin_action(
     resource: str,
     resource_id: str,
     details: Optional[Dict[str, Any]] = None,
-) -> None:
-    """Write a single row to audit_logs.
+) -> Optional[str]:
+    """Write a single row to audit_logs. Returns the audit log ID on success,
+    None on failure.
 
     Failures are logged but never re-raised — an audit write failure must not
     roll back the underlying mutation.
@@ -45,11 +46,12 @@ async def log_admin_action(
       entity_id   = resource_id
       details     = JSON blob including actor_id + actor_role
     """
+    audit_id = str(uuid.uuid4())
     try:
         await db_supabase.insert_one(
             "audit_logs",
             {
-                "id": str(uuid.uuid4()),
+                "id": audit_id,
                 "action": action,
                 "entity_type": resource,
                 "entity_id": resource_id,
@@ -62,6 +64,7 @@ async def log_admin_action(
                 "created_at": datetime.now(timezone.utc).isoformat(),
             },
         )
+        return audit_id
     except Exception:
         logger.error(
             "audit_log write failed: action=%s resource=%s resource_id=%s actor=%s",
@@ -71,3 +74,4 @@ async def log_admin_action(
             admin.get("id"),
             exc_info=True,
         )
+        return None

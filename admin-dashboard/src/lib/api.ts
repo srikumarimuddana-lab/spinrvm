@@ -223,7 +223,7 @@ export const mfaChallenge = (mfa_token: string, totp_code: string) =>
     });
 
 export const mfaStatus = () =>
-    request<{ mfa_enabled: boolean }>("/api/admin/auth/mfa/status");
+    request<{ mfa_enabled: boolean; available: boolean }>("/api/admin/auth/mfa/status");
 
 export const mfaEnroll = () =>
     request<{ secret: string; otpauth_uri: string }>("/api/admin/auth/mfa/enroll", { method: "POST" });
@@ -521,7 +521,7 @@ export const getSubscriptionStats = (params?: { start_date?: string; end_date?: 
 /* ── Settings ─────────────────────────────── */
 export const getSettings = () => request<any>("/api/admin/settings");
 export const updateSettings = (data: any) =>
-    request<any>("/api/admin/settings", {
+    request<{ message: string; audit_log_id?: string }>("/api/admin/settings", {
         method: "PUT",
         body: JSON.stringify(data),
     });
@@ -1097,13 +1097,13 @@ export const getUserWallet = (userId: string, limit = 50) =>
     }>(`/api/admin/wallet/${userId}?limit=${limit}`);
 
 export const creditUserWallet = (userId: string, amount: number, reason: string) =>
-    request<{ balance: number; transaction_id: string }>(`/api/admin/wallet/credit`, {
+    request<{ balance: number; transaction_id: string; audit_log_id?: string }>(`/api/admin/wallet/credit`, {
         method: "POST",
         body: JSON.stringify({ user_id: userId, amount, reason }),
     });
 
 export const debitUserWallet = (userId: string, amount: number, reason: string) =>
-    request<{ balance: number; transaction_id: string }>(`/api/admin/wallet/debit`, {
+    request<{ balance: number; transaction_id: string; audit_log_id?: string }>(`/api/admin/wallet/debit`, {
         method: "POST",
         body: JSON.stringify({ user_id: userId, amount, reason }),
     });
@@ -1287,7 +1287,7 @@ export const assignDriverArea = (driverId: string, serviceAreaId: string) =>
     });
 
 export const driverAction = (driverId: string, action: string, reason?: string) =>
-    request<{ message: string; new_status: string }>(`/api/admin/drivers/${driverId}/action`, {
+    request<{ message: string; new_status: string; audit_log_id?: string }>(`/api/admin/drivers/${driverId}/action`, {
         method: "POST",
         body: JSON.stringify({ action, reason }),
     });

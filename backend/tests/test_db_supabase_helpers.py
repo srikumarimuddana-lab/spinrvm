@@ -355,29 +355,38 @@ class TestUpdateRide:
 
 class TestGetHelpers:
     def test_get_user_by_id_returns_row(self):
+        import sys
+
         from backend.db_supabase import get_user_by_id
 
         user = {"id": "user_1", "email": "test@example.com"}
 
-        with patch("backend.db_supabase.run_sync", AsyncMock(return_value=user)):
+        _mod = sys.modules[get_user_by_id.__module__]
+        with patch.object(_mod, "run_sync", AsyncMock(return_value=user)):
             result = asyncio.run(get_user_by_id("user_1"))
 
         assert result == user
 
     def test_get_user_by_id_returns_none_when_not_found(self):
+        import sys
+
         from backend.db_supabase import get_user_by_id
 
-        with patch("backend.db_supabase.run_sync", AsyncMock(return_value=None)):
+        _mod = sys.modules[get_user_by_id.__module__]
+        with patch.object(_mod, "run_sync", AsyncMock(return_value=None)):
             result = asyncio.run(get_user_by_id("nonexistent"))
 
         assert result is None
 
     def test_get_driver_by_id_returns_row(self):
+        import sys
+
         from backend.db_supabase import get_driver_by_id
 
         driver = {"id": "drv_1", "user_id": "usr_1"}
 
-        with patch("backend.db_supabase.run_sync", AsyncMock(return_value=driver)):
+        _mod = sys.modules[get_driver_by_id.__module__]
+        with patch.object(_mod, "run_sync", AsyncMock(return_value=driver)):
             result = asyncio.run(get_driver_by_id("drv_1"))
 
         assert result == driver

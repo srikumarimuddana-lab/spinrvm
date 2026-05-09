@@ -137,3 +137,58 @@ async def test_unique_violation_with_no_close_is_noop(
                 new_period=1,
             )
     assert any("no-op transition" in r.message for r in caplog.records)
+
+
+# ── Edge-flow tests (M-5c) ─────────────────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_period_2_to_0_driver_offline_mid_ride() -> None:
+    """Driver goes offline while period 2 is open (ride in driver_assigned).
+    The prior period 2 row closes and period 0 (offline) is opened.
+    """
+    sb = _fake_supabase(close_data=[{"id": "period2_row"}])
+    with patch.object(insurance_periods.db_supabase, "supabase", sb):
+        await insurance_periods.record_period_transition(
+            driver_id="d1",
+            new_period=0,
+        )
+
+    update_payload = sb.table.return_value.update.call_args.args[0]
+    assert "ended_at" in update_payload
+    inserted = sb.table.return_value.insert.call_args.args[0]
+    assert inserted["period"] == 0
+    assert "ride_id" not in inserted
+
+
+@pytest.mark.anyio
+async def test_period_2_to_1_on_ride_cancel_after_driver_arrived() -> None:
+    """Rider cancels after driver_arrived: period 2 closes, period 1 opened."""
+    sb = _fake_supabase(close_data=[{"id": "period2_row"}])
+    with patch.object(insurance_periods.db_supabase, "supabase", sb):
+        await insurance_periods.record_period_transition(
+            driver_id="d1",
+            new_period=1,
+        )
+
+    update_payload = sb.table.return_value.update.call_args.args[0]
+    assert "ended_at" in update_payload
+    inserted = sb.table.return_value.insert.call_args.args[0]
+    assert inserted["period"] == 1
+    assert "ride_id" not in inserted
+
+
+@pytest.mark.anyio
+async def test_period_3_to_1_on_ride_complete() -> None:
+    """Trip completes: period 3 closes (ride_id present), period 1 opened."""
+    sb = _fake_supabase(close_data=[{"id": "period3_row"}])
+    with patch.object(insurance_periods.db_supabase, "supabase", sb):
+        await insurance_periods.record_period_transition(
+            driver_id="d1",
+            new_period=1,
+        )
+
+    update_payload = sb.table.return_value.update.call_args.args[0]
+    assert "ended_at" in update_payload
+    inserted = sb.table.return_value.insert.call_args.args[0]
+    assert inserted["period"] == 1

@@ -137,13 +137,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         '@react-native-firebase/app',
         '@react-native-firebase/messaging',
         '@react-native-firebase/crashlytics',
-        // App Check uses Play Integrity on Android, DeviceCheck on iOS.
-        // Add debug tokens for local builds via Firebase Console → App Check
-        // → Apps → overflow menu → "Manage debug tokens".
-        ['@react-native-firebase/app-check', {
-            ios: { appCheckProviderFactory: 'DeviceCheck' },
-            android: { appCheckProviderFactory: 'playIntegrity' },
-        }],
+        '@react-native-firebase/app-check',
         // SDK 55 / RN 0.85.2 androidx.* deps require compileSdk 36 (build tools
         // 36.0.0 provisioned by EAS). LogRocket requires minSdkVersion 25.
         // Kotlin pinned to 2.2.21 — Option C strategy. See docs/android-build-strategy.md

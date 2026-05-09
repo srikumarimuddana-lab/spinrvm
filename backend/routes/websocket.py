@@ -67,6 +67,8 @@ HEARTBEAT_TIMEOUT = 10  # Expect pong within 10 seconds
 WS_MAX_MESSAGES_PER_SECOND = 30
 WS_MAX_MESSAGE_SIZE = 64 * 1024  # 64 KB max message payload
 
+_ADMIN_ROLES = {"admin", "super_admin", "operations", "support", "finance", "custom"}
+
 
 async def _handle_driver_ws_disconnect(connection_key: str | None, user: dict | None) -> None:
     """Narrow post-disconnect hook: surface "socket dropped" to admins.
@@ -352,15 +354,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                 # the repeating "WebSocket failed" loop seen in the admin
                 # live-monitoring console. Mirrors get_current_user() in
                 # dependencies/__init__.py.
-                _admin_roles = {
-                    "admin",
-                    "super_admin",
-                    "operations",
-                    "support",
-                    "finance",
-                    "custom",
-                }
-                if payload.get("role") in _admin_roles and payload.get("email"):
+                if payload.get("role") in _ADMIN_ROLES and payload.get("email"):
                     user = {
                         "id": payload["user_id"],
                         "email": payload.get("email"),
@@ -415,8 +409,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                 return
             current_driver_id = driver_profile["id"]
         elif client_type == "admin":
-            # Admin clients must have admin or super_admin role
-            if user.get("role") not in ("admin", "super_admin"):
+            if user.get("role") not in _ADMIN_ROLES:
                 await websocket.send_json({"type": "error", "message": "admin_access_required"})
                 await websocket.close()
                 return
@@ -813,6 +806,22 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                             msg_data["timestamp"] = msg_data["timestamp"].isoformat()
                             msg_data["type"] = "chat_message"
                             await manager.send_personal_message(msg_data, target)
+
+            elif data.get("type") in ("get_drivers_snapshot", "get_rides_snapshot") and client_type == "admin":
+                try:
+                    from ..routes.admin.monitoring import fetch_monitoring_drivers, fetch_monitoring_rides
+                except ImportError:
+                    from routes.admin.monitoring import fetch_monitoring_drivers, fetch_monitoring_rides  # type: ignore[no-redef]
+                try:
+                    if data["type"] == "get_drivers_snapshot":
+                        drivers = await fetch_monitoring_drivers()
+                        await websocket.send_json({"type": "drivers_snapshot", "drivers": drivers})
+                    else:
+                        rides = await fetch_monitoring_rides()
+                        await websocket.send_json({"type": "rides_snapshot", "rides": rides})
+                except Exception as _snap_exc:
+                    logger.warning(f"[WS] snapshot fetch failed for {connection_key}: {_snap_exc}")
+                    await websocket.send_json({"type": "error", "message": "snapshot_failed"})
 
             else:
                 logger.warning(f"Unknown WS message type: {data.get('type')}")

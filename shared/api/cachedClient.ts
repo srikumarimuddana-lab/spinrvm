@@ -52,15 +52,6 @@ const getStoredToken = async (): Promise<string | null> => {
 // Helper to get auth header
 const getAuthHeader = async (): Promise<string | null> => {
     try {
-        // Try Firebase first
-        try {
-            const { auth } = require('../config/firebaseConfig');
-            if (auth?.currentUser) {
-                return await auth.currentUser.getIdToken();
-            }
-        } catch (_firebaseError: unknown) {
-            // Firebase not available, fall through to stored token
-        }
         // Backend JWT flow — use stored token
         return await getStoredToken();
     } catch (error: unknown) {

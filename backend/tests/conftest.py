@@ -344,13 +344,16 @@ def patch_external_dependencies(
 
     _specs = [
         ("backend.db_supabase", "db_supabase", "supabase", mock_supabase_client),
+        ("backend.repositories._base", "repositories._base", "supabase", mock_supabase_client),
+        ("backend.repositories.auth_repo", "repositories.auth_repo", "supabase", mock_supabase_client),
+        ("backend.repositories.corporate_repo", "repositories.corporate_repo", "supabase", mock_supabase_client),
+        ("backend.repositories.driver_repo", "repositories.driver_repo", "supabase", mock_supabase_client),
+        ("backend.repositories.ride_repo", "repositories.ride_repo", "supabase", mock_supabase_client),
+        ("backend.repositories.wallet_repo", "repositories.wallet_repo", "supabase", mock_supabase_client),
         ("backend.core.lifespan", "core.lifespan", "supabase", mock_supabase_client),
         ("backend.core.security", "core.security", "firebase_admin", mock_firebase_admin),
         ("backend.sms_service", "sms_service", "send_sms", mock_sms_service.send),
         ("backend.sms_service", "sms_service", "send_otp_sms", mock_sms_service.send_otp),
-        # auth.py does `from sms_service import send_otp_sms` — a direct name binding
-        # that is NOT covered by patching the sms_service module attribute above.
-        # Must also patch the name in auth.py's own namespace.
         ("backend.routes.auth", "routes.auth", "send_otp_sms", mock_sms_service.send_otp),
     ]
 

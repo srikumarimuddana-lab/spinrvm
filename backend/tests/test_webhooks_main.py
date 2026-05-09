@@ -706,6 +706,58 @@ class TestStripeWebhookCorporateTopupSuccess:
                 pass  # ImportError variant; branches still exercised
 
 
+class TestWebhookTimeoutDivergence:
+    """Webhook arrives after the synchronous /process-payment call timed out.
+
+    The ride is stuck in payment_status='processing'. The webhook must still
+    finalize it to 'paid' — the handler makes no assumptions about the prior
+    payment_status value.
+    """
+
+    def _mock_req(self):
+        req = MagicMock()
+        req.body = AsyncMock(return_value=b"payload")
+        req.headers = {"stripe-signature": "sig"}
+        return req
+
+    def test_finalizes_ride_stuck_in_processing(self):
+        from backend.routes import webhooks as wh
+
+        data_obj = {
+            "id": "pi_timeout",
+            "metadata": {"ride_id": "ride_stuck", "user_id": "user_1"},
+            "amount_received": 1500,
+        }
+        raw = _make_stripe_event("payment_intent.succeeded", data_obj)
+        event_obj = MagicMock()
+        event_obj.get = lambda k, d=None: raw.get(k, d)
+        event_obj.to_dict_recursive = lambda: raw
+
+        mock_update_ride = AsyncMock(return_value={"id": "ride_stuck"})
+
+        import stripe
+
+        with (
+            patch(
+                "backend.routes.webhooks.get_app_settings",
+                AsyncMock(return_value={"stripe_webhook_secret": "whsec_test", "stripe_secret_key": "sk_test"}),
+            ),
+            patch.object(stripe.Webhook, "construct_event", return_value=event_obj),
+            patch("backend.routes.webhooks.claim_stripe_event", AsyncMock(return_value=True)),
+            patch("backend.routes.webhooks.mark_stripe_event_processed", AsyncMock()),
+            patch("backend.routes.webhooks.db_supabase.update_ride", mock_update_ride),
+            patch("backend.routes.webhooks.send_push_notification", AsyncMock()),
+        ):
+            result = asyncio.run(wh.stripe_webhook(request=self._mock_req()))
+
+        assert result["received"] is True
+        mock_update_ride.assert_awaited_once()
+        call_args = mock_update_ride.call_args
+        assert call_args.args[0] == "ride_stuck"
+        assert call_args.args[1]["payment_status"] == "paid"
+        assert call_args.args[1]["payment_intent_id"] == "pi_timeout"
+
+
 class TestStripeWebhookCheckoutNotPaid:
     def test_checkout_not_paid_logs_and_returns_received(self):
         from backend.routes import webhooks as wh

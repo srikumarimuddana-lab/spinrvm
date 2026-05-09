@@ -24,7 +24,7 @@ from backend.db import db  # noqa: E402
 
 class TestDBWrapper(unittest.IsolatedAsyncioTestCase):
     async def test_find_one_user(self):
-        with patch("backend.db_supabase.supabase") as mock_supabase:
+        with patch("backend.repositories._base.supabase") as mock_supabase:
             # Setup a fluent mock for table().select().eq().execute()
             mock_query = MagicMock()
             mock_supabase.table.return_value = mock_query
@@ -50,7 +50,10 @@ class TestDBWrapper(unittest.IsolatedAsyncioTestCase):
             mock_query.eq.assert_called_with("id", "u1")
 
     async def test_find_nearby_drivers(self):
-        with patch("backend.db_supabase.supabase") as mock_supabase:
+        import sys
+
+        _mod = sys.modules[db_supabase.find_nearby_drivers.__module__]
+        with patch.object(_mod, "supabase") as mock_supabase:
             mock_response = MagicMock()
             mock_response.data = [{"id": "d1", "lat": 52.1, "lng": -106.6}]
 
@@ -67,7 +70,7 @@ class TestDBWrapper(unittest.IsolatedAsyncioTestCase):
             )
 
     async def test_update_driver_location(self):
-        with patch("backend.db_supabase.supabase") as mock_supabase:
+        with patch("backend.repositories._base.supabase") as mock_supabase:
             mock_response = MagicMock()
             mock_response.data = None
             mock_supabase.rpc.return_value.execute.return_value = mock_response
@@ -80,7 +83,7 @@ class TestDBWrapper(unittest.IsolatedAsyncioTestCase):
             )
 
     async def test_claim_driver_atomic(self):
-        with patch("backend.db_supabase.supabase") as mock_supabase:
+        with patch("backend.repositories._base.supabase") as mock_supabase:
             mock_query = MagicMock()
             mock_supabase.table.return_value = mock_query
             mock_query.update.return_value = mock_query

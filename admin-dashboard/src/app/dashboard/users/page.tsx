@@ -42,11 +42,13 @@ import { Users, Search, Mail, Phone, MapPin, Star, Calendar, Car, ShieldCheck, D
 import { formatDate } from "@/lib/utils";
 import { getUsersPaginated, updateUserStatus, getStats, getUserWallet, creditUserWallet, debitUserWallet } from "@/lib/api";
 import { useRequireModule } from "@/hooks/useRequireModule";
+import { useToast } from "@/components/ui/use-toast";
 
 const PAGE_SIZE = 50;
 
 export default function UsersPage() {
     const { allowed } = useRequireModule("users");
+    const { toast } = useToast();
     const [users, setUsers] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
@@ -86,8 +88,7 @@ export default function UsersPage() {
     }, [selectedUser?.id]);
 
     const handleWalletAction = async (action: "credit" | "debit") => {
-        const amt = parseFloat(walletAmount);
-        if (!selectedUser?.id || !walletAmount || isNaN(amt) || amt <= 0) {
+        if (!selectedUser?.id || !walletAmount || !/^\d+(\.\d{1,2})?$/.test(walletAmount.trim()) || parseFloat(walletAmount) <= 0) {
             setWalletError("Enter a positive amount");
             return;
         }
@@ -99,11 +100,15 @@ export default function UsersPage() {
         setWalletError("");
         try {
             const fn = action === "credit" ? creditUserWallet : debitUserWallet;
-            await fn(selectedUser.id, amt, walletReason.trim());
+            const result = await fn(selectedUser.id, parseFloat(walletAmount), walletReason.trim()); // backend converts to Decimal
             const refreshed = await getUserWallet(selectedUser.id);
             setWalletData(refreshed);
             setWalletAmount("");
             setWalletReason("");
+            toast({
+                title: `Wallet ${action === "credit" ? "credited" : "debited"}`,
+                description: result?.audit_log_id ? `Ref: ${result.audit_log_id}` : "Operation successful",
+            });
         } catch (e: any) {
             setWalletError(e?.message || `Failed to ${action}`);
         } finally {
@@ -530,7 +535,10 @@ export default function UsersPage() {
                                                     await updateUserStatus(selectedUser.id, { status: "active" });
                                                     setSelectedUser({ ...selectedUser, status: "active" });
                                                     setUsers(prev => prev.map(u => u.id === selectedUser.id ? { ...u, status: "active" } : u));
-                                                } catch {} finally { setStatusUpdating(null); }
+                                                } catch (err) {
+                                                    console.error('[UsersPage] Failed to activate user:', err);
+                                                    setError("Failed to update user status. Please try again.");
+                                                } finally { setStatusUpdating(null); }
                                             }}
                                         >
                                             <CheckCircle className="h-4 w-4 mr-2 text-green-600" /> Activate
@@ -722,7 +730,10 @@ export default function UsersPage() {
                                     await updateUserStatus(pendingStatusChange.id, { status: pendingStatusChange.status });
                                     setSelectedUser((prev: any) => prev ? { ...prev, status: pendingStatusChange.status } : prev);
                                     setUsers(prev => prev.map(u => u.id === pendingStatusChange.id ? { ...u, status: pendingStatusChange.status } : u));
-                                } catch {} finally {
+                                } catch (err) {
+                                    console.error('[UsersPage] Failed to update user status:', err);
+                                    setError("Failed to update user status. Please try again.");
+                                } finally {
                                     setStatusUpdating(null);
                                 }
                                 setPendingStatusChange(null);

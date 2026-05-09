@@ -13,6 +13,7 @@ import {
   ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import SpinrConfig from '@shared/config/spinr.config';
 import CustomAlert from '@shared/components/CustomAlert';
 import { useLanguageStore } from '../../store/languageStore';
@@ -99,6 +100,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
   distanceToPickup,
 }) => {
   // All hooks MUST be before any early return to avoid React ordering issues
+  const insets = useSafeAreaInsets();
   const { t } = useLanguageStore();
   const [waitSeconds, setWaitSeconds] = useState(0);
   const waitTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -252,7 +254,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
       </View>
 
       {/* ── Main card ───────────────────────────────────────── */}
-      <View style={styles.sheet}>
+      <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 12) + 10 }]}>
 
         {/* ── Trip info row: earnings, distance, time ────── */}
         <View style={styles.tripInfoRow}>
@@ -501,9 +503,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
-    paddingHorizontal: 20,
-    paddingTop: 18,
-    paddingBottom: Platform.OS === 'ios' ? 38 : 22,
+    paddingHorizontal: 16,
+    paddingTop: 16,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: -3 },
     shadowOpacity: 0.08,
@@ -579,10 +580,11 @@ const styles = StyleSheet.create({
   otpHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
   otpTitle: { fontSize: 14, fontWeight: '700', color: '#1A1A1A' },
   otpSub: { fontSize: 12, color: '#999', marginBottom: 14 },
-  otpBoxRow: { flexDirection: 'row', gap: 8, marginBottom: 14 },
+  otpBoxRow: { flexDirection: 'row', gap: 8, marginBottom: 14, justifyContent: 'center' },
   otpBox: {
-    width: 56,
-    height: 66,
+    width: '18%',
+    maxWidth: 56,
+    aspectRatio: 0.85,
     borderRadius: 14,
     backgroundColor: '#fff',
     borderWidth: 2,

@@ -1,8 +1,6 @@
 import { create } from 'zustand';
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
-import { auth } from '../config/firebaseConfig';
-import { PhoneAuthProvider, signInWithCredential, signOut, User as FirebaseUser } from 'firebase/auth';
 import api, { setCsrfToken, setInMemoryToken, setRefreshCallback } from '../api/client';
 import { appCache, CACHE_KEYS, CACHE_CONFIG } from '../cache';
 
@@ -341,98 +339,18 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       // refreshTokens() on failure already called logout() which cleared state.
     }
 
-    // ── No valid stored token ──
-    // Check Firebase as a secondary auth source (only useful when firebase
-    // phone-auth is actively configured and the user signed in via it).
-    const firebaseAuthInstance = typeof auth.onAuthStateChanged === 'function' ? auth : null;
-    if (firebaseAuthInstance) {
-      // Safety timeout: if Firebase doesn't respond within 4s, force init
-      setTimeout(() => {
-        const state = get();
-        if (!state.isInitialized) {
-          if (__DEV__) console.log('[Auth] Firebase init timed out - forcing completion with no session');
-          // Clear leftover tokens so the next launch isn't wedged on the
-          // same stale state — this is the no-uninstall recovery path.
-          clearAuthStorage();
-          set({ user: null, driver: null, token: null, refreshToken: null, tokenExpiresAt: null, isInitialized: true, isLoading: false });
-        }
-      }, 4000);
-
-      firebaseAuthInstance.onAuthStateChanged(async (firebaseUser: FirebaseUser | null) => {
-        if (get().isInitialized) return; // Already resolved by timeout or previous call
-
-        if (firebaseUser) {
-          try {
-            const token = await firebaseUser.getIdToken();
-            if (__DEV__) console.log('[Auth] Got Firebase token');
-            // Set in-memory token immediately so subsequent API calls don't hang on Firebase
-            setInMemoryToken(token);
-
-            let userData: User | null = null;
-            let driverData: Driver | null = null;
-
-            try {
-              const response = await api.get('/auth/me');
-              userData = response.data as User;
-              if (userData) {
-                await appCache.set(CACHE_KEYS.USER_PROFILE, userData, CACHE_CONFIG.USER_PROFILE_TTL);
-              }
-              const looksLikeDriver2 =
-                !!userData?.is_driver ||
-                userData?.role === 'driver' ||
-                !!userData?.driver_onboarding_status;
-              if (looksLikeDriver2) {
-                try {
-                  const driverRes = await api.get('/drivers/me');
-                  driverData = driverRes.data as Driver;
-                  await appCache.set(CACHE_KEYS.DRIVER_PROFILE, driverData, CACHE_CONFIG.USER_PROFILE_TTL);
-                } catch (e) {
-                  if (__DEV__) console.log('Failed to fetch driver data on init');
-                }
-              }
-              set({ user: userData, driver: driverData, token, isInitialized: true, isLoading: false });
-            } catch (err) {
-              if (__DEV__) console.log('[Auth] Firebase user but backend fetch failed');
-              set({ isLoading: false, isInitialized: true, error: 'Failed to sync user' });
-            }
-          } catch (error: unknown) {
-            if (__DEV__) console.log('[Auth] Failed to get Firebase token:', error);
-            set({ isLoading: false, isInitialized: true, error: 'Failed to sync user' });
-          }
-        } else {
-          // No Firebase user AND no stored token → truly logged out
-          if (__DEV__) console.log('[Auth] No Firebase user, no stored token → logged out');
-          // Belt-and-suspenders: even if earlier paths already cleared
-          // these, make absolutely sure nothing lingers. Fixes the
-          // "uninstall required" class of bugs where a transient (non-401)
-          // refresh failure left refresh_token in SecureStore.
-          await clearAuthStorage();
-          await appCache.clearUserCache();
-          set({ user: null, driver: null, token: null, refreshToken: null, tokenExpiresAt: null, isInitialized: true, isLoading: false });
-        }
-      });
-    } else {
-      // Firebase not available at all
-      if (__DEV__) console.log('[Auth] No stored token, no Firebase → logged out');
-      await clearAuthStorage();
-      set({ user: null, driver: null, token: null, refreshToken: null, tokenExpiresAt: null, isInitialized: true, isLoading: false });
-    }
+    // ── No valid stored token → logged out ──
+    if (__DEV__) console.log('[Auth] No stored token → logged out');
+    await clearAuthStorage();
+    set({ user: null, driver: null, token: null, refreshToken: null, tokenExpiresAt: null, isInitialized: true, isLoading: false });
   },
 
-  verifyOTP: async (verificationId: string, code: string) => {
-    try {
-      set({ isLoading: true, error: null });
-
-      const credential = PhoneAuthProvider.credential(verificationId, code);
-      await signInWithCredential(auth, credential);
-
-      // onAuthStateChanged will handle the rest
-    } catch (error: unknown) {
-      if (__DEV__) console.log('Verify OTP Error:', error);
-      const message = (isApiError(error) && error.message) || 'Invalid verification code';
-      set({ isLoading: false, error: message });
-      throw new Error(message);
-    }
+  verifyOTP: async (_verificationId: string, _code: string) => {
+    // OTP verification is handled via the backend API (POST /auth/verify-otp),
+    // not through Firebase Auth. This method is preserved for interface
+    // compatibility but should not be called directly — use the backend
+    // OTP flow in otp.tsx instead.
+    throw new Error('verifyOTP via Firebase is not used. Use backend OTP verification.');
   },
 
   createProfile: async (data: Parameters<AuthState['createProfile']>[0]) => {
@@ -571,13 +489,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       }
     }
 
-    try {
-      if (typeof auth.onAuthStateChanged === 'function') {
-        await signOut(auth);
-      }
-    } catch (error) {
-      if (__DEV__) console.log('Logout error:', error);
-    }
+
     setInMemoryToken(null);
     setCsrfToken(null);
     await storage.deleteItem('auth_token');

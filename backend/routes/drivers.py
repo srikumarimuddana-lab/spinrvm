@@ -19,6 +19,7 @@ try:
     from ..logging_utils import diag_logger
     from ..models.ride_status import RideStatus
     from ..schemas import Driver, RideRatingRequest
+    from ..services.fare_service import recalculate_fare_for_distance
     from ..socket_manager import manager
     from ..utils.crypto import hash_otp
     from ..utils.datetime_utils import parse_iso_utc
@@ -41,6 +42,7 @@ except ImportError:
     from logging_utils import diag_logger
     from models.ride_status import RideStatus  # noqa: F401
     from schemas import Driver, RideRatingRequest
+    from services.fare_service import recalculate_fare_for_distance
     from socket_manager import manager
     from utils.crypto import hash_otp
     from utils.datetime_utils import parse_iso_utc
@@ -750,7 +752,7 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
             "rides",
             {
                 "driver_id": driver["id"],
-                "status": "completed",
+                "status": RideStatus.COMPLETED,
             },
             limit=10000,
         )
@@ -816,7 +818,7 @@ async def get_driver_earnings(period: str = Query("week"), current_user: dict = 
         start_date = now - timedelta(days=7)
 
     try:
-        filters: Dict[str, Any] = {"driver_id": driver["id"], "status": "completed"}
+        filters: Dict[str, Any] = {"driver_id": driver["id"], "status": RideStatus.COMPLETED}
         if use_date_filter and start_date:
             filters["ride_completed_at"] = {"$gte": start_date.isoformat()}
 
@@ -869,7 +871,7 @@ async def get_driver_daily_earnings(days: int = Query(7), current_user: dict = D
             "rides",
             {
                 "driver_id": driver["id"],
-                "status": "completed",
+                "status": RideStatus.COMPLETED,
                 "ride_completed_at": {"$gte": start_date.isoformat()},
             },
             order="ride_completed_at",
@@ -918,7 +920,7 @@ async def get_driver_trip_earnings(
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    filters: Dict[str, Any] = {"driver_id": driver["id"], "status": "completed"}
+    filters: Dict[str, Any] = {"driver_id": driver["id"], "status": RideStatus.COMPLETED}
     if days is not None:
         since = datetime.now(timezone.utc) - timedelta(days=days)
         filters["ride_completed_at"] = {"$gte": since.isoformat()}
@@ -1020,7 +1022,7 @@ async def get_driver_weekly_earnings(weeks: int = Query(4), current_user: dict =
             "rides",
             {
                 "driver_id": driver["id"],
-                "status": "completed",
+                "status": RideStatus.COMPLETED,
                 "ride_completed_at": {"$gte": start_date.isoformat()},
             },
             order="ride_completed_at",
@@ -1113,7 +1115,7 @@ async def get_driver_monthly_earnings(months: int = Query(6), current_user: dict
             "rides",
             {
                 "driver_id": driver["id"],
-                "status": "completed",
+                "status": RideStatus.COMPLETED,
                 "ride_completed_at": {"$gte": start_date.isoformat()},
             },
             order="ride_completed_at",
@@ -1170,7 +1172,7 @@ async def get_driver_earnings_comparison(period: str = Query("week"), current_us
             "rides",
             {
                 "driver_id": driver["id"],
-                "status": "completed",
+                "status": RideStatus.COMPLETED,
                 "ride_completed_at": {"$gte": current_start.isoformat()},
             },
             limit=5000,
@@ -1180,7 +1182,7 @@ async def get_driver_earnings_comparison(period: str = Query("week"), current_us
             "rides",
             {
                 "driver_id": driver["id"],
-                "status": "completed",
+                "status": RideStatus.COMPLETED,
                 "ride_completed_at": {"$gte": previous_start.isoformat()},
             },
             limit=10000,
@@ -1246,7 +1248,7 @@ async def get_driver_earnings_forecast(current_user: dict = Depends(get_current_
             "rides",
             {
                 "driver_id": driver["id"],
-                "status": "completed",
+                "status": RideStatus.COMPLETED,
                 "ride_completed_at": {"$gte": window_start},
             },
             limit=5000,
@@ -1603,7 +1605,7 @@ async def request_payout(
                 destination=stripe_account_id,
                 api_key=stripe_secret,
             )
-            status = "completed"
+            status = RideStatus.COMPLETED
             stripe_payout_id = transfer.id
         except Exception as e:
             # B-P3-leak-cleanup: same pattern as the subscription
@@ -1662,7 +1664,7 @@ async def get_t4a_summary(year: int, current_user: dict = Depends(get_current_us
 
     rides = await db_supabase.get_rides_for_driver(
         driver["id"],
-        statuses=["completed"],
+        statuses=[RideStatus.COMPLETED],
         from_date=f"{year}-01-01",
         to_date=f"{year + 1}-01-01",
         limit=10000,
@@ -1838,7 +1840,7 @@ async def get_active_ride(current_user: dict = Depends(get_current_user)):
             "rides",
             {
                 "driver_id": driver["id"],
-                "status": {"$in": ["driver_assigned", "driver_accepted", "driver_arrived", "in_progress"]},
+                "status": {"$in": list(RideStatus.active_statuses() - {RideStatus.SEARCHING})},
             },
             limit=1,
         )
@@ -1913,7 +1915,7 @@ async def get_ride_history(
     try:
         history_filter = {
             "driver_id": driver["id"],
-            "status": {"$in": ["completed", "cancelled"]},
+            "status": {"$in": list(RideStatus.terminal_statuses())},
         }
         total = await db_supabase.count_documents("rides", history_filter)
         rides = await db_supabase.get_rows(
@@ -1966,7 +1968,7 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
         # Check if it's open (searching) and we can claim it?
         # For now assume mostly assigned flow.
         # If status is searching, we might allow claim if using broadcast.
-        if ride["status"] == "searching":
+        if ride["status"] == RideStatus.SEARCHING:
             # Allow claim
             pass
         else:
@@ -1981,17 +1983,17 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
     # expected pre-acceptance state. Prevents the double-accept race where two
     # concurrent requests both pass the read-based check above and both write.
     if ride.get("driver_id") == driver["id"]:
-        accept_filter = {"id": ride_id, "status": "driver_assigned", "driver_id": driver["id"]}
+        accept_filter = {"id": ride_id, "status": RideStatus.DRIVER_ASSIGNED, "driver_id": driver["id"]}
     else:
         # Broadcast/searching path: claim only if the ride is still unclaimed.
-        accept_filter = {"id": ride_id, "status": "searching"}
+        accept_filter = {"id": ride_id, "status": RideStatus.SEARCHING}
 
     guard = await db.update_one(
         "rides",
         accept_filter,
         {
             "$set": {
-                "status": "driver_accepted",
+                "status": RideStatus.DRIVER_ACCEPTED,
                 "driver_id": driver["id"],
                 "driver_accepted_at": datetime.now(timezone.utc),
                 "updated_at": datetime.now(timezone.utc),
@@ -2037,7 +2039,7 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
             "Your driver has accepted the ride and is on the way.",
             data={"type": "driver_accepted", "ride_id": str(ride_id)},
         )
-    await manager.broadcast_ride_status(ride_id, "driver_accepted", rider_id=(ride or {}).get("rider_id"))
+    await manager.broadcast_ride_status(ride_id, RideStatus.DRIVER_ACCEPTED, rider_id=(ride or {}).get("rider_id"))
 
     return {"success": True}
 
@@ -2055,11 +2057,11 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
     # already moved the ride to driver_accepted with a different driver.
     declined = await db_supabase.update_one(
         "rides",
-        {"id": ride_id, "driver_id": driver["id"], "status": {"$in": ["searching", "driver_assigned"]}},
+        {"id": ride_id, "driver_id": driver["id"], "status": {"$in": [RideStatus.SEARCHING, RideStatus.DRIVER_ASSIGNED]}},
         {
             "$set": {
                 "driver_id": None,
-                "status": "searching",
+                "status": RideStatus.SEARCHING,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
         },
@@ -2142,10 +2144,10 @@ async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_curren
 
     guard = await db.update_one(
         "rides",
-        {"id": ride_id, "driver_id": driver["id"], "status": "driver_accepted"},
+        {"id": ride_id, "driver_id": driver["id"], "status": RideStatus.DRIVER_ACCEPTED},
         {
             "$set": {
-                "status": "driver_arrived",
+                "status": RideStatus.DRIVER_ARRIVED,
                 "driver_arrived_at": datetime.now(timezone.utc),
                 "updated_at": datetime.now(timezone.utc),
             }
@@ -2164,7 +2166,7 @@ async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_curren
                 data={"type": "driver_arrived", "ride_id": str(ride_id)},
             )
         )
-    await manager.broadcast_ride_status(ride_id, "driver_arrived", rider_id=ride.get("rider_id"))
+    await manager.broadcast_ride_status(ride_id, RideStatus.DRIVER_ARRIVED, rider_id=ride.get("rider_id"))
 
     return {"success": True}
 
@@ -2189,10 +2191,10 @@ async def verify_pickup_otp(ride_id: str, request: RideOTPRequest, current_user:
     # OTP correct — atomic transition guards against duplicate taps/retries
     guard = await db.update_one(
         "rides",
-        {"id": ride_id, "driver_id": driver["id"], "status": "driver_arrived"},
+        {"id": ride_id, "driver_id": driver["id"], "status": RideStatus.DRIVER_ARRIVED},
         {
             "$set": {
-                "status": "in_progress",
+                "status": RideStatus.IN_PROGRESS,
                 "ride_started_at": datetime.now(timezone.utc),
                 "updated_at": datetime.now(timezone.utc),
             }
@@ -2214,7 +2216,7 @@ async def verify_pickup_otp(ride_id: str, request: RideOTPRequest, current_user:
                 data={"type": "ride_started", "ride_id": str(ride_id)},
             )
         )
-    await manager.broadcast_ride_status(ride_id, "in_progress", rider_id=ride.get("rider_id"))
+    await manager.broadcast_ride_status(ride_id, RideStatus.IN_PROGRESS, rider_id=ride.get("rider_id"))
 
     return {"success": True}
 
@@ -2236,10 +2238,10 @@ async def start_ride(ride_id: str, current_user: dict = Depends(get_current_user
 
     guard = await db.update_one(
         "rides",
-        {"id": ride_id, "driver_id": driver["id"], "status": "driver_arrived"},
+        {"id": ride_id, "driver_id": driver["id"], "status": RideStatus.DRIVER_ARRIVED},
         {
             "$set": {
-                "status": "in_progress",
+                "status": RideStatus.IN_PROGRESS,
                 "ride_started_at": datetime.now(timezone.utc),
                 "updated_at": datetime.now(timezone.utc),
             }
@@ -2261,7 +2263,7 @@ async def start_ride(ride_id: str, current_user: dict = Depends(get_current_user
                 data={"type": "ride_started", "ride_id": str(ride_id)},
             )
         )
-    await manager.broadcast_ride_status(ride_id, "in_progress", rider_id=ride.get("rider_id"))
+    await manager.broadcast_ride_status(ride_id, RideStatus.IN_PROGRESS, rider_id=ride.get("rider_id"))
     return {"success": True}
 
 
@@ -2407,32 +2409,13 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
 
     # Recalculate fare if actual distance differs materially from estimate
     if actual_distance_km > 0 and abs(actual_distance_km - planned_distance) > 0.1:
-        per_km_rate = (ride.get("distance_fare", 0) / planned_distance) if planned_distance > 0 else 0
-        new_distance_fare = round(per_km_rate * actual_distance_km, 2)
-        new_total_fare = round(
-            ride.get("base_fare", 0)
-            + new_distance_fare
-            + ride.get("time_fare", 0)
-            + ride.get("booking_fee", 0)
-            + (ride.get("airport_fee") or 0),
-            2,
-        )
-        new_driver_earnings = round(
-            ride.get("base_fare", 0) + new_distance_fare + ride.get("time_fare", 0),
-            2,
-        )
-        update_fields.update(
-            {
-                "distance_km": actual_distance_km,  # overwrite with actual
-                "distance_fare": new_distance_fare,
-                "total_fare": new_total_fare,
-                "driver_earnings": new_driver_earnings,
-            }
-        )
-        logger.info(
-            f"Ride {ride_id}: fare recalculated on completion. "
-            f"planned={planned_distance}km actual={actual_distance_km}km"
-        )
+        fare_adj = recalculate_fare_for_distance(ride, actual_distance_km)
+        if fare_adj:
+            update_fields.update(fare_adj)
+            logger.info(
+                f"Ride {ride_id}: fare recalculated on completion. "
+                f"planned={planned_distance}km actual={actual_distance_km}km"
+            )
     else:
         update_fields["distance_km"] = actual_distance_km
 
@@ -2503,7 +2486,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     total_fare = (completed_ride or {}).get("total_fare", ride.get("total_fare", 0))
     await manager.broadcast_ride_status(
         ride_id,
-        "completed",
+        RideStatus.COMPLETED,
         rider_id=(completed_ride or {}).get("rider_id"),
         total_fare=total_fare,
     )
@@ -2534,7 +2517,7 @@ async def cancel_ride(ride_id: str, reason: str = Query(""), current_user: dict 
 
     now = datetime.now(timezone.utc)
     base_update = {
-        "status": "cancelled",
+        "status": RideStatus.CANCELLED,
         "cancelled_at": now,
         "updated_at": now,
     }
@@ -2566,7 +2549,7 @@ async def cancel_ride(ride_id: str, reason: str = Query(""), current_user: dict 
     # driver was assigned/accepted/arrived returns them to period 1.
     # If the ride was still in searching the driver was never in period
     # 2; skip to avoid a phantom 1→1 transition.
-    if ride.get("status") in ("driver_assigned", "driver_accepted", "driver_arrived"):
+    if ride.get("status") in (RideStatus.DRIVER_ASSIGNED, RideStatus.DRIVER_ACCEPTED, RideStatus.DRIVER_ARRIVED):
         await record_period_transition(driver["id"], 1)
 
     ride = await db_supabase.get_ride(ride_id)
@@ -2582,7 +2565,7 @@ async def cancel_ride(ride_id: str, reason: str = Query(""), current_user: dict 
         )
     await manager.broadcast_ride_status(
         ride_id,
-        "cancelled",
+        RideStatus.CANCELLED,
         rider_id=(ride or {}).get("rider_id"),
         reason="driver_cancelled",
     )
@@ -2656,7 +2639,7 @@ async def get_driver_referral_info(current_user: dict = Depends(get_current_user
         )
         if referred_driver:
             completed_rides = await db_supabase.count_documents(
-                "rides", {"driver_id": referred_driver["id"], "status": "completed"}
+                "rides", {"driver_id": referred_driver["id"], "status": RideStatus.COMPLETED}
             )
             if completed_rides >= 10:
                 referral_earnings += 10  # $10 bonus
@@ -2741,7 +2724,7 @@ async def get_referred_drivers(
         if referred_driver:
             # Get completed rides count
             completed_rides = await db_supabase.count_documents(
-                "rides", {"driver_id": referred_driver["id"], "status": "completed"}
+                "rides", {"driver_id": referred_driver["id"], "status": RideStatus.COMPLETED}
             )
             referred_drivers.append(
                 {
@@ -2793,7 +2776,7 @@ async def get_driver_leaderboard(
         try:
             rides = await db.get_rows(
                 "rides",
-                {"driver_id": d_id, "status": "completed"},
+                {"driver_id": d_id, "status": RideStatus.COMPLETED},
                 limit=1000,
             )
             period_rides = [
@@ -2929,7 +2912,7 @@ async def update_driver_status(
                 "rides",
                 {
                     "driver_id": driver_id,
-                    "status": {"$in": ["driver_accepted", "driver_arrived", "in_progress"]},
+                    "status": {"$in": [RideStatus.DRIVER_ACCEPTED, RideStatus.DRIVER_ARRIVED, RideStatus.IN_PROGRESS]},
                 },
                 limit=1,
             )
@@ -3326,7 +3309,7 @@ async def get_current_subscription(current_user: dict = Depends(get_current_user
         "rides",
         {
             "driver_id": driver["id"],
-            "status": "completed",
+            "status": RideStatus.COMPLETED,
             "ride_completed_at": {"$gte": today_start.isoformat()},
         },
     )
@@ -3397,7 +3380,7 @@ async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_c
         await db_supabase.update_one(
             "driver_subscriptions",
             {"id": existing["id"]},
-            {"status": "cancelled", "cancelled_at": datetime.now(timezone.utc).isoformat()},
+            {"status": RideStatus.CANCELLED, "cancelled_at": datetime.now(timezone.utc).isoformat()},
         )
 
     now = datetime.now(timezone.utc)
@@ -3545,7 +3528,7 @@ async def _activate_subscription(subscription_id: str, plan_id: str | None = Non
         await db.update_one(
             "driver_subscriptions",
             {"id": existing["id"]},
-            {"$set": {"status": "cancelled", "cancelled_at": datetime.now(timezone.utc).isoformat()}},
+            {"$set": {"status": RideStatus.CANCELLED, "cancelled_at": datetime.now(timezone.utc).isoformat()}},
         )
 
     # Activate.
@@ -3606,7 +3589,7 @@ async def cancel_subscription(current_user: dict = Depends(get_current_user)):
     await db_supabase.update_one(
         "driver_subscriptions",
         {"id": sub["id"]},
-        {"status": "cancelled", "cancelled_at": datetime.now(timezone.utc).isoformat()},
+        {"status": RideStatus.CANCELLED, "cancelled_at": datetime.now(timezone.utc).isoformat()},
     )
 
     return {"success": True}

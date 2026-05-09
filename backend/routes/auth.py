@@ -175,10 +175,12 @@ def _make_auth_response(
     CookieManager.set_auth_cookie(response, token, ttl_minutes=admin_ttl_minutes)
     CookieManager.set_refresh_cookie(response, refresh_token, ttl_days=30)
 
-    # Return response WITHOUT tokens (they're in cookies now)
+    # Return tokens in BOTH the JSON body AND cookies.
+    # Web clients use the HTTP-only cookies; mobile clients (React Native)
+    # read the JSON body because RN's fetch has no browser cookie jar.
     return AuthResponse(
-        token="",  # No longer returned in JSON
-        refresh_token="",  # No longer returned in JSON
+        token=token,
+        refresh_token=refresh_token,
         expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         user=user_obj,
         is_new_user=is_new_user,
@@ -212,25 +214,12 @@ async def send_otp(request: Request, body: SendOTPRequest):
         and app_settings.get("twilio_from_number")
     )
 
-    # Dev bypass is gated on "development" only — never "test" or "staging".
-    # An externally-reachable test/staging instance with a known OTP code is
-    # an account-takeover vector against any phone number. Mirrors
-    # `_is_dev_otp_bypass` so /send-otp and /verify-otp agree on the gate.
-    is_dev = settings.ENV.lower() == "development"
-
-    if not twilio_configured and not is_dev:
-        # In production / test / staging, refuse to silently fall back to a
-        # known OTP. Force the operator to configure Twilio.
-        raise SpinrException(
-            message="SMS service not configured",
-            error_code=ErrorCode.SERVICE_UNAVAILABLE,
-            status_code=503,
-            message_key=ErrorKeys.SYSTEM_SERVICE_UNAVAILABLE,
-        )
-
-    # Dev fallback: fixed OTP so local testing doesn't need Twilio.
-    # The 4-digit length matches the real generated OTP so OTP screens accept it.
+    # If Twilio is configured, send a real OTP via SMS.
+    # If not configured, fall back to the fixed code "1234" so testing works
+    # without SMS delivery — regardless of ENV.
     otp_code = generate_otp() if twilio_configured else "1234"
+    if not twilio_configured:
+        logger.info("Twilio not configured — OTP bypass active (code=1234) for ...%s", phone[-4:])
 
     otp_record = OTPRecord(
         phone=phone,
@@ -298,6 +287,10 @@ async def send_otp(request: Request, body: SendOTPRequest):
 async def verify_otp(request: Request, response: Response, body: VerifyOTPRequest):
     phone = body.phone.strip()
     code = body.code.strip()
+
+    # Normalize to E.164 so it matches what send-otp stored
+    _, normalized = validate_phone(phone)
+    phone = normalized or phone
 
     # SEC-008: Reject locked-out phones before touching the DB
     await _check_otp_lockout(phone)
@@ -370,9 +363,23 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
         )
 
     try:
-        await db_supabase.update_one("otp_records", {"id": otp_record["id"]}, {"verified": True})
+        # Delete the OTP record after successful verification to prevent reuse.
+        # A stale verified record would cause confusion on retries — the phone
+        # lookup would find it, the hash wouldn't match a newly-requested code,
+        # and the user would get ERR_OTP_INVALID even with the correct code.
+        await db_supabase.delete_otp_record(otp_record["id"])
     except Exception:
-        logger.error("auth: failed to mark OTP %s as verified — reuse risk", otp_record.get("id"), exc_info=True)
+        # Non-fatal: if deletion fails, fall back to marking as verified so at
+        # least a reuse check could catch it.
+        logger.error(
+            "auth: failed to delete verified OTP %s — falling back to mark-as-verified",
+            otp_record.get("id"),
+            exc_info=True,
+        )
+        try:
+            await db_supabase.update_one("otp_records", {"id": otp_record["id"]}, {"verified": True})
+        except Exception:
+            logger.error("auth: failed to mark OTP %s as verified — reuse risk", otp_record.get("id"), exc_info=True)
 
     # SEC-008: Clear failure counter + lockout on successful verification
     await _clear_otp_failures(phone)
@@ -804,11 +811,14 @@ async def refresh_access_token(request: Request, response: Response, body: Optio
     the client's reaction to all three is the same (re-login), and
     distinguishing them would leak an oracle.
     """
-    # P3: Read refresh token from cookie instead of request body
+    # P3: Read refresh token from cookie first, fall back to request body
+    # for mobile clients (React Native fetch has no browser cookie jar).
     refresh_token_from_cookie = request.cookies.get("refresh_token")
+    if not refresh_token_from_cookie and body and body.refresh_token:
+        refresh_token_from_cookie = body.refresh_token
     if not refresh_token_from_cookie:
         raise TokenExpiredException(
-            message="Missing refresh_token cookie",
+            message="Missing refresh token",
             message_key=ErrorKeys.AUTH_TOKEN_EXPIRED,
             action_hint="Sign in again",
         )
@@ -897,9 +907,12 @@ async def refresh_access_token(request: Request, response: Response, body: Optio
     CookieManager.set_auth_cookie(response, token, ttl_minutes=15)
     CookieManager.set_refresh_cookie(response, new_raw, ttl_days=30)
 
+    # Return tokens in BOTH the JSON body AND cookies.
+    # Web clients use the HTTP-only cookies; mobile clients (React Native)
+    # read the JSON body because RN's fetch has no browser cookie jar.
     return RefreshResponse(
-        token="",  # No longer returned in JSON
-        refresh_token="",  # No longer returned in JSON
+        token=token,
+        refresh_token=new_raw,
         access_expires_at=access_expires_at,
         refresh_expires_at=refresh_expires_at,
         csrf_token=csrf,

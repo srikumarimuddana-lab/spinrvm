@@ -1,0 +1,139 @@
+"""Cancellation service — fee calculation, driver compensation, ride cleanup.
+
+Extracted from routes/rides.py (Phase 5 of god-object decomposition).
+"""
+
+import uuid
+from datetime import datetime, timezone
+from decimal import ROUND_HALF_UP, Decimal
+from typing import Optional, Tuple
+
+from loguru import logger
+
+try:
+    from .. import db_supabase
+    from ..features import send_push_notification
+    from ..models.ride_status import RideStatus
+except ImportError:
+    import db_supabase  # type: ignore
+    from features import send_push_notification  # type: ignore
+    from models.ride_status import RideStatus  # type: ignore
+
+try:
+    from ..utils.datetime_utils import parse_iso_utc
+except ImportError:
+    from utils.datetime_utils import parse_iso_utc  # type: ignore
+
+
+def _d(v) -> Decimal:
+    return Decimal(str(v)) if v is not None else Decimal("0")
+
+
+def _round(v: Decimal) -> Decimal:
+    return v.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _f(v: Decimal) -> float:
+    return float(_round(_d(v)))
+
+
+def calculate_cancellation_fee(
+    ride: dict,
+    settings: dict,
+) -> Tuple[Decimal, Decimal]:
+    """Return (admin_fee, driver_fee) based on ride state and timing.
+
+    Returns (0, 0) when no fee applies (early cancel, no driver yet).
+    """
+    driver_id = ride.get("driver_id")
+    fee_admin = _d(settings.get("cancellation_fee_admin", "0.50"))
+    fee_driver = _d(settings.get("cancellation_fee_driver", "2.50"))
+
+    if ride.get("status") == RideStatus.DRIVER_ARRIVED and driver_id:
+        return fee_admin, Decimal("5.00")
+
+    if driver_id and ride.get("driver_accepted_at"):
+        accepted_at = parse_iso_utc(ride["driver_accepted_at"])
+        time_diff = (datetime.now(timezone.utc) - accepted_at).total_seconds() if accepted_at else 0
+        if time_diff > 120:
+            return fee_admin, fee_driver
+
+    return _d(0), _d(0)
+
+
+async def pay_driver_cancellation_fee(
+    ride_id: str,
+    driver_id: str,
+    fee: Decimal,
+    actor_user_id: str,
+    ride_status_at_cancel: Optional[str] = None,
+) -> bool:
+    """Credit the driver's wallet with the cancellation fee and push-notify.
+
+    Returns True on success, False if the payout fails (logged, never raises).
+    """
+    try:
+        driver = await db_supabase.get_driver_by_id(driver_id)
+        driver_user_id = driver.get("user_id") if driver else None
+        if not driver_user_id:
+            return False
+
+        wallet = await db_supabase.find_one("wallets", {"user_id": driver_user_id})
+        if not wallet:
+            return False
+
+        fee_dec = _d(str(fee))
+        new_balance = _round(_d(str(wallet.get("balance", 0))) + fee_dec)
+        await db_supabase.update_one(
+            "wallets",
+            {"id": wallet["id"]},
+            {"balance": _f(new_balance), "updated_at": datetime.now(timezone.utc).isoformat()},
+        )
+        await db_supabase.insert_one(
+            "wallet_transactions",
+            {
+                "id": str(uuid.uuid4()),
+                "wallet_id": wallet["id"],
+                "user_id": driver_user_id,
+                "type": "cancellation_fee",
+                "amount": _f(fee_dec),
+                "balance_after": _f(new_balance),
+                "reference_id": ride_id,
+                "description": f"Cancellation fee for ride {ride_id}",
+                "metadata": {"ride_id": ride_id, "status_at_cancel": ride_status_at_cancel},
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        try:
+            await db_supabase.insert_one(
+                "audit_logs",
+                {
+                    "id": str(uuid.uuid4()),
+                    "action": "cancellation_fee_charged",
+                    "entity_type": "rides",
+                    "entity_id": ride_id,
+                    "actor_id": actor_user_id,
+                    "details": {
+                        "fee_amount": _f(fee_dec),
+                        "driver_id": driver_id,
+                        "ride_status_at_cancel": ride_status_at_cancel,
+                    },
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+        except Exception:
+            logger.warning("audit_log write failed for cancellation_fee_charged", exc_info=True)
+
+        await send_push_notification(
+            driver_user_id,
+            title="Cancellation fee earned",
+            body=f"${fee_dec:.2f} cancellation fee added to your earnings.",
+            data={"type": "cancellation_fee_paid", "ride_id": ride_id},
+        )
+        return True
+    except Exception as fee_err:
+        logger.error(
+            f"[CANCEL] cancellation fee payout failed for driver {driver_id}: {fee_err}",
+            exc_info=True,
+        )
+        return False

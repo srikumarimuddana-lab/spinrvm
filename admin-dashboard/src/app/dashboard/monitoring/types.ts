@@ -59,7 +59,9 @@ export type MonitoringWsEvent =
   | { type: "driver_status_changed"; driver_id: string; is_online: boolean }
   | { type: "ride_requested"; ride: MonitoringRide }
   | { type: "ride_completed"; ride_id: string; fare?: number }
-  | { type: "ride_cancelled"; ride_id: string };
+  | { type: "ride_cancelled"; ride_id: string }
+  | { type: "drivers_snapshot"; drivers: MonitoringDriver[] }
+  | { type: "rides_snapshot"; rides: MonitoringRide[] };
 
 export interface AlertEvent {
   id: string;

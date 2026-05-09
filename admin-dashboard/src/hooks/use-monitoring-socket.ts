@@ -11,25 +11,44 @@ interface UseMonitoringSocketOptions {
     onEvent: (event: MonitoringWsEvent) => void;
 }
 
+const KNOWN_EVENT_TYPES = [
+    "driver_location_update",
+    "ride_status_changed",
+    "driver_status_changed",
+    "ride_requested",
+    "ride_completed",
+    "ride_cancelled",
+    "drivers_snapshot",
+    "rides_snapshot",
+];
+
 export function useMonitoringSocket({ token, onEvent }: UseMonitoringSocketOptions) {
     const [status, setStatus] = useState<ConnectionStatus>("disconnected");
     const wsRef = useRef<WebSocket | null>(null);
     const retryCountRef = useRef(0);
     const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const onEventRef = useRef(onEvent);
-    onEventRef.current = onEvent; // always up-to-date without recreating the effect
+    onEventRef.current = onEvent;
 
     const clientId = useRef(
         typeof crypto !== "undefined" ? crypto.randomUUID() : Math.random().toString(36).slice(2)
     );
 
+    const send = useCallback((msg: Record<string, unknown>) => {
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify(msg));
+        }
+    }, []);
+
+    const requestSnapshots = useCallback(() => {
+        send({ type: "get_drivers_snapshot" });
+        send({ type: "get_rides_snapshot" });
+    }, [send]);
+
     const connect = useCallback(() => {
         if (!token) return;
         if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
-        // Prefer NEXT_PUBLIC_WS_URL. Otherwise derive the scheme from
-        // window.location so HTTPS pages never attempt ws:// (browsers
-        // block that as mixed content).
         const fallbackScheme =
             typeof window !== "undefined" && window.location.protocol === "https:"
                 ? "wss"
@@ -47,27 +66,27 @@ export function useMonitoringSocket({ token, onEvent }: UseMonitoringSocketOptio
 
         ws.onopen = () => {
             ws.send(JSON.stringify({ type: "auth", token }));
-            setStatus("connected");
-            retryCountRef.current = 0;
+            setStatus("connecting");
         };
 
         ws.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data) as { type: string } & Record<string, unknown>;
+                if (data.type === "auth_success") {
+                    setStatus("connected");
+                    retryCountRef.current = 0;
+                    requestSnapshots();
+                    return;
+                }
                 if (data.type === "ping") {
                     ws.send(JSON.stringify({ type: "pong" }));
                     return;
                 }
-                // Only forward known monitoring event types
-                const knownTypes = [
-                    "driver_location_update",
-                    "ride_status_changed",
-                    "driver_status_changed",
-                    "ride_requested",
-                    "ride_completed",
-                    "ride_cancelled",
-                ];
-                if (knownTypes.includes(data.type)) {
+                if (data.type === "error") {
+                    setStatus("error");
+                    return;
+                }
+                if (KNOWN_EVENT_TYPES.includes(data.type)) {
                     onEventRef.current(data as unknown as MonitoringWsEvent);
                 }
             } catch {
@@ -79,12 +98,11 @@ export function useMonitoringSocket({ token, onEvent }: UseMonitoringSocketOptio
 
         ws.onclose = () => {
             setStatus("disconnected");
-            // Exponential backoff: 1s, 2s, 4s, 8s, max 30s
             const delay = Math.min(1000 * 2 ** retryCountRef.current, 30_000);
             retryCountRef.current += 1;
             retryTimerRef.current = setTimeout(connect, delay);
         };
-    }, [token]);
+    }, [token, requestSnapshots]);
 
     useEffect(() => {
         connect();
@@ -94,5 +112,5 @@ export function useMonitoringSocket({ token, onEvent }: UseMonitoringSocketOptio
         };
     }, [connect]);
 
-    return { status };
+    return { status, send, requestSnapshots };
 }

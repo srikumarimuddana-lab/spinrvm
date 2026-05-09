@@ -370,7 +370,7 @@ export default function RideDetailScreen() {
 function createStyles(colors: ThemeColors) {
     return StyleSheet.create({
         container: { flex: 1, backgroundColor: colors.background },
-        mapContainer: { height: 250, position: 'relative' },
+        mapContainer: { height: '30%', minHeight: 180, maxHeight: 300, position: 'relative' },
         map: { ...StyleSheet.absoluteFill },
         backBtn: {
             position: 'absolute',

@@ -4,6 +4,7 @@ import CustomAlert from '@shared/components/CustomAlert';
 import MapView, { Marker, Polyline, Heatmap, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useDriverStore } from '../../../store/driverStore';
 import { useAuthStore } from '@shared/store/authStore';
 import {
@@ -44,6 +45,7 @@ function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number)
 
 function DriverDashboard() {
   const { colors, isDark } = useTheme();
+  const insets = useSafeAreaInsets();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   // Driver + user live on the shared auth store — useDriverStore does not
@@ -668,7 +670,7 @@ function DriverDashboard() {
 
       {/* SOS Button — visible during active ride */}
       {(rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup' || rideState === 'trip_in_progress') && activeRide?.ride?.id && (
-        <View style={{ position: 'absolute', top: Platform.OS === 'ios' ? 100 : 80, right: 16, zIndex: 50 }}>
+        <View style={{ position: 'absolute', top: insets.top + 56, right: 16, zIndex: 50 }}>
           <SOSButton
             rideId={activeRide.ride.id}
             onTrigger={async (rideId, lat, lng) => {

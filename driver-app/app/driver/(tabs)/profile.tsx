@@ -221,7 +221,7 @@ export default function ProfileScreen() {
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" />
-      <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 90 }} showsVerticalScrollIndicator={false}>
+      <ScrollView contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) + 24 }} showsVerticalScrollIndicator={false}>
         
         {/* Premium Header */}
         <LinearGradient
@@ -617,7 +617,7 @@ export default function ProfileScreen() {
             behavior="padding"
           >
             <ScrollView
-              contentContainerStyle={[modalStyles.content, { paddingBottom: insets.bottom + 140 }]}
+              contentContainerStyle={[modalStyles.content, { paddingBottom: Math.max(insets.bottom, 16) + 24 }]}
               keyboardShouldPersistTaps="handled"
                     automaticallyAdjustKeyboardInsets={true}
               showsVerticalScrollIndicator={false}

@@ -19,6 +19,8 @@ interface ErrorBoundaryState {
 // ── Functional fallback UI ────────────────────────────────────────────────────
 // Extracted so it can consume useTheme (hooks cannot be called in class components).
 
+import { ScrollView } from 'react-native';
+
 interface ErrorFallbackProps {
   error: Error | null;
   onRetry: () => void;
@@ -34,8 +36,15 @@ function ErrorFallback({ error, onRetry }: ErrorFallbackProps) {
         <Text style={styles.icon}>⚠️</Text>
         <Text style={styles.title}>Something went wrong</Text>
         <Text style={styles.message}>
-          {error?.message || 'An unexpected error occurred'}
+          {error?.name ? `${error.name}: ` : ''}{error?.message || 'An unexpected error occurred'}
         </Text>
+        
+        {__DEV__ && error?.stack && (
+          <ScrollView style={styles.stackScroll} contentContainerStyle={styles.stackContent}>
+            <Text style={styles.stackText}>{error.stack}</Text>
+          </ScrollView>
+        )}
+
         <TouchableOpacity style={styles.retryButton} onPress={onRetry}>
           <Text style={styles.retryButtonText}>Try Again</Text>
         </TouchableOpacity>
@@ -176,6 +185,22 @@ function createStyles(colors: ThemeColors) {
       color: '#FFFFFF',
       fontSize: 16,
       fontWeight: '600',
+    },
+    stackScroll: {
+      maxHeight: 200,
+      width: 280,
+      backgroundColor: '#1E1E1E',
+      borderRadius: 6,
+      padding: 10,
+      marginBottom: 20,
+    },
+    stackContent: {
+      flexGrow: 1,
+    },
+    stackText: {
+      color: '#FF6B6B',
+      fontFamily: Platform.OS === 'ios' ? 'Courier New' : 'monospace',
+      fontSize: 11,
     },
   });
 }

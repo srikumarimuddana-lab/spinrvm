@@ -4,6 +4,7 @@ import CustomAlert, { AlertButton } from '@shared/components/CustomAlert';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import SpinrConfig from '@shared/config/spinr.config';
 import { useLanguageStore } from '../../store/languageStore';
 
@@ -53,6 +54,7 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
   onDone,
   onRateRider,
 }) => {
+  const insets = useSafeAreaInsets();
   const { t } = useLanguageStore();
   const router = useRouter();
   const [rating, setRating] = useState(0);
@@ -97,7 +99,7 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
 
   return (
     <View style={styles.completedOverlay}>
-      <LinearGradient colors={[COLORS.surface, COLORS.primary]} style={styles.completedPanel}>
+      <LinearGradient colors={[COLORS.surface, COLORS.primary]} style={[styles.completedPanel, { paddingBottom: Math.max(insets.bottom, 16) + 16 }]}>
         <View style={styles.completedIcon}>
           <Ionicons name="checkmark-circle" size={60} color={COLORS.accent} />
         </View>
@@ -271,8 +273,7 @@ const styles = StyleSheet.create({
   completedPanel: {
     borderTopLeftRadius: 28,
     borderTopRightRadius: 28,
-    padding: 24,
-    paddingBottom: 40,
+    padding: 20,
     alignItems: 'center',
   },
   completedIcon: {

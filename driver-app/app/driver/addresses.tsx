@@ -341,7 +341,7 @@ function createStyles(colors: ThemeColors) {
         flex: 1,
         justifyContent: 'center',
         alignItems: 'center',
-        height: 300,
+        minHeight: 200,
     },
     addressList: {
         gap: 12,

@@ -16,65 +16,73 @@ config.resolver.extraNodeModules = {
   '@shared': path.resolve(__dirname, '../shared'),
 };
 
-// Ensure Metro watches the shared folder
-config.watchFolders = [
-  path.resolve(__dirname, '../shared')
-];
-
 config.maxWorkers = Math.max(2, os.cpus().length - 1);
 
-// Watch the shared directory
+// Watch the shared directory so edits in shared/ trigger rebuilds
 config.watchFolders = [
   path.resolve(__dirname, '../shared'),
-  path.resolve(__dirname, 'node_modules'), // Ensure local node_modules are watched
+  path.resolve(__dirname, 'node_modules'),
 ];
 
-// Ensure we resolve node_modules from the project root first
+// Ensure we resolve node_modules from the project root first.
+// This is the PRIMARY mechanism for deduplicating React — Metro checks
+// these paths BEFORE walking up the directory tree from the importer.
 config.resolver.nodeModulesPaths = [
   path.resolve(__dirname, 'node_modules'),
 ];
 
-// Block .d.ts files and the entire @types/ tree from being bundled.
-// React 19 bundles its own types — the standalone @types/react package
-// is only present transitively (via @types/react-test-renderer) and its
-// patched main field would otherwise cause Metro to try parsing index.d.ts
-// (which uses `export =` syntax that Babel can't process).
+// Block duplicate React-family packages in shared/node_modules from being
+// bundled. Without this, code in shared/ that imports 'react' could resolve
+// to shared/node_modules/react (a different version) instead of
+// driver-app/node_modules/react. Two copies of React = "Invalid hook call".
+//
+// Also block .d.ts files and @types/ (React 19 bundles its own types).
+const escapedSharedNM = path
+  .resolve(__dirname, '../shared/node_modules')
+  .replace(/[\\\/]/g, '[\\\\/]');
 config.resolver.blockList = [
   /.*\.d\.ts$/,
   /node_modules[\\/]@types[\\/].*/,
+  // Block singleton packages from shared/node_modules:
+  new RegExp(escapedSharedNM + '[\\\\/]react[\\\\/]'),
+  new RegExp(escapedSharedNM + '[\\\\/]react-native[\\\\/]'),
+  new RegExp(escapedSharedNM + '[\\\\/]react-dom[\\\\/]'),
+  new RegExp(escapedSharedNM + '[\\\\/]scheduler[\\\\/]'),
+  new RegExp(escapedSharedNM + '[\\\\/]react-refresh[\\\\/]'),
+  new RegExp(escapedSharedNM + '[\\\\/]react-is[\\\\/]'),
 ];
 
-// Force `react` and `react-dom` to resolve to the actual packages, not @types
-config.resolver.extraNodeModules = {
-  ...config.resolver.extraNodeModules,
-  react: path.resolve(__dirname, 'node_modules/react'),
-  'react-dom': path.resolve(__dirname, 'node_modules/react-dom'),
-};
-
-// RN 0.85 moved NativeComponent specs into src/private/ using types that
-// Expo 54's Babel codegen plugin can't parse. These are relative imports
-// (e.g. './VirtualViewNativeComponent') so we check context.originModulePath
-// rather than the module name. The native bridge is compiled into the binary
-// at build time, so stubbing the JS spec does not break OTA updates.
+// RN 0.85 moved some NativeComponent specs into src/private/specs_DEPRECATED/
+// using codegen types that Expo's Babel plugin can't parse. These codegen specs
+// return non-renderable objects under the New Architecture (Bridgeless) in
+// Expo Go, causing "Element type is invalid: got object" crashes.
+//
+// IMPORTANT: Only stub imports from `specs_DEPRECATED/` — the other directory
+// `src/private/components/` contains WORKING components (ScrollView wrappers,
+// SafeAreaView) that import from Libraries/ using NativeComponentRegistry.get.
+// Stubbing those would break ScrollView rendering.
 const NATIVE_COMPONENT_STUB = path.resolve(__dirname, '__stubs__/emptyNativeComponent.js');
 config.resolver.resolveRequest = (context, moduleName, platform) => {
   // Skip @types packages during bundling — TypeScript-only, never bundled.
-  // Prevents SyntaxError from `export =` in .d.ts and resolves transitive deps
-  // from @types/react-test-renderer → @types/react.
   if (moduleName.startsWith('@types/')) {
     return { type: 'empty' };
   }
 
+  // Stub broken codegen specs in specs_DEPRECATED only.
   const origin = context.originModulePath || '';
-  const isFromRNPrivate =
-    origin.includes('react-native\\src\\private') ||
-    origin.includes('react-native/src/private');
+  const isFromSpecsDeprecated =
+    origin.includes('specs_DEPRECATED') &&
+    (origin.includes('react-native\\src\\private') ||
+     origin.includes('react-native/src/private'));
   const isNativeComponentImport = moduleName.includes('NativeComponent');
-  const isDirectPrivateImport =
-    (moduleName.includes('/src/private/') || moduleName.includes('\\src\\private\\')) &&
+
+  // Also catch direct imports into specs_DEPRECATED from outside
+  const isDirectSpecsDeprecatedImport =
+    (moduleName.includes('specs_DEPRECATED') ||
+     moduleName.includes('specs_DEPRECATED')) &&
     isNativeComponentImport;
 
-  if ((isFromRNPrivate && isNativeComponentImport) || isDirectPrivateImport) {
+  if ((isFromSpecsDeprecated && isNativeComponentImport) || isDirectSpecsDeprecatedImport) {
     return { type: 'sourceFile', filePath: NATIVE_COMPONENT_STUB };
   }
   return context.resolveRequest(context, moduleName, platform);

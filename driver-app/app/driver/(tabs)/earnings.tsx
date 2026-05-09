@@ -24,7 +24,7 @@ import type { ThemeColors } from '@shared/theme/index';
 import { useLanguageStore } from '../../../store/languageStore';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 
-const { width } = Dimensions.get('window');
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 // Safe currency display: avoids float drift for 2-decimal-place Decimal strings
 // from the backend (e.g. "15.75" → 15.75, never 15.749999…).
@@ -34,6 +34,22 @@ const toMoney = (s: string | number | null | undefined): string => {
 };
 const parseMoney = (s: string | number | null | undefined): number =>
   Math.round((parseFloat(String(s ?? '0')) || 0) * 100) / 100;
+
+const safeLocaleDateString = (
+  dateStr: string | undefined | null,
+  options: Intl.DateTimeFormatOptions,
+  fallback: string = ''
+): string => {
+  if (!dateStr) return fallback;
+  try {
+    const cleanStr = dateStr.includes('T') ? dateStr : dateStr + 'T00:00:00';
+    const d = new Date(cleanStr);
+    if (isNaN(d.getTime())) return fallback;
+    return d.toLocaleDateString('en', options);
+  } catch (e) {
+    return fallback;
+  }
+};
 
 type Period = 'today' | 'week' | 'month' | 'all';
 type ChartMode = 'daily' | 'weekly' | 'monthly';
@@ -68,8 +84,8 @@ function EarningsScreen() {
 
   // Weekly earnings forecast widget (Feature B)
   const [forecast, setForecast] = useState<{
-    this_week_earnings: number;
-    projected_weekly_total: number;
+    this_week_earnings: string | number;
+    projected_weekly_total: string | number;
     days_remaining_this_week: number;
     this_week_trips: number;
   } | null>(null);
@@ -113,22 +129,26 @@ function EarningsScreen() {
 
   // Prepare chart data based on current mode
   const barChartData = (dailyEarnings ?? []).map((d) => ({
-    label: new Date(d.date + 'T00:00:00').toLocaleDateString('en', { weekday: 'narrow' }),
+    label: safeLocaleDateString(d.date, { weekday: 'narrow' }),
     value: parseMoney(d.earnings),
     secondary: parseMoney(d.tips),
   }));
 
   const weeklyChartData = (weeklyEarnings ?? []).map((w) => ({
-    label: new Date(w.week_start + 'T00:00:00').toLocaleDateString('en', { month: 'short', day: 'numeric' }),
+    label: safeLocaleDateString(w.week_start, { month: 'short', day: 'numeric' }),
     value: parseMoney(w.earnings),
   }));
 
-  const monthlyChartData = (monthlyEarnings ?? []).map((m) => ({
-    label: new Date(m.month + '-01T00:00:00').toLocaleDateString('en', { month: 'short' }),
-    value: parseMoney(m.earnings),
-  }));
+  const monthlyChartData = (monthlyEarnings ?? []).map((m) => {
+    // m.month is YYYY-MM, we append -01 to make it a full date
+    const monthStr = m.month ? (m.month.includes('-01') ? m.month : m.month + '-01') : '';
+    return {
+      label: safeLocaleDateString(monthStr, { month: 'short' }),
+      value: parseMoney(m.earnings),
+    };
+  });
 
-  const compPct = earningsComparison?.change_pct?.earnings ?? 0;
+  const compPct = Number(earningsComparison?.change_pct?.earnings ?? 0);
   const compLabel = earningsComparison?.period === 'month' ? 'last month' : 'last week';
 
   const renderFilterTabs = () => (
@@ -207,7 +227,7 @@ function EarningsScreen() {
 
       <ScrollView
         style={styles.content}
-        contentContainerStyle={{ paddingBottom: insets.bottom + 90 }}
+        contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) + 24 }}
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
       >
@@ -220,12 +240,12 @@ function EarningsScreen() {
             </View>
             <View style={styles.forecastBody}>
               <View style={styles.forecastStat}>
-                <Text style={styles.forecastAmount}>${forecast.this_week_earnings.toFixed(2)}</Text>
+                <Text style={styles.forecastAmount}>${toMoney(forecast.this_week_earnings)}</Text>
                 <Text style={styles.forecastLabel}>Earned so far</Text>
               </View>
               <View style={styles.forecastDivider} />
               <View style={styles.forecastStat}>
-                <Text style={[styles.forecastAmount, { color: '#10B981' }]}>${forecast.projected_weekly_total.toFixed(2)}</Text>
+                <Text style={[styles.forecastAmount, { color: '#10B981' }]}>${toMoney(forecast.projected_weekly_total)}</Text>
                 <Text style={styles.forecastLabel}>Projected total</Text>
               </View>
               <View style={styles.forecastDivider} />
@@ -254,7 +274,7 @@ function EarningsScreen() {
                 <MaterialCommunityIcons name="road-variant" size={18} color='#F59E0B' />
             </View>
             <View>
-                <Text style={styles.statValue}>{loading ? '--' : (earnings?.total_distance_km || 0).toFixed(1)}</Text>
+                <Text style={styles.statValue}>{loading ? '--' : parseMoney(earnings?.total_distance_km).toFixed(1)}</Text>
                 <Text style={styles.statLabel}>KM Driven</Text>
             </View>
           </View>
@@ -420,7 +440,7 @@ function EarningsScreen() {
                     <View style={styles.tripMetaRow}>
                       <View style={styles.metaBadge}>
                         <Ionicons name="map-outline" size={14} color={colors.textDim} />
-                        <Text style={styles.metaText}>{trip.distance_km.toFixed(1)} km</Text>
+                        <Text style={styles.metaText}>{parseMoney(trip.distance_km).toFixed(1)} km</Text>
                       </View>
                       <View style={styles.metaBadge}>
                         <Ionicons name="time-outline" size={14} color={colors.textDim} />
@@ -585,7 +605,8 @@ function createStyles(colors: ThemeColors) {
       marginBottom: 24,
     },
     statCard: {
-      width: (width - 44) / 2,
+      flexBasis: '47%',
+      flexGrow: 1,
       backgroundColor: colors.surface,
       borderRadius: 20,
       padding: 16,
@@ -703,13 +724,13 @@ function createStyles(colors: ThemeColors) {
     // Empty state
     emptyStateContainer: {
       alignItems: 'center',
-      paddingVertical: 50,
-      paddingHorizontal: 30,
+      paddingVertical: 40,
+      paddingHorizontal: 20,
     },
     emptyIconCircle: {
-      width: 90,
-      height: 90,
-      borderRadius: 45,
+      width: 80,
+      height: 80,
+      borderRadius: 40,
       backgroundColor: colors.surface,
       justifyContent: 'center',
       alignItems: 'center',

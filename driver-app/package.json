@@ -84,10 +84,14 @@
     "typescript": "~5.9.2"
   },
   "overrides": {
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
     "@types/react": "~19.2.0",
     "@tootallnate/once": "^3.0.1"
   },
   "resolutions": {
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
     "@types/react": "~19.2.0",
     "@tootallnate/once": "^3.0.1",
     "react-test-renderer": "19.2.3",

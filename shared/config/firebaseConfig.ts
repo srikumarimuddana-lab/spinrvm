@@ -1,5 +1,4 @@
 import { initializeApp, getApps, FirebaseApp } from 'firebase/app';
-import { getAuth, Auth } from 'firebase/auth';
 
 /**
  * Firebase JS SDK configuration for Web + Expo Go fallbacks.
@@ -18,6 +17,11 @@ import { getAuth, Auth } from 'firebase/auth';
  * (iOS), which `@react-native-firebase` reads directly — so this
  * module is primarily a compatibility shim for the Expo Web build
  * and legacy call sites that import from the JS SDK.
+ *
+ * Auth: This project uses backend JWT-based OTP auth, NOT Firebase
+ * Auth. We intentionally do NOT import or initialize `firebase/auth`
+ * here to avoid the "Auth state will default to memory persistence"
+ * warning and the unnecessary bundle-size overhead.
  */
 const firebaseConfig = {
   apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY || "",
@@ -31,14 +35,12 @@ const firebaseConfig = {
 
 // Initialize Firebase (avoid duplicate init on hot reload)
 let app: FirebaseApp | undefined;
-let auth: Auth;
 
 if (!firebaseConfig.apiKey || !firebaseConfig.projectId) {
   // No credentials configured — skip Firebase entirely. The app falls back
   // to backend OTP auth. Native builds use google-services.json /
   // GoogleService-Info.plist which are read by @react-native-firebase
   // independently of this module.
-  auth = {} as Auth;
 } else {
   try {
     // Only initialize if not already done (hot reload safety)
@@ -46,11 +48,9 @@ if (!firebaseConfig.apiKey || !firebaseConfig.projectId) {
     app = existingApps.length === 0
       ? initializeApp(firebaseConfig)
       : existingApps.find(a => a.name === '[DEFAULT]') || existingApps[0];
-    auth = getAuth(app);
   } catch (error: unknown) {
     console.warn('[Firebase] init error:', error instanceof Error ? error.message : String(error));
-    auth = {} as Auth;
   }
 }
 
-export { app, auth, firebaseConfig };
+export { app, firebaseConfig };

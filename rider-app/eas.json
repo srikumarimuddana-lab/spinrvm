@@ -12,32 +12,23 @@
       "developmentClient": true,
       "distribution": "internal",
       "channel": "test",
+      "environment": "preview",
       "android": {
         "buildType": "apk"
-      },
-      "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "$SPINR_STAGING_BACKEND_URL",
-        "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY": "$EXPO_PUBLIC_GOOGLE_MAPS_API_KEY"
       }
     },
     "preview": {
       "channel": "preview",
+      "environment": "preview",
       "android": {
         "buildType": "apk"
-      },
-      "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "$SPINR_STAGING_BACKEND_URL",
-        "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY": "$EXPO_PUBLIC_GOOGLE_MAPS_API_KEY"
       }
     },
     "production": {
       "distribution": "store",
       "autoIncrement": true,
       "channel": "production",
-      "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://spinr-backend-production.up.railway.app",
-        "EXPO_PUBLIC_GOOGLE_MAPS_API_KEY": "$EXPO_PUBLIC_GOOGLE_MAPS_API_KEY"
-      }
+      "environment": "production"
     }
   },
   "submit": {

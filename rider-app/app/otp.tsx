@@ -8,11 +8,13 @@ import {
   ActivityIndicator,
   Platform,
   KeyboardAvoidingView,
-  ScrollView,
   Animated,
+  Modal,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+// DIAG-ONLY (revert with diagnostic block): test BlurView module resolution
+import { BlurView as DiagBlurView } from 'expo-blur';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useAuthStore, type User } from '@shared/store/authStore';
 import api, { setInMemoryToken } from '@shared/api/client';
@@ -219,18 +221,39 @@ export default function OtpScreen() {
     }
   };
 
+  // DIAGNOSTIC: log typeof each imported component to find the undefined one.
+  // Remove once OtpScreen render error is fixed.
+  console.log('[OtpScreenDiag]', JSON.stringify({
+    View: typeof View,
+    Text: typeof Text,
+    TextInput: typeof TextInput,
+    TouchableOpacity: typeof TouchableOpacity,
+    ActivityIndicator: typeof ActivityIndicator,
+    KeyboardAvoidingView: typeof KeyboardAvoidingView,
+    ScrollView: typeof ScrollView,
+    Animated: typeof Animated,
+    AnimatedView: typeof Animated?.View,
+    Ionicons: typeof Ionicons,
+    CustomAlert: typeof CustomAlert,
+    // v2 additions — covers CustomAlert's internal sub-tree
+    Modal: typeof Modal,
+    ModalRender: typeof (Modal as any)?.render,
+    ModalDisplayName: String((Modal as any)?.displayName ?? 'n/a'),
+    ModalSymbolType: String((Modal as any)?.$$typeof ?? 'n/a'),
+    BlurView: typeof DiagBlurView,
+    BlurViewDisplayName: String((DiagBlurView as any)?.displayName ?? 'n/a'),
+  }));
+
   return (
     <KeyboardAvoidingView
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
-      <ScrollView
-        contentContainerStyle={[
+      <View
+        style={[
           styles.scrollContent,
-          { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 24 },
+          { flex: 1, paddingTop: insets.top + 16, paddingBottom: insets.bottom + 24 },
         ]}
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
       >
         <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
           <Ionicons name="arrow-back" size={22} color={colors.text} />
@@ -351,7 +374,7 @@ export default function OtpScreen() {
             <Text style={styles.changeNumberText}>Change phone number</Text>
           </TouchableOpacity>
         </View>
-      </ScrollView>
+      </View>
 
       <CustomAlert
         visible={alertState.visible}

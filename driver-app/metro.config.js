@@ -62,27 +62,54 @@ config.resolver.blockList = [
 // SafeAreaView) that import from Libraries/ using NativeComponentRegistry.get.
 // Stubbing those would break ScrollView rendering.
 const NATIVE_COMPONENT_STUB = path.resolve(__dirname, '__stubs__/emptyNativeComponent.js');
+// Force all imports of @tanstack/react-query to a single file. The package
+// ships `react-native: src/index.ts` AND `exports.import.default:
+// build/modern/index.js`; without forcing one, Metro picks src for direct
+// app imports but build/modern for the compiled @tanstack/react-query-
+// persist-client. Two evaluations of QueryClientProvider.* → two distinct
+// QueryClientContext instances → "No QueryClient set" at any consumer.
+const RQ_FORCED_PATH = path.resolve(
+  __dirname,
+  'node_modules/@tanstack/react-query/build/modern/index.js',
+);
+
 config.resolver.resolveRequest = (context, moduleName, platform) => {
   // Skip @types packages during bundling — TypeScript-only, never bundled.
   if (moduleName.startsWith('@types/')) {
     return { type: 'empty' };
   }
 
-  // Stub broken codegen specs in specs_DEPRECATED only.
+  if (moduleName === '@tanstack/react-query') {
+    return { type: 'sourceFile', filePath: RQ_FORCED_PATH };
+  }
+
+  // Stub broken codegen specs:
+  //   - specs_DEPRECATED/* (codegen-only, no runtime impl under New Arch)
+  //   - private/components/virtualview/* (RN 0.85 codegen the Expo Babel
+  //     plugin can't parse: "Unable to determine event arguments for
+  //     onModeChange"). VirtualView is an experimental list optimization
+  //     not used by app code, so stubbing the spec is safe.
   const origin = context.originModulePath || '';
   const isFromSpecsDeprecated =
     origin.includes('specs_DEPRECATED') &&
     (origin.includes('react-native\\src\\private') ||
      origin.includes('react-native/src/private'));
+  const isFromVirtualView =
+    origin.includes('private\\components\\virtualview') ||
+    origin.includes('private/components/virtualview');
   const isNativeComponentImport = moduleName.includes('NativeComponent');
 
-  // Also catch direct imports into specs_DEPRECATED from outside
-  const isDirectSpecsDeprecatedImport =
+  // Also catch direct imports of those broken-spec subtrees from outside.
+  const isDirectBrokenSpecImport =
     (moduleName.includes('specs_DEPRECATED') ||
-     moduleName.includes('specs_DEPRECATED')) &&
+     moduleName.includes('virtualview') ||
+     moduleName.includes('VirtualView')) &&
     isNativeComponentImport;
 
-  if ((isFromSpecsDeprecated && isNativeComponentImport) || isDirectSpecsDeprecatedImport) {
+  if (
+    ((isFromSpecsDeprecated || isFromVirtualView) && isNativeComponentImport) ||
+    isDirectBrokenSpecImport
+  ) {
     return { type: 'sourceFile', filePath: NATIVE_COMPONENT_STUB };
   }
   return context.resolveRequest(context, moduleName, platform);

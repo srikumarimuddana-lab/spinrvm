@@ -212,6 +212,22 @@ export default function OtpScreen() {
     ? `${phoneNumber.slice(0, -4)}${'•'.repeat(4)}`
     : '';
 
+  // DIAGNOSTIC: log typeof each imported component to find the undefined one.
+  // Remove once OtpScreen render error is fixed.
+  console.log('[OtpScreenDiag]', JSON.stringify({
+    View: typeof View,
+    Text: typeof Text,
+    TextInput: typeof TextInput,
+    TouchableOpacity: typeof TouchableOpacity,
+    ActivityIndicator: typeof ActivityIndicator,
+    KeyboardAvoidingView: typeof KeyboardAvoidingView,
+    ScrollView: typeof ScrollView,
+    Animated: typeof Animated,
+    AnimatedView: typeof Animated?.View,
+    Ionicons: typeof Ionicons,
+    CustomAlert: typeof CustomAlert,
+  }));
+
   return (
     <KeyboardAvoidingView
       style={styles.container}

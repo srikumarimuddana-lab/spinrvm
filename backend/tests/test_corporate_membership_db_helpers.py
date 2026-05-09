@@ -13,7 +13,7 @@ import pytest
 async def test_insert_member_invite_writes_row():
     fake = MagicMock()
     fake.data = [{"id": "m1", "company_id": "c1", "invited_email": "a@b.com", "status": "invited"}]
-    with patch("db_supabase.supabase") as mock_sb:
+    with patch("repositories.corporate_repo.supabase") as mock_sb:
         mock_sb.table.return_value.insert.return_value.execute.return_value = fake
         from db_supabase import insert_corporate_member_invite
 
@@ -32,7 +32,7 @@ async def test_insert_member_invite_writes_row():
 async def test_list_company_members_filters_status():
     fake = MagicMock()
     fake.data = [{"id": "m1"}, {"id": "m2"}]
-    with patch("db_supabase.supabase") as mock_sb:
+    with patch("repositories.corporate_repo.supabase") as mock_sb:
         chain = mock_sb.table.return_value.select.return_value.eq.return_value.in_.return_value.order.return_value
         chain.execute.return_value = fake
         from db_supabase import list_company_members
@@ -45,7 +45,7 @@ async def test_list_company_members_filters_status():
 async def test_get_member_by_invite_token_returns_row():
     fake = MagicMock()
     fake.data = [{"id": "m1", "invite_token": "tok"}]
-    with patch("db_supabase.supabase") as mock_sb:
+    with patch("repositories.corporate_repo.supabase") as mock_sb:
         (mock_sb.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value) = fake
         from db_supabase import get_member_by_invite_token
 
@@ -59,7 +59,7 @@ async def test_upsert_allowance_inserts_when_absent():
     existing.data = []
     inserted = MagicMock()
     inserted.data = [{"id": "a1", "member_id": "m1", "used": 0}]
-    with patch("db_supabase.supabase") as mock_sb:
+    with patch("repositories.corporate_repo.supabase") as mock_sb:
         (
             mock_sb.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value
         ) = existing
@@ -79,7 +79,7 @@ async def test_upsert_allowance_updates_when_present():
     existing.data = [{"id": "a1", "member_id": "m1", "used": 50}]
     updated = MagicMock()
     updated.data = [{"id": "a1", "amount": 700}]
-    with patch("db_supabase.supabase") as mock_sb:
+    with patch("repositories.corporate_repo.supabase") as mock_sb:
         (
             mock_sb.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value
         ) = existing
@@ -97,7 +97,7 @@ async def test_upsert_allowance_updates_when_present():
 async def test_list_pending_requests_orders_desc():
     fake = MagicMock()
     fake.data = [{"id": "r1"}]
-    with patch("db_supabase.supabase") as mock_sb:
+    with patch("repositories.corporate_repo.supabase") as mock_sb:
         chain = mock_sb.table.return_value.select.return_value.eq.return_value.eq.return_value.order.return_value
         chain.execute.return_value = fake
         from db_supabase import list_pending_allowance_requests_for_member
@@ -110,7 +110,7 @@ async def test_list_pending_requests_orders_desc():
 async def test_accept_member_invite_flips_status():
     fake = MagicMock()
     fake.data = [{"id": "m1", "status": "active", "user_id": "u1"}]
-    with patch("db_supabase.supabase") as mock_sb:
+    with patch("repositories.corporate_repo.supabase") as mock_sb:
         (mock_sb.table.return_value.update.return_value.eq.return_value.eq.return_value.execute.return_value) = fake
         from db_supabase import accept_member_invite
 
@@ -123,7 +123,7 @@ async def test_accept_member_invite_flips_status():
 async def test_add_allowed_domain_inserts_lowercase():
     fake = MagicMock()
     fake.data = [{"id": "d1", "company_id": "c1", "domain": "acme.com"}]
-    with patch("db_supabase.supabase") as mock_sb:
+    with patch("repositories.corporate_repo.supabase") as mock_sb:
         mock_sb.table.return_value.insert.return_value.execute.return_value = fake
         from db_supabase import add_allowed_domain
 
@@ -135,7 +135,7 @@ async def test_add_allowed_domain_inserts_lowercase():
 async def test_list_allowances_due_for_reset_filters():
     fake = MagicMock()
     fake.data = [{"id": "a1", "period_end": "2026-03-31"}]
-    with patch("db_supabase.supabase") as mock_sb:
+    with patch("repositories.corporate_repo.supabase") as mock_sb:
         chain = mock_sb.table.return_value.select.return_value.eq.return_value.eq.return_value.lt.return_value
         chain.execute.return_value = fake
         from db_supabase import list_allowances_due_for_reset

@@ -47,18 +47,25 @@ export function useMonitoringSocket({ token, onEvent }: UseMonitoringSocketOptio
 
         ws.onopen = () => {
             ws.send(JSON.stringify({ type: "auth", token }));
-            setStatus("connected");
-            retryCountRef.current = 0;
+            setStatus("connecting");
         };
 
         ws.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data) as { type: string } & Record<string, unknown>;
+                if (data.type === "auth_success") {
+                    setStatus("connected");
+                    retryCountRef.current = 0;
+                    return;
+                }
                 if (data.type === "ping") {
                     ws.send(JSON.stringify({ type: "pong" }));
                     return;
                 }
-                // Only forward known monitoring event types
+                if (data.type === "error") {
+                    setStatus("error");
+                    return;
+                }
                 const knownTypes = [
                     "driver_location_update",
                     "ride_status_changed",
@@ -79,7 +86,6 @@ export function useMonitoringSocket({ token, onEvent }: UseMonitoringSocketOptio
 
         ws.onclose = () => {
             setStatus("disconnected");
-            // Exponential backoff: 1s, 2s, 4s, 8s, max 30s
             const delay = Math.min(1000 * 2 ** retryCountRef.current, 30_000);
             retryCountRef.current += 1;
             retryTimerRef.current = setTimeout(connect, delay);

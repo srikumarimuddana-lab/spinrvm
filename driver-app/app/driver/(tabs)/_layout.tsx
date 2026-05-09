@@ -3,6 +3,8 @@ import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@shared/theme/ThemeContext';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { queryClient } from '@shared/api/queryClient';
 
 export default function DriverTabsLayout() {
   const insets = useSafeAreaInsets();
@@ -14,6 +16,7 @@ export default function DriverTabsLayout() {
   const tabBarHeight = 60 + bottomPadding;
 
   return (
+    <QueryClientProvider client={queryClient}>
     <Tabs
       screenOptions={{
         headerShown: false,
@@ -75,5 +78,6 @@ export default function DriverTabsLayout() {
         }}
       />
     </Tabs>
+    </QueryClientProvider>
   );
 }

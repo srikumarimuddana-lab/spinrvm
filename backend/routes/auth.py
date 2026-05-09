@@ -228,9 +228,12 @@ async def send_otp(request: Request, body: SendOTPRequest):
             message_key=ErrorKeys.SYSTEM_SERVICE_UNAVAILABLE,
         )
 
-    # Dev fallback: fixed OTP so local testing doesn't need Twilio.
-    # The 4-digit length matches the real generated OTP so OTP screens accept it.
+    # If Twilio is configured, use it to send a real OTP regardless of ENV.
+    # If Twilio is not configured (local dev without credentials), fall back
+    # to the fixed dev code "1234" so testing works without SMS delivery.
     otp_code = generate_otp() if twilio_configured else "1234"
+    if not twilio_configured:
+        logger.debug("Twilio not configured — dev OTP bypass active (code=1234) for %s", phone[-4:])
 
     otp_record = OTPRecord(
         phone=phone,

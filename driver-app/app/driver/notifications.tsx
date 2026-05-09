@@ -6,9 +6,9 @@ import {
     TouchableOpacity,
     FlatList,
     Platform,
-    RefreshControl,
     Alert,
 } from 'react-native';
+import SafeRefreshControl from '../../components/SafeRefreshControl';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -162,7 +162,7 @@ export default function NotificationsScreen() {
                     index,
                 })}
                 refreshControl={
-                    <RefreshControl refreshing={isFetching} onRefresh={onRefresh} tintColor={colors.primary} />
+                    <SafeRefreshControl refreshing={isFetching} onRefresh={onRefresh} tintColor={colors.primary} />
                 }
                 ListEmptyComponent={
                     <View style={styles.emptyState}>

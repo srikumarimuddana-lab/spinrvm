@@ -262,12 +262,14 @@ class TestFirebaseIntegration:
 
     async def test_create_firebase_user(self, mock_firebase_admin):
         """Test creating user via Firebase."""
+        import sys
+
         from backend.db_supabase import create_user
 
         expected_user = {"id": "user_123", "phone": "+1234567890"}
 
-        # Patch at the function level to bypass run_sync/thread-pool complexity
-        with patch("backend.db_supabase.run_sync", new_callable=AsyncMock, return_value=expected_user):
+        _mod = sys.modules[create_user.__module__]
+        with patch.object(_mod, "run_sync", new_callable=AsyncMock, return_value=expected_user):
             result = await create_user({"id": "user_123", "phone": "+1234567890"})
 
         assert result is not None
@@ -275,12 +277,14 @@ class TestFirebaseIntegration:
 
     async def test_get_firebase_user(self, mock_firebase_admin):
         """Test getting user from Firebase."""
+        import sys
+
         from backend.db_supabase import get_user_by_id
 
         expected_user = {"id": "user_123", "phone": "+1234567890"}
 
-        # Patch at the function level to bypass run_sync/thread-pool complexity
-        with patch("backend.db_supabase.run_sync", new_callable=AsyncMock, return_value=expected_user):
+        _mod = sys.modules[get_user_by_id.__module__]
+        with patch.object(_mod, "run_sync", new_callable=AsyncMock, return_value=expected_user):
             result = await get_user_by_id("user_123")
 
         assert result is not None
@@ -288,20 +292,24 @@ class TestFirebaseIntegration:
 
     async def test_get_user_by_phone_firebase(self, mock_firebase_admin):
         """Test getting user by phone number."""
+        import sys
+
         from backend.db_supabase import get_user_by_phone
 
         mock_firebase_admin.auth.get_user_by_phone_number.return_value = MagicMock(uid="user_123")
 
-        with patch("backend.db_supabase.supabase") as mock_supabase:
-            mock_response = MagicMock()
-            mock_response.data = [{"id": "user_123", "phone": "+1234567890"}]
-            mock_supabase.table.return_value.select.return_value.eq.return_value.execute = AsyncMock(
-                return_value=mock_response
-            )
+        _mod = sys.modules[get_user_by_phone.__module__]
+        mock_supabase = MagicMock()
+        mock_response = MagicMock()
+        mock_response.data = [{"id": "user_123", "phone": "+1234567890"}]
+        mock_supabase.table.return_value.select.return_value.eq.return_value.is_.return_value.execute.return_value = (
+            mock_response
+        )
 
+        with patch.object(_mod, "supabase", mock_supabase):
             result = await get_user_by_phone("+1234567890")
 
-            assert result is not None
+        assert result is not None
 
 
 class TestAuthEndpoints:

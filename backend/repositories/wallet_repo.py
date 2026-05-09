@@ -1,0 +1,260 @@
+"""Wallet & Stripe repository — atomic wallet RPCs, promo, fare-split, Stripe events.
+
+Extracted from db_supabase.py (Phase 4 of god-object decomposition).
+"""
+
+from datetime import datetime, timezone
+from decimal import Decimal
+from typing import Any, Dict
+
+from loguru import logger
+
+try:
+    from ._base import (
+        DatabaseError,
+        _serialize_for_api,
+        run_sync,
+        supabase,
+    )
+except ImportError:
+    from repositories._base import (  # type: ignore
+        DatabaseError,
+        _serialize_for_api,
+        run_sync,
+        supabase,
+    )
+
+
+# ============ Atomic Wallet RPCs (P0-4, P0-5, P0-6) ============
+
+
+async def wallet_increment_balance(wallet_id: str, amount: "Decimal") -> "Decimal":
+    """Atomically increment a wallet balance. Returns the new balance."""
+    from decimal import Decimal as _Decimal  # noqa: PLC0415
+
+    if not supabase:
+        raise DatabaseError(details={"original": "supabase not initialised"})
+
+    def _fn():
+        res = supabase.rpc(
+            "wallet_increment_balance",
+            {"p_wallet_id": wallet_id, "p_amount": str(amount)},
+        ).execute()
+        data = getattr(res, "data", None)
+        if data is None:
+            raise DatabaseError(details={"original": "wallet_increment_balance: no data returned"})
+        return _Decimal(str(data))
+
+    return await run_sync(_fn)
+
+
+async def wallet_pay_for_ride(wallet_id: str, ride_id: str, amount: "Decimal") -> "Decimal":
+    """Atomically debit wallet and mark ride paid. Returns the new balance.
+
+    Raises ValueError('insufficient_funds') if balance < amount.
+    """
+    from decimal import Decimal as _Decimal  # noqa: PLC0415
+
+    if not supabase:
+        raise DatabaseError(details={"original": "supabase not initialised"})
+
+    def _fn():
+        try:
+            res = supabase.rpc(
+                "wallet_pay_for_ride",
+                {"p_wallet_id": wallet_id, "p_ride_id": ride_id, "p_amount": str(amount)},
+            ).execute()
+        except Exception as exc:
+            msg = str(exc).lower()
+            if "insufficient_funds" in msg:
+                raise ValueError("insufficient_funds") from exc
+            if "wallet not found" in msg:
+                raise ValueError("wallet_not_found") from exc
+            raise
+        data = getattr(res, "data", None)
+        if data is None:
+            raise DatabaseError(details={"original": "wallet_pay_for_ride: no data returned"})
+        return _Decimal(str(data))
+
+    return await run_sync(_fn)
+
+
+async def wallet_transfer(sender_id: str, recipient_id: str, amount: "Decimal") -> "tuple[Decimal, Decimal]":
+    """Atomically transfer between two wallets. Returns (sender_balance, recipient_balance).
+
+    Raises ValueError('insufficient_funds') if sender balance < amount.
+    """
+    from decimal import Decimal as _Decimal  # noqa: PLC0415
+
+    if not supabase:
+        raise DatabaseError(details={"original": "supabase not initialised"})
+
+    def _fn():
+        try:
+            res = supabase.rpc(
+                "wallet_transfer",
+                {
+                    "p_sender_id": sender_id,
+                    "p_recipient_id": recipient_id,
+                    "p_amount": str(amount),
+                },
+            ).execute()
+        except Exception as exc:
+            msg = str(exc).lower()
+            if "insufficient_funds" in msg:
+                raise ValueError("insufficient_funds") from exc
+            if "wallet not found" in msg:
+                raise ValueError("wallet_not_found") from exc
+            raise
+        data = getattr(res, "data", None)
+        if not data:
+            raise DatabaseError(details={"original": "wallet_transfer: no data returned"})
+        row = data[0] if isinstance(data, list) else data
+        return (
+            _Decimal(str(row["sender_balance"])),
+            _Decimal(str(row["recipient_balance"])),
+        )
+
+    return await run_sync(_fn)
+
+
+async def increment_promo_uses(promo_id: str, max_uses: int) -> bool:
+    """Atomically increment promo uses if uses < max_uses. Returns True if
+    the promo still had capacity (row updated), False if exhausted.
+    Callers should raise HTTP 409 on False.
+    """
+    if not supabase:
+        raise DatabaseError(details={"original": "supabase not initialised"})
+
+    def _fn():
+        res = supabase.rpc(
+            "increment_promo_uses",
+            {"p_promo_id": promo_id, "p_max_uses": max_uses},
+        ).execute()
+        data = getattr(res, "data", None)
+        return data is True or data == 1 or (isinstance(data, list) and len(data) > 0)
+
+    return await run_sync(_fn)
+
+
+async def fare_split_pay_share(wallet_id: str, participant_id: str, amount: "Decimal") -> "Decimal":
+    """Atomically deduct `amount` from `wallet_id` and mark `participant_id`
+    as paid in a single Postgres transaction. Returns the new wallet balance.
+    Raises ValueError('insufficient_funds') when balance is insufficient.
+    """
+    if not supabase:
+        raise DatabaseError(details={"original": "supabase not initialised"})
+
+    def _fn():
+        try:
+            res = supabase.rpc(
+                "fare_split_pay_share",
+                {
+                    "p_wallet_id": wallet_id,
+                    "p_participant_id": participant_id,
+                    "p_amount": str(amount),
+                },
+            ).execute()
+        except Exception as exc:
+            msg = str(exc).lower()
+            if "insufficient_funds" in msg:
+                raise ValueError("insufficient_funds") from exc
+            raise
+        data = getattr(res, "data", None)
+        if data is None:
+            raise DatabaseError(details={"original": "fare_split_pay_share returned no data"})
+        return data
+
+    try:
+        raw = await run_sync(_fn)
+        return Decimal(str(raw))
+    except Exception as exc:
+        msg = str(exc)
+        if "insufficient_funds" in msg:
+            raise ValueError("insufficient_funds") from exc
+        raise
+
+
+# ── Stripe webhook idempotency ────────────────────────────────────────
+# See migration 22_stripe_events.sql. These helpers back
+# routes/webhooks.py's dedup path: Stripe retries every event until we
+# return 2xx within 20s, so we MUST treat a replay of the same event.id
+# as a no-op — otherwise we double-mark rides paid, double-credit
+# wallets, and double-activate subscriptions.
+
+# PostgreSQL unique_violation SQLSTATE — raised as part of the error
+# string by postgrest-py when an INSERT conflicts with the PK.
+_PG_UNIQUE_VIOLATION = "23505"
+
+
+async def claim_stripe_event(event_id: str, event_type: str, payload: Dict[str, Any]) -> bool:
+    """Atomically claim a Stripe webhook event for processing.
+
+    Returns True if this call inserted the event row (caller should
+    proceed to process it). Returns False if the event_id is already
+    present (a retry — caller should return 200 without doing work).
+
+    Raises if Supabase is unreachable or the error is not a unique
+    violation — in that case the caller should return 5xx so Stripe
+    retries later.
+    """
+    if not supabase:
+        raise RuntimeError("Supabase client not configured — cannot persist stripe event")
+
+    serialized_payload = _serialize_for_api(payload)
+
+    def _fn() -> bool:
+        try:
+            supabase.table("stripe_events").insert(
+                {
+                    "event_id": event_id,
+                    "event_type": event_type,
+                    "payload": serialized_payload,
+                }
+            ).execute()
+            return True
+        except Exception as e:  # noqa: BLE001
+            msg = str(e).lower()
+            if _PG_UNIQUE_VIOLATION in msg or "duplicate key" in msg or "already exists" in msg:
+                # Check if the previous claim was actually completed. A row with
+                # processed_at=NULL means a prior handler crashed mid-way and Stripe
+                # is retrying — log a CRITICAL so the reconciliation alert fires, but
+                # still return False (do not re-process automatically to avoid
+                # double-charging). The ops team can replay via the admin endpoint.
+                existing = (
+                    supabase.table("stripe_events").select("processed_at").eq("event_id", event_id).limit(1).execute()
+                )
+                if existing.data and existing.data[0].get("processed_at") is None:
+                    logger.critical(
+                        "Stripe event %s is STUCK: claimed but never marked processed. Manual reconciliation required.",
+                        event_id,
+                    )
+                else:
+                    logger.info("Stripe event %s already processed — deduplicating", event_id)
+                return False
+            raise
+
+    return await run_sync(_fn)
+
+
+async def mark_stripe_event_processed(event_id: str) -> None:
+    """Stamp processed_at=now() on a previously claimed stripe event row.
+
+    Called after the handler has finished the business-logic work for
+    an event. Failure here is non-fatal — the reconciliation job can
+    still distinguish processed vs. stuck events by the presence of
+    the updated_at stamp, and Stripe will not retry since we returned
+    2xx. Log and swallow.
+    """
+    if not supabase:
+        return
+
+    def _fn():
+        supabase.table("stripe_events").update({"processed_at": datetime.now(timezone.utc).isoformat()}).eq(
+            "event_id", event_id
+        ).execute()
+
+    try:
+        await run_sync(_fn)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"Failed to stamp processed_at on stripe event {event_id}: {e}")

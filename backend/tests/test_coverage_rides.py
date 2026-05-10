@@ -553,9 +553,9 @@ async def test_add_tip_duplicate():
 
 @pytest.mark.anyio
 async def test_record_payment_event_success():
-    from backend.routes.rides import _record_payment_event
+    from backend.services.payment_service import record_payment_event as _record_payment_event
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.services.payment_service.db_supabase") as mock_db:
         mock_db.insert_one = AsyncMock()
         await _record_payment_event(_RIDE_ID, _RIDER_ID, 1500, "pi_test")
     mock_db.insert_one.assert_called_once()
@@ -564,9 +564,9 @@ async def test_record_payment_event_success():
 @pytest.mark.anyio
 async def test_record_payment_event_swallows_error():
     """Ledger write failure must not propagate."""
-    from backend.routes.rides import _record_payment_event
+    from backend.services.payment_service import record_payment_event as _record_payment_event
 
-    with patch("backend.routes.rides.db_supabase") as mock_db:
+    with patch("backend.services.payment_service.db_supabase") as mock_db:
         mock_db.insert_one = AsyncMock(side_effect=Exception("DB error"))
         # Should not raise
         await _record_payment_event(_RIDE_ID, _RIDER_ID, 1500, "pi_test")
@@ -685,7 +685,7 @@ async def test_process_payment_succeeded():
 
     with (
         patch("backend.routes.rides.db_supabase") as mock_db,
-        patch("backend.routes.rides.charge_ride", new_callable=AsyncMock, return_value=mock_outcome),
+        patch("backend.services.payment_service.charge_ride", new_callable=AsyncMock, return_value=mock_outcome),
         patch("backend.routes.rides.manager") as mock_manager,
         patch("backend.routes.rides.send_push_notification", new_callable=AsyncMock),
         patch.dict(sys.modules, {"utils.email_receipt": mock_email_mod}),
@@ -723,7 +723,7 @@ async def test_process_payment_declined():
 
     with (
         patch("backend.routes.rides.db_supabase") as mock_db,
-        patch("backend.routes.rides.charge_ride", new_callable=AsyncMock, return_value=mock_outcome),
+        patch("backend.services.payment_service.charge_ride", new_callable=AsyncMock, return_value=mock_outcome),
         patch("backend.routes.rides.send_push_notification", new_callable=AsyncMock),
     ):
         mock_db.get_ride = AsyncMock(return_value=_ride(status="completed", payment_method_id="pm_1"))
@@ -757,7 +757,7 @@ async def test_process_payment_requires_action():
 
     with (
         patch("backend.routes.rides.db_supabase") as mock_db,
-        patch("backend.routes.rides.charge_ride", new_callable=AsyncMock, return_value=mock_outcome),
+        patch("backend.services.payment_service.charge_ride", new_callable=AsyncMock, return_value=mock_outcome),
     ):
         mock_db.get_ride = AsyncMock(return_value=_ride(status="completed", payment_method_id="pm_1"))
         mock_db.get_user_by_id = AsyncMock(return_value=rider_user)
@@ -2296,7 +2296,7 @@ async def test_process_payment_card_succeeded():
 
     with (
         patch("backend.routes.rides.db_supabase", mock_db),
-        patch("backend.routes.rides.charge_ride", new_callable=AsyncMock, return_value=outcome),
+        patch("backend.services.payment_service.charge_ride", new_callable=AsyncMock, return_value=outcome),
         patch("backend.routes.rides.manager") as mock_manager,
         patch("utils.email_receipt.send_receipt_email", new_callable=AsyncMock, return_value=True),
     ):
@@ -2323,7 +2323,7 @@ async def test_process_payment_card_requires_action():
 
     with (
         patch("backend.routes.rides.db_supabase", mock_db),
-        patch("backend.routes.rides.charge_ride", new_callable=AsyncMock, return_value=outcome),
+        patch("backend.services.payment_service.charge_ride", new_callable=AsyncMock, return_value=outcome),
     ):
         with pytest.raises(HTTPException) as exc:
             await process_payment(
@@ -2349,7 +2349,7 @@ async def test_process_payment_card_declined():
 
     with (
         patch("backend.routes.rides.db_supabase", mock_db),
-        patch("backend.routes.rides.charge_ride", new_callable=AsyncMock, return_value=outcome),
+        patch("backend.services.payment_service.charge_ride", new_callable=AsyncMock, return_value=outcome),
         patch("backend.routes.rides.send_push_notification", new_callable=AsyncMock),
     ):
         with pytest.raises(HTTPException) as exc:
@@ -2374,7 +2374,7 @@ async def test_process_payment_card_unconfigured():
 
     with (
         patch("backend.routes.rides.db_supabase", mock_db),
-        patch("backend.routes.rides.charge_ride", new_callable=AsyncMock, return_value=outcome),
+        patch("backend.services.payment_service.charge_ride", new_callable=AsyncMock, return_value=outcome),
         patch("utils.email_receipt.send_receipt_email", new_callable=AsyncMock, return_value=False),
     ):
         result = await process_payment(
@@ -2399,7 +2399,7 @@ async def test_process_payment_card_failed():
 
     with (
         patch("backend.routes.rides.db_supabase", mock_db),
-        patch("backend.routes.rides.charge_ride", new_callable=AsyncMock, return_value=outcome),
+        patch("backend.services.payment_service.charge_ride", new_callable=AsyncMock, return_value=outcome),
         patch("backend.routes.rides.send_push_notification", new_callable=AsyncMock),
     ):
         with pytest.raises(HTTPException) as exc:
@@ -2746,7 +2746,7 @@ async def test_process_payment_card_succeeded_with_driver():
 
     with (
         patch("backend.routes.rides.db_supabase", mock_db),
-        patch("backend.routes.rides.charge_ride", new_callable=AsyncMock, return_value=outcome),
+        patch("backend.services.payment_service.charge_ride", new_callable=AsyncMock, return_value=outcome),
         patch("backend.routes.rides.manager") as mock_manager,
         patch("utils.email_receipt.send_receipt_email", new_callable=AsyncMock, return_value=True),
     ):
@@ -2849,8 +2849,8 @@ async def test_process_payment_company_allowance_unlimited_happy_path():
 
     with (
         patch("backend.routes.rides.db_supabase", mock_db),
-        patch("backend.routes.rides.corporate_allowance_service", mock_allowance_svc),
-        patch("backend.routes.rides.corporate_wallet_service", mock_wallet_svc),
+        patch("backend.services.payment_service.corporate_allowance_service", mock_allowance_svc),
+        patch("backend.services.payment_service.corporate_wallet_service", mock_wallet_svc),
         patch("backend.routes.rides.evaluate_policy", mock_policy_eval),
         patch("utils.email_receipt.send_receipt_email", new_callable=AsyncMock, return_value=False),
     ):
@@ -2895,8 +2895,8 @@ async def test_process_payment_company_allowance_capped_with_master():
 
     with (
         patch("backend.routes.rides.db_supabase", mock_db),
-        patch("backend.routes.rides.corporate_allowance_service", mock_allowance_svc),
-        patch("backend.routes.rides.corporate_wallet_service", mock_wallet_svc),
+        patch("backend.services.payment_service.corporate_allowance_service", mock_allowance_svc),
+        patch("backend.services.payment_service.corporate_wallet_service", mock_wallet_svc),
         patch("backend.routes.rides.evaluate_policy", mock_policy_eval),
         patch("utils.email_receipt.send_receipt_email", new_callable=AsyncMock, return_value=False),
     ):
@@ -2941,8 +2941,8 @@ async def test_process_payment_company_allowance_master_debit_fails():
 
     with (
         patch("backend.routes.rides.db_supabase", mock_db),
-        patch("backend.routes.rides.corporate_allowance_service", mock_allowance_svc),
-        patch("backend.routes.rides.corporate_wallet_service", mock_wallet_svc),
+        patch("backend.services.payment_service.corporate_allowance_service", mock_allowance_svc),
+        patch("backend.services.payment_service.corporate_wallet_service", mock_wallet_svc),
     ):
         with pytest.raises(HTTPException) as exc:
             await process_payment(

@@ -19,23 +19,25 @@ except ImportError:
 from pydantic import BaseModel, Field
 
 try:
+    from .. import db_supabase
     from ..db import db
-    from ..db_supabase import insert_one as _db_insert_one
-    from ..db_supabase import wallet_increment_balance, wallet_pay_for_ride
-    from ..db_supabase import wallet_transfer as _wallet_transfer_rpc
+    from ..db_supabase import wallet_pay_for_ride
     from ..dependencies import get_current_user
+    from ..settings_loader import get_app_settings
     from ..utils.error_handling import ErrorCode, SpinrException
     from ..utils.error_keys import ErrorKeys
     from ..utils.idempotency import idempotent_endpoint
 except ImportError:
+    import db_supabase
     from db import db
-    from db_supabase import insert_one as _db_insert_one
-    from db_supabase import wallet_increment_balance, wallet_pay_for_ride
-    from db_supabase import wallet_transfer as _wallet_transfer_rpc
+    from db_supabase import wallet_pay_for_ride
     from dependencies import get_current_user
+    from settings_loader import get_app_settings
     from utils.error_handling import ErrorCode, SpinrException
     from utils.error_keys import ErrorKeys
     from utils.idempotency import idempotent_endpoint
+
+import stripe
 
 logger = logging.getLogger(__name__)
 api_router = APIRouter(prefix="/wallet", tags=["Wallet"])
@@ -112,11 +114,6 @@ class WalletPayRequest(BaseModel):
     amount: Decimal = Field(..., gt=0, le=500, description="Amount in CAD (max $500)")
 
 
-class TransferRequest(BaseModel):
-    recipient_phone: str = Field(..., pattern=r"^\+1\d{10}$")
-    amount: Decimal = Field(..., gt=0, le=200, description="Amount in CAD (max $200)")
-
-
 # ── Endpoints ────────────────────────────────────────────────────────
 
 
@@ -139,38 +136,79 @@ async def top_up_wallet(
     request: Request,
     current_user: dict = Depends(get_current_user),
 ):
-    """Add funds to wallet. In production this would charge via Stripe first."""
+    """Create a Stripe PaymentIntent for wallet top-up.
+
+    Returns the PaymentSheet secrets so the client can present the Stripe
+    payment UI. The wallet balance is only credited after Stripe confirms
+    the payment via webhook (payment_intent.succeeded with scope=wallet_topup).
+    """
     wallet = await get_or_create_wallet(current_user["id"])
 
     if not wallet.get("is_active", True):
         raise HTTPException(status_code=403, detail="Your wallet is suspended")
 
-    new_balance = await wallet_increment_balance(wallet["id"], _d(req.amount))
+    settings = await get_app_settings()
+    stripe_secret = settings.get("stripe_secret_key", "")
+    stripe_pk = settings.get("stripe_publishable_key", "")
 
-    txn = await _record_transaction(
-        wallet_id=wallet["id"],
-        user_id=current_user["id"],
-        txn_type="top_up",
-        amount=_money_str(req.amount),
-        balance_after=_money_str(new_balance),
-        description=f"Wallet top-up ${req.amount:.2f}",
-    )
-
-    import asyncio
-
-    asyncio.create_task(
-        _audit_log_user(
-            current_user,
-            "wallet_top_up",
-            "wallets",
-            wallet["id"],
-            {"amount": _money_str(req.amount), "transaction_id": txn["id"]},
+    if not stripe_secret:
+        raise HTTPException(
+            status_code=503,
+            detail="Payment processing is not configured. Please contact support.",
         )
-    )
-    return {
-        "balance": _money_str(new_balance),
-        "transaction_id": txn["id"],
-    }
+
+    user = await db_supabase.get_user_by_id(current_user["id"])
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    stripe_customer_id = user.get("stripe_customer_id")
+    if not stripe_customer_id:
+        customer = stripe.Customer.create(
+            email=user.get("email"),
+            name=f"{user.get('first_name', '')} {user.get('last_name', '')}".strip(),
+            metadata={"user_id": current_user["id"]},
+            api_key=stripe_secret,
+        )
+        stripe_customer_id = customer.id
+        await db_supabase.update_one("users", {"id": current_user["id"]}, {"stripe_customer_id": stripe_customer_id})
+
+    amount_cents = int(_d(req.amount) * 100)
+
+    import time as _time
+
+    idempotency_key = f"wallet-topup-{current_user['id']}-{int(_time.time() // 60)}"
+
+    try:
+        ephemeral_key = stripe.EphemeralKey.create(
+            {"customer": stripe_customer_id},
+            api_version=stripe.api_version,
+            api_key=stripe_secret,
+        )
+
+        intent = stripe.PaymentIntent.create(
+            amount=amount_cents,
+            currency="cad",
+            customer=stripe_customer_id,
+            automatic_payment_methods={"enabled": True},
+            metadata={
+                "scope": "wallet_topup",
+                "user_id": current_user["id"],
+                "wallet_id": wallet["id"],
+                "amount_cad": _money_str(req.amount),
+            },
+            api_key=stripe_secret,
+            idempotency_key=idempotency_key,
+        )
+
+        return {
+            "paymentIntent": intent.client_secret,
+            "ephemeralKey": ephemeral_key.secret,
+            "customer": stripe_customer_id,
+            "publishableKey": stripe_pk,
+        }
+    except stripe.error.StripeError as e:
+        logger.error("Stripe wallet top-up error", exc_info=True)
+        raise HTTPException(status_code=502, detail="Payment provider error. Please try again.") from e
 
 
 @api_router.post("/pay")
@@ -273,93 +311,3 @@ async def get_transactions(
         ],
         "total": len(txns),
     }
-
-
-@api_router.post("/transfer")
-@idempotent_endpoint(scope="wallet_transfer")
-async def transfer_to_user(
-    req: TransferRequest,
-    request: Request,
-    current_user: dict = Depends(get_current_user),
-):
-    """Transfer wallet balance to another user by phone number."""
-    # Find recipient
-    recipient = await db.find_one("users", {"phone": req.recipient_phone})
-    if not recipient:
-        raise SpinrException(
-            message="Recipient not found",
-            error_code=ErrorCode.RESOURCE_NOT_FOUND,
-            status_code=404,
-            message_key=ErrorKeys.WALLET_TRANSFER_RECIPIENT_NOT_FOUND,
-            action_hint="Check the phone number",
-        )
-
-    if recipient["id"] == current_user["id"]:
-        raise SpinrException(
-            message="Cannot transfer to yourself",
-            error_code=ErrorCode.VALIDATION_ERROR,
-            status_code=400,
-            message_key=ErrorKeys.WALLET_TRANSFER_SELF,
-        )
-
-    sender_wallet = await get_or_create_wallet(current_user["id"])
-    recipient_wallet = await get_or_create_wallet(recipient["id"])
-
-    if not sender_wallet.get("is_active", True):
-        raise HTTPException(status_code=403, detail="Your wallet is suspended")
-
-    transfer_amount = _d(req.amount)
-
-    try:
-        new_sender_balance, new_recipient_balance = await _wallet_transfer_rpc(
-            sender_wallet["id"], recipient_wallet["id"], transfer_amount
-        )
-    except ValueError as exc:
-        if "insufficient_funds" in str(exc):
-            raise SpinrException(
-                message="Insufficient wallet balance",
-                error_code=ErrorCode.PAYMENT_INSUFFICIENT_FUNDS,
-                status_code=400,
-                message_key=ErrorKeys.PAYMENT_INSUFFICIENT_FUNDS,
-                action_hint="Top up your wallet",
-            ) from exc
-        raise HTTPException(status_code=503, detail="Transfer failed — please retry") from exc
-
-    await _record_transaction(
-        wallet_id=sender_wallet["id"],
-        user_id=current_user["id"],
-        txn_type="fare_split_sent",
-        amount="-" + _money_str(transfer_amount),
-        balance_after=_money_str(new_sender_balance),
-        description=f"Transfer to {req.recipient_phone}",
-    )
-    await _record_transaction(
-        wallet_id=recipient_wallet["id"],
-        user_id=recipient["id"],
-        txn_type="fare_split_received",
-        amount=_money_str(transfer_amount),
-        balance_after=_money_str(new_recipient_balance),
-        description=f"Received from {current_user.get('phone', 'user')}",
-    )
-
-    try:
-        await _db_insert_one(
-            "audit_logs",
-            {
-                "id": str(uuid.uuid4()),
-                "action": "wallet_transfer",
-                "entity_type": "wallets",
-                "entity_id": sender_wallet["id"],
-                "actor_id": current_user["id"],
-                "details": {
-                    "amount": _money_str(transfer_amount),
-                    "recipient_id": recipient["id"],
-                    "new_sender_balance": _money_str(new_sender_balance),
-                },
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            },
-        )
-    except Exception:
-        logger.warning("audit_log write failed for wallet_transfer", exc_info=True)
-
-    return {"balance": _money_str(new_sender_balance), "success": True}

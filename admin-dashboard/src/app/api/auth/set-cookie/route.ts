@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 const COOKIE_NAME = 'admin_token';
-const COOKIE_MAX_AGE = 7 * 24 * 60 * 60; // 7 days — matches login route SESSION_MAX_AGE
+const COOKIE_MAX_AGE = 8 * 60 * 60; // 8 hours — admin session TTL (P0 security hardening)
 
 export async function POST(request: NextRequest) {
     let token: string | undefined;

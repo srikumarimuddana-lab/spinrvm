@@ -38,13 +38,17 @@ config.resolver.nodeModulesPaths = [
 config.resolver.blockList = [
   /.*\.d\.ts$/,
   /node_modules[\\/]@types[\\/].*/,
+  // Prevent shared/node_modules from providing duplicate React/RN copies
+  /\.\.[\\/]shared[\\/]node_modules[\\/](react|react-native|react-dom)[\\/].*/,
 ];
 
-// Force `react` and `react-dom` to resolve to the actual packages, not @types
+// Force `react`, `react-dom`, and `react-native` to resolve from rider-app's
+// node_modules — prevents shared/ from loading its own duplicate copy.
 config.resolver.extraNodeModules = {
   ...config.resolver.extraNodeModules,
   react: path.resolve(__dirname, 'node_modules/react'),
   'react-dom': path.resolve(__dirname, 'node_modules/react-dom'),
+  'react-native': path.resolve(__dirname, 'node_modules/react-native'),
 };
 
 // ── Web build: stub native-only packages ──────────────────────────────────
@@ -85,17 +89,16 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
     }
   }
 
-  // Stub RN 0.85 private NativeComponent specs that Expo 54 codegen can't parse.
-  const origin = context.originModulePath || '';
-  const isFromRNPrivate =
-    origin.includes('react-native\\src\\private') ||
-    origin.includes('react-native/src/private');
+  // Stub ONLY specs_DEPRECATED NativeComponent files — the Babel codegen plugin
+  // (Expo SDK 55) can't parse their Flow type syntax. Don't stub anything else
+  // in src/private/ (ScrollView wrappers, SafeAreaView, NativeComponentRegistry)
+  // — those are plain JS the dev client needs at runtime.
+  const isSpecsDeprecated =
+    moduleName.includes('specs_DEPRECATED') ||
+    moduleName.includes('specs_DEPRECATED');
   const isNativeComponentImport = moduleName.includes('NativeComponent');
-  const isDirectPrivateImport =
-    (moduleName.includes('/src/private/') || moduleName.includes('\\src\\private\\')) &&
-    isNativeComponentImport;
 
-  if ((isFromRNPrivate && isNativeComponentImport) || isDirectPrivateImport) {
+  if (isSpecsDeprecated && isNativeComponentImport) {
     return { type: 'sourceFile', filePath: NATIVE_COMPONENT_STUB };
   }
 

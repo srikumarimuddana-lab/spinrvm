@@ -1,7 +1,8 @@
 import React, { useState, useMemo } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch,
+  View, Text, StyleSheet, TouchableOpacity, ScrollView,
 } from 'react-native';
+import CustomToggle from '../components/CustomToggle';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -181,7 +182,7 @@ function SettingRow({ icon, iconColor, iconBg, title, subtitle, toggle, value, o
         <Text style={{ fontSize: 12, color: colors.textDim, marginTop: 1 }}>{subtitle}</Text>
       </View>
       {toggle && onToggle ? (
-        <Switch
+        <CustomToggle
           value={value}
           onValueChange={onToggle}
           trackColor={{ false: colors.border, true: `${colors.primary}60` }}

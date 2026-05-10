@@ -10,8 +10,8 @@ import {
   TextInput,
   KeyboardAvoidingView,
   Platform,
-  Switch,
 } from 'react-native';
+import CustomToggle from '../components/CustomToggle';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -361,7 +361,7 @@ function PaymentConfirmScreenContent() {
                     : 'Use a corporate account'}
                 </Text>
               </View>
-              <Switch
+              <CustomToggle
                 value={useCorporate}
                 onValueChange={(v) => setUseCorporate(v)}
                 trackColor={{ false: colors.border, true: colors.primary }}

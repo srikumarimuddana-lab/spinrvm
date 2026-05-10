@@ -1,7 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch, Modal, FlatList,
+  View, Text, StyleSheet, TouchableOpacity, ScrollView, Modal, FlatList,
 } from 'react-native';
+import CustomToggle from '../components/CustomToggle';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -202,7 +203,7 @@ function SettingToggle({ icon, iconColor, iconBg, title, subtitle, value, onTogg
         <Text style={styles.rowTitle}>{title}</Text>
         <Text style={styles.rowSub}>{subtitle}</Text>
       </View>
-      <Switch
+      <CustomToggle
         value={value}
         onValueChange={onToggle}
         trackColor={{ false: colors.border, true: `${colors.primary}60` }}

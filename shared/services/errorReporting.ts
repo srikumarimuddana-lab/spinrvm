@@ -15,7 +15,7 @@
  *
  * Interface is intentionally Sentry-compatible so the upgrade is mechanical.
  */
-import { Platform } from 'react-native';
+import { Platform, NativeModules } from 'react-native';
 
 // Lazy-load the native Crashlytics module so web builds succeed and Expo Go
 // doesn't crash trying to resolve a native module.
@@ -23,12 +23,15 @@ let _crashlytics: (() => any) | null = null;
 
 function crashlytics() {
   if (_crashlytics !== null) return _crashlytics();
-  if (Platform.OS === 'web') return null;
+  if (Platform.OS === 'web' || !NativeModules.RNFBAppModule) {
+    _crashlytics = () => null;
+    return null;
+  }
   try {
     _crashlytics = require('@react-native-firebase/crashlytics').default;
     return _crashlytics!();
   } catch {
-    _crashlytics = () => null; // memoize the failure
+    _crashlytics = () => null;
     return null;
   }
 }

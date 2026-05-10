@@ -7,8 +7,8 @@ import {
   TouchableOpacity,
   RefreshControl,
   ActivityIndicator,
-  Switch,
 } from 'react-native';
+import CustomToggle from '../components/CustomToggle';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -243,7 +243,7 @@ export default function WorkProfileScreen() {
                 </Text>
               </View>
             </View>
-            <Switch
+            <CustomToggle
               value={workModeEnabled}
               onValueChange={v => setWorkMode(v)}
               trackColor={{ false: colors.border, true: '#3B82F6' }}

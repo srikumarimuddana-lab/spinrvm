@@ -1,7 +1,19 @@
 import React from 'react';
 import { Animated } from 'react-native';
 import { render } from '@testing-library/react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { ActiveRidePanel } from '../../components/dashboard/ActiveRidePanel';
+
+// react-native-safe-area-context's `useSafeAreaInsets` throws if no provider is
+// in the tree. Wrap every render with a deterministic SafeAreaProvider.
+const initialMetrics = {
+  frame: { x: 0, y: 0, width: 360, height: 800 },
+  insets: { top: 0, left: 0, right: 0, bottom: 0 },
+};
+const renderWithSafeArea = (ui: React.ReactElement) =>
+  render(
+    <SafeAreaProvider initialMetrics={initialMetrics}>{ui}</SafeAreaProvider>,
+  );
 
 jest.mock('@shared/config/spinr.config', () => ({
   __esModule: true,
@@ -82,33 +94,37 @@ const defaultProps = {
 
 describe('ActiveRidePanel', () => {
   it('renders without crashing', () => {
-    const { toJSON } = render(<ActiveRidePanel {...defaultProps} />);
+    const { toJSON } = renderWithSafeArea(<ActiveRidePanel {...defaultProps} />);
     expect(toJSON()).not.toBeNull();
   });
 
   it('shows rider name', () => {
-    const { getByText } = render(<ActiveRidePanel {...defaultProps} />);
+    const { getByText } = renderWithSafeArea(<ActiveRidePanel {...defaultProps} />);
     expect(getByText('Jane D.')).toBeTruthy();
   });
 
   it('shows earnings amount', () => {
-    const { getAllByText } = render(<ActiveRidePanel {...defaultProps} />);
+    const { getAllByText } = renderWithSafeArea(<ActiveRidePanel {...defaultProps} />);
     // Earnings appears in both the status pill and the trip info row
     expect(getAllByText('$15.00').length).toBeGreaterThan(0);
   });
 
   it('shows pickup address', () => {
-    const { getByText } = render(<ActiveRidePanel {...defaultProps} />);
+    const { getByText } = renderWithSafeArea(<ActiveRidePanel {...defaultProps} />);
     expect(getByText('123 Main St')).toBeTruthy();
   });
 
   it('shows cancel ride option during navigating_to_pickup', () => {
-    const { getByText } = render(<ActiveRidePanel {...defaultProps} />);
+    const { getByText } = renderWithSafeArea(<ActiveRidePanel {...defaultProps} />);
     expect(getByText('Cancel Ride')).toBeTruthy();
   });
 
   it('renders nothing when ride is null', () => {
-    const { toJSON } = render(<ActiveRidePanel {...defaultProps} ride={null} />);
-    expect(toJSON()).toBeNull();
+    // Render inside SafeAreaProvider (the panel calls useSafeAreaInsets before
+    // its early-return); assert the panel produced no panel-specific output by
+    // checking that fields populated from a non-null ride are absent.
+    const { queryByText } = renderWithSafeArea(<ActiveRidePanel {...defaultProps} ride={null} />);
+    expect(queryByText('Jane D.')).toBeNull();
+    expect(queryByText('Cancel Ride')).toBeNull();
   });
 });

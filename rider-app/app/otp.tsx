@@ -39,16 +39,15 @@ const storage = {
 export default function OtpScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{ verificationId?: string; phoneNumber: string; mode?: string }>();
-  const { phoneNumber, verificationId, mode } = params;
-  const isBackendMode = mode === 'backend' || !verificationId;
+  const params = useLocalSearchParams<{ phoneNumber: string }>();
+  const { phoneNumber } = params;
   const codeLength = 4;
 
   const [code, setCode] = useState('');
   const [verifying, setVerifying] = useState(false);
   const [countdown, setCountdown] = useState(30);
   const [canResend, setCanResend] = useState(false);
-  const { verifyOTP, user, initialize, clearError } = useAuthStore();
+  const { user, initialize, clearError } = useAuthStore();
   const inputRef = useRef<TextInput>(null);
   const resendInFlight = useRef(false);
   const { colors, isDark } = useTheme();
@@ -139,30 +138,26 @@ export default function OtpScreen() {
     clearError();
 
     try {
-      if (isBackendMode) {
-        const response = await api.post<{ token?: string; refresh_token?: string; expires_in?: number; user?: User }>('/auth/verify-otp', {
-          phone: phoneNumber,
-          code: code,
+      const response = await api.post<{ token?: string; refresh_token?: string; expires_in?: number; user?: User }>('/auth/verify-otp', {
+        phone: phoneNumber,
+        code: code,
+      });
+      if (!response.data) throw new Error('Empty response from auth server');
+      const { token, refresh_token, expires_in, user: userData } = response.data as { token: string; refresh_token?: string; expires_in?: number; user?: any };
+      // P3 cookie auth: token is "" when HTTP-only cookies are used
+      if (token) {
+        await useAuthStore.getState().setTokens(token, refresh_token ?? "", expires_in ?? 900);
+      }
+      Analytics.otpVerified();
+      if (userData) {
+        useAuthStore.setState({
+          user: userData,
+          isInitialized: true,
+          isLoading: false,
         });
-        if (!response.data) throw new Error('Empty response from auth server');
-        const { token, refresh_token, expires_in, user: userData } = response.data as { token: string; refresh_token?: string; expires_in?: number; user?: any };
-        // P3 cookie auth: token is "" when HTTP-only cookies are used
-        if (token) {
-          await useAuthStore.getState().setTokens(token, refresh_token ?? "", expires_in ?? 900);
-        }
-        Analytics.otpVerified();
-        if (userData) {
-          useAuthStore.setState({
-            user: userData,
-            isInitialized: true,
-            isLoading: false,
-          });
-          Analytics.login();
-        } else {
-          await initialize();
-        }
+        Analytics.login();
       } else {
-        await verifyOTP(verificationId!, code);
+        await initialize();
       }
     } catch (err: any) {
       triggerShake();

@@ -198,7 +198,6 @@ interface AuthState {
 
   // Actions
   initialize: () => Promise<void>;
-  verifyOTP: (verificationId: string, code: string) => Promise<void>;
   setTokens: (token: string, refreshToken: string, expiresIn: number, csrfToken?: string | null) => Promise<void>;
   refreshTokens: () => Promise<boolean>;
   createProfile: (data: {
@@ -343,14 +342,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     if (__DEV__) console.log('[Auth] No stored token → logged out');
     await clearAuthStorage();
     set({ user: null, driver: null, token: null, refreshToken: null, tokenExpiresAt: null, isInitialized: true, isLoading: false });
-  },
-
-  verifyOTP: async (_verificationId: string, _code: string) => {
-    // OTP verification is handled via the backend API (POST /auth/verify-otp),
-    // not through Firebase Auth. This method is preserved for interface
-    // compatibility but should not be called directly — use the backend
-    // OTP flow in otp.tsx instead.
-    throw new Error('verifyOTP via Firebase is not used. Use backend OTP verification.');
   },
 
   createProfile: async (data: Parameters<AuthState['createProfile']>[0]) => {

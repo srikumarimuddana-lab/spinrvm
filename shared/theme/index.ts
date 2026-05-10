@@ -25,10 +25,16 @@ export type ThemeColors = {
   // UI chrome
   border: string;
   overlay: string;
-  // Semantic
+  // Semantic — foreground tones
   error: string;
   success: string;
   warning: string;
+  info: string;
+  // Semantic — surface tints (background behind status icons / pill badges)
+  successBg: string;
+  warningBg: string;
+  dangerBg: string;
+  infoBg: string;
   // Aliases / Legacy
   accent: string;
   accentDim: string;
@@ -51,6 +57,11 @@ export const lightColors: ThemeColors = {
   error: '#DC2626',
   success: '#34C759',
   warning: '#FFCC00',
+  info: '#3B82F6',           // iOS-system-blue
+  successBg: '#ECFDF5',
+  warningBg: '#FFFBEB',
+  dangerBg:  '#FEF2F2',
+  infoBg:    '#EFF6FF',
   accent: '#FF3B30',
   accentDim: '#D32F2F',
   danger: '#DC2626',
@@ -72,6 +83,14 @@ export const darkColors: ThemeColors = {
   error: '#FF453A',
   success: '#30D158',       // iOS system green (dark)
   warning: '#FFD60A',       // iOS system yellow (dark)
+  info: '#0A84FF',          // iOS system blue (dark)
+  // Surface tints — NOT just inverted; very-low-luminance versions of the
+  // foreground hue so they read as a tinted dark surface, not a near-white
+  // tint inverted to off-tone aubergine.
+  successBg: '#0B3D2E',
+  warningBg: '#3D2E0B',
+  dangerBg:  '#3D0B0B',
+  infoBg:    '#0B243D',
   accent: '#FF453A',
   accentDim: '#D32F2F',
   danger: '#FF453A',

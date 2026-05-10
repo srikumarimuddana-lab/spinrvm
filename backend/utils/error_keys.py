@@ -40,8 +40,6 @@ class ErrorKeys:
     PAYMENT_METHOD_INVALID: Final[str] = "errors.payment.method_invalid"
     PAYMENT_INSUFFICIENT_FUNDS: Final[str] = "errors.payment.insufficient_funds"
     PAYMENT_REFUND_FAILED: Final[str] = "errors.payment.refund_failed"
-    WALLET_TRANSFER_SELF: Final[str] = "errors.wallet.transfer_self"
-    WALLET_TRANSFER_RECIPIENT_NOT_FOUND: Final[str] = "errors.wallet.transfer_recipient_not_found"
 
     # System
     SYSTEM_INTERNAL: Final[str] = "errors.system.internal"

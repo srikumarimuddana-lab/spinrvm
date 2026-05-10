@@ -128,6 +128,60 @@ async def stripe_webhook(request: Request):
             await mark_stripe_event_processed(event_id)
             return {"received": True, "scope": "corporate_topup", "event_id": event_id}
 
+        if meta.get("scope") == "wallet_topup":
+            try:
+                from ..db_supabase import wallet_increment_balance  # type: ignore
+            except ImportError:
+                from db_supabase import wallet_increment_balance  # type: ignore
+
+            wallet_id = meta.get("wallet_id")
+            user_id = meta.get("user_id")
+            amount_cad_str = meta.get("amount_cad", "0")
+            from decimal import ROUND_HALF_UP, Decimal
+
+            amount = Decimal(amount_cad_str).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            new_balance = await wallet_increment_balance(wallet_id, amount)
+
+            try:
+                from ..db import db  # type: ignore
+            except ImportError:
+                from db import db  # type: ignore
+
+            await db.insert_one(
+                "wallet_transactions",
+                {
+                    "id": str(__import__("uuid").uuid4()),
+                    "wallet_id": wallet_id,
+                    "user_id": user_id,
+                    "type": "top_up",
+                    "amount": str(amount),
+                    "balance_after": str(new_balance),
+                    "reference_id": data_object["id"],
+                    "description": f"Wallet top-up ${amount}",
+                    "metadata": {"stripe_payment_intent_id": data_object["id"]},
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+
+            logger.info(
+                f"Wallet top-up confirmed: wallet={wallet_id} amount={amount} new_balance={new_balance}",
+                extra={"domain": "payments", "event_id": event_id},
+            )
+            await mark_stripe_event_processed(event_id)
+
+            if user_id:
+                try:
+                    await send_push_notification(
+                        user_id,
+                        title="Wallet Topped Up",
+                        body=f"${amount} has been added to your wallet.",
+                        data={"type": "wallet_topup", "amount": str(amount)},
+                    )
+                except Exception:
+                    logger.warning("Push notification failed for wallet_topup", exc_info=True)
+
+            return {"received": True, "scope": "wallet_topup", "event_id": event_id}
+
         ride_id = meta.get("ride_id")
         user_id = meta.get("user_id")
         payment_intent_id = data_object.get("id")

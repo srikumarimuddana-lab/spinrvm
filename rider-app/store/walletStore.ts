@@ -53,10 +53,14 @@ interface WalletState {
   error: string | null;
 
   fetchWallet: () => Promise<void>;
-  topUp: (amount: number) => Promise<void>;
+  topUp: (amount: number) => Promise<{
+    paymentIntent: string;
+    ephemeralKey: string;
+    customer: string;
+    publishableKey: string;
+  }>;
   payWithWallet: (rideId: string, amount: number) => Promise<void>;
   fetchTransactions: (limit?: number) => Promise<void>;
-  transfer: (phone: string, amount: number) => Promise<void>;
 
   // Fare split actions
   createFareSplit: (rideId: string, phones: string[]) => Promise<FareSplit>;
@@ -91,9 +95,14 @@ export const useWalletStore = create<WalletState>((set, get) => ({
   topUp: async (amount: number) => {
     try {
       set({ isLoading: true, error: null });
-      await api.post('/wallet/top-up', { amount });
-      await get().fetchWallet();
+      const res = await api.post<{
+        paymentIntent: string;
+        ephemeralKey: string;
+        customer: string;
+        publishableKey: string;
+      }>('/wallet/top-up', { amount });
       set({ isLoading: false });
+      return res.data;
     } catch (error: unknown) {
       set({ error: isAxiosError(error) ? (error.response?.data?.detail || error.message || null) : null, isLoading: false });
       throw error;
@@ -120,18 +129,6 @@ export const useWalletStore = create<WalletState>((set, get) => ({
       set({ transactions: res.data.transactions || [], transactionsLoading: false });
     } catch (error: unknown) {
       set({ error: isAxiosError(error) ? (error.message ?? null) : null, transactionsLoading: false });
-    }
-  },
-
-  transfer: async (phone: string, amount: number) => {
-    try {
-      set({ isLoading: true, error: null });
-      await api.post('/wallet/transfer', { recipient_phone: phone, amount });
-      await get().fetchWallet();
-      set({ isLoading: false });
-    } catch (error: unknown) {
-      set({ error: isAxiosError(error) ? (error.response?.data?.detail || error.message || null) : null, isLoading: false });
-      throw error;
     }
   },
 

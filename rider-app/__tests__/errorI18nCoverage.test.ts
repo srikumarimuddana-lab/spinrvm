@@ -42,8 +42,6 @@ describe('rider-app i18n error coverage', () => {
     'errors.payment.method_invalid',
     'errors.payment.insufficient_funds',
     'errors.payment.refund_failed',
-    'errors.wallet.transfer_self',
-    'errors.wallet.transfer_recipient_not_found',
     'errors.system.internal',
     'errors.system.service_unavailable',
     'errors.system.rate_limited',

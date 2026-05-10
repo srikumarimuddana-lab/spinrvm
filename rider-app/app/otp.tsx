@@ -230,7 +230,6 @@ export default function OtpScreen() {
     TouchableOpacity: typeof TouchableOpacity,
     ActivityIndicator: typeof ActivityIndicator,
     KeyboardAvoidingView: typeof KeyboardAvoidingView,
-    ScrollView: typeof ScrollView,
     Animated: typeof Animated,
     AnimatedView: typeof Animated?.View,
     Ionicons: typeof Ionicons,

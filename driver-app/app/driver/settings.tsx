@@ -6,7 +6,6 @@ import {
     TouchableOpacity,
     ScrollView,
     Platform,
-    Switch,
     Modal,
     Pressable,
     ActivityIndicator,
@@ -193,12 +192,22 @@ export default function SettingsScreen() {
                 <Text style={styles.settingLabel}>{label}</Text>
                 <Text style={styles.settingDesc}>{description}</Text>
             </View>
-            <Switch
-                value={value}
-                onValueChange={onToggle}
-                trackColor={{ false: colors.surfaceLight, true: `${colors.primary}60` }}
-                thumbColor={value ? colors.primary : colors.textDim}
-            />
+            <TouchableOpacity
+                activeOpacity={0.8}
+                onPress={() => onToggle(!value)}
+                style={[
+                    styles.toggle,
+                    { backgroundColor: value ? `${colors.primary}60` : colors.surfaceLight },
+                ]}
+            >
+                <View
+                    style={[
+                        styles.toggleThumb,
+                        { backgroundColor: value ? colors.primary : colors.textDim },
+                        value ? { alignSelf: 'flex-end' } : { alignSelf: 'flex-start' },
+                    ]}
+                />
+            </TouchableOpacity>
         </View>
     );
 
@@ -584,6 +593,18 @@ function createStyles(colors: ThemeColors) {
         },
         settingLabel: { color: colors.text, fontSize: 14, fontWeight: '500' },
         settingDesc: { color: colors.textDim, fontSize: 11, marginTop: 1 },
+        toggle: {
+            width: 48,
+            height: 28,
+            borderRadius: 14,
+            padding: 3,
+            justifyContent: 'center',
+        },
+        toggleThumb: {
+            width: 22,
+            height: 22,
+            borderRadius: 11,
+        },
         settingValue: {
             color: colors.textDim,
             fontSize: 13,

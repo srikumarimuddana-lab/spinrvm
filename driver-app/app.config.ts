@@ -243,7 +243,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     },
     extra: {
         eas: {
-            projectId: "1ed02cf4-97cb-4678-b5a2-0881f89abaa8"
+            projectId: "ddcf21cd-edb9-4edd-bd8c-bced1702dd09"
         },
         EXPO_PUBLIC_BACKEND_URL: process.env.EXPO_PUBLIC_BACKEND_URL,
         backendUrl: process.env.EXPO_PUBLIC_BACKEND_URL,

@@ -10,10 +10,10 @@ import {
   Image,
   useWindowDimensions,
   Platform,
-  Switch,
   Modal,
   TextInput,
 } from 'react-native';
+import CustomToggle from '../components/CustomToggle';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -616,7 +616,7 @@ function RideOptionsScreenContent() {
               <Ionicons name="time-outline" size={20} color="#1A1A1A" />
               <Text style={styles.scheduleLabel}>Schedule later</Text>
             </View>
-            <Switch
+            <CustomToggle
               value={isScheduling}
               onValueChange={handleToggleSchedule}
               trackColor={{ false: '#D1D5DB', true: colors.primary + '60' }}
@@ -641,7 +641,7 @@ function RideOptionsScreenContent() {
                     )}
                   </View>
                 </View>
-                <Switch
+                <CustomToggle
                   value={requiresWav}
                   onValueChange={(v) => { if (!wavDisabled) setRequiresWav(v); }}
                   disabled={wavDisabled}
@@ -748,13 +748,12 @@ function RideOptionsScreenContent() {
                 <Text style={styles.wavSubLabel}>Only match me with WAV drivers</Text>
               </View>
             </View>
-            <Switch
+            <CustomToggle
               value={requiresWav}
               onValueChange={setRequiresWav}
               trackColor={{ false: '#D1D5DB', true: colors.primary + '60' }}
               thumbColor={requiresWav ? colors.primary : '#F3F4F6'}
               accessibilityLabel="Request wheelchair-accessible vehicle"
-              accessibilityRole="switch"
             />
           </View>
           {requiresWav && (
@@ -775,13 +774,12 @@ function RideOptionsScreenContent() {
                 <Text style={styles.wavSubLabel}>Prefer minimal conversation</Text>
               </View>
             </View>
-            <Switch
+            <CustomToggle
               value={quietMode}
               onValueChange={setQuietMode}
               trackColor={{ false: '#D1D5DB', true: colors.primary + '60' }}
               thumbColor={quietMode ? colors.primary : '#F3F4F6'}
               accessibilityLabel="Request quiet ride"
-              accessibilityRole="switch"
             />
           </View>
 

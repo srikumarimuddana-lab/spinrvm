@@ -14,7 +14,6 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
 import type { ThemeColors } from '../theme/index';
-
 export type AlertVariant = 'info' | 'warning' | 'danger' | 'success';
 
 export interface AlertButton {

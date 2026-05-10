@@ -40,38 +40,6 @@ interface CustomAlertProps {
   onInputChange?: (text: string) => void;
 }
 
-const VARIANT_CONFIG: Record<AlertVariant, {
-  icon: string;
-  iconColor: string;
-  iconBg: string;
-  buttonColor: string;
-}> = {
-  info: {
-    icon: 'information-circle',
-    iconColor: '#3B82F6',
-    iconBg: '#EFF6FF',
-    buttonColor: '#3B82F6',
-  },
-  warning: {
-    icon: 'alert-circle',
-    iconColor: '#F59E0B',
-    iconBg: '#FFFBEB',
-    buttonColor: '#F59E0B',
-  },
-  danger: {
-    icon: 'warning',
-    iconColor: '#EF4444',
-    iconBg: '#FEF2F2',
-    buttonColor: '#EF4444',
-  },
-  success: {
-    icon: 'checkmark-circle',
-    iconColor: '#10B981',
-    iconBg: '#ECFDF5',
-    buttonColor: '#10B981',
-  },
-};
-
 export default function CustomAlert({
   visible,
   title,
@@ -88,6 +56,38 @@ export default function CustomAlert({
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [isPending, setIsPending] = useState(false);
+
+  // Variant config reads from the active theme, so dark mode renders dark
+  // tinted backgrounds instead of the legacy light-only hex literals.
+  const variantConfig = useMemo(
+    () => ({
+      info: {
+        icon: 'information-circle',
+        iconColor: colors.info,
+        iconBg: colors.infoBg,
+        buttonColor: colors.info,
+      },
+      warning: {
+        icon: 'alert-circle',
+        iconColor: colors.warning,
+        iconBg: colors.warningBg,
+        buttonColor: colors.warning,
+      },
+      danger: {
+        icon: 'warning',
+        iconColor: colors.error,        // theme aliases `danger` to error
+        iconBg: colors.dangerBg,
+        buttonColor: colors.error,
+      },
+      success: {
+        icon: 'checkmark-circle',
+        iconColor: colors.success,
+        iconBg: colors.successBg,
+        buttonColor: colors.success,
+      },
+    }),
+    [colors],
+  );
 
   const scaleAnim = useRef(new Animated.Value(0.85)).current;
   const opacityAnim = useRef(new Animated.Value(0)).current;
@@ -119,7 +119,7 @@ export default function CustomAlert({
     }
   }, [visible, showInput]);
 
-  const config = VARIANT_CONFIG[variant];
+  const config = variantConfig[variant];
   const iconName = (icon || config.icon) as keyof typeof Ionicons.glyphMap;
 
   const handlePress = async (button: AlertButton) => {

@@ -57,11 +57,13 @@ export function OfflineBanner({
   useEffect(() => {
     // Subscribe to network status changes
     const unsubscribe = NetInfo.addEventListener(state => {
-      console.log('[OfflineBanner] Network state changed:', {
-        isConnected: state.isConnected,
-        isInternetReachable: state.isInternetReachable,
-        type: state.type,
-      });
+      if (__DEV__) {
+        console.log('[OfflineBanner] Network state changed:', {
+          isConnected: state.isConnected,
+          isInternetReachable: state.isInternetReachable,
+          type: state.type,
+        });
+      }
       updateNetworkStatus(state.isConnected ?? state.isInternetReachable);
     });
 

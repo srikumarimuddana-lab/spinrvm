@@ -863,7 +863,13 @@ async def break_glass_access(request: Request, body: BreakGlassRequest):
 
     # 1. Feature-gate: disabled unless hash is configured
     if not settings.BREAK_GLASS_TOKEN_HASH:
-        logger.warning("break_glass: attempt from %s — endpoint not configured", client_ip)
+        # Security signal — capture every attempt at a disabled break-glass endpoint
+        # so Sentry surfaces it for the security on-call.
+        logger.error(
+            "break_glass: attempt from %s ua=%s — endpoint not configured",
+            client_ip,
+            user_agent,
+        )
         raise HTTPException(status_code=404, detail="Not found")
 
     # 2. Justification required (non-empty, min 10 chars)

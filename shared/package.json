@@ -14,7 +14,6 @@
     "./validators": "./validators/index.ts",
     "./config": "./config/index.ts",
     "./config/spinr.config": "./config/spinr.config.ts",
-    "./config/supabase": "./config/supabase.ts",
     "./config/firebaseConfig": "./config/firebaseConfig.ts",
     "./store/authStore": "./store/authStore.ts",
     "./store/locationStore": "./store/locationStore.ts",

@@ -39,23 +39,16 @@ export const CarMarker: React.FC<CarMarkerProps> = ({
     isOnline = true,
     size = 40,
 }) => {
-    // Keep tracking view changes briefly so Android's Marker has time to
-    // snapshot the child View once the image paints. Flipping this too
-    // early (e.g. the instant onLoad fires) can race the snapshot and
-    // produce an invisible marker — especially with small/cached images.
-    //
-    // We also re-enable tracking whenever `isOnline` flips so Android
-    // re-snapshots the view with the new opacity. Without this, the
-    // native Marker keeps the frozen bitmap from the previous state and,
-    // on certain prop-change paths, blanks the marker entirely instead
-    // of redrawing (the "marker disappears after hitting STOP" bug).
+    // One-shot: keep tracksViewChanges true briefly on mount so Android's
+    // Marker snapshots the child View once the image paints. We do NOT
+    // re-enable on isOnline change because under RN 0.85 Bridgeless mode
+    // the re-snapshot triggers a native cast crash (ReactViewGroup cannot
+    // be cast to com.rnmaps.maps.i onLayoutChange).
     const [tracksViewChanges, setTracksViewChanges] = useState(true);
     useEffect(() => {
-        setTracksViewChanges(true);
         const t = setTimeout(() => setTracksViewChanges(false), 800);
         return () => clearTimeout(t);
-    }, [isOnline]);
-    const opacity = isOnline ? 1 : 0.6;
+    }, []);
 
     return (
         <Marker
@@ -74,7 +67,6 @@ export const CarMarker: React.FC<CarMarkerProps> = ({
                     backgroundColor: 'transparent',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    opacity,
                 }}
             >
                 <Image

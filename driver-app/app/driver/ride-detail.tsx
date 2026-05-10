@@ -10,6 +10,7 @@ import {
     Dimensions,
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 // Use Google Maps on Android, Apple Maps (native) on iOS
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
@@ -28,6 +29,7 @@ const mapStyle: any[] = [];
 export default function RideDetailScreen() {
     const { id } = useLocalSearchParams<{ id: string }>();
     const router = useRouter();
+    const insets = useSafeAreaInsets();
     const [ride, setRide] = useState<any>(null);
     const [loading, setLoading] = useState(true);
     const { colors } = useTheme();
@@ -143,8 +145,8 @@ export default function RideDetailScreen() {
                         )}
                     </MapView>
 
-                    <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
-                        <Ionicons name="arrow-back" size={22} color={colors.text} />
+                    <TouchableOpacity style={[styles.backBtn, { top: insets.top + 12 }]} onPress={() => router.back()}>
+                        <Ionicons name="arrow-back" size={22} color="#fff" />
                     </TouchableOpacity>
                 </View>
 
@@ -374,7 +376,6 @@ function createStyles(colors: ThemeColors) {
         map: { ...StyleSheet.absoluteFill },
         backBtn: {
             position: 'absolute',
-            top: Platform.OS === 'ios' ? 50 : 35,
             left: 16,
             width: 40,
             height: 40,

@@ -242,7 +242,7 @@ export default function ProfileSetupScreen() {
     >
       <ScrollView
         style={styles.scrollView}
-        contentContainerStyle={[styles.scrollContent, { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 40 }]}
+        contentContainerStyle={[styles.scrollContent, { paddingTop: insets.top + 20, paddingBottom: insets.bottom + 140 }]}
         keyboardShouldPersistTaps="handled"
                     automaticallyAdjustKeyboardInsets={true}
         showsVerticalScrollIndicator={false}

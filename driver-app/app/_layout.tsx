@@ -130,7 +130,7 @@ function usePushNotificationRouter() {
       (response: any) => {
         const data = response?.notification?.request?.content?.data ?? {};
         if (data?.type === 'new_ride_assignment') {
-          router.push('/driver/');
+          router.push('/driver/' as any);
         } else {
           router.push('/driver/notifications');
         }
@@ -157,9 +157,9 @@ function usePushNotificationRouter() {
           // Add a small defer to ensure Stack is mounted
           timer = setTimeout(() => {
             if (data?.type === 'new_ride_assignment') {
-              router.push('/driver/');
+              router.push('/driver/' as any);
             } else {
-              router.push('/driver/notifications');
+              router.push('/driver/notifications' as any);
             }
           }, 100);
         }

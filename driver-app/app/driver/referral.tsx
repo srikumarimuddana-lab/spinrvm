@@ -126,7 +126,7 @@ export default function ReferralScreen() {
             </View>
 
             <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-            <ScrollView style={styles.content} contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) + 24 }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+            <ScrollView style={styles.content} contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) + 24 }} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets={true} showsVerticalScrollIndicator={false}>
                 {/* Hero Section */}
                 <LinearGradient
                     colors={['#E53935', '#C62828']}

@@ -323,7 +323,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   useEffect(() => {
     if (!isOnline) {
       if (locationSubRef.current) {
-        locationSubRef.current.remove();
+        try { locationSubRef.current.remove(); } catch (e) { console.log('[Location] subscription remove error:', e); }
         locationSubRef.current = null;
       }
       return;
@@ -385,7 +385,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
 
     return () => {
       if (locationSubRef.current) {
-        locationSubRef.current.remove();
+        try { locationSubRef.current.remove(); } catch (e) { console.log('[Location] subscription remove error (cleanup):', e); }
         locationSubRef.current = null;
       }
     };
@@ -614,7 +614,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         reconnectTimeoutRef.current = null;
       }
       if (wsRef.current) {
-        wsRef.current.close();
+        try { wsRef.current.close(); } catch (e) { console.log('[WS] close error (going offline):', e); }
         wsRef.current = null;
       }
       setConnectionState('disconnected');
@@ -628,7 +628,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         clearTimeout(reconnectTimeoutRef.current);
       }
       if (wsRef.current) {
-        wsRef.current.close();
+        try { wsRef.current.close(); } catch (e) { console.log('[WS] close error (cleanup):', e); }
         wsRef.current = null;
       }
     };
@@ -659,17 +659,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           connectWebSocket();
         }
       } else if (nextState === 'background' && wsRef.current) {
-        // iOS fires 'inactive' for transient foreground interruptions —
-        // permission dialogs (e.g. background-location prompt on Go
-        // Online), incoming calls, Control Center, the app switcher
-        // preview. Closing the WS on those events caused the backend
-        // disconnect handler to flip the driver offline milliseconds
-        // after they tapped Go Online (the permission prompt itself
-        // triggered a close). Only treat a true 'background' transition
-        // as "driver has left the app". 1001 = "going away".
-        try {
-          wsRef.current.close(1001, 'app_backgrounded');
-        } catch {}
+        try { wsRef.current.close(1001, 'app_backgrounded'); } catch {}
       }
     });
     return () => sub.remove();
@@ -680,85 +670,81 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
 
   // ─── Toggle Online/Offline ───────────────────────────────────────
   const toggleOnline = async () => {
-    if (!driverData?.vehicle_make || !driverData?.license_plate) {
-      showDashAlert(
-        "Profile Incomplete",
-        "You must provide vehicle details before going online.",
-        'warning',
-        [
-          {
-            text: "Add Vehicle Info",
-            onPress: () => router.push('/vehicle-info' as any)
-          },
-          { text: "Cancel", style: "cancel" }
-        ]
-      );
-      return;
-    }
-
-    if (!driverData?.is_verified) {
-      showDashAlert(
-        "Account Not Verified",
-        "Your account is not verified yet. Please complete your profile and wait for admin approval before going online.",
-        'warning',
-        [
-          {
-            text: "Check Status",
-            onPress: () => router.push('/driver/profile' as any)
-          },
-          { text: "OK", style: "default" }
-        ]
-      );
-      return;
-    }
-
-    const next = !isOnline;
-    setIsOnline(next);
     try {
-      await updateDriverStatus(next);
-    } catch (err: any) {
-      setIsOnline(!next);
-
-      // 402 = no subscription
-      if (err.response?.status === 402) {
+      if (!driverData?.vehicle_make || !driverData?.license_plate) {
         showDashAlert(
-          "Spinr Pass Required",
-          err.response?.data?.detail || "You need an active subscription to go online.",
+          "Profile Incomplete",
+          "You must provide vehicle details before going online.",
           'warning',
           [
-            { text: "Subscribe", onPress: () => router.push('/driver/subscription' as any) },
-            { text: "Cancel", style: "cancel" },
+            {
+              text: "Add Vehicle Info",
+              onPress: () => router.push('/vehicle-info' as any)
+            },
+            { text: "Cancel", style: "cancel" }
           ]
         );
-      } else {
-        showDashAlert(
-          "Cannot Go Online",
-          err.response?.data?.detail || "Failed to update status. Please try again.",
-          'danger'
-        );
+        return;
       }
-      return;
-    }
 
-    // Ask for background location AFTER the status update resolved.
-    // Keeping this in the same try block would roll the UI back to
-    // offline on any permission failure even though the backend
-    // already has is_online=true — the mismatch drivers see as
-    // "tapped Go Online, app shows offline a second later".
-    // Android is strict about background-location ("Allow all the
-    // time" vs "While using") and reject flows can throw from this
-    // call; a rejection should NOT undo a successful Go Online, it
-    // should just warn that background tracking is unavailable.
-    if (next) {
-      try {
-        await Location.requestBackgroundPermissionsAsync();
-      } catch {
+      if (!driverData?.is_verified) {
         showDashAlert(
-          "Background location needed",
-          "You're online, but background location is required to keep getting ride offers while the app is minimized. Enable 'Allow all the time' in Settings.",
-          'warning'
+          "Account Not Verified",
+          "Your account is not verified yet. Please complete your profile and wait for admin approval before going online.",
+          'warning',
+          [
+            {
+              text: "Check Status",
+              onPress: () => router.push('/driver/profile' as any)
+            },
+            { text: "OK", style: "default" }
+          ]
         );
+        return;
       }
+
+      const next = !isOnline;
+      setIsOnline(next);
+      try {
+        await updateDriverStatus(next);
+      } catch (err: any) {
+        setIsOnline(!next);
+
+        // 402 = no subscription
+        if (err.response?.status === 402) {
+          showDashAlert(
+            "Spinr Pass Required",
+            err.response?.data?.detail || "You need an active subscription to go online.",
+            'warning',
+            [
+              { text: "Subscribe", onPress: () => router.push('/driver/subscription' as any) },
+              { text: "Cancel", style: "cancel" },
+            ]
+          );
+        } else {
+          showDashAlert(
+            "Cannot Go Online",
+            err.response?.data?.detail || "Failed to update status. Please try again.",
+            'danger'
+          );
+        }
+        return;
+      }
+
+      if (next) {
+        try {
+          await Location.requestBackgroundPermissionsAsync();
+        } catch {
+          showDashAlert(
+            "Background location needed",
+            "You're online, but background location is required to keep getting ride offers while the app is minimized. Enable 'Allow all the time' in Settings.",
+            'warning'
+          );
+        }
+      }
+    } catch (e) {
+      console.error('[toggleOnline] Unexpected error:', e);
+      showDashAlert("Error", "Something went wrong toggling your status. Please try again.", 'danger');
     }
   };
 

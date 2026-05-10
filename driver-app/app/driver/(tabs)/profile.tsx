@@ -604,7 +604,7 @@ export default function ProfileScreen() {
           <LinearGradient colors={[colors.surface, '#F8F9FA']} style={StyleSheet.absoluteFill} />
 
           {/* Header */}
-          <View style={modalStyles.header}>
+          <View style={[modalStyles.header, { paddingTop: insets.top + 12 }]}>
             <TouchableOpacity onPress={() => setShowEditModal(false)} style={modalStyles.backBtn}>
               <Ionicons name="arrow-back" size={24} color={colors.text} />
             </TouchableOpacity>
@@ -617,9 +617,9 @@ export default function ProfileScreen() {
             behavior="padding"
           >
             <ScrollView
-              contentContainerStyle={[modalStyles.content, { paddingBottom: Math.max(insets.bottom, 16) + 24 }]}
+              contentContainerStyle={[modalStyles.content, { paddingBottom: Math.max(insets.bottom, 16) + 140 }]}
               keyboardShouldPersistTaps="handled"
-                    automaticallyAdjustKeyboardInsets={true}
+              automaticallyAdjustKeyboardInsets={true}
               showsVerticalScrollIndicator={false}
             >
               {/* Hero card — mirrors vehicle-info hero */}

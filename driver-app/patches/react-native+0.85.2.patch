@@ -250,6 +250,34 @@ index 1fabac7..2beef39 100644
  const ScrollView = require('../Components/ScrollView/ScrollView').default;
  const View = require('../Components/View/View').default;
  const AppContainer = require('../ReactNative/AppContainer').default;
+diff --git a/node_modules/react-native/src/private/components/scrollview/HScrollViewNativeComponents.js b/node_modules/react-native/src/private/components/scrollview/HScrollViewNativeComponents.js
+index da05855..e1a5093 100644
+--- a/node_modules/react-native/src/private/components/scrollview/HScrollViewNativeComponents.js
++++ b/node_modules/react-native/src/private/components/scrollview/HScrollViewNativeComponents.js
+@@ -15,15 +15,21 @@ import type {HostComponent} from '../../types/HostComponent';
+ import AndroidHorizontalScrollViewNativeComponent from '../../../../Libraries/Components/ScrollView/AndroidHorizontalScrollViewNativeComponent';
+ import ScrollContentViewNativeComponent from '../../../../Libraries/Components/ScrollView/ScrollContentViewNativeComponent';
+ import ScrollViewNativeComponent from '../../../../Libraries/Components/ScrollView/ScrollViewNativeComponent';
++import View from '../../../../Libraries/Components/View/View';
+ import Platform from '../../../../Libraries/Utilities/Platform';
+ import AndroidHorizontalScrollContentViewNativeComponent from '../../specs_DEPRECATED/components/AndroidHorizontalScrollContentViewNativeComponent';
+ 
++// PATCH (spinr driver-app):
++// AndroidHorizontalScrollContentView is declared via codegenNativeComponent
++// (interfaceOnly:true) in specs_DEPRECATED. Under Bridgeless mode it returns a
++// non-renderable object. Fall back to View on Android — horizontal FlatLists
++// still render their items, just without native horizontal scroll chrome.
+ export const HScrollViewNativeComponent: HostComponent<ScrollViewNativeProps> =
+   Platform.OS === 'android'
+-    ? AndroidHorizontalScrollViewNativeComponent
++    ? ((View: $FlowFixMe): HostComponent<ScrollViewNativeProps>)
+     : ScrollViewNativeComponent;
+ 
+ export const HScrollContentViewNativeComponent: HostComponent<ViewProps> =
+   Platform.OS === 'android'
+-    ? AndroidHorizontalScrollContentViewNativeComponent
++    ? View
+     : ScrollContentViewNativeComponent;
 diff --git a/node_modules/react-native/src/private/components/virtualview/VirtualViewExperimentalNativeComponent.js b/node_modules/react-native/src/private/components/virtualview/VirtualViewExperimentalNativeComponent.js
 index c640b5a..a6f35b1 100644
 --- a/node_modules/react-native/src/private/components/virtualview/VirtualViewExperimentalNativeComponent.js
@@ -404,54 +432,3 @@ index 4ba5b68..a746a97 100644
  }>;
  
  export default codegenNativeComponent<VirtualViewNativeProps>('VirtualView', {
-diff --git a/node_modules/react-native/src/private/components/scrollview/VScrollViewNativeComponents.js b/node_modules/react-native/src/private/components/scrollview/VScrollViewNativeComponents.js
---- a/node_modules/react-native/src/private/components/scrollview/VScrollViewNativeComponents.js
-+++ b/node_modules/react-native/src/private/components/scrollview/VScrollViewNativeComponents.js
-@@ -17,8 +17,19 @@
- import View from '../../../../Libraries/Components/View/View';
- import Platform from '../../../../Libraries/Utilities/Platform';
- 
-+// PATCH (spinr rider-app/driver-app):
-+// Under RN 0.85.2 + New Architecture (Bridgeless), the native ScrollView
-+// component (`RCTScrollView` resolved via NativeComponentRegistry.get) renders
-+// as a broken host element, throwing "Element type is invalid... got:
-+// undefined" inside ScrollView's render tree. Empirically reproduced on
-+// driver-app's OtpScreen and rider-app's profile/activity tabs.
-+// Fallback to View on Android keeps content rendering (loses native scroll
-+// gesture; layouts that fit the viewport still work). When upstream RN fixes
-+// the Bridgeless lookup this patch becomes a no-op and can be deleted.
- export const VScrollViewNativeComponent: HostComponent<ScrollViewNativeProps> =
--  ScrollViewNativeComponent;
-+  Platform.OS === 'android'
-+    ? ((View: $FlowFixMe): HostComponent<ScrollViewNativeProps>)
-+    : ScrollViewNativeComponent;
- 
- export const VScrollContentViewNativeComponent: HostComponent<ViewProps> =
-   Platform.OS === 'android' ? View : ScrollContentViewNativeComponent;
-diff --git a/node_modules/react-native/src/private/components/scrollview/HScrollViewNativeComponents.js b/node_modules/react-native/src/private/components/scrollview/HScrollViewNativeComponents.js
---- a/node_modules/react-native/src/private/components/scrollview/HScrollViewNativeComponents.js
-+++ b/node_modules/react-native/src/private/components/scrollview/HScrollViewNativeComponents.js
-@@ -15,15 +15,21 @@
- import AndroidHorizontalScrollViewNativeComponent from '../../../../Libraries/Components/ScrollView/AndroidHorizontalScrollViewNativeComponent';
- import ScrollContentViewNativeComponent from '../../../../Libraries/Components/ScrollView/ScrollContentViewNativeComponent';
- import ScrollViewNativeComponent from '../../../../Libraries/Components/ScrollView/ScrollViewNativeComponent';
-+import View from '../../../../Libraries/Components/View/View';
- import Platform from '../../../../Libraries/Utilities/Platform';
- import AndroidHorizontalScrollContentViewNativeComponent from '../../specs_DEPRECATED/components/AndroidHorizontalScrollContentViewNativeComponent';
- 
-+// PATCH (spinr rider-app/driver-app):
-+// Same Bridgeless ScrollView issue as VScrollViewNativeComponents.js plus
-+// AndroidHorizontalScrollContentView is declared with interfaceOnly:true (the
-+// codegen returns a non-renderable object). Both layers fall back to View on
-+// Android — keeps horizontal lists rendering, loses native horizontal scroll.
- export const HScrollViewNativeComponent: HostComponent<ScrollViewNativeProps> =
-   Platform.OS === 'android'
--    ? AndroidHorizontalScrollViewNativeComponent
-+    ? ((View: $FlowFixMe): HostComponent<ScrollViewNativeProps>)
-     : ScrollViewNativeComponent;
- 
- export const HScrollContentViewNativeComponent: HostComponent<ViewProps> =
-   Platform.OS === 'android'
--    ? AndroidHorizontalScrollContentViewNativeComponent
-+    ? View
-     : ScrollContentViewNativeComponent;

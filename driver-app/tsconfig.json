@@ -1,5 +1,5 @@
 {
-  "extends": "expo/tsconfig.base",
+  "extends": "./node_modules/expo/tsconfig.base",
   "compilerOptions": {
     "strict": true,
     "paths": {
@@ -92,36 +92,6 @@
       ],
       "@types/*": [
         "./types/*"
-      ],
-      "react": [
-        "./node_modules/@types/react"
-      ],
-      "@react-native-async-storage/async-storage": [
-        "./node_modules/@react-native-async-storage/async-storage"
-      ],
-      "react-native-safe-area-context": [
-        "./node_modules/react-native-safe-area-context"
-      ],
-      "@expo/vector-icons": [
-        "./node_modules/@expo/vector-icons"
-      ],
-      "expo-location": [
-        "./node_modules/expo-location"
-      ],
-      "@react-native-firebase/messaging": [
-        "./node_modules/@react-native-firebase/messaging"
-      ],
-      "@react-native-firebase/crashlytics": [
-        "./node_modules/@react-native-firebase/crashlytics"
-      ],
-      "@react-native-firebase/app-check": [
-        "./node_modules/@react-native-firebase/app-check"
-      ],
-      "@tanstack/react-query": [
-        "./node_modules/@tanstack/react-query"
-      ],
-      "@tanstack/query-async-storage-persister": [
-        "./node_modules/@tanstack/query-async-storage-persister"
       ]
     }
   },

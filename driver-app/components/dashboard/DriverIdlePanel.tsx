@@ -4,7 +4,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
-import { BlurView } from 'expo-blur';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import SpinrConfig from '@shared/config/spinr.config';
@@ -131,15 +130,23 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
 
   useEffect(() => {
     if (canGoOnline && !isOnline) {
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(goAnim, { toValue: 1.05, duration: 1000, useNativeDriver: true }),
-          Animated.timing(goAnim, { toValue: 1, duration: 1000, useNativeDriver: true })
-        ])
-      ).start();
+      try {
+        Animated.loop(
+          Animated.sequence([
+            Animated.timing(goAnim, { toValue: 1.05, duration: 1000, useNativeDriver: true }),
+            Animated.timing(goAnim, { toValue: 1, duration: 1000, useNativeDriver: true })
+          ])
+        ).start();
+      } catch (e) {
+        console.log('[Animated] pulse loop failed:', e);
+      }
     } else {
+      try { goAnim.stopAnimation(); } catch {}
       goAnim.setValue(1);
     }
+    return () => {
+      try { goAnim.stopAnimation(); } catch {}
+    };
   }, [canGoOnline, isOnline]);
 
   // Welcome / Onboarding Notification Check

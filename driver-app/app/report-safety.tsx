@@ -8,8 +8,8 @@ import {
     KeyboardAvoidingView,
     ScrollView,
     Platform,
-    SafeAreaView
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -37,6 +37,7 @@ const CATEGORY_ICONS: Record<SafetyCategory, string> = {
 
 export default function ReportSafetyScreen() {
     const router = useRouter();
+    const insets = useSafeAreaInsets();
     const { colors } = useTheme();
     const styles = useMemo(() => createStyles(colors), [colors]);
     const [category, setCategory] = useState<SafetyCategory | null>(null);
@@ -99,9 +100,9 @@ export default function ReportSafetyScreen() {
     };
 
     return (
-        <SafeAreaView style={styles.safeArea}>
+        <View style={styles.safeArea}>
             {/* Header */}
-            <View style={styles.header}>
+            <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
                 <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
                     <Ionicons name="arrow-back" size={24} color={colors.text} />
                 </TouchableOpacity>
@@ -190,7 +191,7 @@ export default function ReportSafetyScreen() {
                 buttons={alert.buttons || [{ text: 'OK', style: 'default' }]}
                 onClose={() => setAlert(a => ({ ...a, visible: false }))}
             />
-        </SafeAreaView>
+        </View>
     );
 }
 
@@ -228,7 +229,7 @@ function createStyles(colors: ThemeColors) {
         },
         content: {
             padding: 24,
-            paddingBottom: 40,
+            paddingBottom: 140,
         },
         warningBox: {
             flexDirection: 'row',

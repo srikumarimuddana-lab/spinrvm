@@ -9,7 +9,6 @@ import {
   Platform,
   KeyboardAvoidingView,
   Animated,
-  Dimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -20,8 +19,6 @@ import CustomAlert from '@shared/components/CustomAlert';
 import { useLanguageStore } from '../store/languageStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 // Platform-safe token storage
 const storage = {

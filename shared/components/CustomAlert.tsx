@@ -6,16 +6,14 @@ import {
   TouchableOpacity,
   Modal,
   Animated,
-  Dimensions,
   TextInput,
   KeyboardAvoidingView,
   Platform,
+  useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
 import type { ThemeColors } from '../theme/index';
-
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 export type AlertVariant = 'info' | 'warning' | 'danger' | 'success';
 
@@ -54,6 +52,8 @@ export default function CustomAlert({
   onInputChange,
 }: CustomAlertProps) {
   const { colors } = useTheme();
+  const { width: windowWidth } = useWindowDimensions();
+  const containerWidth = Math.min(windowWidth - 56, 360);
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [isPending, setIsPending] = useState(false);
 
@@ -152,6 +152,7 @@ export default function CustomAlert({
           style={[
             styles.container,
             {
+              width: containerWidth,
               transform: [{ scale: scaleAnim }],
               opacity: opacityAnim,
             },
@@ -244,8 +245,6 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: 'rgba(0, 0, 0, 0.5)',
     },
     container: {
-      width: SCREEN_WIDTH - 56,
-      maxWidth: 360,
       backgroundColor: colors.surface,
       borderRadius: 24,
       padding: 28,

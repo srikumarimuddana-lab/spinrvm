@@ -157,6 +157,7 @@ async def top_up_wallet(
     )
 
     import asyncio
+
     asyncio.create_task(
         _audit_log_user(
             current_user,
@@ -223,6 +224,7 @@ async def wallet_pay(req: WalletPayRequest, current_user: dict = Depends(get_cur
     )
 
     import asyncio
+
     asyncio.create_task(
         _audit_log_user(
             current_user,
@@ -251,8 +253,9 @@ async def get_transactions(
         "wallet_transactions",
         {"wallet_id": wallet["id"]},
         limit=limit,
-        skip=offset,
+        offset=offset,
         order="created_at",
+        desc=True,
     )
 
     return {

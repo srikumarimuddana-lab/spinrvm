@@ -39,12 +39,11 @@ const storage = {
 export default function OtpScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{ verificationId?: string; phoneNumber: string; mode?: string }>();
-  const { phoneNumber, verificationId, mode } = params;
+  const params = useLocalSearchParams<{ phoneNumber: string }>();
+  const { phoneNumber } = params;
   const { t } = useLanguageStore();
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
-  const isBackendMode = mode === 'backend' || !verificationId;
   const codeLength = 4;
 
   const [code, setCode] = useState('');
@@ -52,7 +51,7 @@ export default function OtpScreen() {
   const [hasAttemptedVerification, setHasAttemptedVerification] = useState(false);
   const [countdown, setCountdown] = useState(30);
   const [canResend, setCanResend] = useState(false);
-  const { verifyOTP, user, initialize, clearError } = useAuthStore();
+  const { user, initialize, clearError } = useAuthStore();
   const inputRef = useRef<TextInput>(null);
 
   // Animations
@@ -144,28 +143,24 @@ export default function OtpScreen() {
     clearError();
 
     try {
-      if (isBackendMode) {
-        const response = await api.post<{ token?: string; refresh_token?: string; expires_in?: number; user?: User }>('/auth/verify-otp', {
-          phone: phoneNumber,
-          code: code,
-        });
-        if (!response.data) throw new Error('Empty response from auth server');
-        const otpData = response.data as { token?: string; refresh_token?: string; expires_in?: number; user?: any };
-        const { token, refresh_token, expires_in, user: userData } = otpData;
-        if (token) {
-          await useAuthStore.getState().setTokens(token, refresh_token ?? '', expires_in ?? 900);
-          if (userData) {
-            useAuthStore.setState({
-              user: userData,
-              isInitialized: true,
-              isLoading: false,
-            });
-          } else {
-            await initialize();
-          }
+      const response = await api.post<{ token?: string; refresh_token?: string; expires_in?: number; user?: User }>('/auth/verify-otp', {
+        phone: phoneNumber,
+        code: code,
+      });
+      if (!response.data) throw new Error('Empty response from auth server');
+      const otpData = response.data as { token?: string; refresh_token?: string; expires_in?: number; user?: any };
+      const { token, refresh_token, expires_in, user: userData } = otpData;
+      if (token) {
+        await useAuthStore.getState().setTokens(token, refresh_token ?? '', expires_in ?? 900);
+        if (userData) {
+          useAuthStore.setState({
+            user: userData,
+            isInitialized: true,
+            isLoading: false,
+          });
+        } else {
+          await initialize();
         }
-      } else {
-        await verifyOTP(verificationId!, code);
       }
     } catch (err: any) {
       triggerShake();

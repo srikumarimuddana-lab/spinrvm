@@ -33,8 +33,14 @@ jobs:
         uses: actions/cache@v5
         with:
           path: rider-app/node_modules
-          key: ${{ runner.os }}-rider-node-${{ hashFiles('rider-app/yarn.lock') }}
-          restore-keys: ${{ runner.os }}-rider-node-
+          # Include patches/** in the key so changes to patch-package files
+          # invalidate the cache (otherwise stale node_modules retains
+          # already-applied hunks → patch-package fails to re-apply on top).
+          key: ${{ runner.os }}-rider-node-${{ hashFiles('rider-app/yarn.lock', 'rider-app/patches/**') }}
+          # No restore-keys: a partial restore from an older key gives us a
+          # node_modules that already has prior patch hunks applied, then
+          # patch-package fails to re-apply on top. Force a clean miss when
+          # the key changes — slow once, correct always.
 
       - name: Install dependencies
         working-directory: rider-app
@@ -71,8 +77,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: driver-app/node_modules
-          key: ${{ runner.os }}-driver-node-${{ hashFiles('driver-app/yarn.lock') }}
-          restore-keys: ${{ runner.os }}-driver-node-
+          key: ${{ runner.os }}-driver-node-${{ hashFiles('driver-app/yarn.lock', 'driver-app/patches/**') }}
 
       - name: Install dependencies
         working-directory: driver-app

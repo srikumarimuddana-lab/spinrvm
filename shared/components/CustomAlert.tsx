@@ -1,4 +1,3 @@
-// @ts-nocheck
 import React, { useEffect, useRef, useMemo, useState } from 'react';
 import {
   View,
@@ -13,32 +12,10 @@ import {
   Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { BlurView } from 'expo-blur';
 import { useTheme } from '../theme/ThemeContext';
 import type { ThemeColors } from '../theme/index';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-
-// DIAGNOSTIC (revert once OtpScreen render error is fixed): logs at module
-// evaluation time so we know what CustomAlert's own imports resolve to —
-// independent of OtpScreen's import surface.
-console.log('[CustomAlertDiag-module]', JSON.stringify({
-  View: typeof View,
-  Text: typeof Text,
-  StyleSheet: typeof StyleSheet,
-  TouchableOpacity: typeof TouchableOpacity,
-  Modal: typeof Modal,
-  ModalRender: typeof (Modal as any)?.render,
-  ModalSymbolType: String((Modal as any)?.$$typeof ?? 'n/a'),
-  Animated: typeof Animated,
-  AnimatedView: typeof Animated?.View,
-  Dimensions: typeof Dimensions,
-  TextInput: typeof TextInput,
-  KeyboardAvoidingView: typeof KeyboardAvoidingView,
-  Platform: typeof Platform,
-  Ionicons: typeof Ionicons,
-  BlurView: typeof BlurView,
-}));
 
 export type AlertVariant = 'info' | 'warning' | 'danger' | 'success';
 

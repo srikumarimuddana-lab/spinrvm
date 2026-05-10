@@ -1,6 +1,19 @@
 import React from 'react';
 import { render } from '@testing-library/react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { TripCompletedPanel } from '../../components/dashboard/TripCompletedPanel';
+
+// react-native-safe-area-context's `useSafeAreaInsets` throws if no provider is
+// in the tree. Wrap every render with a deterministic SafeAreaProvider so
+// tests don't depend on the host app's layout chrome.
+const initialMetrics = {
+  frame: { x: 0, y: 0, width: 360, height: 800 },
+  insets: { top: 0, left: 0, right: 0, bottom: 0 },
+};
+const renderWithSafeArea = (ui: React.ReactElement) =>
+  render(
+    <SafeAreaProvider initialMetrics={initialMetrics}>{ui}</SafeAreaProvider>,
+  );
 
 jest.mock('@shared/config/spinr.config', () => ({
   __esModule: true,
@@ -67,35 +80,39 @@ const defaultProps = {
 
 describe('TripCompletedPanel', () => {
   it('renders without crashing', () => {
-    const { toJSON } = render(<TripCompletedPanel {...defaultProps} />);
+    const { toJSON } = renderWithSafeArea(<TripCompletedPanel {...defaultProps} />);
     expect(toJSON()).not.toBeNull();
   });
 
   it('shows driver earnings in summary', () => {
-    const { getByText } = render(<TripCompletedPanel {...defaultProps} />);
+    const { getByText } = renderWithSafeArea(<TripCompletedPanel {...defaultProps} />);
     expect(getByText('$12.00')).toBeTruthy();
   });
 
   it('shows fare breakdown labels', () => {
-    const { getByText } = render(<TripCompletedPanel {...defaultProps} />);
+    const { getByText } = renderWithSafeArea(<TripCompletedPanel {...defaultProps} />);
     expect(getByText('tripCompleted.baseFare')).toBeTruthy();
     expect(getByText('tripCompleted.yourEarnings')).toBeTruthy();
   });
 
   it('renders rating section with prompt label', () => {
-    const { getByText } = render(<TripCompletedPanel {...defaultProps} />);
+    const { getByText } = renderWithSafeArea(<TripCompletedPanel {...defaultProps} />);
     // The rating section shows a "how was your rider?" label (translated key)
     expect(getByText('tripCompleted.howWasRider')).toBeTruthy();
   });
 
   it('shows trip stats (distance and duration)', () => {
-    const { getByText } = render(<TripCompletedPanel {...defaultProps} />);
+    const { getByText } = renderWithSafeArea(<TripCompletedPanel {...defaultProps} />);
     expect(getByText('5.2 km')).toBeTruthy();
     expect(getByText('18 min')).toBeTruthy();
   });
 
   it('renders nothing when completedRide is null', () => {
-    const { toJSON } = render(<TripCompletedPanel {...defaultProps} completedRide={null} />);
-    expect(toJSON()).toBeNull();
+    // Render inside SafeAreaProvider (the panel calls useSafeAreaInsets before
+    // its early-return); assert the panel produced no panel-specific output by
+    // checking that an always-rendered field from a non-null ride is absent.
+    const { queryByText } = renderWithSafeArea(<TripCompletedPanel {...defaultProps} completedRide={null} />);
+    expect(queryByText('$12.00')).toBeNull();
+    expect(queryByText('tripCompleted.baseFare')).toBeNull();
   });
 });

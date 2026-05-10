@@ -2,10 +2,16 @@ import React from 'react';
 import { View, Text, StyleSheet, Platform, StatusBar } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { BlurView } from 'expo-blur';
 import SpinrConfig from '@shared/config/spinr.config';
 import { useLanguageStore } from '../../store/languageStore';
 import type { ConnectionState } from '../../hooks/useDriverDashboard';
+
+// expo-blur crashes on Android under RN 0.85 Bridgeless mode when props change
+// during a re-render (native component init race). On Android it doesn't
+// actually blur — just a semi-transparent overlay — so use a plain View.
+const SafeBlurView: React.FC<{ intensity?: number; tint?: string; style?: any; children?: React.ReactNode }> = ({ style, children }) => (
+  <View style={style}>{children}</View>
+);
 
 const COLORS = {
   overlay: 'rgba(255, 255, 255, 0.75)',
@@ -47,7 +53,7 @@ export const DriverTopBar: React.FC<DriverTopBarProps> = ({
 
   return (
     <View style={[styles.topBarContainer, { top: Math.max(insets.top, statusBarHeight) }]}>
-      <BlurView intensity={Platform.OS === 'ios' ? 60 : 100} tint="light" style={styles.blurContainer}>
+      <SafeBlurView intensity={Platform.OS === 'ios' ? 60 : 100} tint="light" style={styles.blurContainer}>
         {showBanner && (
           <View style={[styles.connectionBanner, isReconnecting ? styles.bannerReconnecting : styles.bannerDisconnected]}>
             <Ionicons
@@ -97,7 +103,7 @@ export const DriverTopBar: React.FC<DriverTopBarProps> = ({
             </View>
           </View>
         </View>
-      </BlurView>
+      </SafeBlurView>
     </View>
   );
 };

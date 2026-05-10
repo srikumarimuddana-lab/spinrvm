@@ -93,10 +93,10 @@ export default function NotificationsScreen() {
 
     const handleNotificationPress = (item: Notification) => {
         markAsRead(item.id);
-        if (item.type === 'document_expiry') router.push('/driver/documents');
-        else if (item.type === 'payout_processed') router.push('/driver/earnings');
-        else if (item.type === 'ride_offer') router.push('/driver/');
-        else if (item.type === 'quest_earned') router.push('/driver/quests');
+        if (item.type === 'document_expiry') router.push('/driver/documents' as any);
+        else if (item.type === 'payout_processed') router.push('/driver/earnings' as any);
+        else if (item.type === 'ride_offer') router.push('/driver/' as any);
+        else if (item.type === 'quest_earned') router.push('/driver/quests' as any);
         // Unknown type: notification is marked read above; no navigation needed.
         // Explicit no-op prevents accidental fall-through if new types are added later.
     };

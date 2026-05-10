@@ -1237,6 +1237,14 @@ async def get_driver_earnings_forecast(current_user: dict = Depends(get_current_
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
+    _zero = {
+        "this_week_earnings": "0.00",
+        "projected_weekly_total": "0.00",
+        "daily_avg_last_28d": "0.00",
+        "days_remaining_this_week": 6 - datetime.now(timezone.utc).weekday(),
+        "this_week_trips": 0,
+    }
+
     now = datetime.now(timezone.utc)
     # Rolling 28-day window for the daily average
     window_start = (now - timedelta(days=28)).isoformat()
@@ -1255,30 +1263,34 @@ async def get_driver_earnings_forecast(current_user: dict = Depends(get_current_
         )
     except Exception as e:
         logger.error(f"[FORECAST] earnings fetch failed driver={driver['id']}: {e}", exc_info=True)
-        recent_rides = []
+        return _zero
 
-    this_week_rides = [r for r in recent_rides if (r.get("ride_completed_at") or "") >= week_start.isoformat()]
-    prev_28_rides = [r for r in recent_rides if (r.get("ride_completed_at") or "") < week_start.isoformat()]
+    try:
+        this_week_rides = [r for r in recent_rides if (r.get("ride_completed_at") or "") >= week_start.isoformat()]
+        prev_28_rides = [r for r in recent_rides if (r.get("ride_completed_at") or "") < week_start.isoformat()]
 
-    this_week_earnings = sum(Decimal(str(r.get("driver_earnings") or 0)) for r in this_week_rides)
-    prev_28_earnings = sum(Decimal(str(r.get("driver_earnings") or 0)) for r in prev_28_rides)
+        this_week_earnings = sum(Decimal(str(r.get("driver_earnings") or 0)) for r in this_week_rides)
+        prev_28_earnings = sum(Decimal(str(r.get("driver_earnings") or 0)) for r in prev_28_rides)
 
-    # Daily average over the 28-day window excluding the current week
-    days_in_window = 28 - now.weekday()  # days before current week in window
-    daily_avg = (prev_28_earnings / days_in_window) if days_in_window > 0 else Decimal("0")
+        # Daily average over the 28-day window excluding the current week
+        days_in_window = 28 - now.weekday()  # days before current week in window
+        daily_avg = (prev_28_earnings / days_in_window) if days_in_window > 0 else Decimal("0")
 
-    # Days remaining in current week (today = partially elapsed)
-    days_remaining = 6 - now.weekday()  # Mon=0 … Sun=6
-    projected_additional = daily_avg * days_remaining
-    projected_total = (this_week_earnings + projected_additional).quantize(Decimal("0.01"))
+        # Days remaining in current week (today = partially elapsed)
+        days_remaining = 6 - now.weekday()  # Mon=0 … Sun=6
+        projected_additional = daily_avg * days_remaining
+        projected_total = (this_week_earnings + projected_additional).quantize(Decimal("0.01"))
 
-    return {
-        "this_week_earnings": _money_str(this_week_earnings),
-        "projected_weekly_total": _money_str(projected_total),
-        "daily_avg_last_28d": _money_str(daily_avg),
-        "days_remaining_this_week": days_remaining,
-        "this_week_trips": len(this_week_rides),
-    }
+        return {
+            "this_week_earnings": _money_str(this_week_earnings),
+            "projected_weekly_total": _money_str(projected_total),
+            "daily_avg_last_28d": _money_str(daily_avg),
+            "days_remaining_this_week": days_remaining,
+            "this_week_trips": len(this_week_rides),
+        }
+    except Exception as e:
+        logger.error(f"[FORECAST] computation failed driver={driver['id']}: {e}", exc_info=True)
+        return _zero
 
 
 @api_router.get("/nearby")
@@ -2057,7 +2069,11 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
     # already moved the ride to driver_accepted with a different driver.
     declined = await db_supabase.update_one(
         "rides",
-        {"id": ride_id, "driver_id": driver["id"], "status": {"$in": [RideStatus.SEARCHING, RideStatus.DRIVER_ASSIGNED]}},
+        {
+            "id": ride_id,
+            "driver_id": driver["id"],
+            "status": {"$in": [RideStatus.SEARCHING, RideStatus.DRIVER_ASSIGNED]},
+        },
         {
             "$set": {
                 "driver_id": None,

@@ -2,9 +2,15 @@ import React from 'react';
 import { View, StyleSheet, TouchableOpacity, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import MapView from 'react-native-maps';
-import { BlurView } from 'expo-blur';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import SpinrConfig from '@shared/config/spinr.config';
+
+// expo-blur crashes on Android under RN 0.85 Bridgeless mode.
+// On Android it doesn't actually blur — just a semi-transparent overlay — so
+// use a plain View.
+const SafeBlurView: React.FC<{ intensity?: number; tint?: string; style?: any; children?: React.ReactNode }> = ({ style, children }) => (
+  <View style={style}>{children}</View>
+);
 
 const COLORS = {
   overlay: 'rgba(255, 255, 255, 0.8)',
@@ -76,7 +82,7 @@ export const MapControls: React.FC<MapControlsProps> = ({
     <View style={[styles.controlsContainer, { bottom: insets.bottom + 120 }]}>
       {/* Zoom Controls */}
       <View style={styles.shadowWrapper}>
-        <BlurView intensity={Platform.OS === 'ios' ? 40 : 100} tint="light" style={styles.blurContainer}>
+        <SafeBlurView intensity={Platform.OS === 'ios' ? 40 : 100} tint="light" style={styles.blurContainer}>
           <TouchableOpacity style={styles.zoomBtn} onPress={handleZoomIn} activeOpacity={0.7}>
             <Ionicons name="add" size={24} color={COLORS.text} />
           </TouchableOpacity>
@@ -84,16 +90,16 @@ export const MapControls: React.FC<MapControlsProps> = ({
           <TouchableOpacity style={styles.zoomBtn} onPress={handleZoomOut} activeOpacity={0.7}>
             <Ionicons name="remove" size={24} color={COLORS.text} />
           </TouchableOpacity>
-        </BlurView>
+        </SafeBlurView>
       </View>
 
       {/* My Location Button */}
       <View style={[styles.shadowWrapper, { marginTop: 12 }]}>
-        <BlurView intensity={Platform.OS === 'ios' ? 40 : 100} tint="light" style={[styles.blurContainer, styles.myLocationBtn]}>
+        <SafeBlurView intensity={Platform.OS === 'ios' ? 40 : 100} tint="light" style={[styles.blurContainer, styles.myLocationBtn]}>
           <TouchableOpacity style={styles.btnInner} onPress={handleRecenter} activeOpacity={0.7}>
             <Ionicons name="locate" size={24} color={COLORS.accent} />
           </TouchableOpacity>
-        </BlurView>
+        </SafeBlurView>
       </View>
     </View>
   );

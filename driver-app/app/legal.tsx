@@ -6,8 +6,8 @@ import {
     ScrollView,
     TouchableOpacity,
     ActivityIndicator,
-    SafeAreaView,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { SpinrConfig } from '@shared/config/spinr.config';
@@ -62,6 +62,7 @@ For questions: support@spinr.ca`;
 
 export default function LegalScreen() {
     const router = useRouter();
+    const insets = useSafeAreaInsets();
     const params = useLocalSearchParams();
     const type = params.type as 'tos' | 'privacy' | undefined;
     const { colors } = useTheme();
@@ -107,9 +108,9 @@ export default function LegalScreen() {
     };
 
     return (
-        <SafeAreaView style={styles.safeArea}>
+        <View style={styles.safeArea}>
             {/* Header */}
-            <View style={styles.header}>
+            <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
                 <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
                     <Ionicons name="arrow-back" size={24} color={colors.text} />
                 </TouchableOpacity>
@@ -153,7 +154,7 @@ export default function LegalScreen() {
                     </View>
                 </ScrollView>
             )}
-        </SafeAreaView>
+        </View>
     );
 }
 

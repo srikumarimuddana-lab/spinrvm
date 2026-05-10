@@ -166,6 +166,7 @@ export default function EmergencyContactsScreen() {
       >
         <ScrollView
           style={styles.content}
+          contentContainerStyle={{ paddingBottom: 140 }}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
           automaticallyAdjustKeyboardInsets={true}

@@ -188,8 +188,14 @@ async def admin_cancel_ride(
     with_38 = {**with_37, "cancelled_by": "admin", "cancellation_type": "admin_cancel"}
     try:
         await db_supabase.update_ride(ride_id, with_38)
-    except Exception as e38:
-        logger.warning(f"admin_cancel_ride: attribution write failed ({e38}); retrying without mig-38 fields")
+    except Exception:
+        # DB write fallback path — first attempt failed (mig-38 columns may not
+        # exist yet on this DB). Surface to Sentry so we know when/where the
+        # primary path is failing; the retry below is the recovery action.
+        logger.error(
+            "admin_cancel_ride: attribution write failed; retrying without mig-38 fields",
+            exc_info=True,
+        )
         try:
             await db_supabase.update_ride(ride_id, with_37)
         except Exception as e37:
@@ -839,7 +845,14 @@ async def admin_get_ride_route_map(
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(url)
         if resp.status_code != 200:
-            logger.warning(f"Static Maps returned {resp.status_code}: {resp.text[:200]}")
+            # User-visible upstream failure (admin sees missing map). Per
+            # CLAUDE.md observability rules, route to Sentry as error.
+            logger.error(
+                "Static Maps returned %s for ride %s: %s",
+                resp.status_code,
+                ride_id,
+                resp.text[:200],
+            )
             raise HTTPException(status_code=502, detail="Failed to fetch route map")
         return Response(
             content=resp.content,
@@ -847,7 +860,11 @@ async def admin_get_ride_route_map(
             headers={"Cache-Control": "private, max-age=3600"},
         )
     except httpx.HTTPError as e:
-        logger.warning(f"Static Maps fetch error for ride {ride_id}: {e}")
+        logger.error(
+            "Static Maps fetch error for ride %s",
+            ride_id,
+            exc_info=True,
+        )
         raise HTTPException(status_code=502, detail="Failed to fetch route map") from e
 
 
@@ -1125,7 +1142,14 @@ async def admin_get_payout(payout_id: str, _: dict = Depends(get_admin_user)):
         try:
             driver = await db.find_one("drivers", {"id": payout["driver_id"]}) or {}
         except Exception:
-            logger.warning("payout driver lookup failed for %s", payout.get("driver_id"), exc_info=True)
+            # Money-adjacent DB lookup failure — payout response will render
+            # with empty driver fields. Surface to Sentry so the gap is visible
+            # before an admin acts on a payout missing context.
+            logger.error(
+                "payout driver lookup failed for %s",
+                payout.get("driver_id"),
+                exc_info=True,
+            )
             driver = {}
     payout["driver_name"] = driver.get("full_name") or driver.get("name") or payout.get("driver_name")
     payout["driver_email"] = driver.get("email")

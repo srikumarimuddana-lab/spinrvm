@@ -79,8 +79,11 @@ export function CreateRideModal({
 
     // Addresses — biased to admin's location for pickup, to chosen pickup for dropoff
     const adminLoc = useAdminLocation();
+    // Bias coordinates only — re-deriving on `adminLoc` identity changes would
+    // create a new bias object every render and force a useEffect refetch.
     const pickupBias = useMemo(
         () => (adminLoc ? { lat: adminLoc.lat, lng: adminLoc.lng, radiusMeters: 20000 } : null),
+        // eslint-disable-next-line react-hooks/exhaustive-deps
         [adminLoc?.lat, adminLoc?.lng],
     );
 
@@ -138,7 +141,8 @@ export function CreateRideModal({
         }
     }, [breakdown, fareEdited]);
 
-    // Load vehicle types once per modal open.
+    // Load vehicle types once per modal open. Intentionally NOT keyed on
+    // vehicleTypeId — that's set inside the effect when there's only one option.
     useEffect(() => {
         if (!open) return;
         let alive = true;
@@ -155,6 +159,7 @@ export function CreateRideModal({
         return () => {
             alive = false;
         };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [open]);
 
     // Riders

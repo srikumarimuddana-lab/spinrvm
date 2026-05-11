@@ -51,6 +51,13 @@ function clearSessionCookies(res: NextResponse): void {
     path: "/",
     maxAge: 0,
   });
+  res.cookies.set("csrf_token", "", {
+    httpOnly: false,
+    sameSite: "strict",
+    secure: isProduction,
+    path: "/",
+    maxAge: 0,
+  });
 }
 
 export async function POST(req: NextRequest) {

@@ -84,6 +84,18 @@ export async function POST(req: NextRequest) {
       path: "/",
       maxAge: SESSION_MAX_AGE,
     });
+    // Backend's CSRF middleware reads cookie name `csrf_token` (see
+    // backend/core/middleware.py). Vercel rewrites forward this cookie
+    // through to Railway, where the middleware validates it against the
+    // X-CSRF-Token header. Without this, every admin PUT/POST/DELETE
+    // gets a 403 from the backend.
+    res.cookies.set("csrf_token", csrfToken, {
+      httpOnly: false,
+      sameSite: "strict",
+      secure: isProduction,
+      path: "/",
+      maxAge: SESSION_MAX_AGE,
+    });
     return res;
   }
 

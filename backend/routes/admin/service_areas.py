@@ -81,6 +81,19 @@ class ServiceAreaUpdateRequest(BaseModel):
     min_driver_rating: Optional[float] = Field(default=None, ge=1.0, le=5.0)
     show_demand_heatmap: Optional[bool] = None
     vehicle_pricing: Optional[List[Dict[str, Any]]] = None
+    province: Optional[str] = None
+    max_pickup_radius_km: Optional[float] = Field(default=None, ge=0.1, le=200)
+    surge_source: Optional[str] = None
+    insurance_fee_percent: Optional[float] = Field(default=None, ge=0, le=100)
+    platform_fee: Optional[float] = Field(default=None, ge=0, le=100)
+    city_fee: Optional[float] = Field(default=None, ge=0, le=100)
+    rider_cancel_fee_before_driver: Optional[float] = Field(default=None, ge=0, le=100)
+    rider_cancel_fee_after_arrival: Optional[float] = Field(default=None, ge=0, le=100)
+    cancel_fee_driver_share: Optional[float] = Field(default=None, ge=0, le=100)
+    cancel_fee_admin_share: Optional[float] = Field(default=None, ge=0, le=100)
+    driver_cancel_fee: Optional[float] = Field(default=None, ge=0, le=100)
+    free_cancel_window_seconds: Optional[int] = Field(default=None, ge=0, le=3600)
+    currency: Optional[str] = None
 
 
 class SurgePricingRequest(BaseModel):
@@ -209,11 +222,13 @@ async def admin_update_service_area(
     for field in [
         "name",
         "city",
+        "province",
         "is_active",
         "parent_service_area_id",
         "is_airport",
         "airport_fee",
         "surge_multiplier",
+        "surge_source",
         "gst_enabled",
         "gst_rate",
         "pst_enabled",
@@ -228,6 +243,17 @@ async def admin_update_service_area(
         "min_driver_rating",
         "show_demand_heatmap",
         "vehicle_pricing",
+        "max_pickup_radius_km",
+        "insurance_fee_percent",
+        "platform_fee",
+        "city_fee",
+        "rider_cancel_fee_before_driver",
+        "rider_cancel_fee_after_arrival",
+        "cancel_fee_driver_share",
+        "cancel_fee_admin_share",
+        "driver_cancel_fee",
+        "free_cancel_window_seconds",
+        "currency",
     ]:
         val = getattr(area, field)
         if val is not None:

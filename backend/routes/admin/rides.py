@@ -366,14 +366,22 @@ async def admin_complete_ride(
 @limiter.limit("60/minute")
 async def admin_places_autocomplete(
     request: Request,
-    input: str = Query(..., min_length=1),
-    session_token: Optional[str] = None,
+    input: str = Query(..., min_length=1, max_length=200),
+    session_token: Optional[str] = Query(default=None, max_length=64),
+    location: Optional[str] = Query(default=None, max_length=50),
+    radius: int = Query(default=50000, ge=1000, le=100000),
     admin_user: dict = Depends(get_admin_user),
 ):
     """Proxy Google Maps Places Autocomplete API to avoid exposing key to browser.
 
     Pass session_token to bundle N autocomplete + 1 details call into one billing session
     ($0.017 flat vs per-call). Generate one UUID per user typing session on the client.
+
+    Pass ``location`` ("lat,lng") + ``radius`` (meters, default 50 km) to bias
+    results to a point — typically the admin's geolocation or the ride's pickup —
+    so a search like "Walmart" returns the nearest stores first instead of
+    matches across Canada. Soft bias: distant well-known places still appear.
+    Mirrors ``routes/maps_proxy.py:places_autocomplete``.
     """
     import httpx
 
@@ -386,10 +394,15 @@ async def admin_places_autocomplete(
     params: dict = {
         "input": input,
         "key": api_key,
-        "types": "address",
+        "language": "en",
+        "components": "country:ca",
     }
     if session_token:
         params["sessiontoken"] = session_token
+    if location:
+        params["location"] = location
+        params["radius"] = str(radius)
+        params["origin"] = location
 
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:

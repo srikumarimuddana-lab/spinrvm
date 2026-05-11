@@ -80,6 +80,7 @@ class ServiceAreaUpdateRequest(BaseModel):
     search_radius_km: Optional[float] = Field(default=None, ge=1, le=100)
     min_driver_rating: Optional[float] = Field(default=None, ge=1.0, le=5.0)
     show_demand_heatmap: Optional[bool] = None
+    vehicle_pricing: Optional[List[Dict[str, Any]]] = None
 
 
 class SurgePricingRequest(BaseModel):
@@ -226,6 +227,7 @@ async def admin_update_service_area(
         "search_radius_km",
         "min_driver_rating",
         "show_demand_heatmap",
+        "vehicle_pricing",
     ]:
         val = getattr(area, field)
         if val is not None:

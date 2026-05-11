@@ -1,0 +1,94 @@
+"use client";
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import { adminPlacesAutocomplete, type AdminPlaceBias } from "@/lib/api";
+
+const DEBOUNCE_MS = 300;
+const MIN_QUERY_LEN = 2;
+
+interface Prediction {
+    place_id: string;
+    description: string;
+    structured_formatting?: { main_text?: string; secondary_text?: string };
+}
+
+function newSessionToken(): string {
+    return typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+              const r = (Math.random() * 16) | 0;
+              return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
+          });
+}
+
+export interface UseAdminPlacesAutocompleteResult {
+    predictions: Prediction[];
+    loading: boolean;
+    /** Drop all current results — call when the caller selects a prediction. */
+    clear: () => void;
+    /** Mint a fresh session token after closing one with a details call. */
+    rotateSessionToken: () => void;
+    /** Current session token — pass to a place-details request to close the billing session. */
+    sessionToken: string;
+}
+
+/**
+ * Admin-side parallel of @shared/hooks/usePlacesAutocomplete.
+ *
+ * Same shape and behaviour: 300ms debounce, soft location bias, in-flight
+ * cancellation, session-token rotation. Hits POST-equivalent admin proxy
+ * via adminPlacesAutocomplete instead of the rider proxy.
+ *
+ * Cannot share code with the rider/driver hook because admin-dashboard
+ * is a Next.js app with its own API client (cookies, admin auth) — and
+ * the @shared package depends on React Native primitives.
+ */
+export function usePlacesAutocomplete(
+    input: string,
+    bias?: AdminPlaceBias | null,
+): UseAdminPlacesAutocompleteResult {
+    const [predictions, setPredictions] = useState<Prediction[]>([]);
+    const [loading, setLoading] = useState(false);
+    const [sessionToken, setSessionToken] = useState<string>(() => newSessionToken());
+    const seqRef = useRef(0);
+    const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    useEffect(() => {
+        if (!input || input.length < MIN_QUERY_LEN) {
+            setPredictions([]);
+            setLoading(false);
+            return;
+        }
+        if (debounceRef.current) clearTimeout(debounceRef.current);
+        const mySeq = ++seqRef.current;
+
+        debounceRef.current = setTimeout(async () => {
+            setLoading(true);
+            try {
+                const data = await adminPlacesAutocomplete(input, sessionToken, bias ?? null);
+                if (mySeq !== seqRef.current) return;
+                setPredictions(data?.predictions ?? []);
+            } catch {
+                if (mySeq !== seqRef.current) return;
+                setPredictions([]);
+            } finally {
+                if (mySeq === seqRef.current) setLoading(false);
+            }
+        }, DEBOUNCE_MS);
+
+        return () => {
+            if (debounceRef.current) clearTimeout(debounceRef.current);
+        };
+    }, [input, sessionToken, bias?.lat, bias?.lng, bias?.radiusMeters]);
+
+    const clear = useCallback(() => {
+        setPredictions([]);
+        setLoading(false);
+    }, []);
+
+    const rotateSessionToken = useCallback(() => {
+        setSessionToken(newSessionToken());
+    }, []);
+
+    return { predictions, loading, clear, rotateSessionToken, sessionToken };
+}

@@ -93,8 +93,14 @@ async def places_autocomplete(
     if session_token:
         params["sessiontoken"] = session_token
     if location:
+        # Soft bias: prefer results near (lat, lng) within `radius` meters.
+        # Use `origin` (when supported) so results are ordered by distance from
+        # the rider. `strictbounds` would hard-filter to the radius — we want
+        # bias, not hard cap, so distant well-known places still appear if
+        # the rider explicitly searches for them.
         params["location"] = location
         params["radius"] = str(radius)
+        params["origin"] = location
 
     try:
         async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:

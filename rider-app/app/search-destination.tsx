@@ -159,6 +159,7 @@ export default function SearchDestinationScreen() {
         });
         if (userLocation) {
           params.set('location', `${userLocation.latitude},${userLocation.longitude}`);
+          params.set('radius', '20000');
         }
         const { data } = await api.get<{ predictions: PlacePrediction[] }>(
           `/maps/places/autocomplete?${params.toString()}`,

@@ -80,15 +80,24 @@ class UpdatePromoCodeRequest(BaseModel):
 # ============ User-Facing Endpoints ============
 
 
-@api_router.post("/validate")
-@promo_validate_limit
-async def validate_promo(
-    request: Request,
-    req: ValidatePromoRequest,
-    current_user: dict = Depends(get_current_user),
-):
-    """Validate promo code against all rules: usage, expiry, area, user targeting, fare minimum."""
-    code = req.code.strip().upper()
+async def _validate_promo_for_user(
+    code: str,
+    user_id: str,
+    ride_fare: Decimal,
+    ride_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Validate ``code`` against all 10 promo rules for ``user_id``.
+
+    Pure helper — does not depend on FastAPI ``Depends``. Used by:
+    - ``POST /promo/validate`` (rider self-service)
+    - ``POST /promo/apply`` (rider self-service)
+    - admin "apply on behalf of rider" via ``apply_promo_for_admin``
+
+    Per-user limits are scoped to ``user_id``, so an admin-applied promo
+    counts against the rider just like a rider-applied one (the chosen
+    behaviour for the admin Create Ride flow).
+    """
+    code = code.strip().upper()
     now = datetime.now(timezone.utc)
     promo = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("promotions", {"code": code}, limit=1))
 
@@ -123,7 +132,7 @@ async def validate_promo(
             "promo_applications",
             {
                 "promo_id": promo["id"],
-                "user_id": current_user["id"],
+                "user_id": user_id,
             },
         )
         if user_uses >= max_per_user:
@@ -134,33 +143,31 @@ async def validate_promo(
     # 4. Minimum ride fare — use server-fetched fare when ride_id is provided (R-P2-33)
     min_fare = promo.get("min_ride_fare", 0)
     if min_fare > 0:
-        if req.ride_id:
-            ride_rows = await db_supabase.get_rows(
-                "rides", {"id": req.ride_id, "rider_id": current_user["id"]}, limit=1
-            )
+        if ride_id:
+            ride_rows = await db_supabase.get_rows("rides", {"id": ride_id, "rider_id": user_id}, limit=1)
             if not ride_rows:
                 raise HTTPException(status_code=404, detail="Ride not found")
             effective_fare = Decimal(str(ride_rows[0].get("total_fare") or "0"))
         else:
-            effective_fare = req.ride_fare
+            effective_fare = ride_fare
         if effective_fare < min_fare:
             raise HTTPException(status_code=400, detail=f"Minimum ride fare of ${min_fare:.2f} required for this promo")
 
     # 5. Private coupon — assigned to specific users only
     assigned_users = promo.get("assigned_user_ids", [])
-    if assigned_users and current_user["id"] not in assigned_users:
+    if assigned_users and user_id not in assigned_users:
         raise HTTPException(status_code=400, detail="This promo code is not available for your account")
 
     # 6. First ride only
     if promo.get("first_ride_only"):
-        ride_count = await db_supabase.count_documents("rides", {"rider_id": current_user["id"], "status": RideStatus.COMPLETED})
+        ride_count = await db_supabase.count_documents("rides", {"rider_id": user_id, "status": RideStatus.COMPLETED})
         if ride_count > 0:
             raise HTTPException(status_code=400, detail="This promo is for first-time riders only")
 
     # 7. New user restriction (user account must be less than X days old)
     new_user_days = promo.get("new_user_days", 0)
     if new_user_days > 0:
-        user = await db_supabase.get_user_by_id(current_user["id"])
+        user = await db_supabase.get_user_by_id(user_id)
         if user and user.get("created_at"):
             created = parse_iso_utc(user["created_at"])
             if created is not None and (now - created).days > new_user_days:
@@ -173,7 +180,7 @@ async def validate_promo(
         recent_rides = await db_supabase.count_documents(
             "rides",
             {
-                "rider_id": current_user["id"],
+                "rider_id": user_id,
                 "status": RideStatus.COMPLETED,
                 "ride_completed_at": {"$gte": cutoff},
             },
@@ -187,9 +194,7 @@ async def validate_promo(
     min_rides = promo.get("min_total_rides", 0)
     max_rides = promo.get("max_total_rides", 0)
     if min_rides > 0 or max_rides > 0:
-        total_rides = await db_supabase.count_documents(
-            "rides", {"rider_id": current_user["id"], "status": RideStatus.COMPLETED}
-        )
+        total_rides = await db_supabase.count_documents("rides", {"rider_id": user_id, "status": RideStatus.COMPLETED})
         if min_rides > 0 and total_rides < min_rides:
             raise HTTPException(
                 status_code=400, detail=f"You need at least {min_rides} completed rides to use this promo"
@@ -207,14 +212,14 @@ async def validate_promo(
     discount_value = float(promo.get("discount_value", 0))
 
     if discount_type == "percentage":
-        discount = (req.ride_fare * Decimal(str(discount_value)) / Decimal("100")).quantize(
+        discount = (ride_fare * Decimal(str(discount_value)) / Decimal("100")).quantize(
             Decimal("0.01"), rounding=ROUND_HALF_UP
         )
         max_cap = promo.get("max_discount")
         if max_cap and discount > Decimal(str(max_cap)):
             discount = Decimal(str(max_cap))
     else:
-        discount = min(Decimal(str(discount_value)), req.ride_fare)
+        discount = min(Decimal(str(discount_value)), ride_fare)
 
     return {
         "valid": True,
@@ -226,6 +231,75 @@ async def validate_promo(
         "promo_id": promo["id"],
         "description": promo.get("description", ""),
     }
+
+
+async def _record_promo_application(promo_id: str, code: str, user_id: str, discount: Decimal) -> str:
+    """Insert promo_applications row and atomically increment promotions.uses.
+
+    Returns the application id. Raises 409 if the promo just got fully
+    redeemed by a concurrent caller.
+    """
+    application = {
+        "id": str(uuid.uuid4()),
+        "user_id": user_id,
+        "promo_id": promo_id,
+        "code": code,
+        "discount_applied": discount,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db_supabase.insert_one("promo_applications", application)
+
+    promo_row = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("promotions", {"id": promo_id}, limit=1))
+    max_uses = int((promo_row or {}).get("max_uses", 0))
+    incremented = await increment_promo_uses(promo_id, max_uses)
+    if not incremented:
+        raise HTTPException(status_code=409, detail="Promo code has been fully redeemed")
+    return application["id"]
+
+
+async def apply_promo_for_admin(
+    code: str,
+    rider_id: str,
+    ride_fare: Decimal,
+    ride_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Admin-side promo application on behalf of a rider.
+
+    Runs the same 10-rule validation against ``rider_id`` (so the rider's
+    per-user limit is honoured) and records the redemption in
+    ``promo_applications`` keyed to the rider. The caller (admin/rides.py)
+    is responsible for persisting ``promo_application_id`` + ``discount_amount``
+    on the ride row.
+    """
+    validation = await _validate_promo_for_user(code, rider_id, ride_fare, ride_id)
+    application_id = await _record_promo_application(
+        promo_id=validation["promo_id"],
+        code=validation["code"],
+        user_id=rider_id,
+        discount=validation["discount_amount"],
+    )
+    return {
+        "promo_id": validation["promo_id"],
+        "code": validation["code"],
+        "discount_amount": validation["discount_amount"],
+        "application_id": application_id,
+    }
+
+
+@api_router.post("/validate")
+@promo_validate_limit
+async def validate_promo(
+    request: Request,
+    req: ValidatePromoRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Validate promo code against all rules: usage, expiry, area, user targeting, fare minimum."""
+    return await _validate_promo_for_user(
+        code=req.code,
+        user_id=current_user["id"],
+        ride_fare=req.ride_fare,
+        ride_id=req.ride_id,
+    )
 
 
 @api_router.post("/apply")
@@ -244,35 +318,23 @@ async def apply_promo(
         raise HTTPException(status_code=403, detail="ERR_FORBIDDEN")
     server_fare = Decimal(str(ride.get("total_fare", 0)))
 
-    validate_req = ValidatePromoRequest(code=req.code, ride_fare=server_fare)
-    # Re-validate using server fare
-    validation = await validate_promo(validate_req, current_user)
-
-    # Record application
-    application = {
-        "id": str(uuid.uuid4()),
-        "user_id": current_user["id"],
-        "promo_id": validation["promo_id"],
-        "code": validation["code"],
-        "discount_applied": validation["discount_amount"],
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    await db_supabase.insert_one("promo_applications", application)
-
-    # Atomically increment usage count. The RPC does UPDATE ... WHERE uses < max_uses,
-    # so two concurrent applications of a max_uses=1 promo can't both succeed.
-    promo_row = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows("promotions", {"id": validation["promo_id"]}, limit=1)
+    validation = await _validate_promo_for_user(
+        code=req.code,
+        user_id=current_user["id"],
+        ride_fare=server_fare,
     )
-    max_uses = int((promo_row or {}).get("max_uses", 0))
-    incremented = await increment_promo_uses(validation["promo_id"], max_uses)
-    if not incremented:
-        raise HTTPException(status_code=409, detail="Promo code has been fully redeemed")
+
+    application_id = await _record_promo_application(
+        promo_id=validation["promo_id"],
+        code=validation["code"],
+        user_id=current_user["id"],
+        discount=validation["discount_amount"],
+    )
 
     return {
         "success": True,
         "discount_applied": validation["discount_amount"],
-        "application_id": application["id"],
+        "application_id": application_id,
     }
 
 
@@ -289,7 +351,9 @@ async def get_available_promos(
 
     # Pre-fetch user data for targeting checks
     user = await db_supabase.get_user_by_id(current_user["id"])
-    total_rides = await db_supabase.count_documents("rides", {"rider_id": current_user["id"], "status": RideStatus.COMPLETED})
+    total_rides = await db_supabase.count_documents(
+        "rides", {"rider_id": current_user["id"], "status": RideStatus.COMPLETED}
+    )
     recent_cutoff_30 = (now - timedelta(days=30)).isoformat()
     await db_supabase.count_documents(
         "rides",
@@ -359,7 +423,11 @@ async def get_available_promos(
                 cutoff = (now - timedelta(days=inactive_days)).isoformat()
                 recent = await db_supabase.count_documents(
                     "rides",
-                    {"rider_id": current_user["id"], "status": RideStatus.COMPLETED, "ride_completed_at": {"$gte": cutoff}},
+                    {
+                        "rider_id": current_user["id"],
+                        "status": RideStatus.COMPLETED,
+                        "ride_completed_at": {"$gte": cutoff},
+                    },
                 )
                 if recent > 0:
                     continue  # noqa: E701

@@ -1490,9 +1490,26 @@ export const adminCompleteRide = (rideId: string) =>
         { method: "POST" },
     );
 
-export const adminPlacesAutocomplete = (input: string, sessionToken?: string) => {
+export interface AdminPlaceBias {
+    lat: number;
+    lng: number;
+    /** Soft-bias radius in metres. Backend clamps to [1000, 100000]. Defaults to 20km. */
+    radiusMeters?: number;
+}
+
+export const adminPlacesAutocomplete = (
+    input: string,
+    sessionToken?: string,
+    bias?: AdminPlaceBias | null,
+) => {
     const sp = new URLSearchParams({ input });
     if (sessionToken) sp.set("session_token", sessionToken);
+    if (bias && Number.isFinite(bias.lat) && Number.isFinite(bias.lng)) {
+        // 4 decimals (~11m) keeps the URL short and avoids over-precise GPS
+        // appearing in proxy access logs.
+        sp.set("location", `${bias.lat.toFixed(4)},${bias.lng.toFixed(4)}`);
+        sp.set("radius", String(Math.min(Math.max(bias.radiusMeters ?? 20000, 1000), 100000)));
+    }
     return request<{ predictions: any[] }>(`/api/admin/places/autocomplete?${sp.toString()}`);
 };
 
@@ -1501,6 +1518,70 @@ export const adminPlacesDetails = (placeId: string, sessionToken?: string) => {
     if (sessionToken) sp.set("session_token", sessionToken);
     return request<{ lat: number; lng: number; formatted_address: string }>(`/api/admin/places/details?${sp.toString()}`);
 };
+
+export interface AdminFareEstimateResponse {
+    base_fare: number;
+    distance_fare: number;
+    time_fare: number;
+    booking_fee: number;
+    surge_multiplier: number;
+    subtotal: number;
+    area_fees: Array<{ name: string; amount: number }>;
+    area_fees_total: number;
+    tax_amount: number;
+    tax_breakdown: Array<{ name: string; rate: number; amount: number }>;
+    grand_total: number;
+    service_area: string | null;
+}
+
+export const adminFareEstimate = (params: {
+    pickup_lat: number;
+    pickup_lng: number;
+    dropoff_lat: number;
+    dropoff_lng: number;
+    distance_km: number;
+    duration_minutes: number;
+    vehicle_type_id: string;
+}) => {
+    const sp = new URLSearchParams();
+    sp.set("pickup_lat", String(params.pickup_lat));
+    sp.set("pickup_lng", String(params.pickup_lng));
+    sp.set("dropoff_lat", String(params.dropoff_lat));
+    sp.set("dropoff_lng", String(params.dropoff_lng));
+    sp.set("distance_km", String(params.distance_km));
+    sp.set("duration_minutes", String(params.duration_minutes));
+    sp.set("vehicle_type_id", params.vehicle_type_id);
+    return request<AdminFareEstimateResponse>(`/api/admin/rides/fare-estimate?${sp.toString()}`);
+};
+
+export const adminPromoPreview = (data: {
+    rider_id: string;
+    code: string;
+    // String preserves Decimal precision over the wire.
+    ride_fare: string;
+}) =>
+    request<{
+        valid: boolean;
+        code: string;
+        discount_type: string;
+        discount_amount: number;
+        promo_id: string;
+        description: string;
+    }>("/api/admin/promo/preview", {
+        method: "POST",
+        body: JSON.stringify(data),
+    });
+
+export interface AdminVehicleType {
+    id: string;
+    name: string;
+    icon?: string;
+    capacity?: number;
+    is_active: boolean;
+}
+
+export const adminListVehicleTypes = () =>
+    request<AdminVehicleType[]>("/api/admin/vehicle-types");
 
 export const adminCreateRide = (data: {
     rider_id: string;
@@ -1515,6 +1596,10 @@ export const adminCreateRide = (data: {
     // (Pydantic Decimal accepts string/number; string avoids float drift).
     total_fare?: string | number;
     vehicle_type_id?: string;
+    subtotal_fare?: string | number;
+    discount_amount?: string | number;
+    promo_code?: string;
+    fare_overridden_by_admin?: boolean;
 }) =>
     request<{ success: boolean; ride_id: string; status: string }>(
         "/api/admin/rides/create",

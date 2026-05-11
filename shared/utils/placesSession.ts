@@ -7,6 +7,9 @@
  * call) to start the next session.
  *
  * Not cryptographically sensitive — Google only requires opacity, not entropy.
+ *
+ * Lives in @shared/utils so rider-app, driver-app, and any future surface
+ * can import the same generator. Previously duplicated in both app trees.
  */
 export function newPlacesSessionToken(): string {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {

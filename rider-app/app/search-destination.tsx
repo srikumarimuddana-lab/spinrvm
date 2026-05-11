@@ -22,16 +22,8 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import CustomAlert from '@shared/components/CustomAlert';
 import api from '@shared/api/client';
-import { newPlacesSessionToken } from '../utils/placesSession';
-
-interface PlacePrediction {
-  place_id: string;
-  description: string;
-  structured_formatting?: {
-    main_text: string;
-    secondary_text: string;
-  };
-}
+import { usePlacesAutocomplete } from '@shared/hooks/usePlacesAutocomplete';
+import type { PlacePrediction } from '@shared/api/places';
 
 export default function SearchDestinationScreen() {
   const router = useRouter();
@@ -52,8 +44,7 @@ export default function SearchDestinationScreen() {
   const [pickupText, setPickupText] = useState(pickup?.address || 'Current Location');
   const [dropoffText, setDropoffText] = useState(dropoff?.address || '');
   const [stopTexts, setStopTexts] = useState<string[]>(stops.map(s => s.address || ''));
-  const [predictions, setPredictions] = useState<PlacePrediction[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
   const [alertState, setAlertState] = useState<{
     visible: boolean;
     title: string;
@@ -62,11 +53,22 @@ export default function SearchDestinationScreen() {
     buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
   }>({ visible: false, title: '', message: '', variant: 'info' });
 
+  // Bias prediction results to the rider's location so e.g. "Walmart"
+  // surfaces nearby stores first instead of generic matches across Canada.
+  const bias = userLocation
+    ? { lat: userLocation.latitude, lng: userLocation.longitude, radiusMeters: 20000 }
+    : null;
+  const {
+    predictions,
+    loading: isSearching,
+    clear: clearPredictions,
+    rotateSessionToken,
+    sessionToken,
+  } = usePlacesAutocomplete(searchQuery, bias);
+
   const pickupRef = useRef<TextInput>(null);
   const dropoffRef = useRef<TextInput>(null);
   const stopRefs = useRef<(TextInput | null)[]>([]);
-  const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const sessionToken = useRef<string>(newPlacesSessionToken());
 
   // Handle return from map picker
   useEffect(() => {
@@ -142,50 +144,17 @@ export default function SearchDestinationScreen() {
     }, 100);
   }, [activeField]);
 
-  const searchPlaces = async (query: string) => {
-    if (!query || query.length < 2) {
-      setPredictions([]);
-      return;
-    }
-
-    if (searchTimeout.current) clearTimeout(searchTimeout.current);
-
-    searchTimeout.current = setTimeout(async () => {
-      setIsSearching(true);
-      try {
-        const params = new URLSearchParams({
-          input: query,
-          session_token: sessionToken.current,
-        });
-        if (userLocation) {
-          params.set('location', `${userLocation.latitude},${userLocation.longitude}`);
-          params.set('radius', '20000');
-        }
-        const { data } = await api.get<{ predictions: PlacePrediction[] }>(
-          `/maps/places/autocomplete?${params.toString()}`,
-        );
-        if (data?.predictions) {
-          setPredictions(data.predictions);
-        }
-      } catch (error) {
-        console.log('Places search error:', error);
-      } finally {
-        setIsSearching(false);
-      }
-    }, 300);
-  };
-
   const getPlaceDetails = async (placeId: string): Promise<{ lat: number; lng: number; address: string } | null> => {
     try {
       const params = new URLSearchParams({
         place_id: placeId,
-        session_token: sessionToken.current,
+        session_token: sessionToken,
       });
       const { data } = await api.get<{ lat: number | null; lng: number | null; formatted_address: string }>(
         `/maps/places/details?${params.toString()}`,
       );
       // Selection closes the billing session — start a fresh one for the next field.
-      sessionToken.current = newPlacesSessionToken();
+      rotateSessionToken();
       if (data && data.lat != null && data.lng != null) {
         return {
           lat: data.lat,
@@ -201,7 +170,8 @@ export default function SearchDestinationScreen() {
 
   const handleSelectPrediction = async (prediction: PlacePrediction) => {
     Keyboard.dismiss();
-    setPredictions([]);
+    clearPredictions();
+    setSearchQuery('');
     const details = await getPlaceDetails(prediction.place_id);
     if (!details) return;
 
@@ -253,7 +223,7 @@ export default function SearchDestinationScreen() {
       setStopTexts(newTexts);
     }
     setActiveField(field);
-    searchPlaces(text);
+    setSearchQuery(text);
   };
 
   const handleAddStop = () => {
@@ -275,9 +245,10 @@ export default function SearchDestinationScreen() {
       : field === 'dropoff' ? dropoffText
         : stopTexts[field] || '';
     if (text && text !== 'Current Location') {
-      searchPlaces(text);
+      setSearchQuery(text);
     } else {
-      setPredictions([]);
+      setSearchQuery('');
+      clearPredictions();
     }
   };
 
@@ -296,7 +267,8 @@ export default function SearchDestinationScreen() {
       newTexts[activeField] = location.address;
       setStopTexts(newTexts);
     }
-    setPredictions([]);
+    setSearchQuery('');
+    clearPredictions();
   };
 
   const handleSearchRide = () => {
@@ -515,7 +487,8 @@ export default function SearchDestinationScreen() {
                         setPickup(location);
                         setPickupText('Current Location');
                         if (!dropoff) setActiveField('dropoff');
-                        setPredictions([]);
+                        setSearchQuery('');
+                        clearPredictions();
                       }}
                       accessibilityRole="button"
                       accessibilityLabel="Use current location as pickup"

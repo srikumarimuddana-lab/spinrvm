@@ -11,7 +11,8 @@ import CustomAlert from '@shared/components/CustomAlert';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import api from '@shared/api/client';
-import { newPlacesSessionToken } from '../utils/placesSession';
+import { usePlacesAutocomplete } from '@shared/hooks/usePlacesAutocomplete';
+import type { PlacePrediction as Prediction } from '@shared/api/places';
 
 const PLACE_TYPES = [
   { key: 'Home', icon: 'home', color: '#FF3B30', bg: '#FEF2F2' },
@@ -21,18 +22,12 @@ const PLACE_TYPES = [
   { key: 'Other', icon: 'star', color: '#8B5CF6', bg: '#EDE9FE' },
 ];
 
-interface Prediction {
-  place_id: string;
-  description: string;
-  structured_formatting?: { main_text: string; secondary_text: string };
-}
-
 export default function SavedPlacesScreen() {
   const router = useRouter();
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
-  const { savedAddresses, fetchSavedAddresses, addSavedAddress, deleteSavedAddress } = useRideStore();
+  const { savedAddresses, fetchSavedAddresses, addSavedAddress, deleteSavedAddress, userLocation } = useRideStore();
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -41,11 +36,22 @@ export default function SavedPlacesScreen() {
   const [placeName, setPlaceName] = useState('');
   const [selectedType, setSelectedType] = useState('Home');
   const [searchText, setSearchText] = useState('');
-  const [predictions, setPredictions] = useState<Prediction[]>([]);
   const [selectedPlace, setSelectedPlace] = useState<{ address: string; lat: number; lng: number } | null>(null);
-  const [searching, setSearching] = useState(false);
-  const searchTimeout = React.useRef<any>(null);
-  const sessionToken = React.useRef<string>(newPlacesSessionToken());
+
+  // Bias to the rider's GPS so a "Walmart" search returns the nearby store
+  // instead of generic matches across Canada. Previously this screen sent
+  // no bias at all.
+  const bias = userLocation
+    ? { lat: userLocation.latitude, lng: userLocation.longitude, radiusMeters: 20000 }
+    : null;
+  const {
+    predictions,
+    loading: searching,
+    clear: clearPredictions,
+    rotateSessionToken,
+    sessionToken,
+  } = usePlacesAutocomplete(selectedPlace ? '' : searchText, bias);
+
   const [alertState, setAlertState] = useState<{
     visible: boolean;
     title: string;
@@ -67,38 +73,19 @@ export default function SavedPlacesScreen() {
   const searchPlaces = (query: string) => {
     setSearchText(query);
     setSelectedPlace(null);
-    if (!query || query.length < 2) {
-      setPredictions([]);
-      return;
-    }
-    if (searchTimeout.current) clearTimeout(searchTimeout.current);
-    searchTimeout.current = setTimeout(async () => {
-      setSearching(true);
-      try {
-        const params = new URLSearchParams({
-          input: query,
-          session_token: sessionToken.current,
-        });
-        const { data } = await api.get<{ predictions: Prediction[] }>(
-          `/maps/places/autocomplete?${params.toString()}`,
-        );
-        setPredictions(data?.predictions || []);
-      } catch {}
-      finally { setSearching(false); }
-    }, 300);
   };
 
   const selectPrediction = async (prediction: Prediction) => {
     try {
       const params = new URLSearchParams({
         place_id: prediction.place_id,
-        session_token: sessionToken.current,
+        session_token: sessionToken,
       });
       const { data } = await api.get<{ lat: number | null; lng: number | null; formatted_address: string }>(
         `/maps/places/details?${params.toString()}`,
       );
       // Selection closes the billing session — start a fresh one for the next save.
-      sessionToken.current = newPlacesSessionToken();
+      rotateSessionToken();
       if (data && data.lat != null && data.lng != null) {
         setSelectedPlace({
           address: data.formatted_address,
@@ -106,7 +93,7 @@ export default function SavedPlacesScreen() {
           lng: data.lng,
         });
         setSearchText(prediction.structured_formatting?.main_text || prediction.description);
-        setPredictions([]);
+        clearPredictions();
       }
     } catch {}
   };
@@ -144,7 +131,7 @@ export default function SavedPlacesScreen() {
   };
 
   const resetForm = () => {
-    setPlaceName(''); setSelectedType('Home'); setSearchText(''); setSelectedPlace(null); setPredictions([]);
+    setPlaceName(''); setSelectedType('Home'); setSearchText(''); setSelectedPlace(null); clearPredictions();
   };
 
   const getPlaceConfig = (name: string) => {

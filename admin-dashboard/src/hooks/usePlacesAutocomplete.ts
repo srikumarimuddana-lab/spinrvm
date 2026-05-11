@@ -79,6 +79,10 @@ export function usePlacesAutocomplete(
         return () => {
             if (debounceRef.current) clearTimeout(debounceRef.current);
         };
+        // We depend on the bias coordinates, NOT the bias object identity —
+        // callers pass a freshly-built object every render and we don't want
+        // to refetch unless lat/lng/radius actually changed.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [input, sessionToken, bias?.lat, bias?.lng, bias?.radiusMeters]);
 
     const clear = useCallback(() => {

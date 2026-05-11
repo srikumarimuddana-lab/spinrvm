@@ -780,21 +780,32 @@ function FieldToggle({ label, value, onSave }: { label: string; value: boolean; 
 // ─── Vehicle Pricing Editor ───
 
 function VehiclePricingEditor({ pricing, vehicleTypes, onSave }: { pricing: any[]; vehicleTypes: { id: string; name: string }[]; onSave: (p: any[]) => void }) {
-  const [rows, setRows] = useState(pricing.length > 0 ? pricing : [
-    { vehicle_type: 'Economy', base_fare: 3.50, per_km: 1.20, per_min: 0.25, min_fare: 7.00, booking_fee: 2.00 },
-    { vehicle_type: 'Premium', base_fare: 5.00, per_km: 2.00, per_min: 0.40, min_fare: 12.00, booking_fee: 2.50 },
-    { vehicle_type: 'XL', base_fare: 6.00, per_km: 2.50, per_min: 0.50, min_fare: 15.00, booking_fee: 3.00 },
-    { vehicle_type: 'Van', base_fare: 7.00, per_km: 3.00, per_min: 0.60, min_fare: 18.00, booking_fee: 3.50 },
-  ]);
+  // Mirror saved state exactly — do NOT inject local defaults when empty.
+  // Pre-populating defaults caused "delete doesn't save" bugs: deleting all
+  // rows and saving empty array would re-show defaults on refresh, looking
+  // like the delete failed.
+  const [rows, setRows] = useState<any[]>(pricing || []);
+  const [dirty, setDirty] = useState(false);
+
+  // Re-sync local rows when parent reloads (e.g. after save).
+  useEffect(() => { setRows(pricing || []); setDirty(false); }, [pricing]);
 
   const update = (idx: number, field: string, val: string) => {
     const next = [...rows];
     next[idx] = { ...next[idx], [field]: field === 'vehicle_type' ? val : parseFloat(val) || 0 };
     setRows(next);
+    setDirty(true);
   };
 
-  const addRow = () => setRows([...rows, { vehicle_type: '', base_fare: 0, per_km: 0, per_min: 0, min_fare: 0, booking_fee: 0 }]);
-  const removeRow = (i: number) => setRows(rows.filter((_, idx) => idx !== i));
+  const addRow = () => { setRows([...rows, { vehicle_type: '', base_fare: 0, per_km: 0, per_min: 0, min_fare: 0, booking_fee: 0 }]); setDirty(true); };
+  // Persist immediately on delete so the row doesn't reappear if the user
+  // forgets to click "Save Pricing".
+  const removeRow = (i: number) => {
+    const next = rows.filter((_, idx) => idx !== i);
+    setRows(next);
+    onSave(next);
+    setDirty(false);
+  };
 
   // Vehicle types already taken by other rows — prevents picking the
   // same type twice in the same area. The current row's own value is
@@ -866,7 +877,13 @@ function VehiclePricingEditor({ pricing, vehicleTypes, onSave }: { pricing: any[
       )}
       <div className="flex gap-3 mt-3">
         <button onClick={addRow} className="text-sm text-red-500 font-semibold hover:underline">+ Add vehicle type</button>
-        <button onClick={() => onSave(rows)} className="bg-red-500 text-white px-5 py-2 rounded-xl text-sm font-semibold hover:bg-red-600">Save Pricing</button>
+        <button
+          onClick={() => { onSave(rows); setDirty(false); }}
+          className={`px-5 py-2 rounded-xl text-sm font-semibold transition ${dirty ? 'bg-red-500 text-white hover:bg-red-600' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
+          disabled={!dirty}
+        >
+          {dirty ? 'Save Pricing*' : 'Saved'}
+        </button>
       </div>
     </div>
   );

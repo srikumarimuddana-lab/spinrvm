@@ -71,7 +71,11 @@ export default function FlagsTab() {
     const handleCreate = async () => {
         if (!form.ride_id.trim()) { toast({ title: "Missing ride ID", variant: "destructive" }); return; }
         setSaving(true);
-        try { await flagRideParticipant(form.ride_id, { target_type: form.target_type, reason: form.reason, description: form.description, service_area_id: form.service_area_id || null }); setDialogOpen(false); setForm({ ride_id: "", target_type: "driver", reason: "other", description: "", service_area_id: "" }); load(); }
+        try {
+            await flagRideParticipant(form.ride_id, { target_type: form.target_type, reason: form.reason, description: form.description, service_area_id: form.service_area_id || null });
+            toast({ title: "Flag created" });
+            setDialogOpen(false); setForm({ ride_id: "", target_type: "driver", reason: "other", description: "", service_area_id: "" }); load();
+        }
         catch (e: any) { toast({ title: "Failed to create flag", description: e.message, variant: "destructive" }); } finally { setSaving(false); }
     };
 

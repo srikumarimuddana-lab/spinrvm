@@ -78,6 +78,7 @@ export default function FaqsTab() {
         try {
             if (editing) await updateFaq(editing.id, form);
             else await createFaq(form);
+            toast({ title: editing ? "FAQ updated" : "FAQ created" });
             setDialogOpen(false); setEditing(null); setForm(EMPTY); load();
         } catch (e: any) { toast({ title: "Failed to save FAQ", description: e.message, variant: "destructive" }); } finally { setSaving(false); }
     };
@@ -88,7 +89,11 @@ export default function FaqsTab() {
 
     const confirmDelete = async () => {
         if (!deleteTarget) return;
-        try { await deleteFaq(deleteTarget); load(); } catch (e: any) { toast({ title: "Failed to delete FAQ", description: e.message, variant: "destructive" }); }
+        try {
+            await deleteFaq(deleteTarget);
+            toast({ title: "FAQ deleted" });
+            load();
+        } catch (e: any) { toast({ title: "Failed to delete FAQ", description: e.message, variant: "destructive" }); }
         finally { setDeleteTarget(null); }
     };
 

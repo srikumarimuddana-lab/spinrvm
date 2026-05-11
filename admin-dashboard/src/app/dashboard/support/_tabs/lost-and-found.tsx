@@ -78,19 +78,31 @@ export default function LostAndFoundTab() {
     const handleCreate = async () => {
         if (!form.ride_id.trim() || !form.item_description.trim()) { toast({ title: "Missing fields", description: "Enter ride ID and item description.", variant: "destructive" }); return; }
         setSaving(true);
-        try { await reportLostItem(form.ride_id, { item_description: form.item_description, service_area_id: form.service_area_id || null }); setDialogOpen(false); setForm({ ride_id: "", item_description: "", service_area_id: "" }); load(); }
+        try {
+            await reportLostItem(form.ride_id, { item_description: form.item_description, service_area_id: form.service_area_id || null });
+            toast({ title: "Lost item reported" });
+            setDialogOpen(false); setForm({ ride_id: "", item_description: "", service_area_id: "" }); load();
+        }
         catch (e: any) { toast({ title: "Failed to report item", description: e?.message || "Please try again", variant: "destructive" }); } finally { setSaving(false); }
     };
 
     const handleUpdate = async () => {
         if (!editing) return;
         setSaving(true);
-        try { await updateLostItem(editing.id, editForm); setEditDialog(false); setEditing(null); load(); }
+        try {
+            await updateLostItem(editing.id, editForm);
+            toast({ title: "Lost item updated" });
+            setEditDialog(false); setEditing(null); load();
+        }
         catch (e: any) { toast({ title: "Failed to update item", description: e?.message || "Please try again", variant: "destructive" }); } finally { setSaving(false); }
     };
 
     const handleResolve = async (id: string, status: string) => {
-        try { await resolveLostItem(id, { status }); load(); } catch (e: any) { toast({ title: "Failed to update status", description: e?.message || "Please try again", variant: "destructive" }); }
+        try {
+            await resolveLostItem(id, { status });
+            toast({ title: `Marked as ${status}` });
+            load();
+        } catch (e: any) { toast({ title: "Failed to update status", description: e?.message || "Please try again", variant: "destructive" }); }
     };
 
     return (
@@ -161,7 +173,7 @@ export default function LostAndFoundTab() {
                     </AlertDialogHeader>
                     <AlertDialogFooter>
                         <AlertDialogCancel>Cancel</AlertDialogCancel>
-                        <AlertDialogAction onClick={() => { if (deleteTarget) deleteLostItem(deleteTarget).then(load).catch((e: any) => { toast({ title: "Failed to delete item", description: e?.message || "Please try again", variant: "destructive" }); }).finally(() => setDeleteTarget(null)); }} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
+                        <AlertDialogAction onClick={() => { if (deleteTarget) deleteLostItem(deleteTarget).then(() => { toast({ title: "Lost item deleted" }); load(); }).catch((e: any) => { toast({ title: "Failed to delete item", description: e?.message || "Please try again", variant: "destructive" }); }).finally(() => setDeleteTarget(null)); }} className="bg-red-600 hover:bg-red-700">Delete</AlertDialogAction>
                     </AlertDialogFooter>
                 </AlertDialogContent>
             </AlertDialog>

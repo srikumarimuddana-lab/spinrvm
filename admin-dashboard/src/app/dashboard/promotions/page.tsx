@@ -407,6 +407,7 @@ export default function PromotionsPage() {
             if (isPrivateTab) payload.assigned_user_ids = form.assigned_user_ids;
             if (editingPromo) { await updatePromotion(editingPromo.id, payload); }
             else { await createPromotion(payload); }
+            toast({ title: editingPromo ? "Promo updated" : "Promo created" });
             setDialogOpen(false);
             resetForm();
             await fetchAll();
@@ -418,7 +419,11 @@ export default function PromotionsPage() {
     };
 
     const toggleActive = async (p: PromoCode) => {
-        try { await updatePromotion(p.id, { is_active: !p.is_active }); await fetchAll(); }
+        try {
+            await updatePromotion(p.id, { is_active: !p.is_active });
+            toast({ title: `Promo ${!p.is_active ? 'activated' : 'deactivated'}` });
+            await fetchAll();
+        }
         catch (e: any) { toast({ title: "Failed to toggle promo", description: e.message, variant: "destructive" }); }
     };
 
@@ -428,7 +433,11 @@ export default function PromotionsPage() {
 
     const confirmDelete = async () => {
         if (!deleteTarget) return;
-        try { await deletePromotion(deleteTarget); await fetchAll(); }
+        try {
+            await deletePromotion(deleteTarget);
+            toast({ title: "Promo deleted" });
+            await fetchAll();
+        }
         catch (e: any) { toast({ title: "Failed to delete promo", description: e.message, variant: "destructive" }); }
         finally { setDeleteTarget(null); }
     };

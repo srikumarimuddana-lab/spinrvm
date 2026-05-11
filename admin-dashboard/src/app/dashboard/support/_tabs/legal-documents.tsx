@@ -88,6 +88,7 @@ export default function LegalDocumentsTab() {
             await upsertLegalDocument({ audience, type: doc_type, content });
             setSavedKey(k);
             setTimeout(() => setSavedKey((cur) => (cur === k ? null : cur)), 1800);
+            toast({ title: "Legal document saved" });
             load();
         } catch (e: any) {
             toast({ title: "Failed to save document", description: e?.message, variant: "destructive" });

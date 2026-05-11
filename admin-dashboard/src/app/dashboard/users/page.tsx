@@ -535,9 +535,10 @@ export default function UsersPage() {
                                                     await updateUserStatus(selectedUser.id, { status: "active" });
                                                     setSelectedUser({ ...selectedUser, status: "active" });
                                                     setUsers(prev => prev.map(u => u.id === selectedUser.id ? { ...u, status: "active" } : u));
-                                                } catch (err) {
+                                                    toast({ title: "User activated" });
+                                                } catch (err: any) {
                                                     console.error('[UsersPage] Failed to activate user:', err);
-                                                    setError("Failed to update user status. Please try again.");
+                                                    toast({ title: "Failed to activate user", description: err?.message, variant: "destructive" });
                                                 } finally { setStatusUpdating(null); }
                                             }}
                                         >
@@ -730,9 +731,10 @@ export default function UsersPage() {
                                     await updateUserStatus(pendingStatusChange.id, { status: pendingStatusChange.status });
                                     setSelectedUser((prev: any) => prev ? { ...prev, status: pendingStatusChange.status } : prev);
                                     setUsers(prev => prev.map(u => u.id === pendingStatusChange.id ? { ...u, status: pendingStatusChange.status } : u));
-                                } catch (err) {
+                                    toast({ title: `User ${pendingStatusChange.status === "banned" ? "banned" : "suspended"}` });
+                                } catch (err: any) {
                                     console.error('[UsersPage] Failed to update user status:', err);
-                                    setError("Failed to update user status. Please try again.");
+                                    toast({ title: "Failed to update user status", description: err?.message, variant: "destructive" });
                                 } finally {
                                     setStatusUpdating(null);
                                 }

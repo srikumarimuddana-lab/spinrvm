@@ -80,13 +80,21 @@ export default function ComplaintsTab() {
         if (!form.ride_id?.trim()) { toast({ title: "Ride ID is required", variant: "destructive" }); return; }
         if (!form.description?.trim()) { toast({ title: "Description is required", variant: "destructive" }); return; }
         setSaving(true);
-        try { await createRideComplaint(form.ride_id, { against_type: form.against_type, category: form.category, description: form.description, service_area_id: form.service_area_id || null }); setDialogOpen(false); setForm({ ride_id: "", against_type: "driver", category: "other", description: "", service_area_id: "" }); load(); }
+        try {
+            await createRideComplaint(form.ride_id, { against_type: form.against_type, category: form.category, description: form.description, service_area_id: form.service_area_id || null });
+            toast({ title: "Complaint created" });
+            setDialogOpen(false); setForm({ ride_id: "", against_type: "driver", category: "other", description: "", service_area_id: "" }); load();
+        }
         catch (e: any) { toast({ title: "Failed to create complaint", description: e.message, variant: "destructive" }); } finally { setSaving(false); }
     };
 
     const handleResolve = async (status: string) => {
         if (!selected) return;
-        try { await resolveComplaint(selected.id, { status, resolution: resolution.trim() || status }); setSelected(null); setResolution(""); load(); }
+        try {
+            await resolveComplaint(selected.id, { status, resolution: resolution.trim() || status });
+            toast({ title: `Complaint marked as ${status}` });
+            setSelected(null); setResolution(""); load();
+        }
         catch (e: any) { toast({ title: "Failed to resolve complaint", description: e.message, variant: "destructive" }); }
     };
 

@@ -21,7 +21,7 @@ import api from '@shared/api/client';
 import { useLanguageStore } from '../../store/languageStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-import { newPlacesSessionToken } from '../../utils/placesSession';
+import { newPlacesSessionToken } from '@shared/utils/placesSession';
 
 interface AutocompletePrediction {
     place_id: string;

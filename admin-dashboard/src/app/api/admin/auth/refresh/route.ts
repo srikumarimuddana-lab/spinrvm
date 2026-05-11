@@ -37,6 +37,13 @@ function clearSessionCookies(res: NextResponse): void {
     path: "/",
     maxAge: 0,
   });
+  res.cookies.set("csrf_token", "", {
+    httpOnly: false,
+    sameSite: "strict",
+    secure: isProduction,
+    path: "/",
+    maxAge: 0,
+  });
 }
 
 function verifyCsrf(req: NextRequest): boolean {
@@ -111,6 +118,16 @@ export async function POST(req: NextRequest) {
       maxAge: SESSION_MAX_AGE,
     });
     res.cookies.set(CSRF_COOKIE, newCsrfToken, {
+      httpOnly: false,
+      sameSite: "strict",
+      secure: isProduction,
+      path: "/",
+      maxAge: SESSION_MAX_AGE,
+    });
+    // Backend's CSRF middleware reads cookie name `csrf_token` — set it
+    // alongside spinr_admin_csrf so the backend can validate proxied
+    // requests. See login route for details.
+    res.cookies.set("csrf_token", newCsrfToken, {
       httpOnly: false,
       sameSite: "strict",
       secure: isProduction,

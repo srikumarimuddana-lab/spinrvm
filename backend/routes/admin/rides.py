@@ -468,6 +468,78 @@ async def admin_places_details(
         raise HTTPException(status_code=502, detail="Failed to call Places API") from e
 
 
+@router.get("/rides/fare-estimate")
+async def admin_fare_estimate(
+    pickup_lat: float = Query(...),
+    pickup_lng: float = Query(...),
+    dropoff_lat: float = Query(...),
+    dropoff_lng: float = Query(...),
+    distance_km: float = Query(...),
+    duration_minutes: int = Query(...),
+    vehicle_type_id: str = Query(...),
+    admin_user: dict = Depends(get_admin_user),
+):
+    """Admin-authenticated wrapper over the public /rides/fare-estimate.
+
+    Returns the same payload (base, distance, time, booking, surge, area
+    fees, taxes, grand total). Kept behind admin auth so admin actions on
+    behalf of a rider remain auditable and so the admin dashboard does not
+    need to mint a rider/driver token to call the rider proxy.
+    """
+    try:
+        from ...features import fare_estimate as _public_fare_estimate
+    except ImportError:  # pragma: no cover - dual import path
+        from features import fare_estimate as _public_fare_estimate  # type: ignore
+
+    return await _public_fare_estimate(
+        pickup_lat=pickup_lat,
+        pickup_lng=pickup_lng,
+        dropoff_lat=dropoff_lat,
+        dropoff_lng=dropoff_lng,
+        distance_km=distance_km,
+        duration_minutes=duration_minutes,
+        vehicle_type_id=vehicle_type_id,
+    )
+
+
+class AdminPromoPreviewRequest(BaseModel):
+    rider_id: str
+    code: str
+    ride_fare: Decimal
+
+
+@router.post("/promo/preview")
+async def admin_promo_preview(
+    body: AdminPromoPreviewRequest,
+    admin_user: dict = Depends(get_admin_user),
+):
+    """Validate a promo code on behalf of a rider without recording it.
+
+    Used by the admin Create Ride modal to render the discount line in the
+    fare breakdown before submitting. The same 10-rule validation runs as
+    the rider self-service path (per-user limit, expiry, first-ride, etc.)
+    so the admin cannot bypass restrictions by previewing.
+    """
+    try:
+        from ..promotions import _validate_promo_for_user
+    except ImportError:  # pragma: no cover - dual import path
+        from routes.promotions import _validate_promo_for_user  # type: ignore
+
+    validation = await _validate_promo_for_user(
+        code=body.code,
+        user_id=body.rider_id,
+        ride_fare=body.ride_fare,
+    )
+    return {
+        "valid": True,
+        "code": validation["code"],
+        "discount_type": validation["discount_type"],
+        "discount_amount": validation["discount_amount"],
+        "promo_id": validation["promo_id"],
+        "description": validation.get("description", ""),
+    }
+
+
 class AdminCreateRideRequest(BaseModel):
     rider_id: str
     driver_id: Optional[str] = None
@@ -479,6 +551,10 @@ class AdminCreateRideRequest(BaseModel):
     dropoff_lng: float
     total_fare: Optional[Decimal] = None
     vehicle_type_id: Optional[str] = None
+    subtotal_fare: Optional[Decimal] = None
+    discount_amount: Optional[Decimal] = None
+    promo_code: Optional[str] = None
+    fare_overridden_by_admin: bool = False
 
 
 @router.post("/rides/create")
@@ -486,11 +562,43 @@ async def admin_create_ride(
     body: AdminCreateRideRequest,
     admin_user: dict = Depends(get_admin_user),
 ):
-    """Admin manually creates a ride, optionally assigning a driver directly."""
+    """Admin manually creates a ride, optionally assigning a driver directly.
+
+    May optionally redeem a promo code on behalf of the rider — the promo
+    is validated against the rider's per-user limit and the redemption is
+    recorded in ``promo_applications`` against the rider_id, so it counts
+    exactly like a rider-initiated apply.
+    """
     now = datetime.now(timezone.utc)
     distance_km = calculate_distance(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng)
 
     status = "driver_assigned" if body.driver_id else "searching"
+
+    # Apply the promo BEFORE the ride insert so a failed validation does
+    # not leave behind a half-created ride. The promo_applications row is
+    # written keyed to rider_id; the ride row references it via
+    # promo_application_id.
+    promo_application_id: Optional[str] = None
+    discount_amount: Decimal = Decimal(body.discount_amount) if body.discount_amount is not None else Decimal("0")
+    promo_code_normalised: Optional[str] = None
+    if body.promo_code:
+        try:
+            from ..promotions import apply_promo_for_admin
+        except ImportError:  # pragma: no cover - dual import path
+            from routes.promotions import apply_promo_for_admin  # type: ignore
+
+        # Validate against the pre-discount subtotal — falls back to the
+        # admin-supplied total_fare when no breakdown was attached, so the
+        # promo per-rider rules see the real ride value.
+        promo_basis = body.subtotal_fare or body.total_fare or Decimal("0")
+        admin_promo = await apply_promo_for_admin(
+            code=body.promo_code,
+            rider_id=body.rider_id,
+            ride_fare=Decimal(promo_basis),
+        )
+        promo_application_id = admin_promo["application_id"]
+        promo_code_normalised = admin_promo["code"]
+        discount_amount = Decimal(admin_promo["discount_amount"])
 
     # Decimal stays Decimal — _serialize_for_api handles JSON encoding
     # without re-introducing float arithmetic. CLAUDE.md: money never
@@ -508,6 +616,11 @@ async def admin_create_ride(
         "status": status,
         "distance_km": distance_km,
         "total_fare": body.total_fare if body.total_fare is not None else Decimal("0"),
+        "subtotal_fare": body.subtotal_fare,
+        "discount_amount": discount_amount,
+        "promo_code": promo_code_normalised,
+        "promo_application_id": promo_application_id,
+        "fare_overridden_by_admin": bool(body.fare_overridden_by_admin),
         "payment_status": "pending",
         "vehicle_type_id": body.vehicle_type_id,
         "created_at": now.isoformat(),
@@ -530,7 +643,16 @@ async def admin_create_ride(
         "admin_create_ride",
         "rides",
         ride_doc["id"],
-        {"driver_id": body.driver_id, "status": status},
+        {
+            "driver_id": body.driver_id,
+            "status": status,
+            "vehicle_type_id": body.vehicle_type_id,
+            "subtotal_fare": str(body.subtotal_fare) if body.subtotal_fare is not None else None,
+            "discount_amount": str(discount_amount),
+            "total_fare": str(ride_doc["total_fare"]),
+            "promo_code": promo_code_normalised,
+            "fare_overridden_by_admin": bool(body.fare_overridden_by_admin),
+        },
     )
 
     if body.driver_id:

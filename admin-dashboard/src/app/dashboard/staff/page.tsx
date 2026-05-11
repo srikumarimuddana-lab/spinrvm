@@ -122,6 +122,7 @@ export default function StaffPage() {
         if (!form.password) return;
         await createStaff(form);
       }
+      toast({ title: editingId ? "Staff member updated" : "Staff member created" });
       resetForm();
       loadStaff();
     } catch (e: any) {
@@ -143,8 +144,13 @@ export default function StaffPage() {
   };
 
   const handleToggleActive = async (s: Staff) => {
-    await updateStaff(s.id, { is_active: !s.is_active });
-    loadStaff();
+    try {
+      await updateStaff(s.id, { is_active: !s.is_active });
+      toast({ title: `Staff member ${!s.is_active ? 'activated' : 'deactivated'}` });
+      loadStaff();
+    } catch (e: any) {
+      toast({ title: "Failed to update staff", description: e?.message, variant: "destructive" });
+    }
   };
 
   const handleDelete = (s: Staff) => {
@@ -155,6 +161,7 @@ export default function StaffPage() {
     if (!deleteTarget) return;
     try {
       await deleteStaff(deleteTarget.id);
+      toast({ title: "Staff member deleted", description: `${deleteTarget.email} removed.` });
       loadStaff();
     } catch (e: any) {
       toast({ title: "Failed to delete staff member", description: e?.message, variant: "destructive" });

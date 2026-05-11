@@ -3,6 +3,7 @@
 import { useEffect, useState, lazy, Suspense } from "react";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/ui/use-toast";
+import { useCrudToast } from "@/components/ui/use-crud-toast";
 import {
     AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
     AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -56,6 +57,7 @@ export default function ServiceAreasPage() {
   const { allowed } = useRequireModule("service_areas");
   const router = useRouter();
   const { toast } = useToast();
+  const crudToast = useCrudToast();
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   const [areas, setAreas] = useState<any[]>([]);
   const [plans, setPlans] = useState<any[]>([]);
@@ -142,14 +144,15 @@ export default function ServiceAreasPage() {
       });
       setShowCreate(false);
       setCreateForm({ name: "", city: "", province: "SK", preset: "", polygon: [], polygonText: "", is_active: true, is_airport: false });
+      crudToast.created("Service area");
       load();
-    } catch (e: any) { toast({ title: "Failed to create service area", description: e?.message, variant: "destructive" }); }
+    } catch (e) { crudToast.error("create service area", e); }
   };
 
   const handleCreateAirportSubRegion = async (parentId: string) => {
     const parent = areas.find(a => a.id === parentId);
     if (!airportForm.name || airportForm.polygon.length < 3) {
-      toast({ title: "Missing airport boundary", description: "Please enter a name and draw the airport boundary on the map.", variant: "destructive" });
+      crudToast.warn("Missing airport boundary", "Please enter a name and draw the airport boundary on the map.");
       return;
     }
     try {
@@ -165,8 +168,9 @@ export default function ServiceAreasPage() {
       });
       setAddAirportFor(null);
       setAirportForm({ name: "", airport_fee: 2.0, polygon: [] });
+      crudToast.created("Airport zone");
       load();
-    } catch (e: any) { toast({ title: "Failed to create airport zone", description: e?.message, variant: "destructive" }); }
+    } catch (e) { crudToast.error("create airport zone", e); }
   };
 
   const handleFieldUpdate = async (areaId: string, field: string, value: any) => {
@@ -179,7 +183,8 @@ export default function ServiceAreasPage() {
         }
         return a;
       }));
-    } catch (e: any) { toast({ title: "Failed to update field", description: e?.message, variant: "destructive" }); }
+      crudToast.updated("Service area");
+    } catch (e) { crudToast.error("update field", e); }
   };
 
   const handleVehiclePricingUpdate = async (areaId: string, pricing: any[]) => {
@@ -192,8 +197,12 @@ export default function ServiceAreasPage() {
 
   const confirmDelete = async () => {
     if (!deleteTarget) return;
-    try { await deleteServiceArea(deleteTarget.id); load(); }
-    catch (e: any) { toast({ title: "Failed to delete service area", description: e?.message, variant: "destructive" }); }
+    try {
+      await deleteServiceArea(deleteTarget.id);
+      crudToast.deleted("Service area", `"${deleteTarget.name}" removed.`);
+      load();
+    }
+    catch (e) { crudToast.error("delete service area", e); }
     finally { setDeleteTarget(null); }
   };
 
@@ -340,7 +349,8 @@ export default function ServiceAreasPage() {
                           try {
                             await updateServiceArea(area.id, updates);
                             setAreas(prev => prev.map(a => a.id === area.id ? { ...a, ...updates } : a));
-                          } catch (e: any) { toast({ title: "Failed to save", description: e?.message, variant: "destructive" }); }
+                            crudToast.updated("Service area");
+                          } catch (e) { crudToast.error("save service area", e); }
                         }} onDelete={() => handleDelete(area.id, area.name)} />
                       )}
 
@@ -1041,6 +1051,7 @@ function AreaFeesEditor({ areaId, area, fees, loading, onReload, onFieldUpdate }
     onReload: () => void; onFieldUpdate: (areaId: string, field: string, value: any) => void;
 }) {
     const { toast } = useToast();
+    const crudToast = useCrudToast();
     const [feeDeleteTarget, setFeeDeleteTarget] = useState<string | null>(null);
     const [editingFee, setEditingFee] = useState<any>(null);
     const [saving, setSaving] = useState(false);
@@ -1063,13 +1074,18 @@ function AreaFeesEditor({ areaId, area, fees, loading, onReload, onFieldUpdate }
         setSaving(true);
         try {
             await createAreaFee(areaId, { fee_name: 'New Fee', fee_type: 'custom', calc_mode: 'flat', amount: 0, is_active: true });
+            crudToast.created("Fee");
             onReload();
-        } catch (e: any) { toast({ title: "Failed to create fee", description: e?.message, variant: "destructive" }); }
+        } catch (e) { crudToast.error("create fee", e); }
         setSaving(false);
     };
 
     const handleUpdate = async (feeId: string, data: any) => {
-        try { await updateAreaFee(areaId, feeId, data); onReload(); } catch (e: any) { toast({ title: "Failed to update fee", description: e?.message, variant: "destructive" }); }
+        try {
+            await updateAreaFee(areaId, feeId, data);
+            crudToast.updated("Fee");
+            onReload();
+        } catch (e) { crudToast.error("update fee", e); }
     };
 
     const handleDelete = (feeId: string) => {
@@ -1078,8 +1094,12 @@ function AreaFeesEditor({ areaId, area, fees, loading, onReload, onFieldUpdate }
 
     const confirmFeeDelete = async () => {
         if (!feeDeleteTarget) return;
-        try { await deleteAreaFee(areaId, feeDeleteTarget); onReload(); }
-        catch (e: any) { toast({ title: "Failed to delete fee", description: e?.message, variant: "destructive" }); }
+        try {
+            await deleteAreaFee(areaId, feeDeleteTarget);
+            crudToast.deleted("Fee");
+            onReload();
+        }
+        catch (e) { crudToast.error("delete fee", e); }
         finally { setFeeDeleteTarget(null); }
     };
 

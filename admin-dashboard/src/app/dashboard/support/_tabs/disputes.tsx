@@ -69,13 +69,18 @@ export default function DisputesTab() {
         try {
             if (editing) await updateDispute(editing.id, { reason: form.reason, description: form.description, refund_amount: form.refund_amount ? parseFloat(form.refund_amount) : 0, user_type: form.user_type, service_area_id: form.service_area_id || null });
             else await createDispute({ ride_id: form.ride_id || null, user_name: form.user_name, user_type: form.user_type, reason: form.reason, description: form.description, refund_amount: form.refund_amount ? parseFloat(form.refund_amount) : 0, service_area_id: form.service_area_id || null });
+            toast({ title: editing ? "Dispute updated" : "Dispute created" });
             setDialogOpen(false); reset(); load();
         } catch (e: any) { toast({ title: "Failed to save dispute", description: e.message, variant: "destructive" }); } finally { setSaving(false); }
     };
 
     const handleResolve = async (status: string) => {
         if (!selected || !resolution.trim()) { toast({ title: "Enter resolution notes before resolving", variant: "destructive" }); return; }
-        try { await resolveDispute(selected.id, { resolution: status, admin_note: resolution.trim() }); setSelected(null); setResolution(""); load(); } catch (e: any) { toast({ title: "Failed to resolve dispute", description: e.message, variant: "destructive" }); }
+        try {
+            await resolveDispute(selected.id, { resolution: status, admin_note: resolution.trim() });
+            toast({ title: `Dispute resolved (${status})` });
+            setSelected(null); setResolution(""); load();
+        } catch (e: any) { toast({ title: "Failed to resolve dispute", description: e.message, variant: "destructive" }); }
     };
 
     return (

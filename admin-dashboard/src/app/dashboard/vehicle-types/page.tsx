@@ -118,6 +118,7 @@ export default function VehicleTypesPage() {
         if (!deleteTarget) return;
         try {
             await deleteVehicleType(deleteTarget);
+            toast({ title: "Vehicle type deleted" });
             fetchTypes();
         } catch (err: any) {
             // 409 from backend means still referenced by a service area or fare config.
@@ -135,6 +136,7 @@ export default function VehicleTypesPage() {
                     t.id === vt.id ? { ...t, is_active: !t.is_active } : t
                 )
             );
+            toast({ title: `Vehicle type ${!vt.is_active ? 'activated' : 'deactivated'}` });
         } catch (err) {
             console.error("Error toggling vehicle type:", err);
             toast({ title: "Update failed", description: "Could not update vehicle type status. Please try again.", variant: "destructive" });

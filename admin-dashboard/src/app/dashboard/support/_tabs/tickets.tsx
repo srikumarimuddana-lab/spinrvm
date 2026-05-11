@@ -101,6 +101,7 @@ function TicketsList() {
         try {
             if (editing) await updateTicket(editing.id, { subject: form.subject, category: form.category, priority: form.priority, service_area_id: form.service_area_id || null });
             else await createTicket({ ...form, service_area_id: form.service_area_id || null });
+            toast({ title: editing ? "Ticket updated" : "Ticket created" });
             setDialogOpen(false); reset(); load();
         } catch (e: any) { toast({ title: "Failed to save ticket", description: e.message, variant: "destructive" }); } finally { setSaving(false); }
     };

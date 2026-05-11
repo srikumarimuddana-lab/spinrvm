@@ -13,6 +13,10 @@ import { useDriverConfig } from '@shared/hooks/queries';
 import { API_URL } from '@shared/config';
 import { onForegroundMessage } from '@shared/services/firebase';
 import { Dimensions } from 'react-native';
+import { startBackgroundLocation, stopBackgroundLocation } from '../utils/backgroundLocation';
+import { checkLocationIntegrity, resetLocationIntegrity } from '../utils/locationIntegrity';
+import { startSensorMonitoring, stopSensorMonitoring, isMovementConsistentWithSpeed } from '../utils/sensorIntegrity';
+import { attestDeviceIntegrity } from '../utils/deviceIntegrity';
 
 const { height } = Dimensions.get('window');
 const RECONNECT_DELAYS = [1000, 2000, 5000, 10000, 30000];
@@ -336,6 +340,16 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           distanceInterval: 10,
         },
         (loc) => {
+          const integrity = checkLocationIntegrity(loc);
+          if (!integrity.trusted) {
+            console.warn(`[Location] Spoofed/invalid fix rejected: ${integrity.reason}`);
+            return;
+          }
+          if (!isMovementConsistentWithSpeed(loc.coords.speed)) {
+            console.warn('[Location] Sensor mismatch: GPS shows movement but accelerometer is still');
+            return;
+          }
+
           locationRef.current = loc;
           const now = Date.now();
           if (now - lastRenderMsRef.current >= 10000) {
@@ -362,6 +376,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
             heading: loc.coords.heading ?? null,
             accuracy: loc.coords.accuracy ?? null,
             altitude: loc.coords.altitude ?? null,
+            mocked: loc.mocked ?? false,
             ride_id: rideId,
             tracking_phase: phaseMap[currentRideState] || 'online_idle',
           };
@@ -732,15 +747,25 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       }
 
       if (next) {
-        try {
-          await Location.requestBackgroundPermissionsAsync();
-        } catch {
+        // Device integrity check — non-blocking, flags but doesn't block
+        attestDeviceIntegrity().then((result) => {
+          if (!result.attested) {
+            console.warn('[Integrity] Device attestation failed:', result.reason);
+          }
+        });
+        startSensorMonitoring();
+        const bgStarted = await startBackgroundLocation();
+        if (!bgStarted) {
           showDashAlert(
             "Background location needed",
             "You're online, but background location is required to keep getting ride offers while the app is minimized. Enable 'Allow all the time' in Settings.",
             'warning'
           );
         }
+      } else {
+        stopSensorMonitoring();
+        await stopBackgroundLocation();
+        resetLocationIntegrity();
       }
     } catch (e) {
       console.error('[toggleOnline] Unexpected error:', e);

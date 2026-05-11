@@ -272,6 +272,38 @@ async def _generate_and_store_ride_snapshot(
         logger.error(f"Ride snapshot pipeline failed for {ride_id}: {exc}", exc_info=True)
 
 
+async def _validate_ride_route(ride_id: str, breadcrumbs: list, driver_id: str) -> None:
+    """Background task: validate GPS trace against road network post-completion."""
+    if not breadcrumbs or len(breadcrumbs) < 5:
+        return
+    try:
+        try:
+            from ..utils.route_validation import validate_trip_route
+        except ImportError:
+            from utils.route_validation import validate_trip_route  # type: ignore
+
+        result = await validate_trip_route(breadcrumbs)
+        if not result:
+            return
+
+        # Store validation result on ride
+        try:
+            await db_supabase.update_one("rides", {"id": ride_id}, {"route_validation": result})
+        except Exception as db_exc:
+            logger.warning(f"[route_validation] failed to store results on ride {ride_id}: {db_exc}")
+
+        if result["verdict"] in ("suspicious", "likely_spoofed"):
+            logger.warning(
+                "[route_validation] ride=%s driver=%s verdict=%s deviation=%.1f%%",
+                ride_id,
+                driver_id,
+                result["verdict"],
+                result["deviation_pct"],
+            )
+    except Exception as exc:
+        logger.error(f"[route_validation] failed for ride {ride_id}: {exc}", exc_info=True)
+
+
 async def _require_ride_in_state(ride_id: str, driver_id: str, allowed_states: tuple) -> Dict[str, Any]:
     """Load a driver's ride only if it is in one of ``allowed_states``.
 
@@ -1297,11 +1329,20 @@ async def get_driver_earnings_forecast(current_user: dict = Depends(get_current_
 async def get_nearby_drivers_public(
     lat: float = Query(...),
     lng: float = Query(...),
-    radius: float = Query(5.0),
+    radius: float = Query(None),
     vehicle_type: str = Query(None),
     current_user: dict = Depends(get_current_user),
 ):
     """Get nearby active drivers for riders. Filters by service area + vehicle type."""
+    # Use admin-configured search_radius_km if caller didn't override
+    if radius is None:
+        try:
+            from ..settings_loader import get_app_settings  # type: ignore
+        except ImportError:
+            from settings_loader import get_app_settings  # type: ignore
+        app_settings = await get_app_settings() or {}
+        radius = float(app_settings.get("search_radius_km", 10.0))
+
     # is_verified + status='active' prevent unverified / suspended / needs_review
     # drivers from appearing on the rider map even if their is_online flag is
     # stale.
@@ -1393,6 +1434,10 @@ async def create_driver(driver: Driver, admin_user: dict = Depends(get_admin_use
 @api_router.post("/location-batch")
 async def update_location_batch(batch: Union[List[dict], dict], current_user: dict = Depends(get_current_user)):
     """Update driver location in batch (from background tracking)."""
+    try:
+        from ..utils.location_integrity import check_location_integrity
+    except ImportError:
+        from utils.location_integrity import check_location_integrity  # type: ignore
 
     points = []
     if isinstance(batch, list):
@@ -1410,6 +1455,19 @@ async def update_location_batch(batch: Union[List[dict], dict], current_user: di
     latest.get("heading", 0)
 
     if lat and lng:
+        # GPS spoofing check
+        driver_rows = await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+        driver_id = driver_rows[0]["id"] if driver_rows else current_user["id"]
+        trusted, _reason = await check_location_integrity(
+            driver_id,
+            lat,
+            lng,
+            speed=latest.get("speed"),
+            accuracy=latest.get("accuracy"),
+            mocked=latest.get("mocked"),
+        )
+        if not trusted:
+            return {"success": False, "reason": "location_rejected"}
         # Update via Supabase wrapper which now handles casting
         # Note: 'heading' column might not exist in Supabase 'drivers' table yet.
         update_data = {"lat": lat, "lng": lng, "updated_at": datetime.now(timezone.utc)}
@@ -1432,6 +1490,21 @@ async def update_location_batch(batch: Union[List[dict], dict], current_user: di
             await mark_present(driver_row["id"])
 
     return {"success": True}
+
+
+@api_router.post("/attest-device")
+async def attest_device(device_info: dict, current_user: dict = Depends(get_current_user)):
+    """Verify device integrity on go-online. Flags emulators and suspicious devices."""
+    try:
+        from ..utils.device_attestation import verify_device
+    except ImportError:
+        from utils.device_attestation import verify_device  # type: ignore
+
+    driver_rows = await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    driver_id = driver_rows[0]["id"] if driver_rows else current_user["id"]
+
+    result = await verify_device(current_user["id"], driver_id, device_info)
+    return result
 
 
 import uuid  # noqa: E402
@@ -2471,6 +2544,11 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             route_polyline=route_polyline,
         )
     )
+
+    # Fire-and-forget: validate GPS trace against road network.
+    # Flags spoofed trips for admin review without blocking completion.
+    _breadcrumbs_for_validation = all_breadcrumbs if "all_breadcrumbs" in locals() else []
+    asyncio.create_task(_validate_ride_route(ride_id, _breadcrumbs_for_validation, driver["id"]))
 
     # Update driver stats. Setting is_available=True is safe here because the
     # ride has just transitioned to `completed`, and the driver's row already

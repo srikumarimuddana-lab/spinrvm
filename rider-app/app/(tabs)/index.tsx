@@ -20,7 +20,6 @@ import * as Location from 'expo-location';
 import Constants from 'expo-constants';
 import { useAuthStore } from '@shared/store/authStore';
 import api from '@shared/api/client';
-import { DEFAULT_LATITUDE, DEFAULT_LONGITUDE } from '../../constants/geo';
 import { useRideStore } from '../../store/rideStore';
 import AppMap from '@shared/components/AppMap';
 import CustomAlert from '@shared/components/CustomAlert';
@@ -389,8 +388,18 @@ export default function HomeScreen() {
           try {
             loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
           } catch (e) {
-            console.warn('Could not get current location, using fallback:', e);
-            loc = location ?? { coords: { latitude: DEFAULT_LATITUDE, longitude: DEFAULT_LONGITUDE } };
+            console.warn('Could not get current location:', e);
+            // Don't write a hardcoded city to the store / cache — it
+            // biases place search (e.g. "Walmart") to the wrong region.
+            // Re-center on the existing fix if we have one; otherwise bail.
+            if (!location) return;
+            mapRef.current.animateToRegion({
+              latitude: location.coords.latitude,
+              longitude: location.coords.longitude,
+              latitudeDelta: 0.01,
+              longitudeDelta: 0.01,
+            }, 1000);
+            return;
           }
           setLocation(loc);
           setUserLocation({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });

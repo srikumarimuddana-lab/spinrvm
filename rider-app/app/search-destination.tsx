@@ -15,7 +15,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
-import { DEFAULT_LATITUDE, DEFAULT_LONGITUDE } from '../constants/geo';
 import { useRideStore } from '../store/rideStore';
 import { useAuthStore } from '@shared/store/authStore';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -97,24 +96,20 @@ export default function SearchDestinationScreen() {
     if (!userLocation) {
       (async () => {
         const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status === 'granted') {
-          try {
-            let loc;
-            try {
-              loc = await Location.getCurrentPositionAsync({
-                accuracy: Location.Accuracy.Balanced,
-              });
-            } catch (e) {
-              console.warn('Could not get current location, using fallback:', e);
-              loc = { coords: { latitude: DEFAULT_LATITUDE, longitude: DEFAULT_LONGITUDE } };
-            }
-            setUserLocation({
-              latitude: loc.coords.latitude,
-              longitude: loc.coords.longitude,
-            });
-          } catch (e) {
-            console.log('GPS error:', e);
-          }
+        if (status !== 'granted') return;
+        try {
+          const loc = await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.Balanced,
+          });
+          setUserLocation({
+            latitude: loc.coords.latitude,
+            longitude: loc.coords.longitude,
+          });
+        } catch (e) {
+          // Don't fall back to a hardcoded city — that biases place
+          // search (e.g. "Walmart") to the wrong region. Leave
+          // userLocation null so autocomplete sends no location bias.
+          console.warn('Could not get current location:', e);
         }
       })();
     }

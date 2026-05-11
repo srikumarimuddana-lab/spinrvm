@@ -157,6 +157,9 @@ export default function SearchDestinationScreen() {
           input: query,
           session_token: sessionToken.current,
         });
+        if (userLocation) {
+          params.set('location', `${userLocation.latitude},${userLocation.longitude}`);
+        }
         const { data } = await api.get<{ predictions: PlacePrediction[] }>(
           `/maps/places/autocomplete?${params.toString()}`,
         );

@@ -1,3 +1,4 @@
+import '../utils/backgroundLocation';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';

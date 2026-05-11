@@ -76,6 +76,8 @@ async def places_autocomplete(
     request: Request,
     input: str = Query(..., min_length=1, max_length=200),
     session_token: Optional[str] = Query(default=None, max_length=64),
+    location: Optional[str] = Query(default=None, max_length=50),
+    radius: int = Query(default=50000, ge=1000, le=100000),
     current_user: dict = Depends(get_current_user),
 ):
     """Proxy Places Autocomplete. Pass session_token to bundle billing."""
@@ -90,6 +92,9 @@ async def places_autocomplete(
     }
     if session_token:
         params["sessiontoken"] = session_token
+    if location:
+        params["location"] = location
+        params["radius"] = str(radius)
 
     try:
         async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:

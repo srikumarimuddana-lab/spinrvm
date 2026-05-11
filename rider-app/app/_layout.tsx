@@ -484,7 +484,7 @@ function RootLayoutInner({
           </Text>
         </View>
       )}
-      <GestureHandlerRootView>
+      <GestureHandlerRootView style={{ flex: 1 }}>
         <View style={{ flex: 1 }}>
           <SafeAreaProvider>
             <StatusBar style={isOffline ? "light" : isDark ? "light" : "dark"} />

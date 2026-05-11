@@ -526,6 +526,21 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                 driver_id = current_driver_id if client_type == "driver" else None
 
                 if driver_id and lat and lng:
+                    try:
+                        from ..utils.location_integrity import check_location_integrity
+                    except ImportError:
+                        from utils.location_integrity import check_location_integrity  # type: ignore
+                    trusted, reason = await check_location_integrity(
+                        driver_id,
+                        lat,
+                        lng,
+                        speed=data.get("speed"),
+                        accuracy=data.get("accuracy"),
+                        mocked=data.get("mocked"),
+                    )
+                    if not trusted:
+                        continue
+
                     manager.update_driver_location(driver_id, lat, lng)
                     await db_supabase.update_driver_location(driver_id, lat, lng)
                     # Location pings are an even stronger liveness signal
@@ -811,7 +826,10 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                 try:
                     from ..routes.admin.monitoring import fetch_monitoring_drivers, fetch_monitoring_rides
                 except ImportError:
-                    from routes.admin.monitoring import fetch_monitoring_drivers, fetch_monitoring_rides  # type: ignore[no-redef]
+                    from routes.admin.monitoring import (  # type: ignore[no-redef]
+                        fetch_monitoring_drivers,
+                        fetch_monitoring_rides,
+                    )
                 try:
                     if data["type"] == "get_drivers_snapshot":
                         drivers = await fetch_monitoring_drivers()

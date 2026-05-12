@@ -84,12 +84,15 @@ export default function HomeScreen() {
   // current fix when the user is looking at the map. Cache only primes the
   // very first paint.
   const refreshLocation = useCallback(async (useCache: boolean) => {
+    console.log('[DEBUG home] refreshLocation called, useCache=', useCache);
     if (useCache) {
       const cached = await loadLastLocation();
+      console.log('[DEBUG home] loadLastLocation result:', cached);
       if (cached) {
         const cachedLoc = { coords: { latitude: cached.lat, longitude: cached.lng } };
         setLocation(cachedLoc);
         setUserLocation({ latitude: cached.lat, longitude: cached.lng });
+        console.log('[DEBUG home] setUserLocation from cache:', cached.lat, cached.lng);
       }
     }
 
@@ -112,6 +115,7 @@ export default function HomeScreen() {
     }
 
     const { status } = await Location.requestForegroundPermissionsAsync();
+    console.log('[DEBUG home] location permission status:', status);
     if (status !== 'granted') {
       Alert.alert(
         'Location Required',
@@ -127,6 +131,7 @@ export default function HomeScreen() {
     if (useCache) {
       try {
         const lastKnown = await Location.getLastKnownPositionAsync();
+        console.log('[DEBUG home] getLastKnownPosition:', lastKnown ? `${lastKnown.coords.latitude},${lastKnown.coords.longitude}` : 'null');
         if (lastKnown) {
           setLocation(lastKnown);
           setUserLocation({ latitude: lastKnown.coords.latitude, longitude: lastKnown.coords.longitude });
@@ -137,6 +142,7 @@ export default function HomeScreen() {
 
     Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced })
       .then(loc => {
+        console.log('[DEBUG home] getCurrentPosition:', loc.coords.latitude, loc.coords.longitude);
         setLocation(loc);
         setUserLocation({ latitude: loc.coords.latitude, longitude: loc.coords.longitude });
         saveLastLocation(loc.coords.latitude, loc.coords.longitude);
@@ -150,7 +156,7 @@ export default function HomeScreen() {
           })
           .catch(() => {});
       })
-      .catch(() => {});
+      .catch((e) => { console.log('[DEBUG home] getCurrentPosition FAILED:', e); });
   }, [setUserLocation]);
 
   // Saved-places can be TTL-gated — they rarely change within a session.

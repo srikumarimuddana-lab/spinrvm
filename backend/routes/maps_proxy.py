@@ -92,6 +92,7 @@ async def places_autocomplete(
     }
     if session_token:
         params["sessiontoken"] = session_token
+
     if location:
         # Strict bias: only return results inside the radius around the rider's
         # location. For ride-sharing this is what users want — they're searching
@@ -102,6 +103,14 @@ async def places_autocomplete(
         params["radius"] = str(radius)
         params["origin"] = location
         params["strictbounds"] = "true"
+
+    logger.info(
+        "[maps_proxy] autocomplete input=%r location=%s radius=%s strictbounds=%s",
+        input,
+        params.get("location", "(none)"),
+        params.get("radius", "(none)"),
+        params.get("strictbounds", "false"),
+    )
 
     try:
         async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
@@ -123,6 +132,12 @@ async def places_autocomplete(
     await record_call("autocomplete_session" if session_token else "autocomplete")
 
     predictions = data.get("predictions", [])
+
+    logger.info(
+        "[maps_proxy] autocomplete results=%d top=%s",
+        len(predictions),
+        predictions[0].get("description", "")[:60] if predictions else "(none)",
+    )
 
     # Sort by distance from the rider when origin was provided. Google's
     # autocomplete sorts by relevance by default — a distant well-known

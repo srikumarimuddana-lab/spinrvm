@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, useMemo } from 'react';
+import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View,
@@ -12,6 +12,7 @@ import {
   Platform,
   Modal,
   TextInput,
+  Animated,
 } from 'react-native';
 import CustomToggle from '../components/CustomToggle';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -27,15 +28,17 @@ import type { ThemeColors } from '@shared/theme/index';
 import { CarMarker } from '@shared/components/CarMarker';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import SkeletonBox from '../components/SkeletonBox';
+import { useResponsive } from '@shared/utils/responsive';
 
 const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
 
 function RideOptionsScreenContent() {
   const { width: SCREEN_WIDTH, height } = useWindowDimensions();
-  // Reactive map height: 35% of current screen height, clamped for usability
-  const MAP_HEIGHT = Math.min(Math.max(Math.round(height * 0.35), 180), 380);
+  // Reactive map height: 25% of current screen height, clamped for usability
+  const MAP_HEIGHT = Math.min(Math.max(Math.round(height * 0.25), 140), 280);
   const { colors, isDark } = useTheme();
-  const styles = useMemo(() => createStyles(colors, MAP_HEIGHT), [colors, MAP_HEIGHT]);
+  const { sf } = useResponsive();
+  const styles = useMemo(() => createStyles(colors, MAP_HEIGHT, sf), [colors, MAP_HEIGHT, sf]);
   const router = useRouter();
   const {
     pickup,
@@ -91,6 +94,7 @@ function RideOptionsScreenContent() {
     buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
   }>({ visible: false, title: '', message: '', variant: 'info' });
   const mapRef = useRef<MapView>(null);
+  const scrollRef = useRef<ScrollView>(null);
 
   const handleFetchEstimates = async () => {
     setFetchError(null);
@@ -533,92 +537,25 @@ function RideOptionsScreenContent() {
           ))}
         </View>
       ) : (
-        <ScrollView style={styles.optionsList} showsVerticalScrollIndicator={false}>
-          {estimates.map((estimate, index) => {
-            const isSelected = selectedIndex === index;
-            const isAvailable = estimate.available;
+        <ScrollView ref={scrollRef} style={styles.optionsList} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+          {estimates.map((estimate, index) => (
+            <AnimatedVehicleCard
+              key={estimate.vehicle_type.id}
+              estimate={estimate}
+              index={index}
+              isSelected={selectedIndex === index}
+              isAvailable={estimate.available}
+              onPress={handleSelect}
+              styles={styles}
+              colors={colors}
+              appliedPromo={appliedPromo}
+            />
+          ))}
 
-            return (
-              <TouchableOpacity
-                key={estimate.vehicle_type.id}
-                style={[
-                  styles.optionCard,
-                  isSelected && isAvailable && styles.optionCardSelected,
-                  !isAvailable && styles.optionCardDisabled,
-                ]}
-                onPress={() => handleSelect(index)}
-                activeOpacity={isAvailable ? 0.7 : 1}
-                disabled={!isAvailable}
-              >
-                {/* Car Image */}
-                <View style={[styles.carImageContainer, !isAvailable && { opacity: 0.4 }]}>
-                  {estimate.vehicle_type.image_url ? (
-                    <Image
-                      source={{ uri: estimate.vehicle_type.image_url }}
-                      style={styles.carImage}
-                      resizeMode="contain"
-                    />
-                  ) : (
-                    <View style={styles.carIconFallback}>
-                      <Ionicons name="car" size={36} color="#666" />
-                    </View>
-                  )}
-                </View>
-
-                {/* Info */}
-                <View style={[styles.optionInfo, !isAvailable && { opacity: 0.4 }]}>
-                  <View style={styles.optionNameRow}>
-                    <Text style={styles.optionName}>{estimate.vehicle_type.name}</Text>
-                    {(estimate.surge_multiplier ?? 1) > 1.0 && (
-                      <View style={styles.surgeBadge}>
-                        <Ionicons name="trending-up" size={10} color="#fff" />
-                        <Text style={styles.surgeBadgeText} allowFontScaling={false}>{estimate.surge_multiplier}x</Text>
-                      </View>
-                    )}
-                    <View style={styles.capacityBadge}>
-                      <Ionicons name="person" size={12} color="#666" />
-                      <Text style={styles.capacityText}>{estimate.vehicle_type.capacity}</Text>
-                    </View>
-                  </View>
-
-                  {isAvailable ? (
-                    <Text style={styles.optionETA} allowFontScaling={false}>
-                      {estimate.eta_minutes ? `${estimate.eta_minutes} min away` : 'Nearby'}
-                      {estimate.driver_count > 0 && ` · ${estimate.driver_count} driver${estimate.driver_count > 1 ? 's' : ''}`}
-                    </Text>
-                  ) : (
-                    <Text style={styles.unavailableText}>No drivers nearby</Text>
-                  )}
-                  {(estimate.surge_multiplier ?? 1) > 1.0 && (
-                    <Text style={styles.surgeNotice}>Fares are higher due to increased demand</Text>
-                  )}
-                </View>
-
-                {/* Price — with promo struck-through */}
-                <View style={[styles.optionPriceContainer, !isAvailable && { opacity: 0.4 }]}>
-                  {appliedPromo && appliedPromo.discount_value > 0 && isSelected ? (
-                    <View style={{ alignItems: 'flex-end' }}>
-                      <Text style={styles.optionPriceStruck} allowFontScaling={false}>${parseFloat(estimate.total_fare || '0').toFixed(2)}</Text>
-                      <Text style={styles.optionPriceDiscounted} allowFontScaling={false}>
-                        ${Math.max(0, parseFloat(estimate.total_fare || '0') - appliedPromo.discount_value).toFixed(2)}
-                      </Text>
-                    </View>
-                  ) : (
-                    <Text style={styles.optionPrice} allowFontScaling={false}>${parseFloat(estimate.total_fare || '0').toFixed(2)}</Text>
-                  )}
-                  {isSelected && isAvailable && (
-                    <View style={styles.selectedCheck}>
-                      <Ionicons name="checkmark-circle" size={22} color={colors.primary} />
-                    </View>
-                  )}
-                </View>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
-      )}
-
-      {/* Confirm Button */}
+      {/* Confirm / options footer — inside the ScrollView so vehicle cards
+          and action buttons scroll as one unit (Uber/Lyft pattern). Previously
+          this was a sibling which squeezed the flex:1 ScrollView to ~0px when
+          it appeared, making all vehicle cards invisible. */}
       {!isLoading && !allUnavailable && estimates.length > 0 && selectedEstimate && (
         <View style={styles.footer}>
           {/* Schedule Toggle */}
@@ -750,31 +687,7 @@ function RideOptionsScreenContent() {
             )
           )}
 
-          {/* WAV toggle */}
-          <View style={styles.scheduleRow} accessibilityRole="none">
-            <View style={styles.scheduleInfo}>
-              <Ionicons name="accessibility" size={20} color="#1A1A1A" />
-              <View>
-                <Text style={styles.scheduleLabel}>Wheelchair-accessible vehicle</Text>
-                <Text style={styles.wavSubLabel}>Only match me with WAV drivers</Text>
-              </View>
-            </View>
-            <CustomToggle
-              value={requiresWav}
-              onValueChange={setRequiresWav}
-              trackColor={{ false: '#D1D5DB', true: colors.primary + '60' }}
-              thumbColor={requiresWav ? colors.primary : '#F3F4F6'}
-              accessibilityLabel="Request wheelchair-accessible vehicle"
-            />
-          </View>
-          {requiresWav && (
-            <View style={styles.wavBanner}>
-              <Ionicons name="information-circle-outline" size={14} color="#1D4ED8" />
-              <Text style={styles.wavBannerText}>
-                WAV rides may have longer wait times depending on driver availability.
-              </Text>
-            </View>
-          )}
+
 
           {/* Quiet mode toggle */}
           <View style={styles.scheduleRow} accessibilityRole="none">
@@ -807,15 +720,11 @@ function RideOptionsScreenContent() {
               multiline={false}
               returnKeyType="done"
               accessibilityLabel="Note for your driver"
+              onFocus={() => {
+                setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 300);
+              }}
             />
           </View>
-
-          {/* Payment method row */}
-          <TouchableOpacity style={styles.paymentRow}>
-            <Ionicons name="card" size={20} color="#1A1A1A" />
-            <Text style={styles.paymentText}>Visa •••• 4242</Text>
-            <Ionicons name="chevron-forward" size={16} color="#999" />
-          </TouchableOpacity>
 
           {/* Cancellation policy disclosure (UX-001) */}
           <View style={styles.cancelPolicyRow}>
@@ -824,9 +733,28 @@ function RideOptionsScreenContent() {
               Free cancellation within 2 min of driver acceptance. A cancellation fee applies after.
             </Text>
           </View>
+          <View style={{ height: 120 }} />
+        </View>
+      )}
+        </ScrollView>
+      )}
 
+      {/* Sticky confirm button — always visible at bottom */}
+      {!isLoading && !allUnavailable && estimates.length > 0 && selectedEstimate && (
+        <View style={styles.stickyFooter}>
+          <View style={styles.stickyPriceRow}>
+            <View>
+              <Text style={styles.stickyVehicleName}>{selectedEstimate.vehicle_type.name}</Text>
+              <Text style={styles.stickyEta}>
+                {selectedEstimate.eta_minutes ? `${selectedEstimate.eta_minutes} min away` : 'Checking...'}
+              </Text>
+            </View>
+            <Text style={styles.stickyPrice} allowFontScaling={false}>
+              ${parseFloat((selectedEstimate as any).grand_total || selectedEstimate.total_fare).toFixed(2)}
+            </Text>
+          </View>
           <TouchableOpacity
-            style={styles.confirmButton}
+            style={[styles.confirmButton, !selectedEstimate.available && { opacity: 0.5 }]}
             onPress={handleConfirm}
             activeOpacity={0.8}
             disabled={!selectedEstimate.available}
@@ -926,7 +854,113 @@ export default function RideOptionsScreen() {
   );
 }
 
-function createStyles(colors: ThemeColors, mapHeight: number = 280) {
+/** Lyft-style animated vehicle card — spring scale + shadow on selection. */
+function AnimatedVehicleCard({
+  estimate, index, isSelected, isAvailable, onPress, styles, colors, appliedPromo,
+}: {
+  estimate: any; index: number; isSelected: boolean; isAvailable: boolean;
+  onPress: (i: number) => void; styles: any; colors: any; appliedPromo: any;
+}) {
+  const scaleAnim = useRef(new Animated.Value(isSelected ? 1 : 0)).current;
+
+  useEffect(() => {
+    Animated.spring(scaleAnim, {
+      toValue: isSelected ? 1 : 0,
+      tension: 120,
+      friction: 14,
+      useNativeDriver: true,
+    }).start();
+  }, [isSelected]);
+
+  const scale = scaleAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 1.02] });
+  const elevation = scaleAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 6] });
+
+  return (
+    <Animated.View style={[
+      { transform: [{ scale }] },
+      isSelected && isAvailable && {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 3 },
+        shadowOpacity: 0.1,
+        shadowRadius: 8,
+        elevation: 4,
+        zIndex: 10,
+        marginHorizontal: 4,
+        marginVertical: 4,
+        borderRadius: 14,
+      },
+    ]}>
+      <TouchableOpacity
+        style={[
+          styles.optionCard,
+          isSelected && isAvailable && styles.optionCardSelected,
+          !isAvailable && styles.optionCardDisabled,
+        ]}
+        onPress={() => onPress(index)}
+        activeOpacity={isAvailable ? 0.7 : 1}
+        disabled={!isAvailable}
+      >
+        <View style={[styles.carImageContainer, !isAvailable && { opacity: 0.4 }]}>
+          {estimate.vehicle_type.image_url ? (
+            <Image source={{ uri: estimate.vehicle_type.image_url }} style={styles.carImage} resizeMode="contain" />
+          ) : (
+            <View style={styles.carIconFallback}>
+              <Ionicons name="car" size={36} color="#666" />
+            </View>
+          )}
+        </View>
+
+        <View style={[styles.optionInfo, !isAvailable && { opacity: 0.4 }]}>
+          <View style={styles.optionNameRow}>
+            <Text style={styles.optionName}>{estimate.vehicle_type.name}</Text>
+            {(estimate.surge_multiplier ?? 1) > 1.0 && (
+              <View style={styles.surgeBadge}>
+                <Ionicons name="trending-up" size={10} color="#fff" />
+                <Text style={styles.surgeBadgeText} allowFontScaling={false}>{estimate.surge_multiplier}x</Text>
+              </View>
+            )}
+            <View style={styles.capacityBadge}>
+              <Ionicons name="person" size={12} color="#666" />
+              <Text style={styles.capacityText}>{estimate.vehicle_type.capacity}</Text>
+            </View>
+          </View>
+
+          {isAvailable ? (
+            <Text style={styles.optionETA} allowFontScaling={false}>
+              {estimate.eta_minutes ? `${estimate.eta_minutes} min away` : 'Nearby'}
+              {estimate.driver_count > 0 && ` · ${estimate.driver_count} driver${estimate.driver_count > 1 ? 's' : ''}`}
+            </Text>
+          ) : (
+            <Text style={styles.unavailableText}>No drivers nearby</Text>
+          )}
+          {(estimate.surge_multiplier ?? 1) > 1.0 && (
+            <Text style={styles.surgeNotice}>Fares are higher due to increased demand</Text>
+          )}
+        </View>
+
+        <View style={[styles.optionPriceContainer, !isAvailable && { opacity: 0.4 }]}>
+          {appliedPromo && appliedPromo.discount_value > 0 && isSelected ? (
+            <View style={{ alignItems: 'flex-end' }}>
+              <Text style={styles.optionPriceStruck} allowFontScaling={false}>${parseFloat(estimate.total_fare || '0').toFixed(2)}</Text>
+              <Text style={styles.optionPriceDiscounted} allowFontScaling={false}>
+                ${Math.max(0, parseFloat(estimate.total_fare || '0') - appliedPromo.discount_value).toFixed(2)}
+              </Text>
+            </View>
+          ) : (
+            <Text style={styles.optionPrice} allowFontScaling={false}>${parseFloat(estimate.total_fare || '0').toFixed(2)}</Text>
+          )}
+          {isSelected && isAvailable && (
+            <View style={styles.selectedCheck}>
+              <Ionicons name="checkmark-circle" size={22} color={colors.text} />
+            </View>
+          )}
+        </View>
+      </TouchableOpacity>
+    </Animated.View>
+  );
+}
+
+function createStyles(colors: ThemeColors, mapHeight: number = 280, sf: (size: number) => number = (s) => s) {
   return StyleSheet.create({
   container: {
     flex: 1,
@@ -955,7 +989,7 @@ function createStyles(colors: ThemeColors, mapHeight: number = 280) {
     alignItems: 'center',
   },
   destinationChipText: {
-    fontSize: 12,
+    fontSize: sf(12),
     fontFamily: 'PlusJakartaSans_600SemiBold',
     color: colors.textSecondary,
     letterSpacing: 0.5,
@@ -999,7 +1033,7 @@ function createStyles(colors: ThemeColors, mapHeight: number = 280) {
     borderBottomColor: colors.border,
   },
   sectionTitle: {
-    fontSize: 18,
+    fontSize: sf(18),
     fontFamily: 'PlusJakartaSans_700Bold',
     color: colors.text,
   },
@@ -1010,7 +1044,7 @@ function createStyles(colors: ThemeColors, mapHeight: number = 280) {
     paddingVertical: 4,
   },
   commissionText: {
-    fontSize: 12,
+    fontSize: sf(12),
     fontFamily: 'PlusJakartaSans_500Medium',
     color: '#2E7D32',
   },
@@ -1021,7 +1055,7 @@ function createStyles(colors: ThemeColors, mapHeight: number = 280) {
   },
   loadingText: {
     marginTop: 16,
-    fontSize: 14,
+    fontSize: sf(14),
     fontFamily: 'PlusJakartaSans_400Regular',
     color: colors.textDim,
   },
@@ -1034,7 +1068,7 @@ function createStyles(colors: ThemeColors, mapHeight: number = 280) {
   },
   retryButtonText: {
     color: '#FFF',
-    fontSize: 15,
+    fontSize: sf(15),
     fontFamily: 'PlusJakartaSans_600SemiBold',
   },
   optionsList: {
@@ -1049,9 +1083,12 @@ function createStyles(colors: ThemeColors, mapHeight: number = 280) {
     borderBottomColor: colors.border,
   },
   optionCardSelected: {
-    backgroundColor: `${colors.primary}14`,
-    borderLeftWidth: 3,
-    borderLeftColor: colors.primary,
+    backgroundColor: colors.surface,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    borderBottomWidth: 1.5,
+    borderBottomColor: colors.border,
   },
   optionCardDisabled: {
     backgroundColor: colors.surfaceLight,
@@ -1084,7 +1121,7 @@ function createStyles(colors: ThemeColors, mapHeight: number = 280) {
     gap: 6,
   },
   optionName: {
-    fontSize: 16,
+    fontSize: sf(16),
     fontFamily: 'PlusJakartaSans_600SemiBold',
     color: colors.text,
   },
@@ -1098,12 +1135,12 @@ function createStyles(colors: ThemeColors, mapHeight: number = 280) {
     paddingVertical: 2,
   },
   surgeBadgeText: {
-    fontSize: 10,
+    fontSize: sf(10),
     fontFamily: 'PlusJakartaSans_700Bold',
     color: '#fff',
   },
   surgeNotice: {
-    fontSize: 11,
+    fontSize: sf(11),
     fontFamily: 'PlusJakartaSans_400Regular',
     color: '#EF4444',
     marginTop: 2,
@@ -1118,18 +1155,18 @@ function createStyles(colors: ThemeColors, mapHeight: number = 280) {
     paddingVertical: 2,
   },
   capacityText: {
-    fontSize: 11,
+    fontSize: sf(11),
     fontFamily: 'PlusJakartaSans_500Medium',
     color: colors.textDim,
   },
   optionETA: {
-    fontSize: 13,
+    fontSize: sf(13),
     fontFamily: 'PlusJakartaSans_400Regular',
     color: '#10B981',
     marginTop: 2,
   },
   unavailableText: {
-    fontSize: 13,
+    fontSize: sf(13),
     fontFamily: 'PlusJakartaSans_400Regular',
     color: colors.textDim,
     marginTop: 2,
@@ -1139,18 +1176,18 @@ function createStyles(colors: ThemeColors, mapHeight: number = 280) {
     alignItems: 'flex-end',
   },
   optionPrice: {
-    fontSize: 18,
+    fontSize: sf(18),
     fontFamily: 'PlusJakartaSans_700Bold',
     color: colors.text,
   },
   optionPriceStruck: {
-    fontSize: 13,
+    fontSize: sf(13),
     fontFamily: 'PlusJakartaSans_500Medium',
     color: colors.textDim,
     textDecorationLine: 'line-through',
   },
   optionPriceDiscounted: {
-    fontSize: 18,
+    fontSize: sf(18),
     fontFamily: 'PlusJakartaSans_700Bold',
     color: '#10B981',
   },
@@ -1169,12 +1206,12 @@ function createStyles(colors: ThemeColors, mapHeight: number = 280) {
     borderColor: '#BFDBFE',
   },
   workBannerTitle: {
-    fontSize: 13,
+    fontSize: sf(13),
     fontFamily: 'PlusJakartaSans_700Bold',
     color: '#1E3A8A',
   },
   workBannerSubtitle: {
-    fontSize: 11,
+    fontSize: sf(11),
     fontFamily: 'PlusJakartaSans_400Regular',
     color: '#1D4ED8',
     marginTop: 1,
@@ -1193,12 +1230,12 @@ function createStyles(colors: ThemeColors, mapHeight: number = 280) {
   },
   promoBannerText: {
     flex: 1,
-    fontSize: 13,
+    fontSize: sf(13),
     fontFamily: 'PlusJakartaSans_600SemiBold',
     color: '#065F46',
   },
   promoBannerMore: {
-    fontSize: 12,
+    fontSize: sf(12),
     fontFamily: 'PlusJakartaSans_500Medium',
     color: '#10B981',
   },
@@ -1213,21 +1250,6 @@ function createStyles(colors: ThemeColors, mapHeight: number = 280) {
     borderTopColor: colors.border,
     backgroundColor: colors.surface,
   },
-  paymentRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-    marginBottom: 12,
-  },
-  paymentText: {
-    flex: 1,
-    fontSize: 14,
-    fontFamily: 'PlusJakartaSans_500Medium',
-    color: colors.text,
-  },
   cancelPolicyRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -1237,9 +1259,48 @@ function createStyles(colors: ThemeColors, mapHeight: number = 280) {
   },
   cancelPolicyText: {
     flex: 1,
-    fontSize: 12,
+    fontSize: sf(12),
     color: colors.textSecondary,
     lineHeight: 17,
+  },
+  stickyFooter: {
+    position: 'absolute' as const,
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: colors.surface,
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: Platform.OS === 'ios' ? 28 : 16,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -3 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 8,
+  },
+  stickyPriceRow: {
+    flexDirection: 'row' as const,
+    justifyContent: 'space-between' as const,
+    alignItems: 'center' as const,
+    marginBottom: 10,
+  },
+  stickyVehicleName: {
+    fontSize: sf(16),
+    fontFamily: 'PlusJakartaSans_600SemiBold',
+    color: colors.text,
+  },
+  stickyEta: {
+    fontSize: sf(12),
+    fontFamily: 'PlusJakartaSans_400Regular',
+    color: colors.textDim,
+    marginTop: 2,
+  },
+  stickyPrice: {
+    fontSize: sf(22),
+    fontFamily: 'PlusJakartaSans_700Bold',
+    color: colors.text,
   },
   confirmButton: {
     backgroundColor: colors.primary,
@@ -1249,7 +1310,7 @@ function createStyles(colors: ThemeColors, mapHeight: number = 280) {
     justifyContent: 'center',
   },
   confirmButtonText: {
-    fontSize: 17,
+    fontSize: sf(17),
     fontFamily: 'PlusJakartaSans_600SemiBold',
     color: '#FFFFFF',
   },
@@ -1266,7 +1327,7 @@ function createStyles(colors: ThemeColors, mapHeight: number = 280) {
   },
   busyText: {
     color: '#B91C1C',
-    fontSize: 14,
+    fontSize: sf(14),
     fontFamily: 'PlusJakartaSans_500Medium',
     flex: 1,
   },
@@ -1285,12 +1346,12 @@ function createStyles(colors: ThemeColors, mapHeight: number = 280) {
     gap: 10,
   },
   scheduleLabel: {
-    fontSize: 14,
+    fontSize: sf(14),
     fontFamily: 'PlusJakartaSans_500Medium',
     color: colors.text,
   },
   wavSubLabel: {
-    fontSize: 11,
+    fontSize: sf(11),
     fontFamily: 'PlusJakartaSans_400Regular',
     color: colors.textDim,
     marginTop: 1,
@@ -1309,7 +1370,7 @@ function createStyles(colors: ThemeColors, mapHeight: number = 280) {
   },
   wavBannerText: {
     flex: 1,
-    fontSize: 12,
+    fontSize: sf(12),
     fontFamily: 'PlusJakartaSans_400Regular',
     color: '#1D4ED8',
     lineHeight: 17,
@@ -1326,12 +1387,12 @@ function createStyles(colors: ThemeColors, mapHeight: number = 280) {
   },
   scheduledTimeText: {
     flex: 1,
-    fontSize: 14,
+    fontSize: sf(14),
     fontFamily: 'PlusJakartaSans_500Medium',
     color: colors.text,
   },
   changeText: {
-    fontSize: 13,
+    fontSize: sf(13),
     fontFamily: 'PlusJakartaSans_600SemiBold',
     color: colors.primary,
   },
@@ -1355,12 +1416,12 @@ function createStyles(colors: ThemeColors, mapHeight: number = 280) {
     borderBottomColor: colors.border,
   },
   pickerCancelText: {
-    fontSize: 16,
+    fontSize: sf(16),
     color: colors.textSecondary,
     fontFamily: 'PlusJakartaSans_500Medium',
   },
   pickerDoneText: {
-    fontSize: 16,
+    fontSize: sf(16),
     color: colors.primary,
     fontFamily: 'PlusJakartaSans_600SemiBold',
   },
@@ -1379,7 +1440,7 @@ function createStyles(colors: ThemeColors, mapHeight: number = 280) {
     alignSelf: 'center', marginBottom: 16,
   },
   promoSheetTitle: {
-    fontSize: 18, fontFamily: 'PlusJakartaSans_700Bold', color: colors.text,
+    fontSize: sf(18), fontFamily: 'PlusJakartaSans_700Bold', color: colors.text,
     marginBottom: 16,
   },
   promoRow: {
@@ -1396,26 +1457,26 @@ function createStyles(colors: ThemeColors, mapHeight: number = 280) {
     backgroundColor: colors.surfaceLight,
   },
   promoRowCode: {
-    fontSize: 16, fontFamily: 'PlusJakartaSans_700Bold', color: colors.text, letterSpacing: 0.5,
+    fontSize: sf(16), fontFamily: 'PlusJakartaSans_700Bold', color: colors.text, letterSpacing: 0.5,
   },
   promoRowDesc: {
-    fontSize: 12, fontFamily: 'PlusJakartaSans_400Regular', color: colors.textDim, marginTop: 1,
+    fontSize: sf(12), fontFamily: 'PlusJakartaSans_400Regular', color: colors.textDim, marginTop: 1,
   },
   promoRowSaving: {
-    fontSize: 13, fontFamily: 'PlusJakartaSans_600SemiBold', color: '#10B981', marginTop: 2,
+    fontSize: sf(13), fontFamily: 'PlusJakartaSans_600SemiBold', color: '#10B981', marginTop: 2,
   },
   promoEmpty: {
     alignItems: 'center', paddingVertical: 32, gap: 10,
   },
   promoEmptyText: {
-    fontSize: 14, fontFamily: 'PlusJakartaSans_400Regular', color: colors.textDim,
+    fontSize: sf(14), fontFamily: 'PlusJakartaSans_400Regular', color: colors.textDim,
   },
   promoCloseBtn: {
     marginTop: 8, paddingVertical: 14, borderRadius: 24,
     backgroundColor: colors.surfaceLight, alignItems: 'center',
   },
   promoCloseBtnText: {
-    fontSize: 16, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.textDim,
+    fontSize: sf(16), fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.textDim,
   },
   fareBreakdown: {
     backgroundColor: colors.surfaceLight,
@@ -1433,12 +1494,12 @@ function createStyles(colors: ThemeColors, mapHeight: number = 280) {
     marginBottom: 12,
   },
   fareBreakdownTitle: {
-    fontSize: 15,
+    fontSize: sf(15),
     fontFamily: 'PlusJakartaSans_700Bold',
     color: colors.text,
   },
   fareBreakdownVehicle: {
-    fontSize: 12,
+    fontSize: sf(12),
     fontFamily: 'PlusJakartaSans_500Medium',
     color: colors.textSecondary,
     backgroundColor: colors.border,
@@ -1453,12 +1514,12 @@ function createStyles(colors: ThemeColors, mapHeight: number = 280) {
     paddingVertical: 5,
   },
   fareLabel: {
-    fontSize: 13,
+    fontSize: sf(13),
     fontFamily: 'PlusJakartaSans_400Regular',
     color: colors.textSecondary,
   },
   fareValue: {
-    fontSize: 13,
+    fontSize: sf(13),
     fontFamily: 'PlusJakartaSans_500Medium',
     color: colors.text,
   },
@@ -1468,12 +1529,12 @@ function createStyles(colors: ThemeColors, mapHeight: number = 280) {
     marginVertical: 8,
   },
   fareTotalLabel: {
-    fontSize: 15,
+    fontSize: sf(15),
     fontFamily: 'PlusJakartaSans_700Bold',
     color: colors.text,
   },
   fareTotalValue: {
-    fontSize: 17,
+    fontSize: sf(17),
     fontFamily: 'PlusJakartaSans_700Bold',
     color: colors.primary,
   },
@@ -1489,7 +1550,7 @@ function createStyles(colors: ThemeColors, mapHeight: number = 280) {
   },
   notesInput: {
     flex: 1,
-    fontSize: 14,
+    fontSize: sf(14),
     fontFamily: 'PlusJakartaSans_400Regular',
     color: colors.text,
   },

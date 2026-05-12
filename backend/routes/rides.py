@@ -771,6 +771,24 @@ async def estimate_ride(
         surge = Decimal("1.0") if corporate_bypass else _d(fare_info.get("surge_multiplier", 1.0))
         fb = calculate_fare(fare_info, distance_km, duration_minutes, surge=surge, airport_fee=airport_fee)
 
+        # Calculate area fees + taxes so the rider sees them before booking
+        fees_result = {}
+        try:
+            fees_result = await calculate_all_fees(
+                body.pickup_lat,
+                body.pickup_lng,
+                body.dropoff_lat,
+                body.dropoff_lng,
+                distance_km,
+                _f(fb.total_fare),
+            )
+        except Exception as e:
+            logger.error("[estimate] calculate_all_fees failed: %s", e, exc_info=True)
+
+        area_fees_total = fees_result.get("fees_total", 0)
+        tax_amount = fees_result.get("tax_amount", 0)
+        grand_total = _f(_round(fb.total_fare + _d(area_fees_total) + _d(tax_amount)))
+
         # Check real driver availability for this vehicle type
         vt_id = fare_info["vehicle_type"].get("id")
         nearby_for_type = drivers_by_type.get(vt_id, [])
@@ -809,6 +827,11 @@ async def estimate_ride(
                 "booking_fee": _money_str(fb.booking_fee),
                 "surge_multiplier": round(float(surge), 2),
                 "total_fare": _money_str(fb.total_fare),
+                "area_fees": fees_result.get("fees", []),
+                "area_fees_total": area_fees_total,
+                "tax_breakdown": fees_result.get("tax_breakdown", {}),
+                "tax_amount": tax_amount,
+                "grand_total": grand_total,
                 "available": is_available,
                 "eta_minutes": eta_minutes,
                 "driver_count": driver_count,

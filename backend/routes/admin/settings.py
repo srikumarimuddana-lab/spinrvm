@@ -8,17 +8,31 @@ try:
 except ImportError:
     from utils.audit_logger import log_admin_action  # noqa: F401
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import (  # noqa: F401
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    UploadFile,
+)
 from pydantic import BaseModel, ConfigDict, Field
 
 try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
     from ...settings_loader import get_app_settings
+    from ...supabase_client import supabase  # noqa: F401
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user
     from settings_loader import get_app_settings
+    from supabase_client import supabase  # noqa: F401
+
+# Driver-app alert ping uploads — 500 KB cap; bucket `audio-assets` must be
+# public-read in the Supabase dashboard (see migration 83 comment).
+_MAX_SOUND_BYTES = 500 * 1024
+_SOUND_BUCKET = "audio-assets"
+_SOUND_MIME_TYPES = frozenset({"audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav"})
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +163,83 @@ async def admin_update_settings(settings: SettingsUpdateRequest, admin: dict = D
     )
 
     return {"message": "Settings updated", "audit_log_id": audit_id}
+
+
+@router.post("/settings/ride-offer-sound")
+async def admin_upload_ride_offer_sound(
+    file: UploadFile = File(...),
+    admin: dict = Depends(get_admin_user),
+):
+    """Upload the driver-app ride-offer alert tone (mp3/wav, ≤500 KB).
+
+    Stores the file in Supabase Storage bucket `audio-assets` under
+    `ride-offer/{uuid4}{ext}` and writes the public URL to
+    `settings.ride_offer_sound_url`. Driver-app pulls the URL on next
+    `/drivers/config` refresh; null/empty falls back to the bundled
+    placeholder mp3 in driver-app/assets/sounds/.
+    """
+    content_type = file.content_type or "application/octet-stream"
+    # iOS/Android pickers sometimes report mp3 as audio/mp3 vs audio/mpeg.
+    if content_type == "audio/mp3":
+        content_type = "audio/mpeg"
+    if content_type not in _SOUND_MIME_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported content-type {content_type}. Accepted: {sorted(_SOUND_MIME_TYPES)}",
+        )
+
+    file_bytes = await file.read()
+    if len(file_bytes) > _MAX_SOUND_BYTES:
+        raise HTTPException(status_code=400, detail="File exceeds 500 KB limit")
+
+    ext = ".mp3" if content_type == "audio/mpeg" else ".wav"
+    object_path = f"ride-offer/{uuid.uuid4()}{ext}"
+
+    try:
+        supabase.storage.from_(_SOUND_BUCKET).upload(
+            file=file_bytes,
+            path=object_path,
+            file_options={"content-type": content_type, "upsert": "true"},
+        )
+    except Exception as e:
+        logger.error("Ride-offer sound upload failed: %s", e, exc_info=True)
+        raise HTTPException(status_code=502, detail="Storage upload failed") from e
+
+    public_url_res = supabase.storage.from_(_SOUND_BUCKET).get_public_url(object_path)
+    public_url = public_url_res if isinstance(public_url_res, str) else getattr(public_url_res, "public_url", None)
+    if not public_url:
+        raise HTTPException(status_code=502, detail="Could not resolve public URL for uploaded sound")
+
+    # Persist on the single app_settings row.
+    existing = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("settings", {"id": "app_settings"}, limit=1)
+    )
+    payload = {"ride_offer_sound_url": public_url, "updated_at": datetime.now(timezone.utc).isoformat()}
+    if existing:
+        await db_supabase.update_one("settings", {"id": "app_settings"}, payload)
+    else:
+        await db_supabase.insert_one("settings", {"id": "app_settings", **payload})
+
+    # Audit — log the URL change but not the file contents.
+    await db_supabase.insert_one(
+        "audit_logs",
+        {
+            "id": str(uuid.uuid4()),
+            "actor_id": admin["id"],
+            "actor_role": admin.get("role"),
+            "action": "ride_offer_sound_uploaded",
+            "resource": "settings",
+            "resource_id": "app_settings",
+            "details": {"url": public_url, "bytes": len(file_bytes)},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    logger.info(
+        "[admin] ride-offer sound uploaded admin_id=%s bytes=%d",
+        admin.get("id"),
+        len(file_bytes),
+    )
+    return {"ride_offer_sound_url": public_url}
 
 
 # ---------- Heat Map Settings ----------

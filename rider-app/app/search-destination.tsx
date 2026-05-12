@@ -56,7 +56,7 @@ export default function SearchDestinationScreen() {
   // Bias prediction results to the rider's location so e.g. "Walmart"
   // surfaces nearby stores first instead of generic matches across Canada.
   const bias = userLocation
-    ? { lat: userLocation.latitude, lng: userLocation.longitude, radiusMeters: 20000 }
+    ? { lat: userLocation.latitude, lng: userLocation.longitude, radiusMeters: 50000 }
     : null;
   const {
     predictions,
@@ -93,28 +93,28 @@ export default function SearchDestinationScreen() {
   useEffect(() => {
     fetchSavedAddresses();
     loadRecentSearches();
-    // If home screen didn't get GPS yet, fetch it now
+    // If home screen didn't get GPS yet, fetch it now.
+    // IMPORTANT: only set userLocation when GPS actually succeeds. Faking it
+    // with DEFAULT_LATITUDE/LONGITUDE (Saskatoon) silently mis-biases place
+    // search for riders in other cities — they'd see Saskatoon Walmarts when
+    // searching in Regina, for example.
     if (!userLocation) {
       (async () => {
         const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status === 'granted') {
-          try {
-            let loc;
-            try {
-              loc = await Location.getCurrentPositionAsync({
-                accuracy: Location.Accuracy.Balanced,
-              });
-            } catch (e) {
-              console.warn('Could not get current location, using fallback:', e);
-              loc = { coords: { latitude: DEFAULT_LATITUDE, longitude: DEFAULT_LONGITUDE } };
-            }
-            setUserLocation({
-              latitude: loc.coords.latitude,
-              longitude: loc.coords.longitude,
-            });
-          } catch (e) {
-            console.log('GPS error:', e);
-          }
+        if (status !== 'granted') return;
+        try {
+          const loc = await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.Balanced,
+          });
+          setUserLocation({
+            latitude: loc.coords.latitude,
+            longitude: loc.coords.longitude,
+          });
+        } catch (e) {
+          console.warn('GPS unavailable; place search will not be biased:', e);
+          // Leave userLocation null — the autocomplete falls back to
+          // country-scoped results, which is correct when we don't know
+          // where the rider is.
         }
       })();
     }

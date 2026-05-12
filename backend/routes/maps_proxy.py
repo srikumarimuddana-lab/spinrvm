@@ -93,14 +93,15 @@ async def places_autocomplete(
     if session_token:
         params["sessiontoken"] = session_token
     if location:
-        # Soft bias: prefer results near (lat, lng) within `radius` meters.
-        # Use `origin` (when supported) so results are ordered by distance from
-        # the rider. `strictbounds` would hard-filter to the radius — we want
-        # bias, not hard cap, so distant well-known places still appear if
-        # the rider explicitly searches for them.
+        # Strict bias: only return results inside the radius around the rider's
+        # location. For ride-sharing this is what users want — they're searching
+        # for pickup/dropoff in their city, not browsing places nation-wide.
+        # Without strictbounds, brand searches like "Walmart" return matches from
+        # all over Canada ranked above the local store.
         params["location"] = location
         params["radius"] = str(radius)
         params["origin"] = location
+        params["strictbounds"] = "true"
 
     try:
         async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
@@ -121,7 +122,20 @@ async def places_autocomplete(
     # Bill as session-priced when client opted in, per-keystroke otherwise.
     await record_call("autocomplete_session" if session_token else "autocomplete")
 
-    return {"predictions": data.get("predictions", [])}
+    predictions = data.get("predictions", [])
+
+    # Sort by distance from the rider when origin was provided. Google's
+    # autocomplete sorts by relevance by default — a distant well-known
+    # Walmart can outrank the closer one even with strict bounds. Re-sort
+    # by `distance_meters` (populated when `origin` is sent) so the rider
+    # always sees the closest match first.
+    if location and predictions:
+        predictions = sorted(
+            predictions,
+            key=lambda p: p.get("distance_meters", 10_000_000),
+        )
+
+    return {"predictions": predictions}
 
 
 @api_router.get("/places/details")

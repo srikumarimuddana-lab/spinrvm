@@ -59,7 +59,9 @@ export function buildPlacesQuery(
   if (bias && Number.isFinite(bias.lat) && Number.isFinite(bias.lng)) {
     // 4 decimals (~11m) is plenty for soft-bias and avoids over-precise GPS in URLs.
     q.location = `${bias.lat.toFixed(4)},${bias.lng.toFixed(4)}`;
-    q.radius = Math.min(Math.max(bias.radiusMeters ?? 20000, 1000), 100000);
+    // Default 50km radius covers a typical metro area (Regina, Saskatoon, etc.)
+    // Backend uses strictbounds=true, so anything outside this radius won't appear.
+    q.radius = Math.min(Math.max(bias.radiusMeters ?? 50000, 1000), 100000);
   }
   return q;
 }

@@ -370,9 +370,13 @@ async def get_driver_config(current_user: dict = Depends(get_current_user)):
             return default
         return max(lo, min(hi, n))
 
+    # Admin-uploaded mp3/wav URL the driver-app plays as the ride-offer
+    # ping. Null/empty → driver-app falls back to the bundled placeholder.
+    ride_offer_sound_url = app_settings.get("ride_offer_sound_url") or None
     return {
         "ride_offer_timeout_seconds": _clamp(app_settings.get("ride_offer_timeout_seconds"), 5, 60, 15),
         "pickup_radius_meters": _clamp(app_settings.get("pickup_radius_meters"), 10, 1000, 100),
+        "ride_offer_sound_url": ride_offer_sound_url,
     }
 
 

@@ -8,7 +8,7 @@ import { router } from 'expo-router';
 
 import { useAuthStore } from '@shared/store/authStore';
 import { useDriverStore } from '../store/driverStore';
-import { useRideOfferSound } from './useRideOfferSound';
+import { useRideOfferSound, setOfferSoundUrl } from './useRideOfferSound';
 import api from '@shared/api/client';
 import { useDriverConfig } from '@shared/hooks/queries';
 import { API_URL } from '@shared/config';
@@ -222,7 +222,11 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // 100m pickup radius) so the flow never breaks on a transient hiccup.
   const driverConfigQuery = useDriverConfig();
   useEffect(() => {
-    if (driverConfigQuery.data) applyDriverConfig(driverConfigQuery.data);
+    if (!driverConfigQuery.data) return;
+    applyDriverConfig(driverConfigQuery.data);
+    // Admin may have uploaded a custom ride-offer sound — swap the
+    // player to that URL. Null/empty reverts to the bundled placeholder.
+    setOfferSoundUrl((driverConfigQuery.data as { ride_offer_sound_url?: string | null }).ride_offer_sound_url ?? null);
   }, [driverConfigQuery.data, applyDriverConfig]);
 
   // ─── Location Tracking ───────────────────────────────────────────

@@ -144,6 +144,11 @@ class AppSettings(BaseModel):
     company_phone: str = ""
     company_email: str = ""
     company_website: str = ""
+    # Admin-configurable URL of the alert tone the driver-app plays when a
+    # new ride offer arrives. Null/empty → driver-app falls back to the
+    # bundled placeholder mp3. Uploaded via the admin dashboard into
+    # Supabase Storage bucket `audio-assets`.
+    ride_offer_sound_url: str = ""
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

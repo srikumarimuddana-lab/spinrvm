@@ -79,6 +79,12 @@ async def invalidate_fare_cache() -> int:
 @api_router.get("/vehicle-types")
 async def get_vehicle_types():
     types = await db_supabase.get_rows("vehicle_types", {"is_active": True}, limit=100)
+    # Rider/driver apps key the car illustration off `image_url`, but the DB
+    # column added in migration 83 is `illustration_url`. Surface both keys
+    # so neither side has to care which name "won".
+    for vt in types or []:
+        if isinstance(vt, dict) and vt.get("illustration_url") and not vt.get("image_url"):
+            vt["image_url"] = vt["illustration_url"]
     return serialize_doc(types)
 
 
@@ -268,6 +274,12 @@ async def _fares_for_location_impl(
     """
     if vehicle_types is None:
         vehicle_types = await db_supabase.get_rows("vehicle_types", {"is_active": True}, limit=100)
+    # Migration 83 added illustration_url; rider/driver apps key the car
+    # image off `image_url`. Mirror the value here so embedded
+    # vehicle_type objects in the estimate response carry both fields.
+    for vt in vehicle_types or []:
+        if isinstance(vt, dict) and vt.get("illustration_url") and not vt.get("image_url"):
+            vt["image_url"] = vt["illustration_url"]
     logger.info(f"Fares: Found {len(vehicle_types)} active vehicle types")
 
     if not vehicle_types:

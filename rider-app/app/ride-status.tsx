@@ -7,6 +7,10 @@ import {
   ActivityIndicator,
   Animated,
   BackHandler,
+  Modal,
+  TextInput,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -21,7 +25,18 @@ import type { ThemeColors } from '@shared/theme/index';
 export default function RideStatusScreen() {
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
-  const { currentRide, currentDriver, fetchRide, cancelRide, simulateDriverArrival, clearRide } = useRideStore();
+  const { currentRide, currentDriver, fetchRide, cancelRide, simulateDriverArrival, clearRide, updateRideNotes } = useRideStore();
+
+  // Post-confirm "note for driver" — replaces the input that used to
+  // live on ride-options. Editable until the trip starts; backend
+  // returns 409 after that so the chip auto-hides.
+  const [notesSheetOpen, setNotesSheetOpen] = useState(false);
+  const [notesDraft, setNotesDraft] = useState('');
+  const [savingNotes, setSavingNotes] = useState(false);
+  const currentNotes = (currentRide as { rider_notes?: string | null } | null)?.rider_notes || '';
+  const canEditNotes = currentRide
+    ? ['searching', 'driver_assigned', 'driver_accepted', 'driver_arrived'].includes(currentRide.status)
+    : false;
 
   const [pulseAnim] = useState(new Animated.Value(1));
   const [dotAnim] = useState(new Animated.Value(0));
@@ -371,6 +386,26 @@ export default function RideStatusScreen() {
             {(currentRide.status === 'driver_assigned' || currentRide.status === 'driver_accepted') && renderDriverAssigned()}
             {currentRide.status === 'driver_arrived' && renderDriverArrived()}
 
+            {/* Post-confirm note chip — replaces the input that used to
+                live on ride-options. Hidden after the trip starts because
+                the backend rejects late edits (409). */}
+            {canEditNotes && (
+              <TouchableOpacity
+                style={styles.notesChip}
+                activeOpacity={0.7}
+                onPress={() => {
+                  setNotesDraft(currentNotes);
+                  setNotesSheetOpen(true);
+                }}
+              >
+                <Ionicons name="chatbubble-ellipses-outline" size={18} color={colors.primary} />
+                <Text style={styles.notesChipText} numberOfLines={1}>
+                  {currentNotes ? `Note: ${currentNotes}` : 'Add note for driver'}
+                </Text>
+                <Ionicons name="chevron-forward" size={18} color={colors.textDim} />
+              </TouchableOpacity>
+            )}
+
             {/* Cancel Button */}
             <TouchableOpacity style={styles.cancelButton} onPress={handleBackPress}>
               <Text style={styles.cancelButtonText}>
@@ -418,6 +453,79 @@ export default function RideStatusScreen() {
         buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
         onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
       />
+
+      {/* Note-for-driver editor — opened from the chip above. Backend
+          rejects late edits (post-pickup) so 409 surfaces as a CustomAlert. */}
+      <Modal
+        visible={notesSheetOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setNotesSheetOpen(false)}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.notesSheetBackdrop}
+        >
+          <TouchableOpacity
+            style={StyleSheet.absoluteFill}
+            activeOpacity={1}
+            onPress={() => setNotesSheetOpen(false)}
+          />
+          <View style={styles.notesSheet}>
+            <View style={styles.notesSheetHandle} />
+            <Text style={styles.notesSheetTitle}>Note for driver</Text>
+            <Text style={styles.notesSheetSubtitle}>
+              Optional. Up to 200 characters — gate code, special instructions, etc.
+            </Text>
+            <TextInput
+              value={notesDraft}
+              onChangeText={setNotesDraft}
+              placeholder="e.g. Gate code 4521 or backdoor pickup"
+              placeholderTextColor={colors.textDim}
+              maxLength={200}
+              multiline
+              style={styles.notesSheetInput}
+            />
+            <View style={styles.notesSheetActions}>
+              <TouchableOpacity
+                style={[styles.notesSheetButton, styles.notesSheetButtonCancel]}
+                onPress={() => setNotesSheetOpen(false)}
+                disabled={savingNotes}
+              >
+                <Text style={styles.notesSheetButtonCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.notesSheetButton, styles.notesSheetButtonSave]}
+                disabled={savingNotes}
+                onPress={async () => {
+                  setSavingNotes(true);
+                  try {
+                    await updateRideNotes(notesDraft);
+                    setNotesSheetOpen(false);
+                  } catch (err: unknown) {
+                    const message =
+                      (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
+                      (err as Error)?.message ||
+                      'Could not save note.';
+                    setAlertState({
+                      visible: true,
+                      title: 'Note not saved',
+                      message,
+                      variant: 'warning',
+                    });
+                  } finally {
+                    setSavingNotes(false);
+                  }
+                }}
+              >
+                <Text style={styles.notesSheetButtonSaveText}>
+                  {savingNotes ? 'Saving…' : 'Save'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -726,6 +834,93 @@ function createStyles(colors: ThemeColors) {
     },
     devBtnText: {
       fontSize: 12,
+      fontWeight: '700',
+      color: '#FFF',
+    },
+    /* Post-confirm note chip + sheet (replaces ride-options notes input) */
+    notesChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      paddingVertical: 12,
+      paddingHorizontal: 14,
+      backgroundColor: colors.surfaceLight,
+      borderRadius: 12,
+      marginTop: 12,
+    },
+    notesChipText: {
+      flex: 1,
+      fontSize: 14,
+      fontWeight: '500',
+      color: colors.text,
+    },
+    notesSheetBackdrop: {
+      flex: 1,
+      backgroundColor: 'rgba(0,0,0,0.35)',
+      justifyContent: 'flex-end',
+    },
+    notesSheet: {
+      backgroundColor: colors.surface,
+      borderTopLeftRadius: 20,
+      borderTopRightRadius: 20,
+      paddingHorizontal: 20,
+      paddingTop: 12,
+      paddingBottom: 24,
+    },
+    notesSheetHandle: {
+      alignSelf: 'center',
+      width: 40,
+      height: 4,
+      borderRadius: 2,
+      backgroundColor: colors.border,
+      marginBottom: 12,
+    },
+    notesSheetTitle: {
+      fontSize: 17,
+      fontWeight: '700',
+      color: colors.text,
+      marginBottom: 4,
+    },
+    notesSheetSubtitle: {
+      fontSize: 13,
+      color: colors.textDim,
+      marginBottom: 16,
+    },
+    notesSheetInput: {
+      minHeight: 90,
+      maxHeight: 180,
+      borderRadius: 12,
+      backgroundColor: colors.surfaceLight,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      fontSize: 15,
+      color: colors.text,
+      textAlignVertical: 'top',
+    },
+    notesSheetActions: {
+      flexDirection: 'row',
+      gap: 12,
+      marginTop: 16,
+    },
+    notesSheetButton: {
+      flex: 1,
+      paddingVertical: 14,
+      borderRadius: 12,
+      alignItems: 'center',
+    },
+    notesSheetButtonCancel: {
+      backgroundColor: colors.surfaceLight,
+    },
+    notesSheetButtonCancelText: {
+      fontSize: 15,
+      fontWeight: '600',
+      color: colors.text,
+    },
+    notesSheetButtonSave: {
+      backgroundColor: colors.primary,
+    },
+    notesSheetButtonSaveText: {
+      fontSize: 15,
       fontWeight: '700',
       color: '#FFF',
     },

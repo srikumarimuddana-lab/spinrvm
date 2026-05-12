@@ -11,7 +11,6 @@ import {
   useWindowDimensions,
   Platform,
   Modal,
-  TextInput,
   Animated,
 } from 'react-native';
 import CustomToggle from '../components/CustomToggle';
@@ -54,12 +53,11 @@ function RideOptionsScreenContent() {
     error: storeError,
     requiresWav,
     setRequiresWav,
+    showWavOption,
     scheduledTime,
     setScheduledTime,
     quietMode,
     setQuietMode,
-    riderNotes,
-    setRiderNotes,
     availablePromos,
     appliedPromo,
     fetchAvailablePromos,
@@ -572,8 +570,11 @@ function RideOptionsScreenContent() {
             />
           </View>
 
-          {/* WAV Toggle — Saskatchewan Transportation Act s.22 */}
-          {(() => {
+          {/* WAV Toggle — Saskatchewan Transportation Act s.22.
+              Hidden by default; riders opt in via Account → Accessibility.
+              Backend dispatch path is unchanged regardless — purely
+              presentational gating. */}
+          {showWavOption && (() => {
             const wavCount = selectedEstimate?.wav_available ?? 0;
             const wavDisabled = wavCount === 0;
             return (
@@ -707,24 +708,9 @@ function RideOptionsScreenContent() {
             />
           </View>
 
-          {/* Notes to driver */}
-          <View style={styles.notesRow}>
-            <Ionicons name="chatbubble-outline" size={18} color="#6B7280" style={{ marginTop: 2 }} />
-            <TextInput
-              style={styles.notesInput}
-              placeholder="Note for driver (optional)"
-              placeholderTextColor="#9CA3AF"
-              value={riderNotes}
-              onChangeText={setRiderNotes}
-              maxLength={200}
-              multiline={false}
-              returnKeyType="done"
-              accessibilityLabel="Note for your driver"
-              onFocus={() => {
-                setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 300);
-              }}
-            />
-          </View>
+          {/* Note-for-driver was here — moved to a post-confirm chip on
+              ride-status (PATCH /rides/{id}/notes). Matches Uber's pattern:
+              don't ask the rider for it until they've actually booked. */}
 
           {/* Cancellation policy disclosure (UX-001) */}
           <View style={styles.cancelPolicyRow}>
@@ -1537,22 +1523,6 @@ function createStyles(colors: ThemeColors, mapHeight: number = 280, sf: (size: n
     fontSize: sf(17),
     fontFamily: 'PlusJakartaSans_700Bold',
     color: colors.primary,
-  },
-  notesRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    backgroundColor: colors.surfaceLight,
-    borderRadius: 12,
-    marginTop: 8,
-  },
-  notesInput: {
-    flex: 1,
-    fontSize: sf(14),
-    fontFamily: 'PlusJakartaSans_400Regular',
-    color: colors.text,
   },
   });
 }

@@ -698,6 +698,11 @@ async def estimate_ride(
         limit=200,
     )
 
+    logger.info(
+        "[estimate] fetched %d online+available drivers from DB",
+        len(all_drivers),
+    )
+
     # Filter to drivers within 10km radius and group by vehicle_type_id.
     # Exclude drivers without a user_id — those are orphan/demo rows that
     # cannot be dispatched to, and counting them would inflate the rider's
@@ -705,21 +710,37 @@ async def estimate_ride(
     from collections import defaultdict
 
     drivers_by_type = defaultdict(list)
+    skipped_reasons: dict = defaultdict(int)
     for d in all_drivers:
         if not d.get("user_id"):
+            skipped_reasons["no_user_id"] += 1
             continue
         d_lat = d.get("lat")
         d_lng = d.get("lng")
-        if d_lat and d_lng:
-            dist = calculate_distance(body.pickup_lat, body.pickup_lng, d_lat, d_lng)
-            if dist <= 10.0:  # 10km radius
-                vt_id = d.get("vehicle_type_id")
-                drivers_by_type[vt_id].append(
-                    {
-                        "driver": d,
-                        "distance_km": dist,
-                    }
-                )
+        if not d_lat or not d_lng:
+            skipped_reasons["no_lat_lng"] += 1
+            continue
+        dist = calculate_distance(body.pickup_lat, body.pickup_lng, d_lat, d_lng)
+        if dist > 10.0:
+            skipped_reasons["outside_10km"] += 1
+            continue
+        vt_id = d.get("vehicle_type_id")
+        if not vt_id:
+            skipped_reasons["no_vehicle_type_id"] += 1
+            continue
+        drivers_by_type[vt_id].append(
+            {
+                "driver": d,
+                "distance_km": dist,
+            }
+        )
+
+    if skipped_reasons:
+        logger.info("[estimate] skipped drivers: %s", dict(skipped_reasons))
+    logger.info(
+        "[estimate] matched drivers by vehicle_type: %s",
+        {k: len(v) for k, v in drivers_by_type.items()},
+    )
 
     # Check airport surcharge (pickup, dropoff, or any stop in airport sub-region)
     airport_result = await calculate_airport_fee(
@@ -737,6 +758,12 @@ async def estimate_ride(
         payment_method=body.payment_method,
         work_profile=body.work_profile,
         corporate_account_id=body.corporate_account_id,
+    )
+
+    logger.info(
+        "[estimate] fares=%d vehicle_types=%s",
+        len(fares),
+        [f.get("vehicle_type", {}).get("name", "?") for f in fares],
     )
 
     estimates = []
@@ -789,6 +816,12 @@ async def estimate_ride(
                 "estimate_token": estimate_token,
             }
         )
+
+    logger.info(
+        "[estimate] returning %d estimates: %s",
+        len(estimates),
+        [(e["vehicle_type"].get("name", "?"), e["available"], e["driver_count"]) for e in estimates],
+    )
     return estimates
 
 

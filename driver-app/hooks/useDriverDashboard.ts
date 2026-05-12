@@ -8,6 +8,7 @@ import { router } from 'expo-router';
 
 import { useAuthStore } from '@shared/store/authStore';
 import { useDriverStore } from '../store/driverStore';
+import { useRideOfferSound } from './useRideOfferSound';
 import api from '@shared/api/client';
 import { useDriverConfig } from '@shared/hooks/queries';
 import { API_URL } from '@shared/config';
@@ -20,6 +21,21 @@ import { attestDeviceIntegrity } from '../utils/deviceIntegrity';
 
 const { height } = Dimensions.get('window');
 const RECONNECT_DELAYS = [1000, 2000, 5000, 10000, 30000];
+
+/**
+ * Coerce a value into a finite latitude/longitude or return null.
+ *
+ * Used to validate the four coords on a ride offer arriving via WS
+ * (numbers) or FCM (strings — FCM data values are always string-typed).
+ * Reject empty strings, NaN, ±Infinity, and out-of-range values so the
+ * offer panel never plots at (0,0) or off the map.
+ */
+const _toFiniteCoord = (v: unknown): number | null => {
+  const n = typeof v === 'number' ? v : typeof v === 'string' ? parseFloat(v) : NaN;
+  if (!Number.isFinite(n)) return null;
+  if (n < -90 || n > 180) return null; // loose bounds; rejects 0/0 only if pickup+dropoff both zero, handled by caller
+  return n;
+};
 
 interface UseDriverDashboardReturn {
   // State
@@ -80,6 +96,10 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     applyDriverConfig,
     earnings,
   } = useDriverStore();
+
+  // Audio cue for ride offers — recurring tone every ~2.5s until
+  // the offer is accepted, declined, or expired (see effect below).
+  const offerSound = useRideOfferSound();
 
   // State
   const [isOnline, setIsOnline] = useState(driverData?.is_online || false);
@@ -409,23 +429,46 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // ─── WebSocket Message Handler ───────────────────────────────────
   const handleWSMessage = useCallback((data: any) => {
     switch (data.type) {
-      case 'new_ride_assignment':
+      case 'new_ride_assignment': {
+        const pLat = _toFiniteCoord(data.pickup_lat);
+        const pLng = _toFiniteCoord(data.pickup_lng);
+        const dLat = _toFiniteCoord(data.dropoff_lat);
+        const dLng = _toFiniteCoord(data.dropoff_lng);
+        if (pLat === null || pLng === null || dLat === null || dLng === null) {
+          console.error(
+            '[WS] dropping ride offer with invalid coords',
+            { ride_id: data.ride_id, pickup_lat: data.pickup_lat, pickup_lng: data.pickup_lng,
+              dropoff_lat: data.dropoff_lat, dropoff_lng: data.dropoff_lng },
+          );
+          break;
+        }
         Vibration.vibrate([0, 500, 200, 500]);
+        offerSound.play();
         setIncomingRide({
           ride_id: data.ride_id,
           pickup_address: data.pickup_address,
           dropoff_address: data.dropoff_address,
-          pickup_lat: data.pickup_lat || 0,
-          pickup_lng: data.pickup_lng || 0,
-          dropoff_lat: data.dropoff_lat || 0,
-          dropoff_lng: data.dropoff_lng || 0,
+          pickup_lat: pLat,
+          pickup_lng: pLng,
+          dropoff_lat: dLat,
+          dropoff_lng: dLng,
           fare: data.fare || 0,
           distance_km: data.distance_km,
           duration_minutes: data.duration_minutes,
           rider_name: data.rider_name,
           rider_rating: data.rider_rating,
           requires_wav: data.requires_wav === true,
+          countdown_seconds: typeof data.countdown_seconds === 'number' ? data.countdown_seconds : undefined,
         });
+        break;
+      }
+      case 'ride_offer_expired':
+        // Backend tells us the offer-TTL fired before we accepted/declined.
+        // Without this, the panel just vanished on the next reconnect when
+        // fetchActiveRide() found no driver_assigned row. Now it's explicit.
+        offerSound.stop();
+        resetRideState();
+        showDashAlert('Offer expired', 'Looking for the next ride…', 'info');
         break;
       case 'ride_cancelled':
         showDashAlert(
@@ -501,12 +544,22 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         console.warn('[WS] Unknown message type received:', data.type);
         break;
     }
-  }, [setIncomingRide, resetRideState]);
+  }, [setIncomingRide, resetRideState, offerSound]);
 
   // Stable ref to the message handler so connectWebSocket's identity
   // doesn't flip every time the handler closure changes.
   const handleWSMessageRef = useRef(handleWSMessage);
   useEffect(() => { handleWSMessageRef.current = handleWSMessage; }, [handleWSMessage]);
+
+  // Stop the recurring offer tone whenever the offer goes away — covers
+  // accept, decline, system reset, ride_cancelled, and the explicit
+  // ride_offer_expired path. Centralised here so every clear-path is
+  // covered without sprinkling stop() calls through the store actions.
+  useEffect(() => {
+    if (!incomingRide) {
+      offerSound.stop();
+    }
+  }, [incomingRide, offerSound]);
 
   // ─── WebSocket Connection ────────────────────────────────────────
   // Empty dep array: this callback reads everything through refs (userRef,
@@ -579,7 +632,11 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           wsAuthenticated = true;
           // Re-sync active ride state — server buffers no WS events, so any
           // transitions that fired while disconnected are recovered via HTTP.
-          if (wasReconnect) {
+          // Skip the fetch if we already hold an offer locally: the
+          // backend offer-TTL handler resets the ride to `searching`
+          // ~timeout+15s after dispatch, so a reconnect inside that
+          // window would clobber the live offer panel.
+          if (wasReconnect && !useDriverStore.getState().incomingRide) {
             fetchActiveRide();
           }
           // Now that auth is confirmed, send the cached location so the
@@ -661,9 +718,24 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // background sockets silently — without this the driver shows as
   // online to admins and can even receive ride offers after the app
   // was swiped away.
+  //
+  // Background close is debounced ~3s and `inactive` is ignored, so a
+  // transient transition (notification shade, control-center, system
+  // permission dialog) doesn't tear down the socket and trigger a
+  // reconnect storm.
   useEffect(() => {
+    const BACKGROUND_CLOSE_DELAY_MS = 3000;
+    let backgroundCloseTimer: ReturnType<typeof setTimeout> | null = null;
+    const cancelBackgroundClose = () => {
+      if (backgroundCloseTimer) {
+        clearTimeout(backgroundCloseTimer);
+        backgroundCloseTimer = null;
+      }
+    };
     const sub = AppState.addEventListener('change', (nextState) => {
-      if (nextState === 'active' && isOnlineRef.current && userRef.current) {
+      if (nextState === 'active') {
+        cancelBackgroundClose();
+        if (!isOnlineRef.current || !userRef.current) return;
         const ws = wsRef.current;
         if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
           if (reconnectTimeoutRef.current) {
@@ -673,11 +745,25 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           reconnectAttemptRef.current = 0;
           connectWebSocket();
         }
-      } else if (nextState === 'background' && wsRef.current) {
-        try { wsRef.current.close(1001, 'app_backgrounded'); } catch {}
+      } else if (nextState === 'background') {
+        // Schedule the close — if the app comes back to 'active' within
+        // the debounce window (notification shade pull, system dialog),
+        // we cancel and keep the socket open. `inactive` is iOS partial
+        // cover; never close on that transition.
+        cancelBackgroundClose();
+        backgroundCloseTimer = setTimeout(() => {
+          backgroundCloseTimer = null;
+          if (wsRef.current) {
+            try { wsRef.current.close(1001, 'app_backgrounded'); } catch {}
+          }
+        }, BACKGROUND_CLOSE_DELAY_MS);
       }
+      // 'inactive' (iOS): intentionally no-op.
     });
-    return () => sub.remove();
+    return () => {
+      cancelBackgroundClose();
+      sub.remove();
+    };
     // connectWebSocket is stable; user read via ref. Empty deps so this
     // listener is registered exactly once per hook instance.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -832,23 +918,36 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     const unsubscribe = onForegroundMessage((remoteMessage: any) => {
       const data = remoteMessage?.data || {};
       if (data?.type === 'new_ride_assignment' && data?.ride_id) {
-        Vibration.vibrate([0, 500, 200, 500]);
         // Hydrate an incoming ride offer from the FCM payload. Backend
-        // sends coordinates/addresses as strings in the `data` field
-        // (FCM data-only messages are all string-typed).
+        // sends coordinates as strings (FCM data values are always
+        // string-typed). Reject the offer if any coord fails to parse —
+        // a (0,0) fallback would plot at the Gulf of Guinea.
+        const pLat = _toFiniteCoord(data.pickup_lat);
+        const pLng = _toFiniteCoord(data.pickup_lng);
+        const dLat = _toFiniteCoord(data.dropoff_lat);
+        const dLng = _toFiniteCoord(data.dropoff_lng);
+        if (pLat === null || pLng === null || dLat === null || dLng === null) {
+          console.error('[FCM] dropping ride offer with invalid coords', { ride_id: data.ride_id });
+          return;
+        }
+        Vibration.vibrate([0, 500, 200, 500]);
+        offerSound.play();
+        const countdownStr = data.countdown_seconds;
+        const countdownNum = typeof countdownStr === 'string' ? parseInt(countdownStr, 10) : undefined;
         setIncomingRide({
           ride_id: data.ride_id,
           pickup_address: data.pickup_address || '',
           dropoff_address: data.dropoff_address || '',
-          pickup_lat: parseFloat(data.pickup_lat || '0'),
-          pickup_lng: parseFloat(data.pickup_lng || '0'),
-          dropoff_lat: parseFloat(data.dropoff_lat || '0'),
-          dropoff_lng: parseFloat(data.dropoff_lng || '0'),
+          pickup_lat: pLat,
+          pickup_lng: pLng,
+          dropoff_lat: dLat,
+          dropoff_lng: dLng,
           fare: String(data.fare ?? '0.00'),
           distance_km: data.distance_km ? parseFloat(data.distance_km) : undefined,
           duration_minutes: data.duration_minutes ? parseFloat(data.duration_minutes) : undefined,
           rider_name: data.rider_name,
           rider_rating: data.rider_rating ? parseFloat(data.rider_rating) : undefined,
+          countdown_seconds: Number.isFinite(countdownNum) ? countdownNum : undefined,
         });
       } else if (data?.type === 'ride_cancelled') {
         showDashAlert('Ride Cancelled', 'The rider has cancelled this ride.', 'warning');

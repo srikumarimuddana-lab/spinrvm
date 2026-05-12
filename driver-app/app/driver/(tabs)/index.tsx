@@ -131,6 +131,11 @@ function DriverDashboard() {
 
   // Route polyline coordinates for active rides
   const [routeCoords, setRouteCoords] = useState<{ latitude: number; longitude: number }[]>([]);
+  // True when the Google Directions API call failed (no network, quota,
+  // invalid key, etc.). When set, the offer panel renders a dashed
+  // straight-line polyline from origin to destination so the driver
+  // still sees pickup → dropoff geometry instead of an empty map.
+  const [directionsFailed, setDirectionsFailed] = useState(false);
 
   // MapView remount key. Bumped when a ride ends so Android's Google Maps
   // native layer fully drops leftover polyline overlays and the CarMarker
@@ -251,6 +256,7 @@ function DriverDashboard() {
   // and the driver marker ends up off-screen.
   useEffect(() => {
     setRouteCoords([]);
+    setDirectionsFailed(false);
     setRouteEtaMinutes(null);
     setRouteDistanceKm(null);
     setDirectionsKey(0);
@@ -596,6 +602,7 @@ function DriverDashboard() {
                 strokeColor="transparent"
                 onReady={(result) => {
                   setRouteCoords(result.coordinates);
+                  setDirectionsFailed(false);
                   if (result.duration != null) setRouteEtaMinutes(Math.round(result.duration));
                   if (result.distance != null) setRouteDistanceKm(Math.round(result.distance * 10) / 10);
                   lastDirectionsFetchRef.current = {
@@ -610,8 +617,31 @@ function DriverDashboard() {
                     });
                   }
                 }}
-                onError={(err) => console.log('Directions error:', err)}
+                onError={(err) => {
+                  console.warn('Directions error — falling back to straight line:', err);
+                  setDirectionsFailed(true);
+                  if (mapRef.current) {
+                    mapRef.current.fitToCoordinates([origin, destination], {
+                      edgePadding: { top: 100, right: 60, bottom: 300, left: 60 },
+                      animated: true,
+                    });
+                  }
+                }}
               />
+              {/* Fallback polyline: a dashed straight line drawn when the
+                  Directions API can't return a route (no network, quota
+                  exceeded, invalid key). Better than a blank map — the
+                  driver can still see roughly where they're being asked
+                  to go. */}
+              {directionsFailed && routeCoords.length === 0 && (
+                <Polyline
+                  coordinates={[origin, destination]}
+                  strokeWidth={4}
+                  strokeColor="#FF9500"
+                  lineDashPattern={[6, 6]}
+                  lineCap="round"
+                />
+              )}
               {routeCoords.length > 1 && (() => {
                 const total = routeCoords.length;
                 const SEGS = 20;

@@ -260,6 +260,10 @@ interface IncomingRide {
     // flag in the ride offer panel; non-WAV drivers should not receive
     // these offers at all (backend filters dispatch).
     requires_wav?: boolean;
+    // Per-offer countdown sourced from the dispatch payload — overrides
+    // the cached configuredCountdownSeconds so an admin-changed timeout
+    // takes effect on the very next offer, not the next cold start.
+    countdown_seconds?: number;
 }
 
 interface DriverState {
@@ -389,7 +393,12 @@ export const useDriverStore = create<DriverState>((set, get) => ({
     error: null,
 
     setIncomingRide: (ride) => {
-        const countdown = get().configuredCountdownSeconds || FALLBACK_COUNTDOWN;
+        const cached = get().configuredCountdownSeconds || FALLBACK_COUNTDOWN;
+        // Per-offer countdown from the WS/FCM payload wins over the cached
+        // config — the backend may have a newer value than this app instance.
+        const countdown = ride?.countdown_seconds && ride.countdown_seconds > 0
+            ? ride.countdown_seconds
+            : cached;
         set({
             incomingRide: ride,
             rideState: ride ? 'ride_offered' : 'idle',

@@ -109,12 +109,23 @@ function RideOptionsScreenContent() {
       // R-P2-51: run both fetches in parallel — they are independent requests.
       void Promise.all([handleFetchEstimates(), fetchNearbyDrivers()]);
 
-      // Auto-refresh drivers every 10 seconds
-      const interval = setInterval(() => {
+      // Auto-refresh both drivers AND estimates every 10 seconds.
+      // Without re-fetching estimates the `available` flag stays stale —
+      // a driver coming online never flips a card from "No drivers nearby"
+      // to bookable, and the "No cars available" banner stays up indefinitely.
+      const driversInterval = setInterval(() => {
         fetchNearbyDrivers();
       }, 10000);
+      // Estimates poll on a slightly slower cadence to avoid extra fare-engine
+      // load — 15s is fast enough to feel live without flooding /rides/estimate.
+      const estimatesInterval = setInterval(() => {
+        void handleFetchEstimates();
+      }, 15000);
 
-      return () => clearInterval(interval);
+      return () => {
+        clearInterval(driversInterval);
+        clearInterval(estimatesInterval);
+      };
     }
   }, [pickup, dropoff]);
 

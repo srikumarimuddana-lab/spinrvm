@@ -6,6 +6,7 @@ import {
     createVehicleType,
     updateVehicleType,
     deleteVehicleType,
+    adminUploadVehicleIllustration,
 } from "@/lib/api";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -33,7 +34,11 @@ interface VehicleType {
     description: string;
     icon: string;
     capacity: number;
+    // Admin-uploaded car image. DB column is `illustration_url`; the rider-
+    // facing GET aliases it to `image_url`. Admin GET returns raw rows, so
+    // we accept either here for backward compat.
     image_url?: string;
+    illustration_url?: string;
     is_active: boolean;
     created_at?: string;
 }
@@ -57,6 +62,33 @@ export default function VehicleTypesPage() {
     const [editingId, setEditingId] = useState<string | null>(null);
     const [form, setForm] = useState(EMPTY_FORM);
     const [saving, setSaving] = useState(false);
+    const [uploading, setUploading] = useState(false);
+
+    const handleUploadIllustration = async (file: File) => {
+        if (!editingId) {
+            toast({
+                title: "Save the type first",
+                description: "Create the vehicle type before uploading an illustration so we can key the file by id.",
+                variant: "destructive",
+            });
+            return;
+        }
+        if (file.size > 500 * 1024) {
+            toast({ title: "File too large", description: "Max 500 KB.", variant: "destructive" });
+            return;
+        }
+        setUploading(true);
+        try {
+            const { illustration_url } = await adminUploadVehicleIllustration(editingId, file);
+            setForm({ ...form, image_url: illustration_url });
+            toast({ title: "Illustration uploaded" });
+        } catch (err) {
+            console.error(err);
+            toast({ title: "Upload failed", description: String((err as Error).message || err), variant: "destructive" });
+        } finally {
+            setUploading(false);
+        }
+    };
 
     const fetchTypes = () => {
         setLoading(true);
@@ -85,7 +117,9 @@ export default function VehicleTypesPage() {
             description: vt.description,
             icon: vt.icon,
             capacity: vt.capacity,
-            image_url: vt.image_url || "",
+            // Backend admin GET returns raw rows; rider-facing GET aliases
+            // illustration_url → image_url, but here we read either.
+            image_url: vt.image_url || (vt as { illustration_url?: string }).illustration_url || "",
             is_active: vt.is_active,
         });
         setDialogOpen(true);
@@ -94,10 +128,16 @@ export default function VehicleTypesPage() {
     const handleSave = async () => {
         setSaving(true);
         try {
+            // Backend persists the URL as `illustration_url`; the form keeps
+            // the legacy `image_url` name internally because the rider-app's
+            // existing type expects that. The /vehicle-types GET also returns
+            // both keys (mapped server-side) so reads stay consistent.
+            const { image_url, ...rest } = form;
+            const payload = { ...rest, illustration_url: image_url || null };
             if (editingId) {
-                await updateVehicleType(editingId, form);
+                await updateVehicleType(editingId, payload);
             } else {
-                await createVehicleType(form);
+                await createVehicleType(payload);
             }
             toast({ title: "Vehicle type saved" });
             setDialogOpen(false);
@@ -191,9 +231,9 @@ export default function VehicleTypesPage() {
                         >
                             {/* Image */}
                             <div className="h-32 bg-muted flex items-center justify-center">
-                                {vt.image_url ? (
+                                {(vt.image_url || vt.illustration_url) ? (
                                     <img
-                                        src={vt.image_url}
+                                        src={vt.image_url || vt.illustration_url}
                                         alt={vt.name}
                                         className="h-full w-full object-contain p-4"
                                     />
@@ -318,10 +358,30 @@ export default function VehicleTypesPage() {
                         <div className="space-y-2">
                             <Label className="flex items-center gap-2">
                                 <ImageIcon className="h-4 w-4" />
-                                Image URL
+                                Illustration
                             </Label>
+                            <div className="flex items-center gap-2">
+                                <Input
+                                    type="file"
+                                    accept="image/png,image/jpeg,image/webp"
+                                    disabled={uploading || !editingId}
+                                    onChange={(e) => {
+                                        const f = e.target.files?.[0];
+                                        if (f) void handleUploadIllustration(f);
+                                        e.target.value = ""; // allow re-selecting same file
+                                    }}
+                                />
+                                {uploading && (
+                                    <span className="text-xs text-muted-foreground">Uploading…</span>
+                                )}
+                            </div>
+                            {!editingId && (
+                                <p className="text-xs text-muted-foreground">
+                                    Save the vehicle type first, then re-open to upload the illustration.
+                                </p>
+                            )}
                             <Input
-                                placeholder="https://example.com/car.png"
+                                placeholder="…or paste a hosted URL"
                                 value={form.image_url}
                                 onChange={(e) =>
                                     setForm({ ...form, image_url: e.target.value })

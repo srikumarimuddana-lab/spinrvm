@@ -2,46 +2,43 @@
 
 import { useEffect, useState } from "react";
 
-/** Saskatoon City Hall — the project's default-region fallback. */
-const FALLBACK_LAT = 52.1332;
-const FALLBACK_LNG = -106.6700;
-
 export interface AdminLocation {
     lat: number;
     lng: number;
-    /** "gps" if the browser granted geolocation, "fallback" if we used the default city. */
-    source: "gps" | "fallback";
+    /** Always "gps" — the hook returns null when a real fix isn't available. */
+    source: "gps";
 }
 
 /**
  * Resolve a "where is the admin" point used to bias place-search results.
  *
- * Asks the browser for geolocation once on mount. If the admin denies the
- * prompt or the API is unavailable (insecure context, headless test) we
- * return the configured fallback so e.g. searching "Walmart" still biases
- * to Saskatoon instead of returning generic Canada-wide results.
+ * Asks the browser for geolocation once on mount. Returns null when the admin
+ * denies the prompt, the API is unavailable (insecure context, headless test),
+ * or the request times out. Callers must treat null as "no bias" — never
+ * substitute a hardcoded city, because that mis-biases place search for any
+ * admin outside that city (e.g. an admin in Regina searching "Walmart" would
+ * see Saskatoon stores).
  *
- * The result is intentionally module-cached per page load (no Context) —
- * we don't want a re-prompt on every modal open, but a hard refresh
- * always re-requests.
+ * Only successful fixes are module-cached per page load — so a transient
+ * failure does not poison the rest of the session. A hard refresh always
+ * re-requests.
  */
 let cached: AdminLocation | null = null;
-let pendingResolve: Array<(loc: AdminLocation) => void> = [];
+let pendingResolve: Array<(loc: AdminLocation | null) => void> = [];
 let inFlight = false;
 
-function resolveAdminLocation(): Promise<AdminLocation> {
+function resolveAdminLocation(): Promise<AdminLocation | null> {
     if (cached) return Promise.resolve(cached);
     if (typeof window === "undefined" || !navigator?.geolocation) {
-        cached = { lat: FALLBACK_LAT, lng: FALLBACK_LNG, source: "fallback" };
-        return Promise.resolve(cached);
+        return Promise.resolve(null);
     }
     if (inFlight) {
         return new Promise((res) => pendingResolve.push(res));
     }
     inFlight = true;
     return new Promise((resolve) => {
-        const finalize = (loc: AdminLocation) => {
-            cached = loc;
+        const finalize = (loc: AdminLocation | null) => {
+            if (loc) cached = loc;
             inFlight = false;
             pendingResolve.forEach((r) => r(loc));
             pendingResolve = [];
@@ -56,9 +53,9 @@ function resolveAdminLocation(): Promise<AdminLocation> {
                 });
             },
             () => {
-                finalize({ lat: FALLBACK_LAT, lng: FALLBACK_LNG, source: "fallback" });
+                finalize(null);
             },
-            { enableHighAccuracy: false, timeout: 5000, maximumAge: 600000 },
+            { enableHighAccuracy: false, timeout: 15000, maximumAge: 600000 },
         );
     });
 }

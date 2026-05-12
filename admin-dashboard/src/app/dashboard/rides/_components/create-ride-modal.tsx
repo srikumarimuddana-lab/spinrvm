@@ -435,9 +435,9 @@ export function CreateRideModal({
                     <div className="relative">
                         <Label>
                             Pickup Location
-                            {adminLoc?.source === "fallback" && (
+                            {!adminLoc && (
                                 <span className="ml-2 text-xs text-muted-foreground">
-                                    (biased to default city — enable location for better matches)
+                                    (enable browser location for nearby matches)
                                 </span>
                             )}
                         </Label>

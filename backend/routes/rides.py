@@ -314,6 +314,19 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
         logger.error(f"[DISPATCH] match_driver_to_ride: ride {ride_id} not found")
         return
 
+    # Refuse to dispatch a ride with missing coordinates — the driver-app
+    # cannot render the map polyline and would either drop the offer or
+    # plot (0,0) (Gulf of Guinea). Surfacing loudly per CLAUDE.md ("Do not
+    # silently swallow errors"); insurance Period 2 also requires a known
+    # origin/destination.
+    _coords = [ride.get("pickup_lat"), ride.get("pickup_lng"), ride.get("dropoff_lat"), ride.get("dropoff_lng")]
+    if any(c is None for c in _coords):
+        logger.error(
+            f"[DISPATCH] ride {ride_id} has missing coordinates "
+            f"pickup=({_coords[0]},{_coords[1]}) dropoff=({_coords[2]},{_coords[3]}) — aborting dispatch",
+        )
+        return
+
     # Single app_settings fetch — used both for matching config (via
     # DispatchService.resolve_matching_config) and for the offer-timeout
     # lookup at the end. Previously this loaded twice; the dead
@@ -321,6 +334,10 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
     # been removed — resolve_matching_config does its own find_one
     # against the same table.
     app_settings = await get_app_settings()
+    # Compute offer timeout early so it can be embedded in dispatch payloads —
+    # driver-app uses this for the per-offer countdown instead of a cached
+    # value, which drifted when admin changed the setting mid-session.
+    offer_timeout = int(app_settings.get("ride_offer_timeout_seconds", 15))
 
     # Algorithm + radius + rating floor (area overrides app settings).
     algorithm, min_rating, search_radius = await dispatch.resolve_matching_config(ride, app_settings=app_settings)
@@ -509,6 +526,10 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
             "rider_name": rider_display_name,
             "rider_rating": (rider_user or {}).get("rating"),
             "requires_wav": bool(ride.get("requires_wav")),
+            # Per-offer countdown sourced from current app_settings — driver-app
+            # honors this over its cached config so admin changes take effect
+            # immediately, not on next cold start.
+            "countdown_seconds": offer_timeout,
         }
 
         # Notify driver via WebSocket (only reaches the driver if they have
@@ -539,15 +560,19 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
                         "ride_id": ride_id,
                         "pickup_address": ride.get("pickup_address") or "",
                         "dropoff_address": ride.get("dropoff_address") or "",
-                        "pickup_lat": str(ride.get("pickup_lat") or 0),
-                        "pickup_lng": str(ride.get("pickup_lng") or 0),
-                        "dropoff_lat": str(ride.get("dropoff_lat") or 0),
-                        "dropoff_lng": str(ride.get("dropoff_lng") or 0),
+                        # Coords are guaranteed non-null here — the null-coord
+                        # guard at the top of match_driver_to_ride aborts
+                        # dispatch before we reach this branch.
+                        "pickup_lat": str(ride["pickup_lat"]),
+                        "pickup_lng": str(ride["pickup_lng"]),
+                        "dropoff_lat": str(ride["dropoff_lat"]),
+                        "dropoff_lng": str(ride["dropoff_lng"]),
                         "fare": str(ride.get("driver_earnings") or 0),
                         "distance_km": str(ride.get("distance_km") or ""),
                         "duration_minutes": str(ride.get("duration_minutes") or ""),
                         "rider_name": rider_display_name or "",
                         "rider_rating": str((rider_user or {}).get("rating") or ""),
+                        "countdown_seconds": str(offer_timeout),
                         "deeplink": "/driver/",
                     },
                     priority="dispatch",
@@ -573,8 +598,8 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
     # This background task fires after the configured timeout + a
     # 15 s grace period (for network latency and FCM delivery). If
     # the ride is STILL `driver_assigned` to THIS specific driver,
-    # it unassigns and re-dispatches.
-    offer_timeout = int(app_settings.get("ride_offer_timeout_seconds", 15))
+    # it unassigns and re-dispatches. ``offer_timeout`` was computed
+    # earlier so it could also be embedded in the dispatch payload.
     asyncio.create_task(
         _offer_timeout_handler(
             ride_id,
@@ -654,6 +679,21 @@ async def _offer_timeout_handler(
                 },
                 f"rider_{rider_id}",
             )
+
+        # Notify the driver too — without this the panel just vanishes on
+        # the next reconnect with no explanation, which looked like a bug
+        # to drivers. Lookup is best-effort; a failure here must not block
+        # the rider-side re-dispatch.
+        try:
+            driver_row = await db_supabase.get_driver_by_id(driver_id)
+            driver_user_id = (driver_row or {}).get("user_id")
+            if driver_user_id:
+                await manager.send_personal_message(
+                    {"type": "ride_offer_expired", "ride_id": ride_id},
+                    f"driver_{driver_user_id}",
+                )
+        except Exception as e:
+            logger.warning(f"[DISPATCH] could not notify driver of offer expiry for ride {ride_id}: {e}")
 
         # Attempt re-dispatch to the next available driver.
         await match_driver_to_ride(ride_id)

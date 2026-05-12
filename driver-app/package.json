@@ -26,6 +26,7 @@
     "axios": "^1.15.2",
     "expo": "~55.0.20",
     "expo-application": "^55.0.14",
+    "expo-audio": "^55.0.14",
     "expo-blur": "~55.0.14",
     "expo-build-properties": "~55.0.13",
     "expo-clipboard": "~55.0.13",

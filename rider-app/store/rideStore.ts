@@ -166,6 +166,12 @@ interface RideState {
   scheduledTime: Date | null;
   scheduledRides: Ride[];
   requiresWav: boolean;
+  // Whether the rider has opted into seeing WAV (wheelchair-accessible
+  // vehicle) options on the booking screen. Default false so the booking
+  // screen stays uncluttered for the 99% who don't need it; the WAV
+  // dispatch path (backend filter, fare estimate, etc.) is unchanged.
+  // Toggled from the Accessibility screen under profile.
+  showWavOption: boolean;
   userLocation: { latitude: number; longitude: number } | null;
   availablePromos: Promo[];
   appliedPromo: Promo | null;
@@ -204,8 +210,15 @@ interface RideState {
   clearRecentSearches: () => void;
   setScheduledTime: (time: Date | null) => void;
   setRequiresWav: (value: boolean) => void;
+  setShowWavOption: (value: boolean) => void;
   setQuietMode: (v: boolean) => void;
   setRiderNotes: (v: string) => void;
+  /**
+   * Update the rider_notes for the currently-in-flight ride. Used by the
+   * post-confirm "Add note for driver" chip on ride-status. Backend
+   * accepts edits only while the ride is pre-pickup.
+   */
+  updateRideNotes: (notes: string) => Promise<void>;
   fetchScheduledRides: () => Promise<void>;
   cancelScheduledRide: (rideId: string) => Promise<void>;
   setUserLocation: (loc: { latitude: number; longitude: number } | null) => void;
@@ -239,6 +252,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   availablePromos: [],
   appliedPromo: null,
   requiresWav: false,
+  showWavOption: false,
   quietMode: false,
   riderNotes: '',
   scheduledTime: null,
@@ -675,6 +689,11 @@ export const useRideStore = create<RideState>((set, get) => ({
       if (stored) {
         set({ recentSearches: JSON.parse(stored) });
       }
+      // Also hydrate the Accessibility setting at the same time — the
+      // home screen calls loadRecentSearches on mount, so this is the
+      // earliest moment we can populate it without adding a new effect.
+      const showWav = await AsyncStorage.getItem('rider_show_wav_option');
+      if (showWav === '1') set({ showWavOption: true });
     } catch { }
   },
 
@@ -685,8 +704,27 @@ export const useRideStore = create<RideState>((set, get) => ({
 
   setScheduledTime: (time) => set({ scheduledTime: time }),
   setRequiresWav: (value) => set({ requiresWav: value }),
+  setShowWavOption: (value) => {
+    set({ showWavOption: value });
+    AsyncStorage.setItem('rider_show_wav_option', value ? '1' : '0').catch(() => { });
+    // If the user just turned the option off, also clear any in-flight
+    // WAV selection so we don't keep sending requires_wav=true silently.
+    if (!value) set({ requiresWav: false });
+  },
   setQuietMode: (v) => set({ quietMode: v }),
   setRiderNotes: (v) => set({ riderNotes: v }),
+
+  updateRideNotes: async (notes) => {
+    const { currentRide } = get();
+    if (!currentRide?.id) throw new Error('No active ride to update');
+    const response = await api.patch<{ success: boolean; notes: string | null }>(
+      `/rides/${currentRide.id}/notes`,
+      { notes },
+    );
+    // Optimistic in-memory update so the chip's preview text updates
+    // immediately without waiting for the next ride fetch.
+    set({ currentRide: { ...currentRide, rider_notes: response.data?.notes ?? null } as Ride });
+  },
 
   fetchScheduledRides: async () => {
     try {

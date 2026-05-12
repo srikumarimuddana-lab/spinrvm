@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getSettings, updateSettings, mfaStatus, mfaDisable } from "@/lib/api";
+import { getSettings, updateSettings, mfaStatus, mfaDisable, adminUploadRideOfferSound } from "@/lib/api";
 import { MfaEnrollDialog } from "@/components/mfa-enroll-dialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -36,6 +36,33 @@ export default function SettingsPage() {
     const [disablePassword, setDisablePassword] = useState("");
     const [disabling, setDisabling] = useState(false);
     const [disableError, setDisableError] = useState("");
+
+    const [soundUploading, setSoundUploading] = useState(false);
+
+    const handleUploadOfferSound = async (file: File) => {
+        if (file.size > 500 * 1024) {
+            toast({ title: "File too large", description: "Max 500 KB.", variant: "destructive" });
+            return;
+        }
+        setSoundUploading(true);
+        try {
+            const { ride_offer_sound_url } = await adminUploadRideOfferSound(file);
+            setSettings({ ...settings, ride_offer_sound_url });
+            toast({ title: "Ride-offer sound uploaded" });
+        } catch (err) {
+            console.error(err);
+            toast({ title: "Upload failed", description: String((err as Error).message || err), variant: "destructive" });
+        } finally {
+            setSoundUploading(false);
+        }
+    };
+
+    const handleClearOfferSound = () => {
+        // Persisted on next "Save settings" click. Clearing in the form
+        // triggers a normal PUT with ride_offer_sound_url="" — backend
+        // stores it; driver-app falls back to the bundled placeholder.
+        setSettings({ ...settings, ride_offer_sound_url: "" });
+    };
 
     useEffect(() => {
         getSettings()
@@ -515,6 +542,60 @@ export default function SettingsPage() {
                                     className="min-h-[70px]"
                                 />
                             </div>
+                        </CardContent>
+                    </Card>
+
+                    {/* Driver-app ride-offer alert tone — uploaded via
+                        a dedicated multipart endpoint that writes the URL
+                        directly to settings.ride_offer_sound_url. */}
+                    <Card className="border-border/50 lg:col-span-2">
+                        <CardHeader>
+                            <CardTitle className="text-base">Ride-offer alert sound (driver app)</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-4">
+                            <div className="space-y-2">
+                                <Label>Upload MP3 or WAV (≤500 KB)</Label>
+                                <div className="flex items-center gap-2">
+                                    <Input
+                                        type="file"
+                                        accept="audio/mpeg,audio/mp3,audio/wav"
+                                        disabled={soundUploading}
+                                        onChange={(e) => {
+                                            const f = e.target.files?.[0];
+                                            if (f) void handleUploadOfferSound(f);
+                                            e.target.value = "";
+                                        }}
+                                    />
+                                    {soundUploading && (
+                                        <span className="text-xs text-muted-foreground">Uploading…</span>
+                                    )}
+                                </div>
+                                <p className="text-xs text-muted-foreground">
+                                    Drivers hear this tone every ~2.5s while a ride offer is on screen. Leave empty to use the bundled placeholder.
+                                </p>
+                            </div>
+                            {settings.ride_offer_sound_url ? (
+                                <div className="space-y-2">
+                                    <Label>Current</Label>
+                                    {/* Native HTML5 audio — no extra dep. */}
+                                    <audio controls src={settings.ride_offer_sound_url} className="w-full" />
+                                    <div className="flex gap-2">
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            size="sm"
+                                            onClick={handleClearOfferSound}
+                                        >
+                                            Clear (revert to bundled)
+                                        </Button>
+                                    </div>
+                                </div>
+                            ) : (
+                                <p className="text-xs text-muted-foreground italic">
+                                    No custom sound set — drivers play the bundled placeholder.
+                                </p>
+                            )}
                         </CardContent>
                     </Card>
                 </div>

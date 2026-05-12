@@ -10,12 +10,14 @@ try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
     from ...routes.fares import invalidate_fare_cache
+    from ...services.fare_service import DEFAULT_FARE
     from ...utils.audit_logger import log_admin_action
     from ...utils.surge_engine import SURGE_CAP
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user  # noqa: F401
     from routes.fares import invalidate_fare_cache
+    from services.fare_service import DEFAULT_FARE
     from utils.audit_logger import log_admin_action  # noqa: F401
     from utils.surge_engine import SURGE_CAP
 
@@ -182,6 +184,23 @@ async def admin_create_service_area(area: ServiceAreaCreateRequest, admin: dict 
         "show_demand_heatmap": area.show_demand_heatmap,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+    # Seed vehicle_pricing with all active vehicle types so every type
+    # appears on the rider's ride-options screen from day one.
+    if not doc.get("vehicle_pricing"):
+        vt_rows = await db_supabase.get_rows("vehicle_types", {"is_active": True}, limit=100)
+        doc["vehicle_pricing"] = [
+            {
+                "vehicle_type": vt["name"],
+                "base_fare": DEFAULT_FARE["base_fare"],
+                "per_km": DEFAULT_FARE["per_km_rate"],
+                "per_min": DEFAULT_FARE["per_minute_rate"],
+                "min_fare": DEFAULT_FARE["minimum_fare"],
+                "booking_fee": DEFAULT_FARE["booking_fee"],
+            }
+            for vt in vt_rows
+            if vt.get("name")
+        ]
+
     await db_supabase.insert_one("service_areas", doc)
     # PERF-001: Invalidate fare cache
     await invalidate_fare_cache()

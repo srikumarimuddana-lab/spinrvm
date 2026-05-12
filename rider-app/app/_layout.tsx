@@ -183,6 +183,21 @@ export default function RootLayout() {
   useEffect(() => {
     const init = async () => {
       try {
+        // Seed userLocation from the last-known cached GPS fix so that
+        // search-destination.tsx has a location bias before the user types.
+        // Without this, the home screen's async GPS fetch races with typing
+        // and the first autocomplete request has no location= param.
+        try {
+          const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+          const saved = await AsyncStorage.getItem('spinr_last_location');
+          if (saved) {
+            const { lat, lng } = JSON.parse(saved);
+            if (typeof lat === 'number' && typeof lng === 'number') {
+              useRideStore.getState().setUserLocation({ latitude: lat, longitude: lng });
+            }
+          }
+        } catch (e) { /* non-fatal — GPS will be fetched fresh by the home screen */ }
+
         await Promise.all([initializeAuth(), initializeLocation(), hydrateWorkProfile()]);
 
         // Firebase native modules: Crashlytics + App Check. FCM token

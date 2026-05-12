@@ -58,13 +58,29 @@ export default function SearchDestinationScreen() {
   const bias = userLocation
     ? { lat: userLocation.latitude, lng: userLocation.longitude, radiusMeters: 50000 }
     : null;
+
+  // Gate: hold the search query until we have a location OR 2 seconds pass.
+  // Without this, if GPS hasn't resolved yet the very first request fires with
+  // no location= param and Google returns Canada-wide results (Ontario Walmart
+  // instead of Regina Walmart). The 2s timeout is a graceful fallback for
+  // users who have denied location permission.
+  const [locationReady, setLocationReady] = useState(!!userLocation);
+  useEffect(() => {
+    if (userLocation && !locationReady) setLocationReady(true);
+  }, [userLocation]);
+  useEffect(() => {
+    if (locationReady) return;
+    const t = setTimeout(() => setLocationReady(true), 2000);
+    return () => clearTimeout(t);
+  }, []);
+
   const {
     predictions,
     loading: isSearching,
     clear: clearPredictions,
     rotateSessionToken,
     sessionToken,
-  } = usePlacesAutocomplete(searchQuery, bias);
+  } = usePlacesAutocomplete(locationReady ? searchQuery : '', bias);
 
   const pickupRef = useRef<TextInput>(null);
   const dropoffRef = useRef<TextInput>(null);
@@ -102,6 +118,23 @@ export default function SearchDestinationScreen() {
       (async () => {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status !== 'granted') return;
+        // Try last-known position first (instant — cached by the OS).
+        // This populates userLocation before the user starts typing so the
+        // very first autocomplete request includes the location bias.
+        // getCurrentPositionAsync can take 5–10s on cold start, by which
+        // time the user has already typed and seen the wrong results.
+        try {
+          const lastKnown = await Location.getLastKnownPositionAsync();
+          if (lastKnown) {
+            setUserLocation({
+              latitude: lastKnown.coords.latitude,
+              longitude: lastKnown.coords.longitude,
+            });
+          }
+        } catch (e) {
+          console.warn('Last-known position unavailable:', e);
+        }
+        // Then refine with a fresh fix in the background.
         try {
           const loc = await Location.getCurrentPositionAsync({
             accuracy: Location.Accuracy.Balanced,
@@ -112,9 +145,9 @@ export default function SearchDestinationScreen() {
           });
         } catch (e) {
           console.warn('GPS unavailable; place search will not be biased:', e);
-          // Leave userLocation null — the autocomplete falls back to
-          // country-scoped results, which is correct when we don't know
-          // where the rider is.
+          // Leave userLocation null if last-known also failed — the
+          // autocomplete falls back to country-scoped results, which is
+          // correct when we don't know where the rider is.
         }
       })();
     }

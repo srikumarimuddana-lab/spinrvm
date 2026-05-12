@@ -70,6 +70,10 @@ class SettingsUpdateRequest(BaseModel):
     require_driver_subscription: Optional[bool] = None
     terms_of_service_text: Optional[str] = None
     privacy_policy_text: Optional[str] = None
+    # Driver-app alert ping. URL points at an mp3/wav in Supabase Storage
+    # bucket `audio-assets`. Empty string clears the override and reverts
+    # the driver-app to the bundled placeholder.
+    ride_offer_sound_url: Optional[str] = None
 
 
 @router.get("/settings")

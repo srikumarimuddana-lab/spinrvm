@@ -226,9 +226,13 @@ async def build_fares_for_area(matched_area, vehicle_types):
 
     result = []
     for vt in vehicle_types:
-        pricing = _pick(vt)
-        if not pricing:
-            continue
+        pricing = _pick(vt) or {
+            "base_fare": DEFAULT_FARE["base_fare"],
+            "per_km_rate": DEFAULT_FARE["per_km_rate"],
+            "per_minute_rate": DEFAULT_FARE["per_minute_rate"],
+            "minimum_fare": DEFAULT_FARE["minimum_fare"],
+            "booking_fee": DEFAULT_FARE["booking_fee"],
+        }
         # Normalise all monetary values from DB through _money_str() so they
         # serialise as exact Decimal strings; surge_multiplier stays float.
         result.append(
@@ -242,13 +246,6 @@ async def build_fares_for_area(matched_area, vehicle_types):
                 "surge_multiplier": _fd(surge),
             }
         )
-
-    if not result:
-        logger.info(
-            f"Fares: no vehicle_pricing or fare_configs matched for area "
-            f"{matched_area.get('id')}; using platform defaults"
-        )
-        return _build_default_fares(vehicle_types, surge)
 
     logger.info(
         f"Fares: Returning {len(result)} fare estimates "

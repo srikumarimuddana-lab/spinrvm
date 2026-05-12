@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View,
@@ -7,21 +7,23 @@ import {
   TouchableOpacity,
   ScrollView,
   ActivityIndicator,
-  TextInput,
   KeyboardAvoidingView,
   Platform,
+  Animated,
 } from 'react-native';
 import CustomToggle from '../components/CustomToggle';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useRideStore } from '../store/rideStore';
+import { useWalletStore } from '../store/walletStore';
 import { useWorkProfileStore } from '../store/workProfileStore';
 import CustomAlert from '@shared/components/CustomAlert';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import Analytics from '@shared/analytics';
+import { useResponsive } from '@shared/utils/responsive';
 import { useScheduledRideReminder } from '../hooks/useScheduledRideReminder';
 
 interface CorporateAccount {
@@ -40,16 +42,11 @@ interface SavedCard {
 
 function PaymentConfirmScreenContent() {
   const router = useRouter();
-  const { pickup, dropoff, selectedVehicle, estimates, createRide, isLoading, scheduledTime } = useRideStore();
+  const { pickup, dropoff, selectedVehicle, estimates, createRide, isLoading, scheduledTime, appliedPromo } = useRideStore();
+  const { wallet, fetchWallet } = useWalletStore();
   const [selectedPayment, setSelectedPayment] = useState('card');
   const [savedCards, setSavedCards] = useState<SavedCard[]>([]);
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
-  const [promoExpanded, setPromoExpanded] = useState(false);
-  const [promoCode, setPromoCode] = useState('');
-  const [promoDiscount, setPromoDiscount] = useState(0);
-  const [promoValidating, setPromoValidating] = useState(false);
-  const [promoApplied, setPromoApplied] = useState(false);
-  const [promoMessage, setPromoMessage] = useState('');
   const { profiles: workProfiles, workModeEnabled, fetchProfiles: fetchWorkProfiles, activeCompanyId } = useWorkProfileStore();
   const corporateAccounts: CorporateAccount[] = workProfiles
     .map(p => ({ id: p.company.id ?? '', company_name: p.company.name ?? '' }))
@@ -67,13 +64,31 @@ function PaymentConfirmScreenContent() {
   }>({ visible: false, title: '', message: '', variant: 'info' });
 
   const { colors, isDark } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const { sf } = useResponsive();
+  const styles = useMemo(() => createStyles(colors, sf), [colors, sf]);
   const { scheduleReminder } = useScheduledRideReminder();
+  const [fareExpanded, setFareExpanded] = useState(false);
+  const fareHeightAnim = useRef(new Animated.Value(0)).current;
 
   const selectedEstimate = estimates.find((e) => e.vehicle_type.id === selectedVehicle?.id);
 
+  // Staggered fade-in + slide-up for each section
+  const sectionAnims = useRef([0, 1, 2].map(() => new Animated.Value(0))).current;
+  const slideAnims = useRef([0, 1, 2].map(() => new Animated.Value(20))).current;
+
+  useEffect(() => {
+    const animations = sectionAnims.map((anim, i) =>
+      Animated.parallel([
+        Animated.timing(anim, { toValue: 1, duration: 350, delay: i * 100, useNativeDriver: true }),
+        Animated.timing(slideAnims[i], { toValue: 0, duration: 350, delay: i * 100, useNativeDriver: true }),
+      ]),
+    );
+    Animated.stagger(80, animations).start();
+  }, []);
+
   useEffect(() => {
     fetchWorkProfiles();
+    fetchWallet();
   }, []);
 
   useEffect(() => {
@@ -119,7 +134,7 @@ function PaymentConfirmScreenContent() {
       if (scheduledTime) {
         router.replace('/(tabs)');
       } else {
-        router.replace('/driver-arriving?rideId=' + ride.id);
+        router.replace({ pathname: '/driver-arriving', params: { rideId: ride.id } } as any);
       }
     } catch (error: any) {
       setAlertState({ visible: true, title: 'Error', message: error.message || 'Failed to book ride', variant: 'danger' });
@@ -128,27 +143,7 @@ function PaymentConfirmScreenContent() {
     }
   };
 
-  const handleApplyPromo = async () => {
-    const code = promoCode.trim();
-    if (!code) return;
-    setPromoValidating(true);
-    setPromoMessage('');
-    try {
-      const fare = parseFloat(selectedEstimate?.total_fare || '0');
-      const res = await api.post<{ discount_amount?: number }>('/promo/validate', { code, ride_fare: fare });
-      setPromoDiscount(res.data.discount_amount ?? 0);
-      setPromoApplied(true);
-      setPromoMessage(`-$${(res.data.discount_amount ?? 0).toFixed(2)} discount applied!`);
-    } catch (error: any) {
-      const msg = error?.response?.data?.detail || 'Invalid promo code';
-      setPromoMessage(msg);
-      setPromoDiscount(0);
-      setPromoApplied(false);
-    } finally {
-      setPromoValidating(false);
-    }
-  };
-
+  const promoDiscount = appliedPromo?.discount_value ?? 0;
   const totalFare = Math.max(0, parseFloat(selectedEstimate?.total_fare || '0') - promoDiscount);
 
   return (
@@ -171,7 +166,7 @@ function PaymentConfirmScreenContent() {
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <ScrollView style={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
         {/* Ride Summary */}
-        <View style={styles.rideSummary}>
+        <Animated.View style={[styles.rideSummary, { opacity: sectionAnims[0], transform: [{ translateY: slideAnims[0] }] }]}>
           <View style={styles.vehicleInfo}>
             <View style={styles.vehicleIcon}>
               <Ionicons name="car" size={28} color={colors.primary} />
@@ -200,66 +195,9 @@ function PaymentConfirmScreenContent() {
               </View>
             </View>
           </View>
-        </View>
+        </Animated.View>
 
-        {/* Fare Breakdown */}
-        {selectedEstimate && (
-          <View style={styles.fareBreakdown}>
-            <Text style={styles.fareBreakdownTitle}>Fare Breakdown</Text>
-
-            <View style={styles.fareRow}>
-              <Text style={styles.fareLabel}>Base fare</Text>
-              <Text style={styles.fareValue} allowFontScaling={false}>${parseFloat(selectedEstimate.base_fare).toFixed(2)}</Text>
-            </View>
-            <View style={styles.fareRow}>
-              <Text style={styles.fareLabel}>Distance ({selectedEstimate.distance_km} km)</Text>
-              <Text style={styles.fareValue} allowFontScaling={false}>${parseFloat(selectedEstimate.distance_fare).toFixed(2)}</Text>
-            </View>
-            <View style={styles.fareRow}>
-              <Text style={styles.fareLabel}>Time ({selectedEstimate.duration_minutes} min)</Text>
-              <Text style={styles.fareValue} allowFontScaling={false}>${parseFloat(selectedEstimate.time_fare).toFixed(2)}</Text>
-            </View>
-            <View style={styles.fareRow}>
-              <Text style={styles.fareLabel}>Booking fee</Text>
-              <Text style={styles.fareValue} allowFontScaling={false}>${parseFloat(selectedEstimate.booking_fee).toFixed(2)}</Text>
-            </View>
-
-            <View style={styles.fareDivider} />
-
-            {/* Dynamic area fees from API */}
-            {(selectedEstimate as any).area_fees?.map((fee: any, i: number) => (
-              <View key={fee.id || i} style={styles.fareRow}>
-                <Text style={styles.fareLabel}>{fee.name || fee.type}</Text>
-                <Text style={styles.fareValue} allowFontScaling={false}>${Number(fee.calculated_value || 0).toFixed(2)}</Text>
-              </View>
-            ))}
-
-            {/* Dynamic tax breakdown from API */}
-            {(selectedEstimate as any).tax_breakdown && Object.entries((selectedEstimate as any).tax_breakdown).map(([name, info]: [string, any]) => (
-              <View key={name} style={styles.fareRow}>
-                <Text style={styles.fareLabel}>{name} ({info.rate}%)</Text>
-                <Text style={styles.fareValue} allowFontScaling={false}>${Number(info.amount || 0).toFixed(2)}</Text>
-              </View>
-            ))}
-
-            {(selectedEstimate.surge_multiplier ?? 1) > 1.0 && (
-              <View style={styles.fareRow}>
-                <Text style={[styles.fareLabel, { color: '#EF4444' }]}>Surge ({selectedEstimate.surge_multiplier}x)</Text>
-                <Text style={[styles.fareValue, { color: '#EF4444' }]}>Applied</Text>
-              </View>
-            )}
-
-            <View style={styles.fareDivider} />
-            <View style={styles.fareRow}>
-              <Text style={styles.fareTotalLabel}>Estimated Total</Text>
-              <Text style={styles.fareTotalValue} allowFontScaling={false}>
-                ${parseFloat((selectedEstimate as any).grand_total || selectedEstimate.total_fare).toFixed(2)}
-              </Text>
-            </View>
-          </View>
-        )}
-
-        <View style={styles.section}>
+        <Animated.View style={[styles.section, { opacity: sectionAnims[1], transform: [{ translateY: slideAnims[1] }] }]}>
           <Text style={styles.sectionTitle}>Payment Method</Text>
 
           {/* Saved cards from Stripe */}
@@ -326,6 +264,9 @@ function PaymentConfirmScreenContent() {
             </View>
             <View style={styles.paymentInfo}>
               <Text style={styles.paymentName}>Spinr Wallet</Text>
+              <Text style={styles.walletBalance}>
+                Balance: ${parseFloat(wallet?.balance ?? '0').toFixed(2)}
+              </Text>
             </View>
             {selectedPayment === 'wallet' && (
               <View style={styles.paymentCheck}>
@@ -344,7 +285,6 @@ function PaymentConfirmScreenContent() {
             <Ionicons name="add" size={20} color={colors.primary} />
             <Text style={styles.addPaymentText}>Add Payment Method</Text>
           </TouchableOpacity>
-        </View>
 
         {/* Corporate Billing */}
         {corporateAccounts.length > 0 && (
@@ -392,96 +332,100 @@ function PaymentConfirmScreenContent() {
           </View>
         )}
 
-        {/* Promo Code */}
-        {!promoExpanded ? (
-          <TouchableOpacity
-            style={styles.promoButton}
-            onPress={() => setPromoExpanded(true)}
-            accessibilityRole="button"
-            accessibilityLabel={promoApplied ? `Promo applied, saving $${promoDiscount.toFixed(2)}` : 'Add promo code'}
-            accessibilityHint="Opens the promo code entry field"
-          >
-            <Ionicons name="pricetag" size={20} color={colors.primary} />
-            <Text style={styles.promoText}>
-              {promoApplied ? `Promo applied: -$${promoDiscount.toFixed(2)}` : 'Add promo code'}
-            </Text>
-            <Ionicons name="chevron-forward" size={20} color={colors.textDim} />
-          </TouchableOpacity>
-        ) : (
-          <View style={styles.promoSection}>
-            <Text style={styles.promoSectionTitle}>Promo Code</Text>
-            <View style={styles.promoInputRow}>
-              <TextInput
-                style={styles.promoInput}
-                placeholder="Enter code"
-                placeholderTextColor={colors.textDim}
-                value={promoCode}
-                onChangeText={(t) => { setPromoCode(t.toUpperCase()); setPromoApplied(false); setPromoMessage(''); }}
-                autoCapitalize="characters"
-                autoFocus
-                returnKeyType="done"
-                onSubmitEditing={handleApplyPromo}
-              />
-              <TouchableOpacity
-                style={[styles.promoApplyButton, (!promoCode.trim() || promoValidating) && styles.promoApplyDisabled]}
-                onPress={handleApplyPromo}
-                disabled={!promoCode.trim() || promoValidating}
-                accessibilityRole="button"
-                accessibilityLabel="Apply promo code"
-                accessibilityState={{ disabled: !promoCode.trim() || promoValidating, busy: promoValidating }}
-              >
-                {promoValidating ? (
-                  <ActivityIndicator color="#FFF" size="small" />
-                ) : (
-                  <Text style={styles.promoApplyText}>Apply</Text>
-                )}
-              </TouchableOpacity>
-            </View>
-            {promoMessage ? (
-              <Text style={[styles.promoMessage, promoApplied && styles.promoMessageSuccess]}>
-                {promoMessage}
-              </Text>
-            ) : null}
-          </View>
-        )}
+        </Animated.View>
 
-        {/* Fare Split Option */}
-        <TouchableOpacity
-          style={styles.splitButton}
-          onPress={() => router.push('/fare-split' as any)}
-          accessibilityRole="button"
-          accessibilityLabel="Split fare"
-          accessibilityHint="Share the cost of this ride with friends"
-        >
-          <View style={styles.splitIconContainer}>
-            <Ionicons name="people" size={20} color={colors.primary} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.splitText}>Split Fare</Text>
-            <Text style={styles.splitSubtext}>Share the cost with friends</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={20} color={colors.textDim} />
-        </TouchableOpacity>
       </ScrollView>
       </KeyboardAvoidingView>
 
-      {/* Book Button */}
-      <View style={styles.footer}>
-        <View style={styles.totalRow}>
-          <Text style={styles.totalLabel}>Subtotal</Text>
-          <Text style={styles.totalAmount} allowFontScaling={false}>${parseFloat(selectedEstimate?.total_fare || '0').toFixed(2)}</Text>
-        </View>
-        {promoDiscount > 0 && (
-          <View style={styles.discountRow}>
-            <Text style={styles.discountLabel}>Promo discount</Text>
-            <Text style={styles.discountAmount} allowFontScaling={false}>-${promoDiscount.toFixed(2)}</Text>
-          </View>
+      {/* Footer — fare breakdown + subtotal + book */}
+      <Animated.View style={[styles.footer, { opacity: sectionAnims[2], transform: [{ translateY: slideAnims[2] }] }]}>
+        {/* Collapsible fare breakdown */}
+        {selectedEstimate && (
+          <>
+            <TouchableOpacity
+              style={styles.fareHeader}
+              onPress={() => {
+                const next = !fareExpanded;
+                setFareExpanded(next);
+                Animated.spring(fareHeightAnim, {
+                  toValue: next ? 1 : 0,
+                  tension: 100,
+                  friction: 12,
+                  useNativeDriver: false,
+                }).start();
+              }}
+              activeOpacity={0.7}
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.fareTotalLabel}>Estimated Total</Text>
+                <Text style={styles.fareToggleHint}>{fareExpanded ? 'Hide details' : 'View fare details'}</Text>
+              </View>
+              <Text style={styles.fareTotalValue} allowFontScaling={false}>
+                ${parseFloat((selectedEstimate as any).grand_total || selectedEstimate.total_fare).toFixed(2)}
+              </Text>
+              <Animated.View style={{ transform: [{ rotate: fareHeightAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '180deg'] }) }], marginLeft: 8 }}>
+                <Ionicons name="chevron-down" size={18} color={colors.textDim} />
+              </Animated.View>
+            </TouchableOpacity>
+
+            {fareExpanded && (
+              <View style={{ marginTop: 8 }}>
+                <View style={styles.fareDivider} />
+                <View style={styles.fareRow}>
+                  <Text style={styles.fareLabel}>Base fare</Text>
+                  <Text style={styles.fareValue} allowFontScaling={false}>${parseFloat(selectedEstimate.base_fare).toFixed(2)}</Text>
+                </View>
+                <View style={styles.fareRow}>
+                  <Text style={styles.fareLabel}>Distance ({selectedEstimate.distance_km} km)</Text>
+                  <Text style={styles.fareValue} allowFontScaling={false}>${parseFloat(selectedEstimate.distance_fare).toFixed(2)}</Text>
+                </View>
+                <View style={styles.fareRow}>
+                  <Text style={styles.fareLabel}>Time ({selectedEstimate.duration_minutes} min)</Text>
+                  <Text style={styles.fareValue} allowFontScaling={false}>${parseFloat(selectedEstimate.time_fare).toFixed(2)}</Text>
+                </View>
+                <View style={styles.fareRow}>
+                  <Text style={styles.fareLabel}>Booking fee</Text>
+                  <Text style={styles.fareValue} allowFontScaling={false}>${parseFloat(selectedEstimate.booking_fee).toFixed(2)}</Text>
+                </View>
+
+                {(selectedEstimate as any).area_fees?.map((fee: any, i: number) => (
+                  <View key={fee.id || i} style={styles.fareRow}>
+                    <Text style={styles.fareLabel}>{fee.name || fee.type}</Text>
+                    <Text style={styles.fareValue} allowFontScaling={false}>${Number(fee.calculated_value || 0).toFixed(2)}</Text>
+                  </View>
+                ))}
+
+                {(selectedEstimate as any).tax_breakdown && Object.entries((selectedEstimate as any).tax_breakdown).map(([name, info]: [string, any]) => (
+                  <View key={name} style={styles.fareRow}>
+                    <Text style={styles.fareLabel}>{name} ({info.rate}%)</Text>
+                    <Text style={styles.fareValue} allowFontScaling={false}>${Number(info.amount || 0).toFixed(2)}</Text>
+                  </View>
+                ))}
+
+                {(selectedEstimate.surge_multiplier ?? 1) > 1.0 && (
+                  <View style={styles.fareRow}>
+                    <Text style={[styles.fareLabel, { color: '#EF4444' }]}>Surge ({selectedEstimate.surge_multiplier}x)</Text>
+                    <Text style={[styles.fareValue, { color: '#EF4444' }]}>Applied</Text>
+                  </View>
+                )}
+              </View>
+            )}
+            <View style={[styles.fareDivider, { marginTop: 12 }]} />
+          </>
         )}
-        {promoDiscount > 0 && (
-          <View style={[styles.totalRow, { marginTop: 4 }]}>
-            <Text style={[styles.totalLabel, { fontFamily: 'PlusJakartaSans_700Bold', color: colors.text }]}>Total</Text>
-            <Text style={styles.totalAmount} allowFontScaling={false}>${totalFare.toFixed(2)}</Text>
-          </View>
+
+        {/* Promo + total (only shown when promo is applied) */}
+        {appliedPromo && promoDiscount > 0 && (
+          <>
+            <View style={styles.discountRow}>
+              <Text style={styles.discountLabel}>Promo ({appliedPromo.code})</Text>
+              <Text style={styles.discountAmount} allowFontScaling={false}>-${promoDiscount.toFixed(2)}</Text>
+            </View>
+            <View style={[styles.totalRow, { marginTop: 4 }]}>
+              <Text style={[styles.totalLabel, { fontFamily: 'PlusJakartaSans_700Bold', color: colors.text }]}>Total</Text>
+              <Text style={styles.totalAmount} allowFontScaling={false}>${totalFare.toFixed(2)}</Text>
+            </View>
+          </>
         )}
         {scheduledTime && (
           <View style={styles.scheduledBadge}>
@@ -513,7 +457,7 @@ function PaymentConfirmScreenContent() {
             </>
           )}
         </TouchableOpacity>
-      </View>
+      </Animated.View>
       <CustomAlert
         visible={alertState.visible}
         title={alertState.title}
@@ -534,7 +478,7 @@ export default function PaymentConfirmScreen() {
   );
 }
 
-function createStyles(colors: ThemeColors) {
+function createStyles(colors: ThemeColors, sf: (size: number) => number = (s) => s) {
   return StyleSheet.create({
     container: {
       flex: 1,
@@ -557,7 +501,7 @@ function createStyles(colors: ThemeColors) {
       alignItems: 'center',
     },
     headerTitle: {
-      fontSize: 18,
+      fontSize: sf(18),
       fontFamily: 'PlusJakartaSans_600SemiBold',
       color: colors.text,
     },
@@ -567,7 +511,15 @@ function createStyles(colors: ThemeColors) {
     rideSummary: {
       backgroundColor: colors.surface,
       marginBottom: 12,
+      marginHorizontal: 12,
+      marginTop: 12,
       padding: 20,
+      borderRadius: 16,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.06,
+      shadowRadius: 8,
+      elevation: 2,
     },
     vehicleInfo: {
       flexDirection: 'row',
@@ -587,17 +539,17 @@ function createStyles(colors: ThemeColors) {
       flex: 1,
     },
     vehicleName: {
-      fontSize: 18,
+      fontSize: sf(18),
       fontFamily: 'PlusJakartaSans_700Bold',
       color: colors.text,
     },
     vehicleDesc: {
-      fontSize: 14,
+      fontSize: sf(14),
       fontFamily: 'PlusJakartaSans_400Regular',
       color: colors.textDim,
     },
     totalPrice: {
-      fontSize: 22,
+      fontSize: sf(22),
       fontFamily: 'PlusJakartaSans_700Bold',
       color: colors.primary,
     },
@@ -627,13 +579,13 @@ function createStyles(colors: ThemeColors) {
       flex: 1,
     },
     routeLabel: {
-      fontSize: 12,
+      fontSize: sf(12),
       fontFamily: 'PlusJakartaSans_500Medium',
       color: colors.textDim,
       marginBottom: 2,
     },
     routeAddress: {
-      fontSize: 15,
+      fontSize: sf(15),
       fontFamily: 'PlusJakartaSans_500Medium',
       color: colors.text,
     },
@@ -641,9 +593,16 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.surface,
       padding: 20,
       marginBottom: 12,
+      marginHorizontal: 12,
+      borderRadius: 16,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.06,
+      shadowRadius: 8,
+      elevation: 2,
     },
     sectionTitle: {
-      fontSize: 16,
+      fontSize: sf(16),
       fontFamily: 'PlusJakartaSans_700Bold',
       color: colors.text,
       marginBottom: 16,
@@ -675,14 +634,20 @@ function createStyles(colors: ThemeColors) {
       flex: 1,
     },
     paymentName: {
-      fontSize: 15,
+      fontSize: sf(15),
       fontFamily: 'PlusJakartaSans_600SemiBold',
       color: colors.text,
     },
     paymentDetails: {
-      fontSize: 13,
+      fontSize: sf(13),
       fontFamily: 'PlusJakartaSans_400Regular',
       color: colors.textDim,
+    },
+    walletBalance: {
+      fontSize: sf(13),
+      fontFamily: 'PlusJakartaSans_500Medium',
+      color: colors.textDim,
+      marginTop: 2,
     },
     paymentCheck: {
       width: 28,
@@ -699,24 +664,10 @@ function createStyles(colors: ThemeColors) {
       paddingVertical: 12,
     },
     addPaymentText: {
-      fontSize: 14,
+      fontSize: sf(14),
       fontFamily: 'PlusJakartaSans_600SemiBold',
       color: colors.primary,
       marginLeft: 8,
-    },
-    promoButton: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      backgroundColor: colors.surface,
-      padding: 20,
-      marginBottom: 20,
-    },
-    promoText: {
-      flex: 1,
-      fontSize: 15,
-      fontFamily: 'PlusJakartaSans_500Medium',
-      color: colors.text,
-      marginLeft: 12,
     },
     footer: {
       backgroundColor: colors.surface,
@@ -732,12 +683,12 @@ function createStyles(colors: ThemeColors) {
       marginBottom: 16,
     },
     totalLabel: {
-      fontSize: 16,
+      fontSize: sf(16),
       fontFamily: 'PlusJakartaSans_500Medium',
       color: colors.textDim,
     },
     totalAmount: {
-      fontSize: 24,
+      fontSize: sf(24),
       fontFamily: 'PlusJakartaSans_700Bold',
       color: colors.text,
     },
@@ -751,59 +702,9 @@ function createStyles(colors: ThemeColors) {
       gap: 8,
     },
     bookButtonText: {
-      fontSize: 17,
+      fontSize: sf(17),
       fontFamily: 'PlusJakartaSans_600SemiBold',
       color: '#FFFFFF',
-    },
-    promoSection: {
-      backgroundColor: colors.surface,
-      padding: 20,
-      marginBottom: 20,
-    },
-    promoSectionTitle: {
-      fontSize: 16,
-      fontFamily: 'PlusJakartaSans_700Bold',
-      color: colors.text,
-      marginBottom: 12,
-    },
-    promoInputRow: {
-      flexDirection: 'row',
-      gap: 10,
-    },
-    promoInput: {
-      flex: 1,
-      height: 48,
-      backgroundColor: colors.surfaceLight,
-      borderRadius: 12,
-      paddingHorizontal: 16,
-      fontSize: 16,
-      fontFamily: 'PlusJakartaSans_600SemiBold',
-      color: colors.text,
-      letterSpacing: 1,
-    },
-    promoApplyButton: {
-      backgroundColor: colors.primary,
-      paddingHorizontal: 24,
-      borderRadius: 12,
-      justifyContent: 'center',
-      alignItems: 'center',
-    },
-    promoApplyDisabled: {
-      opacity: 0.5,
-    },
-    promoApplyText: {
-      fontSize: 15,
-      fontFamily: 'PlusJakartaSans_600SemiBold',
-      color: '#FFFFFF',
-    },
-    promoMessage: {
-      marginTop: 8,
-      fontSize: 13,
-      fontFamily: 'PlusJakartaSans_500Medium',
-      color: '#EF4444',
-    },
-    promoMessageSuccess: {
-      color: '#10B981',
     },
     discountRow: {
       flexDirection: 'row',
@@ -812,12 +713,12 @@ function createStyles(colors: ThemeColors) {
       marginBottom: 8,
     },
     discountLabel: {
-      fontSize: 14,
+      fontSize: sf(14),
       fontFamily: 'PlusJakartaSans_500Medium',
       color: '#10B981',
     },
     discountAmount: {
-      fontSize: 16,
+      fontSize: sf(16),
       fontFamily: 'PlusJakartaSans_600SemiBold',
       color: '#10B981',
     },
@@ -832,7 +733,7 @@ function createStyles(colors: ThemeColors) {
       marginBottom: 12,
     },
     scheduledText: {
-      fontSize: 13,
+      fontSize: sf(13),
       fontFamily: 'PlusJakartaSans_500Medium',
       color: colors.text,
     },
@@ -840,9 +741,16 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.surface,
       padding: 20,
       marginBottom: 12,
+      marginHorizontal: 12,
+      borderRadius: 16,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.06,
+      shadowRadius: 8,
+      elevation: 2,
     },
     fareBreakdownTitle: {
-      fontSize: 16,
+      fontSize: sf(16),
       fontFamily: 'PlusJakartaSans_700Bold',
       color: colors.text,
       marginBottom: 14,
@@ -854,12 +762,12 @@ function createStyles(colors: ThemeColors) {
       paddingVertical: 6,
     },
     fareLabel: {
-      fontSize: 14,
+      fontSize: sf(14),
       fontFamily: 'PlusJakartaSans_400Regular',
       color: '#6B7280',
     },
     fareValue: {
-      fontSize: 14,
+      fontSize: sf(14),
       fontFamily: 'PlusJakartaSans_500Medium',
       color: colors.text,
     },
@@ -868,13 +776,24 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.border,
       marginVertical: 10,
     },
+    fareHeader: {
+      flexDirection: 'row' as const,
+      alignItems: 'center' as const,
+      paddingVertical: 4,
+    },
+    fareToggleHint: {
+      fontSize: sf(12),
+      fontFamily: 'PlusJakartaSans_400Regular',
+      color: colors.textDim,
+      marginTop: 2,
+    },
     fareTotalLabel: {
-      fontSize: 16,
+      fontSize: sf(16),
       fontFamily: 'PlusJakartaSans_700Bold',
       color: colors.text,
     },
     fareTotalValue: {
-      fontSize: 18,
+      fontSize: sf(18),
       fontFamily: 'PlusJakartaSans_700Bold',
       color: colors.primary,
     },
@@ -897,12 +816,12 @@ function createStyles(colors: ThemeColors) {
       justifyContent: 'center',
     },
     corporateTitle: {
-      fontSize: 15,
+      fontSize: sf(15),
       fontFamily: 'PlusJakartaSans_600SemiBold',
       color: colors.text,
     },
     corporateSubtitle: {
-      fontSize: 13,
+      fontSize: sf(13),
       fontFamily: 'PlusJakartaSans_400Regular',
       color: colors.textDim,
       marginTop: 2,
@@ -925,35 +844,9 @@ function createStyles(colors: ThemeColors) {
       backgroundColor: colors.primary + '10',
     },
     corporateOptionText: {
-      fontSize: 14,
+      fontSize: sf(14),
       fontFamily: 'PlusJakartaSans_500Medium',
       color: colors.text,
-    },
-    splitButton: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      backgroundColor: colors.surface,
-      padding: 16,
-      marginBottom: 20,
-      gap: 12,
-    },
-    splitIconContainer: {
-      width: 40,
-      height: 40,
-      borderRadius: 20,
-      backgroundColor: colors.primary + '15',
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    splitText: {
-      fontSize: 15,
-      fontWeight: '600',
-      color: colors.text,
-    },
-    splitSubtext: {
-      fontSize: 13,
-      color: colors.textDim,
-      marginTop: 2,
     },
   });
 }

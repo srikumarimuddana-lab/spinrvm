@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import { Alert, Linking } from 'react-native';
+import { Linking } from 'react-native';
+import { globalAlert } from './alertStore';
 import api from '@shared/api/client';
 import { useAuthStore, registerLogoutCallback } from '@shared/store/authStore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -281,21 +282,31 @@ export const useRideStore = create<RideState>((set, get) => ({
   },
 
   fetchEstimates: async () => {
-    console.log('fetchEstimates store action started');
-    const { pickup, dropoff, stops } = get();
+    const { pickup, dropoff, stops, estimates: existing } = get();
     if (!pickup || !dropoff) return;
 
     try {
-      set({ isLoading: true, error: null });
+      // Only show loading skeleton on the initial fetch. Subsequent
+      // auto-refreshes update silently so vehicle cards don't flash.
+      if (existing.length === 0) {
+        set({ isLoading: true, error: null });
+      }
       const response = await api.post<RideEstimate[]>('/rides/estimate', {
         pickup_lat: pickup.lat,
         pickup_lng: pickup.lng,
         dropoff_lat: dropoff.lat,
         dropoff_lng: dropoff.lng,
-        stops: stops, // Send stops to backend
+        stops: stops,
       });
-      console.log('Ride API Response:', response.data);
-      set({ estimates: response.data as RideEstimate[], isLoading: false });
+      const fresh = Array.isArray(response.data) ? response.data as RideEstimate[] : [];
+      // Never replace a populated list with an empty one during a background
+      // refresh — the rider should always see vehicle types even when the
+      // backend returns none transiently (cache miss, rate-limit, etc.).
+      if (fresh.length > 0 || existing.length === 0) {
+        set({ estimates: fresh, isLoading: false });
+      } else {
+        set({ isLoading: false });
+      }
     } catch (error: unknown) {
       console.error('fetchEstimates error:', error);
       set({ isLoading: false, error: isErrorLike(error) ? error.message : 'Failed to fetch estimates' });
@@ -403,9 +414,10 @@ export const useRideStore = create<RideState>((set, get) => ({
       await AsyncStorage.setItem('offline_queue', JSON.stringify(updatedQueue));
 
       if (failedPermanently.length > 0) {
-        Alert.alert(
+        globalAlert(
           'Sync Failed',
           `${failedPermanently.length} offline action(s) could not be synced and were dropped.`,
+          'warning',
         );
       }
       if (successfulSyncs.length > 0) {
@@ -422,7 +434,10 @@ export const useRideStore = create<RideState>((set, get) => ({
       throw new Error('Missing ride details');
     }
     if (get().currentRide) {
-      throw new Error('A ride is already active');
+      const serverCheck = await get().fetchActiveRide();
+      if (serverCheck?.active) {
+        throw new Error('A ride is already active');
+      }
     }
 
     try {

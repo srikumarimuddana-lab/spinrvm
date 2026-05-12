@@ -403,6 +403,13 @@ export default function AccountScreen() {
               <View style={styles.cardDivider} />
               <MenuRow
                 styles={styles} colors={colors}
+                icon="accessibility" iconColor="#0284C7" iconBg="rgba(2, 132, 199, 0.1)"
+                label="Accessibility"
+                onPress={() => router.push('/accessibility' as any)}
+              />
+              <View style={styles.cardDivider} />
+              <MenuRow
+                styles={styles} colors={colors}
                 icon="notifications" iconColor="#6366F1" iconBg="rgba(99, 102, 241, 0.1)"
                 label="Notifications"
                 onPress={() => router.push('/notifications' as any)}

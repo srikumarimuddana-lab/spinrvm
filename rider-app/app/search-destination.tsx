@@ -54,16 +54,36 @@ export default function SearchDestinationScreen() {
 
   // Bias prediction results to the rider's location so e.g. "Walmart"
   // surfaces nearby stores first instead of generic matches across Canada.
-  const bias = userLocation
-    ? { lat: userLocation.latitude, lng: userLocation.longitude, radiusMeters: 20000 }
+  // Fall back to pickup coordinates (often set from GPS on the home screen)
+  // when userLocation hasn't propagated to the store yet.
+  const biasLat = userLocation?.latitude ?? (pickup?.lat || null);
+  const biasLng = userLocation?.longitude ?? (pickup?.lng || null);
+  const bias = biasLat != null && biasLng != null && (biasLat !== 0 || biasLng !== 0)
+    ? { lat: biasLat, lng: biasLng, radiusMeters: 50000 }
     : null;
+
+  // Gate: hold the search query until we have a location OR 2 seconds pass.
+  // Without this, if GPS hasn't resolved yet the very first request fires with
+  // no location= param and Google returns Canada-wide results (Ontario Walmart
+  // instead of Regina Walmart). The 2s timeout is a graceful fallback for
+  // users who have denied location permission.
+  const [locationReady, setLocationReady] = useState(!!bias);
+  useEffect(() => {
+    if (bias && !locationReady) setLocationReady(true);
+  }, [bias?.lat, bias?.lng]);
+  useEffect(() => {
+    if (locationReady) return;
+    const t = setTimeout(() => setLocationReady(true), 2000);
+    return () => clearTimeout(t);
+  }, []);
+
   const {
     predictions,
     loading: isSearching,
     clear: clearPredictions,
     rotateSessionToken,
     sessionToken,
-  } = usePlacesAutocomplete(searchQuery, bias);
+  } = usePlacesAutocomplete(locationReady ? searchQuery : '', bias);
 
   const pickupRef = useRef<TextInput>(null);
   const dropoffRef = useRef<TextInput>(null);
@@ -92,7 +112,11 @@ export default function SearchDestinationScreen() {
   useEffect(() => {
     fetchSavedAddresses();
     loadRecentSearches();
-    // If home screen didn't get GPS yet, fetch it now
+    // If home screen didn't get GPS yet, fetch it now.
+    // IMPORTANT: only set userLocation when GPS actually succeeds. Faking it
+    // with DEFAULT_LATITUDE/LONGITUDE (Saskatoon) silently mis-biases place
+    // search for riders in other cities — they'd see Saskatoon Walmarts when
+    // searching in Regina, for example.
     if (!userLocation) {
       (async () => {
         const { status } = await Location.requestForegroundPermissionsAsync();

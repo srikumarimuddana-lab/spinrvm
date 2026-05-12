@@ -47,6 +47,30 @@ export const FONT = {
 // ── Minimum touch target (Apple HIG = 44pt, Material = 48dp) ─────────────────
 export const MIN_TOUCH = 44;
 
+// ── Dynamic font scaling ─────────────────────────────────────────────────────
+// Design baseline: 375dp (iPhone SE / standard Figma frame).
+// Scales linearly with screen width but dampened by a factor so fonts don't
+// become enormous on tablets. Clamped to ±30 % of the design size.
+const DESIGN_WIDTH = 375;
+const SCALE_FACTOR = 0.4; // 0 = no scaling, 1 = fully proportional
+
+/**
+ * Scale a font size to the current screen width.
+ * Call inside a component or pass `width` from useWindowDimensions.
+ *
+ *   const styles = createStyles(sf);
+ *   // in StyleSheet: fontSize: sf(15)
+ */
+export function createScaledFont(screenWidth: number) {
+  return (size: number): number => {
+    const scale = screenWidth / DESIGN_WIDTH;
+    const scaled = size + (size * (scale - 1)) * SCALE_FACTOR;
+    const min = size * 0.8;
+    const max = size * 1.3;
+    return Math.round(Math.min(Math.max(scaled, min), max) * 10) / 10;
+  };
+}
+
 // ── Hook ──────────────────────────────────────────────────────────────────────
 export function useResponsive() {
   // useWindowDimensions re-renders when the window size changes (rotation,
@@ -73,6 +97,9 @@ export function useResponsive() {
   // Two-column card width: (screen − 2×horizontal padding − 1 gap) / 2
   const statCardWidth = Math.floor((width - SPACING.md * 2 - SPACING.sm) / 2);
 
+  // Dynamic font scaler for the current screen width
+  const sf = createScaledFont(width);
+
   return {
     width,
     height,
@@ -83,5 +110,6 @@ export function useResponsive() {
     mapHeight,
     sheetSnaps,
     statCardWidth,
+    sf,
   };
 }

@@ -37,6 +37,8 @@ import {
   onTokenRefresh,
 } from '@shared/services/firebase';
 import { handleScheduledRideReminderFCM } from '../hooks/useScheduledRideReminder';
+import CustomAlert from '@shared/components/CustomAlert';
+import { useAlertStore } from '../store/alertStore';
 
 // R-P1-29: Route to the correct screen based on FCM notification data.
 // Called both for killed-state (getInitialNotification) and tapped-while-backgrounded notifications.
@@ -121,6 +123,20 @@ if (Notifications) {
 setBackgroundMessageHandler(async (remoteMessage: any) => {
   console.log('[Push] Rider background FCM:', remoteMessage?.data?.type || remoteMessage?.notification?.title);
 });
+
+function GlobalAlert() {
+  const { visible, title, message, variant, buttons, hideAlert } = useAlertStore();
+  return (
+    <CustomAlert
+      visible={visible}
+      title={title}
+      message={message}
+      variant={variant}
+      buttons={buttons || [{ text: 'OK', style: 'default' }]}
+      onClose={hideAlert}
+    />
+  );
+}
 
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
@@ -353,19 +369,20 @@ export default function RootLayout() {
       if (remoteMessage?.data?.type === 'safety_checkin') {
         const checkinRideId = remoteMessage?.data?.ride_id as string | undefined;
         if (checkinRideId) {
-          Alert.alert(
-            'Safety check-in',
-            "Just checking in — are you okay?\n\nIf you don't respond, we'll follow up with you shortly.",
-            [
+          useAlertStore.getState().showAlert({
+            title: 'Safety check-in',
+            message: "Just checking in — are you okay?\n\nIf you don't respond, we'll follow up with you shortly.",
+            variant: 'info',
+            buttons: [
               {
                 text: "I'm okay",
+                style: 'default',
                 onPress: () => {
                   api.post(`/rides/${checkinRideId}/safety-checkin`).catch((e) => console.warn('[Layout] Safety checkin failed:', e?.message ?? e));
                 },
               },
             ],
-            { cancelable: false },
-          );
+          });
         }
         return;
       }
@@ -554,6 +571,7 @@ function RootLayoutInner({
             </Stack>
             </MaybeStripeProvider>
             </StripeKeyContext.Provider>
+            <GlobalAlert />
           </SafeAreaProvider>
         </View>
       </GestureHandlerRootView>

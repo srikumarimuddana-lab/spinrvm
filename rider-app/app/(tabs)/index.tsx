@@ -8,7 +8,6 @@ import {
   ActivityIndicator,
   Platform,
   Image,
-  Alert,
   Linking,
   AppState,
 } from 'react-native';
@@ -43,7 +42,7 @@ const getBackendUrl = () => {
 export default function HomeScreen() {
   const router = useRouter();
   const { user } = useAuthStore();
-  const { savedAddresses, fetchSavedAddresses, setUserLocation, currentRide, triggerEmergency } = useRideStore();
+  const { savedAddresses, fetchSavedAddresses, setUserLocation, currentRide, triggerEmergency, fetchActiveRide } = useRideStore();
   const [unreadNotifCount, setUnreadNotifCount] = useState(0);
   const [showPromo, setShowPromo] = useState(true);
   const [location, setLocation] = useState<any>(null);
@@ -100,27 +99,30 @@ export default function HomeScreen() {
     const prePromptShown = await AsyncStorage.getItem('spinr_location_preprompt_shown').catch(() => null);
     if (!prePromptShown) {
       await new Promise<void>(resolve => {
-        Alert.alert(
-          'Location Access',
-          'Spinr uses your location to show nearby drivers, calculate your pickup point, and provide accurate ETAs. ' +
+        setAlertState({
+          visible: true,
+          title: 'Location Access',
+          message: 'Spinr uses your location to show nearby drivers, calculate your pickup point, and provide accurate ETAs. ' +
           'Your location is only used while the app is in use and is never sold or shared with advertisers.',
-          [{ text: 'Continue', style: 'default', onPress: () => resolve() }],
-          { cancelable: false },
-        );
+          variant: 'info',
+          buttons: [{ text: 'Continue', style: 'default', onPress: () => resolve() }],
+        });
       });
       await AsyncStorage.setItem('spinr_location_preprompt_shown', '1').catch(() => {});
     }
 
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') {
-      Alert.alert(
-        'Location Required',
-        'Spinr needs your location to show nearby drivers and confirm your pickup. Please enable location in Settings.',
-        [
+      setAlertState({
+        visible: true,
+        title: 'Location Required',
+        message: 'Spinr needs your location to show nearby drivers and confirm your pickup. Please enable location in Settings.',
+        variant: 'warning',
+        buttons: [
           { text: 'Cancel', style: 'cancel' },
-          { text: 'Open Settings', onPress: () => Linking.openSettings() },
-        ]
-      );
+          { text: 'Open Settings', style: 'default', onPress: () => Linking.openSettings() },
+        ],
+      });
       return;
     }
 
@@ -165,17 +167,15 @@ export default function HomeScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      fetchActiveRide();
       const now = Date.now();
       if (now - lastFetchedAt.current < HOME_DATA_TTL_MS) {
-        // Still refresh the location so a stale fix from a previous session
-        // (or from before a long commute) gets replaced. Skip the saved-
-        // places fetch — those don't change minute-to-minute.
         refreshLocation(false);
         return;
       }
       lastFetchedAt.current = now;
       fetchHomeData();
-    }, [fetchHomeData, refreshLocation])
+    }, [fetchHomeData, refreshLocation, fetchActiveRide])
   );
 
   // App resume — always grab a fresh fix, no cache. `initialRegion` on
@@ -375,14 +375,16 @@ export default function HomeScreen() {
           if (!mapRef.current) return;
           const { status } = await Location.requestForegroundPermissionsAsync();
           if (status !== 'granted') {
-            Alert.alert(
-              'Location Required',
-              'Spinr needs your location to show nearby drivers and confirm your pickup. Please enable location in Settings.',
-              [
+            setAlertState({
+              visible: true,
+              title: 'Location Required',
+              message: 'Spinr needs your location to show nearby drivers and confirm your pickup. Please enable location in Settings.',
+              variant: 'warning',
+              buttons: [
                 { text: 'Cancel', style: 'cancel' },
-                { text: 'Open Settings', onPress: () => Linking.openSettings() },
-              ]
-            );
+                { text: 'Open Settings', style: 'default', onPress: () => Linking.openSettings() },
+              ],
+            });
             return;
           }
           let loc: any;

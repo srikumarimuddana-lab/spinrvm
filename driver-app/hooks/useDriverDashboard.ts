@@ -579,7 +579,11 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           wsAuthenticated = true;
           // Re-sync active ride state — server buffers no WS events, so any
           // transitions that fired while disconnected are recovered via HTTP.
-          if (wasReconnect) {
+          // Skip the fetch if we already hold an offer locally: the
+          // backend offer-TTL handler resets the ride to `searching`
+          // ~timeout+15s after dispatch, so a reconnect inside that
+          // window would clobber the live offer panel.
+          if (wasReconnect && !useDriverStore.getState().incomingRide) {
             fetchActiveRide();
           }
           // Now that auth is confirmed, send the cached location so the
@@ -661,9 +665,24 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // background sockets silently — without this the driver shows as
   // online to admins and can even receive ride offers after the app
   // was swiped away.
+  //
+  // Background close is debounced ~3s and `inactive` is ignored, so a
+  // transient transition (notification shade, control-center, system
+  // permission dialog) doesn't tear down the socket and trigger a
+  // reconnect storm.
   useEffect(() => {
+    const BACKGROUND_CLOSE_DELAY_MS = 3000;
+    let backgroundCloseTimer: ReturnType<typeof setTimeout> | null = null;
+    const cancelBackgroundClose = () => {
+      if (backgroundCloseTimer) {
+        clearTimeout(backgroundCloseTimer);
+        backgroundCloseTimer = null;
+      }
+    };
     const sub = AppState.addEventListener('change', (nextState) => {
-      if (nextState === 'active' && isOnlineRef.current && userRef.current) {
+      if (nextState === 'active') {
+        cancelBackgroundClose();
+        if (!isOnlineRef.current || !userRef.current) return;
         const ws = wsRef.current;
         if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
           if (reconnectTimeoutRef.current) {
@@ -673,11 +692,25 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           reconnectAttemptRef.current = 0;
           connectWebSocket();
         }
-      } else if (nextState === 'background' && wsRef.current) {
-        try { wsRef.current.close(1001, 'app_backgrounded'); } catch {}
+      } else if (nextState === 'background') {
+        // Schedule the close — if the app comes back to 'active' within
+        // the debounce window (notification shade pull, system dialog),
+        // we cancel and keep the socket open. `inactive` is iOS partial
+        // cover; never close on that transition.
+        cancelBackgroundClose();
+        backgroundCloseTimer = setTimeout(() => {
+          backgroundCloseTimer = null;
+          if (wsRef.current) {
+            try { wsRef.current.close(1001, 'app_backgrounded'); } catch {}
+          }
+        }, BACKGROUND_CLOSE_DELAY_MS);
       }
+      // 'inactive' (iOS): intentionally no-op.
     });
-    return () => sub.remove();
+    return () => {
+      cancelBackgroundClose();
+      sub.remove();
+    };
     // connectWebSocket is stable; user read via ref. Empty deps so this
     // listener is registered exactly once per hook instance.
     // eslint-disable-next-line react-hooks/exhaustive-deps

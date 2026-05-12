@@ -680,6 +680,21 @@ async def _offer_timeout_handler(
                 f"rider_{rider_id}",
             )
 
+        # Notify the driver too — without this the panel just vanishes on
+        # the next reconnect with no explanation, which looked like a bug
+        # to drivers. Lookup is best-effort; a failure here must not block
+        # the rider-side re-dispatch.
+        try:
+            driver_row = await db_supabase.get_driver_by_id(driver_id)
+            driver_user_id = (driver_row or {}).get("user_id")
+            if driver_user_id:
+                await manager.send_personal_message(
+                    {"type": "ride_offer_expired", "ride_id": ride_id},
+                    f"driver_{driver_user_id}",
+                )
+        except Exception as e:
+            logger.warning(f"[DISPATCH] could not notify driver of offer expiry for ride {ride_id}: {e}")
+
         # Attempt re-dispatch to the next available driver.
         await match_driver_to_ride(ride_id)
 

@@ -25,7 +25,7 @@
 -- Forward-compatible: both columns are nullable; existing rows are
 -- unaffected. Idempotent: IF NOT EXISTS on both ALTERs.
 --
--- Rollback (if needed):
+-- Rollback:
 --   ALTER TABLE vehicle_types DROP COLUMN illustration_url;
 --   ALTER TABLE settings DROP COLUMN ride_offer_sound_url;
 --

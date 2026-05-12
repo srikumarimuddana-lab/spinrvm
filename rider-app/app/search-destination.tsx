@@ -15,7 +15,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
-import { DEFAULT_LATITUDE, DEFAULT_LONGITUDE } from '../constants/geo';
 import { useRideStore } from '../store/rideStore';
 import { useAuthStore } from '@shared/store/authStore';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -122,23 +121,6 @@ export default function SearchDestinationScreen() {
       (async () => {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status !== 'granted') return;
-        // Try last-known position first (instant — cached by the OS).
-        // This populates userLocation before the user starts typing so the
-        // very first autocomplete request includes the location bias.
-        // getCurrentPositionAsync can take 5–10s on cold start, by which
-        // time the user has already typed and seen the wrong results.
-        try {
-          const lastKnown = await Location.getLastKnownPositionAsync();
-          if (lastKnown) {
-            setUserLocation({
-              latitude: lastKnown.coords.latitude,
-              longitude: lastKnown.coords.longitude,
-            });
-          }
-        } catch (e) {
-          console.warn('Last-known position unavailable:', e);
-        }
-        // Then refine with a fresh fix in the background.
         try {
           const loc = await Location.getCurrentPositionAsync({
             accuracy: Location.Accuracy.Balanced,
@@ -148,10 +130,10 @@ export default function SearchDestinationScreen() {
             longitude: loc.coords.longitude,
           });
         } catch (e) {
-          console.warn('GPS unavailable; place search will not be biased:', e);
-          // Leave userLocation null if last-known also failed — the
-          // autocomplete falls back to country-scoped results, which is
-          // correct when we don't know where the rider is.
+          // Don't fall back to a hardcoded city — that biases place
+          // search (e.g. "Walmart") to the wrong region. Leave
+          // userLocation null so autocomplete sends no location bias.
+          console.warn('Could not get current location:', e);
         }
       })();
     }

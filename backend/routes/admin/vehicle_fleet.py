@@ -3,15 +3,33 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import (  # noqa: F401
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    UploadFile,
+)
 from pydantic import BaseModel
 
 try:
     from ... import db_supabase
+    from ...dependencies import get_admin_user  # noqa: F401
+    from ...documents import _validate_file_type  # noqa: F401
     from ...routes.fares import invalidate_fare_cache
+    from ...supabase_client import supabase  # noqa: F401
 except ImportError:
     import db_supabase
+    from dependencies import get_admin_user  # noqa: F401
+    from documents import _validate_file_type  # noqa: F401
     from routes.fares import invalidate_fare_cache
+    from supabase_client import supabase  # noqa: F401
+
+# Cap admin asset uploads at 500 KB — illustrations are small SVGs/PNGs
+# meant to render in a 72×48 dp card on the rider app.
+_MAX_ILLUSTRATION_BYTES = 500 * 1024
+_ILLUSTRATION_BUCKET = "vehicle-illustrations"
+_ILLUSTRATION_MIME_TYPES = frozenset({"image/png", "image/jpeg", "image/jpg", "image/webp"})
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +47,11 @@ class VehicleTypeCreateRequest(BaseModel):
     price_per_km: Optional[float] = None
     price_per_minute: Optional[float] = None
     is_active: bool = True
+    # Public URL of the rider-app car illustration (uploaded via
+    # /vehicle-types/{id}/upload-illustration). Optional on create —
+    # admins typically upload after the type is created so the path
+    # can be keyed by id.
+    illustration_url: Optional[str] = None
 
 
 class VehicleTypeUpdateRequest(BaseModel):
@@ -39,6 +62,7 @@ class VehicleTypeUpdateRequest(BaseModel):
     price_per_km: Optional[float] = None
     price_per_minute: Optional[float] = None
     is_active: Optional[bool] = None
+    illustration_url: Optional[str] = None
 
 
 class FareConfigCreateRequest(BaseModel):
@@ -102,6 +126,7 @@ async def admin_create_vehicle_type(vtype: VehicleTypeCreateRequest):
         "price_per_km": vtype.price_per_km,
         "price_per_minute": vtype.price_per_minute,
         "is_active": vtype.is_active,
+        "illustration_url": vtype.illustration_url,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     row = await db_supabase.insert_one("vehicle_types", doc)
@@ -128,12 +153,83 @@ async def admin_update_vehicle_type(type_id: str, vtype: VehicleTypeUpdateReques
         update_payload["price_per_minute"] = vtype.price_per_minute
     if vtype.is_active is not None:
         update_payload["is_active"] = vtype.is_active
+    if vtype.illustration_url is not None:
+        # Admin may pass "" to clear the override and revert to icon fallback.
+        update_payload["illustration_url"] = vtype.illustration_url or None
 
     if update_payload:
         await db_supabase.update_one("vehicle_types", {"id": type_id}, update_payload)
         # PERF-001: Invalidate fare cache
         await invalidate_fare_cache()
     return {"message": "Vehicle type updated"}
+
+
+@router.post("/vehicle-types/{type_id}/upload-illustration")
+async def admin_upload_vehicle_illustration(
+    type_id: str,
+    file: UploadFile = File(...),
+    admin: dict = Depends(get_admin_user),
+):
+    """Upload a PNG/JPEG/WebP illustration for a vehicle type.
+
+    Stores the file in Supabase Storage bucket `vehicle-illustrations` at
+    `{type_id}/{uuid4}{ext}`, then writes the resulting public URL to
+    `vehicle_types.illustration_url`. The bucket must be set to public
+    read in the Supabase dashboard so the rider-app's `<Image>` tag can
+    load it without an auth header.
+    """
+    # Verify the vehicle type exists before consuming the upload.
+    vt = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("vehicle_types", {"id": type_id}, limit=1))
+    if not vt:
+        raise HTTPException(status_code=404, detail="Vehicle type not found")
+
+    content_type = file.content_type or "application/octet-stream"
+    if content_type == "image/jpg":  # normalise iOS picker quirk
+        content_type = "image/jpeg"
+    if content_type not in _ILLUSTRATION_MIME_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported content-type {content_type}. Accepted: {sorted(_ILLUSTRATION_MIME_TYPES)}",
+        )
+
+    file_bytes = await file.read()
+    if len(file_bytes) > _MAX_ILLUSTRATION_BYTES:
+        raise HTTPException(status_code=400, detail="File exceeds 500 KB limit")
+    # Magic-byte check (shared with driver-document upload path) catches
+    # mis-declared types (e.g. a .png renamed to .jpg).
+    _validate_file_type(file_bytes, content_type)
+
+    ext_map = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}
+    ext = ext_map.get(content_type, ".bin")
+    object_path = f"{type_id}/{uuid.uuid4()}{ext}"
+
+    try:
+        supabase.storage.from_(_ILLUSTRATION_BUCKET).upload(
+            file=file_bytes,
+            path=object_path,
+            file_options={"content-type": content_type, "upsert": "true"},
+        )
+    except Exception as e:
+        logger.error("Vehicle illustration upload failed: %s", e, exc_info=True)
+        raise HTTPException(status_code=502, detail="Storage upload failed") from e
+
+    # Public URL — bucket is public-read so no signed URL needed.
+    public_url_res = supabase.storage.from_(_ILLUSTRATION_BUCKET).get_public_url(object_path)
+    # supabase-py returns either a string or an object with a publicUrl attr
+    public_url = public_url_res if isinstance(public_url_res, str) else getattr(public_url_res, "public_url", None)
+    if not public_url:
+        raise HTTPException(status_code=502, detail="Could not resolve public URL for uploaded illustration")
+
+    await db_supabase.update_one("vehicle_types", {"id": type_id}, {"illustration_url": public_url})
+    await invalidate_fare_cache()
+
+    logger.info(
+        "[admin] vehicle illustration uploaded type_id=%s admin_id=%s bytes=%d",
+        type_id,
+        admin.get("id"),
+        len(file_bytes),
+    )
+    return {"illustration_url": public_url}
 
 
 @router.delete("/vehicle-types/{type_id}")

@@ -2286,6 +2286,67 @@ async def remove_stop_mid_trip(
     return {"success": True, "stops": stops, **fare_update}
 
 
+class RideNotesUpdateRequest(BaseModel):
+    notes: str = Field(default="", max_length=200)
+
+
+@api_router.patch("/{ride_id}/notes")
+@ride_action_limit
+async def patch_ride_notes(
+    ride_id: str,
+    body: RideNotesUpdateRequest,
+    request: Request = None,
+    current_user: dict = Depends(get_current_user),
+):
+    """Rider attaches/updates a free-text note for the driver.
+
+    UX intent: the booking screen no longer collects this field — riders
+    add the note from the ride-status screen *after* confirming, matching
+    the Uber/Lyft pattern. Allowed while the driver is still en route;
+    once the trip starts the note is locked (the driver is already
+    on the way; tail-end edits are confusing).
+    """
+    ride = await db.find_one("rides", {"id": ride_id})
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    if ride.get("rider_id") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    allowed = (
+        RideStatus.SEARCHING,
+        RideStatus.DRIVER_ASSIGNED,
+        RideStatus.DRIVER_ACCEPTED,
+        RideStatus.DRIVER_ARRIVED,
+    )
+    if ride.get("status") not in allowed:
+        raise HTTPException(
+            status_code=409,
+            detail="Notes can only be edited before pickup",
+        )
+
+    notes = (body.notes or "").strip() or None
+    await db.update_one(
+        "rides",
+        {"id": ride_id},
+        {"$set": {"rider_notes": notes, "updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+
+    # Push to the assigned driver if one exists. Best-effort — a failed
+    # WS send must not error out the API (the driver-app will reconcile
+    # via its next ride fetch).
+    if ride.get("driver_id"):
+        try:
+            driver = await db.find_one("drivers", {"id": ride["driver_id"]})
+            if driver and driver.get("user_id"):
+                await manager.send_personal_message(
+                    {"type": "ride_notes_updated", "ride_id": ride_id, "notes": notes},
+                    f"driver_{driver['user_id']}",
+                )
+        except Exception as e:
+            logger.warning(f"[notes] WS push to driver failed for ride {ride_id}: {e}")
+
+    return {"success": True, "notes": notes}
+
+
 class EmergencyRequest(BaseModel):
     message: str = "Emergency assistance requested"
     latitude: Optional[float] = None

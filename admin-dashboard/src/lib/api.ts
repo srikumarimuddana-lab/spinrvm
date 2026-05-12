@@ -61,8 +61,11 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     // Get token from Zustand store
     const store = useAuthStore.getState();
     const token = store.token;
+    // Don't force JSON Content-Type when the body is FormData — the browser
+    // sets multipart/form-data with the right boundary automatically.
+    const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
     const headers: Record<string, string> = {
-        "Content-Type": "application/json",
+        ...(isFormData ? {} : { "Content-Type": "application/json" }),
         ...(options.headers as Record<string, string>),
     };
     if (token) headers["Authorization"] = `Bearer ${token}`;
@@ -563,6 +566,32 @@ export const updateVehicleType = (id: string, data: any) =>
     });
 export const deleteVehicleType = (id: string) =>
     request<any>(`/api/admin/vehicle-types/${id}`, { method: "DELETE" });
+
+/**
+ * Upload a PNG/JPEG/WebP illustration for a vehicle type. ≤500 KB.
+ * Returns the public URL stored on `vehicle_types.illustration_url`.
+ */
+export const adminUploadVehicleIllustration = (id: string, file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return request<{ illustration_url: string }>(
+        `/api/admin/vehicle-types/${id}/upload-illustration`,
+        { method: "POST", body: fd },
+    );
+};
+
+/**
+ * Upload the driver-app ride-offer alert tone. mp3/wav, ≤500 KB.
+ * Returns the public URL stored on `settings.ride_offer_sound_url`.
+ */
+export const adminUploadRideOfferSound = (file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return request<{ ride_offer_sound_url: string }>(
+        "/api/admin/settings/ride-offer-sound",
+        { method: "POST", body: fd },
+    );
+};
 
 /* ── Fare Configs ─────────────────────────── */
 export const getFareConfigs = () =>

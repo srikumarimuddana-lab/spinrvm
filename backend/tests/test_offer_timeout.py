@@ -1,8 +1,13 @@
 """
 Tests for _offer_timeout_handler — the backend-enforced offer TTL.
+
+Also covers the related dispatch hardening:
+  • null-coord abort in match_driver_to_ride
+  • countdown_seconds in the new_ride_assignment WS payload
+  • ride_offer_expired event sent to the driver on expiry
 """
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -134,3 +139,137 @@ class TestOfferTimeoutHandler:
 
             mock_db.update_one.assert_not_called()
             mock_redispatch.assert_not_called()
+
+
+class TestDispatchHardening:
+    """Tests for related changes in match_driver_to_ride.
+
+    Patterns mirror test_e2e_wav_dispatch.py — patch every external dep of
+    match_driver_to_ride and assert on the captured WS payload / early return.
+    """
+
+    _RIDE_BASE = {
+        "id": "ride_disp_1",
+        "rider_id": "rider_disp_1",
+        "vehicle_type_id": "economy",
+        "pickup_lat": 52.13,
+        "pickup_lng": -106.67,
+        "dropoff_lat": 52.14,
+        "dropoff_lng": -106.65,
+        "status": "searching",
+        "requires_wav": False,
+    }
+    _DRIVER = {
+        "id": "driver_disp_1",
+        "user_id": "user_driver_disp_1",
+        "lat": 52.131,
+        "lng": -106.671,
+        "rating": 4.9,
+        "is_wav": False,
+        "vehicle_type_id": "economy",
+    }
+
+    @pytest.mark.asyncio
+    async def test_dispatch_aborts_on_null_coords(self):
+        """Ride row with any null lat/lng must abort before driver lookup."""
+        from backend.routes import rides as rides_mod
+
+        bad_ride = {**self._RIDE_BASE, "pickup_lng": None}
+
+        get_rows_mock = AsyncMock(return_value=[self._DRIVER])
+        update_ride_mock = AsyncMock()
+        create_task_mock = MagicMock()
+        send_personal_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=bad_ride)),
+            patch("backend.routes.rides.db_supabase.get_rows", get_rows_mock),
+            patch("backend.routes.rides.db_supabase.update_ride", update_ride_mock),
+            patch("backend.routes.rides.manager.send_personal_message", send_personal_mock),
+            patch("backend.routes.rides.send_push_notification", AsyncMock()),
+            patch("backend.routes.rides.get_app_settings", AsyncMock(return_value={})),
+            patch("backend.routes.rides.asyncio.create_task", create_task_mock),
+        ):
+            await rides_mod.match_driver_to_ride(ride_id=self._RIDE_BASE["id"])
+
+        get_rows_mock.assert_not_called()  # never queried drivers
+        update_ride_mock.assert_not_called()  # never assigned a driver
+        send_personal_mock.assert_not_called()  # never broadcast
+        create_task_mock.assert_not_called()  # no offer-timeout scheduled
+
+    @pytest.mark.asyncio
+    async def test_dispatch_payload_includes_countdown_seconds(self):
+        """new_ride_assignment WS payload carries the per-offer countdown."""
+        from backend.routes import rides as rides_mod
+
+        send_personal_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=self._RIDE_BASE)),
+            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[self._DRIVER])),
+            patch(
+                "backend.routes.rides.dispatch.resolve_matching_config",
+                AsyncMock(return_value=("nearest", 4.0, 10.0)),
+            ),
+            patch("backend.routes.rides.db_supabase.match_and_claim_driver", AsyncMock(return_value=None)),
+            patch("backend.routes.rides.db_supabase.claim_driver_atomic", AsyncMock(return_value=True)),
+            patch("backend.routes.rides.db_supabase.update_ride", AsyncMock()),
+            patch(
+                "backend.routes.rides.db_supabase.get_driver_by_id",
+                AsyncMock(return_value={**self._DRIVER, "is_online": True}),
+            ),
+            patch(
+                "backend.routes.rides.db_supabase.get_user_by_id",
+                AsyncMock(return_value={"first_name": "Test", "last_name": "Rider"}),
+            ),
+            patch("backend.routes.rides.manager.send_personal_message", send_personal_mock),
+            patch("backend.routes.rides.send_push_notification", AsyncMock()),
+            patch(
+                "backend.routes.rides.get_app_settings",
+                AsyncMock(return_value={"ride_offer_timeout_seconds": 22}),
+            ),
+            patch("backend.routes.rides.record_period_transition", AsyncMock()),
+            patch("backend.routes.rides.asyncio.create_task", MagicMock()),
+        ):
+            await rides_mod.match_driver_to_ride(ride_id=self._RIDE_BASE["id"])
+
+        ws_payloads = [c.args[0] for c in send_personal_mock.call_args_list]
+        dispatch_msgs = [p for p in ws_payloads if p.get("type") == "new_ride_assignment"]
+        assert dispatch_msgs, "Expected a new_ride_assignment WS event"
+        assert dispatch_msgs[0]["countdown_seconds"] == 22, (
+            f"Expected countdown_seconds=22 from app_settings, got {dispatch_msgs[0].get('countdown_seconds')}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_offer_expiry_notifies_driver(self):
+        """_offer_timeout_handler must also send ride_offer_expired to the driver."""
+        from backend.routes import rides as rides_mod
+
+        ride = {
+            "id": "ride_disp_2",
+            "rider_id": "rider_disp_2",
+            "driver_id": "driver_disp_2",
+            "status": "driver_assigned",
+        }
+        driver_row = {"id": "driver_disp_2", "user_id": "user_driver_disp_2"}
+
+        send_personal_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.rides.asyncio.sleep", new_callable=AsyncMock),
+            patch("backend.routes.rides.db") as mock_db,
+            patch("backend.routes.rides.match_driver_to_ride", new_callable=AsyncMock),
+            patch("backend.routes.rides.manager.send_personal_message", send_personal_mock),
+            patch("backend.routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=driver_row)),
+            patch("backend.routes.rides.record_period_transition", AsyncMock()),
+        ):
+            mock_db.find_one = AsyncMock(return_value=ride)
+            mock_db.update_one = AsyncMock()
+
+            await rides_mod._offer_timeout_handler(
+                "ride_disp_2", "driver_disp_2", rider_id="rider_disp_2", timeout_seconds=30
+            )
+
+        events = [(c.args[0]["type"], c.args[1]) for c in send_personal_mock.call_args_list]
+        assert ("driver_timeout", "rider_rider_disp_2") in events
+        assert ("ride_offer_expired", "driver_user_driver_disp_2") in events

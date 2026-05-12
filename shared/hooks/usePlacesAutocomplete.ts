@@ -46,7 +46,6 @@ export function usePlacesAutocomplete(
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    console.log('[DEBUG hook] effect fired — input:', JSON.stringify(input), 'bias:', bias ? `${bias.lat},${bias.lng}` : 'NULL');
     if (!input || input.length < MIN_QUERY_LEN) {
       setPredictions([]);
       setLoading(false);
@@ -66,14 +65,11 @@ export function usePlacesAutocomplete(
         if (query.location) params.set('location', query.location);
         if (query.radius != null) params.set('radius', String(query.radius));
 
-        console.log('[DEBUG hook] FIRING request — url:', `/maps/places/autocomplete?${params.toString()}`);
-
         const { data } = await api.get<{ predictions: PlacePrediction[] }>(
           `/maps/places/autocomplete?${params.toString()}`,
         );
         // Discard if a newer request has started since this one fired.
         if (mySeq !== requestSeqRef.current) return;
-        console.log('[DEBUG hook] got', data?.predictions?.length ?? 0, 'results, top:', data?.predictions?.[0]?.description?.slice(0, 50));
         setPredictions(data?.predictions ?? []);
       } catch {
         if (mySeq !== requestSeqRef.current) return;

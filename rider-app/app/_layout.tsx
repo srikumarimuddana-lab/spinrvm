@@ -190,22 +190,13 @@ export default function RootLayout() {
         try {
           const AsyncStorage = require('@react-native-async-storage/async-storage').default;
           const saved = await AsyncStorage.getItem('spinr_last_location');
-          console.log('[DEBUG _layout] AsyncStorage spinr_last_location raw:', saved);
           if (saved) {
             const { lat, lng } = JSON.parse(saved);
-            console.log('[DEBUG _layout] Parsed cache lat=', lat, 'lng=', lng, 'types:', typeof lat, typeof lng);
             if (typeof lat === 'number' && typeof lng === 'number') {
               useRideStore.getState().setUserLocation({ latitude: lat, longitude: lng });
-              console.log('[DEBUG _layout] seeded userLocation from cache');
-            } else {
-              console.log('[DEBUG _layout] cache values not numbers, skipped');
             }
-          } else {
-            console.log('[DEBUG _layout] no cached location in AsyncStorage');
           }
-        } catch (e) {
-          console.log('[DEBUG _layout] cache read error:', e);
-        }
+        } catch (e) { /* non-fatal — GPS will be fetched fresh by the home screen */ }
 
         await Promise.all([initializeAuth(), initializeLocation(), hydrateWorkProfile()]);
 

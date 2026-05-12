@@ -53,8 +53,6 @@ export default function SearchDestinationScreen() {
     buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
   }>({ visible: false, title: '', message: '', variant: 'info' });
 
-  console.log('[DEBUG search] mount/render — userLocation:', userLocation, 'pickup:', pickup?.lat, pickup?.lng);
-
   // Bias prediction results to the rider's location so e.g. "Walmart"
   // surfaces nearby stores first instead of generic matches across Canada.
   // Fall back to pickup coordinates (often set from GPS on the home screen)
@@ -65,8 +63,6 @@ export default function SearchDestinationScreen() {
     ? { lat: biasLat, lng: biasLng, radiusMeters: 50000 }
     : null;
 
-  console.log('[DEBUG search] bias:', bias ? `${bias.lat},${bias.lng}` : 'NULL', 'source:', userLocation ? 'userLocation' : pickup?.lat ? 'pickup' : 'none');
-
   // Gate: hold the search query until we have a location OR 2 seconds pass.
   // Without this, if GPS hasn't resolved yet the very first request fires with
   // no location= param and Google returns Canada-wide results (Ontario Walmart
@@ -74,21 +70,11 @@ export default function SearchDestinationScreen() {
   // users who have denied location permission.
   const [locationReady, setLocationReady] = useState(!!bias);
   useEffect(() => {
-    if (bias && !locationReady) {
-      console.log('[DEBUG search] locationReady set TRUE via bias arrival');
-      setLocationReady(true);
-    }
+    if (bias && !locationReady) setLocationReady(true);
   }, [bias?.lat, bias?.lng]);
   useEffect(() => {
-    if (locationReady) {
-      console.log('[DEBUG search] locationReady already TRUE on mount');
-      return;
-    }
-    console.log('[DEBUG search] locationReady FALSE — starting 2s timeout');
-    const t = setTimeout(() => {
-      console.log('[DEBUG search] 2s timeout fired, locationReady forced TRUE, bias is:', bias ? `${bias.lat},${bias.lng}` : 'STILL NULL');
-      setLocationReady(true);
-    }, 2000);
+    if (locationReady) return;
+    const t = setTimeout(() => setLocationReady(true), 2000);
     return () => clearTimeout(t);
   }, []);
 
@@ -132,12 +118,9 @@ export default function SearchDestinationScreen() {
     // with DEFAULT_LATITUDE/LONGITUDE (Saskatoon) silently mis-biases place
     // search for riders in other cities — they'd see Saskatoon Walmarts when
     // searching in Regina, for example.
-    console.log('[DEBUG search] useEffect mount — userLocation:', userLocation, 'pickup:', pickup?.lat, pickup?.lng);
     if (!userLocation) {
-      console.log('[DEBUG search] userLocation is NULL, starting GPS fallback');
       (async () => {
         const { status } = await Location.requestForegroundPermissionsAsync();
-        console.log('[DEBUG search] GPS fallback permission:', status);
         if (status !== 'granted') return;
         // Try last-known position first (instant — cached by the OS).
         // This populates userLocation before the user starts typing so the
@@ -146,7 +129,6 @@ export default function SearchDestinationScreen() {
         // time the user has already typed and seen the wrong results.
         try {
           const lastKnown = await Location.getLastKnownPositionAsync();
-          console.log('[DEBUG search] getLastKnown:', lastKnown ? `${lastKnown.coords.latitude},${lastKnown.coords.longitude}` : 'null');
           if (lastKnown) {
             setUserLocation({
               latitude: lastKnown.coords.latitude,
@@ -161,7 +143,6 @@ export default function SearchDestinationScreen() {
           const loc = await Location.getCurrentPositionAsync({
             accuracy: Location.Accuracy.Balanced,
           });
-          console.log('[DEBUG search] getCurrentPosition:', loc.coords.latitude, loc.coords.longitude);
           setUserLocation({
             latitude: loc.coords.latitude,
             longitude: loc.coords.longitude,

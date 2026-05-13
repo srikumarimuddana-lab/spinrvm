@@ -37,6 +37,7 @@ import {
   onTokenRefresh,
 } from '@shared/services/firebase';
 import { handleScheduledRideReminderFCM } from '../hooks/useScheduledRideReminder';
+import { useRideStatusNotification } from '../hooks/useRideStatusNotification';
 import CustomAlert from '@shared/components/CustomAlert';
 import { useAlertStore } from '../store/alertStore';
 
@@ -258,6 +259,19 @@ export default function RootLayout() {
               vibrationPattern: [0, 250, 150, 250],
               lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
               enableVibrate: true,
+            });
+            // Persistent live-status channel — LOW importance so updating
+            // the notification text doesn't re-ring the phone. A single
+            // sticky notification on this channel shows ride progress while
+            // the app is backgrounded, mirroring delivery-app behaviour.
+            await Notifications.setNotificationChannelAsync('ride-status-live', {
+              name: 'Live Ride Status',
+              description: 'Shows current ride progress in the notification bar.',
+              importance: Notifications.AndroidImportance.LOW,
+              sound: null,
+              vibrationPattern: [0],
+              lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+              enableVibrate: false,
             });
           } catch (e) {
             console.log('[Push] Android channel setup failed:', e);
@@ -530,6 +544,7 @@ function RootLayoutInner({
   wsState: import('../hooks/useRiderSocket').RiderSocketState;
 }) {
   const { isDark } = useTheme();
+  useRideStatusNotification();
   return (
     <ErrorBoundary>
       <OfflineBanner visible={isOffline} onVisibilityChange={setIsOffline} />

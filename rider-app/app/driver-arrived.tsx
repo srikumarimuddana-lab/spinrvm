@@ -57,7 +57,15 @@ export default function DriverArrivedScreen() {
         { text: 'Keep Ride', style: 'cancel' },
         {
           text: `Cancel & Pay $${cancellationFee.toFixed(2)}`, style: 'destructive',
-          onPress: async () => { await cancelRide(); clearRide(); router.replace('/(tabs)' as any); },
+          onPress: async () => {
+            try {
+              await cancelRide();
+              clearRide();
+              router.replace('/(tabs)' as any);
+            } catch {
+              setAlertState({ visible: true, title: 'Could not cancel', message: 'The server rejected the request. Please try again.', variant: 'error', buttons: [{ text: 'OK', style: 'default' }] });
+            }
+          },
         },
       ],
     });

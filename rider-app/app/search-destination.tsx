@@ -119,7 +119,11 @@ export default function SearchDestinationScreen() {
     // searching in Regina, for example.
     if (!userLocation) {
       (async () => {
-        const { status } = await Location.requestForegroundPermissionsAsync();
+        let { status } = await Location.getForegroundPermissionsAsync();
+        if (status !== 'granted') {
+          const res = await Location.requestForegroundPermissionsAsync();
+          status = res.status;
+        }
         if (status !== 'granted') return;
         try {
           const loc = await Location.getCurrentPositionAsync({

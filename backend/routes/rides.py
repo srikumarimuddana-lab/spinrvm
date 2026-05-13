@@ -1530,6 +1530,24 @@ async def get_ride_history(
 
 
 @ride_read_limit
+@api_router.get("/scheduled")
+async def get_scheduled_rides(request: Request = None, current_user: dict = Depends(get_current_user)):
+    """Get all upcoming scheduled rides for the current rider."""
+    rides = await db_supabase.get_rows(
+        "rides",
+        {
+            "rider_id": current_user["id"],
+            "is_scheduled": True,
+            "status": {"$nin": [RideStatus.COMPLETED, RideStatus.CANCELLED]},
+        },
+        order="scheduled_time",
+        desc=False,
+        limit=50,
+    )
+    return rides
+
+
+@ride_read_limit
 @api_router.get("/{ride_id}")
 async def get_ride(ride_id: str, request: Request = None, current_user: dict = Depends(get_current_user)):
     """Fetch details of a specific ride"""
@@ -1645,7 +1663,7 @@ async def get_ride(ride_id: str, request: Request = None, current_user: dict = D
                     notified_dt = driver_notified_at
                 if notified_dt.tzinfo is None:
                     notified_dt = notified_dt.replace(tzinfo=timezone.utc)
-                expires_dt = notified_dt + timedelta(seconds=offer_timeout_seconds)
+                expires_dt = notified_dt + timedelta(seconds=offer_timeout_seconds + 15)
                 ride["offer_expires_at"] = expires_dt.isoformat()
             except Exception:
                 ride["offer_expires_at"] = None
@@ -2685,14 +2703,6 @@ async def send_ride_message(
         await manager.send_personal_message({**msg_data, "type": "chat_message"}, target)
 
     return {"success": True, "message": msg_data}
-
-
-@api_router.get("/scheduled")
-async def get_scheduled_rides(current_user: dict = Depends(get_current_user)):
-    """Get all upcoming scheduled rides for the current rider."""
-    rides_cursor = db_supabase.get_rides_for_user(current_user, limit=100)
-    rides = await rides_cursor.to_list(length=50) if hasattr(rides_cursor, "to_list") else list(rides_cursor)
-    return rides
 
 
 @api_router.delete("/scheduled/{ride_id}")

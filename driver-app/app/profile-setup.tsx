@@ -117,7 +117,11 @@ export default function ProfileSetupScreen() {
 
       // Try to auto-select service area based on current location
       try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
+        let { status } = await Location.getForegroundPermissionsAsync();
+        if (status !== 'granted') {
+          const res = await Location.requestForegroundPermissionsAsync();
+          status = res.status;
+        }
         if (status === 'granted') {
           const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
           const geocode = await Location.reverseGeocodeAsync({

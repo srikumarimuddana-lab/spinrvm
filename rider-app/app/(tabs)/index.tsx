@@ -52,6 +52,7 @@ export default function HomeScreen() {
     title: string;
     message: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
+    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
   }>({ visible: false, title: '', message: '', variant: 'info' });
   const mapRef = useRef<any>(null);
   const lastFetchedAt = useRef<number>(0);
@@ -97,6 +98,8 @@ export default function HomeScreen() {
     const AsyncStorage = require('@react-native-async-storage/async-storage').default;
     const prePromptShown = await AsyncStorage.getItem('spinr_location_preprompt_shown').catch(() => null);
     if (!prePromptShown) {
+      // Mark seen BEFORE showing so a crash or unexpected dismiss can't loop the dialog.
+      await AsyncStorage.setItem('spinr_location_preprompt_shown', '1').catch(() => {});
       await new Promise<void>(resolve => {
         setAlertState({
           visible: true,
@@ -107,10 +110,13 @@ export default function HomeScreen() {
           buttons: [{ text: 'Continue', style: 'default', onPress: () => resolve() }],
         });
       });
-      await AsyncStorage.setItem('spinr_location_preprompt_shown', '1').catch(() => {});
     }
 
-    const { status } = await Location.requestForegroundPermissionsAsync();
+    let { status } = await Location.getForegroundPermissionsAsync();
+    if (status !== 'granted') {
+      const res = await Location.requestForegroundPermissionsAsync();
+      status = res.status;
+    }
     if (status !== 'granted') {
       setAlertState({
         visible: true,
@@ -387,7 +393,11 @@ export default function HomeScreen() {
           hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
           onPress={async () => {
           if (!mapRef.current) return;
-          const { status } = await Location.requestForegroundPermissionsAsync();
+          let { status } = await Location.getForegroundPermissionsAsync();
+          if (status !== 'granted') {
+            const res = await Location.requestForegroundPermissionsAsync();
+            status = res.status;
+          }
           if (status !== 'granted') {
             setAlertState({
               visible: true,
@@ -541,7 +551,7 @@ export default function HomeScreen() {
         title={alertState.title}
         message={alertState.message}
         variant={alertState.variant}
-        buttons={[{ text: 'OK', style: 'default' }]}
+        buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
         onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
       />
     </View>

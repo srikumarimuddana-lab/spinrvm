@@ -125,7 +125,11 @@ export async function startBackgroundLocation(): Promise<boolean> {
     return true;
   }
 
-  const { status } = await Location.requestBackgroundPermissionsAsync();
+  let { status } = await Location.getBackgroundPermissionsAsync();
+  if (status !== 'granted') {
+    const res = await Location.requestBackgroundPermissionsAsync();
+    status = res.status;
+  }
   if (status !== 'granted') {
     console.warn('[BgLocation] Background permission not granted');
     return false;

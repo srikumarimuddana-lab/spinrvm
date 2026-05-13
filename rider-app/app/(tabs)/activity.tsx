@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo, useCallback, useRef } from 'react';
+import React, { useState, useMemo, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import SkeletonBox from '../../components/SkeletonBox';
 import { useRideStore } from '../../store/rideStore';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -57,15 +58,11 @@ export default function ActivityScreen() {
   const { t } = useTranslation();
 
   const fetchPage = useCallback(async (cursor?: string) => {
-    try {
-      const url = cursor
-        ? `/rides/history?limit=${PAGE_LIMIT}&before=${cursor}`
-        : `/rides/history?limit=${PAGE_LIMIT}`;
-      const res = await api.get<{ rides: RideHistory[]; next_cursor: string | null }>(url).catch(() => ({ data: { rides: [], next_cursor: null } }));
-      return { rides: res.data?.rides ?? [], next_cursor: res.data?.next_cursor ?? null };
-    } catch {
-      return { rides: [], next_cursor: null };
-    }
+    const url = cursor
+      ? `/rides/history?limit=${PAGE_LIMIT}&before=${cursor}`
+      : `/rides/history?limit=${PAGE_LIMIT}`;
+    const res = await api.get<{ rides: RideHistory[]; next_cursor: string | null }>(url);
+    return { rides: res.data?.rides ?? [], next_cursor: res.data?.next_cursor ?? null };
   }, []);
 
   const fetchData = useCallback(async () => {
@@ -104,10 +101,19 @@ export default function ActivityScreen() {
     }
   }, [loadingMore, nextCursor, fetchPage]);
 
-  useEffect(() => {
-    fetchData();
-    fetchScheduledRides();
-  }, []);
+  const lastFetchedAt = useRef<number>(0);
+  const ACTIVITY_TTL_MS = 30 * 1000; // re-fetch if tab hasn't been loaded in 30s
+
+  useFocusEffect(
+    useCallback(() => {
+      const now = Date.now();
+      if (now - lastFetchedAt.current > ACTIVITY_TTL_MS) {
+        lastFetchedAt.current = now;
+        fetchData();
+        fetchScheduledRides();
+      }
+    }, [fetchData, fetchScheduledRides])
+  );
 
   const onRefresh = () => {
     setRefreshing(true);

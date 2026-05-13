@@ -62,8 +62,6 @@ export default function AccountScreen() {
       .catch(() => {});
   }, []);
 
-  // Refresh user profile each time the tab comes into focus — mirrors the
-  // driver-app profile screen so both sides behave identically.
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
@@ -102,7 +100,7 @@ export default function AccountScreen() {
     try {
       await updateProfileImage(uri);
       showFeedback('Photo Updated', 'Your profile photo has been submitted for review.', 'success');
-    } catch (err: any) {
+    } catch {
       showFeedback('Upload Failed', 'Photo upload failed. Please try again.', 'danger');
     } finally {
       setIsUploadingPhoto(false);
@@ -159,15 +157,24 @@ export default function AccountScreen() {
     return phone;
   };
 
+  // Root is ScrollView — no outer View constraining it.
+  // This avoids the Android APK flex-height issue where a View→ScrollView
+  // hierarchy can prevent the scroll gesture from registering on native builds.
   return (
-    <View style={styles.container}>
+    <>
       <StatusBar barStyle="light-content" />
       <ScrollView
-        contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) + 24 }}
+        style={styles.scrollRoot}
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingBottom: Math.max(insets.bottom, 16) + 24 },
+        ]}
         showsVerticalScrollIndicator={false}
+        overScrollMode="always"
+        bounces={false}
       >
 
-        {/* Premium Header — mirrors driver-app/app/driver/profile.tsx hero */}
+        {/* Header hero */}
         <LinearGradient
           colors={[colors.primary, colors.primaryDark]}
           style={[styles.headerHero, { paddingTop: insets.top + 20 }]}
@@ -347,7 +354,7 @@ export default function AccountScreen() {
             </View>
           </View>
 
-          {/* Work Profile — only when at least one company is linked */}
+          {/* Work Profile */}
           {profiles.length > 0 && (
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Work</Text>
@@ -420,7 +427,7 @@ export default function AccountScreen() {
             </View>
           </View>
 
-          {/* Settings — mirrors driver's final section, ends with Sign Out */}
+          {/* Settings */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Settings</Text>
             <View style={styles.card}>
@@ -438,7 +445,6 @@ export default function AccountScreen() {
                 onPress={() => router.push('/legal?type=tos' as any)}
               />
               <View style={styles.cardDivider} />
-              {/* R-P2-44: Privacy policy link (PIPEDA) */}
               <TouchableOpacity
                 style={styles.actionRow}
                 activeOpacity={0.7}
@@ -451,7 +457,6 @@ export default function AccountScreen() {
                 <Ionicons name="open-outline" size={16} color="#D1D5DB" />
               </TouchableOpacity>
               <View style={styles.cardDivider} />
-              {/* R-P2-43: DSAR — Request my data (PIPEDA) */}
               <TouchableOpacity
                 style={styles.actionRow}
                 activeOpacity={0.7}
@@ -464,7 +469,6 @@ export default function AccountScreen() {
                 <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
               </TouchableOpacity>
               <View style={styles.cardDivider} />
-              {/* R-P2-43: Delete Account (PIPEDA right to erasure) */}
               <TouchableOpacity
                 style={styles.actionRow}
                 activeOpacity={0.7}
@@ -486,7 +490,6 @@ export default function AccountScreen() {
             </View>
           </View>
 
-          {/* Company info footer — shows only when admin populated it */}
           {(companyInfo.address || companyInfo.phone || companyInfo.email || companyInfo.website) && (
             <View style={styles.companySection}>
               <Text style={styles.companyName}>{companyInfo.name || 'Spinr'}</Text>
@@ -499,7 +502,7 @@ export default function AccountScreen() {
         </View>
       </ScrollView>
 
-      {/* Alerts */}
+      {/* Alerts — Modals render above the view hierarchy, safe in a fragment */}
       <CustomAlert
         visible={showLogoutAlert}
         title="Sign Out"
@@ -525,7 +528,6 @@ export default function AccountScreen() {
         ]}
         onClose={() => setShowPhotoPickerAlert(false)}
       />
-      {/* R-P2-43: Delete Account — regulatory retention warning (PIPEDA + SK Transportation Act) */}
       <CustomAlert
         visible={showDeleteAccountAlert}
         title="Delete Account"
@@ -551,7 +553,6 @@ export default function AccountScreen() {
         ]}
         onClose={() => setShowDeleteAccountAlert(false)}
       />
-      {/* Second confirmation to prevent accidental deletion */}
       <CustomAlert
         visible={showDeleteConfirmAlert}
         title="Confirm Deletion"
@@ -568,7 +569,6 @@ export default function AccountScreen() {
         ]}
         onClose={() => setShowDeleteConfirmAlert(false)}
       />
-      {/* R-P2-43: DSAR — Request my data */}
       <CustomAlert
         visible={showDsarAlert}
         title="Request My Data"
@@ -599,7 +599,7 @@ export default function AccountScreen() {
         buttons={[{ text: 'OK', style: 'default' }]}
         onClose={() => setFeedbackAlert(prev => ({ ...prev, visible: false }))}
       />
-    </View>
+    </>
   );
 }
 
@@ -622,9 +622,15 @@ function MenuRow({
 }
 
 function createStyles(colors: ThemeColors) { return StyleSheet.create({
-  container: {
+  // ScrollView is the root — no outer container View.
+  // flex: 1 here so the scroll view fills the tab screen area,
+  // but contentContainerStyle controls the actual scrollable content height.
+  scrollRoot: {
     flex: 1,
     backgroundColor: colors.surfaceLight,
+  },
+  scrollContent: {
+    flexGrow: 1,
   },
 
   // ── Hero ──
@@ -798,7 +804,7 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
     fontWeight: '700',
   },
 
-  // ── Card + rows (static info) ──
+  // ── Card rows ──
   card: {
     backgroundColor: colors.surface,
     borderRadius: 24,
@@ -847,7 +853,7 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
     marginTop: 2,
   },
 
-  // ── Menu action rows ──
+  // ── Menu rows ──
   actionRow: {
     flexDirection: 'row',
     alignItems: 'center',

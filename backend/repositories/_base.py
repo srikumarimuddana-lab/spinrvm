@@ -16,6 +16,7 @@ import time as _time
 from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
 from datetime import date, datetime
 from decimal import Decimal
+from enum import Enum as _Enum
 from typing import Any, Callable, Dict, List, Literal, Optional, TypeVar
 
 try:
@@ -463,7 +464,11 @@ def _apply_filters(q, filters: Optional[Dict[str, Any]]):
             continue
         if isinstance(v, dict):
             if "$in" in v and isinstance(v["$in"], (list, tuple)):
-                q = q.in_(k, list(v["$in"]))
+                # str(SomeStrEnum.VALUE) returns "ClassName.VALUE" in Python
+                # 3.12, not the enum's string value. Explicitly unwrap enum
+                # instances so PostgREST sees plain strings, not repr garbage.
+                clean = [x.value if isinstance(x, _Enum) else x for x in v["$in"]]
+                q = q.in_(k, clean)
             elif "$gt" in v:
                 q = q.gt(k, v["$gt"])
             elif "$gte" in v:

@@ -21,7 +21,6 @@ import { Ionicons } from '@expo/vector-icons';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import { useRideStore } from '../store/rideStore';
-import { useRiderSocket } from '../hooks/useRiderSocket';
 import { RideStatus } from '../constants/rideStatus';
 import api from '@shared/api/client';
 import CustomAlert from '@shared/components/CustomAlert';
@@ -44,8 +43,8 @@ function DriverArrivingScreenContent() {
   const {
     currentRide, currentDriver, fetchRide, triggerEmergency,
     isLoading, error, driverEtaSeconds, cancelRide, clearRide,
+    wsConnected,
   } = useRideStore();
-  const { wsConnected } = useRiderSocket();
   const mapRef = useRef<MapView>(null);
 
   const [mapEtaMinutes, setMapEtaMinutes] = useState<number | null>(null);

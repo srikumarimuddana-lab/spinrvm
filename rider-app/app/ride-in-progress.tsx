@@ -21,7 +21,6 @@ import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import BottomSheet, { BottomSheetScrollView } from '../components/SafeBottomSheet';
 import { useRideStore } from '../store/rideStore';
-import { useRiderSocket } from '../hooks/useRiderSocket';
 import { RideStatus } from '../constants/rideStatus';
 import api from '@shared/api/client';
 import CustomAlert from '@shared/components/CustomAlert';
@@ -33,8 +32,7 @@ import type { ThemeColors } from '@shared/theme/index';
 function RideInProgressScreenContent() {
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
-  const { currentRide, currentDriver, fetchRide, cancelRide, clearRide, triggerEmergency, isLoading, error } = useRideStore();
-  const { wsConnected } = useRiderSocket();
+  const { currentRide, currentDriver, fetchRide, cancelRide, clearRide, triggerEmergency, isLoading, error, wsConnected } = useRideStore();
   const [eta, setEta] = useState(15);
   const [estimatedTime, setEstimatedTime] = useState('12:45 PM');
   const [currentLocation, setCurrentLocation] = useState('4th Avenue North');

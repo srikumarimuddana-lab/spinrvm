@@ -229,6 +229,9 @@ interface RideState {
   updateDriverLocation: (lat: number, lng: number, speed?: number | null, heading?: number | null, etaSeconds?: number | null) => void;
   applyRideStatusFromWS: (rideId: string, status: string, extra?: Record<string, unknown>) => void;
 
+  wsConnected: boolean;
+  setWsConnected: (v: boolean) => void;
+
   // Chat
   chatMessages: ChatMessage[];
   addChatMessage: (msg: ChatMessage) => void;
@@ -247,6 +250,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   driverEtaSeconds: null,
   _lastWsDriverPositionAt: 0,
   chatMessages: [],
+  wsConnected: false,
   savedAddresses: [],
   recentSearches: [],
   availablePromos: [],
@@ -652,6 +656,8 @@ export const useRideStore = create<RideState>((set, get) => ({
       set({ error: isErrorLike(error) ? error.message : 'Failed to delete address' });
     }
   },
+
+  setWsConnected: (v) => set({ wsConnected: v }),
 
   addChatMessage: (msg) => {
     const { chatMessages } = get();

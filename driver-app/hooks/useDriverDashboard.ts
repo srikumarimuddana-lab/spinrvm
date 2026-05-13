@@ -467,6 +467,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           rider_rating: data.rider_rating,
           requires_wav: data.requires_wav === true,
           countdown_seconds: typeof data.countdown_seconds === 'number' ? data.countdown_seconds : undefined,
+          offer_expires_at: data.offer_expires_at,
         });
         break;
       }
@@ -963,6 +964,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           rider_name: data.rider_name,
           rider_rating: data.rider_rating ? parseFloat(data.rider_rating) : undefined,
           countdown_seconds: Number.isFinite(countdownNum) ? countdownNum : undefined,
+          offer_expires_at: data.offer_expires_at,
         });
       } else if (data?.type === 'ride_cancelled') {
         showDashAlert('Ride Cancelled', 'The rider has cancelled this ride.', 'warning');

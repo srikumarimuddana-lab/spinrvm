@@ -81,17 +81,30 @@ export function useRiderSocket() {
         break;
 
       // ── Ride lifecycle transitions ──────────────────────────────
+      // Apply the status optimistically first so the UI transitions
+      // instantly, then fetchRide fills in the full details (driver
+      // info, fare, etc.). Without the optimistic update the rider
+      // stays on "searching" for 1-2s while the HTTP call completes.
       case 'driver_accepted':
-        if (rideId) fetchRide(rideId);
+        if (rideId) {
+          applyRideStatusFromWS(rideId, RideStatus.DRIVER_ACCEPTED);
+          fetchRide(rideId);
+        }
         break;
 
       case 'driver_arrived':
         Vibration.vibrate([0, 300, 150, 300]);
-        if (rideId) fetchRide(rideId);
+        if (rideId) {
+          applyRideStatusFromWS(rideId, RideStatus.DRIVER_ARRIVED);
+          fetchRide(rideId);
+        }
         break;
 
       case 'ride_started':
-        if (rideId) fetchRide(rideId);
+        if (rideId) {
+          applyRideStatusFromWS(rideId, RideStatus.IN_PROGRESS);
+          fetchRide(rideId);
+        }
         break;
 
       case 'ride_completed':

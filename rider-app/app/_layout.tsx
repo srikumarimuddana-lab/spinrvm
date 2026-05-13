@@ -541,63 +541,55 @@ function RootLayoutInner({
         </View>
       )}
       <GestureHandlerRootView style={{ flex: 1 }}>
-        <View style={{ flex: 1 }}>
-          <SafeAreaProvider>
-            <StatusBar style={isOffline ? "light" : isDark ? "light" : "dark"} />
-            {/* MaybeStripeProvider defers mounting the native Stripe SDK until
-                the real publishable key is fetched from the backend. Passing
-                an empty string (or a malformed key) to StripeProvider's native
-                module throws IllegalArgumentException on Android and crashes
-                the app. StripeKeyContext exposes the key to child screens so
-                they can gate CardField rendering independently. */}
-            <StripeKeyContext.Provider value={stripePublishableKey}>
-            <MaybeStripeProvider publishableKey={stripePublishableKey}>
-            <Stack
-              screenOptions={{
-                headerShown: false,
-                animation: 'slide_from_right',
-              }}
-            >
-              {/* Auth */}
-              <Stack.Screen name="index" options={{ animation: 'none' }} />
-              <Stack.Screen name="login" />
-              <Stack.Screen name="otp" />
-              <Stack.Screen name="profile-setup" options={{ headerShown: false }} />
+        <SafeAreaProvider>
+          <StatusBar style={isOffline ? "light" : isDark ? "light" : "dark"} />
+          <StripeKeyContext.Provider value={stripePublishableKey}>
+          <MaybeStripeProvider publishableKey={stripePublishableKey}>
+          <Stack
+            screenOptions={{
+              headerShown: false,
+              animation: 'slide_from_right',
+            }}
+          >
+            {/* Auth */}
+            <Stack.Screen name="index" options={{ animation: 'none' }} />
+            <Stack.Screen name="login" />
+            <Stack.Screen name="otp" />
+            <Stack.Screen name="profile-setup" options={{ headerShown: false }} />
 
-              {/* Main — instant cut from splash so the home tab's SOSButton
-                  doesn't flash through a cross-fade transition. */}
-              <Stack.Screen name="(tabs)" options={{ animation: 'none' }} />
+            {/* Main — instant cut from splash so the home tab's SOSButton
+                doesn't flash through a cross-fade transition. */}
+            <Stack.Screen name="(tabs)" options={{ animation: 'none' }} />
 
-              {/* Ride flow */}
-              <Stack.Screen name="search-destination" options={{ animation: 'slide_from_bottom' }} />
-              <Stack.Screen name="pick-on-map" options={{ animation: 'slide_from_bottom', headerShown: false }} />
-              <Stack.Screen name="confirm-pickup" />
-              <Stack.Screen name="ride-options" />
-              <Stack.Screen name="ride-status" options={{ gestureEnabled: false }} />
-              <Stack.Screen name="driver-arriving" options={{ gestureEnabled: false }} />
-              <Stack.Screen name="driver-arrived" options={{ gestureEnabled: false }} />
-              <Stack.Screen name="ride-in-progress" options={{ gestureEnabled: false }} />
-              <Stack.Screen name="ride-completed" options={{ gestureEnabled: false }} />
-              <Stack.Screen name="chat-driver" />
+            {/* Ride flow */}
+            <Stack.Screen name="search-destination" options={{ animation: 'slide_from_bottom' }} />
+            <Stack.Screen name="pick-on-map" options={{ animation: 'slide_from_bottom', headerShown: false }} />
+            <Stack.Screen name="confirm-pickup" />
+            <Stack.Screen name="ride-options" />
+            <Stack.Screen name="ride-status" options={{ gestureEnabled: false }} />
+            <Stack.Screen name="driver-arriving" options={{ gestureEnabled: false }} />
+            <Stack.Screen name="driver-arrived" options={{ gestureEnabled: false }} />
+            <Stack.Screen name="ride-in-progress" options={{ gestureEnabled: false }} />
+            <Stack.Screen name="ride-completed" options={{ gestureEnabled: false }} />
+            <Stack.Screen name="chat-driver" />
 
-              {/* Account */}
-              <Stack.Screen name="manage-cards" />
-              <Stack.Screen name="saved-places" />
-              <Stack.Screen name="promotions" />
-              <Stack.Screen name="privacy-settings" />
-              <Stack.Screen name="emergency-contacts" />
-              <Stack.Screen name="report-safety" />
-              <Stack.Screen name="support" />
-              <Stack.Screen name="legal" />
-              <Stack.Screen name="become-driver" />
-              <Stack.Screen name="ride-details" />
-              <Stack.Screen name="settings" />
-            </Stack>
-            </MaybeStripeProvider>
-            </StripeKeyContext.Provider>
-            <GlobalAlert />
-          </SafeAreaProvider>
-        </View>
+            {/* Account */}
+            <Stack.Screen name="manage-cards" />
+            <Stack.Screen name="saved-places" />
+            <Stack.Screen name="promotions" />
+            <Stack.Screen name="privacy-settings" />
+            <Stack.Screen name="emergency-contacts" />
+            <Stack.Screen name="report-safety" />
+            <Stack.Screen name="support" />
+            <Stack.Screen name="legal" />
+            <Stack.Screen name="become-driver" />
+            <Stack.Screen name="ride-details" />
+            <Stack.Screen name="settings" />
+          </Stack>
+          </MaybeStripeProvider>
+          </StripeKeyContext.Provider>
+          <GlobalAlert />
+        </SafeAreaProvider>
       </GestureHandlerRootView>
     </ErrorBoundary>
   );

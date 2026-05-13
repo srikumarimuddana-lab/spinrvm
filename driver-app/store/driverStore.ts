@@ -589,7 +589,25 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                 // the ride_offered countdown screen instead of jumping to the
                 // post-accept navigation panel.
                 if (ride.status === 'driver_assigned') {
-                    const countdown = get().configuredCountdownSeconds || FALLBACK_COUNTDOWN;
+                    const fullTimeout = get().configuredCountdownSeconds || FALLBACK_COUNTDOWN;
+                    // Use the server's offer_expires_at to compute remaining
+                    // time — otherwise the client always restarts at 15s even
+                    // if the backend timeout has nearly elapsed, causing the
+                    // offer to vanish when the server-side handler fires.
+                    let countdown = fullTimeout;
+                    const offerExpiresAt = (ride as any).offer_expires_at as string | undefined;
+                    if (offerExpiresAt) {
+                        const remaining = Math.floor(
+                            (new Date(offerExpiresAt).getTime() - Date.now()) / 1000,
+                        );
+                        countdown = Math.max(0, remaining);
+                    }
+                    if (countdown <= 0) {
+                        // Offer already expired server-side — don't show it.
+                        set({ activeRide: null, rideState: 'idle', incomingRide: null, countdownSeconds: 0 });
+                        AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
+                        return;
+                    }
                     const riderName = rider
                         ? (rider.first_name || rider.name || undefined)
                         : undefined;
@@ -638,15 +656,18 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                 // No active ride on the server — reset everything including
                 // rideState so a stale AsyncStorage restore (from hydrateDriverRideState)
                 // doesn't leave the idle panel hidden indefinitely.
-                set({ activeRide: null, rideState: 'idle' });
+                set({ activeRide: null, rideState: 'idle', incomingRide: null, countdownSeconds: 0 });
                 AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
             }
         } catch {
-            // On any error (500, network, etc.) reset to idle — it is safer
-            // to show the idle panel than to leave a stale rideState from
-            // AsyncStorage that hides the GO button and shows a blank panel.
-            set({ rideState: 'idle', activeRide: null });
-            AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
+            // On network errors, don't wipe a live offer — the driver is
+            // trying to accept and a transient 500/timeout shouldn't kill
+            // the panel. Only reset if we were in a non-offer state where
+            // stale AsyncStorage data could hide the GO button.
+            if (get().rideState !== 'ride_offered') {
+                set({ rideState: 'idle', activeRide: null });
+                AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
+            }
         }
     },
 
@@ -742,7 +763,12 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                 await AsyncStorage.removeItem(DRIVER_RIDE_KEY);
                 return;
             }
-            // Only restore if no active ride is already in memory.
+            // Don't overwrite a live offer — the pending-offer hydration
+            // (from FCM AsyncStorage) runs before this and sets
+            // rideState='ride_offered'. Overwriting it with stale cached
+            // state causes the offer to vanish until fetchActiveRide
+            // corrects it.
+            if (get().rideState === 'ride_offered') return;
             if (!get().activeRide) {
                 set({ activeRide, rideState });
             }

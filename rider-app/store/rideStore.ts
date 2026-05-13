@@ -537,6 +537,7 @@ export const useRideStore = create<RideState>((set, get) => ({
     } catch (error: unknown) {
       recordNonFatal(error, { store: 'rideStore', action: 'cancelRide' });
       set({ isLoading: false, error: isErrorLike(error) ? error.message : 'Failed to cancel ride' });
+      throw error;
     }
   },
 

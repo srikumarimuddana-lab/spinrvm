@@ -214,7 +214,12 @@ export default function RootLayout() {
           }
         } catch (e) { /* non-fatal — GPS will be fetched fresh by the home screen */ }
 
-        await Promise.all([initializeAuth(), initializeLocation(), hydrateWorkProfile()]);
+        await Promise.all([
+          initializeAuth(),
+          initializeLocation(),
+          hydrateWorkProfile(),
+          useRideStore.getState().hydrateActiveRide(),
+        ]);
 
         // Firebase native modules: Crashlytics + App Check. FCM token
         // registration is deferred to a separate effect that waits for
@@ -427,6 +432,25 @@ export default function RootLayout() {
     return () => clearTimeout(timer);
   }, [isAuthInitialized]);
 
+  // Redirect to the active ride screen on cold start so the rider resumes
+  // exactly where they left off (industry standard: Uber/Lyft both do this).
+  useEffect(() => {
+    if (!isAuthInitialized || !isLocationInitialized) return;
+    const timer = setTimeout(() => {
+      const ride = useRideStore.getState().currentRide;
+      if (!ride?.id) return;
+      const s = ride.status;
+      if (s === 'searching' || s === 'driver_assigned' || s === 'driver_accepted') {
+        router.push({ pathname: '/driver-arriving', params: { rideId: ride.id } } as any);
+      } else if (s === 'driver_arrived') {
+        router.push({ pathname: '/driver-arrived', params: { rideId: ride.id } } as any);
+      } else if (s === 'in_progress') {
+        router.push({ pathname: '/ride-in-progress', params: { rideId: ride.id } } as any);
+      }
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [isAuthInitialized, isLocationInitialized]);
+
   // Clear ride session data when the user logs out so a subsequent login
   // doesn't show the previous session's ride, driver, or chat state.
   const prevAuthTokenRef = useRef(authToken);
@@ -547,8 +571,8 @@ function RootLayoutInner({
               {/* Ride flow */}
               <Stack.Screen name="search-destination" options={{ animation: 'slide_from_bottom' }} />
               <Stack.Screen name="pick-on-map" options={{ animation: 'slide_from_bottom', headerShown: false }} />
+              <Stack.Screen name="confirm-pickup" />
               <Stack.Screen name="ride-options" />
-              <Stack.Screen name="payment-confirm" />
               <Stack.Screen name="ride-status" options={{ gestureEnabled: false }} />
               <Stack.Screen name="driver-arriving" options={{ gestureEnabled: false }} />
               <Stack.Screen name="driver-arrived" options={{ gestureEnabled: false }} />

@@ -33,7 +33,7 @@ const RECONNECT_DELAYS = [1000, 2000, 5000, 10000, 30000];
 const _toFiniteCoord = (v: unknown): number | null => {
   const n = typeof v === 'number' ? v : typeof v === 'string' ? parseFloat(v) : NaN;
   if (!Number.isFinite(n)) return null;
-  if (n < -90 || n > 180) return null; // loose bounds; rejects 0/0 only if pickup+dropoff both zero, handled by caller
+  if (n < -180 || n > 180) return null; // valid range for both lat (-90..90) and lng (-180..180)
   return n;
 };
 

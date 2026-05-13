@@ -19,7 +19,7 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
-import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
+import BottomSheet, { BottomSheetScrollView } from '../components/SafeBottomSheet';
 import { useRideStore } from '../store/rideStore';
 import { useRiderSocket } from '../hooks/useRiderSocket';
 import { RideStatus } from '../constants/rideStatus';
@@ -48,7 +48,7 @@ function RideInProgressScreenContent() {
     buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
   }>({ visible: false, title: '', message: '', variant: 'info' });
   const mapRef = React.useRef<MapView>(null);
-  const bottomSheetRef = React.useRef<BottomSheet>(null);
+  const bottomSheetRef = React.useRef<any>(null);
 
   const { height, width } = useWindowDimensions();
   const isLandscape = height < width;

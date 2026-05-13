@@ -292,7 +292,7 @@ export default function SearchDestinationScreen() {
 
   const handleSearchRide = () => {
     if (pickup && dropoff) {
-      router.push('/ride-options');
+      router.push('/confirm-pickup');
     }
   };
 

@@ -162,7 +162,13 @@ export default function AccountScreen() {
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" />
-      <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 90 }} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{ paddingBottom: insets.bottom + 90 }}
+        showsVerticalScrollIndicator={false}
+        nestedScrollEnabled
+        bounces
+      >
 
         {/* Premium Header — mirrors driver-app/app/driver/profile.tsx hero */}
         <LinearGradient

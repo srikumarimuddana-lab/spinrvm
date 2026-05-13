@@ -166,15 +166,30 @@ export default function HomeScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      fetchActiveRide();
+      let cancelled = false;
+
+      (async () => {
+        const result = await fetchActiveRide();
+        if (cancelled || !result?.active || !result.ride) return;
+        const s = result.ride.status;
+        if (s === 'searching' || s === 'driver_assigned' || s === 'driver_accepted') {
+          router.push({ pathname: '/driver-arriving', params: { rideId: result.ride.id } } as any);
+        } else if (s === 'driver_arrived') {
+          router.push({ pathname: '/driver-arrived', params: { rideId: result.ride.id } } as any);
+        } else if (s === 'in_progress') {
+          router.push({ pathname: '/ride-in-progress', params: { rideId: result.ride.id } } as any);
+        }
+      })();
+
       const now = Date.now();
       if (now - lastFetchedAt.current < HOME_DATA_TTL_MS) {
         refreshLocation(false);
-        return;
+      } else {
+        lastFetchedAt.current = now;
+        fetchHomeData();
       }
-      lastFetchedAt.current = now;
-      fetchHomeData();
-    }, [fetchHomeData, refreshLocation, fetchActiveRide])
+      return () => { cancelled = true; };
+    }, [fetchHomeData, refreshLocation, fetchActiveRide, router])
   );
 
   // App resume — always grab a fresh fix, no cache. `initialRegion` on

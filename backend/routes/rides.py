@@ -2159,8 +2159,8 @@ async def cancel_ride_rider(ride_id: str, request: Request = None, current_user:
     _base_update = {
         "status": RideStatus.CANCELLED,
         "cancelled_at": _now,
-        "cancellation_fee_admin": charged_admin,
-        "cancellation_fee_driver": charged_driver,
+        "cancellation_fee_admin": _f(charged_admin),
+        "cancellation_fee_driver": _f(charged_driver),
         "updated_at": _now,
     }
     # Migration 38 — attribution. Fall back to the legacy payload on

@@ -247,7 +247,11 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       } catch {}
     }
 
-    const { status } = await Location.requestForegroundPermissionsAsync();
+    let { status } = await Location.getForegroundPermissionsAsync();
+    if (status !== 'granted') {
+      const res = await Location.requestForegroundPermissionsAsync();
+      status = res.status;
+    }
     if (status !== 'granted') return null;
 
     if (useCache) {

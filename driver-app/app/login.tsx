@@ -47,7 +47,11 @@ export default function LoginScreen() {
   useEffect(() => {
     (async () => {
       try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
+        let { status } = await Location.getForegroundPermissionsAsync();
+        if (status !== 'granted') {
+          const res = await Location.requestForegroundPermissionsAsync();
+          status = res.status;
+        }
         if (status !== 'granted') return;
 
         // Try fast cached location first

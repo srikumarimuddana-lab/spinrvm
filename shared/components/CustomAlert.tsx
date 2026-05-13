@@ -27,7 +27,7 @@ interface CustomAlertProps {
   title: string;
   message?: string;
   variant?: AlertVariant;
-  icon?: keyof typeof Ionicons.glyphMap;
+  icon?: any;
   buttons?: AlertButton[];
   onClose: () => void;
   // For text input prompts
@@ -119,7 +119,7 @@ export default function CustomAlert({
   }, [visible, showInput]);
 
   const config = variantConfig[variant];
-  const iconName = (icon || config.icon) as keyof typeof Ionicons.glyphMap;
+  const iconName = (icon || config.icon) as any;
 
   const handlePress = async (button: AlertButton) => {
     if (isPending) return;
@@ -240,7 +240,8 @@ function createStyles(colors: ThemeColors) {
       alignItems: 'center',
     },
     backdrop: {
-      ...StyleSheet.absoluteFillObject,
+      position: 'absolute',
+      top: 0, bottom: 0, left: 0, right: 0,
       backgroundColor: 'rgba(0, 0, 0, 0.5)',
     },
     container: {

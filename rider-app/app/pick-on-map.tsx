@@ -34,7 +34,11 @@ export default function PickOnMapScreen() {
 
   useEffect(() => {
     (async () => {
-      const { status } = await Location.requestForegroundPermissionsAsync();
+      let { status } = await Location.getForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        const res = await Location.requestForegroundPermissionsAsync();
+        status = res.status;
+      }
       if (status !== 'granted') {
         setRegion({ latitude: 52.1332, longitude: -106.67, latitudeDelta: 0.02, longitudeDelta: 0.02 });
         setLoading(false);

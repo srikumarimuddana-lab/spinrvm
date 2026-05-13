@@ -636,11 +636,11 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           wsAuthenticated = true;
           // Re-sync active ride state — server buffers no WS events, so any
           // transitions that fired while disconnected are recovered via HTTP.
-          // Skip the fetch if we already hold an offer locally: the
-          // backend offer-TTL handler resets the ride to `searching`
-          // ~timeout+15s after dispatch, so a reconnect inside that
-          // window would clobber the live offer panel.
-          if (wasReconnect && !useDriverStore.getState().incomingRide) {
+          // Always fetch on reconnect (even when holding an offer) so stale
+          // FCM-backed offers are validated against current server state.
+          // fetchActiveRide is safe to call with a live offer: it checks
+          // offer_expires_at and only clobbers the panel if the offer expired.
+          if (wasReconnect) {
             fetchActiveRide();
           }
           // Now that auth is confirmed, send the cached location so the
@@ -888,8 +888,15 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         if (raw) {
           await AsyncStorage.removeItem('spinr_pending_ride_offer');
           const offer = JSON.parse(raw);
-          Vibration.vibrate([0, 500, 200, 500]);
-          setIncomingRide(offer);
+          // Discard offers that already expired while the phone was off.
+          // offer_expires_at is included in the FCM payload since the
+          // dispatch fix; older payloads without the field pass through.
+          const expiresAt = offer.offer_expires_at;
+          const isExpired = expiresAt && new Date(expiresAt) <= new Date();
+          if (!isExpired) {
+            Vibration.vibrate([0, 500, 200, 500]);
+            setIncomingRide(offer);
+          }
         }
       } catch (e) {
         console.warn('[Push] Failed to hydrate pending ride offer on mount:', e);

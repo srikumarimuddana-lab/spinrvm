@@ -670,6 +670,17 @@ async def admin_create_ride(
             rider = await db_supabase.get_user_by_id(body.rider_id)
             rider_name = _user_display_name(rider) if rider else ""
 
+            import asyncio  # noqa: PLC0415
+
+            try:
+                from ...routes.rides import _offer_timeout_handler  # type: ignore[attr-defined]
+            except ImportError:
+                from routes.rides import _offer_timeout_handler  # type: ignore[attr-defined]
+
+            _admin_settings = await get_app_settings()
+            _admin_timeout = int(_admin_settings.get("ride_offer_timeout_seconds", 15))
+            _offer_expires_at = (datetime.now(timezone.utc) + timedelta(seconds=_admin_timeout + 15)).isoformat()
+
             dispatch_payload = {
                 "type": "new_ride_assignment",
                 "ride_id": ride_doc["id"],
@@ -686,10 +697,27 @@ async def admin_create_ride(
                 "duration_minutes": int(distance_km / 30 * 60) + 5,
                 "rider_name": rider_name,
                 "rider_rating": rider.get("rating") if rider else None,
+                "countdown_seconds": _admin_timeout,
+                "offer_expires_at": _offer_expires_at,
             }
             await manager.send_personal_message(
                 dispatch_payload,
                 f"driver_{driver['user_id']}",
+            )
+            await send_push_notification(
+                driver["user_id"],
+                "New ride request",
+                f"{ride_doc['pickup_address']} → {ride_doc['dropoff_address']}",
+                {k: str(v) for k, v in dispatch_payload.items() if v is not None},
+                priority="dispatch",
+            )
+            asyncio.create_task(
+                _offer_timeout_handler(
+                    ride_doc["id"],
+                    driver["id"],
+                    rider_id=body.rider_id,
+                    timeout_seconds=_admin_timeout + 15,
+                )
             )
 
     try:

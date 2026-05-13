@@ -120,6 +120,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     plugins: [
         './plugins/withGradleWrapper',
         'expo-router',
+        ['expo-location', {
+            locationWhenInUsePermission: 'Spinr needs your location to show nearby drivers and confirm your pickup.',
+        }],
         ['@stripe/stripe-react-native', {
             merchantIdentifier: 'merchant.com.spinr.user',
             enableGooglePay: true,

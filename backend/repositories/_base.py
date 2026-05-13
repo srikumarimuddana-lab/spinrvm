@@ -16,6 +16,7 @@ import time as _time
 from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
 from datetime import date, datetime
 from decimal import Decimal
+from enum import Enum as _Enum
 from typing import Any, Callable, Dict, List, Literal, Optional, TypeVar
 
 try:

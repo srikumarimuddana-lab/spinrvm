@@ -127,6 +127,7 @@ export function useRiderSocket() {
           'warning',
         );
         clearRide();
+        router.replace('/(tabs)' as any);
         break;
 
       // Driver didn't respond in time — backend is re-dispatching.

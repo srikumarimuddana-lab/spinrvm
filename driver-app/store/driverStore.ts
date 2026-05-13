@@ -264,6 +264,7 @@ interface IncomingRide {
     // the cached configuredCountdownSeconds so an admin-changed timeout
     // takes effect on the very next offer, not the next cold start.
     countdown_seconds?: number;
+    offer_expires_at?: string;
 }
 
 interface DriverState {

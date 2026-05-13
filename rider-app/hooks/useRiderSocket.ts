@@ -42,7 +42,11 @@ export function useRiderSocket() {
   const currentRide = useRideStore((s) => s.currentRide);
   const router = useRouter();
 
-  const [connectionState, setConnectionState] = useState<RiderSocketState>('disconnected');
+  const [connectionState, _setConnectionState] = useState<RiderSocketState>('disconnected');
+  const setConnectionState = useCallback((s: RiderSocketState) => {
+    _setConnectionState(s);
+    useRideStore.getState().setWsConnected(s === 'connected');
+  }, []);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectAttemptRef = useRef(0);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -152,6 +156,12 @@ export function useRiderSocket() {
         useRideStore.getState().addChatMessage(data);
         break;
 
+      case 'auth_success':
+        break;
+
+      case 'pong':
+        break;
+
       // Auth errors — shouldn't happen after connect, but handle
       // gracefully in case the token expires mid-session.
       case 'error':
@@ -172,6 +182,10 @@ export function useRiderSocket() {
     const token = useAuthStore.getState().token;
     if (!token) {
       console.log('[WS] Cannot connect: no auth token');
+      return;
+    }
+
+    if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
       return;
     }
 

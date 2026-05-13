@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { Linking } from 'react-native';
 import { globalAlert } from './alertStore';
-import api from '@shared/api/client';
+import api, { SpinrApiError } from '@shared/api/client';
 import { useAuthStore, registerLogoutCallback } from '@shared/store/authStore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { RideStatus } from '../constants/rideStatus';
@@ -539,6 +539,19 @@ export const useRideStore = create<RideState>((set, get) => ({
       set({ currentRide: null, currentDriver: null, isLoading: false });
       AsyncStorage.removeItem(ACTIVE_RIDE_KEY).catch(() => {});
     } catch (error: unknown) {
+      // 409 with a terminal current_status means the backend already cancelled/
+      // completed the ride (offer timeout, system cancel, etc.) while the local
+      // store still showed it as active. Clear local state so the rider can
+      // navigate home — the ride is already done on the server.
+      if (
+        error instanceof SpinrApiError &&
+        error.status === 409 &&
+        TERMINAL_STATUSES.has(String(error.details?.current_status ?? ''))
+      ) {
+        set({ currentRide: null, currentDriver: null, isLoading: false });
+        AsyncStorage.removeItem(ACTIVE_RIDE_KEY).catch(() => {});
+        return;
+      }
       recordNonFatal(error, { store: 'rideStore', action: 'cancelRide' });
       set({ isLoading: false, error: isErrorLike(error) ? error.message : 'Failed to cancel ride' });
       throw error;

@@ -53,6 +53,7 @@ function DriverArrivingScreenContent() {
   const [driverRouteCoords, setDriverRouteCoords] = useState<any[]>([]);
   const [rideRouteCoords, setRideRouteCoords] = useState<any[]>([]);
   const [isCancelling, setIsCancelling] = useState(false);
+  const cancelInitiatedRef = useRef(false);
   const [alertState, setAlertState] = useState<{
     visible: boolean; title: string; message: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
@@ -101,7 +102,9 @@ function DriverArrivingScreenContent() {
   // ── Fetch ride on mount ──
   useEffect(() => {
     if (rideId) fetchRide(rideId);
-    const interval = setInterval(() => { if (rideId) fetchRide(rideId); }, 5000);
+    const interval = setInterval(() => {
+      if (rideId && !cancelInitiatedRef.current) fetchRide(rideId);
+    }, 5000);
     return () => clearInterval(interval);
   }, [rideId]);
 
@@ -140,12 +143,14 @@ function DriverArrivingScreenContent() {
     const fare = parseFloat(currentRide?.total_fare || '0');
 
     const doCancel = async () => {
+      cancelInitiatedRef.current = true;
       setIsCancelling(true);
       try {
         await cancelRide();
         clearRide();
         router.replace('/(tabs)' as any);
       } catch {
+        cancelInitiatedRef.current = false;
         setIsCancelling(false);
         setAlertState({
           visible: true, title: 'Cancel failed',

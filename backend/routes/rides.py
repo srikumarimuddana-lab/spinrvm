@@ -375,6 +375,20 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
         f"matching vehicle_type_id + online + available"
     )
 
+    # Skip drivers who recently timed out or declined this specific offer
+    # so the same driver is not hammered with repeat notifications.
+    try:
+        from ..utils.redis_client import redis_get as _redis_get  # type: ignore
+    except ImportError:
+        from utils.redis_client import redis_get as _redis_get  # type: ignore
+    _skip_ids: set = set()
+    for _d in all_drivers:
+        if await _redis_get(f"spinr:offer_skip:{ride_id}:{_d['id']}"):
+            _skip_ids.add(_d["id"])
+    if _skip_ids:
+        all_drivers = [d for d in all_drivers if d["id"] not in _skip_ids]
+        logger.info(f"[DISPATCH] skipped {len(_skip_ids)} driver(s) with recent timeout/decline for ride {ride_id}")
+
     # Pure filter+rank: drops orphan/no-location/low-rated drivers and
     # attaches per-driver distance. Pure function — no I/O.
     drivers_with_distance = filter_and_rank_drivers(ride, all_drivers, algorithm, min_rating, search_radius)
@@ -511,6 +525,9 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
         # ride_id, pickup_address, dropoff_address, pickup_lat, pickup_lng,
         # dropoff_lat, dropoff_lng, fare, distance_km, duration_minutes,
         # rider_name, rider_rating.
+        from datetime import timedelta as _td
+
+        _offer_expires_at = (datetime.now(timezone.utc) + _td(seconds=offer_timeout + 15)).isoformat()
         dispatch_payload = {
             "type": "new_ride_assignment",
             "ride_id": ride_id,
@@ -530,6 +547,9 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
             # honors this over its cached config so admin changes take effect
             # immediately, not on next cold start.
             "countdown_seconds": offer_timeout,
+            # Absolute expiry so the client can validate stale FCM offers
+            # that arrive after the backend TTL has already fired.
+            "offer_expires_at": _offer_expires_at,
         }
 
         # Notify driver via WebSocket (only reaches the driver if they have
@@ -573,6 +593,7 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
                         "rider_name": rider_display_name or "",
                         "rider_rating": str((rider_user or {}).get("rating") or ""),
                         "countdown_seconds": str(offer_timeout),
+                        "offer_expires_at": _offer_expires_at,
                         "deeplink": "/driver/",
                     },
                     priority="dispatch",
@@ -694,6 +715,17 @@ async def _offer_timeout_handler(
                 )
         except Exception as e:
             logger.warning(f"[DISPATCH] could not notify driver of offer expiry for ride {ride_id}: {e}")
+
+        # Record this driver's timeout so they are skipped on the next
+        # dispatch cycle for this ride (5-minute cooldown).
+        try:
+            from ..utils.redis_client import redis_set as _redis_set  # type: ignore
+        except ImportError:
+            from utils.redis_client import redis_set as _redis_set  # type: ignore
+        try:
+            await _redis_set(f"spinr:offer_skip:{ride_id}:{driver_id}", "1", ttl=300)
+        except Exception as _e:
+            logger.warning(f"[DISPATCH] could not set offer cooldown key for ride {ride_id} driver {driver_id}: {_e}")
 
         # Attempt re-dispatch to the next available driver.
         await match_driver_to_ride(ride_id)
@@ -2079,7 +2111,14 @@ async def cancel_ride_rider(ride_id: str, request: Request = None, current_user:
     ride = await _require_ride_in_state_rider(
         ride_id,
         current_user["id"],
-        ("requested", RideStatus.SEARCHING, RideStatus.DRIVER_ASSIGNED, "en_route", RideStatus.DRIVER_ARRIVED),
+        (
+            "requested",
+            RideStatus.SEARCHING,
+            RideStatus.DRIVER_ASSIGNED,
+            RideStatus.DRIVER_ACCEPTED,
+            "en_route",
+            RideStatus.DRIVER_ARRIVED,
+        ),
     )
     diag_logger.info(
         f"[CANCEL] entry ride_id={ride_id} pre_status={ride.get('status')} driver_id={ride.get('driver_id')}"
@@ -2168,7 +2207,20 @@ async def cancel_ride_rider(ride_id: str, request: Request = None, current_user:
                 f"driver_{driver['user_id']}",
             )
 
-    await manager.broadcast_ride_status(ride_id, RideStatus.CANCELLED, reason="rider_cancelled")
+    # Notify the rider's own connection — broadcast_ride_status only fans
+    # out to the rider when rider_id is passed, but an explicit message
+    # ensures clearRide() fires immediately in useRiderSocket without
+    # waiting for the next poll cycle.
+    await manager.send_personal_message(
+        {"type": "ride_cancelled", "ride_id": ride_id, "reason": "rider_cancelled"},
+        f"rider_{current_user['id']}",
+    )
+    await manager.broadcast_ride_status(
+        ride_id,
+        RideStatus.CANCELLED,
+        rider_id=current_user["id"],
+        reason="rider_cancelled",
+    )
     try:
         await manager.broadcast_to_admins({"type": "ride_cancelled", "ride_id": ride_id, "reason": "rider_cancelled"})
     except Exception as _exc:  # pragma: no cover - best effort

@@ -2190,6 +2190,17 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
     except Exception as _e:
         logger.error(f"Could not log ride decline to audit_logs: {_e}", exc_info=True)
 
+    # Cooldown: skip this driver for 5 minutes on the next dispatch cycle
+    # so they are not immediately re-offered the same ride they declined.
+    try:
+        from ..utils.redis_client import redis_set as _redis_set  # type: ignore
+    except ImportError:
+        from utils.redis_client import redis_set as _redis_set  # type: ignore
+    try:
+        await _redis_set(f"spinr:offer_skip:{ride_id}:{driver['id']}", "1", ttl=300)
+    except Exception as _e:
+        logger.error(f"Could not set offer cooldown key for ride {ride_id}: {_e}", exc_info=True)
+
     # GAP FIX: Re-match to find the next available driver
     try:
         import asyncio

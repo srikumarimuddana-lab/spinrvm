@@ -203,7 +203,11 @@ export default function HomeScreen() {
   // changes post-mount.
   useEffect(() => {
     const sub = AppState.addEventListener('change', (next) => {
-      if (next === 'active') refreshLocation(false);
+      if (next === 'active') {
+        refreshLocation(false).catch((e) => {
+          console.warn('[Home] AppState refreshLocation failed:', e);
+        });
+      }
     });
     return () => sub.remove();
   }, [refreshLocation]);

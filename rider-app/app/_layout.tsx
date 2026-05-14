@@ -559,6 +559,18 @@ export default function RootLayout() {
   );
 }
 
+// Diagnostic: on Android, bypass GestureHandlerRootView (which intercepts
+// all touch events via native dispatchTouchEvent) to test whether its
+// gesture orchestrator is consuming vertical scroll events. Stack swipe-back
+// gestures won't work, but ScrollView should. If scrolling works with a
+// plain View, the root cause is in gesture handler's native event dispatch.
+function GestureRootWrapper({ children }: { children: React.ReactNode }) {
+  if (Platform.OS === 'android') {
+    return <View style={{ flex: 1 }}>{children}</View>;
+  }
+  return <GestureHandlerRootView style={{ flex: 1 }}>{children}</GestureHandlerRootView>;
+}
+
 function MaybeStripeProvider({
   publishableKey,
   children,
@@ -590,7 +602,7 @@ function RootLayoutInner({
   return (
     <ErrorBoundary>
       <OfflineBanner visible={isOffline} onVisibilityChange={setIsOffline} />
-      <GestureHandlerRootView style={{ flex: 1 }}>
+      <GestureRootWrapper>
         <SafeAreaProvider>
           <StatusBar style={isOffline ? "light" : isDark ? "light" : "dark"} />
           {wsState === 'reconnecting' && (
@@ -645,7 +657,7 @@ function RootLayoutInner({
           </StripeKeyContext.Provider>
           <GlobalAlert />
         </SafeAreaProvider>
-      </GestureHandlerRootView>
+      </GestureRootWrapper>
     </ErrorBoundary>
   );
 }

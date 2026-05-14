@@ -21,7 +21,6 @@ try:
     from ..schemas import Driver, RideRatingRequest
     from ..services.fare_service import recalculate_fare_for_distance
     from ..socket_manager import manager
-    from ..utils.crypto import hash_otp
     from ..utils.datetime_utils import parse_iso_utc
     from ..utils.driver_presence import clear_presence, mark_present, present_driver_ids
     from ..utils.error_handling import (
@@ -44,7 +43,6 @@ except ImportError:
     from schemas import Driver, RideRatingRequest
     from services.fare_service import recalculate_fare_for_distance
     from socket_manager import manager
-    from utils.crypto import hash_otp
     from utils.datetime_utils import parse_iso_utc
     from utils.driver_presence import clear_presence, mark_present, present_driver_ids
     from utils.error_handling import (
@@ -2289,7 +2287,8 @@ async def verify_pickup_otp(ride_id: str, request: RideOTPRequest, current_user:
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
-    if not hmac.compare_digest(ride.get("pickup_otp", ""), hash_otp(request.otp)):
+    stored_otp = ride.get("pickup_otp", "")
+    if not hmac.compare_digest(stored_otp, request.otp):
         raise HTTPException(status_code=400, detail="Invalid OTP")
 
     # OTP correct — atomic transition guards against duplicate taps/retries

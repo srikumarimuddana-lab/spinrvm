@@ -3,12 +3,12 @@ import {
   View,
   Text,
   StyleSheet,
+  ScrollView,
   TouchableOpacity,
   ActivityIndicator,
   StatusBar,
   Linking,
 } from 'react-native';
-import { ScrollView } from 'react-native-gesture-handler';
 import { Image } from 'expo-image';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -157,21 +157,13 @@ export default function AccountScreen() {
     return phone;
   };
 
-  // Root is ScrollView — no outer View constraining it.
-  // This avoids the Android APK flex-height issue where a View→ScrollView
-  // hierarchy can prevent the scroll gesture from registering on native builds.
   return (
-    <>
+    <View style={styles.container}>
       <StatusBar barStyle="light-content" />
       <ScrollView
-        style={styles.scrollRoot}
-        contentContainerStyle={[
-          styles.scrollContent,
-          { paddingBottom: Math.max(insets.bottom, 16) + 24 },
-        ]}
+        style={{ flex: 1 }}
+        contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) + 24 }}
         showsVerticalScrollIndicator={false}
-        overScrollMode="always"
-        bounces={false}
       >
 
         {/* Header hero */}
@@ -599,7 +591,7 @@ export default function AccountScreen() {
         buttons={[{ text: 'OK', style: 'default' }]}
         onClose={() => setFeedbackAlert(prev => ({ ...prev, visible: false }))}
       />
-    </>
+    </View>
   );
 }
 
@@ -622,15 +614,9 @@ function MenuRow({
 }
 
 function createStyles(colors: ThemeColors) { return StyleSheet.create({
-  // ScrollView is the root — no outer container View.
-  // flex: 1 here so the scroll view fills the tab screen area,
-  // but contentContainerStyle controls the actual scrollable content height.
-  scrollRoot: {
+  container: {
     flex: 1,
     backgroundColor: colors.surfaceLight,
-  },
-  scrollContent: {
-    flexGrow: 1,
   },
 
   // ── Hero ──

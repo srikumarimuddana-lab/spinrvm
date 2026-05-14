@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 export const StripeKeyContext = React.createContext<string | null>(null);
 import { Stack, router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { Alert, View, ActivityIndicator, StyleSheet, Text, Platform } from 'react-native';
+import { AppState, View, ActivityIndicator, StyleSheet, Text, Platform } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { StripeProvider } from '@stripe/stripe-react-native';
 import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold, PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans';
@@ -465,6 +465,48 @@ export default function RootLayout() {
     return () => clearTimeout(timer);
   }, [isAuthInitialized, isLocationInitialized]);
 
+  // ── Foreground resume: re-check active ride and route accordingly ──
+  // The cold-boot effect above only fires once when stores initialise.
+  // When the rider backgrounds the app and later opens it, AppState fires
+  // 'active' but the cold-boot effect doesn't re-run. Without this, the
+  // rider stays on whatever screen they left instead of being routed to
+  // the active ride screen (or home if the ride ended while backgrounded).
+  useEffect(() => {
+    if (!isAuthInitialized) return;
+    const sub = AppState.addEventListener('change', async (nextState) => {
+      if (nextState !== 'active') return;
+      try {
+        const result = await useRideStore.getState().fetchActiveRide();
+        if (!result?.active || !result.ride) return;
+        const s = result.ride.status;
+        if (s === 'searching' || s === 'driver_assigned' || s === 'driver_accepted') {
+          router.push({ pathname: '/driver-arriving', params: { rideId: result.ride.id } } as any);
+        } else if (s === 'driver_arrived') {
+          router.push({ pathname: '/driver-arrived', params: { rideId: result.ride.id } } as any);
+        } else if (s === 'in_progress') {
+          router.push({ pathname: '/ride-in-progress', params: { rideId: result.ride.id } } as any);
+        }
+      } catch (e) {
+        console.warn('[Layout] Foreground ride check failed:', e);
+      }
+    });
+    return () => sub.remove();
+  }, [isAuthInitialized]);
+
+  // ── Notification tap while backgrounded (not killed) ──
+  // The killed-state case is handled above via getInitialNotificationResponseAsync.
+  // This listener handles taps on notifications received while the app was in
+  // background but still alive — without it, tapping a "driver arrived"
+  // notification would just foreground the app without navigating.
+  useEffect(() => {
+    if (!isAuthInitialized || !canUseNotifications || !Notifications) return;
+    const sub = Notifications.addNotificationResponseReceivedListener((response: any) => {
+      const data = response?.notification?.request?.content?.data as Record<string, string> | undefined;
+      if (data) routeFromNotificationData(data);
+    });
+    return () => sub?.remove?.();
+  }, [isAuthInitialized]);
+
   // Clear ride session data when the user logs out so a subsequent login
   // doesn't show the previous session's ride, driver, or chat state.
   const prevAuthTokenRef = useRef(authToken);
@@ -548,16 +590,16 @@ function RootLayoutInner({
   return (
     <ErrorBoundary>
       <OfflineBanner visible={isOffline} onVisibilityChange={setIsOffline} />
-      {wsState === 'reconnecting' && (
-        <View style={{ backgroundColor: '#F59E0B', paddingVertical: 4, alignItems: 'center' }}>
-          <Text style={{ color: '#fff', fontSize: 12, fontWeight: '600' }}>
-            Reconnecting to ride updates…
-          </Text>
-        </View>
-      )}
       <GestureHandlerRootView style={{ flex: 1 }}>
         <SafeAreaProvider>
           <StatusBar style={isOffline ? "light" : isDark ? "light" : "dark"} />
+          {wsState === 'reconnecting' && (
+            <View style={{ backgroundColor: '#F59E0B', paddingVertical: 4, alignItems: 'center' }}>
+              <Text style={{ color: '#fff', fontSize: 12, fontWeight: '600' }}>
+                Reconnecting to ride updates…
+              </Text>
+            </View>
+          )}
           <StripeKeyContext.Provider value={stripePublishableKey}>
           <MaybeStripeProvider publishableKey={stripePublishableKey}>
           <Stack
@@ -572,8 +614,6 @@ function RootLayoutInner({
             <Stack.Screen name="otp" />
             <Stack.Screen name="profile-setup" options={{ headerShown: false }} />
 
-            {/* Main — instant cut from splash so the home tab's SOSButton
-                doesn't flash through a cross-fade transition. */}
             <Stack.Screen name="(tabs)" options={{ animation: 'none' }} />
 
             {/* Ride flow */}

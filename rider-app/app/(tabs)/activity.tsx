@@ -322,11 +322,15 @@ export default function ActivityScreen() {
           </View>
 
           {fetchError ? (
-            <View style={styles.emptyState}>
+            <ScrollView
+              style={styles.content}
+              contentContainerStyle={styles.emptyState}
+              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+            >
               <Ionicons name="alert-circle-outline" size={48} color="#EF4444" />
               <Text style={[styles.emptyTitle, { color: '#EF4444' }]}>Could not load rides</Text>
               <Text style={styles.emptyText}>Pull down to refresh.</Text>
-            </View>
+            </ScrollView>
           ) : loading && rides.length === 0 ? (
             <View style={{ paddingHorizontal: 16, paddingTop: 8 }}>
               {[0, 1, 2, 3].map((i) => (

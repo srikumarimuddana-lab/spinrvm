@@ -13,6 +13,7 @@ import json as _json
 import os as _os
 import random as _random
 import time as _time
+import traceback
 from concurrent.futures import ThreadPoolExecutor as _ThreadPoolExecutor
 from datetime import date, datetime
 from decimal import Decimal
@@ -201,7 +202,8 @@ async def run_sync(
                 "RemoteProtocolError" in exc_name or "Server disconnected" in exc_str or "ConnectionClosed" in exc_name
             )
             is_timeout = _HTTPX_TIMEOUT_EXC is not None and isinstance(exc, _HTTPX_TIMEOUT_EXC)
-            is_transient = is_conn_terminated or is_remote_disconnect or is_timeout
+            is_h2_stream_race = isinstance(exc, KeyError) and "http2" in traceback.format_exc().lower()
+            is_transient = is_conn_terminated or is_remote_disconnect or is_timeout or is_h2_stream_race
 
             if not is_transient:
                 break

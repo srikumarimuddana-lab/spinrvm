@@ -15,7 +15,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     userInterfaceStyle: 'automatic',
     newArchEnabled: false, // disabled: pre-launch stability over perf; re-enable post go-live as a planned migration
     updates: {
-        url: 'https://u.expo.dev/14e2200c-dc0a-48a1-90cf-bbbb8f798efc',
+        url: 'https://u.expo.dev/8f1e4f60-720e-46b0-9b71-33c13d3af043',
     },
     // Bare workflow requires a literal string runtimeVersion (policies like
     // 'fingerprint'/'appVersion' rejected by EAS CLI). Bump manually when
@@ -173,7 +173,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     },
     extra: {
         eas: {
-            projectId: "14e2200c-dc0a-48a1-90cf-bbbb8f798efc"
+            projectId: "8f1e4f60-720e-46b0-9b71-33c13d3af043"
         },
         EXPO_PUBLIC_BACKEND_URL: process.env.EXPO_PUBLIC_BACKEND_URL,
         backendUrl: process.env.EXPO_PUBLIC_BACKEND_URL,

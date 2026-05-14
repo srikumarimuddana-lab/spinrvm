@@ -73,7 +73,6 @@ def _driver(**extra) -> dict:
         "id": "driver_001",
         "user_id": "user_driver_1",
         "rating": None,
-        "average_rating": None,
         "total_ratings": 0,
     }
     row.update(extra)
@@ -134,7 +133,6 @@ class TestFirstRatingUpdatesDriverAverage:
         assert len(driver_updates) == 1, "drivers table must be updated on first rating"
         _, _, data = driver_updates[0]
         assert data["rating"] == 5.0
-        assert data["average_rating"] == 5.0
         assert data["total_ratings"] == 1
 
     async def test_second_rating_computes_correct_average(self):
@@ -142,7 +140,7 @@ class TestFirstRatingUpdatesDriverAverage:
         from backend.routes import rides as rides_mod
 
         ride = _ride()
-        driver = _driver(rating=4.0, average_rating=4.0, total_ratings=1)
+        driver = _driver(rating=4.0, total_ratings=1)
         prior_ride = dict(_ride(id="ride_000"), rider_rating=4)
         current_ride_with_rating = dict(ride, rider_rating=5)
 

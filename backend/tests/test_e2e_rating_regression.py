@@ -92,7 +92,6 @@ class TestFirstRatingNoCrash:
         _, _, update_payload = update_mock.call_args[0]
         assert update_payload["total_ratings"] == 1
         assert update_payload["rating"] == 5.0
-        assert update_payload["average_rating"] == 5.0
 
     async def test_first_rating_total_ratings_missing(self):
         """Driver row missing total_ratings key entirely — treated as 0, no KeyError."""

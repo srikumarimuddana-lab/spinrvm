@@ -22,7 +22,7 @@ api_router = APIRouter(tags=["FAQs"])
 @api_router.get("/faqs")
 async def get_public_faqs(
     category: str | None = Query(None),
-    audience: str | None = Query(None, regex="^(rider|driver)$"),
+    audience: str | None = Query(None, pattern="^(rider|driver)$"),
 ):
     """List active FAQ entries, optionally filtered by category and audience.
 

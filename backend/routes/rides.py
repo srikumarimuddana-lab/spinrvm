@@ -26,7 +26,6 @@ try:
     from ..sms_service import send_sms
     from ..socket_manager import manager
     from ..utils.audit_logger import log_user_action
-    from ..utils.crypto import hash_otp
     from ..utils.error_handling import (
         ErrorCode,
         RideNotFoundException,
@@ -61,7 +60,6 @@ except ImportError:
     from sms_service import send_sms
     from socket_manager import manager
     from utils.audit_logger import log_user_action
-    from utils.crypto import hash_otp
     from utils.error_handling import (
         ErrorCode,
         RideNotFoundException,
@@ -1240,7 +1238,7 @@ async def create_ride(body: CreateRideRequest, request: Request = None, current_
         # here) — Python 3.11+ raises SyntaxError, blocking module import
         # and the entire test suite. Drop-in fix unblocks Audit-17 Phase 1c.
         status=RideStatus.SEARCHING,
-        pickup_otp=hash_otp(pickup_otp_plain),
+        pickup_otp=pickup_otp_plain,
         ride_requested_at=datetime.now(timezone.utc),
     )
 
@@ -1382,10 +1380,6 @@ async def create_ride(body: CreateRideRequest, request: Request = None, current_
     # app sees "searching" even when a driver was already assigned in
     # the same request, so we keep this one round-trip on purpose.
     updated_ride = await db_supabase.get_ride(ride.id)
-    # The DB stores the SHA-256 hash; return the plain code to the rider
-    # so the app can display it. Only this one response carries the plain text.
-    if updated_ride:
-        updated_ride["pickup_otp"] = pickup_otp_plain
 
     # Small helper to ensure we return a clean dict
     def serialize_doc(doc):
@@ -1677,16 +1671,18 @@ async def get_ride(ride_id: str, request: Request = None, current_user: dict = D
     # while the trip is active. Retaining exact addresses post-completion
     # enables address-based stalking (attack tree RAT-1). Riders retain their
     # own address history (is_rider check).
-    if is_driver and not is_rider and ride.get("status") in RideStatus.terminal_statuses():
-        for _addr_key in (
-            "pickup_address",
-            "dropoff_address",
-            "pickup_lat",
-            "pickup_lng",
-            "dropoff_lat",
-            "dropoff_lng",
-        ):
-            ride.pop(_addr_key, None)
+    if is_driver and not is_rider:
+        ride.pop("pickup_otp", None)
+        if ride.get("status") in RideStatus.terminal_statuses():
+            for _addr_key in (
+                "pickup_address",
+                "dropoff_address",
+                "pickup_lat",
+                "pickup_lng",
+                "dropoff_lat",
+                "dropoff_lng",
+            ):
+                ride.pop(_addr_key, None)
 
     def serialize_doc(doc):
         return doc

@@ -36,7 +36,7 @@ async def log_audit(
             {
                 "action": action,
                 "entity_type": entity_type,
-                "resource_id": entity_id,
+                "entity_id": entity_id,
                 "actor_id": actor,
                 "details": details,
                 "created_at": datetime.now(timezone.utc).isoformat(),

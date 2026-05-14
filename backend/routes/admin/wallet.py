@@ -161,8 +161,8 @@ async def admin_credit_wallet(
             "actor_id": admin["id"],
             "actor_role": admin.get("role"),
             "action": "wallet_credit",
-            "resource": "user",
-            "resource_id": req.user_id,
+            "entity_type": "user",
+            "entity_id": req.user_id,
             "details": {
                 "amount": _money_str(credit),
                 "old_balance": _money_str(old_balance),
@@ -238,8 +238,8 @@ async def admin_debit_wallet(
             "actor_id": admin["id"],
             "actor_role": admin.get("role"),
             "action": "wallet_debit",
-            "resource": "user",
-            "resource_id": req.user_id,
+            "entity_type": "user",
+            "entity_id": req.user_id,
             "details": {
                 "amount": _money_str(debit),
                 "old_balance": _money_str(old_balance),

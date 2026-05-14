@@ -28,8 +28,8 @@ ALLOWED_TYPES = {"tos", "privacy"}
 
 @api_router.get("/legal-documents")
 async def get_legal_document(
-    audience: str = Query(..., regex="^(rider|driver)$"),
-    doc_type: str = Query(..., alias="type", regex="^(tos|privacy)$"),
+    audience: str = Query(..., pattern="^(rider|driver)$"),
+    doc_type: str = Query(..., alias="type", pattern="^(tos|privacy)$"),
 ):
     """Return the active legal document for an (audience, doc_type) pair.
 

@@ -485,6 +485,8 @@ export default function RootLayout() {
           router.push({ pathname: '/driver-arrived', params: { rideId: result.ride.id } } as any);
         } else if (s === 'in_progress') {
           router.push({ pathname: '/ride-in-progress', params: { rideId: result.ride.id } } as any);
+        } else if (s === 'completed') {
+          router.push({ pathname: '/ride-completed', params: { rideId: result.ride.id } } as any);
         }
       } catch (e) {
         console.warn('[Layout] Foreground ride check failed:', e);

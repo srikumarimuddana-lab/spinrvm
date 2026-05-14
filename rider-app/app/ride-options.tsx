@@ -281,6 +281,23 @@ function RideOptionsScreenContent() {
         router.replace({ pathname: '/driver-arriving', params: { rideId: ride.id } } as any);
       }
     } catch (error: any) {
+      const is409 = error?.response?.status === 409 || error?.message?.includes('already active');
+      if (is409) {
+        const active = await useRideStore.getState().fetchActiveRide();
+        if (active?.active && active.ride) {
+          const s = active.ride.status;
+          if (s === 'searching' || s === 'driver_assigned' || s === 'driver_accepted') {
+            router.replace({ pathname: '/driver-arriving', params: { rideId: active.ride.id } } as any);
+          } else if (s === 'driver_arrived') {
+            router.replace({ pathname: '/driver-arrived', params: { rideId: active.ride.id } } as any);
+          } else if (s === 'in_progress') {
+            router.replace({ pathname: '/ride-in-progress', params: { rideId: active.ride.id } } as any);
+          } else if (s === 'completed') {
+            router.replace({ pathname: '/ride-completed', params: { rideId: active.ride.id } } as any);
+          }
+          return;
+        }
+      }
       setAlertState({ visible: true, title: 'Error', message: error.message || 'Failed to book ride', variant: 'danger' });
     } finally {
       setIsBooking(false);

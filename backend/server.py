@@ -281,6 +281,7 @@ app.include_router(corporate_wallet_router, prefix="/api")
 # a coordinated mobile release migrates those calls to /api/company/{id}/...
 app.include_router(corporate_company_router)
 app.include_router(corporate_rider_router)
+app.include_router(corporate_rider_router, prefix="/api/v1")
 # files_router serves document files at /api/documents/{id} (used by admin dashboard).
 # Also mounted under /api/v1 so legacy driver_documents rows whose document_url was
 # written as /api/v1/documents/{id} by the old base64-in-DB upload path keep resolving.

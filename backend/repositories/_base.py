@@ -416,6 +416,11 @@ def _postgrest_pattern(value: str) -> str:
     return str(value).replace("*", r"\*").replace(",", r"\,").replace("(", r"\(").replace(")", r"\)")
 
 
+def _unwrap_enum(v: Any) -> Any:
+    """Return the .value of Enum instances so PostgREST sees plain strings."""
+    return v.value if isinstance(v, _Enum) else v
+
+
 def _build_or_clause_term(col: str, val: Any) -> Optional[str]:
     """Convert one {col: predicate} pair into a PostgREST or_() leaf term."""
     if isinstance(val, dict):
@@ -423,19 +428,19 @@ def _build_or_clause_term(col: str, val: Any) -> Optional[str]:
             op = "ilike" if val.get("$options") == "i" else "like"
             return f"{col}.{op}.*{_postgrest_pattern(val['$regex'])}*"
         if "$ne" in val:
-            return f"{col}.neq.{val['$ne']}"
+            return f"{col}.neq.{_unwrap_enum(val['$ne'])}"
         if "$gt" in val:
-            return f"{col}.gt.{val['$gt']}"
+            return f"{col}.gt.{_unwrap_enum(val['$gt'])}"
         if "$gte" in val:
-            return f"{col}.gte.{val['$gte']}"
+            return f"{col}.gte.{_unwrap_enum(val['$gte'])}"
         if "$lt" in val:
-            return f"{col}.lt.{val['$lt']}"
+            return f"{col}.lt.{_unwrap_enum(val['$lt'])}"
         if "$lte" in val:
-            return f"{col}.lte.{val['$lte']}"
+            return f"{col}.lte.{_unwrap_enum(val['$lte'])}"
         return None
     if val is None:
         return f"{col}.is.null"
-    return f"{col}.eq.{val}"
+    return f"{col}.eq.{_unwrap_enum(val)}"
 
 
 def _build_or_clause(clauses: List[Dict[str, Any]]) -> str:
@@ -464,23 +469,20 @@ def _apply_filters(q, filters: Optional[Dict[str, Any]]):
             continue
         if isinstance(v, dict):
             if "$in" in v and isinstance(v["$in"], (list, tuple)):
-                # str(SomeStrEnum.VALUE) returns "ClassName.VALUE" in Python
-                # 3.12, not the enum's string value. Explicitly unwrap enum
-                # instances so PostgREST sees plain strings, not repr garbage.
-                clean = [x.value if isinstance(x, _Enum) else x for x in v["$in"]]
+                clean = [_unwrap_enum(x) for x in v["$in"]]
                 q = q.in_(k, clean)
             elif "$gt" in v:
-                q = q.gt(k, v["$gt"])
+                q = q.gt(k, _unwrap_enum(v["$gt"]))
             elif "$gte" in v:
-                q = q.gte(k, v["$gte"])
+                q = q.gte(k, _unwrap_enum(v["$gte"]))
             elif "$lt" in v:
-                q = q.lt(k, v["$lt"])
+                q = q.lt(k, _unwrap_enum(v["$lt"]))
             elif "$lte" in v:
-                q = q.lte(k, v["$lte"])
+                q = q.lte(k, _unwrap_enum(v["$lte"]))
             elif "$ne" in v:
-                q = q.neq(k, v["$ne"])
+                q = q.neq(k, _unwrap_enum(v["$ne"]))
             elif "$nin" in v and isinstance(v["$nin"], (list, tuple)):
-                q = q.not_.in_(k, list(v["$nin"]))
+                q = q.not_.in_(k, [_unwrap_enum(x) for x in v["$nin"]])
             elif "$regex" in v:
                 pattern = f"%{v['$regex']}%"
                 if v.get("$options") == "i":
@@ -488,7 +490,7 @@ def _apply_filters(q, filters: Optional[Dict[str, Any]]):
                 else:
                     q = q.like(k, pattern)
         else:
-            q = q.eq(k, v)
+            q = q.eq(k, v.value if isinstance(v, _Enum) else v)
     return q
 
 

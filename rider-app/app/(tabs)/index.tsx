@@ -185,7 +185,10 @@ export default function HomeScreen() {
         } else if (s === 'in_progress') {
           router.push({ pathname: '/ride-in-progress', params: { rideId: result.ride.id } } as any);
         } else if (s === 'completed') {
-          router.push({ pathname: '/ride-completed', params: { rideId: result.ride.id } } as any);
+          const ps = result.ride.payment_status;
+          if (ps !== 'paid' && ps !== 'waived_admin') {
+            router.push({ pathname: '/ride-completed', params: { rideId: result.ride.id } } as any);
+          }
         }
       })();
 

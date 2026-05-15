@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useRef, useState, useMemo } from 'react';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput,
@@ -77,6 +77,22 @@ function RideCompletedScreenContent() {
   useEffect(() => {
     if (currentRide?.payment_status === 'paid') {
       setAlreadyPaid(true);
+    }
+  }, [currentRide?.payment_status]);
+
+  // Auto-dismiss: if the rider lands on this screen and the ride is already
+  // fully paid (stale routing from store race or navigation stack), clear
+  // state and go home so they're not trapped in a loop. Only fires once,
+  // on the first time ride data loads — so it won't interfere with the
+  // normal pay-then-navigate flow in handleSubmit.
+  const initialPaymentChecked = useRef(false);
+  useEffect(() => {
+    if (initialPaymentChecked.current || !currentRide?.payment_status) return;
+    initialPaymentChecked.current = true;
+    const ps = currentRide.payment_status;
+    if (ps === 'paid' || ps === 'waived_admin') {
+      clearRide();
+      router.replace('/(tabs)');
     }
   }, [currentRide?.payment_status]);
 

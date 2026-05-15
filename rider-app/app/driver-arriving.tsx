@@ -31,6 +31,7 @@ import { CarMarker } from '@shared/components/CarMarker';
 import { FreeCancelTimer } from '../components/FreeCancelTimer';
 import { useResponsive } from '@shared/utils/responsive';
 import BottomSheet, { BottomSheetScrollView } from '../components/SafeBottomSheet';
+import { useAppResumeKey } from '../hooks/useAppResumeKey';
 
 function DriverArrivingScreenContent() {
   const { height: SCREEN_HEIGHT } = useWindowDimensions();
@@ -48,6 +49,7 @@ function DriverArrivingScreenContent() {
   const mapRef = useRef<MapView>(null);
   const bottomSheetRef = useRef<any>(null);
   const snapPoints = useMemo(() => ['40%', '65%', '90%'], []);
+  const resumeKey = useAppResumeKey();
 
   const [mapEtaMinutes, setMapEtaMinutes] = useState<number | null>(null);
   const [countdownSeconds, setCountdownSeconds] = useState<number | null>(null);
@@ -306,6 +308,7 @@ function DriverArrivingScreenContent() {
 
       {/* ═══ Bottom sheet ═══ */}
       <BottomSheet
+        key={resumeKey}
         ref={bottomSheetRef}
         index={0}
         snapPoints={snapPoints}

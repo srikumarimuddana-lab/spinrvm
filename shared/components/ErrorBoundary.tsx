@@ -1,5 +1,5 @@
 import React, { Component, useMemo, type ErrorInfo, type ReactNode } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Platform } from 'react-native';
+import { AppState, View, Text, StyleSheet, TouchableOpacity, Platform } from 'react-native';
 import { useTheme } from '../theme/ThemeContext';
 import type { ThemeColors } from '../theme/index';
 import { captureException } from '../services/errorReporting';
@@ -64,6 +64,8 @@ function ErrorFallback({ error, onRetry }: ErrorFallbackProps) {
  * ```
  */
 export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  private appStateSub: ReturnType<typeof AppState.addEventListener> | null = null;
+
   constructor(props: ErrorBoundaryProps) {
     super(props);
     this.state = {
@@ -71,6 +73,18 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       error: null,
       errorInfo: null,
     };
+  }
+
+  componentDidMount(): void {
+    this.appStateSub = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active' && this.state.hasError) {
+        this.handleRetry();
+      }
+    });
+  }
+
+  componentWillUnmount(): void {
+    this.appStateSub?.remove();
   }
 
   static getDerivedStateFromError(error: Error): Partial<ErrorBoundaryState> {

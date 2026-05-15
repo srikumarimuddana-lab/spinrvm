@@ -20,6 +20,7 @@ import { Ionicons } from '@expo/vector-icons';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import BottomSheet, { BottomSheetScrollView } from '../components/SafeBottomSheet';
+import { useAppResumeKey } from '../hooks/useAppResumeKey';
 import { useRideStore } from '../store/rideStore';
 import { RideStatus } from '../constants/rideStatus';
 import api from '@shared/api/client';
@@ -47,6 +48,7 @@ function RideInProgressScreenContent() {
   }>({ visible: false, title: '', message: '', variant: 'info' });
   const mapRef = React.useRef<MapView>(null);
   const bottomSheetRef = React.useRef<any>(null);
+  const resumeKey = useAppResumeKey();
 
   const { height, width } = useWindowDimensions();
   const isLandscape = height < width;
@@ -598,6 +600,7 @@ I've shared my live location with you for safety.
         </SafeAreaView>
       ) : (
         <BottomSheet
+          key={resumeKey}
           ref={bottomSheetRef}
           index={1}
           snapPoints={snapPoints}

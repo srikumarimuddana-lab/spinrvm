@@ -460,6 +460,10 @@ export default function RootLayout() {
         router.push({ pathname: '/driver-arrived', params: { rideId: ride.id } } as any);
       } else if (s === 'in_progress') {
         router.push({ pathname: '/ride-in-progress', params: { rideId: ride.id } } as any);
+      } else if (s === 'completed') {
+        if (ride.payment_status !== 'paid' && ride.payment_status !== 'waived_admin') {
+          router.push({ pathname: '/ride-completed', params: { rideId: ride.id } } as any);
+        }
       }
     }, 200);
     return () => clearTimeout(timer);
@@ -486,7 +490,10 @@ export default function RootLayout() {
         } else if (s === 'in_progress') {
           router.push({ pathname: '/ride-in-progress', params: { rideId: result.ride.id } } as any);
         } else if (s === 'completed') {
-          router.push({ pathname: '/ride-completed', params: { rideId: result.ride.id } } as any);
+          const ps = result.ride.payment_status;
+          if (ps !== 'paid' && ps !== 'waived_admin') {
+            router.push({ pathname: '/ride-completed', params: { rideId: result.ride.id } } as any);
+          }
         }
       } catch (e) {
         console.warn('[Layout] Foreground ride check failed:', e);

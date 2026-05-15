@@ -50,8 +50,11 @@ export default function Index() {
             const status = result.ride.status;
             const rideId = result.ride.id;
             if (status === 'completed') {
-              router.replace({ pathname: '/ride-completed', params: { rideId } } as any);
-              return;
+              const ps = result.ride.payment_status;
+              if (ps !== 'paid' && ps !== 'waived_admin') {
+                router.replace({ pathname: '/ride-completed', params: { rideId } } as any);
+                return;
+              }
             } else if (status === 'in_progress') {
               router.replace({ pathname: '/ride-in-progress', params: { rideId } } as any);
               return;

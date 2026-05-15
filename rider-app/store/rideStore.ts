@@ -229,6 +229,7 @@ interface RideState {
   updateDriverLocation: (lat: number, lng: number, speed?: number | null, heading?: number | null, etaSeconds?: number | null) => void;
   applyRideStatusFromWS: (rideId: string, status: string, extra?: Record<string, unknown>) => void;
 
+  _clearedRideId: string | null;
   wsConnected: boolean;
   setWsConnected: (v: boolean) => void;
 
@@ -250,6 +251,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   driverEtaSeconds: null,
   _lastWsDriverPositionAt: 0,
   chatMessages: [],
+  _clearedRideId: null,
   wsConnected: false,
   savedAddresses: [],
   recentSearches: [],
@@ -284,7 +286,7 @@ export const useRideStore = create<RideState>((set, get) => ({
         const ride = response.data.ride;
         const driver = ride.driver ?? null;
         const rideWithoutDriver: Ride = (({ driver: _d, ...rest }) => rest)(ride);
-        set({ currentRide: rideWithoutDriver, currentDriver: driver });
+        set({ currentRide: rideWithoutDriver, currentDriver: driver, _clearedRideId: null });
         _persistRide(rideWithoutDriver, driver);
         return { active: true, ride: rideWithoutDriver };
       }
@@ -495,7 +497,7 @@ export const useRideStore = create<RideState>((set, get) => ({
       const response = await api.post<Ride>('/rides', rideData, {
         headers: { 'Idempotency-Key': idempotencyKey },
       });
-      set({ currentRide: response.data, isLoading: false, scheduledTime: null, requiresWav: false, quietMode: false, riderNotes: '' });
+      set({ currentRide: response.data, isLoading: false, scheduledTime: null, requiresWav: false, quietMode: false, riderNotes: '', _clearedRideId: null });
       _persistRide(response.data, null);
       return response.data;
     } catch (error: unknown) {
@@ -512,6 +514,12 @@ export const useRideStore = create<RideState>((set, get) => ({
         set({ isLoading: true });
       }
       const response = await api.get<Ride & { driver?: Driver | null }>(`/rides/${rideId}`);
+      // If clearRide() ran while this fetch was in-flight, discard the
+      // response so we don't re-populate the store with the old ride.
+      if (get()._clearedRideId === rideId) {
+        set({ isLoading: false });
+        return;
+      }
       const ride = response.data;
       let driver = ride.driver ?? null;
       // R-P2-29: if a WS position update arrived within the last 10 s, the DB
@@ -687,8 +695,14 @@ export const useRideStore = create<RideState>((set, get) => ({
   // those represent "what the user wants to do next", not "the in-flight
   // trip". Wiping them caused the post-cancel flow to land on ride-options
   // with no pickup → stuck loading → bounce back to home.
+  //
+  // _clearedRideId: when clearRide runs, we record which ride was cleared
+  // so that in-flight fetchRide calls for that ride are ignored. Without
+  // this, the race (clearRide → fetchRide response arrives → currentRide
+  // re-populated) traps the rider on ride-completed after paying.
   clearRide: () => {
-    set({ currentRide: null, currentDriver: null, chatMessages: [], error: null });
+    const clearedId = get().currentRide?.id;
+    set({ currentRide: null, currentDriver: null, chatMessages: [], error: null, _clearedRideId: clearedId ?? null });
     AsyncStorage.removeItem(ACTIVE_RIDE_KEY).catch(() => {});
   },
 

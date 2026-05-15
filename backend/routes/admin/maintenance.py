@@ -144,8 +144,8 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
     )
     declines_by_driver: Dict[str, int] = defaultdict(int)
     for entry in decline_logs or []:
-        # user_email column stores driver_id for decline entries (see decline_ride endpoint)
-        did = entry.get("user_email")
+        # actor_id stores driver_id for decline entries (see decline_ride endpoint)
+        did = entry.get("actor_id") or entry.get("user_email")
         if did:
             declines_by_driver[did] += 1
 

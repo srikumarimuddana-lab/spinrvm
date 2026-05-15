@@ -2180,8 +2180,8 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
                 "action": "ride_declined",
                 "entity_type": "ride",
                 "entity_id": ride_id,
-                "user_email": driver["id"],  # reuse user_email column to store driver_id
-                "details": f"driver_id={driver['id']}",
+                "actor_id": driver["id"],
+                "details": {"driver_id": driver["id"]},
                 "created_at": datetime.now(timezone.utc).isoformat(),
             },
         )

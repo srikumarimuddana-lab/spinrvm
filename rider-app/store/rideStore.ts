@@ -484,6 +484,7 @@ export const useRideStore = create<RideState>((set, get) => ({
         requires_wav: requiresWav,
         quiet_mode: quietMode,
         rider_notes: riderNotes || null,
+        promo_code: get().appliedPromo?.code || null,
         created_at: new Date().toISOString(),
       };
 
@@ -497,7 +498,7 @@ export const useRideStore = create<RideState>((set, get) => ({
       const response = await api.post<Ride>('/rides', rideData, {
         headers: { 'Idempotency-Key': idempotencyKey },
       });
-      set({ currentRide: response.data, isLoading: false, scheduledTime: null, requiresWav: false, quietMode: false, riderNotes: '', _clearedRideId: null });
+      set({ currentRide: response.data, isLoading: false, scheduledTime: null, requiresWav: false, quietMode: false, riderNotes: '', appliedPromo: null, _clearedRideId: null });
       _persistRide(response.data, null);
       return response.data;
     } catch (error: unknown) {

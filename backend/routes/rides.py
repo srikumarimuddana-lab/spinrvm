@@ -1361,6 +1361,50 @@ async def create_ride(body: CreateRideRequest, request: Request = None, current_
 
     fresh_ride = inserted or ride_data
 
+    # ── Apply promo code if provided ──
+    if body.promo_code:
+        try:
+            try:
+                from ..routes.promotions import _validate_promo_for_user, _record_promo_application
+            except ImportError:
+                from routes.promotions import _validate_promo_for_user, _record_promo_application
+
+            server_fare = _d(fresh_ride.get("total_fare", 0))
+            validation = await _validate_promo_for_user(
+                code=body.promo_code,
+                user_id=current_user["id"],
+                ride_fare=server_fare,
+                ride_id=ride.id,
+            )
+            if validation.get("valid"):
+                discount = _d(validation["discount_amount"])
+                application_id = await _record_promo_application(
+                    promo_id=validation["promo_id"],
+                    code=validation["code"],
+                    user_id=current_user["id"],
+                    discount=discount,
+                )
+                discounted_total = _f(_round(server_fare - discount))
+                discounted_grand = _f(_round(_d(fresh_ride.get("grand_total", server_fare)) - discount))
+                await db_supabase.update_one("rides", {"id": ride.id}, {
+                    "subtotal_fare": _f(server_fare),
+                    "discount_amount": _f(discount),
+                    "promo_code": validation["code"],
+                    "promo_application_id": application_id,
+                    "total_fare": discounted_total,
+                    "grand_total": discounted_grand,
+                })
+                fresh_ride["subtotal_fare"] = _f(server_fare)
+                fresh_ride["discount_amount"] = _f(discount)
+                fresh_ride["promo_code"] = validation["code"]
+                fresh_ride["promo_application_id"] = application_id
+                fresh_ride["total_fare"] = discounted_total
+                fresh_ride["grand_total"] = discounted_grand
+        except HTTPException:
+            pass  # promo invalid/expired — ride still created without discount
+        except Exception as e:
+            logger.error(f"create_ride: promo application failed for code={body.promo_code}: {e}", exc_info=True)
+
     # Let admin live-monitoring see the request before dispatch starts —
     # previously the dashboard only observed a ride once a driver accepted,
     # which made it impossible to watch an unassigned ride sit in queue.

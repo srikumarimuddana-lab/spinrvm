@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useContext } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, FlatList,
   TextInput, ActivityIndicator, Platform, KeyboardAvoidingView,
@@ -7,6 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useStripe } from '@stripe/stripe-react-native';
+import { StripeKeyContext } from './_layout';
 import { useWalletStore, WalletTransaction } from '../store/walletStore';
 import CustomAlert from '@shared/components/CustomAlert';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -43,6 +44,7 @@ export default function WalletScreen() {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
+  const stripeKey = useContext(StripeKeyContext);
   const { initPaymentSheet, presentPaymentSheet } = useStripe();
   const {
     wallet, transactions, walletLoading, transactionsLoading, error: storeError,
@@ -50,6 +52,7 @@ export default function WalletScreen() {
   } = useWalletStore();
 
   const [showTopUp, setShowTopUp] = useState(false);
+  const [selectedPreset, setSelectedPreset] = useState<number | null>(null);
   const [customAmount, setCustomAmount] = useState('');
   const [topUpLoading, setTopUpLoading] = useState(false);
   const [alertState, setAlertState] = useState<{
@@ -57,19 +60,36 @@ export default function WalletScreen() {
     variant: 'info' | 'warning' | 'danger' | 'success';
   }>({ visible: false, title: '', message: '', variant: 'info' });
 
+  const effectiveAmount = selectedPreset ?? (parseFloat(customAmount) || 0);
+  const canTopUp = effectiveAmount >= 1 && effectiveAmount <= 500 && !topUpLoading;
+
   useEffect(() => {
     clearError();
     void Promise.all([fetchWallet(), fetchTransactions(30)]).catch(() => {});
   }, []);
 
-  const handleTopUp = async (amount: number) => {
-    if (amount <= 0 || amount > 500) {
-      setAlertState({ visible: true, title: 'Invalid Amount', message: 'Amount must be between $1 and $500', variant: 'warning' });
+  const selectPreset = (amt: number) => {
+    setSelectedPreset(amt);
+    setCustomAmount('');
+  };
+
+  const onCustomAmountChange = (text: string) => {
+    setCustomAmount(text);
+    setSelectedPreset(null);
+  };
+
+  const handleTopUp = async () => {
+    if (!stripeKey) {
+      setAlertState({ visible: true, title: 'Payment Not Available', message: 'Payment processing is not set up yet. Please add a card in Cards settings first, or try again later.', variant: 'warning' });
+      return;
+    }
+    if (effectiveAmount < 1 || effectiveAmount > 500) {
+      setAlertState({ visible: true, title: 'Invalid Amount', message: 'Please select or enter an amount between $1 and $500.', variant: 'warning' });
       return;
     }
     setTopUpLoading(true);
     try {
-      const { paymentIntent, ephemeralKey, customer } = await topUp(amount);
+      const { paymentIntent, ephemeralKey, customer } = await topUp(effectiveAmount);
 
       const { error: initError } = await initPaymentSheet({
         merchantDisplayName: 'Spinr',
@@ -99,8 +119,9 @@ export default function WalletScreen() {
       }
 
       setShowTopUp(false);
+      setSelectedPreset(null);
       setCustomAmount('');
-      setAlertState({ visible: true, title: 'Payment Successful', message: `$${amount.toFixed(2)} will be added to your wallet shortly.`, variant: 'success' });
+      setAlertState({ visible: true, title: 'Payment Successful', message: `$${effectiveAmount.toFixed(2)} will be added to your wallet shortly.`, variant: 'success' });
       setTimeout(() => { fetchWallet(); fetchTransactions(30); }, 2000);
     } catch (err: any) {
       setAlertState({ visible: true, title: 'Top-up Failed', message: err.response?.data?.detail || err.message || 'Please try again', variant: 'danger' });
@@ -179,7 +200,7 @@ export default function WalletScreen() {
         </View>
       </View>
 
-      {/* Top Up Modal */}
+      {/* Top Up Panel */}
       {showTopUp && (
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
           <View style={styles.topUpSection}>
@@ -188,36 +209,45 @@ export default function WalletScreen() {
               {TOP_UP_AMOUNTS.map((amt) => (
                 <TouchableOpacity
                   key={amt}
-                  style={styles.topUpChip}
-                  onPress={() => handleTopUp(amt)}
+                  style={[styles.topUpChip, selectedPreset === amt && styles.topUpChipSelected]}
+                  onPress={() => selectPreset(amt)}
                   disabled={topUpLoading}
                 >
-                  <Text style={styles.topUpChipText}>${amt}</Text>
+                  <Text style={[styles.topUpChipText, selectedPreset === amt && styles.topUpChipTextSelected]}>
+                    ${amt}
+                  </Text>
                 </TouchableOpacity>
               ))}
             </View>
             <View style={styles.customRow}>
               <TextInput
-                style={styles.customInput}
+                style={[styles.customInput, customAmount ? styles.customInputActive : null]}
                 placeholder="Custom amount"
                 placeholderTextColor={colors.textDim}
                 keyboardType="decimal-pad"
                 value={customAmount}
-                onChangeText={setCustomAmount}
+                onChangeText={onCustomAmountChange}
+                editable={!topUpLoading}
               />
-              <TouchableOpacity
-                style={[styles.customButton, !customAmount && styles.customButtonDisabled]}
-                onPress={() => handleTopUp(parseFloat(customAmount) || 0)}
-                disabled={!customAmount || topUpLoading}
-              >
-                {topUpLoading ? (
-                  <ActivityIndicator color="#FFF" size="small" />
-                ) : (
-                  <Text style={styles.customButtonText}>Add</Text>
-                )}
-              </TouchableOpacity>
             </View>
-            <TouchableOpacity onPress={() => setShowTopUp(false)}>
+            <TouchableOpacity
+              style={[styles.addFundsButton, !canTopUp && styles.addFundsButtonDisabled]}
+              onPress={handleTopUp}
+              disabled={!canTopUp}
+              activeOpacity={0.7}
+            >
+              {topUpLoading ? (
+                <ActivityIndicator color="#FFF" size="small" />
+              ) : (
+                <>
+                  <Ionicons name="wallet-outline" size={20} color="#FFF" />
+                  <Text style={styles.addFundsButtonText}>
+                    {effectiveAmount >= 1 ? `Add $${effectiveAmount.toFixed(2)}` : 'Select an Amount'}
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => { setShowTopUp(false); setSelectedPreset(null); setCustomAmount(''); }}>
               <Text style={styles.cancelText}>Cancel</Text>
             </TouchableOpacity>
           </View>
@@ -297,21 +327,27 @@ function createStyles(colors: ThemeColors) {
     topUpGrid: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
     topUpChip: {
       flex: 1, minWidth: 70, alignItems: 'center', paddingVertical: 14,
-      backgroundColor: colors.surfaceLight, borderRadius: 12, borderWidth: 1, borderColor: colors.border,
+      backgroundColor: colors.surfaceLight, borderRadius: 12, borderWidth: 1.5, borderColor: colors.border,
+    },
+    topUpChipSelected: {
+      backgroundColor: colors.primary + '15', borderColor: colors.primary,
     },
     topUpChipText: { fontSize: 16, fontWeight: '700', color: colors.text },
+    topUpChipTextSelected: { color: colors.primary },
     customRow: { flexDirection: 'row', marginTop: 12, gap: 10 },
     customInput: {
       flex: 1, backgroundColor: colors.surfaceLight, borderRadius: 12, paddingHorizontal: 16,
-      paddingVertical: 12, fontSize: 16, borderWidth: 1, borderColor: colors.border,
+      paddingVertical: 12, fontSize: 16, borderWidth: 1.5, borderColor: colors.border,
       color: colors.text,
     },
-    customButton: {
-      backgroundColor: colors.primary, borderRadius: 12, paddingHorizontal: 24,
-      alignItems: 'center', justifyContent: 'center',
+    customInputActive: { borderColor: colors.primary },
+    addFundsButton: {
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
+      backgroundColor: colors.primary, borderRadius: 14, paddingVertical: 16,
+      marginTop: 16,
     },
-    customButtonDisabled: { opacity: 0.5 },
-    customButtonText: { fontSize: 15, fontWeight: '700', color: '#FFF' },
+    addFundsButtonDisabled: { opacity: 0.45 },
+    addFundsButtonText: { fontSize: 16, fontWeight: '700', color: '#FFF' },
     cancelText: { textAlign: 'center', color: colors.textDim, marginTop: 12, fontSize: 14 },
 
     txnHeader: { paddingHorizontal: 16, paddingVertical: 8 },

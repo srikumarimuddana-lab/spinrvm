@@ -348,6 +348,7 @@ class CreateRideRequest(BaseModel):
     estimate_token: Optional[str] = None
     payment_method_id: Optional[str] = None
     work_profile: Optional[bool] = None
+    promo_code: Optional[str] = None
     requires_wav: bool = False
 
     # ── Input validation (SEC-017) ──────────────────────────────────────── #

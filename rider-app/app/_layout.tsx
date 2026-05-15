@@ -180,6 +180,7 @@ export default function RootLayout() {
     }
   }, []);
 
+
   // ── Fetch Stripe publishable key from backend /settings ──
   // Public endpoint — no auth required. Key comes from the admin
   // settings row so ops can rotate without a new app build. Tokenization
@@ -219,8 +220,13 @@ export default function RootLayout() {
           initializeAuth(),
           initializeLocation(),
           hydrateWorkProfile(),
-          useRideStore.getState().hydrateActiveRide(),
         ]);
+
+        // hydrateActiveRide must run AFTER initializeAuth — it calls
+        // api.get('/rides/active') which requires an auth token. Running
+        // it concurrently caused a 401 → double token refresh race →
+        // session destruction → "network request failed" on next login.
+        await useRideStore.getState().hydrateActiveRide();
 
         // Firebase native modules: Crashlytics + App Check. FCM token
         // registration is deferred to a separate effect that waits for

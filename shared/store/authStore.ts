@@ -331,11 +331,31 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           return;
         } catch (e) {
           if (__DEV__) console.log('[Auth] Profile hydration after refresh failed:', e);
-          // refreshTokens() already stored new tokens; if /auth/me fails
-          // here, treat it as a failed session and fall through.
+          // Refresh succeeded but /auth/me failed — clear the in-memory
+          // token so the app doesn't send a stale Authorization header
+          // while Zustand thinks the user is logged out. This mismatch
+          // previously left a zombie auth state that could corrupt HTTP/2
+          // connections on the next request.
+          setInMemoryToken(null);
+          setCsrfToken(null);
         }
       }
-      // refreshTokens() on failure already called logout() which cleared state.
+
+      // refreshTokens() returned false OR refresh succeeded but /auth/me
+      // failed. Two sub-cases:
+      // A. 401 → refresh token is expired/revoked → logout() already ran,
+      //    refresh_token already deleted from SecureStore. Fall through.
+      // B. Transient error (5xx, timeout, "Network request failed") →
+      //    refresh token is still valid and still in SecureStore. Do NOT
+      //    delete it — the next app launch should retry.
+      if (get().refreshToken || await storage.getItem('refresh_token')) {
+        if (__DEV__) console.log('[Auth] Refresh failed transiently — keeping refresh token for next launch');
+        // Ensure no in-memory auth artifacts leak into the "logged out" UI.
+        setInMemoryToken(null);
+        setCsrfToken(null);
+        set({ user: null, driver: null, token: null, refreshToken: null, tokenExpiresAt: null, isInitialized: true, isLoading: false });
+        return;
+      }
     }
 
     // ── No valid stored token → logged out ──

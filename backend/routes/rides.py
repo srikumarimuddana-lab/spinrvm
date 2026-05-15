@@ -2864,19 +2864,8 @@ async def rider_complete_ride(ride_id: str, request: Request = None, current_use
         "status": RideStatus.COMPLETED,
         "ride_completed_at": now,
         "updated_at": now,
-        "completed_by": "rider",
     }
-
-    try:
-        await db_supabase.update_one("rides", {"id": ride_id}, update_fields)
-    except Exception as e:
-        err_msg = str(e).lower()
-        if "column" in err_msg or "pgrst204" in err_msg:
-            logger.warning(f"Retrying rider complete with minimal fields: {e}")
-            safe_updates = {k: v for k, v in update_fields.items() if k in {"status", "ride_completed_at", "updated_at"}}
-            await db_supabase.update_one("rides", {"id": ride_id}, safe_updates)
-        else:
-            raise
+    await db_supabase.update_one("rides", {"id": ride_id}, update_fields)
 
     driver_id = ride.get("driver_id")
     driver_user_id = None

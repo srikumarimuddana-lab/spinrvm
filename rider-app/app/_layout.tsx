@@ -490,15 +490,15 @@ export default function RootLayout() {
         if (!result?.active || !result.ride) return;
         const s = result.ride.status;
         if (s === 'searching' || s === 'driver_assigned' || s === 'driver_accepted') {
-          router.push({ pathname: '/driver-arriving', params: { rideId: result.ride.id } } as any);
+          router.replace({ pathname: '/driver-arriving', params: { rideId: result.ride.id } } as any);
         } else if (s === 'driver_arrived') {
-          router.push({ pathname: '/driver-arrived', params: { rideId: result.ride.id } } as any);
+          router.replace({ pathname: '/driver-arrived', params: { rideId: result.ride.id } } as any);
         } else if (s === 'in_progress') {
-          router.push({ pathname: '/ride-in-progress', params: { rideId: result.ride.id } } as any);
+          router.replace({ pathname: '/ride-in-progress', params: { rideId: result.ride.id } } as any);
         } else if (s === 'completed') {
           const ps = result.ride.payment_status;
           if (ps !== 'paid' && ps !== 'waived_admin') {
-            router.push({ pathname: '/ride-completed', params: { rideId: result.ride.id } } as any);
+            router.replace({ pathname: '/ride-completed', params: { rideId: result.ride.id } } as any);
           }
         }
       } catch (e) {
@@ -574,15 +574,7 @@ export default function RootLayout() {
   );
 }
 
-// Diagnostic: on Android, bypass GestureHandlerRootView (which intercepts
-// all touch events via native dispatchTouchEvent) to test whether its
-// gesture orchestrator is consuming vertical scroll events. Stack swipe-back
-// gestures won't work, but ScrollView should. If scrolling works with a
-// plain View, the root cause is in gesture handler's native event dispatch.
 function GestureRootWrapper({ children }: { children: React.ReactNode }) {
-  if (Platform.OS === 'android') {
-    return <View style={{ flex: 1 }}>{children}</View>;
-  }
   return <GestureHandlerRootView style={{ flex: 1 }}>{children}</GestureHandlerRootView>;
 }
 

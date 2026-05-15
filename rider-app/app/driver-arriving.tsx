@@ -30,7 +30,7 @@ import { SOSButton } from '@shared/components/SOSButton';
 import { CarMarker } from '@shared/components/CarMarker';
 import { FreeCancelTimer } from '../components/FreeCancelTimer';
 import { useResponsive } from '@shared/utils/responsive';
-import { ScrollView } from 'react-native';
+import BottomSheet, { BottomSheetScrollView } from '../components/SafeBottomSheet';
 
 function DriverArrivingScreenContent() {
   const { height: SCREEN_HEIGHT } = useWindowDimensions();
@@ -46,6 +46,8 @@ function DriverArrivingScreenContent() {
     wsConnected,
   } = useRideStore();
   const mapRef = useRef<MapView>(null);
+  const bottomSheetRef = useRef<any>(null);
+  const snapPoints = useMemo(() => ['40%', '65%', '90%'], []);
 
   const [mapEtaMinutes, setMapEtaMinutes] = useState<number | null>(null);
   const [countdownSeconds, setCountdownSeconds] = useState<number | null>(null);
@@ -109,13 +111,14 @@ function DriverArrivingScreenContent() {
 
   // ── Status-based navigation ──
   useEffect(() => {
-    if (currentRide?.status === RideStatus.DRIVER_ARRIVED) {
+    if (!currentRide || currentRide.id !== rideId) return;
+    if (currentRide.status === RideStatus.DRIVER_ARRIVED) {
       router.replace({ pathname: '/driver-arrived', params: { rideId } });
-    } else if (currentRide?.status === RideStatus.IN_PROGRESS) {
+    } else if (currentRide.status === RideStatus.IN_PROGRESS) {
       router.replace({ pathname: '/ride-in-progress', params: { rideId } });
-    } else if (currentRide?.status === 'completed') {
+    } else if (currentRide.status === 'completed') {
       router.replace({ pathname: '/ride-completed', params: { rideId } });
-    } else if (currentRide?.status === 'cancelled') {
+    } else if (currentRide.status === 'cancelled') {
       clearRide();
       router.replace('/(tabs)' as any);
     }
@@ -302,10 +305,14 @@ function DriverArrivingScreenContent() {
       </View>
 
       {/* ═══ Bottom sheet ═══ */}
-      <View style={[styles.sheet, { maxHeight: SCREEN_HEIGHT * 0.55 }]}>
-        <View style={styles.sheetHandle} />
-
-        <ScrollView showsVerticalScrollIndicator={false} style={{ flex: 1 }}
+      <BottomSheet
+        ref={bottomSheetRef}
+        index={0}
+        snapPoints={snapPoints}
+        backgroundStyle={styles.sheet}
+        handleIndicatorStyle={styles.sheetHandle}
+      >
+        <BottomSheetScrollView
           contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) + 8 }}>
 
           {/* ── SEARCHING STATE ── */}
@@ -499,8 +506,8 @@ function DriverArrivingScreenContent() {
               )}
             </View>
           )}
-        </ScrollView>
-      </View>
+        </BottomSheetScrollView>
+      </BottomSheet>
 
       <CustomAlert
         visible={alertState.visible} title={alertState.title} message={alertState.message}
@@ -575,14 +582,12 @@ function createStyles(colors: ThemeColors, sf: (s: number) => number, insets: { 
 
     // ── Bottom sheet ──
     sheet: {
-      position: 'absolute', bottom: 0, left: 0, right: 0,
       backgroundColor: colors.surface,
       borderTopLeftRadius: 24, borderTopRightRadius: 24,
       shadowColor: '#000', shadowOffset: { width: 0, height: -4 }, shadowOpacity: 0.12, shadowRadius: 12, elevation: 16,
     },
     sheetHandle: {
       width: 40, height: 4, borderRadius: 2, backgroundColor: '#D1D5DB',
-      alignSelf: 'center', marginTop: 10, marginBottom: 4,
     },
 
     // ── Searching state ──

@@ -31,7 +31,7 @@ export default function RideTrackingWebviewScreen() {
   const fetchTrackingUrl = async (id: string) => {
     try {
       setLoading(true);
-      const res = await api.post<{ share_token?: string }>(`/rides/${id}/share`);
+      const res = await api.get<{ share_token?: string }>(`/rides/${id}/share`);
       const token = res.data?.share_token ?? id;
       setResolvedUrl(`https://spinr-track.app/${token}`);
     } catch {

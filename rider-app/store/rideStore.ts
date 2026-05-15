@@ -520,6 +520,15 @@ export const useRideStore = create<RideState>((set, get) => ({
         set({ isLoading: false });
         return;
       }
+      // Don't overwrite a DIFFERENT ride's data. This prevents stale
+      // in-flight fetches (from WS reconnect or poll intervals) from
+      // clobbering a newly created ride with old ride data — the root
+      // cause of the "second ride loops between searching and home" bug.
+      const current = get().currentRide;
+      if (current && current.id !== rideId) {
+        set({ isLoading: false });
+        return;
+      }
       const ride = response.data;
       let driver = ride.driver ?? null;
       // R-P2-29: if a WS position update arrived within the last 10 s, the DB

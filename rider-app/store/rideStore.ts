@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { Linking } from 'react-native';
 import { globalAlert } from './alertStore';
-import api, { SpinrApiError } from '@shared/api/client';
+import api, { SpinrApiError, hasAuthToken } from '@shared/api/client';
 import { useAuthStore, registerLogoutCallback } from '@shared/store/authStore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { RideStatus } from '../constants/rideStatus';
@@ -291,11 +291,11 @@ export const useRideStore = create<RideState>((set, get) => ({
         return { active: true, ride: rideWithoutDriver };
       }
       // No active ride on server — clear any stale local state
-      get().clearRide();
+      if (get().currentRide) get().clearRide();
       return null;
     } catch (err: unknown) {
       if (isErrorLike(err) && (err as { response?: { status?: number } }).response?.status === 404) {
-        get().clearRide();
+        if (get().currentRide) get().clearRide();
       }
       return null;
     }
@@ -842,6 +842,13 @@ export const useRideStore = create<RideState>((set, get) => ({
       }
       // Validate against backend — if the ride completed or was cancelled
       // while the app was closed the stored data would be stale.
+      // Skip if no auth token yet — avoids 401 → double refresh → session kill.
+      if (!hasAuthToken()) {
+        if (!get().currentRide) {
+          set({ currentRide: stored, currentDriver: currentDriver || null });
+        }
+        return;
+      }
       try {
         const live = await api.get<{ active?: boolean; ride?: Ride & { driver?: Driver | null } }>('/rides/active');
         if (!live.data?.active || live.data.ride?.id !== stored.id) {

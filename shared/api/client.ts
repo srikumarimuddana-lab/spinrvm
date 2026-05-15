@@ -4,7 +4,15 @@ import SpinrConfig from '../config/spinr.config';
 
 const API_URL = SpinrConfig.backendUrl;
 
-if (__DEV__) console.log('API Client configured with URL:', API_URL);
+// Always log the resolved URL — in production this line is the first clue
+// when an OTA update ships with a wrong/missing EXPO_PUBLIC_BACKEND_URL.
+console.log('[API] Backend URL:', API_URL);
+if (!API_URL || API_URL.includes('localhost') || API_URL.includes('10.0.2.2')) {
+  console.warn(
+    '[API] ⚠ Backend URL looks like a local dev fallback. ' +
+    'If this is a production build, EXPO_PUBLIC_BACKEND_URL was not set during the EAS update.',
+  );
+}
 
 // Request timeout in milliseconds
 const REQUEST_TIMEOUT = 15000;
@@ -51,6 +59,12 @@ const fetchWithTimeout = async (
       timeoutError.name = 'TimeoutError';
       throw timeoutError;
     }
+    // Log the raw fetch failure — "Network request failed" at this layer
+    // means the native networking stack couldn't send the request at all
+    // (DNS, TLS, malformed URL, or cleartext-HTTP block on Android).
+    console.error(
+      `[API] fetch() failed: url=${url} error=${error instanceof Error ? error.message : String(error)}`,
+    );
     throw error;
   }
 };
@@ -65,6 +79,10 @@ let _inMemoryToken: string | null = null;
 export function setInMemoryToken(token: string | null) {
   _inMemoryToken = token;
   if (__DEV__) console.log('[API] In-memory token:', token ? 'SET' : 'CLEARED');
+}
+
+export function hasAuthToken(): boolean {
+  return _inMemoryToken !== null;
 }
 
 // ── CSRF double-submit token ──

@@ -136,7 +136,7 @@ function RideInProgressScreenContent() {
             text: 'End & Pay Full Fare',
             style: 'destructive',
             onPress: async () => {
-              try { await api.post(`/drivers/rides/${currentRide?.id}/complete`); }
+              try { await api.post(`/rides/${currentRide?.id}/complete`); }
               catch { setAlertState({ visible: true, title: 'Error', message: 'Could not end ride. Please try again.', variant: 'danger' }); }
               if (rideId) fetchRide(rideId);
             },
@@ -182,7 +182,7 @@ function RideInProgressScreenContent() {
     // Get share token from backend API
     let shareToken = rideId || 'demo';
     try {
-      const shareRes = await api.post<{ share_token?: string }>(`/rides/${rideId}/share`);
+      const shareRes = await api.get<{ share_token?: string }>(`/rides/${rideId}/share`);
       if (shareRes.data?.share_token) {
         shareToken = shareRes.data.share_token;
       }
@@ -236,7 +236,7 @@ I've shared my live location with you for safety.
   const handleCopyTrackingLink = async () => {
     let shareToken = rideId || 'demo';
     try {
-      const shareRes = await api.post<{ share_token?: string }>(`/rides/${rideId}/share`);
+      const shareRes = await api.get<{ share_token?: string }>(`/rides/${rideId}/share`);
       if (shareRes.data?.share_token) {
         shareToken = shareRes.data.share_token;
       }
@@ -392,16 +392,6 @@ I've shared my live location with you for safety.
           <Ionicons name="map-outline" size={20} color={colors.text} />
           <Text style={styles.actionBtnText}>Live Map</Text>
         </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.actionBtn}
-          onPress={() => router.push({ pathname: '/fare-split', params: { rideId } } as any)}
-          accessibilityLabel="Split fare"
-          accessibilityRole="button"
-          accessibilityHint="Divide the ride cost with others"
-        >
-          <Ionicons name="people-outline" size={20} color={colors.text} />
-          <Text style={styles.actionBtnText}>Split Fare</Text>
-        </TouchableOpacity>
         <View style={styles.actionBtn}>
           <SOSButton rideId={rideId as string} onTrigger={triggerEmergency} />
           <Text style={styles.actionBtnText}>SOS</Text>
@@ -417,7 +407,7 @@ I've shared my live location with you for safety.
               {
                 text: 'End & Pay Full Fare', style: 'destructive',
                 onPress: async () => {
-                  try { await api.post(`/drivers/rides/${currentRide?.id}/complete`); }
+                  try { await api.post(`/rides/${currentRide?.id}/complete`); }
                   catch { setAlertState({ visible: true, title: 'Error', message: 'Could not end ride. Please try again.', variant: 'danger' }); }
                   if (rideId) fetchRide(rideId);
                 },

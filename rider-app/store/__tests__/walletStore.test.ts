@@ -1,7 +1,6 @@
 /**
  * walletStore tests
- * Covers: fetchWallet, topUp, payWithWallet, fetchTransactions,
- *         createFareSplit, cancelFareSplit, clearError.
+ * Covers: fetchWallet, topUp, payWithWallet, fetchTransactions, clearError.
  * All network calls are mocked — no real HTTP occurs.
  */
 
@@ -40,25 +39,11 @@ const makeTx = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
-const makeSplit = (overrides: Record<string, unknown> = {}) => ({
-  id: 'split-1',
-  ride_id: 'ride-99',
-  total_fare: '30.00',
-  split_count: 2,
-  your_share: '15.00',
-  status: 'pending',
-  participants: [
-    { id: 'p-1', phone: '+13065551234', share_amount: '15.00', status: 'pending' },
-  ],
-  ...overrides,
-});
-
 describe('walletStore', () => {
   beforeEach(() => {
     useWalletStore.setState({
       wallet: null,
       transactions: [],
-      currentSplit: null,
       isLoading: false,
       error: null,
     });
@@ -129,36 +114,6 @@ describe('walletStore', () => {
       await useWalletStore.getState().fetchTransactions(50);
 
       expect(mockApi.get).toHaveBeenCalledWith('/wallet/transactions?limit=50');
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  describe('createFareSplit', () => {
-    it('stores the created split', async () => {
-      const split = makeSplit();
-      mockApi.post.mockResolvedValueOnce({ data: split, status: 200 });
-
-      const result = await useWalletStore.getState().createFareSplit('ride-99', ['+13065551234']);
-
-      expect(mockApi.post).toHaveBeenCalledWith('/fare-split', {
-        ride_id: 'ride-99',
-        participant_phones: ['+13065551234'],
-      });
-      expect(result).toEqual(split);
-      expect(useWalletStore.getState().currentSplit).toEqual(split);
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  describe('cancelFareSplit', () => {
-    it('clears currentSplit after cancellation', async () => {
-      useWalletStore.setState({ currentSplit: makeSplit() });
-      mockApi.post.mockResolvedValueOnce({ data: null, status: 200 });
-
-      await useWalletStore.getState().cancelFareSplit('split-1');
-
-      expect(mockApi.post).toHaveBeenCalledWith('/fare-split/split-1/cancel');
-      expect(useWalletStore.getState().currentSplit).toBeNull();
     });
   });
 

@@ -2844,14 +2844,74 @@ async def rider_start_ride(ride_id: str, request: Request = None, current_user: 
 @api_router.post("/{ride_id}/complete")
 @ride_action_limit
 async def rider_complete_ride(ride_id: str, request: Request = None, current_user: dict = Depends(get_current_user)):
-    """Rider-side: Get completed ride data (ride is completed by driver; this fetches the result)."""
+    """Rider-initiated ride completion (early end-ride).
+
+    The rider pays the full agreed fare. We mark the ride completed and
+    free the driver, mirroring the essential parts of
+    drivers.py::complete_ride but skipping GPS aggregation (that data
+    is still captured and available for admin review).
+    """
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
     if ride.get("rider_id") != current_user["id"]:
         raise HTTPException(status_code=403, detail="Not authorized")
-    # Return the current ride state (driver will have set it to completed)
-    return ride
+    if ride.get("status") != RideStatus.IN_PROGRESS:
+        raise HTTPException(status_code=400, detail="Ride is not in progress")
+
+    now = datetime.now(timezone.utc)
+    update_fields = {
+        "status": RideStatus.COMPLETED,
+        "ride_completed_at": now,
+        "updated_at": now,
+        "completed_by": "rider",
+    }
+
+    try:
+        await db_supabase.update_one("rides", {"id": ride_id}, update_fields)
+    except Exception as e:
+        err_msg = str(e).lower()
+        if "column" in err_msg or "pgrst204" in err_msg:
+            logger.warning(f"Retrying rider complete with minimal fields: {e}")
+            safe_updates = {k: v for k, v in update_fields.items() if k in {"status", "ride_completed_at", "updated_at"}}
+            await db_supabase.update_one("rides", {"id": ride_id}, safe_updates)
+        else:
+            raise
+
+    driver_id = ride.get("driver_id")
+    driver_user_id = None
+    if driver_id:
+        await db_supabase.set_driver_available(driver_id, available=True, total_rides_inc=1)
+        try:
+            await record_period_transition(driver_id, 1)
+        except Exception:
+            logger.error(f"rider_complete_ride: period transition failed for driver {driver_id}", exc_info=True)
+        driver_row = await db_supabase.get_driver_by_id(driver_id)
+        driver_user_id = driver_row.get("user_id") if driver_row else None
+
+    completed_ride = await db_supabase.get_ride(ride_id)
+    total_fare = (completed_ride or {}).get("total_fare", ride.get("total_fare", 0))
+
+    if driver_user_id:
+        await manager.send_personal_message(
+            {"type": "ride_completed", "ride_id": ride_id, "total_fare": total_fare},
+            f"driver_{driver_user_id}",
+        )
+    await manager.send_personal_message(
+        {"type": "ride_completed", "ride_id": ride_id, "total_fare": total_fare},
+        f"rider_{current_user['id']}",
+    )
+    await manager.broadcast_ride_status(
+        ride_id, RideStatus.COMPLETED,
+        rider_id=current_user["id"], driver_user_id=driver_user_id,
+        total_fare=total_fare,
+    )
+    try:
+        await manager.broadcast_to_admins({"type": "ride_completed", "ride_id": ride_id, "total_fare": total_fare, "completed_by": "rider"})
+    except Exception:
+        pass
+
+    return completed_ride or ride
 
 
 @api_router.get("/{ride_id}/receipt")

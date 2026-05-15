@@ -120,7 +120,9 @@ export function useRiderSocket() {
         }
         break;
 
-      case 'ride_cancelled':
+      case 'ride_cancelled': {
+        const currentId = useRideStore.getState().currentRide?.id;
+        if (data.ride_id && currentId && data.ride_id !== currentId) break;
         globalAlert(
           'Ride Cancelled',
           data.reason || 'Your ride has been cancelled.',
@@ -129,6 +131,7 @@ export function useRiderSocket() {
         clearRide();
         router.replace('/(tabs)' as any);
         break;
+      }
 
       // Driver didn't respond in time — backend is re-dispatching.
       // R-P1-16: Show Alert first so the rider knows what happened,

@@ -43,7 +43,6 @@
     "distance": "Distance",
     "eta": "ETA",
     "share_trip": "Share Trip",
-    "split_fare": "Split Fare",
     "end_ride": "End Ride",
     "sos": "SOS",
     "driver_timeout": "Driver Unavailable",

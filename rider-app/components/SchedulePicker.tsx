@@ -51,8 +51,10 @@ export default function SchedulePicker({ visible, onClose, onConfirm, minDate, m
     const firstDay = new Date(viewYear, viewMonth, 1).getDay();
     const days: (number | null)[] = Array(firstDay).fill(null);
     for (let d = 1; d <= daysInMonth; d++) days.push(d);
-    while (days.length % 7 !== 0) days.push(null);
-    return days;
+    // Always exactly 42 cells (6 rows × 7 cols) so child count never changes
+    // between months — prevents Fabric "failed to insert view at index" crash.
+    while (days.length < 42) days.push(null);
+    return days.slice(0, 42);
   }, [viewYear, viewMonth]);
 
   const dayStr = (day: number) =>
@@ -128,7 +130,7 @@ export default function SchedulePicker({ visible, onClose, onConfirm, minDate, m
             </View>
 
             {/* ── Day grid ── */}
-            <View style={styles.grid}>
+            <View key={`${viewYear}-${viewMonth}`} style={styles.grid}>
               {calendarDays.map((day, idx) => {
                 if (!day) return <View key={`empty-${idx}`} style={styles.dayCell} />;
                 const ds = dayStr(day);

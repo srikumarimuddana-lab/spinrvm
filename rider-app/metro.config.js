@@ -40,9 +40,6 @@ config.resolver.blockList = [
   /node_modules[\\/]@types[\\/].*/,
   // Prevent shared/node_modules from providing duplicate React/RN copies
   /\.\.[\\/]shared[\\/]node_modules[\\/](react|react-native|react-dom)[\\/].*/,
-  // RN 0.85 VirtualView experimental component — codegen fails on nested Readonly
-  // event types. Experimental feature unused by Expo apps; safe to stub out.
-  /node_modules[\\/]react-native[\\/]src[\\/]private[\\/]components[\\/]virtualview[\\/]VirtualViewExperimentalNativeComponent\.js$/,
 ];
 
 // Force `react`, `react-dom`, and `react-native` to resolve from rider-app's
@@ -92,13 +89,24 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
     }
   }
 
+  // Stub the entire VirtualView directory — RN 0.85 added an experimental
+  // VirtualViewExperimentalNativeComponent whose codegen spec uses nested
+  // Readonly<{}> inside DirectEventHandler that Expo 55 can't parse. VirtualView.js
+  // also uses Flow `component` syntax unsupported by the Babel preset here.
+  // The whole feature is behind unstable_VirtualView and unused by Expo apps.
+  if (
+    moduleName.includes('VirtualViewExperimentalNativeComponent') ||
+    moduleName.includes('VirtualViewNativeComponent') ||
+    (moduleName.includes('virtualview') && moduleName.includes('VirtualView'))
+  ) {
+    return { type: 'sourceFile', filePath: NATIVE_COMPONENT_STUB };
+  }
+
   // Stub ONLY specs_DEPRECATED NativeComponent files — the Babel codegen plugin
   // (Expo SDK 55) can't parse their Flow type syntax. Don't stub anything else
   // in src/private/ (ScrollView wrappers, SafeAreaView, NativeComponentRegistry)
   // — those are plain JS the dev client needs at runtime.
-  const isSpecsDeprecated =
-    moduleName.includes('specs_DEPRECATED') ||
-    moduleName.includes('specs_DEPRECATED');
+  const isSpecsDeprecated = moduleName.includes('specs_DEPRECATED');
   const isNativeComponentImport = moduleName.includes('NativeComponent');
 
   if (isSpecsDeprecated && isNativeComponentImport) {

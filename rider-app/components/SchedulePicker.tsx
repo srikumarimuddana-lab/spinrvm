@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, Modal, ScrollView,
+  View, Text, StyleSheet, TouchableOpacity, Pressable, Modal, ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -104,8 +104,9 @@ export default function SchedulePicker({ visible, onClose, onConfirm, minDate, m
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <TouchableOpacity style={styles.overlay} activeOpacity={1} onPress={onClose}>
-        <TouchableOpacity activeOpacity={1} style={styles.sheet}>
+      <View style={styles.overlay}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+        <View style={styles.sheet}>
           <View style={styles.handle} />
           <Text style={styles.title}>Schedule Ride</Text>
 
@@ -218,15 +219,15 @@ export default function SchedulePicker({ visible, onClose, onConfirm, minDate, m
               {selectedDay ? `Schedule for ${formatPreviewTime()}` : 'Select a Date'}
             </Text>
           </TouchableOpacity>
-        </TouchableOpacity>
-      </TouchableOpacity>
+        </View>
+      </View>
     </Modal>
   );
 }
 
 function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
-    overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+    overlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.5)' },
     sheet: {
       backgroundColor: colors.surface,
       borderTopLeftRadius: 20, borderTopRightRadius: 20,

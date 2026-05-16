@@ -26,7 +26,7 @@ import CustomAlert from '@shared/components/CustomAlert';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { CarMarker } from '@shared/components/CarMarker';
-import SchedulePicker from '../components/SchedulePicker';
+import DatePicker from 'react-native-date-picker';
 import SkeletonBox from '../components/SkeletonBox';
 import { useResponsive } from '@shared/utils/responsive';
 import api from '@shared/api/client';
@@ -96,6 +96,7 @@ function RideOptionsScreenContent() {
   const [routeCoordinates, setRouteCoordinates] = useState<any[]>([]);
   const [mapReady, setMapReady] = useState(false);
   const [showScheduleModal, setShowScheduleModal] = useState(false);
+  const [tempDate, setTempDate] = useState(new Date(Date.now() + 30 * 60000));
   const [showPromoSheet, setShowPromoSheet] = useState(false);
   const [alertState, setAlertState] = useState<{
     visible: boolean; title: string; message: string;
@@ -303,12 +304,13 @@ function RideOptionsScreenContent() {
   };
 
   const handleScheduleConfirm = (date: Date) => {
+    setShowScheduleModal(false);
     if (date < new Date(Date.now() + 15 * 60000)) {
       setAlertState({ visible: true, title: 'Invalid Time', message: 'Scheduled time must be at least 15 minutes from now.', variant: 'warning' });
       return;
     }
+    setTempDate(date);
     setScheduledTime(date);
-    setShowScheduleModal(false);
   };
 
   // ── Render ──
@@ -772,13 +774,19 @@ function RideOptionsScreenContent() {
         </TouchableOpacity>
       </Modal>
 
-      {/* ═══ Schedule picker (absolute overlay — no Modal) ═══ */}
-      <SchedulePicker
-        visible={showScheduleModal}
-        onClose={() => setShowScheduleModal(false)}
+      {/* ═══ Schedule picker ═══ */}
+      <DatePicker
+        modal
+        open={showScheduleModal}
+        date={tempDate}
+        mode="datetime"
+        minimumDate={new Date(Date.now() + 15 * 60000)}
+        maximumDate={new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)}
+        title="Schedule Ride"
+        confirmText="Schedule"
+        cancelText="Cancel"
         onConfirm={handleScheduleConfirm}
-        minDate={new Date(Date.now() + 15 * 60000)}
-        maxDate={new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)}
+        onCancel={() => setShowScheduleModal(false)}
       />
 
       <CustomAlert

@@ -40,6 +40,9 @@ config.resolver.blockList = [
   /node_modules[\\/]@types[\\/].*/,
   // Prevent shared/node_modules from providing duplicate React/RN copies
   /\.\.[\\/]shared[\\/]node_modules[\\/](react|react-native|react-dom)[\\/].*/,
+  // RN 0.85 VirtualView experimental component — codegen fails on nested Readonly
+  // event types. Experimental feature unused by Expo apps; safe to stub out.
+  /node_modules[\\/]react-native[\\/]src[\\/]private[\\/]components[\\/]virtualview[\\/]VirtualViewExperimentalNativeComponent\.js$/,
 ];
 
 // Force `react`, `react-dom`, and `react-native` to resolve from rider-app's

@@ -26,7 +26,7 @@ import CustomAlert from '@shared/components/CustomAlert';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { CarMarker } from '@shared/components/CarMarker';
-import { Calendar, toDateId } from '@marceloterreiro/flash-calendar';
+import SchedulePicker from '../components/SchedulePicker';
 import SkeletonBox from '../components/SkeletonBox';
 import { useResponsive } from '@shared/utils/responsive';
 import api from '@shared/api/client';
@@ -97,9 +97,6 @@ function RideOptionsScreenContent() {
   const [mapReady, setMapReady] = useState(false);
   const [showScheduleModal, setShowScheduleModal] = useState(false);
   const [showPromoSheet, setShowPromoSheet] = useState(false);
-  const [selectedDay, setSelectedDay] = useState('');
-  const [selectedHour, setSelectedHour] = useState(new Date(Date.now() + 30 * 60000).getHours());
-  const [selectedMinute, setSelectedMinute] = useState(Math.ceil(new Date(Date.now() + 30 * 60000).getMinutes() / 15) * 15 % 60);
   const [alertState, setAlertState] = useState<{
     visible: boolean; title: string; message: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
@@ -305,32 +302,14 @@ function RideOptionsScreenContent() {
     }
   };
 
-  // Schedule picker helpers
-  const todayStr = useMemo(() => toDateId(new Date()), []);
-  const maxDateStr = useMemo(() => toDateId(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)), []);
-  const HOURS = useMemo(() => Array.from({ length: 24 }, (_, i) => i), []);
-  const MINUTES = [0, 15, 30, 45];
+  const openScheduleModal = () => setShowScheduleModal(true);
 
-  const formatHour12 = (h: number) =>
-    `${h % 12 || 12}:${String(selectedMinute).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
-
-  const openScheduleModal = () => {
-    const now = new Date(Date.now() + 30 * 60000);
-    setSelectedDay(toDateId(now));
-    setSelectedHour(now.getHours());
-    setSelectedMinute(Math.ceil(now.getMinutes() / 15) * 15 % 60);
-    setShowScheduleModal(true);
-  };
-
-  const confirmSchedule = () => {
-    if (!selectedDay) return;
-    const [y, m, d] = selectedDay.split('-').map(Number);
-    const combined = new Date(y, m - 1, d, selectedHour, selectedMinute);
-    if (combined < new Date(Date.now() + 15 * 60000)) {
+  const handleScheduleConfirm = (date: Date) => {
+    if (date < new Date(Date.now() + 15 * 60000)) {
       setAlertState({ visible: true, title: 'Invalid Time', message: 'Scheduled time must be at least 15 minutes from now.', variant: 'warning' });
       return;
     }
-    setScheduledTime(combined);
+    setScheduledTime(date);
     setShowScheduleModal(false);
   };
 
@@ -795,80 +774,14 @@ function RideOptionsScreenContent() {
         </TouchableOpacity>
       </Modal>
 
-      {/* ═══ Schedule picker modal ═══ */}
-      <Modal visible={showScheduleModal} transparent animationType="slide" onRequestClose={() => setShowScheduleModal(false)}>
-        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowScheduleModal(false)}>
-          <TouchableOpacity activeOpacity={1} style={styles.scheduleModal}>
-            <View style={styles.scheduleHandle} />
-            <Text style={styles.scheduleTitle}>Schedule Ride</Text>
-
-            <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-              <Calendar
-                calendarActiveDateRanges={selectedDay ? [{ startId: selectedDay, endId: selectedDay }] : []}
-                calendarMinDateId={todayStr}
-                calendarMaxDateId={maxDateStr}
-                onCalendarDayPress={(dateId) => setSelectedDay(dateId)}
-              />
-
-              <View style={styles.timeSection}>
-                <Text style={styles.timeSectionLabel}>Hour</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingHorizontal: 2 }}>
-                  {HOURS.map((h) => (
-                    <TouchableOpacity
-                      key={h}
-                      style={[styles.timeChip, selectedHour === h && styles.timeChipSelected]}
-                      onPress={() => setSelectedHour(h)}
-                    >
-                      <Text style={[styles.timeChipText, selectedHour === h && styles.timeChipTextSelected]}>
-                        {h === 0 ? '12 AM' : h < 12 ? `${h} AM` : h === 12 ? '12 PM' : `${h - 12} PM`}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-              </View>
-
-              <View style={styles.timeSection}>
-                <Text style={styles.timeSectionLabel}>Minute</Text>
-                <View style={styles.minuteRow}>
-                  {MINUTES.map((m) => (
-                    <TouchableOpacity
-                      key={m}
-                      style={[styles.minuteChip, selectedMinute === m && styles.minuteChipSelected]}
-                      onPress={() => setSelectedMinute(m)}
-                    >
-                      <Text style={[styles.minuteChipText, selectedMinute === m && styles.minuteChipTextSelected]}>
-                        :{String(m).padStart(2, '0')}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-              </View>
-
-              {selectedDay ? (
-                <View style={styles.schedulePreview}>
-                  <Ionicons name="calendar-outline" size={18} color={colors.primary} />
-                  <Text style={styles.schedulePreviewText}>
-                    {new Date(selectedDay + 'T00:00:00').toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' })}
-                    {' at '}
-                    {formatHour12(selectedHour)}
-                  </Text>
-                </View>
-              ) : null}
-            </ScrollView>
-
-            <TouchableOpacity
-              style={[styles.scheduleConfirmBtn, !selectedDay && { opacity: 0.5 }]}
-              onPress={confirmSchedule}
-              disabled={!selectedDay}
-            >
-              <Ionicons name="checkmark-circle" size={20} color="#FFF" />
-              <Text style={styles.scheduleConfirmText}>
-                {selectedDay ? `Schedule for ${formatHour12(selectedHour)}` : 'Select a Date'}
-              </Text>
-            </TouchableOpacity>
-          </TouchableOpacity>
-        </TouchableOpacity>
-      </Modal>
+      {/* ═══ Schedule picker ═══ */}
+      <SchedulePicker
+        visible={showScheduleModal}
+        onClose={() => setShowScheduleModal(false)}
+        onConfirm={handleScheduleConfirm}
+        minDate={new Date(Date.now() + 15 * 60000)}
+        maxDate={new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)}
+      />
 
       <CustomAlert
         visible={alertState.visible} title={alertState.title} message={alertState.message}
@@ -1560,70 +1473,5 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
       color: colors.textDim,
     },
 
-    // ── Schedule modal ──
-    scheduleModal: {
-      backgroundColor: colors.surface,
-      borderTopLeftRadius: 20,
-      borderTopRightRadius: 20,
-      paddingBottom: 30,
-      maxHeight: '85%',
-    },
-    scheduleHandle: {
-      width: 40, height: 4, borderRadius: 2,
-      backgroundColor: colors.border, alignSelf: 'center', marginTop: 10,
-    },
-    scheduleTitle: {
-      fontSize: sf(18), fontWeight: '700', color: colors.text,
-      textAlign: 'center', marginVertical: 14,
-      fontFamily: 'PlusJakartaSans_700Bold',
-    },
-    timeSection: { paddingHorizontal: 16, marginTop: 12, marginBottom: 4 },
-    timeSectionLabel: {
-      fontSize: sf(13), fontWeight: '600', color: colors.textSecondary,
-      marginBottom: 8, fontFamily: 'PlusJakartaSans_600SemiBold',
-    },
-    timeChip: {
-      paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10,
-      backgroundColor: colors.surfaceLight, borderWidth: 1.5, borderColor: colors.border,
-    },
-    timeChipSelected: {
-      backgroundColor: colors.primary + '15', borderColor: colors.primary,
-    },
-    timeChipText: {
-      fontSize: sf(13), fontWeight: '600', color: colors.text,
-      fontFamily: 'PlusJakartaSans_600SemiBold',
-    },
-    timeChipTextSelected: { color: colors.primary },
-    minuteRow: { flexDirection: 'row', gap: 10 },
-    minuteChip: {
-      flex: 1, alignItems: 'center', paddingVertical: 12, borderRadius: 10,
-      backgroundColor: colors.surfaceLight, borderWidth: 1.5, borderColor: colors.border,
-    },
-    minuteChipSelected: {
-      backgroundColor: colors.primary + '15', borderColor: colors.primary,
-    },
-    minuteChipText: {
-      fontSize: sf(15), fontWeight: '700', color: colors.text,
-      fontFamily: 'PlusJakartaSans_700Bold',
-    },
-    minuteChipTextSelected: { color: colors.primary },
-    schedulePreview: {
-      flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-      gap: 8, paddingVertical: 12, marginHorizontal: 16, marginTop: 12,
-      backgroundColor: colors.primary + '10', borderRadius: 10,
-    },
-    schedulePreviewText: {
-      fontSize: sf(14), fontWeight: '600', color: colors.primary,
-      fontFamily: 'PlusJakartaSans_600SemiBold',
-    },
-    scheduleConfirmBtn: {
-      flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
-      marginHorizontal: 16, marginTop: 14, marginBottom: 4, paddingVertical: 16,
-      backgroundColor: colors.primary, borderRadius: 14,
-    },
-    scheduleConfirmText: {
-      fontSize: sf(16), fontWeight: '700', color: '#FFF',
-      fontFamily: 'PlusJakartaSans_700Bold',
-    },
   });
 }

@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, Pressable, Modal, ScrollView,
+  View, Text, StyleSheet, TouchableOpacity, Pressable, ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -46,15 +46,16 @@ export default function SchedulePicker({ visible, onClose, onConfirm, minDate, m
     Math.ceil(initDate.getMinutes() / 15) * 15 % 60,
   );
 
-  const calendarDays = useMemo(() => {
+  // Always 6 rows × 7 cols = 42 fixed cells — child count never changes
+  const calendarRows = useMemo(() => {
     const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
     const firstDay = new Date(viewYear, viewMonth, 1).getDay();
-    const days: (number | null)[] = Array(firstDay).fill(null);
-    for (let d = 1; d <= daysInMonth; d++) days.push(d);
-    // Always exactly 42 cells (6 rows × 7 cols) so child count never changes
-    // between months — prevents Fabric "failed to insert view at index" crash.
-    while (days.length < 42) days.push(null);
-    return days.slice(0, 42);
+    const flat: (number | null)[] = Array(firstDay).fill(null);
+    for (let d = 1; d <= daysInMonth; d++) flat.push(d);
+    while (flat.length < 42) flat.push(null);
+    const rows: (number | null)[][] = [];
+    for (let i = 0; i < 42; i += 7) rows.push(flat.slice(i, i + 7));
+    return rows; // always 6 rows
   }, [viewYear, viewMonth]);
 
   const dayStr = (day: number) =>
@@ -90,144 +91,149 @@ export default function SchedulePicker({ visible, onClose, onConfirm, minDate, m
   };
 
   const formatPreview = () => {
-    if (!selectedDay) return '';
     const d = new Date(selectedDay + 'T00:00:00');
     const dateStr = d.toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' });
     return `${dateStr} at ${formatPreviewTime()}`;
   };
 
   const handleConfirm = () => {
-    if (!selectedDay) return;
     const [y, m, d] = selectedDay.split('-').map(Number);
     onConfirm(new Date(y, m - 1, d, selectedHour, selectedMinute));
   };
 
+  // Rendered as absoluteFill inside the screen — no Modal, no separate native window.
+  // Visibility via pointerEvents so the view tree stays stable (no insert/remove).
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <View style={styles.overlay}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
-        <View style={styles.sheet}>
-          <View style={styles.handle} />
-          <Text style={styles.title}>Schedule Ride</Text>
+    <View
+      style={[StyleSheet.absoluteFill, styles.container]}
+      pointerEvents={visible ? 'box-none' : 'none'}
+    >
+      {visible && (
+        <>
+          <Pressable style={[StyleSheet.absoluteFill, styles.backdrop]} onPress={onClose} />
+          <View style={styles.sheet}>
+            <View style={styles.handle} />
+            <Text style={styles.title}>Schedule Ride</Text>
 
-          <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+            <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
 
-            {/* ── Month navigation ── */}
-            <View style={styles.monthNav}>
-              <TouchableOpacity onPress={() => navigateMonth(-1)} disabled={!canPrev} style={styles.navBtn}>
-                <Ionicons name="chevron-back" size={20} color={canPrev ? colors.text : colors.border} />
-              </TouchableOpacity>
-              <Text style={styles.monthLabel}>{MONTH_NAMES[viewMonth]} {viewYear}</Text>
-              <TouchableOpacity onPress={() => navigateMonth(1)} disabled={!canNext} style={styles.navBtn}>
-                <Ionicons name="chevron-forward" size={20} color={canNext ? colors.text : colors.border} />
-              </TouchableOpacity>
-            </View>
+              {/* Month navigation */}
+              <View style={styles.monthNav}>
+                <TouchableOpacity onPress={() => navigateMonth(-1)} disabled={!canPrev} style={styles.navBtn}>
+                  <Ionicons name="chevron-back" size={20} color={canPrev ? colors.text : colors.border} />
+                </TouchableOpacity>
+                <Text style={styles.monthLabel}>{MONTH_NAMES[viewMonth]} {viewYear}</Text>
+                <TouchableOpacity onPress={() => navigateMonth(1)} disabled={!canNext} style={styles.navBtn}>
+                  <Ionicons name="chevron-forward" size={20} color={canNext ? colors.text : colors.border} />
+                </TouchableOpacity>
+              </View>
 
-            {/* ── Weekday headers ── */}
-            <View style={styles.weekRow}>
-              {WEEK_DAYS.map(wd => (
-                <Text key={wd} style={styles.weekDay}>{wd}</Text>
-              ))}
-            </View>
-
-            {/* ── Day grid ── */}
-            <View key={`${viewYear}-${viewMonth}`} style={styles.grid}>
-              {calendarDays.map((day, idx) => {
-                if (!day) return <View key={`empty-${idx}`} style={styles.dayCell} />;
-                const ds = dayStr(day);
-                const disabled = ds < minStr || ds > maxStr;
-                const selected = ds === selectedDay;
-                const isToday = ds === todayStr;
-                return (
-                  <TouchableOpacity
-                    key={ds}
-                    style={[
-                      styles.dayCell,
-                      selected && { backgroundColor: colors.primary },
-                      !selected && isToday && styles.todayRing,
-                    ]}
-                    onPress={() => setSelectedDay(ds)}
-                    disabled={disabled}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={[
-                      styles.dayText,
-                      disabled && styles.dayDisabled,
-                      selected && styles.daySelected,
-                      !disabled && !selected && isToday && { color: colors.primary, fontWeight: '700' },
-                    ]}>
-                      {day}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-
-            {/* ── Hour chips ── */}
-            <View style={styles.section}>
-              <Text style={styles.sectionLabel}>Hour</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingHorizontal: 2 }}>
-                {HOURS.map(h => (
-                  <TouchableOpacity
-                    key={h}
-                    style={[styles.chip, selectedHour === h && { backgroundColor: colors.primary + '15', borderColor: colors.primary }]}
-                    onPress={() => setSelectedHour(h)}
-                  >
-                    <Text style={[styles.chipText, selectedHour === h && { color: colors.primary }]}>
-                      {formatHour(h)}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-            </View>
-
-            {/* ── Minute chips ── */}
-            <View style={styles.section}>
-              <Text style={styles.sectionLabel}>Minute</Text>
-              <View style={styles.minuteRow}>
-                {MINUTES.map(m => (
-                  <TouchableOpacity
-                    key={m}
-                    style={[styles.minuteChip, selectedMinute === m && { backgroundColor: colors.primary + '15', borderColor: colors.primary }]}
-                    onPress={() => setSelectedMinute(m)}
-                  >
-                    <Text style={[styles.minuteText, selectedMinute === m && { color: colors.primary }]}>
-                      :{String(m).padStart(2, '0')}
-                    </Text>
-                  </TouchableOpacity>
+              {/* Weekday headers — always 7 children */}
+              <View style={styles.weekRow}>
+                {WEEK_DAYS.map(wd => (
+                  <Text key={wd} style={styles.weekDay}>{wd}</Text>
                 ))}
               </View>
-            </View>
 
-            {/* ── Preview ── */}
-            {selectedDay ? (
+              {/* Calendar grid — always 6 rows × 7 cols, stable child counts */}
+              <View>
+                {calendarRows.map((row, ri) => (
+                  <View key={`row-${ri}`} style={styles.gridRow}>
+                    {row.map((day, ci) => {
+                      if (!day) return <View key={`e-${ri}-${ci}`} style={styles.dayCell} />;
+                      const ds = dayStr(day);
+                      const disabled = ds < minStr || ds > maxStr;
+                      const selected = ds === selectedDay;
+                      const isToday = ds === todayStr;
+                      return (
+                        <TouchableOpacity
+                          key={ds}
+                          style={[
+                            styles.dayCell,
+                            selected && { backgroundColor: colors.primary },
+                            !selected && isToday && styles.todayRing,
+                          ]}
+                          onPress={() => setSelectedDay(ds)}
+                          disabled={disabled}
+                          activeOpacity={0.7}
+                        >
+                          <Text style={[
+                            styles.dayText,
+                            disabled && styles.dayDisabled,
+                            selected && styles.daySelected,
+                            !disabled && !selected && isToday && { color: colors.primary, fontWeight: '700' },
+                          ]}>
+                            {day}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                ))}
+              </View>
+
+              {/* Hour chips */}
+              <View style={styles.section}>
+                <Text style={styles.sectionLabel}>Hour</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8, paddingHorizontal: 2 }}>
+                  {HOURS.map(h => (
+                    <TouchableOpacity
+                      key={h}
+                      style={[styles.chip, selectedHour === h && { backgroundColor: colors.primary + '15', borderColor: colors.primary }]}
+                      onPress={() => setSelectedHour(h)}
+                    >
+                      <Text style={[styles.chipText, selectedHour === h && { color: colors.primary }]}>
+                        {formatHour(h)}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
+
+              {/* Minute chips */}
+              <View style={styles.section}>
+                <Text style={styles.sectionLabel}>Minute</Text>
+                <View style={styles.minuteRow}>
+                  {MINUTES.map(m => (
+                    <TouchableOpacity
+                      key={m}
+                      style={[styles.minuteChip, selectedMinute === m && { backgroundColor: colors.primary + '15', borderColor: colors.primary }]}
+                      onPress={() => setSelectedMinute(m)}
+                    >
+                      <Text style={[styles.minuteText, selectedMinute === m && { color: colors.primary }]}>
+                        :{String(m).padStart(2, '0')}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+
+              {/* Preview */}
               <View style={[styles.preview, { backgroundColor: colors.primary + '10' }]}>
                 <Ionicons name="calendar-outline" size={16} color={colors.primary} />
                 <Text style={[styles.previewText, { color: colors.primary }]}>{formatPreview()}</Text>
               </View>
-            ) : null}
 
-          </ScrollView>
+            </ScrollView>
 
-          <TouchableOpacity
-            style={[styles.confirmBtn, { backgroundColor: colors.primary }, !selectedDay && { opacity: 0.5 }]}
-            onPress={handleConfirm}
-            disabled={!selectedDay}
-          >
-            <Ionicons name="checkmark-circle" size={20} color="#FFF" />
-            <Text style={styles.confirmText}>
-              {selectedDay ? `Schedule for ${formatPreviewTime()}` : 'Select a Date'}
-            </Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    </Modal>
+            <TouchableOpacity
+              style={[styles.confirmBtn, { backgroundColor: colors.primary }]}
+              onPress={handleConfirm}
+            >
+              <Ionicons name="checkmark-circle" size={20} color="#FFF" />
+              <Text style={styles.confirmText}>Schedule for {formatPreviewTime()}</Text>
+            </TouchableOpacity>
+          </View>
+        </>
+      )}
+    </View>
   );
 }
 
 function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
-    overlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.5)' },
+    container: { justifyContent: 'flex-end', zIndex: 999 },
+    backdrop: { backgroundColor: 'rgba(0,0,0,0.5)' },
     sheet: {
       backgroundColor: colors.surface,
       borderTopLeftRadius: 20, borderTopRightRadius: 20,
@@ -248,13 +254,10 @@ function createStyles(colors: ThemeColors) {
     navBtn: { width: 36, height: 36, justifyContent: 'center', alignItems: 'center' },
     monthLabel: { fontSize: 16, fontWeight: '600', color: colors.text },
     weekRow: { flexDirection: 'row', paddingHorizontal: 8, marginBottom: 4 },
-    weekDay: {
-      flex: 1, textAlign: 'center', fontSize: 12,
-      fontWeight: '600', color: colors.textDim,
-    },
-    grid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 8 },
+    weekDay: { flex: 1, textAlign: 'center', fontSize: 12, fontWeight: '600', color: colors.textDim },
+    gridRow: { flexDirection: 'row', paddingHorizontal: 8 },
     dayCell: {
-      width: '14.28%', aspectRatio: 1,
+      flex: 1, aspectRatio: 1,
       justifyContent: 'center', alignItems: 'center', borderRadius: 100,
     },
     todayRing: { borderWidth: 1.5, borderColor: colors.primary },

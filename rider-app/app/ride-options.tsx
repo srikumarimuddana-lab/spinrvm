@@ -26,7 +26,7 @@ import CustomAlert from '@shared/components/CustomAlert';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { CarMarker } from '@shared/components/CarMarker';
-import DateTimePicker from '@react-native-community/datetimepicker';
+import SchedulePicker from '../components/SchedulePicker';
 import SkeletonBox from '../components/SkeletonBox';
 import { useResponsive } from '@shared/utils/responsive';
 import api from '@shared/api/client';
@@ -95,10 +95,8 @@ function RideOptionsScreenContent() {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [routeCoordinates, setRouteCoordinates] = useState<any[]>([]);
   const [mapReady, setMapReady] = useState(false);
-  const [showDatePicker, setShowDatePicker] = useState(false);
-  const [showTimePicker, setShowTimePicker] = useState(false);
+  const [showScheduleModal, setShowScheduleModal] = useState(false);
   const [showPromoSheet, setShowPromoSheet] = useState(false);
-  const [tempDate, setTempDate] = useState<Date>(new Date(Date.now() + 30 * 60000));
   const [alertState, setAlertState] = useState<{
     visible: boolean; title: string; message: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
@@ -304,40 +302,13 @@ function RideOptionsScreenContent() {
     }
   };
 
-  // Date/time picker handlers
-  const handleDateChange = (event: any, selectedDate?: Date) => {
-    if (Platform.OS === 'android') setShowDatePicker(false);
-    if (event.type === 'dismissed') { setShowDatePicker(false); return; }
-    if (selectedDate) {
-      setTempDate(selectedDate);
-      if (Platform.OS === 'android') setShowTimePicker(true);
-    }
-  };
-
-  const confirmDateSelection = () => {
-    setShowDatePicker(false);
-    setTimeout(() => setShowTimePicker(true), 100);
-  };
-
-  const handleTimeChange = (event: any, selectedTime?: Date) => {
-    if (Platform.OS === 'android') setShowTimePicker(false);
-    if (event.type === 'dismissed') { setShowTimePicker(false); return; }
-    if (selectedTime) {
-      const combined = new Date(tempDate);
-      combined.setHours(selectedTime.getHours(), selectedTime.getMinutes());
-      setTempDate(combined);
-      if (Platform.OS === 'android') confirmTimeSelection(combined);
-    }
-  };
-
-  const confirmTimeSelection = (timeToConfirm = tempDate) => {
-    const minTime = new Date(Date.now() + 15 * 60000);
-    if (timeToConfirm < minTime) {
+  const handleScheduleConfirm = (date: Date) => {
+    if (date < new Date(Date.now() + 15 * 60000)) {
       setAlertState({ visible: true, title: 'Invalid Time', message: 'Scheduled time must be at least 15 minutes from now.', variant: 'warning' });
       return;
     }
-    setScheduledTime(timeToConfirm);
-    setShowTimePicker(false);
+    setScheduledTime(date);
+    setShowScheduleModal(false);
   };
 
   // ── Render ──
@@ -596,7 +567,7 @@ function RideOptionsScreenContent() {
             {/* Schedule row */}
             <TouchableOpacity
               style={styles.actionRow}
-              onPress={() => scheduledTime ? setScheduledTime(null) : setShowDatePicker(true)}
+              onPress={() => scheduledTime ? setScheduledTime(null) : setShowScheduleModal(true)}
               activeOpacity={0.7}
             >
               <View style={styles.actionRowIcon}>
@@ -801,56 +772,14 @@ function RideOptionsScreenContent() {
         </TouchableOpacity>
       </Modal>
 
-      {/* ═══ Date / Time pickers ═══ */}
-      {showDatePicker && (
-        Platform.OS === 'ios' ? (
-          <Modal transparent animationType="slide" visible>
-            <View style={styles.modalOverlay}>
-              <View style={styles.pickerContainer}>
-                <View style={styles.pickerHeader}>
-                  <TouchableOpacity onPress={() => setShowDatePicker(false)}>
-                    <Text style={styles.pickerCancelText}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={confirmDateSelection}>
-                    <Text style={styles.pickerDoneText}>Next</Text>
-                  </TouchableOpacity>
-                </View>
-                <DateTimePicker value={tempDate} mode="date" display="spinner"
-                  minimumDate={new Date(Date.now() + 15 * 60 * 1000)}
-                  maximumDate={new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)}
-                  onChange={handleDateChange} textColor="#000000" />
-              </View>
-            </View>
-          </Modal>
-        ) : (
-          <DateTimePicker value={tempDate} mode="date" display="default"
-            minimumDate={new Date(Date.now() + 15 * 60 * 1000)}
-            maximumDate={new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)}
-            onChange={handleDateChange} />
-        )
-      )}
-      {showTimePicker && (
-        Platform.OS === 'ios' ? (
-          <Modal transparent animationType="slide" visible>
-            <View style={styles.modalOverlay}>
-              <View style={styles.pickerContainer}>
-                <View style={styles.pickerHeader}>
-                  <TouchableOpacity onPress={() => setShowTimePicker(false)}>
-                    <Text style={styles.pickerCancelText}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={() => confirmTimeSelection()}>
-                    <Text style={styles.pickerDoneText}>Done</Text>
-                  </TouchableOpacity>
-                </View>
-                <DateTimePicker value={tempDate} mode="time" display="spinner"
-                  onChange={handleTimeChange} textColor="#000000" />
-              </View>
-            </View>
-          </Modal>
-        ) : (
-          <DateTimePicker value={tempDate} mode="time" display="default" onChange={handleTimeChange} />
-        )
-      )}
+      {/* ═══ Schedule picker (absolute overlay — no Modal) ═══ */}
+      <SchedulePicker
+        visible={showScheduleModal}
+        onClose={() => setShowScheduleModal(false)}
+        onConfirm={handleScheduleConfirm}
+        minDate={new Date(Date.now() + 15 * 60000)}
+        maxDate={new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)}
+      />
 
       <CustomAlert
         visible={alertState.visible} title={alertState.title} message={alertState.message}
@@ -1542,31 +1471,6 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
       color: colors.textDim,
     },
 
-    // ── Pickers ──
-    pickerContainer: {
-      backgroundColor: colors.surface,
-      borderTopLeftRadius: 16,
-      borderTopRightRadius: 16,
-      paddingBottom: 20,
-    },
-    pickerHeader: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      alignItems: 'center',
-      padding: 16,
-      borderBottomWidth: 1,
-      borderBottomColor: colors.border,
-    },
-    pickerCancelText: {
-      fontSize: sf(16),
-      color: colors.textSecondary,
-      fontFamily: 'PlusJakartaSans_500Medium',
-    },
-    pickerDoneText: {
-      fontSize: sf(16),
-      color: colors.primary,
-      fontFamily: 'PlusJakartaSans_600SemiBold',
-    },
 
   });
 }

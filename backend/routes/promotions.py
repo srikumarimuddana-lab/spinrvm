@@ -240,9 +240,8 @@ async def _validate_promo_for_user(
         if max_cap and discount > Decimal(str(max_cap)):
             discount = Decimal(str(max_cap))
     else:
-        # Flat discount capped at grand_total to prevent a negative bill
-        cap = grand_total if grand_total is not None else ride_fare
-        discount = min(Decimal(str(discount_value)), cap)
+        # Flat discount capped at ride_fare (driver earnings only — never discounts fees/taxes)
+        discount = min(Decimal(str(discount_value)), ride_fare)
 
     return {
         "valid": True,
@@ -515,7 +514,7 @@ async def get_available_promos(
                 if max_cap and discount > max_cap:
                     discount = max_cap  # noqa: E701
             else:
-                discount = min(discount_value, ride_fare) if ride_fare > 0 else discount_value
+                discount = min(discount_value, effective_ride) if effective_ride > 0 else discount_value
 
             available.append(
                 {

@@ -32,6 +32,7 @@ import { formatDate, formatCurrency } from "@/lib/utils";
 import { getPromotions, createPromotion, updatePromotion, deletePromotion, getPromoUsage, getPromoStats, getUsers, getServiceAreas } from "@/lib/api";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { useRequireModule } from "@/hooks/useRequireModule";
+import RideDetailModal from "../rides/_components/ride-detail-modal";
 
 // --- Types ---
 
@@ -64,6 +65,8 @@ interface ServiceArea {
 interface PromoUsageRecord {
     id: string;
     user_id: string;
+    user_name?: string;
+    ride_id?: string | null;
     promo_id: string;
     code: string;
     discount_applied: number;
@@ -117,6 +120,7 @@ export default function PromotionsPage() {
     const { allowed } = useRequireModule("promotions");
     const { toast } = useToast();
     const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+    const [selectedRideId, setSelectedRideId] = useState<string | null>(null);
     const [promos, setPromos] = useState<PromoCode[]>([]);
     const [usage, setUsage] = useState<PromoUsageRecord[]>([]);
     const [stats, setStats] = useState<PromoStatsData | null>(null);
@@ -702,7 +706,7 @@ export default function PromotionsPage() {
                         <div className="border rounded-lg">
                             <Table>
                                 <TableHeader><TableRow>
-                                    <TableHead>Date</TableHead><TableHead>User ID</TableHead><TableHead>Code</TableHead><TableHead>Type</TableHead><TableHead>Discount Applied</TableHead>
+                                    <TableHead>Date</TableHead><TableHead>User</TableHead><TableHead>Code</TableHead><TableHead>Type</TableHead><TableHead>Booking</TableHead><TableHead>Discount Applied</TableHead>
                                 </TableRow></TableHeader>
                                 <TableBody>
                                     {filteredUsage.map((u) => {
@@ -710,9 +714,25 @@ export default function PromotionsPage() {
                                         return (
                                             <TableRow key={u.id}>
                                                 <TableCell className="text-sm text-muted-foreground">{formatDate(u.created_at)}</TableCell>
-                                                <TableCell className="text-sm font-mono">{u.user_id?.slice(0, 12)}...</TableCell>
+                                                <TableCell className="text-sm">
+                                                    {u.user_name
+                                                        ? <span className="font-medium">{u.user_name}</span>
+                                                        : <span className="font-mono text-muted-foreground">{u.user_id?.slice(0, 10)}…</span>}
+                                                </TableCell>
                                                 <TableCell><span className="font-mono font-semibold text-violet-600 dark:text-violet-400 bg-violet-500/10 px-2 py-0.5 rounded text-xs">{u.code}</span></TableCell>
                                                 <TableCell><Badge variant="outline" className="text-xs">{pType === "private" ? "Private" : "Public"}</Badge></TableCell>
+                                                <TableCell>
+                                                    {u.ride_id ? (
+                                                        <button
+                                                            onClick={() => setSelectedRideId(u.ride_id!)}
+                                                            className="font-mono text-xs text-blue-600 dark:text-blue-400 hover:underline bg-blue-500/10 px-2 py-0.5 rounded"
+                                                        >
+                                                            {u.ride_id.slice(0, 8)}…
+                                                        </button>
+                                                    ) : (
+                                                        <span className="text-muted-foreground text-xs">—</span>
+                                                    )}
+                                                </TableCell>
                                                 <TableCell className="text-sm font-medium text-emerald-600">{formatCurrency(u.discount_applied)}</TableCell>
                                             </TableRow>
                                         );
@@ -827,6 +847,12 @@ export default function PromotionsPage() {
                     </div>
                 </DialogContent>
             </Dialog>
+
+            <RideDetailModal
+                rideId={selectedRideId}
+                open={!!selectedRideId}
+                onClose={() => setSelectedRideId(null)}
+            />
 
             <AlertDialog open={!!deleteTarget} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}>
                 <AlertDialogContent>

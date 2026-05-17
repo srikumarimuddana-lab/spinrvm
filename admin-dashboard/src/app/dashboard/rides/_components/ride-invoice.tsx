@@ -255,13 +255,14 @@ export default function RideInvoice({ rideId, status }: Props) {
             if (typeof data.airport_fee === "number" && data.airport_fee > 0) {
                 fareLines.push(["Airport Fee", fmtMoney(data.airport_fee)]);
             }
-            // Dynamic area fees — any key/value the admin defined on the service area
-            const extraFees: Record<string, unknown> = data.extra_fees || {};
-            for (const [key, val] of Object.entries(extraFees)) {
-                const amount = typeof val === "number" ? val : parseFloat(String(val));
+            // Dynamic area fees stored in area_fees_breakdown JSONB at booking time.
+            // Each entry: { name, calculated_value, ... }
+            for (const fee of (Array.isArray(data.area_fees_breakdown) ? data.area_fees_breakdown : [])) {
+                const amount = typeof fee.calculated_value === "number"
+                    ? fee.calculated_value
+                    : parseFloat(String(fee.calculated_value ?? 0));
                 if (Number.isFinite(amount) && amount > 0) {
-                    const label = key.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
-                    fareLines.push([label, fmtMoney(amount)]);
+                    fareLines.push([fee.name || "Fee", fmtMoney(amount)]);
                 }
             }
 

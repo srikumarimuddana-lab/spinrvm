@@ -53,7 +53,6 @@ interface RideEstimate {
   distance_fare: string; // MoneyString
   time_fare: string; // MoneyString
   booking_fee: string; // MoneyString
-  fees?: Record<string, string>; // dynamic area fees from service_areas.fees — any key/value
   surge_multiplier?: number; // ratio, not money — stays number
   total_fare: string; // MoneyString
   fare_breakdown?: FareLineItem[];
@@ -117,7 +116,6 @@ interface Ride {
   distance_fare?: string; // MoneyString
   time_fare?: string; // MoneyString
   booking_fee?: string; // MoneyString
-  extra_fees?: Record<string, string>; // dynamic area fees snapshotted at booking
   total_fare: string; // MoneyString
   fare_breakdown?: FareLineItem[];
   grand_total?: string; // MoneyString

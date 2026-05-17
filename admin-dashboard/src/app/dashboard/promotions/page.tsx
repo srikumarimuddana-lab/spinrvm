@@ -426,7 +426,7 @@ export default function PromotionsPage() {
                 max_uses: parseInt(form.max_uses),
                 max_uses_per_user: parseInt(form.max_uses_per_user),
                 expiry_date: form.expiry_date || null,
-                description: form.description || null,
+                description: form.description || "",
                 min_ride_fare: form.min_ride_fare ? parseFloat(form.min_ride_fare) : 0,
                 first_ride_only: form.first_ride_only,
                 service_area_id: form.service_area_id || null,

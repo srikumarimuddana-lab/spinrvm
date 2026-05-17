@@ -107,7 +107,19 @@ export default function HomeScreen() {
           message: 'Spinr uses your location to show nearby drivers, calculate your pickup point, and provide accurate ETAs. ' +
           'Your location is only used while the app is in use and is never sold or shared with advertisers.',
           variant: 'info',
-          buttons: [{ text: 'Continue', style: 'default', onPress: () => resolve() }],
+          buttons: [{
+            text: 'Continue',
+            style: 'default',
+            onPress: () => {
+              // Close the alert first, then wait for the Modal close animation
+              // to finish before the system permission dialog appears.
+              // Without this the Modal stays visible=true while the system dialog
+              // is on screen; when the system dialog closes the stale Modal blocks
+              // all ScrollView touch events on every screen until force-restart.
+              setAlertState(prev => ({ ...prev, visible: false }));
+              setTimeout(resolve, 350);
+            },
+          }],
         });
       });
     }

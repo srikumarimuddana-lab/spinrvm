@@ -337,7 +337,11 @@ function RideOptionsScreenContent() {
   return (
     <View style={styles.container}>
       {/* ═══ Full-screen map ═══ */}
+      {/* pointerEvents="none" on the wrapper prevents Google Maps' native gesture
+          recognizer from stealing vertical scroll events from the sheet's ScrollView
+          on Android production builds. The map is decorative here (auto-fit route). */}
       {pickup && dropoff ? (
+        <View style={StyleSheet.absoluteFill} pointerEvents="none">
         <MapView
           ref={mapRef}
           provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
@@ -404,6 +408,7 @@ function RideOptionsScreenContent() {
               heading={(driver as any).heading ?? Math.random() * 360} size={36} zIndex={101} />
           ))}
         </MapView>
+        </View>
       ) : (
         <View style={styles.mapPlaceholder}>
           <ActivityIndicator size="large" color={colors.primary} />

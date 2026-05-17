@@ -521,10 +521,18 @@ async def admin_create_promo_code(req: CreatePromoCodeRequest):
     """Create a new promo code."""
     code = req.code.strip().upper()
 
-    # Check uniqueness
-    existing = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("promotions", {"code": code}, limit=1))
-    if existing:
-        raise HTTPException(status_code=400, detail=f"Promo code '{code}' already exists")
+    # Uniqueness is (code, service_area_id) — same code is allowed in different areas.
+    area_id = req.service_area_id or None
+    lookup: dict = {"code": code}
+    if area_id:
+        lookup["service_area_id"] = area_id
+    existing_rows = await db_supabase.get_rows("promotions", lookup, limit=1)
+    # For global promos (area_id is None) we must also exclude rows where service_area_id IS NULL.
+    if area_id is None:
+        existing_rows = [r for r in (existing_rows or []) if r.get("service_area_id") is None]
+    if existing_rows:
+        area_label = " in this service area" if area_id else " (global)"
+        raise HTTPException(status_code=400, detail=f"Promo code '{code}' already exists{area_label}")
 
     if req.discount_type not in ("flat", "percentage"):
         raise HTTPException(status_code=400, detail="discount_type must be 'flat' or 'percentage'")

@@ -9,6 +9,7 @@ export default function TabLayout() {
   const { colors } = useTheme();
   return (
     <Tabs
+      initialRouteName="index"
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: colors.primary,

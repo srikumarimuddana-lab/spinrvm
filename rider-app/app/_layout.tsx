@@ -40,6 +40,7 @@ import { handleScheduledRideReminderFCM } from '../hooks/useScheduledRideReminde
 import { useRideStatusNotification } from '../hooks/useRideStatusNotification';
 import CustomAlert from '@shared/components/CustomAlert';
 import { useAlertStore } from '../store/alertStore';
+import Toast from '../components/Toast';
 
 // R-P1-29: Route to the correct screen based on FCM notification data.
 // Called both for killed-state (getInitialNotification) and tapped-while-backgrounded notifications.
@@ -663,6 +664,7 @@ function RootLayoutInner({
           </MaybeStripeProvider>
           </StripeKeyContext.Provider>
           <GlobalAlert />
+          <Toast />
         </SafeAreaProvider>
       </GestureRootWrapper>
     </ErrorBoundary>

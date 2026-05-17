@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { Linking } from 'react-native';
-import { globalAlert } from './alertStore';
+import { showToast } from './toastStore';
 import api, { SpinrApiError, hasAuthToken } from '@shared/api/client';
 import { useAuthStore, registerLogoutCallback } from '@shared/store/authStore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -39,6 +39,12 @@ interface VehicleType {
   image_url?: string;
 }
 
+export interface FareLineItem {
+  label: string;
+  amount: number | string | null;
+  type: 'fare' | 'fee' | 'tax' | 'tip' | 'modifier';
+}
+
 interface RideEstimate {
   vehicle_type: VehicleType;
   distance_km: number;
@@ -47,8 +53,12 @@ interface RideEstimate {
   distance_fare: string; // MoneyString
   time_fare: string; // MoneyString
   booking_fee: string; // MoneyString
+  platform_fee?: string; // MoneyString — service area fee from admin panel
+  city_fee?: string; // MoneyString — municipal fee from admin panel
   surge_multiplier?: number; // ratio, not money — stays number
   total_fare: string; // MoneyString
+  fare_breakdown?: FareLineItem[];
+  grand_total?: string; // MoneyString — includes area fees + taxes
   available: boolean;
   eta_minutes: number;
   driver_count: number;
@@ -109,7 +119,11 @@ interface Ride {
   distance_fare?: string; // MoneyString
   time_fare?: string; // MoneyString
   booking_fee?: string; // MoneyString
+  platform_fee?: string; // MoneyString
+  city_fee?: string; // MoneyString
   total_fare: string; // MoneyString
+  fare_breakdown?: FareLineItem[];
+  grand_total?: string; // MoneyString
   payment_method: string;
   payment_status?: string;
   card_last4?: string;
@@ -396,6 +410,12 @@ export const useRideStore = create<RideState>((set, get) => ({
       } catch (parseErr) {
         if (__DEV__) console.warn('[offline_queue] discarding corrupted queue:', parseErr);
         await AsyncStorage.removeItem('offline_queue');
+        showToast(
+          'Offline Actions Lost',
+          'Some queued actions could not be recovered. Please rebook if needed.',
+          'warning',
+          6000,
+        );
         return;
       }
       if (queue.length === 0) return;
@@ -436,10 +456,11 @@ export const useRideStore = create<RideState>((set, get) => ({
       await AsyncStorage.setItem('offline_queue', JSON.stringify(updatedQueue));
 
       if (failedPermanently.length > 0) {
-        globalAlert(
+        showToast(
           'Sync Failed',
-          `${failedPermanently.length} offline action(s) could not be synced and were dropped.`,
+          `${failedPermanently.length} offline action(s) could not be synced.`,
           'warning',
+          5000,
         );
       }
       if (successfulSyncs.length > 0) {

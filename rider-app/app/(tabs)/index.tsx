@@ -88,7 +88,6 @@ export default function HomeScreen() {
       if (cached) {
         const cachedLoc = { coords: { latitude: cached.lat, longitude: cached.lng } };
         setLocation(cachedLoc);
-        setUserLocation({ latitude: cached.lat, longitude: cached.lng });
       }
     }
 
@@ -148,7 +147,6 @@ export default function HomeScreen() {
         const lastKnown = await Location.getLastKnownPositionAsync();
         if (lastKnown) {
           setLocation(lastKnown);
-          setUserLocation({ latitude: lastKnown.coords.latitude, longitude: lastKnown.coords.longitude });
           saveLastLocation(lastKnown.coords.latitude, lastKnown.coords.longitude);
         }
       } catch (err) { if (__DEV__) console.error('[rider-home]', err); }

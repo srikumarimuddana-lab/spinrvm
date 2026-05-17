@@ -185,6 +185,44 @@ def calculate_fare(
     )
 
 
+def build_fare_breakdown_lines(
+    fb: FareBreakdown,
+    distance_km: float,
+    duration_minutes: int,
+    area_fees: List[Dict[str, Any]] = (),
+    tax_breakdown: Dict[str, Dict[str, float]] = None,
+) -> List[Dict[str, Any]]:
+    """Build a flat list of labelled fare line items for the rider UI.
+
+    The frontend renders this array verbatim — no hardcoded field knowledge
+    needed. Labels are owned by the backend so admin fee changes propagate
+    without a client release.
+    """
+    lines: List[Dict[str, Any]] = []
+
+    lines.append({"label": "Base fare", "amount": _f(fb.base_fare), "type": "fare"})
+    lines.append({"label": f"Distance ({round(distance_km, 1)} km)", "amount": _f(fb.distance_fare), "type": "fare"})
+    lines.append({"label": f"Time ({duration_minutes} min)", "amount": _f(fb.time_fare), "type": "fare"})
+    lines.append({"label": "Booking fee", "amount": _f(fb.booking_fee), "type": "fee"})
+
+    if fb.surge_multiplier > Decimal("1"):
+        lines.append({"label": f"Surge ({float(fb.surge_multiplier)}×)", "amount": None, "type": "modifier"})
+
+    for fee in (area_fees or []):
+        val = fee.get("calculated_value", 0)
+        if float(val) > 0:
+            lines.append({"label": fee.get("name", "Fee"), "amount": float(val), "type": "fee"})
+
+    if tax_breakdown:
+        for tax_name, info in tax_breakdown.items():
+            if info.get("amount", 0) > 0:
+                rate = info.get("rate", 0)
+                label = f"{tax_name} ({rate}%)" if rate else tax_name
+                lines.append({"label": label, "amount": info["amount"], "type": "tax"})
+
+    return lines
+
+
 def recalculate_fare_for_distance(
     ride: Dict[str, Any],
     actual_distance_km: float,

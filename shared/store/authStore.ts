@@ -69,14 +69,12 @@ async function clearAuthStorage(): Promise<void> {
 }
 
 // Platform-safe secure storage
-// Web uses sessionStorage (clears on tab close) instead of localStorage
-// to reduce token exposure in browser storage.
+// Web relies entirely on HttpOnly cookies set by the backend — no client-side
+// token storage, so XSS cannot exfiltrate session tokens. Native uses SecureStore.
 const storage = {
   async getItem(key: string): Promise<string | null> {
     try {
-      if (Platform.OS === 'web') {
-        return sessionStorage.getItem(key);
-      }
+      if (Platform.OS === 'web') return null;
       return await SecureStore.getItemAsync(key);
     } catch (e) {
       if (__DEV__) {
@@ -88,10 +86,7 @@ const storage = {
   },
   async setItem(key: string, value: string): Promise<void> {
     try {
-      if (Platform.OS === 'web') {
-        sessionStorage.setItem(key, value);
-        return;
-      }
+      if (Platform.OS === 'web') return;
       return await SecureStore.setItemAsync(key, value);
     } catch (e) {
       if (__DEV__) {
@@ -102,10 +97,7 @@ const storage = {
   },
   async deleteItem(key: string): Promise<void> {
     try {
-      if (Platform.OS === 'web') {
-        sessionStorage.removeItem(key);
-        return;
-      }
+      if (Platform.OS === 'web') return;
       return await SecureStore.deleteItemAsync(key);
     } catch (e) {
       if (__DEV__) {

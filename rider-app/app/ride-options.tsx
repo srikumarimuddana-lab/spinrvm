@@ -20,6 +20,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import MapView, { Marker, Circle, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
+import BottomSheet, { BottomSheetScrollView } from '../components/SafeBottomSheet';
 import { useRideStore } from '../store/rideStore';
 import { useWalletStore } from '../store/walletStore';
 import { useWorkProfileStore } from '../store/workProfileStore';
@@ -112,10 +113,12 @@ function RideOptionsScreenContent() {
 
   // ── Derived values ──
   const selectedEstimate = estimates.length > selectedIndex ? estimates[selectedIndex] : null;
+  const bottomSheetRef = useRef<any>(null);
+  const snapPoints = useMemo(() => ['38%', '60%', '85%'], []);
+
   const allUnavailable = estimates.length > 0 && !estimates.some(e => e.available);
   const promoDiscount = appliedPromo?.discount_value ?? 0;
-  const totalFare = Math.max(0, parseFloat(selectedEstimate?.total_fare || '0') - promoDiscount);
-  const sheetScrollMax = SCREEN_HEIGHT * 0.68 - 20 - 180;
+  const totalFare = Math.max(0, parseFloat((selectedEstimate as any)?.grand_total || selectedEstimate?.total_fare || '0') - promoDiscount);
 
   const paymentLabel = useMemo(() => {
     if (useCorporate && selectedCorporateId) {
@@ -435,12 +438,17 @@ function RideOptionsScreenContent() {
       )}
 
       {/* ═══ Bottom sheet ═══ */}
-      <View style={[styles.sheet, { maxHeight: SCREEN_HEIGHT * 0.68 }]}>
-        <View style={styles.sheetHandle} />
-
-        {/* Scrollable content */}
-        <ScrollView style={{ flex: 1, maxHeight: sheetScrollMax }} showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled">
+      <BottomSheet
+        ref={bottomSheetRef}
+        index={1}
+        snapPoints={snapPoints}
+        backgroundStyle={styles.sheet}
+        handleIndicatorStyle={styles.sheetHandle}
+      >
+        <BottomSheetScrollView
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
 
           {/* Section header */}
           <View style={styles.sectionHeader}>
@@ -586,41 +594,23 @@ function RideOptionsScreenContent() {
               accessibilityLabel="Request quiet ride" />
           </View>
 
-          {/* Fare breakdown */}
-          {selectedEstimate && (
+          {/* Fare breakdown — rendered dynamically from API */}
+          {selectedEstimate?.fare_breakdown && selectedEstimate.fare_breakdown.length > 0 && (
             <View style={styles.fareBreakdownCard}>
               <Text style={styles.fareBreakdownTitle}>Fare breakdown</Text>
-              <View style={styles.fareBreakdownRow}>
-                <Text style={styles.fareBreakdownLabel}>Base fare</Text>
-                <Text style={styles.fareBreakdownValue}>${parseFloat(selectedEstimate.base_fare || '0').toFixed(2)}</Text>
-              </View>
-              <View style={styles.fareBreakdownRow}>
-                <Text style={styles.fareBreakdownLabel}>Distance ({selectedEstimate.distance_km?.toFixed(1)} km)</Text>
-                <Text style={styles.fareBreakdownValue}>${parseFloat(selectedEstimate.distance_fare || '0').toFixed(2)}</Text>
-              </View>
-              <View style={styles.fareBreakdownRow}>
-                <Text style={styles.fareBreakdownLabel}>Time ({selectedEstimate.duration_minutes} min)</Text>
-                <Text style={styles.fareBreakdownValue}>${parseFloat(selectedEstimate.time_fare || '0').toFixed(2)}</Text>
-              </View>
-              <View style={styles.fareBreakdownRow}>
-                <Text style={styles.fareBreakdownLabel}>Booking fee</Text>
-                <Text style={styles.fareBreakdownValue}>${parseFloat(selectedEstimate.booking_fee || '0').toFixed(2)}</Text>
-              </View>
-              {parseFloat(selectedEstimate.platform_fee || '0') > 0 && (
-                <View style={styles.fareBreakdownRow}>
-                  <Text style={styles.fareBreakdownLabel}>Platform fee</Text>
-                  <Text style={styles.fareBreakdownValue}>${parseFloat(selectedEstimate.platform_fee || '0').toFixed(2)}</Text>
-                </View>
-              )}
-              {parseFloat(selectedEstimate.city_fee || '0') > 0 && (
-                <View style={styles.fareBreakdownRow}>
-                  <Text style={styles.fareBreakdownLabel}>City fee</Text>
-                  <Text style={styles.fareBreakdownValue}>${parseFloat(selectedEstimate.city_fee || '0').toFixed(2)}</Text>
-                </View>
-              )}
+              {selectedEstimate.fare_breakdown.map((line, i) => (
+                line.amount != null ? (
+                  <View key={i} style={styles.fareBreakdownRow}>
+                    <Text style={[styles.fareBreakdownLabel, line.type === 'tax' && { color: '#6B7280' }]}>{line.label}</Text>
+                    <Text style={styles.fareBreakdownValue}>${parseFloat(String(line.amount)).toFixed(2)}</Text>
+                  </View>
+                ) : null
+              ))}
               <View style={[styles.fareBreakdownRow, styles.fareBreakdownTotal]}>
                 <Text style={styles.fareBreakdownTotalLabel}>Total</Text>
-                <Text style={styles.fareBreakdownTotalValue}>${parseFloat(selectedEstimate.total_fare || '0').toFixed(2)}</Text>
+                <Text style={styles.fareBreakdownTotalValue}>
+                  ${parseFloat(selectedEstimate.grand_total || selectedEstimate.total_fare || '0').toFixed(2)}
+                </Text>
               </View>
             </View>
           )}
@@ -632,7 +622,7 @@ function RideOptionsScreenContent() {
               Free cancellation within 2 min of driver acceptance.
             </Text>
           </View>
-        </ScrollView>
+        </BottomSheetScrollView>
 
         {/* ═══ Fixed footer — Uber style ═══ */}
         {!isLoading && !allUnavailable && estimates.length > 0 && selectedEstimate && (
@@ -692,7 +682,7 @@ function RideOptionsScreenContent() {
             </TouchableOpacity>
           </View>
         )}
-      </View>
+      </BottomSheet>
 
       {/* ═══ Payment method modal ═══ */}
       <Modal visible={showPaymentSheet} animationType="slide" transparent onRequestClose={() => setShowPaymentSheet(false)}>
@@ -1007,15 +997,15 @@ function AnimatedVehicleCard({
           {appliedPromo && appliedPromo.discount_value > 0 && isSelected ? (
             <View style={{ alignItems: 'flex-end' }}>
               <Text style={styles.optionPriceStruck} allowFontScaling={false}>
-                ${parseFloat(estimate.total_fare || '0').toFixed(2)}
+                ${parseFloat((estimate as any).grand_total || estimate.total_fare || '0').toFixed(2)}
               </Text>
               <Text style={styles.optionPriceDiscounted} allowFontScaling={false}>
-                ${Math.max(0, parseFloat(estimate.total_fare || '0') - appliedPromo.discount_value).toFixed(2)}
+                ${Math.max(0, parseFloat((estimate as any).grand_total || estimate.total_fare || '0') - appliedPromo.discount_value).toFixed(2)}
               </Text>
             </View>
           ) : (
             <Text style={styles.optionPrice} allowFontScaling={false}>
-              ${parseFloat(estimate.total_fare || '0').toFixed(2)}
+              ${parseFloat((estimate as any).grand_total || estimate.total_fare || '0').toFixed(2)}
             </Text>
           )}
           {isSelected && isAvailable && (
@@ -1097,10 +1087,6 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
 
     // ── Bottom sheet ──
     sheet: {
-      position: 'absolute',
-      bottom: 0,
-      left: 0,
-      right: 0,
       backgroundColor: colors.surface,
       borderTopLeftRadius: 24,
       borderTopRightRadius: 24,
@@ -1115,9 +1101,6 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
       height: 4,
       borderRadius: 2,
       backgroundColor: '#D1D5DB',
-      alignSelf: 'center',
-      marginTop: 10,
-      marginBottom: 4,
     },
     sectionHeader: {
       flexDirection: 'row',

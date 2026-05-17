@@ -185,18 +185,24 @@ export default function RideDetailsScreen() {
           </View>
         </View>
 
-        {/* Fare Card */}
+        {/* Fare Card — dynamic from API */}
         <View style={styles.fareCard}>
           <Text style={styles.fareTitle}>Fare Breakdown</Text>
-          <FareRow label="Base fare" value={`$${(ride.base_fare || 0).toFixed(2)}`} colors={colors} />
-          <FareRow label={`Distance (${(ride.distance_km || 0).toFixed(1)} km)`} value={`$${(ride.distance_fare || 0).toFixed(2)}`} colors={colors} />
-          <FareRow label={`Time (${ride.duration_minutes || 0} min)`} value={`$${(ride.time_fare || 0).toFixed(2)}`} colors={colors} />
-          <FareRow label="Booking fee" value={`$${(ride.booking_fee || 0).toFixed(2)}`} colors={colors} />
-          {(ride.tip_amount || 0) > 0 && <FareRow label="Tip" value={`$${ride.tip_amount.toFixed(2)}`} highlight colors={colors} />}
+          {(ride.fare_breakdown || []).map((line: any, i: number) => (
+            line.amount != null ? (
+              <FareRow
+                key={i}
+                label={line.label}
+                value={`$${parseFloat(String(line.amount)).toFixed(2)}`}
+                highlight={line.type === 'tip'}
+                colors={colors}
+              />
+            ) : null
+          ))}
           <View style={styles.fareDivider} />
           <View style={styles.fareRowWrap}>
             <Text style={styles.fareTotalLabel}>Total</Text>
-            <Text style={styles.fareTotalValue}>${(ride.total_fare || 0).toFixed(2)}</Text>
+            <Text style={styles.fareTotalValue}>${parseFloat(ride.grand_total || ride.total_fare || '0').toFixed(2)}</Text>
           </View>
           <View style={styles.paymentRow}>
             <Ionicons name="card" size={14} color={colors.textDim} />

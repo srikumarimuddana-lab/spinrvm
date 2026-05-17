@@ -292,13 +292,13 @@ describe('attemptRidePayment', () => {
       expect(result.alert?.title).toBe('Payment error');
     });
 
-    it('retries once on 409 requires-completed-state and succeeds', async () => {
+    it('retries on 409 requires-completed-state with backoff and succeeds', async () => {
       jest.useFakeTimers();
       let calls = 0;
       const api = {
         post: jest.fn().mockImplementation(async () => {
           calls += 1;
-          if (calls === 1) {
+          if (calls <= 2) {
             const err: any = new Error('409');
             err.response = {
               status: 409,
@@ -316,7 +316,32 @@ describe('attemptRidePayment', () => {
 
       expect(result.ok).toBe(true);
       expect(result.charged).toBe(12.5);
-      expect(api.post).toHaveBeenCalledTimes(2);
+      expect(api.post).toHaveBeenCalledTimes(3);
+      jest.useRealTimers();
+    });
+
+    it('returns finalizing alert when 409 persists after all 3 retries', async () => {
+      jest.useFakeTimers();
+      const err409 = (): never => {
+        const err: any = new Error('409');
+        err.response = {
+          status: 409,
+          data: { detail: "Ride is in status 'in_progress'; payment requires completed state." },
+        };
+        throw err;
+      };
+      const api = { post: jest.fn().mockImplementation(async () => err409()) };
+
+      const promise = attemptRidePayment({ api, stripe: makeStripe(), rideId: 'r1', tipAmount: 0 });
+      await jest.runAllTimersAsync();
+      const result = await promise;
+
+      expect(result.ok).toBe(false);
+      expect(result.alert?.title).toBe('Finalizing your trip');
+      expect(result.alert?.variant).toBe('info');
+      expect(result.alert?.buttons?.some((b) => b.kind === 'retry')).toBe(true);
+      // 1 initial + 3 retries = 4 total calls
+      expect(api.post).toHaveBeenCalledTimes(4);
       jest.useRealTimers();
     });
 

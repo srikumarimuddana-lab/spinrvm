@@ -20,21 +20,6 @@ import Analytics from '@shared/analytics';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
-// Platform-safe token storage
-const storage = {
-  async setItem(key: string, value: string) {
-    try {
-      if (Platform.OS === 'web') {
-        localStorage.setItem(key, value);
-      } else {
-        const SecureStore = require('expo-secure-store');
-        await SecureStore.setItemAsync(key, value);
-      }
-    } catch (e) {
-      console.log('[Auth] Storage setItem FAILED:', e);
-    }
-  },
-};
 
 export default function OtpScreen() {
   const router = useRouter();

@@ -57,6 +57,7 @@ class CreatePromoCodeRequest(BaseModel):
     expiry_date: Optional[str] = None  # ISO 8601
     is_active: bool = True
     description: Optional[str] = None
+    service_area_id: Optional[str] = None  # None = all areas
 
     @field_validator("discount_value")
     @classmethod
@@ -75,6 +76,7 @@ class UpdatePromoCodeRequest(BaseModel):
     expiry_date: Optional[str] = None
     is_active: Optional[bool] = None
     description: Optional[str] = None
+    service_area_id: Optional[str] = None
 
 
 # ============ User-Facing Endpoints ============
@@ -343,11 +345,34 @@ async def apply_promo(
 async def get_available_promos(
     request: Request,
     ride_fare: float = Query(0.0),
+    pickup_lat: Optional[float] = Query(None),
+    pickup_lng: Optional[float] = Query(None),
     current_user: dict = Depends(get_current_user),
 ):
-    """Get all promos available to this user, sorted by best discount first."""
+    """Get all promos available to this user, filtered by pickup service area."""
     now = datetime.now(timezone.utc)
+
+    # Resolve pickup service area so we can filter area-specific promos.
+    pickup_area_id: Optional[str] = None
+    if pickup_lat is not None and pickup_lng is not None:
+        try:
+            rows = await db_supabase.rpc(
+                "get_service_area_for_point",
+                {"lat": pickup_lat, "lng": pickup_lng},
+            )
+            if rows:
+                pickup_area_id = rows[0].get("id")
+        except Exception as e:
+            logger.warning("Could not resolve service area for pickup (%.4f, %.4f): %s", pickup_lat, pickup_lng, e)
+
     promos = await db_supabase.get_rows("promotions", {"is_active": True}, limit=100)
+
+    # Keep only promos that match the pickup area (or have no area restriction).
+    if pickup_area_id:
+        promos = [p for p in promos if p.get("service_area_id") is None or p.get("service_area_id") == pickup_area_id]
+    else:
+        # Pickup unknown — show only global (unrestricted) promos.
+        promos = [p for p in promos if p.get("service_area_id") is None]
 
     # Pre-fetch user data for targeting checks
     user = await db_supabase.get_user_by_id(current_user["id"])
@@ -522,6 +547,7 @@ async def admin_create_promo_code(req: CreatePromoCodeRequest):
         "expiry_date": req.expiry_date,
         "is_active": req.is_active,
         "description": req.description or "",
+        "service_area_id": req.service_area_id or None,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -543,6 +569,7 @@ async def admin_update_promo_code(promo_id: str, req: UpdatePromoCodeRequest):
         "expiry_date",
         "is_active",
         "description",
+        "service_area_id",
     ]:
         val = getattr(req, field)
         if val is not None:

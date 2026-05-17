@@ -29,7 +29,7 @@ import {
     DollarSign, TrendingUp, BarChart3, X, Check, User, Clock,
 } from "lucide-react";
 import { formatDate, formatCurrency } from "@/lib/utils";
-import { getPromotions, createPromotion, updatePromotion, deletePromotion, getPromoUsage, getPromoStats, getUsers } from "@/lib/api";
+import { getPromotions, createPromotion, updatePromotion, deletePromotion, getPromoUsage, getPromoStats, getUsers, getServiceAreas } from "@/lib/api";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { useRequireModule } from "@/hooks/useRequireModule";
 
@@ -51,7 +51,13 @@ interface PromoCode {
     min_ride_fare?: number;
     first_ride_only?: boolean;
     assigned_user_ids?: string[];
+    service_area_id?: string | null;
     created_at: string;
+}
+
+interface ServiceArea {
+    id: string;
+    name: string;
 }
 
 interface PromoUsageRecord {
@@ -145,6 +151,9 @@ export default function PromotionsPage() {
     const [userSearchText, setUserSearchText] = useState("");
     const [userSearchLoading, setUserSearchLoading] = useState(false);
 
+    // Service areas for promo scoping
+    const [serviceAreas, setServiceAreas] = useState<ServiceArea[]>([]);
+
     // Form
     const [form, setForm] = useState({
         code: "",
@@ -158,6 +167,7 @@ export default function PromotionsPage() {
         min_ride_fare: "",
         first_ride_only: false,
         assigned_user_ids: [] as string[],
+        service_area_id: "",
     });
 
     // --- Data fetching ---
@@ -224,6 +234,11 @@ export default function PromotionsPage() {
     const fetchAll = async () => {
         await Promise.all([fetchStats(), fetchPromos(), fetchUsage()]);
     };
+
+    // Load service areas once on mount for the promo scoping dropdown
+    useEffect(() => {
+        getServiceAreas().then((areas) => setServiceAreas(areas ?? [])).catch(() => {});
+    }, []);
 
     // Re-fetch stats when range changes
     useEffect(() => { fetchStats(); }, [usageDateRange]);
@@ -326,7 +341,7 @@ export default function PromotionsPage() {
     // --- CRUD ---
 
     const resetForm = () => {
-        setForm({ code: "", discount_type: "flat", discount_value: "", max_discount: "", max_uses: "100", max_uses_per_user: "1", expiry_date: "", description: "", min_ride_fare: "", first_ride_only: false, assigned_user_ids: [] });
+        setForm({ code: "", discount_type: "flat", discount_value: "", max_discount: "", max_uses: "100", max_uses_per_user: "1", expiry_date: "", description: "", min_ride_fare: "", first_ride_only: false, assigned_user_ids: [], service_area_id: "" });
         setEditingPromo(null);
         setSelectedUsers([]);
         setUserSearchText("");
@@ -342,6 +357,7 @@ export default function PromotionsPage() {
             max_uses_per_user: String(p.max_uses_per_user), expiry_date: p.expiry_date ? p.expiry_date.split("T")[0] : "",
             description: p.description || "", min_ride_fare: p.min_ride_fare ? String(p.min_ride_fare) : "",
             first_ride_only: p.first_ride_only || false, assigned_user_ids: p.assigned_user_ids || [],
+            service_area_id: p.service_area_id || "",
         });
         setSelectedUsers((p.assigned_user_ids || []).map((id) => ({ id, label: id.slice(0, 8) + "..." })));
         setDialogOpen(true);
@@ -403,6 +419,7 @@ export default function PromotionsPage() {
                 description: form.description || null,
                 min_ride_fare: form.min_ride_fare ? parseFloat(form.min_ride_fare) : 0,
                 first_ride_only: form.first_ride_only,
+                service_area_id: form.service_area_id || null,
             };
             if (isPrivateTab) payload.assigned_user_ids = form.assigned_user_ids;
             if (editingPromo) { await updatePromotion(editingPromo.id, payload); }
@@ -728,6 +745,27 @@ export default function PromotionsPage() {
                             <div className="flex items-center gap-2 pt-6"><Switch id="first-ride" checked={form.first_ride_only} onCheckedChange={(v) => setForm({ ...form, first_ride_only: v })} /><Label htmlFor="first-ride" className="cursor-pointer text-sm">First ride only</Label></div>
                         </div>
                         <div className="space-y-2"><Label>Description</Label><Input placeholder="Optional description" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></div>
+
+                        <div className="space-y-2">
+                            <Label className="flex items-center gap-1.5">
+                                Service Area
+                                <span className="text-xs font-normal text-muted-foreground">(leave blank to apply in all areas)</span>
+                            </Label>
+                            <Select
+                                value={form.service_area_id || "all"}
+                                onValueChange={(v) => setForm({ ...form, service_area_id: v === "all" ? "" : v })}
+                            >
+                                <SelectTrigger>
+                                    <SelectValue placeholder="All areas" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="all">All areas</SelectItem>
+                                    {serviceAreas.map((area) => (
+                                        <SelectItem key={area.id} value={area.id}>{area.name}</SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
 
                         {(promoTab === "private" || editingPromo?.promo_type === "private") && (
                             <>

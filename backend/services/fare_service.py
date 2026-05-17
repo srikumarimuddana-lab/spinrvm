@@ -194,9 +194,13 @@ def build_fare_breakdown_lines(
     """
     lines: List[Dict[str, Any]] = []
 
-    lines.append({"label": "Base fare", "amount": _f(fb.base_fare), "type": "fare"})
-    lines.append({"label": f"Distance ({round(distance_km, 1)} km)", "amount": _f(fb.distance_fare), "type": "fare"})
-    lines.append({"label": f"Time ({duration_minutes} min)", "amount": _f(fb.time_fare), "type": "fare"})
+    # Consolidated ride line — driver earns 100% of this amount (0% commission model)
+    ride_subtotal = _f(fb.base_fare + fb.distance_fare + fb.time_fare)
+    lines.append({"label": f"Ride fare ({round(distance_km, 1)} km)", "amount": ride_subtotal, "type": "ride"})
+
+    if fb.airport_fee > Decimal("0"):
+        lines.append({"label": "Airport surcharge", "amount": _f(fb.airport_fee), "type": "fee"})
+
     lines.append({"label": "Booking fee", "amount": _f(fb.booking_fee), "type": "fee"})
 
     if fb.surge_multiplier > Decimal("1"):

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { AppState, Vibration } from 'react-native';
-import { globalAlert } from '../store/alertStore';
+import { showToast } from '../store/toastStore';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '@shared/store/authStore';
 import { useRideStore } from '../store/rideStore';
@@ -123,7 +123,7 @@ export function useRiderSocket() {
       case 'ride_cancelled': {
         const currentId = useRideStore.getState().currentRide?.id;
         if (data.ride_id && currentId && data.ride_id !== currentId) break;
-        globalAlert(
+        showToast(
           'Ride Cancelled',
           data.reason || 'Your ride has been cancelled.',
           'warning',
@@ -137,7 +137,7 @@ export function useRiderSocket() {
       // R-P1-16: Show Alert first so the rider knows what happened,
       // then refetch so the UI transitions back to "searching".
       case 'driver_timeout':
-        globalAlert(
+        showToast(
           'Driver Unavailable',
           'The driver did not respond in time. Finding another driver\u2026',
           'info',

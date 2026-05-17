@@ -51,6 +51,7 @@ function RideCompletedScreenContent() {
   const [customTip, setCustomTip] = useState('');
   const [tipSent, setTipSent] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitPhase, setSubmitPhase] = useState<'idle' | 'rating' | 'confirming'>('idle');
   const [alreadyPaid, setAlreadyPaid] = useState(false);
   const [paymentProcessed, setPaymentProcessed] = useState(false);
 
@@ -65,7 +66,7 @@ function RideCompletedScreenContent() {
   const mapRef = React.useRef<MapView>(null);
 
   const tipOptions = [2, 5, 10];
-  const fare = toNum(currentRide?.total_fare);
+  const fare = toNum((currentRide as any)?.grand_total || currentRide?.total_fare);
   const duration = currentRide?.duration_minutes || 0;
   const distance = currentRide?.distance_km || 0;
 
@@ -127,15 +128,12 @@ function RideCompletedScreenContent() {
       `▸ TO    ${currentRide?.dropoff_address || '—'}`,
       ``,
       `━━━━━━ FARE BREAKDOWN ━━━━━━`,
-      `Base fare:     $${fmt(currentRide?.base_fare)}`,
-      `Distance fare: $${fmt(currentRide?.distance_fare)}  (${distance.toFixed(1)} km)`,
-      `Time fare:     $${fmt(currentRide?.time_fare)}  (${duration} min)`,
-      `Booking fee:   $${fmt(currentRide?.booking_fee)}`,
-      (currentRide?.platform_fee ?? 0) > 0 ? `Platform fee:  $${fmt(currentRide?.platform_fee)}` : null,
-      (currentRide?.city_fee ?? 0) > 0 ? `City fee:      $${fmt(currentRide?.city_fee)}` : null,
-      tipAmount > 0 ? `Tip:           $${tipAmount.toFixed(2)}` : null,
+      ...(currentRide?.fare_breakdown || [])
+        .filter((line: any) => line.amount != null)
+        .map((line: any) => `${line.label.padEnd(15)}$${parseFloat(String(line.amount)).toFixed(2)}`),
+      tipAmount > 0 ? `${'Tip'.padEnd(15)}$${tipAmount.toFixed(2)}` : null,
       `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
-      `TOTAL:         $${total.toFixed(2)} CAD`,
+      `TOTAL:         $${parseFloat(currentRide?.grand_total || String(total)).toFixed(2)} CAD`,
       ``,
       `💳 Card •••• ${currentRide?.card_last4 || '4242'}  ✅ PAID`,
       ``,
@@ -192,6 +190,7 @@ function RideCompletedScreenContent() {
   const handleSubmit = async () => {
     if (isSubmitting) return; // prevent double tap
     setIsSubmitting(true);
+    setSubmitPhase('rating');
     try {
       const tipAmount = selectedTip || (customTip ? parseFloat(customTip) || 0 : 0);
 
@@ -203,6 +202,7 @@ function RideCompletedScreenContent() {
 
       // 2. Process payment. If the rider has already paid (came back to
       //    this screen), skip the attempt entirely.
+      setSubmitPhase('confirming');
       let paymentOk = alreadyPaid;
       let chargedAmount: number | undefined;
       if (!alreadyPaid) {
@@ -245,6 +245,7 @@ function RideCompletedScreenContent() {
       setAlertState({ visible: true, title: 'Error', message: 'Failed to submit. Please try again.', variant: 'danger' });
     } finally {
       setIsSubmitting(false);
+      setSubmitPhase('idle');
     }
   };
 
@@ -596,7 +597,12 @@ function RideCompletedScreenContent() {
           accessibilityState={{ disabled: isSubmitting || sheetLoading, busy: isSubmitting }}
         >
           {isSubmitting ? (
-            <ActivityIndicator size="small" color="#FFF" />
+            <>
+              <ActivityIndicator size="small" color="#FFF" />
+              <Text style={styles.submitBtnText}>
+                {submitPhase === 'confirming' ? 'Confirming payment…' : 'Submitting…'}
+              </Text>
+            </>
           ) : (
             <>
               <Text style={styles.submitBtnText}>

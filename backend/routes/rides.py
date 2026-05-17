@@ -21,7 +21,7 @@ try:
     from ..services.dispatch_service import (
         filter_and_rank_drivers,
     )
-    from ..services.fare_service import calculate_fare
+    from ..services.fare_service import calculate_fare, build_fare_breakdown_lines
     from ..settings_loader import get_app_settings
     from ..sms_service import send_sms
     from ..socket_manager import manager
@@ -55,7 +55,7 @@ except ImportError:
         DispatchService,
         filter_and_rank_drivers,
     )
-    from services.fare_service import calculate_fare
+    from services.fare_service import calculate_fare, build_fare_breakdown_lines
     from settings_loader import get_app_settings
     from sms_service import send_sms
     from socket_manager import manager
@@ -886,6 +886,14 @@ async def estimate_ride(
             total_fare=_f(fb.total_fare),
         )
 
+        fare_breakdown_lines = build_fare_breakdown_lines(
+            fb,
+            distance_km=distance_km,
+            duration_minutes=duration_minutes,
+            area_fees=fees_result.get("fees", []),
+            tax_breakdown=fees_result.get("tax_breakdown", {}),
+        )
+
         estimates.append(
             {
                 "vehicle_type": fare_info["vehicle_type"],
@@ -904,6 +912,7 @@ async def estimate_ride(
                 "tax_breakdown": fees_result.get("tax_breakdown", {}),
                 "tax_amount": tax_amount,
                 "grand_total": grand_total,
+                "fare_breakdown": fare_breakdown_lines,
                 "available": is_available,
                 "eta_minutes": eta_minutes,
                 "driver_count": driver_count,
@@ -1749,6 +1758,31 @@ async def get_ride(ride_id: str, request: Request = None, current_user: dict = D
                 "dropoff_lng",
             ):
                 ride.pop(_addr_key, None)
+
+    # Build dynamic fare_breakdown for the rider UI — labels owned by backend.
+    _fb_lines = []
+    if ride.get("base_fare"):
+        _fb_lines.append({"label": "Base fare", "amount": ride["base_fare"], "type": "fare"})
+    if ride.get("distance_fare"):
+        _dist_label = f"Distance ({ride.get('distance_km', '?')} km)"
+        _fb_lines.append({"label": _dist_label, "amount": ride["distance_fare"], "type": "fare"})
+    if ride.get("time_fare"):
+        _time_label = f"Time ({ride.get('duration_minutes', '?')} min)"
+        _fb_lines.append({"label": _time_label, "amount": ride["time_fare"], "type": "fare"})
+    if ride.get("booking_fee"):
+        _fb_lines.append({"label": "Booking fee", "amount": ride["booking_fee"], "type": "fee"})
+    for _af in (ride.get("area_fees_breakdown") or []):
+        _afv = _af.get("calculated_value", 0)
+        if float(_afv) > 0:
+            _fb_lines.append({"label": _af.get("name", "Fee"), "amount": _afv, "type": "fee"})
+    for _tax_name, _tax_info in (ride.get("tax_breakdown") or {}).items():
+        if _tax_info.get("amount", 0) > 0:
+            _rate = _tax_info.get("rate", 0)
+            _lbl = f"{_tax_name} ({_rate}%)" if _rate else _tax_name
+            _fb_lines.append({"label": _lbl, "amount": _tax_info["amount"], "type": "tax"})
+    if ride.get("tip_amount") and float(ride["tip_amount"]) > 0:
+        _fb_lines.append({"label": "Tip", "amount": ride["tip_amount"], "type": "tip"})
+    ride["fare_breakdown"] = _fb_lines
 
     def serialize_doc(doc):
         return doc

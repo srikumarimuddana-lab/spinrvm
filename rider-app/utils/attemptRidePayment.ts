@@ -101,8 +101,19 @@ const STRIPE_UNAVAILABLE_ALERT: PaymentAlert = {
  *   - 402 { detail: { code: "card_declined", decline_code, message, suggested_action } }
  *   - 502 { detail: { code: "payment_processor_error", message } }
  */
+const FINALIZING_ALERT: PaymentAlert = {
+  title: 'Finalizing your trip',
+  message: 'Your ride is complete but payment is still being confirmed. Please try again in a moment.',
+  variant: 'info',
+  buttons: [{ text: 'Retry', kind: 'retry' }],
+};
+
+const RETRY_BACKOFF_MS = [1500, 2500, 3500];
+const MAX_409_RETRIES = RETRY_BACKOFF_MS.length;
+
 export async function attemptRidePayment(
   deps: PaymentAttemptDeps,
+  _retryAttempt = 0,
 ): Promise<PaymentAttemptResult> {
   const { api, stripe, rideId, tipAmount } = deps;
 
@@ -165,12 +176,12 @@ export async function attemptRidePayment(
       return { ok: false, alert: PROCESSOR_ERROR_ALERT };
     }
 
-    // 409 "requires completed state" — the WS event arrived before the DB
-    // write was visible to this replica. Retry once after 1.5 s; by then
-    // Supabase will have committed the status = "completed" update.
     if (status === 409 && typeof message === 'string' && message.includes('requires completed state')) {
-      await new Promise(resolve => setTimeout(resolve, 1500));
-      return attemptRidePayment(deps);
+      if (_retryAttempt >= MAX_409_RETRIES) {
+        return { ok: false, alert: FINALIZING_ALERT };
+      }
+      await new Promise(resolve => setTimeout(resolve, RETRY_BACKOFF_MS[_retryAttempt]));
+      return attemptRidePayment(deps, _retryAttempt + 1);
     }
 
     return { ok: false, alert: UNKNOWN_ERROR_ALERT };

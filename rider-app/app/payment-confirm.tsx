@@ -161,7 +161,7 @@ function PaymentConfirmScreenContent() {
   };
 
   const promoDiscount = appliedPromo?.discount_value ?? 0;
-  const totalFare = Math.max(0, parseFloat(selectedEstimate?.total_fare || '0') - promoDiscount);
+  const totalFare = Math.max(0, parseFloat((selectedEstimate as any)?.grand_total || selectedEstimate?.total_fare || '0') - promoDiscount);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -388,43 +388,22 @@ function PaymentConfirmScreenContent() {
             {fareExpanded && (
               <View style={{ marginTop: 8 }}>
                 <View style={styles.fareDivider} />
-                <View style={styles.fareRow}>
-                  <Text style={styles.fareLabel}>Base fare</Text>
-                  <Text style={styles.fareValue} allowFontScaling={false}>${parseFloat(selectedEstimate.base_fare).toFixed(2)}</Text>
-                </View>
-                <View style={styles.fareRow}>
-                  <Text style={styles.fareLabel}>Distance ({selectedEstimate.distance_km} km)</Text>
-                  <Text style={styles.fareValue} allowFontScaling={false}>${parseFloat(selectedEstimate.distance_fare).toFixed(2)}</Text>
-                </View>
-                <View style={styles.fareRow}>
-                  <Text style={styles.fareLabel}>Time ({selectedEstimate.duration_minutes} min)</Text>
-                  <Text style={styles.fareValue} allowFontScaling={false}>${parseFloat(selectedEstimate.time_fare).toFixed(2)}</Text>
-                </View>
-                <View style={styles.fareRow}>
-                  <Text style={styles.fareLabel}>Booking fee</Text>
-                  <Text style={styles.fareValue} allowFontScaling={false}>${parseFloat(selectedEstimate.booking_fee).toFixed(2)}</Text>
-                </View>
-
-                {(selectedEstimate as any).area_fees?.map((fee: any, i: number) => (
-                  <View key={fee.id || i} style={styles.fareRow}>
-                    <Text style={styles.fareLabel}>{fee.name || fee.type}</Text>
-                    <Text style={styles.fareValue} allowFontScaling={false}>${Number(fee.calculated_value || 0).toFixed(2)}</Text>
-                  </View>
+                {(selectedEstimate.fare_breakdown || []).map((line: any, i: number) => (
+                  line.amount != null ? (
+                    <View key={i} style={styles.fareRow}>
+                      <Text style={[styles.fareLabel, line.type === 'tax' && { color: '#6B7280' }, line.type === 'modifier' && { color: '#EF4444' }]}>
+                        {line.label}
+                      </Text>
+                      {line.amount != null ? (
+                        <Text style={[styles.fareValue, line.type === 'modifier' && { color: '#EF4444' }]} allowFontScaling={false}>
+                          ${parseFloat(String(line.amount)).toFixed(2)}
+                        </Text>
+                      ) : (
+                        <Text style={[styles.fareValue, { color: '#EF4444' }]}>Applied</Text>
+                      )}
+                    </View>
+                  ) : null
                 ))}
-
-                {(selectedEstimate as any).tax_breakdown && Object.entries((selectedEstimate as any).tax_breakdown).map(([name, info]: [string, any]) => (
-                  <View key={name} style={styles.fareRow}>
-                    <Text style={styles.fareLabel}>{name} ({info.rate}%)</Text>
-                    <Text style={styles.fareValue} allowFontScaling={false}>${Number(info.amount || 0).toFixed(2)}</Text>
-                  </View>
-                ))}
-
-                {(selectedEstimate.surge_multiplier ?? 1) > 1.0 && (
-                  <View style={styles.fareRow}>
-                    <Text style={[styles.fareLabel, { color: '#EF4444' }]}>Surge ({selectedEstimate.surge_multiplier}x)</Text>
-                    <Text style={[styles.fareValue, { color: '#EF4444' }]}>Applied</Text>
-                  </View>
-                )}
               </View>
             )}
             <View style={[styles.fareDivider, { marginTop: 12 }]} />

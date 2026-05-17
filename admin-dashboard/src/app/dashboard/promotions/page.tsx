@@ -39,6 +39,7 @@ interface PromoCode {
     id: string;
     code: string;
     promo_type?: string;
+    free_ride?: boolean;
     discount_type: "flat" | "percentage";
     discount_value: number;
     max_discount?: number;
@@ -157,6 +158,7 @@ export default function PromotionsPage() {
     // Form
     const [form, setForm] = useState({
         code: "",
+        free_ride: false,
         discount_type: "flat" as "flat" | "percentage",
         discount_value: "",
         max_discount: "",
@@ -341,7 +343,7 @@ export default function PromotionsPage() {
     // --- CRUD ---
 
     const resetForm = () => {
-        setForm({ code: "", discount_type: "flat", discount_value: "", max_discount: "", max_uses: "100", max_uses_per_user: "1", expiry_date: "", description: "", min_ride_fare: "", first_ride_only: false, assigned_user_ids: [], service_area_id: "" });
+        setForm({ code: "", free_ride: false, discount_type: "flat", discount_value: "", max_discount: "", max_uses: "100", max_uses_per_user: "1", expiry_date: "", description: "", min_ride_fare: "", first_ride_only: false, assigned_user_ids: [], service_area_id: "" });
         setEditingPromo(null);
         setSelectedUsers([]);
         setUserSearchText("");
@@ -352,7 +354,8 @@ export default function PromotionsPage() {
     const openEdit = (p: PromoCode) => {
         setEditingPromo(p);
         setForm({
-            code: p.code, discount_type: p.discount_type, discount_value: String(p.discount_value),
+            code: p.code, free_ride: p.free_ride || false, discount_type: p.discount_type,
+            discount_value: String(p.discount_value),
             max_discount: p.max_discount ? String(p.max_discount) : "", max_uses: String(p.max_uses),
             max_uses_per_user: String(p.max_uses_per_user), expiry_date: p.expiry_date ? p.expiry_date.split("T")[0] : "",
             description: p.description || "", min_ride_fare: p.min_ride_fare ? String(p.min_ride_fare) : "",
@@ -364,32 +367,38 @@ export default function PromotionsPage() {
     };
 
     const handleSave = async () => {
-        if (!form.code.trim() || !form.discount_value) {
-            toast({ title: "Missing required fields", description: "Please fill in code and discount value.", variant: "destructive" });
+        if (!form.code.trim()) {
+            toast({ title: "Missing required fields", description: "Please fill in the code.", variant: "destructive" });
             return;
         }
-        const discountVal = parseFloat(form.discount_value);
-        if (isNaN(discountVal) || discountVal <= 0) {
-            toast({ title: "Invalid discount value", description: "Discount must be greater than zero.", variant: "destructive" });
-            return;
-        }
-        if (form.discount_type === "percentage" && discountVal > 100) {
-            toast({ title: "Invalid percentage", description: "Percentage discount cannot exceed 100%.", variant: "destructive" });
-            return;
-        }
-        if (form.discount_type === "flat" && discountVal > 500) {
-            toast({ title: "Discount too large", description: "Flat discount cannot exceed $500.", variant: "destructive" });
-            return;
-        }
-        if (form.max_discount) {
-            const maxD = parseFloat(form.max_discount);
-            if (isNaN(maxD) || maxD <= 0) {
-                toast({ title: "Invalid max discount cap", description: "Max discount cap must be greater than zero.", variant: "destructive" });
+        if (!form.free_ride) {
+            if (!form.discount_value) {
+                toast({ title: "Missing required fields", description: "Please fill in code and discount value.", variant: "destructive" });
                 return;
             }
-            if (maxD > 500) {
-                toast({ title: "Max discount cap too large", description: "Max discount cap cannot exceed $500.", variant: "destructive" });
+            const discountVal = parseFloat(form.discount_value);
+            if (isNaN(discountVal) || discountVal <= 0) {
+                toast({ title: "Invalid discount value", description: "Discount must be greater than zero.", variant: "destructive" });
                 return;
+            }
+            if (form.discount_type === "percentage" && discountVal > 100) {
+                toast({ title: "Invalid percentage", description: "Percentage discount cannot exceed 100%.", variant: "destructive" });
+                return;
+            }
+            if (form.discount_type === "flat" && discountVal > 500) {
+                toast({ title: "Discount too large", description: "Flat discount cannot exceed $500.", variant: "destructive" });
+                return;
+            }
+            if (form.max_discount) {
+                const maxD = parseFloat(form.max_discount);
+                if (isNaN(maxD) || maxD <= 0) {
+                    toast({ title: "Invalid max discount cap", description: "Max discount cap must be greater than zero.", variant: "destructive" });
+                    return;
+                }
+                if (maxD > 500) {
+                    toast({ title: "Max discount cap too large", description: "Max discount cap cannot exceed $500.", variant: "destructive" });
+                    return;
+                }
             }
         }
         const maxUses = parseInt(form.max_uses);
@@ -410,8 +419,9 @@ export default function PromotionsPage() {
             const payload: any = {
                 code: form.code.trim().toUpperCase(),
                 promo_type: isPrivateTab ? "private" : "discount",
+                free_ride: form.free_ride,
                 discount_type: form.discount_type,
-                discount_value: parseFloat(form.discount_value),
+                discount_value: form.free_ride ? 0 : parseFloat(form.discount_value),
                 max_discount: form.max_discount ? parseFloat(form.max_discount) : null,
                 max_uses: parseInt(form.max_uses),
                 max_uses_per_user: parseInt(form.max_uses_per_user),
@@ -567,7 +577,7 @@ export default function PromotionsPage() {
                                         return (
                                             <TableRow key={p.id}>
                                                 <TableCell><span className="font-mono font-semibold text-violet-600 dark:text-violet-400 bg-violet-500/10 px-2 py-0.5 rounded">{p.code}</span>{p.description && <p className="text-xs text-muted-foreground mt-1">{p.description}</p>}</TableCell>
-                                                <TableCell className="text-sm">{p.discount_type === "flat" ? formatCurrency(p.discount_value) : `${p.discount_value}%`}{p.max_discount != null && <span className="text-xs text-muted-foreground ml-1">(max {formatCurrency(p.max_discount)})</span>}</TableCell>
+                                                <TableCell className="text-sm">{p.free_ride ? <span className="text-emerald-600 dark:text-emerald-400 font-semibold">Free Ride</span> : p.discount_type === "flat" ? formatCurrency(p.discount_value) : `${p.discount_value}%`}{!p.free_ride && p.max_discount != null && <span className="text-xs text-muted-foreground ml-1">(max {formatCurrency(p.max_discount)})</span>}</TableCell>
                                                 <TableCell className="text-sm">{p.uses}/{p.max_uses || "∞"}</TableCell>
                                                 {promoTab === "expired" && <TableCell><Badge variant="outline" className="text-xs">{p.promo_type === "private" ? "Private" : "Public"}</Badge></TableCell>}
                                                 {(promoTab === "private" || promoTab === "expired") && <TableCell className="text-sm">{(p.assigned_user_ids || []).length > 0 ? `${(p.assigned_user_ids || []).length} user${(p.assigned_user_ids || []).length !== 1 ? "s" : ""}` : "—"}</TableCell>}
@@ -729,12 +739,24 @@ export default function PromotionsPage() {
                     <div className="space-y-4">
                         <div className="grid grid-cols-2 gap-4">
                             <div className="space-y-2"><Label>Code</Label><Input placeholder="e.g. SAVE10" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} className="uppercase tracking-widest font-mono" /></div>
-                            <div className="space-y-2"><Label>Type</Label><Select value={form.discount_type} onValueChange={(v) => setForm({ ...form, discount_type: v as any })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="flat">Flat ($)</SelectItem><SelectItem value="percentage">Percentage (%)</SelectItem></SelectContent></Select></div>
+                            <div className="flex items-center gap-2 pt-6">
+                                <Switch id="free-ride-toggle" checked={form.free_ride} onCheckedChange={(v) => setForm({ ...form, free_ride: v })} />
+                                <Label htmlFor="free-ride-toggle" className="cursor-pointer text-sm font-medium">Free ride (100% covered)</Label>
+                            </div>
                         </div>
-                        <div className="grid grid-cols-2 gap-4">
-                            <div className="space-y-2"><Label>Discount Value</Label><Input type="number" placeholder={form.discount_type === "flat" ? "5.00" : "10"} value={form.discount_value} onChange={(e) => setForm({ ...form, discount_value: e.target.value })} /></div>
-                            {form.discount_type === "percentage" && <div className="space-y-2"><Label>Max Discount Cap ($)</Label><Input type="number" placeholder="25.00" value={form.max_discount} onChange={(e) => setForm({ ...form, max_discount: e.target.value })} /></div>}
-                        </div>
+                        {!form.free_ride && (
+                            <>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div className="space-y-2"><Label>Type</Label><Select value={form.discount_type} onValueChange={(v) => setForm({ ...form, discount_type: v as any })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="flat">Flat ($)</SelectItem><SelectItem value="percentage">Percentage (%)</SelectItem></SelectContent></Select></div>
+                                    <div className="space-y-2"><Label>Discount Value</Label><Input type="number" placeholder={form.discount_type === "flat" ? "5.00" : "10"} value={form.discount_value} onChange={(e) => setForm({ ...form, discount_value: e.target.value })} /></div>
+                                </div>
+                                {form.discount_type === "percentage" && (
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div className="space-y-2"><Label>Max Discount Cap ($)</Label><Input type="number" placeholder="25.00" value={form.max_discount} onChange={(e) => setForm({ ...form, max_discount: e.target.value })} /></div>
+                                    </div>
+                                )}
+                            </>
+                        )}
                         <div className="grid grid-cols-3 gap-4">
                             <div className="space-y-2"><Label>Max Uses</Label><Input type="number" value={form.max_uses} onChange={(e) => setForm({ ...form, max_uses: e.target.value })} /></div>
                             <div className="space-y-2"><Label>Per User</Label><Input type="number" value={form.max_uses_per_user} onChange={(e) => setForm({ ...form, max_uses_per_user: e.target.value })} /></div>
@@ -801,7 +823,7 @@ export default function PromotionsPage() {
                             </>
                         )}
 
-                        <Button className="w-full" onClick={handleSave} disabled={saving || !form.code.trim() || !form.discount_value}>{saving ? "Saving..." : editingPromo ? "Update" : "Create"}</Button>
+                        <Button className="w-full" onClick={handleSave} disabled={saving || !form.code.trim() || (!form.free_ride && !form.discount_value)}>{saving ? "Saving..." : editingPromo ? "Update" : "Create"}</Button>
                     </div>
                 </DialogContent>
             </Dialog>

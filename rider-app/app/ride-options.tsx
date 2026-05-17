@@ -117,7 +117,8 @@ function RideOptionsScreenContent() {
   const snapPoints = useMemo(() => ['38%', '60%', '85%'], []);
 
   const allUnavailable = estimates.length > 0 && !estimates.some(e => e.available);
-  const promoDiscount = appliedPromo?.discount_value ?? 0;
+  // Use server-computed discount_amount — correct for percentage promos and free_ride.
+  const promoDiscount = appliedPromo?.discount_amount ?? 0;
   const totalFare = Math.max(0, parseFloat((selectedEstimate as any)?.grand_total || selectedEstimate?.total_fare || '0') - promoDiscount);
 
   const paymentLabel = useMemo(() => {
@@ -162,8 +163,10 @@ function RideOptionsScreenContent() {
 
   useEffect(() => {
     if (estimates.length > 0) {
-      const selectedFare = parseFloat(estimates[selectedIndex]?.total_fare || estimates[0]?.total_fare || '0');
-      fetchAvailablePromos(selectedFare);
+      const est = estimates[selectedIndex] ?? estimates[0];
+      const grandTotal = parseFloat((est as any).grand_total || est.total_fare || '0');
+      const ridePortion = parseFloat(est.base_fare || '0') + parseFloat(est.distance_fare || '0') + parseFloat(est.time_fare || '0');
+      fetchAvailablePromos(grandTotal, ridePortion);
     }
   }, [estimates]);
 
@@ -242,7 +245,10 @@ function RideOptionsScreenContent() {
     setSelectedIndex(index);
     selectVehicle(estimates[index].vehicle_type);
     setTimeout(() => fetchNearbyDrivers(), 100);
-    fetchAvailablePromos(parseFloat(estimates[index].total_fare || '0'));
+    const est = estimates[index];
+    const grandTotal = parseFloat((est as any).grand_total || est.total_fare || '0');
+    const ridePortion = parseFloat(est.base_fare || '0') + parseFloat(est.distance_fare || '0') + parseFloat(est.time_fare || '0');
+    fetchAvailablePromos(grandTotal, ridePortion);
   };
 
   const handleBookRide = async () => {
@@ -521,9 +527,11 @@ function RideOptionsScreenContent() {
               <View style={{ flex: 1 }}>
                 <Text style={styles.promoEntryCode}>{appliedPromo.code}</Text>
                 <Text style={styles.promoEntryDesc}>
-                  {appliedPromo.discount_type === 'percentage'
-                    ? `${appliedPromo.discount_value}% off your ride`
-                    : `$${Number(appliedPromo.discount_value).toFixed(2)} off your ride`}
+                  {appliedPromo.free_ride
+                    ? 'Free ride — 100% covered'
+                    : appliedPromo.discount_type === 'percentage'
+                      ? `${appliedPromo.discount_value}% off your ride fare`
+                      : `$${Number(appliedPromo.discount_amount ?? appliedPromo.discount_value).toFixed(2)} off`}
                 </Text>
               </View>
             ) : (
@@ -849,9 +857,11 @@ function RideOptionsScreenContent() {
             <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 340 }}>
               {availablePromos.map((promo: any) => {
                 const isSelected = appliedPromo?.promo_id === promo.promo_id || appliedPromo?.code === promo.code;
-                const discountLabel = promo.discount_type === 'percentage'
-                  ? `${promo.discount_value}% off${promo.max_discount ? ` · max $${promo.max_discount}` : ''}`
-                  : `$${Number(promo.discount_value).toFixed(2)} off`;
+                const discountLabel = promo.free_ride
+                  ? 'Free ride'
+                  : promo.discount_type === 'percentage'
+                    ? `${promo.discount_value}% off${promo.max_discount ? ` · max $${promo.max_discount}` : ''}`
+                    : `$${Number(promo.discount_value).toFixed(2)} off`;
                 return (
                   <TouchableOpacity
                     key={promo.promo_id || promo.code}
@@ -1005,13 +1015,13 @@ function AnimatedVehicleCard({
           )}
         </View>
         <View style={[styles.optionPriceContainer, !isAvailable && { opacity: 0.4 }]}>
-          {appliedPromo && appliedPromo.discount_value > 0 && isSelected ? (
+          {appliedPromo && (appliedPromo.discount_amount ?? 0) > 0 && isSelected ? (
             <View style={{ alignItems: 'flex-end' }}>
               <Text style={styles.optionPriceStruck} allowFontScaling={false}>
                 ${parseFloat((estimate as any).grand_total || estimate.total_fare || '0').toFixed(2)}
               </Text>
               <Text style={styles.optionPriceDiscounted} allowFontScaling={false}>
-                ${Math.max(0, parseFloat((estimate as any).grand_total || estimate.total_fare || '0') - appliedPromo.discount_value).toFixed(2)}
+                ${Math.max(0, parseFloat((estimate as any).grand_total || estimate.total_fare || '0') - (appliedPromo.discount_amount ?? 0)).toFixed(2)}
               </Text>
             </View>
           ) : (

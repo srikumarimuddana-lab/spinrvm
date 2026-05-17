@@ -160,7 +160,8 @@ function PaymentConfirmScreenContent() {
     }
   };
 
-  const promoDiscount = appliedPromo?.discount_value ?? 0;
+  // Use server-computed discount_amount — correct for percentage promos and free_ride.
+  const promoDiscount = appliedPromo?.discount_amount ?? 0;
   const totalFare = Math.max(0, parseFloat((selectedEstimate as any)?.grand_total || selectedEstimate?.total_fare || '0') - promoDiscount);
 
   return (

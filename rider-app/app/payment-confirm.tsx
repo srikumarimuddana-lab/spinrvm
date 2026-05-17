@@ -378,7 +378,7 @@ function PaymentConfirmScreenContent() {
                 <Text style={styles.fareToggleHint}>{fareExpanded ? 'Hide details' : 'View fare details'}</Text>
               </View>
               <Text style={styles.fareTotalValue} allowFontScaling={false}>
-                ${parseFloat((selectedEstimate as any).grand_total || selectedEstimate.total_fare).toFixed(2)}
+                ${totalFare.toFixed(2)}
               </Text>
               <Animated.View style={{ transform: [{ rotate: fareHeightAnim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '180deg'] }) }], marginLeft: 8 }}>
                 <Ionicons name="chevron-down" size={18} color={colors.textDim} />
@@ -411,23 +411,15 @@ function PaymentConfirmScreenContent() {
                     </View>
                   ) : null
                 ))}
+                {appliedPromo && promoDiscount > 0 && (
+                  <View style={[styles.fareRow, { marginTop: 2 }]}>
+                    <Text style={[styles.fareLabel, { color: '#10B981' }]}>Promo ({appliedPromo.code})</Text>
+                    <Text style={[styles.fareValue, { color: '#10B981' }]} allowFontScaling={false}>-${promoDiscount.toFixed(2)}</Text>
+                  </View>
+                )}
               </View>
             )}
             <View style={[styles.fareDivider, { marginTop: 12 }]} />
-          </>
-        )}
-
-        {/* Promo + total (only shown when promo is applied) */}
-        {appliedPromo && promoDiscount > 0 && (
-          <>
-            <View style={styles.discountRow}>
-              <Text style={styles.discountLabel}>Promo ({appliedPromo.code})</Text>
-              <Text style={styles.discountAmount} allowFontScaling={false}>-${promoDiscount.toFixed(2)}</Text>
-            </View>
-            <View style={[styles.totalRow, { marginTop: 4 }]}>
-              <Text style={[styles.totalLabel, { fontFamily: 'PlusJakartaSans_700Bold', color: colors.text }]}>Total</Text>
-              <Text style={styles.totalAmount} allowFontScaling={false}>${totalFare.toFixed(2)}</Text>
-            </View>
           </>
         )}
         {scheduledTime && (

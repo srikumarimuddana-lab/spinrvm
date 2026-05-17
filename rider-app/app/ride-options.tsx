@@ -613,11 +613,15 @@ function RideOptionsScreenContent() {
                   </View>
                 ) : null
               ))}
+              {appliedPromo && promoDiscount > 0 && (
+                <View style={[styles.fareBreakdownRow, { marginTop: 2 }]}>
+                  <Text style={[styles.fareBreakdownLabel, { color: '#10B981' }]}>Promo ({appliedPromo.code})</Text>
+                  <Text style={[styles.fareBreakdownValue, { color: '#10B981' }]}>-${promoDiscount.toFixed(2)}</Text>
+                </View>
+              )}
               <View style={[styles.fareBreakdownRow, styles.fareBreakdownTotal]}>
                 <Text style={styles.fareBreakdownTotalLabel}>Total</Text>
-                <Text style={styles.fareBreakdownTotalValue}>
-                  ${parseFloat(selectedEstimate.grand_total || selectedEstimate.total_fare || '0').toFixed(2)}
-                </Text>
+                <Text style={styles.fareBreakdownTotalValue}>${totalFare.toFixed(2)}</Text>
               </View>
             </View>
           )}

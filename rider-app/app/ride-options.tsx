@@ -12,6 +12,7 @@ import {
   Platform,
   Modal,
   Animated,
+  TextInput,
 } from 'react-native';
 import CustomToggle from '../components/CustomToggle';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -26,7 +27,7 @@ import CustomAlert from '@shared/components/CustomAlert';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { CarMarker } from '@shared/components/CarMarker';
-import DatePicker from 'react-native-date-picker';
+import SchedulePicker from '../components/SchedulePicker';
 import SkeletonBox from '../components/SkeletonBox';
 import { useResponsive } from '@shared/utils/responsive';
 import api from '@shared/api/client';
@@ -98,6 +99,8 @@ function RideOptionsScreenContent() {
   const [showScheduleModal, setShowScheduleModal] = useState(false);
   const [tempDate, setTempDate] = useState(new Date(Date.now() + 30 * 60000));
   const [showPromoSheet, setShowPromoSheet] = useState(false);
+  const [promoInput, setPromoInput] = useState('');
+  const [promoError, setPromoError] = useState('');
   const [alertState, setAlertState] = useState<{
     visible: boolean; title: string; message: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
@@ -313,6 +316,22 @@ function RideOptionsScreenContent() {
     setScheduledTime(date);
   };
 
+  const handleManualPromo = () => {
+    const code = promoInput.trim().toUpperCase();
+    if (!code) return;
+    const match = availablePromos.find(
+      (p: any) => p.code?.toUpperCase() === code
+    );
+    if (match) {
+      applyPromo(match);
+      setPromoInput('');
+      setPromoError('');
+      setShowPromoSheet(false);
+    } else {
+      setPromoError('Code not found or has expired');
+    }
+  };
+
   // ── Render ──
 
   return (
@@ -476,25 +495,44 @@ function RideOptionsScreenContent() {
             </View>
           )}
 
-          {/* Promo banner — Lyft style */}
-          {(appliedPromo || availablePromos.length > 0) && (
-            <TouchableOpacity style={styles.promoBanner} onPress={() => setShowPromoSheet(true)} activeOpacity={0.8}>
-              <Ionicons name="pricetag" size={16} color="#10B981" />
-              {appliedPromo ? (
-                <Text style={styles.promoBannerText}>
+          {/* Promo row — always visible */}
+          <TouchableOpacity
+            style={[styles.promoEntryRow, appliedPromo && styles.promoEntryRowActive]}
+            onPress={() => { setPromoError(''); setShowPromoSheet(true); }}
+            activeOpacity={0.75}
+          >
+            <View style={[styles.promoEntryIcon, appliedPromo && { backgroundColor: '#D1FAE5' }]}>
+              <Ionicons name="pricetag" size={16} color={appliedPromo ? '#059669' : colors.textDim} />
+            </View>
+            {appliedPromo ? (
+              <View style={{ flex: 1 }}>
+                <Text style={styles.promoEntryCode}>{appliedPromo.code}</Text>
+                <Text style={styles.promoEntryDesc}>
                   {appliedPromo.discount_type === 'percentage'
-                    ? `Save ${appliedPromo.discount_value}% off${appliedPromo.max_discount ? ` ($${appliedPromo.max_discount} max)` : ''}`
-                    : `Save $${appliedPromo.discount_value.toFixed(2)} off`}
-                  {' · '}<Text style={{ fontWeight: '800' }}>{appliedPromo.code}</Text>
+                    ? `${appliedPromo.discount_value}% off your ride`
+                    : `$${Number(appliedPromo.discount_value).toFixed(2)} off your ride`}
                 </Text>
-              ) : (
-                <Text style={styles.promoBannerText}>
-                  {availablePromos.length} promo{availablePromos.length !== 1 ? 's' : ''} available
-                </Text>
-              )}
-              <Ionicons name="chevron-forward" size={14} color="#999" />
-            </TouchableOpacity>
-          )}
+              </View>
+            ) : (
+              <View style={{ flex: 1 }}>
+                <Text style={styles.promoEntryLabel}>Add promo code</Text>
+                {availablePromos.length > 0 && (
+                  <Text style={styles.promoEntryHint}>{availablePromos.length} offer{availablePromos.length !== 1 ? 's' : ''} available</Text>
+                )}
+              </View>
+            )}
+            {appliedPromo ? (
+              <TouchableOpacity
+                onPress={(e) => { e.stopPropagation(); applyPromo(null); }}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                style={styles.promoRemoveBtn}
+              >
+                <Ionicons name="close-circle" size={20} color="#059669" />
+              </TouchableOpacity>
+            ) : (
+              <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
+            )}
+          </TouchableOpacity>
 
           {/* Work mode banner */}
           {workModeEnabled && activeCompanyId && (
@@ -725,68 +763,113 @@ function RideOptionsScreenContent() {
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowPromoSheet(false)}>
           <TouchableOpacity activeOpacity={1} style={styles.promoSheet}>
             <View style={styles.paymentModalHandle} />
-            <Text style={styles.paymentModalTitle}>Available Promos</Text>
+            <Text style={styles.paymentModalTitle}>Promo Code</Text>
 
-            <TouchableOpacity
-              style={[styles.promoRow, !appliedPromo && styles.promoRowSelected]}
-              onPress={() => { applyPromo(null); setShowPromoSheet(false); }}>
-              <View style={styles.promoRowIcon}><Ionicons name="close-circle-outline" size={22} color={colors.textDim} /></View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.promoRowCode}>No promo</Text>
-                <Text style={styles.promoRowDesc}>Pay full fare</Text>
+            {/* Manual code entry */}
+            <View style={styles.promoInputRow}>
+              <View style={[styles.promoInputWrap, promoError ? { borderColor: '#EF4444' } : {}]}>
+                <Ionicons name="pricetag-outline" size={16} color={colors.textDim} style={{ marginLeft: 12 }} />
+                <TextInput
+                  style={[styles.promoInputField, { color: colors.text }]}
+                  placeholder="Enter code"
+                  placeholderTextColor={colors.textDim}
+                  value={promoInput}
+                  onChangeText={t => { setPromoInput(t); setPromoError(''); }}
+                  autoCapitalize="characters"
+                  autoCorrect={false}
+                  returnKeyType="done"
+                  onSubmitEditing={handleManualPromo}
+                />
               </View>
-              {!appliedPromo && <Ionicons name="checkmark-circle" size={22} color={colors.primary} />}
-            </TouchableOpacity>
-
-            {availablePromos.map((promo: any) => {
-              const isSelected = appliedPromo?.promo_id === promo.promo_id || appliedPromo?.code === promo.code;
-              const discountLabel = promo.discount_type === 'percentage'
-                ? `${promo.discount_value}% off${promo.max_discount ? ` (max $${promo.max_discount})` : ''}`
-                : `$${promo.discount_value.toFixed(2)} off`;
-              return (
-                <TouchableOpacity key={promo.promo_id || promo.code}
-                  style={[styles.promoRow, isSelected && styles.promoRowSelected]}
-                  onPress={() => { applyPromo(promo); setShowPromoSheet(false); }}>
-                  <View style={[styles.promoRowIcon, { backgroundColor: '#ECFDF5' }]}>
-                    <Ionicons name="pricetag" size={20} color="#10B981" />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.promoRowCode}>{promo.code}</Text>
-                    <Text style={styles.promoRowDesc}>{promo.description || discountLabel}</Text>
-                    <Text style={styles.promoRowSaving} allowFontScaling={false}>{discountLabel}</Text>
-                  </View>
-                  {isSelected && <Ionicons name="checkmark-circle" size={22} color={colors.primary} />}
-                </TouchableOpacity>
-              );
-            })}
-
-            {availablePromos.length === 0 && (
-              <View style={styles.promoEmpty}>
-                <Ionicons name="gift-outline" size={36} color={colors.border} />
-                <Text style={styles.promoEmptyText}>No promos available right now</Text>
+              <TouchableOpacity
+                style={[styles.promoApplyBtn, { backgroundColor: promoInput.trim() ? colors.primary : colors.border }]}
+                onPress={handleManualPromo}
+                disabled={!promoInput.trim()}
+              >
+                <Text style={styles.promoApplyText}>Apply</Text>
+              </TouchableOpacity>
+            </View>
+            {promoError ? (
+              <View style={styles.promoErrorRow}>
+                <Ionicons name="alert-circle-outline" size={14} color="#EF4444" />
+                <Text style={styles.promoErrorText}>{promoError}</Text>
               </View>
+            ) : null}
+
+            {/* Available promos list */}
+            {availablePromos.length > 0 && (
+              <Text style={[styles.promoSectionLabel, { color: colors.textDim }]}>Available Offers</Text>
+            )}
+
+            <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 340 }}>
+              {availablePromos.map((promo: any) => {
+                const isSelected = appliedPromo?.promo_id === promo.promo_id || appliedPromo?.code === promo.code;
+                const discountLabel = promo.discount_type === 'percentage'
+                  ? `${promo.discount_value}% off${promo.max_discount ? ` · max $${promo.max_discount}` : ''}`
+                  : `$${Number(promo.discount_value).toFixed(2)} off`;
+                return (
+                  <TouchableOpacity
+                    key={promo.promo_id || promo.code}
+                    style={[styles.promoRow, isSelected && styles.promoRowSelected]}
+                    onPress={() => { applyPromo(promo); setShowPromoSheet(false); }}
+                    activeOpacity={0.75}
+                  >
+                    <View style={[styles.promoRowIcon, { backgroundColor: isSelected ? '#D1FAE5' : '#F0FDF4' }]}>
+                      <Ionicons name="pricetag" size={18} color={isSelected ? '#059669' : '#10B981'} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                        <Text style={styles.promoRowCode}>{promo.code}</Text>
+                        <View style={styles.promoSavingPill}>
+                          <Text style={styles.promoSavingPillText}>{discountLabel}</Text>
+                        </View>
+                      </View>
+                      {promo.description ? (
+                        <Text style={styles.promoRowDesc}>{promo.description}</Text>
+                      ) : null}
+                    </View>
+                    {isSelected
+                      ? <Ionicons name="checkmark-circle" size={22} color="#059669" />
+                      : <Ionicons name="chevron-forward" size={16} color={colors.border} />}
+                  </TouchableOpacity>
+                );
+              })}
+
+              {availablePromos.length === 0 && (
+                <View style={styles.promoEmpty}>
+                  <View style={styles.promoEmptyIcon}>
+                    <Ionicons name="gift-outline" size={28} color={colors.textDim} />
+                  </View>
+                  <Text style={styles.promoEmptyTitle}>No offers right now</Text>
+                  <Text style={styles.promoEmptyText}>Enter a code above if you have one</Text>
+                </View>
+              )}
+            </ScrollView>
+
+            {appliedPromo && (
+              <TouchableOpacity
+                style={styles.promoRemoveRow}
+                onPress={() => { applyPromo(null); setShowPromoSheet(false); }}
+              >
+                <Ionicons name="close-circle-outline" size={18} color="#EF4444" />
+                <Text style={styles.promoRemoveText}>Remove applied code</Text>
+              </TouchableOpacity>
             )}
 
             <TouchableOpacity style={styles.paymentDoneBtn} onPress={() => setShowPromoSheet(false)}>
-              <Text style={styles.paymentDoneBtnText}>Close</Text>
+              <Text style={styles.paymentDoneBtnText}>Done</Text>
             </TouchableOpacity>
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
 
       {/* ═══ Schedule picker ═══ */}
-      <DatePicker
-        modal
-        open={showScheduleModal}
-        date={tempDate}
-        mode="datetime"
-        minimumDate={new Date(Date.now() + 15 * 60000)}
-        maximumDate={new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)}
-        title="Schedule Ride"
-        confirmText="Schedule"
-        cancelText="Cancel"
+      <SchedulePicker
+        visible={showScheduleModal}
+        onClose={() => setShowScheduleModal(false)}
         onConfirm={handleScheduleConfirm}
-        onCancel={() => setShowScheduleModal(false)}
+        minDate={new Date(Date.now() + 15 * 60000)}
+        maxDate={new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)}
       />
 
       <CustomAlert
@@ -1181,24 +1264,58 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
       marginTop: 3,
     },
 
-    // ── Promo / work banners ──
-    promoBanner: {
+    // ── Promo entry row (always visible) ──
+    promoEntryRow: {
       flexDirection: 'row',
       alignItems: 'center',
       marginHorizontal: 16,
       marginTop: 8,
       marginBottom: 4,
-      backgroundColor: '#ECFDF5',
-      borderRadius: 12,
-      paddingVertical: 10,
-      paddingHorizontal: 14,
-      gap: 8,
+      backgroundColor: colors.surfaceLight,
+      borderRadius: 14,
+      paddingVertical: 11,
+      paddingHorizontal: 12,
+      gap: 10,
+      borderWidth: 1.5,
+      borderColor: colors.border,
     },
-    promoBannerText: {
-      flex: 1,
-      fontSize: sf(13),
+    promoEntryRowActive: {
+      backgroundColor: '#F0FDF4',
+      borderColor: '#6EE7B7',
+    },
+    promoEntryIcon: {
+      width: 34,
+      height: 34,
+      borderRadius: 10,
+      backgroundColor: colors.surface,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    promoEntryLabel: {
+      fontSize: sf(14),
       fontFamily: 'PlusJakartaSans_600SemiBold',
+      color: colors.text,
+    },
+    promoEntryHint: {
+      fontSize: sf(11),
+      fontFamily: 'PlusJakartaSans_400Regular',
+      color: '#059669',
+      marginTop: 1,
+    },
+    promoEntryCode: {
+      fontSize: sf(14),
+      fontFamily: 'PlusJakartaSans_700Bold',
       color: '#065F46',
+      letterSpacing: 0.4,
+    },
+    promoEntryDesc: {
+      fontSize: sf(11),
+      fontFamily: 'PlusJakartaSans_400Regular',
+      color: '#059669',
+      marginTop: 1,
+    },
+    promoRemoveBtn: {
+      padding: 2,
     },
     workBanner: {
       flexDirection: 'row',
@@ -1424,13 +1541,67 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
       paddingHorizontal: 20,
       paddingBottom: Math.max(insets.bottom, 16) + 8,
       paddingTop: 12,
-      maxHeight: '80%',
+      maxHeight: '85%',
+    },
+    promoInputRow: {
+      flexDirection: 'row',
+      gap: 8,
+      marginBottom: 6,
+    },
+    promoInputWrap: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      borderRadius: 12,
+      borderWidth: 1.5,
+      borderColor: colors.border,
+      backgroundColor: colors.surfaceLight,
+      overflow: 'hidden',
+    },
+    promoInputField: {
+      flex: 1,
+      paddingVertical: 13,
+      paddingHorizontal: 10,
+      fontSize: sf(15),
+      fontFamily: 'PlusJakartaSans_600SemiBold',
+      letterSpacing: 1,
+    },
+    promoApplyBtn: {
+      paddingHorizontal: 18,
+      borderRadius: 12,
+      justifyContent: 'center',
+      alignItems: 'center',
+      minHeight: 48,
+    },
+    promoApplyText: {
+      fontSize: sf(14),
+      fontFamily: 'PlusJakartaSans_700Bold',
+      color: '#FFF',
+    },
+    promoErrorRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 5,
+      marginBottom: 10,
+    },
+    promoErrorText: {
+      fontSize: sf(12),
+      fontFamily: 'PlusJakartaSans_500Medium',
+      color: '#EF4444',
+    },
+    promoSectionLabel: {
+      fontSize: sf(11),
+      fontFamily: 'PlusJakartaSans_700Bold',
+      textTransform: 'uppercase',
+      letterSpacing: 0.6,
+      marginTop: 8,
+      marginBottom: 8,
     },
     promoRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      gap: 14,
-      paddingVertical: 14,
+      gap: 12,
+      paddingVertical: 13,
       paddingHorizontal: 12,
       borderRadius: 14,
       marginBottom: 8,
@@ -1439,19 +1610,18 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
       borderColor: 'transparent',
     },
     promoRowSelected: {
-      borderColor: colors.primary,
-      backgroundColor: `${colors.primary}10`,
+      borderColor: '#6EE7B7',
+      backgroundColor: '#F0FDF4',
     },
     promoRowIcon: {
-      width: 40,
-      height: 40,
+      width: 38,
+      height: 38,
       borderRadius: 10,
       justifyContent: 'center',
       alignItems: 'center',
-      backgroundColor: colors.surfaceLight,
     },
     promoRowCode: {
-      fontSize: sf(15),
+      fontSize: sf(14),
       fontFamily: 'PlusJakartaSans_700Bold',
       color: colors.text,
       letterSpacing: 0.5,
@@ -1460,23 +1630,52 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
       fontSize: sf(12),
       fontFamily: 'PlusJakartaSans_400Regular',
       color: colors.textDim,
-      marginTop: 1,
-    },
-    promoRowSaving: {
-      fontSize: sf(13),
-      fontFamily: 'PlusJakartaSans_600SemiBold',
-      color: '#10B981',
       marginTop: 2,
+    },
+    promoSavingPill: {
+      backgroundColor: '#D1FAE5',
+      borderRadius: 6,
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+    },
+    promoSavingPillText: {
+      fontSize: sf(11),
+      fontFamily: 'PlusJakartaSans_700Bold',
+      color: '#065F46',
     },
     promoEmpty: {
       alignItems: 'center',
-      paddingVertical: 28,
+      paddingVertical: 32,
       gap: 8,
     },
+    promoEmptyIcon: {
+      width: 56, height: 56, borderRadius: 28,
+      backgroundColor: colors.surfaceLight,
+      justifyContent: 'center', alignItems: 'center',
+      marginBottom: 4,
+    },
+    promoEmptyTitle: {
+      fontSize: sf(15),
+      fontFamily: 'PlusJakartaSans_600SemiBold',
+      color: colors.text,
+    },
     promoEmptyText: {
-      fontSize: sf(14),
+      fontSize: sf(13),
       fontFamily: 'PlusJakartaSans_400Regular',
       color: colors.textDim,
+    },
+    promoRemoveRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 6,
+      paddingVertical: 12,
+      marginBottom: 4,
+    },
+    promoRemoveText: {
+      fontSize: sf(14),
+      fontFamily: 'PlusJakartaSans_600SemiBold',
+      color: '#EF4444',
     },
 
 

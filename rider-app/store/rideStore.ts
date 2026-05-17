@@ -353,7 +353,9 @@ export const useRideStore = create<RideState>((set, get) => ({
   fetchAvailablePromos: async (rideFare?: number) => {
     try {
       const fare = rideFare ?? 0;
-      const response = await api.get<Promo[]>(`/promo/available?ride_fare=${fare}`);
+      const pickup = get().pickup;
+      const coords = pickup ? `&pickup_lat=${pickup.lat}&pickup_lng=${pickup.lng}` : '';
+      const response = await api.get<Promo[]>(`/promo/available?ride_fare=${fare}${coords}`);
       const promos = response.data || [];
       set({ availablePromos: promos });
       // Auto-apply best promo (first one, already sorted by biggest discount)

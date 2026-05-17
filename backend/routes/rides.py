@@ -758,6 +758,23 @@ async def estimate_ride(
 
     fares = await get_fares_for_location(body.pickup_lat, body.pickup_lng)
 
+    # Resolve service area once for fees/taxes — shared across all vehicle-type iterations
+    # so calculate_all_fees doesn't re-fetch service_areas N times.
+    _est_all_areas = await db_supabase.get_rows("service_areas", {"is_active": True}, limit=100)
+    _est_matched_area = next(
+        (
+            a
+            for a in _est_all_areas
+            if get_service_area_polygon(a)
+            and point_in_polygon(body.pickup_lat, body.pickup_lng, get_service_area_polygon(a))
+        ),
+        None,
+    )
+    if _est_matched_area:
+        logger.info("[estimate] matched service area '%s' for fees", _est_matched_area.get("name", _est_matched_area.get("id")))
+    else:
+        logger.info("[estimate] no service area matched pickup (%.5f, %.5f) — area fees will be empty", body.pickup_lat, body.pickup_lng)
+
     # Fetch all nearby online+available drivers once
     all_drivers = await db_supabase.get_rows(
         "drivers",
@@ -841,7 +858,8 @@ async def estimate_ride(
         surge = Decimal("1.0") if corporate_bypass else _d(fare_info.get("surge_multiplier", 1.0))
         fb = calculate_fare(fare_info, distance_km, duration_minutes, surge=surge, airport_fee=airport_fee)
 
-        # Calculate area fees + taxes so the rider sees them before booking
+        # Calculate area fees + taxes so the rider sees them before booking.
+        # Pass the pre-resolved area to avoid a redundant DB fetch per vehicle type.
         fees_result = {}
         try:
             fees_result = await calculate_all_fees(
@@ -851,6 +869,8 @@ async def estimate_ride(
                 body.dropoff_lng,
                 distance_km,
                 _f(fb.total_fare),
+                _all_areas=_est_all_areas,
+                _matched_area=_est_matched_area,
             )
         except Exception as e:
             logger.error("[estimate] calculate_all_fees failed: %s", e, exc_info=True)

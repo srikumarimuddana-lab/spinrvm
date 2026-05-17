@@ -15,13 +15,15 @@ def get_service_area_polygon(area: Dict[str, Any]) -> List[Dict[str, float]]:
     """
     Return polygon as list of {lat, lng} from a service area row.
     Supports both 'polygon' (list of {lat, lng}) and 'geojson' (GeoJSON geometry; coordinates are [lng, lat]).
+    The admin dashboard stores GeoJSON dicts in the polygon column, so both are handled.
     """
     if not area:
         return []
     poly = area.get("polygon")
     if isinstance(poly, list) and len(poly) >= 3:
         return [{"lat": float(p.get("lat", 0)), "lng": float(p.get("lng", 0))} for p in poly]
-    geojson = area.get("geojson")
+    # Admin dashboard stores GeoJSON dict in the polygon column; fall through to GeoJSON parsing.
+    geojson = poly if isinstance(poly, dict) else area.get("geojson")
     if isinstance(geojson, dict):
         geom = geojson.get("geometry", geojson)
         coords = geom.get("coordinates") if isinstance(geom, dict) else None

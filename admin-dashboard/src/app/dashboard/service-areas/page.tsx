@@ -136,7 +136,7 @@ export default function ServiceAreasPage() {
         geojson: { type: "Polygon", coordinates: [createForm.polygon.map(p => [p.lng, p.lat])] },
         is_active: createForm.is_active, is_airport: createForm.is_airport,
         // Defaults
-        fees: {}, airport_fee: createForm.is_airport ? 5.0 : 0,
+        airport_fee: createForm.is_airport ? 5.0 : 0,
         gst_rate: 5.0, pst_rate: createForm.province === 'SK' ? 6.0 : createForm.province === 'AB' ? 0 : 7.0,
         insurance_fee_percent: 2.0, vehicle_pricing: [], subscription_plan_ids: [],
         spinr_pass_enabled: true, surge_enabled: false, surge_multiplier: 1.0,
@@ -1061,115 +1061,6 @@ function DocumentsEditor({ docs, onSave }: { docs: any[]; onSave: (d: any[]) => 
   );
 }
 
-// ─── Flat Fees Editor ───
-// Edits service_areas.fees JSONB — a simple {name: amount} dict where admin
-// can define any number of flat fees (platform_fee, city_fee, etc.) without
-// a schema migration. All values flow to admin_earnings at ride creation.
-
-function FlatFeesEditor({ areaId, fees, onSave }: {
-    areaId: string;
-    fees: Record<string, number>;
-    onSave: (updated: Record<string, number>) => void;
-}) {
-    const [rows, setRows] = useState<{ key: string; value: string }[]>(() =>
-        Object.entries(fees).map(([k, v]) => ({ key: k, value: String(v) }))
-    );
-    const [newKey, setNewKey] = useState("");
-    const [newValue, setNewValue] = useState("");
-    const [saving, setSaving] = useState(false);
-    const crudToast = useCrudToast();
-
-    // Keep rows in sync when parent area reloads
-    useEffect(() => {
-        setRows(Object.entries(fees).map(([k, v]) => ({ key: k, value: String(v) })));
-    }, [JSON.stringify(fees)]);
-
-    const toDict = (r: { key: string; value: string }[]) =>
-        Object.fromEntries(r.filter(x => x.key.trim()).map(x => [x.key.trim(), parseFloat(x.value) || 0]));
-
-    const handleSave = async () => {
-        setSaving(true);
-        try {
-            onSave(toDict(rows));
-            crudToast.updated("Flat fees");
-        } catch (e) { crudToast.error("save flat fees", e); }
-        finally { setSaving(false); }
-    };
-
-    const handleAdd = () => {
-        if (!newKey.trim()) return;
-        const key = newKey.trim().toLowerCase().replace(/\s+/g, "_");
-        if (rows.some(r => r.key === key)) return;
-        setRows(prev => [...prev, { key, value: newValue || "0" }]);
-        setNewKey(""); setNewValue("");
-    };
-
-    const handleRemove = (idx: number) => setRows(prev => prev.filter((_, i) => i !== idx));
-
-    const handleChange = (idx: number, field: "key" | "value", val: string) =>
-        setRows(prev => prev.map((r, i) => i === idx ? { ...r, [field]: val } : r));
-
-    return (
-        <div>
-            <div className="flex items-center justify-between mb-3">
-                <div>
-                    <h4 className="font-bold text-gray-800">Flat Fees</h4>
-                    <p className="text-sm text-gray-500">Fixed amounts added to every ride in this area. All flow to admin earnings.</p>
-                </div>
-            </div>
-            <div className="bg-white rounded-xl border p-4 space-y-2">
-                {rows.length === 0 && (
-                    <p className="text-sm text-gray-400 italic">No flat fees configured — add one below.</p>
-                )}
-                {rows.map((row, i) => (
-                    <div key={i} className="flex items-center gap-2">
-                        <input
-                            className="flex-1 border rounded-lg px-3 py-1.5 text-sm font-mono"
-                            value={row.key} onChange={e => handleChange(i, "key", e.target.value)}
-                            placeholder="fee_name"
-                        />
-                        <span className="text-gray-400 text-sm">$</span>
-                        <input
-                            className="w-28 border rounded-lg px-3 py-1.5 text-sm text-right"
-                            type="number" min="0" step="0.01"
-                            value={row.value} onChange={e => handleChange(i, "value", e.target.value)}
-                        />
-                        <button onClick={() => handleRemove(i)} className="text-gray-300 hover:text-red-500">
-                            <Trash2 className="h-4 w-4" />
-                        </button>
-                    </div>
-                ))}
-                {/* Add new row */}
-                <div className="flex items-center gap-2 pt-2 border-t mt-2">
-                    <input
-                        className="flex-1 border rounded-lg px-3 py-1.5 text-sm font-mono"
-                        value={newKey} onChange={e => setNewKey(e.target.value)}
-                        placeholder="e.g. platform_fee"
-                        onKeyDown={e => e.key === "Enter" && handleAdd()}
-                    />
-                    <span className="text-gray-400 text-sm">$</span>
-                    <input
-                        className="w-28 border rounded-lg px-3 py-1.5 text-sm text-right"
-                        type="number" min="0" step="0.01"
-                        value={newValue} onChange={e => setNewValue(e.target.value)}
-                        placeholder="0.00"
-                        onKeyDown={e => e.key === "Enter" && handleAdd()}
-                    />
-                    <button onClick={handleAdd} className="flex items-center gap-1 bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1.5 rounded-lg text-sm font-semibold">
-                        <Plus className="h-3.5 w-3.5" /> Add
-                    </button>
-                </div>
-                <div className="flex justify-end pt-2">
-                    <button onClick={handleSave} disabled={saving}
-                        className="bg-red-500 text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-red-600 disabled:opacity-50">
-                        {saving ? "Saving…" : "Save Flat Fees"}
-                    </button>
-                </div>
-            </div>
-        </div>
-    );
-}
-
 // ─── Area Fees Editor ───
 
 function AreaFeesEditor({ areaId, area, fees, loading, onReload, onFieldUpdate }: {
@@ -1295,10 +1186,7 @@ function AreaFeesEditor({ areaId, area, fees, loading, onReload, onFieldUpdate }
                 )}
             </div>
 
-            {/* SECTION 2: Flat Fees (fees JSONB — any named flat fee applied to every ride) */}
-            <FlatFeesEditor areaId={areaId} fees={area.fees || {}} onSave={updated => onFieldUpdate(areaId, 'fees', updated)} />
-
-            {/* SECTION 3: Taxes */}
+            {/* SECTION 2: Taxes */}
             <div>
                 <h4 className="font-bold text-gray-800 mb-3">Tax Configuration</h4>
                 <div className="bg-white rounded-xl border p-4">
@@ -1346,7 +1234,7 @@ function AreaFeesEditor({ areaId, area, fees, loading, onReload, onFieldUpdate }
                 </div>
             </div>
 
-            {/* SECTION 4: Cancellation Fees */}
+            {/* SECTION 3: Cancellation Fees */}
             <div>
                 <h4 className="font-bold text-gray-800 mb-3">Cancellation Fees</h4>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

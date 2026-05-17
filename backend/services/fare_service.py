@@ -130,9 +130,6 @@ class FareBreakdown:
     time_fare: Decimal
     booking_fee: Decimal
     airport_fee: Decimal
-    # Dynamic fees from service_areas.fees — any key/value the admin defines.
-    # Summed into total_fare and admin_earnings; snapshotted to rides.extra_fees.
-    extra_fees: Dict[str, Decimal]
     total_fare: Decimal
     minimum_fare: Decimal
     surge_multiplier: Decimal
@@ -159,19 +156,14 @@ def calculate_fare(
     minimum = _d(fare_info.get("minimum_fare", DEFAULT_FARE["minimum_fare"]))
     ap_fee = _d(airport_fee)
 
-    # Dynamic area fees — any key/value dict from service_areas.fees.
-    raw_fees: Dict[str, Any] = fare_info.get("fees") or {}
-    extra_fees: Dict[str, Decimal] = {k: _round(_d(v)) for k, v in raw_fees.items() if _d(v) > 0}
-    extra_fees_total = sum(extra_fees.values(), Decimal("0"))
-
     distance_fare = _round(per_km * _d(distance_km) * surge)
     time_fare = _round(per_min * _d(duration_minutes) * surge)
 
-    subtotal = _round(base_fare + distance_fare + time_fare + booking + ap_fee + extra_fees_total)
+    subtotal = _round(base_fare + distance_fare + time_fare + booking + ap_fee)
     total_fare = max(subtotal, minimum)
 
     driver_earnings = _round(base_fare + distance_fare + time_fare)
-    admin_earnings = _round(booking + ap_fee + extra_fees_total)
+    admin_earnings = _round(booking + ap_fee)
 
     return FareBreakdown(
         base_fare=base_fare,
@@ -179,7 +171,6 @@ def calculate_fare(
         time_fare=time_fare,
         booking_fee=booking,
         airport_fee=ap_fee,
-        extra_fees=extra_fees,
         total_fare=total_fare,
         minimum_fare=minimum,
         surge_multiplier=surge,
@@ -210,11 +201,6 @@ def build_fare_breakdown_lines(
 
     if fb.surge_multiplier > Decimal("1"):
         lines.append({"label": f"Surge ({float(fb.surge_multiplier)}×)", "amount": None, "type": "modifier"})
-
-    # Dynamic area fees — rendered in whatever order the admin defined them.
-    for fee_name, fee_amount in (fb.extra_fees or {}).items():
-        label = fee_name.replace("_", " ").title()
-        lines.append({"label": label, "amount": _f(fee_amount), "type": "fee"})
 
     for fee in (area_fees or []):
         val = fee.get("calculated_value", 0)
@@ -247,14 +233,12 @@ def recalculate_fare_for_distance(
 
     per_km_rate = _d(ride.get("distance_fare", 0)) / planned
     new_distance_fare = _round(per_km_rate * _d(actual_distance_km))
-    extra_fees_total = sum(_d(v) for v in (ride.get("extra_fees") or {}).values())
     new_total_fare = _round(
         _d(ride.get("base_fare", 0))
         + new_distance_fare
         + _d(ride.get("time_fare", 0))
         + _d(ride.get("booking_fee", 0))
         + _d(ride.get("airport_fee") or 0)
-        + extra_fees_total
     )
     new_driver_earnings = _round(_d(ride.get("base_fare", 0)) + new_distance_fare + _d(ride.get("time_fare", 0)))
 

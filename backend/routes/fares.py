@@ -126,7 +126,6 @@ def _build_default_fares(vt_list, surge=1.0):
                 "per_minute_rate": _money_str(DEFAULT_FARE["per_minute_rate"]),
                 "minimum_fare": _money_str(DEFAULT_FARE["minimum_fare"]),
                 "booking_fee": _money_str(DEFAULT_FARE["booking_fee"]),
-                "fees": {},
                 "surge_multiplier": _fd(surge),
             }
         )
@@ -242,9 +241,6 @@ async def build_fares_for_area(matched_area, vehicle_types):
         }
         # Normalise all monetary values from DB through _money_str() so they
         # serialise as exact Decimal strings; surge_multiplier stays float.
-        # fees JSONB from the area — any key/value the admin defined.
-        area_fees_raw: dict = matched_area.get("fees") or {}
-        area_fees_serialized = {k: _money_str(v) for k, v in area_fees_raw.items() if _fd(v) > 0}
         result.append(
             {
                 "vehicle_type": serialize_doc(vt),
@@ -253,7 +249,6 @@ async def build_fares_for_area(matched_area, vehicle_types):
                 "per_minute_rate": _money_str(pricing["per_minute_rate"]),
                 "minimum_fare": _money_str(pricing["minimum_fare"]),
                 "booking_fee": _money_str(pricing["booking_fee"]),
-                "fees": area_fees_serialized,
                 "surge_multiplier": _fd(surge),
             }
         )

@@ -201,7 +201,8 @@ def build_fare_breakdown_lines(
     if fb.airport_fee > Decimal("0"):
         lines.append({"label": "Airport surcharge", "amount": _f(fb.airport_fee), "type": "fee"})
 
-    lines.append({"label": "Booking fee", "amount": _f(fb.booking_fee), "type": "fee"})
+    if fb.booking_fee > Decimal("0"):
+        lines.append({"label": "Booking fee", "amount": _f(fb.booking_fee), "type": "fee"})
 
     if fb.surge_multiplier > Decimal("1"):
         lines.append({"label": f"Surge ({float(fb.surge_multiplier)}×)", "amount": None, "type": "modifier"})

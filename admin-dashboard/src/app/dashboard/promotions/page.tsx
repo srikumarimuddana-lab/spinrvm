@@ -767,12 +767,35 @@ export default function PromotionsPage() {
                         {!form.free_ride && (
                             <>
                                 <div className="grid grid-cols-2 gap-4">
-                                    <div className="space-y-2"><Label>Type</Label><Select value={form.discount_type} onValueChange={(v) => setForm({ ...form, discount_type: v as any })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="flat">Flat ($)</SelectItem><SelectItem value="percentage">Percentage (%)</SelectItem></SelectContent></Select></div>
-                                    <div className="space-y-2"><Label>Discount Value</Label><Input type="number" placeholder={form.discount_type === "flat" ? "5.00" : "10"} value={form.discount_value} onChange={(e) => setForm({ ...form, discount_value: e.target.value })} /></div>
+                                    <div className="space-y-2">
+                                        <Label>Type</Label>
+                                        <Select value={form.discount_type} onValueChange={(v) => setForm({ ...form, discount_type: v as any })}>
+                                            <SelectTrigger><SelectValue /></SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="flat">Flat ($) — fixed dollar off</SelectItem>
+                                                <SelectItem value="percentage">Percentage (%) — % of ride fare</SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                    <div className="space-y-2">
+                                        <Label>{form.discount_type === "flat" ? "Discount Amount ($)" : "Discount Percentage (%)"}</Label>
+                                        <Input type="number" placeholder={form.discount_type === "flat" ? "10.00" : "20"} value={form.discount_value} onChange={(e) => setForm({ ...form, discount_value: e.target.value })} />
+                                        <p className="text-xs text-muted-foreground">
+                                            {form.discount_type === "flat"
+                                                ? "Deducted from ride fare only (not booking fees or taxes)"
+                                                : "Applied to ride fare only — set a cap below to limit exposure"}
+                                        </p>
+                                    </div>
                                 </div>
                                 {form.discount_type === "percentage" && (
                                     <div className="grid grid-cols-2 gap-4">
-                                        <div className="space-y-2"><Label>Max Discount Cap ($)</Label><Input type="number" placeholder="25.00" value={form.max_discount} onChange={(e) => setForm({ ...form, max_discount: e.target.value })} /></div>
+                                        <div className="space-y-2">
+                                            <Label>Max Discount Cap ($) <span className="text-red-500 font-normal">*required</span></Label>
+                                            <Input type="number" placeholder="25.00" value={form.max_discount} onChange={(e) => setForm({ ...form, max_discount: e.target.value })} className={!form.max_discount ? "border-amber-400 focus-visible:ring-amber-400" : ""} />
+                                            {!form.max_discount && (
+                                                <p className="text-xs text-amber-600 dark:text-amber-400">Without a cap, a 75% promo on a $100 fare gives $75 off. Set a cap to limit this.</p>
+                                            )}
+                                        </div>
                                     </div>
                                 )}
                             </>

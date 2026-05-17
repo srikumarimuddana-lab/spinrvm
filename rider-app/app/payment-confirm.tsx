@@ -390,10 +390,17 @@ function PaymentConfirmScreenContent() {
                 <View style={styles.fareDivider} />
                 {(selectedEstimate.fare_breakdown || []).map((line: any, i: number) => (
                   line.amount != null ? (
-                    <View key={i} style={styles.fareRow}>
-                      <Text style={[styles.fareLabel, line.type === 'tax' && { color: '#6B7280' }, line.type === 'modifier' && { color: '#EF4444' }]}>
-                        {line.label}
-                      </Text>
+                    <View key={i} style={[styles.fareRow, line.type === 'ride' && { alignItems: 'flex-start' }]}>
+                      {line.type === 'ride' ? (
+                        <View>
+                          <Text style={styles.fareLabel}>{line.label}</Text>
+                          <Text style={styles.fareDriverBadge}>100% goes to your driver · ride local, support local</Text>
+                        </View>
+                      ) : (
+                        <Text style={[styles.fareLabel, line.type === 'tax' && { color: '#6B7280' }, line.type === 'modifier' && { color: '#EF4444' }]}>
+                          {line.label}
+                        </Text>
+                      )}
                       {line.amount != null ? (
                         <Text style={[styles.fareValue, line.type === 'modifier' && { color: '#EF4444' }]} allowFontScaling={false}>
                           ${parseFloat(String(line.amount)).toFixed(2)}
@@ -761,6 +768,12 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number = (s) =>
       fontSize: sf(14),
       fontFamily: 'PlusJakartaSans_400Regular',
       color: '#6B7280',
+    },
+    fareDriverBadge: {
+      fontSize: sf(11),
+      fontFamily: 'PlusJakartaSans_500Medium',
+      color: '#10B981',
+      marginTop: 2,
     },
     fareValue: {
       fontSize: sf(14),

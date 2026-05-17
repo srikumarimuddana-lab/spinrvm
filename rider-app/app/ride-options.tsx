@@ -600,8 +600,15 @@ function RideOptionsScreenContent() {
               <Text style={styles.fareBreakdownTitle}>Fare breakdown</Text>
               {selectedEstimate.fare_breakdown.map((line, i) => (
                 line.amount != null ? (
-                  <View key={i} style={styles.fareBreakdownRow}>
-                    <Text style={[styles.fareBreakdownLabel, line.type === 'tax' && { color: '#6B7280' }]}>{line.label}</Text>
+                  <View key={i} style={[styles.fareBreakdownRow, line.type === 'ride' && { alignItems: 'flex-start' }]}>
+                    {line.type === 'ride' ? (
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.fareBreakdownLabel}>{line.label}</Text>
+                        <Text style={styles.fareBreakdownDriverBadge}>100% goes to your driver · ride local, support local</Text>
+                      </View>
+                    ) : (
+                      <Text style={[styles.fareBreakdownLabel, line.type === 'tax' && { color: '#6B7280' }]}>{line.label}</Text>
+                    )}
                     <Text style={styles.fareBreakdownValue}>${parseFloat(String(line.amount)).toFixed(2)}</Text>
                   </View>
                 ) : null
@@ -1439,6 +1446,12 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
       fontSize: sf(13),
       fontFamily: 'PlusJakartaSans_500Medium',
       color: colors.text,
+    },
+    fareBreakdownDriverBadge: {
+      fontSize: sf(10),
+      fontFamily: 'PlusJakartaSans_500Medium',
+      color: '#10B981',
+      marginTop: 2,
     },
     fareBreakdownTotal: {
       borderTopWidth: 1,

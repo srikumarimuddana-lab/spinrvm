@@ -42,7 +42,7 @@ interface VehicleType {
 export interface FareLineItem {
   label: string;
   amount: number | string | null;
-  type: 'fare' | 'fee' | 'tax' | 'tip' | 'modifier';
+  type: 'ride' | 'fare' | 'fee' | 'tax' | 'tip' | 'modifier';
 }
 
 interface RideEstimate {

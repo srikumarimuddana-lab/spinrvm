@@ -147,8 +147,12 @@ interface SavedAddress {
 interface Promo {
   id: string;
   code: string;
+  free_ride?: boolean;
   discount_type: string;
   discount_value: number;
+  max_discount?: number;
+  /** Server-computed discount amount for this promo against the current fare. */
+  discount_amount?: number;
   [key: string]: unknown;
 }
 
@@ -231,7 +235,7 @@ interface RideState {
   fetchScheduledRides: () => Promise<void>;
   cancelScheduledRide: (rideId: string) => Promise<void>;
   setUserLocation: (loc: { latitude: number; longitude: number } | null) => void;
-  fetchAvailablePromos: (rideFare?: number) => Promise<void>;
+  fetchAvailablePromos: (rideFare?: number, ridePortion?: number) => Promise<void>;
   applyPromo: (promo: Promo | null) => void;
 
   // WebSocket-driven updates (see rider-app/hooks/useRiderSocket.ts).
@@ -359,12 +363,13 @@ export const useRideStore = create<RideState>((set, get) => ({
 
   selectVehicle: (vehicle) => set({ selectedVehicle: vehicle }),
 
-  fetchAvailablePromos: async (rideFare?: number) => {
+  fetchAvailablePromos: async (rideFare?: number, ridePortion?: number) => {
     try {
       const fare = rideFare ?? 0;
       const pickup = get().pickup;
       const coords = pickup ? `&pickup_lat=${pickup.lat}&pickup_lng=${pickup.lng}` : '';
-      const response = await api.get<Promo[]>(`/promo/available?ride_fare=${fare}${coords}`);
+      const portionParam = ridePortion !== undefined ? `&ride_portion=${ridePortion}` : '';
+      const response = await api.get<Promo[]>(`/promo/available?ride_fare=${fare}${portionParam}${coords}`);
       const promos = response.data || [];
       set({ availablePromos: promos });
       // Auto-apply best promo (first one, already sorted by biggest discount)

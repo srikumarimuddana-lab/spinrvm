@@ -38,7 +38,8 @@ api_router = APIRouter(prefix="/promo", tags=["Promotions"])
 
 class ValidatePromoRequest(BaseModel):
     code: str
-    ride_fare: Decimal = Decimal("0.00")  # Decimal for currency precision; ignored when ride_id is provided
+    ride_fare: Decimal = Decimal("0.00")  # ride portion only (base+dist+time); ignored when ride_id is provided
+    grand_total: Optional[Decimal] = None  # full amount including fees; required for free_ride promos
     ride_id: Optional[str] = None  # When set, fare is fetched server-side (R-P2-33)
 
 
@@ -49,8 +50,9 @@ class ApplyPromoRequest(BaseModel):
 
 class CreatePromoCodeRequest(BaseModel):
     code: str
+    free_ride: bool = False  # when True, covers entire grand_total; discount_type/value ignored
     discount_type: str = "flat"  # flat | percentage
-    discount_value: Decimal = Field(..., gt=0, le=500)  # flat: max $500 off; percentage: capped at 100 below
+    discount_value: Decimal = Field(default=Decimal("0"), ge=0, le=500)  # 0 allowed for free_ride
     max_discount: Optional[Decimal] = None  # Cap for percentage discounts
     max_uses: int = 100
     max_uses_per_user: int = 1
@@ -62,12 +64,17 @@ class CreatePromoCodeRequest(BaseModel):
     @field_validator("discount_value")
     @classmethod
     def validate_discount_value(cls, value, info):
+        if info.data.get("free_ride"):
+            return value
+        if value <= 0:
+            raise ValueError("discount_value must be greater than 0")
         if info.data.get("discount_type") == "percentage" and value > 100:
             raise ValueError("Percentage discount cannot exceed 100")
         return value
 
 
 class UpdatePromoCodeRequest(BaseModel):
+    free_ride: Optional[bool] = None
     discount_type: Optional[str] = None
     discount_value: Optional[Decimal] = None
     max_discount: Optional[Decimal] = None
@@ -85,8 +92,9 @@ class UpdatePromoCodeRequest(BaseModel):
 async def _validate_promo_for_user(
     code: str,
     user_id: str,
-    ride_fare: Decimal,
+    ride_fare: Decimal,  # ride portion only (base+dist+time = driver earnings)
     ride_id: Optional[str] = None,
+    grand_total: Optional[Decimal] = None,  # full amount including fees; required for free_ride promos
 ) -> Dict[str, Any]:
     """Validate ``code`` against all 10 promo rules for ``user_id``.
 
@@ -98,6 +106,11 @@ async def _validate_promo_for_user(
     Per-user limits are scoped to ``user_id``, so an admin-applied promo
     counts against the rider just like a rider-applied one (the chosen
     behaviour for the admin Create Ride flow).
+
+    ``ride_fare`` is the ride-only portion (driver earnings: base+dist+time).
+    Regular percentage/flat promos apply to this amount only — never to fees or taxes.
+    ``grand_total`` is the full rider-facing total. ``free_ride`` promos use it
+    so the rider pays $0.
     """
     code = code.strip().upper()
     now = datetime.now(timezone.utc)
@@ -142,7 +155,7 @@ async def _validate_promo_for_user(
                 status_code=400, detail="You have already used this promo code the maximum number of times"
             )
 
-    # 4. Minimum ride fare — use server-fetched fare when ride_id is provided (R-P2-33)
+    # 4. Minimum ride fare — check against grand_total when available (R-P2-33)
     min_fare = promo.get("min_ride_fare", 0)
     if min_fare > 0:
         if ride_id:
@@ -151,7 +164,8 @@ async def _validate_promo_for_user(
                 raise HTTPException(status_code=404, detail="Ride not found")
             effective_fare = Decimal(str(ride_rows[0].get("total_fare") or "0"))
         else:
-            effective_fare = ride_fare
+            # grand_total includes fees; a better basis for min-fare checks than ride portion alone
+            effective_fare = grand_total if grand_total is not None else ride_fare
         if effective_fare < min_fare:
             raise HTTPException(status_code=400, detail=f"Minimum ride fare of ${min_fare:.2f} required for this promo")
 
@@ -210,10 +224,15 @@ async def _validate_promo_for_user(
         raise HTTPException(status_code=400, detail="This promotion has reached its budget limit")
 
     # Calculate discount
+    free_ride = promo.get("free_ride", False)
     discount_type = promo.get("discount_type", "flat")
     discount_value = float(promo.get("discount_value", 0))
 
-    if discount_type == "percentage":
+    if free_ride:
+        # Covers the entire grand_total — rider pays $0
+        discount = grand_total if grand_total is not None else ride_fare
+    elif discount_type == "percentage":
+        # Percentage applies to ride portion only (never to fees or taxes)
         discount = (ride_fare * Decimal(str(discount_value)) / Decimal("100")).quantize(
             Decimal("0.01"), rounding=ROUND_HALF_UP
         )
@@ -221,11 +240,14 @@ async def _validate_promo_for_user(
         if max_cap and discount > Decimal(str(max_cap)):
             discount = Decimal(str(max_cap))
     else:
-        discount = min(Decimal(str(discount_value)), ride_fare)
+        # Flat discount capped at grand_total to prevent a negative bill
+        cap = grand_total if grand_total is not None else ride_fare
+        discount = min(Decimal(str(discount_value)), cap)
 
     return {
         "valid": True,
         "code": code,
+        "free_ride": free_ride,
         "discount_type": discount_type,
         "discount_value": discount_value,
         "discount_amount": discount,
@@ -301,6 +323,7 @@ async def validate_promo(
         user_id=current_user["id"],
         ride_fare=req.ride_fare,
         ride_id=req.ride_id,
+        grand_total=req.grand_total,
     )
 
 
@@ -312,18 +335,28 @@ async def apply_promo(
     """Apply a promo code (records usage). Call after ride creation.
     R-P1-8: uses server-stored ride fare, not client-supplied fare.
     """
-    # Fetch server-side fare to prevent client-manipulated discount inflation.
+    # Fetch server-side fares to prevent client-manipulated discount inflation.
     ride = await db_supabase.find_one("rides", {"id": req.ride_id})
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
     if ride.get("rider_id") != current_user["id"]:
         raise HTTPException(status_code=403, detail="ERR_FORBIDDEN")
-    server_fare = Decimal(str(ride.get("total_fare", 0)))
+
+    # ride_fare = driver earnings (base+dist+time); the portion promos discount against
+    server_ride_fare = Decimal(str(ride.get("driver_earnings") or "0"))
+    if server_ride_fare == 0:
+        server_ride_fare = (
+            Decimal(str(ride.get("base_fare") or "0"))
+            + Decimal(str(ride.get("distance_fare") or "0"))
+            + Decimal(str(ride.get("time_fare") or "0"))
+        )
+    server_grand_total = Decimal(str(ride.get("total_fare", 0)))
 
     validation = await _validate_promo_for_user(
         code=req.code,
         user_id=current_user["id"],
-        ride_fare=server_fare,
+        ride_fare=server_ride_fare,
+        grand_total=server_grand_total,
     )
 
     application_id = await _record_promo_application(
@@ -344,7 +377,8 @@ async def apply_promo(
 @promo_available_limit
 async def get_available_promos(
     request: Request,
-    ride_fare: float = Query(0.0),
+    ride_fare: float = Query(0.0),  # grand total (kept for backward compat + min-fare check)
+    ride_portion: Optional[float] = Query(None),  # ride-only portion (base+dist+time) for promo calculation
     pickup_lat: Optional[float] = Query(None),
     pickup_lng: Optional[float] = Query(None),
     current_user: dict = Depends(get_current_user),
@@ -468,10 +502,15 @@ async def get_available_promos(
                 continue  # noqa: E701
 
             # Calculate discount
+            effective_ride = ride_portion if ride_portion is not None else ride_fare
+            free_ride_flag = p.get("free_ride", False)
             discount_type = p.get("discount_type", "flat")
             discount_value = float(p.get("discount_value", 0))
-            if discount_type == "percentage":
-                discount = round(ride_fare * (discount_value / 100), 2) if ride_fare > 0 else 0
+            if free_ride_flag:
+                discount = ride_fare  # covers everything; rider pays $0
+            elif discount_type == "percentage":
+                # Applies to ride portion only (never to fees/taxes)
+                discount = round(effective_ride * (discount_value / 100), 2) if effective_ride > 0 else 0
                 max_cap = p.get("max_discount")
                 if max_cap and discount > max_cap:
                     discount = max_cap  # noqa: E701
@@ -482,6 +521,7 @@ async def get_available_promos(
                 {
                     "promo_id": p["id"],
                     "code": p.get("code"),
+                    "free_ride": free_ride_flag,
                     "discount_type": discount_type,
                     "discount_value": discount_value,
                     "max_discount": p.get("max_discount"),
@@ -534,18 +574,19 @@ async def admin_create_promo_code(req: CreatePromoCodeRequest):
         area_label = " in this service area" if area_id else " (global)"
         raise HTTPException(status_code=400, detail=f"Promo code '{code}' already exists{area_label}")
 
-    if req.discount_type not in ("flat", "percentage"):
-        raise HTTPException(status_code=400, detail="discount_type must be 'flat' or 'percentage'")
-
-    # P1-4: cap discount_value to prevent absurd promo creation
-    if req.discount_type == "percentage" and req.discount_value > 100:
-        raise HTTPException(status_code=400, detail="Percentage discount cannot exceed 100%")
-    if req.discount_type == "flat" and req.discount_value > 500:
-        raise HTTPException(status_code=400, detail="Flat discount cannot exceed $500")
+    if not req.free_ride:
+        if req.discount_type not in ("flat", "percentage"):
+            raise HTTPException(status_code=400, detail="discount_type must be 'flat' or 'percentage'")
+        # P1-4: cap discount_value to prevent absurd promo creation
+        if req.discount_type == "percentage" and req.discount_value > 100:
+            raise HTTPException(status_code=400, detail="Percentage discount cannot exceed 100%")
+        if req.discount_type == "flat" and req.discount_value > 500:
+            raise HTTPException(status_code=400, detail="Flat discount cannot exceed $500")
 
     promo = {
         "id": str(uuid.uuid4()),
         "code": code,
+        "free_ride": req.free_ride,
         "discount_type": req.discount_type,
         "discount_value": req.discount_value,
         "max_discount": req.max_discount,
@@ -569,6 +610,7 @@ async def admin_update_promo_code(promo_id: str, req: UpdatePromoCodeRequest):
     """Update an existing promo code."""
     update_data: Dict[str, Any] = {"updated_at": datetime.now(timezone.utc).isoformat()}
     for field in [
+        "free_ride",
         "discount_type",
         "discount_value",
         "max_discount",

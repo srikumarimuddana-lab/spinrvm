@@ -255,11 +255,14 @@ export default function RideInvoice({ rideId, status }: Props) {
             if (typeof data.airport_fee === "number" && data.airport_fee > 0) {
                 fareLines.push(["Airport Fee", fmtMoney(data.airport_fee)]);
             }
-            if (typeof data.platform_fee === "number" && data.platform_fee > 0) {
-                fareLines.push(["Platform Fee", fmtMoney(data.platform_fee)]);
-            }
-            if (typeof data.city_fee === "number" && data.city_fee > 0) {
-                fareLines.push(["City Fee", fmtMoney(data.city_fee)]);
+            // Dynamic area fees — any key/value the admin defined on the service area
+            const extraFees: Record<string, unknown> = data.extra_fees || {};
+            for (const [key, val] of Object.entries(extraFees)) {
+                const amount = typeof val === "number" ? val : parseFloat(String(val));
+                if (Number.isFinite(amount) && amount > 0) {
+                    const label = key.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
+                    fareLines.push([label, fmtMoney(amount)]);
+                }
             }
 
             doc.setTextColor(80);

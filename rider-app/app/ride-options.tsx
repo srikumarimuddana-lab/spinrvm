@@ -581,6 +581,45 @@ function RideOptionsScreenContent() {
               accessibilityLabel="Request quiet ride" />
           </View>
 
+          {/* Fare breakdown */}
+          {selectedEstimate && (
+            <View style={styles.fareBreakdownCard}>
+              <Text style={styles.fareBreakdownTitle}>Fare breakdown</Text>
+              <View style={styles.fareBreakdownRow}>
+                <Text style={styles.fareBreakdownLabel}>Base fare</Text>
+                <Text style={styles.fareBreakdownValue}>${parseFloat(selectedEstimate.base_fare || '0').toFixed(2)}</Text>
+              </View>
+              <View style={styles.fareBreakdownRow}>
+                <Text style={styles.fareBreakdownLabel}>Distance ({selectedEstimate.distance_km?.toFixed(1)} km)</Text>
+                <Text style={styles.fareBreakdownValue}>${parseFloat(selectedEstimate.distance_fare || '0').toFixed(2)}</Text>
+              </View>
+              <View style={styles.fareBreakdownRow}>
+                <Text style={styles.fareBreakdownLabel}>Time ({selectedEstimate.duration_minutes} min)</Text>
+                <Text style={styles.fareBreakdownValue}>${parseFloat(selectedEstimate.time_fare || '0').toFixed(2)}</Text>
+              </View>
+              <View style={styles.fareBreakdownRow}>
+                <Text style={styles.fareBreakdownLabel}>Booking fee</Text>
+                <Text style={styles.fareBreakdownValue}>${parseFloat(selectedEstimate.booking_fee || '0').toFixed(2)}</Text>
+              </View>
+              {parseFloat(selectedEstimate.platform_fee || '0') > 0 && (
+                <View style={styles.fareBreakdownRow}>
+                  <Text style={styles.fareBreakdownLabel}>Platform fee</Text>
+                  <Text style={styles.fareBreakdownValue}>${parseFloat(selectedEstimate.platform_fee || '0').toFixed(2)}</Text>
+                </View>
+              )}
+              {parseFloat(selectedEstimate.city_fee || '0') > 0 && (
+                <View style={styles.fareBreakdownRow}>
+                  <Text style={styles.fareBreakdownLabel}>City fee</Text>
+                  <Text style={styles.fareBreakdownValue}>${parseFloat(selectedEstimate.city_fee || '0').toFixed(2)}</Text>
+                </View>
+              )}
+              <View style={[styles.fareBreakdownRow, styles.fareBreakdownTotal]}>
+                <Text style={styles.fareBreakdownTotalLabel}>Total</Text>
+                <Text style={styles.fareBreakdownTotalValue}>${parseFloat(selectedEstimate.total_fare || '0').toFixed(2)}</Text>
+              </View>
+            </View>
+          )}
+
           {/* Cancel policy */}
           <View style={styles.policyRow}>
             <Ionicons name="information-circle-outline" size={14} color="#9CA3AF" />
@@ -1377,6 +1416,57 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
       fontFamily: 'PlusJakartaSans_400Regular',
       color: '#9CA3AF',
       lineHeight: 15,
+    },
+
+    // ── Fare breakdown card ──
+    fareBreakdownCard: {
+      marginHorizontal: 16,
+      marginVertical: 8,
+      backgroundColor: colors.surfaceLight,
+      borderRadius: 12,
+      paddingHorizontal: 14,
+      paddingVertical: 10,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    fareBreakdownTitle: {
+      fontSize: sf(12),
+      fontFamily: 'PlusJakartaSans_600SemiBold',
+      color: colors.textDim,
+      marginBottom: 8,
+      textTransform: 'uppercase',
+      letterSpacing: 0.5,
+    },
+    fareBreakdownRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      paddingVertical: 3,
+    },
+    fareBreakdownLabel: {
+      fontSize: sf(13),
+      fontFamily: 'PlusJakartaSans_400Regular',
+      color: colors.text,
+    },
+    fareBreakdownValue: {
+      fontSize: sf(13),
+      fontFamily: 'PlusJakartaSans_500Medium',
+      color: colors.text,
+    },
+    fareBreakdownTotal: {
+      borderTopWidth: 1,
+      borderTopColor: colors.border,
+      marginTop: 4,
+      paddingTop: 6,
+    },
+    fareBreakdownTotalLabel: {
+      fontSize: sf(14),
+      fontFamily: 'PlusJakartaSans_700Bold',
+      color: colors.text,
+    },
+    fareBreakdownTotalValue: {
+      fontSize: sf(14),
+      fontFamily: 'PlusJakartaSans_700Bold',
+      color: colors.primary,
     },
 
     // ── Fixed footer (Uber style) ──

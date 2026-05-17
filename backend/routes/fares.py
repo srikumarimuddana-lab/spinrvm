@@ -249,6 +249,8 @@ async def build_fares_for_area(matched_area, vehicle_types):
                 "per_minute_rate": _money_str(pricing["per_minute_rate"]),
                 "minimum_fare": _money_str(pricing["minimum_fare"]),
                 "booking_fee": _money_str(pricing["booking_fee"]),
+                "platform_fee": _money_str(matched_area.get("platform_fee", 0)),
+                "city_fee": _money_str(matched_area.get("city_fee", 0)),
                 "surge_multiplier": _fd(surge),
             }
         )

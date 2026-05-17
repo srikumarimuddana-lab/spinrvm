@@ -130,6 +130,8 @@ class FareBreakdown:
     time_fare: Decimal
     booking_fee: Decimal
     airport_fee: Decimal
+    platform_fee: Decimal
+    city_fee: Decimal
     total_fare: Decimal
     minimum_fare: Decimal
     surge_multiplier: Decimal
@@ -155,15 +157,17 @@ def calculate_fare(
     booking = _d(fare_info.get("booking_fee", DEFAULT_FARE["booking_fee"]))
     minimum = _d(fare_info.get("minimum_fare", DEFAULT_FARE["minimum_fare"]))
     ap_fee = _d(airport_fee)
+    plat_fee = _d(fare_info.get("platform_fee", 0))
+    c_fee = _d(fare_info.get("city_fee", 0))
 
     distance_fare = _round(per_km * _d(distance_km) * surge)
     time_fare = _round(per_min * _d(duration_minutes) * surge)
 
-    subtotal = _round(base_fare + distance_fare + time_fare + booking + ap_fee)
+    subtotal = _round(base_fare + distance_fare + time_fare + booking + ap_fee + plat_fee + c_fee)
     total_fare = max(subtotal, minimum)
 
     driver_earnings = _round(base_fare + distance_fare + time_fare)
-    admin_earnings = _round(booking + ap_fee)
+    admin_earnings = _round(booking + ap_fee + plat_fee + c_fee)
 
     return FareBreakdown(
         base_fare=base_fare,
@@ -171,6 +175,8 @@ def calculate_fare(
         time_fare=time_fare,
         booking_fee=booking,
         airport_fee=ap_fee,
+        platform_fee=plat_fee,
+        city_fee=c_fee,
         total_fare=total_fare,
         minimum_fare=minimum,
         surge_multiplier=surge,
@@ -202,11 +208,7 @@ def recalculate_fare_for_distance(
         + _d(ride.get("booking_fee", 0))
         + _d(ride.get("airport_fee") or 0)
     )
-    new_driver_earnings = _round(
-        _d(ride.get("base_fare", 0))
-        + new_distance_fare
-        + _d(ride.get("time_fare", 0))
-    )
+    new_driver_earnings = _round(_d(ride.get("base_fare", 0)) + new_distance_fare + _d(ride.get("time_fare", 0)))
 
     return {
         "distance_km": round(actual_distance_km, 2),

@@ -131,6 +131,8 @@ function RideCompletedScreenContent() {
       `Distance fare: $${fmt(currentRide?.distance_fare)}  (${distance.toFixed(1)} km)`,
       `Time fare:     $${fmt(currentRide?.time_fare)}  (${duration} min)`,
       `Booking fee:   $${fmt(currentRide?.booking_fee)}`,
+      (currentRide?.platform_fee ?? 0) > 0 ? `Platform fee:  $${fmt(currentRide?.platform_fee)}` : null,
+      (currentRide?.city_fee ?? 0) > 0 ? `City fee:      $${fmt(currentRide?.city_fee)}` : null,
       tipAmount > 0 ? `Tip:           $${tipAmount.toFixed(2)}` : null,
       `━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
       `TOTAL:         $${total.toFixed(2)} CAD`,

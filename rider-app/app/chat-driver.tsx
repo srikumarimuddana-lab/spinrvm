@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
+  Alert,
   View,
   Text,
   StyleSheet,
@@ -92,18 +93,29 @@ export default function ChatDriverScreen() {
 
   const sendMessage = async (text: string) => {
     if (!text.trim() || !rideId || sending) return;
+    const trimmed = text.trim();
+    setMessage('');
     setSending(true);
+
+    // Show message immediately so the user gets instant feedback
+    const tempId = `pending_${Date.now()}`;
+    addChatMessage({ id: tempId, text: trimmed, sender: 'rider', timestamp: new Date().toISOString() } as any);
+
     try {
-      const res = await api.post<{ message?: unknown }>(`/rides/${rideId}/messages`, { text: text.trim() });
+      const res = await api.post<{ message?: any }>(`/rides/${rideId}/messages`, { text: trimmed });
       if (res.data?.message) {
-        // Optimistically add to local state (deduplicated by the store).
-        addChatMessage(res.data.message as import('../store/rideStore').ChatMessage);
+        // Swap temp entry for the server-confirmed one (real UUID)
+        const msgs = useRideStore.getState().chatMessages.filter((m: any) => m.id !== tempId);
+        setChatMessages([...msgs, res.data.message]);
       }
     } catch (e) {
       console.log('[Chat] Send failed:', e);
+      // Roll back the optimistic message and let the user retry
+      setChatMessages(useRideStore.getState().chatMessages.filter((m: any) => m.id !== tempId));
+      setMessage(trimmed);
+      Alert.alert('Could not send', 'Please check your connection and try again.');
     } finally {
       setSending(false);
-      setMessage('');
     }
   };
 
@@ -138,10 +150,6 @@ export default function ChatDriverScreen() {
         <TouchableOpacity style={styles.callButton} onPress={handleCall}>
           <Ionicons name="call" size={22} color={colors.primary} />
         </TouchableOpacity>
-
-        <View style={styles.toggleContainer}>
-          <View style={styles.toggleDot} />
-        </View>
       </View>
 
       {/* Messages */}
@@ -297,21 +305,6 @@ function createStyles(colors: ThemeColors) {
       justifyContent: 'center',
       alignItems: 'center',
       marginRight: 8,
-    },
-    toggleContainer: {
-      width: 36,
-      height: 22,
-      backgroundColor: colors.border,
-      borderRadius: 11,
-      justifyContent: 'center',
-      alignItems: 'flex-end',
-      paddingHorizontal: 3,
-    },
-    toggleDot: {
-      width: 18,
-      height: 18,
-      borderRadius: 9,
-      backgroundColor: colors.textDim,
     },
     messagesContainer: {
       flex: 1,

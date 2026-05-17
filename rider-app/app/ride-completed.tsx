@@ -18,6 +18,8 @@ import Analytics from '@shared/analytics';
 import { useStripe } from '@stripe/stripe-react-native';
 import { attemptRidePayment, PaymentAlertButton } from '../utils/attemptRidePayment';
 import { useSpinrPaymentSheet } from '../hooks/useSpinrPaymentSheet';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
 
 // PR #664 stringified Decimal money fields in API responses (e.g. total_fare,
 // base_fare, tip_amount). The receipt UI needs them as numbers for arithmetic
@@ -148,10 +150,110 @@ function RideCompletedScreenContent() {
     ].filter(Boolean).join('\n');
   };
 
+  const buildReceiptHtml = () => {
+    const esc = (s: string) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const tipAmt = selectedTip || (customTip ? parseFloat(customTip) || 0 : 0);
+    const rideDate = currentRide?.ride_completed_at
+      ? new Date(currentRide.ride_completed_at).toLocaleString('en-CA', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+      : new Date().toLocaleString('en-CA', { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const rideCode = currentRide?.ride_code || currentRide?.id?.slice(0, 8).toUpperCase() || '—';
+    const breakdown = (currentRide as any)?.fare_breakdown;
+    const lines: Array<{ label: string; amount: number }> = Array.isArray(breakdown) && breakdown.length > 0
+      ? breakdown.filter((l: any) => toNum(l.amount) > 0).map((l: any) => ({ label: l.label, amount: toNum(l.amount) }))
+      : [
+          { label: 'Ride fare', amount: toNum(currentRide?.base_fare) + toNum(currentRide?.distance_fare) + toNum(currentRide?.time_fare) },
+          { label: 'Booking fee', amount: toNum((currentRide as any)?.booking_fee) },
+        ].filter(l => l.amount > 0);
+    const dAmt = toNum((currentRide as any)?.discount_amount);
+    const dCode = (currentRide as any)?.promo_code as string | undefined;
+    const pMethod = (currentRide as any)?.payment_method as string | undefined;
+    const pLabel = pMethod === 'wallet' ? 'Spinr Wallet'
+      : pMethod === 'company' || pMethod === 'corporate' ? ((currentRide as any)?.company_name || 'Company account')
+      : currentRide?.card_last4 ? `Card •••• ${currentRide.card_last4}` : 'Payment card';
+    const fareRowsHtml = lines.map(l =>
+      `<div class="row"><span class="lbl">${esc(l.label)}</span><span class="amt">$${l.amount.toFixed(2)}</span></div>`
+    ).join('');
+    const promoHtml = dAmt > 0
+      ? `<div class="row"><span class="lbl" style="color:#10B981;">🏷 ${esc(dCode ? `Promo (${dCode})` : 'Promo')}</span><span class="amt" style="color:#10B981;">−$${dAmt.toFixed(2)}</span></div>`
+      : '';
+    const tipHtml = tipAmt > 0
+      ? `<div class="row"><span class="lbl">Tip</span><span class="amt">$${tipAmt.toFixed(2)}</span></div>`
+      : '';
+    const total = toNum((currentRide as any)?.grand_total || currentRide?.total_fare);
+
+    return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+      *{box-sizing:border-box;margin:0;padding:0}
+      body{font-family:-apple-system,Helvetica,Arial,sans-serif;background:#fff;color:#111;max-width:480px;margin:0 auto;padding:0}
+      .header{text-align:center;padding:28px 24px 20px;border-bottom:1px solid #eee}
+      .brand{font-size:32px;font-weight:900;color:#FF5A1F;letter-spacing:-1px}
+      .receipt-title{font-size:11px;letter-spacing:2px;color:#999;margin-top:4px;text-transform:uppercase}
+      .date{font-size:12px;color:#888;margin-top:8px}
+      .ride-code{font-size:11px;color:#bbb;margin-top:2px}
+      .section{padding:16px 24px;border-bottom:1px solid #f0f0f0}
+      .route-row{display:flex;align-items:flex-start;gap:10px;margin-bottom:8px}
+      .dot{width:10px;height:10px;border-radius:50%;margin-top:3px;flex-shrink:0}
+      .row{display:flex;justify-content:space-between;align-items:center;padding:4px 0}
+      .lbl{font-size:13px;color:#555}
+      .amt{font-size:13px;font-weight:600;color:#111}
+      .divider{border:none;border-top:1px dashed #e0e0e0;margin:8px 0}
+      .total-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0 4px}
+      .total-lbl{font-size:16px;font-weight:700}
+      .total-amt{font-size:28px;font-weight:900;color:#FF5A1F}
+      .badge{display:inline-block;background:#f5f5f5;padding:5px 12px;border-radius:20px;font-size:12px;color:#555;margin-top:8px}
+      .paid{display:inline-block;background:#dcfce7;color:#15803d;font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px;margin-left:6px;vertical-align:middle}
+      .stats{display:flex;gap:0;padding:14px 24px}
+      .stat{flex:1;text-align:center}
+      .stat-val{font-size:16px;font-weight:700}
+      .stat-lbl{font-size:10px;color:#999;margin-top:2px}
+      .stat-div{width:1px;background:#eee}
+      .driver-section{padding:14px 24px}
+      .driver-name{font-size:14px;font-weight:700}
+      .driver-meta{font-size:12px;color:#666;margin-top:2px}
+      .footer{text-align:center;padding:20px 24px;font-size:11px;color:#bbb;line-height:1.7}
+    </style></head><body>
+    <div class="header">
+      <div class="brand">spinr</div>
+      <div class="receipt-title">Ride Receipt</div>
+      <div class="date">${esc(rideDate)}</div>
+      <div class="ride-code">Ride ${esc(rideCode)}</div>
+    </div>
+    <div class="section">
+      <div class="route-row"><div class="dot" style="background:#10B981"></div><div style="font-size:13px;color:#333">${esc(currentRide?.pickup_address || '—')}</div></div>
+      <div class="route-row"><div class="dot" style="background:#EF4444"></div><div style="font-size:13px;color:#333">${esc(currentRide?.dropoff_address || '—')}</div></div>
+    </div>
+    <div class="section">
+      ${fareRowsHtml}${promoHtml}${tipHtml}
+      <hr class="divider">
+      <div class="total-row"><span class="total-lbl">Total</span><span class="total-amt">$${total.toFixed(2)} CAD</span></div>
+      <div><span class="badge">💳 ${esc(pLabel)}<span class="paid">PAID</span></span></div>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="stat-val">${toNum(currentRide?.duration_minutes)} min</div><div class="stat-lbl">Duration</div></div>
+      <div class="stat-div"></div>
+      <div class="stat"><div class="stat-val">${toNum(currentRide?.distance_km).toFixed(1)} km</div><div class="stat-lbl">Distance</div></div>
+      ${tipAmt > 0 ? `<div class="stat-div"></div><div class="stat"><div class="stat-val">$${tipAmt.toFixed(2)}</div><div class="stat-lbl">Tip</div></div>` : ''}
+    </div>
+    <div class="driver-section">
+      <div class="driver-name">${esc(currentDriver?.name || 'Driver')}</div>
+      <div class="driver-meta">${esc([currentDriver?.vehicle_color, currentDriver?.vehicle_make, currentDriver?.vehicle_model].filter(Boolean).join(' '))} · ${esc(currentDriver?.license_plate || '')}</div>
+    </div>
+    <div class="footer">Spinr Technologies Inc.<br>support@spinr.ca · spinr.ca<br>Saskatchewan, Canada</div>
+    </body></html>`;
+  };
+
   const handleShareInvoice = async () => {
     try {
-      await Share.share({ message: buildReceiptText(), title: 'Spinr Ride Receipt' });
-    } catch {}
+      const html = buildReceiptHtml();
+      const { uri } = await Print.printToFileAsync({ html, base64: false });
+      const canShare = await Sharing.isAvailableAsync();
+      if (canShare) {
+        await Sharing.shareAsync(uri, { mimeType: 'application/pdf', dialogTitle: 'Share Spinr Receipt', UTI: 'com.adobe.pdf' });
+      } else {
+        await Share.share({ message: buildReceiptText(), title: 'Spinr Ride Receipt' });
+      }
+    } catch {
+      setAlertState({ visible: true, title: 'Error', message: 'Could not share receipt.', variant: 'danger' });
+    }
   };
 
   // Payment is processed when rider taps "Done" — includes tip amount
@@ -276,218 +378,47 @@ function RideCompletedScreenContent() {
     router.replace('/(tabs)');
   };
 
+  const displayTip = selectedTip || (customTip ? parseFloat(customTip) || 0 : 0);
+  const payMethod = (currentRide as any)?.payment_method as string | undefined;
+  const payLabel = payMethod === 'wallet' ? 'Spinr Wallet'
+    : payMethod === 'company' || payMethod === 'corporate'
+      ? ((currentRide as any)?.company_name || 'Company account')
+      : currentRide?.card_last4 ? `Card •••• ${currentRide.card_last4}` : 'Payment card';
+  const payIcon = payMethod === 'wallet' ? 'wallet-outline'
+    : payMethod === 'company' || payMethod === 'corporate' ? 'business-outline'
+    : 'card-outline';
+
+  const fareLines: Array<{ label: string; amount: number }> = (() => {
+    const breakdown = (currentRide as any)?.fare_breakdown;
+    if (Array.isArray(breakdown) && breakdown.length > 0) {
+      return breakdown.filter((l: any) => toNum(l.amount) > 0).map((l: any) => ({ label: l.label, amount: toNum(l.amount) }));
+    }
+    const lines = [];
+    const ridePortion = toNum(currentRide?.base_fare) + toNum(currentRide?.distance_fare) + toNum(currentRide?.time_fare);
+    if (ridePortion > 0) lines.push({ label: 'Ride fare', amount: ridePortion });
+    const booking = toNum((currentRide as any)?.booking_fee);
+    if (booking > 0) lines.push({ label: 'Booking fee', amount: booking });
+    return lines;
+  })();
+  const promoAmount = toNum((currentRide as any)?.discount_amount);
+  const promoCode = (currentRide as any)?.promo_code as string | undefined;
+
   return (
     <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
 
-        {/* Success Header */}
+        {/* ── Header ────────────────────────────────────────────────── */}
         <View style={styles.successSection}>
           <View style={styles.checkCircle}>
-            <Ionicons name="checkmark" size={36} color={colors.primary} />
+            <Ionicons name="checkmark" size={34} color={colors.primary} />
           </View>
           <Text style={styles.title}>Ride Complete!</Text>
-          <Text style={styles.subtitle} numberOfLines={1}>
-            {currentRide?.dropoff_address || 'Destination'}
-          </Text>
+          <Text style={styles.subtitle} numberOfLines={2}>{currentRide?.dropoff_address || 'Destination'}</Text>
         </View>
 
-        {/* Post-Trip Actions */}
-        <View style={styles.postTripActions}>
-          <View style={styles.receiptRow}>
-            <TouchableOpacity
-              style={[styles.invoiceBtn, { flex: 1 }]}
-              onPress={handleShareInvoice}
-              accessibilityRole="button"
-              accessibilityLabel="Share receipt"
-              accessibilityHint="Shares your trip receipt"
-            >
-              <Ionicons name="receipt-outline" size={18} color={colors.primary} />
-              <Text style={styles.invoiceBtnText}>Share Receipt</Text>
-              <Ionicons name="share-outline" size={16} color={colors.textDim} />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.copyReceiptBtn}
-              onPress={() => {
-                Clipboard.setString(buildReceiptText());
-                setAlertState({ visible: true, title: 'Copied!', message: 'Receipt copied to clipboard.', variant: 'success' });
-              }}
-              accessibilityRole="button"
-              accessibilityLabel="Copy receipt to clipboard"
-              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-            >
-              <Ionicons name="copy-outline" size={18} color={colors.textDim} />
-            </TouchableOpacity>
-          </View>
-          <TouchableOpacity
-            style={styles.chatBtn}
-            onPress={() => router.push(`/chat-driver?rideId=${rideId}` as any)}
-            accessibilityRole="button"
-            accessibilityLabel="Message driver"
-            accessibilityHint="Opens a chat with your driver"
-          >
-            <Ionicons name="chatbubble-ellipses-outline" size={18} color="#3B82F6" />
-            <Text style={styles.chatBtnText}>Message Driver</Text>
-            <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.viewReceiptBtn}
-            onPress={() => router.push(`/receipt/${rideId}` as any)}
-            accessibilityRole="button"
-            accessibilityLabel="View receipt"
-            accessibilityHint="Opens the detailed fare breakdown for this ride"
-          >
-            <Ionicons name="document-text-outline" size={18} color={colors.text} />
-            <Text style={styles.viewReceiptBtnText}>View Receipt</Text>
-            <Ionicons name="chevron-forward" size={16} color={colors.textDim} />
-          </TouchableOpacity>
-        </View>
-
-        {/* Route Map */}
-        {currentRide && Number(currentRide.pickup_lat) && Number(currentRide.dropoff_lat) && (
-          <View style={styles.mapCard}>
-            <MapView
-              ref={mapRef}
-              style={styles.map}
-              provider={MAP_PROVIDER}
-              scrollEnabled={false}
-              zoomEnabled={false}
-              rotateEnabled={false}
-              pitchEnabled={false}
-              userInterfaceStyle={isDark ? "dark" : "light"}
-              initialRegion={{
-                latitude: (Number(currentRide.pickup_lat) + Number(currentRide.dropoff_lat)) / 2,
-                longitude: (Number(currentRide.pickup_lng) + Number(currentRide.dropoff_lng)) / 2,
-                latitudeDelta: Math.abs(Number(currentRide.pickup_lat) - Number(currentRide.dropoff_lat)) * 2.5 + 0.01,
-                longitudeDelta: Math.abs(Number(currentRide.pickup_lng) - Number(currentRide.dropoff_lng)) * 2.5 + 0.01,
-              }}
-            >
-              {/* Fetch route */}
-              {GOOGLE_MAPS_API_KEY && (
-                <MapViewDirections
-                  origin={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }}
-                  destination={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }}
-                  apikey={GOOGLE_MAPS_API_KEY}
-                  strokeWidth={0}
-                  strokeColor="transparent"
-                  onReady={(result: any) => {
-                    setRouteCoords(result.coordinates);
-                    if (mapRef.current && result.coordinates?.length > 1) {
-                      mapRef.current.fitToCoordinates(result.coordinates, {
-                        edgePadding: { top: 30, right: 30, bottom: 30, left: 30 },
-                        animated: false,
-                      });
-                    }
-                  }}
-                />
-              )}
-
-              {/* Orange → Red gradient route */}
-              {routeCoords.length > 1 && (() => {
-                const total = routeCoords.length;
-                const SEGS = 15;
-                const chunk = Math.max(1, Math.floor(total / SEGS));
-                const segments: { coords: any[]; color: string }[] = [];
-                for (let i = 0; i < total - 1; i += chunk) {
-                  const end = Math.min(i + chunk + 1, total);
-                  const t = i / Math.max(total - 1, 1);
-                  const r = Math.round(255 + (238 - 255) * t);
-                  const g = Math.round(149 + (43 - 149) * t);
-                  const b = Math.round(0 + (43 - 0) * t);
-                  segments.push({ coords: routeCoords.slice(i, end), color: `rgb(${r},${g},${b})` });
-                }
-                return segments.map((seg, idx) => (
-                  <Polyline
-                    key={`seg-${idx}`}
-                    coordinates={seg.coords}
-                    strokeWidth={4}
-                    strokeColor={seg.color}
-                    lineCap="round"
-                    lineJoin="round"
-                  />
-                ));
-              })()}
-
-              {/* Pickup marker */}
-              <Marker
-                coordinate={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }}
-                anchor={{ x: 0.5, y: 0.5 }}
-              >
-                <View style={styles.mapPin}>
-                  <Ionicons name="location" size={14} color="#FFF" />
-                </View>
-              </Marker>
-
-              {/* Dropoff marker */}
-              <Marker
-                coordinate={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }}
-                anchor={{ x: 0.5, y: 0.5 }}
-              >
-                <View style={[styles.mapPin, { backgroundColor: '#EF4444' }]}>
-                  <Ionicons name="flag" size={14} color="#FFF" />
-                </View>
-              </Marker>
-            </MapView>
-
-            {/* Route label overlay */}
-            <View style={styles.mapLabel}>
-              <Text style={styles.mapLabelText}>YOUR ROUTE</Text>
-            </View>
-          </View>
-        )}
-
-        {/* Fare Card */}
-        <View style={styles.fareCard}>
-          <Text style={styles.fareAmount} allowFontScaling={false}>${fare.toFixed(2)}</Text>
-          <View style={styles.paymentBadge}>
-            <Ionicons name="card" size={14} color={colors.textDim} />
-            <Text style={styles.paymentText}>
-              Card ending •••• {currentRide?.card_last4 || '4242'}
-            </Text>
-            {alreadyPaid && (
-              <>
-                <Ionicons name="checkmark-circle" size={14} color="#10B981" />
-                <Text style={{ fontSize: 11, fontWeight: '700', color: '#10B981' }} allowFontScaling={false}>PAID</Text>
-              </>
-            )}
-          </View>
-
-          {/* Stats */}
-          <View style={styles.statsRow}>
-            <View style={styles.stat}>
-              <Ionicons name="time-outline" size={18} color={colors.textDim} />
-              <Text style={styles.statVal} allowFontScaling={false}>{duration} min</Text>
-              <Text style={styles.statLbl}>Duration</Text>
-            </View>
-            <View style={styles.statDivider} />
-            <View style={styles.stat}>
-              <Ionicons name="speedometer-outline" size={18} color={colors.textDim} />
-              <Text style={styles.statVal} allowFontScaling={false}>{distance.toFixed(1)} km</Text>
-              <Text style={styles.statLbl}>Distance</Text>
-            </View>
-            <View style={styles.statDivider} />
-            <View style={styles.stat}>
-              <Ionicons name="cash-outline" size={18} color={colors.textDim} />
-              <Text style={styles.statVal} allowFontScaling={false}>${fare.toFixed(2)}</Text>
-              <Text style={styles.statLbl}>Total</Text>
-            </View>
-          </View>
-        </View>
-
-        {/* Rate Driver */}
+        {/* ── Rate your ride ───────────────────────────────────────── */}
         <View style={styles.rateCard}>
-          <View style={styles.driverRow}>
-            <View style={styles.driverAvatar}>
-              <Ionicons name="person" size={24} color={colors.textDim} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.driverName}>{currentDriver?.name || 'Your Driver'}</Text>
-              <Text style={styles.driverMeta}>
-                {currentDriver?.vehicle_color} {currentDriver?.vehicle_make} · {currentDriver?.license_plate}
-              </Text>
-            </View>
-          </View>
-
           <Text style={styles.rateLabel}>How was your ride?</Text>
           <View style={styles.starsRow}>
             {[1, 2, 3, 4, 5].map((star) => (
@@ -499,23 +430,17 @@ function RideCompletedScreenContent() {
                 accessibilityRole="button"
                 accessibilityState={{ selected: rating === star }}
               >
-                <Ionicons
-                  name={star <= rating ? 'star' : 'star-outline'}
-                  size={36}
-                  color={star <= rating ? '#FFB800' : '#DDD'}
-                />
+                <Ionicons name={star <= rating ? 'star' : 'star-outline'} size={36} color={star <= rating ? '#FFB800' : colors.border} />
               </TouchableOpacity>
             ))}
           </View>
           <Text style={styles.ratingText}>
             {rating === 5 ? 'Excellent!' : rating === 4 ? 'Great' : rating === 3 ? 'Good' : rating === 2 ? 'Fair' : 'Poor'}
           </Text>
-
-          {/* Comment */}
           <TextInput
             style={styles.commentInput}
             placeholder="Leave a comment (optional)"
-            placeholderTextColor="#BBB"
+            placeholderTextColor={colors.textDim}
             value={comment}
             onChangeText={setComment}
             multiline
@@ -523,7 +448,7 @@ function RideCompletedScreenContent() {
           />
         </View>
 
-        {/* Tip Section */}
+        {/* ── Tip ──────────────────────────────────────────────────── */}
         <View style={styles.tipCard}>
           <Text style={styles.tipTitle}>Add a tip for {currentDriver?.name?.split(' ')[0] || 'your driver'}</Text>
           {tipSent ? (
@@ -537,7 +462,7 @@ function RideCompletedScreenContent() {
                 <TouchableOpacity
                   key={amt}
                   style={[styles.tipBtn, selectedTip === amt && styles.tipBtnActive]}
-                  onPress={() => { setSelectedTip(amt); setCustomTip(''); }}
+                  onPress={() => { setSelectedTip(selectedTip === amt ? null : amt); setCustomTip(''); }}
                   accessibilityRole="radio"
                   accessibilityLabel={`Tip $${amt}`}
                   accessibilityState={{ checked: selectedTip === amt }}
@@ -550,7 +475,7 @@ function RideCompletedScreenContent() {
                 <TextInput
                   style={styles.tipCustomInput}
                   placeholder="Other"
-                  placeholderTextColor="#BBB"
+                  placeholderTextColor={colors.textDim}
                   keyboardType="decimal-pad"
                   value={customTip}
                   onChangeText={(t) => { setCustomTip(t); setSelectedTip(null); }}
@@ -561,13 +486,150 @@ function RideCompletedScreenContent() {
           )}
         </View>
 
+        {/* ── Fare & Payment card ───────────────────────────────────── */}
+        <View style={styles.fareCard}>
+          <View style={styles.driverRow}>
+            <View style={styles.driverAvatar}>
+              <Ionicons name="person" size={18} color={colors.textDim} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.driverName}>{currentDriver?.name || 'Your Driver'}</Text>
+              <Text style={styles.driverMeta}>
+                {[currentDriver?.vehicle_color, currentDriver?.vehicle_make, currentDriver?.license_plate].filter(Boolean).join(' · ')}
+              </Text>
+            </View>
+            <View style={styles.statsBadge}>
+              <Text style={styles.statsBadgeText}>{duration} min · {distance.toFixed(1)} km</Text>
+            </View>
+          </View>
+
+          <View style={styles.divider} />
+
+          {fareLines.map((line, i) => (
+            <View key={i} style={styles.fareRow}>
+              <Text style={styles.fareRowLabel}>{line.label}</Text>
+              <Text style={styles.fareRowAmount}>${line.amount.toFixed(2)}</Text>
+            </View>
+          ))}
+
+          {promoAmount > 0 && (
+            <View style={styles.fareRow}>
+              <View style={styles.promoLabel}>
+                <Ionicons name="pricetag" size={12} color="#10B981" />
+                <Text style={[styles.fareRowLabel, { color: '#10B981' }]}>{promoCode ? `Promo (${promoCode})` : 'Promo'}</Text>
+              </View>
+              <Text style={[styles.fareRowAmount, { color: '#10B981' }]}>−${promoAmount.toFixed(2)}</Text>
+            </View>
+          )}
+
+          <View style={styles.divider} />
+
+          <View style={styles.totalRow}>
+            <Text style={styles.totalLabel}>Total</Text>
+            <Text style={styles.totalAmount} allowFontScaling={false}>${fare.toFixed(2)}</Text>
+          </View>
+
+          <View style={styles.paymentBadge}>
+            <Ionicons name={payIcon as any} size={14} color={colors.textDim} />
+            <Text style={styles.paymentText}>{payLabel}</Text>
+            {alreadyPaid && (
+              <>
+                <Ionicons name="checkmark-circle" size={14} color="#10B981" />
+                <Text style={styles.paidText}>PAID</Text>
+              </>
+            )}
+          </View>
+        </View>
+
+        {/* ── Secondary actions ─────────────────────────────────────── */}
+        <View style={styles.secondaryRow}>
+          <TouchableOpacity style={styles.secondaryBtn} onPress={handleShareInvoice} accessibilityRole="button" accessibilityLabel="Share receipt as PDF">
+            <Ionicons name="document-attach-outline" size={18} color={colors.textDim} />
+            <Text style={styles.secondaryBtnText}>Share PDF</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.secondaryBtn}
+            accessibilityRole="button"
+            accessibilityLabel="Copy receipt text"
+            onPress={() => { Clipboard.setString(buildReceiptText()); setAlertState({ visible: true, title: 'Copied!', message: 'Receipt copied to clipboard.', variant: 'success' }); }}
+          >
+            <Ionicons name="copy-outline" size={18} color={colors.textDim} />
+            <Text style={styles.secondaryBtnText}>Copy</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.secondaryBtn} onPress={() => router.push(`/chat-driver?rideId=${rideId}` as any)} accessibilityRole="button" accessibilityLabel="Message driver">
+            <Ionicons name="chatbubble-ellipses-outline" size={18} color={colors.textDim} />
+            <Text style={styles.secondaryBtnText}>Message</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* ── Route Map (last) ──────────────────────────────────────── */}
+        {currentRide && Number(currentRide.pickup_lat) && Number(currentRide.dropoff_lat) && (
+          <View style={styles.mapCard}>
+            <MapView
+              ref={mapRef}
+              style={styles.map}
+              provider={MAP_PROVIDER}
+              scrollEnabled={false}
+              zoomEnabled={false}
+              rotateEnabled={false}
+              pitchEnabled={false}
+              userInterfaceStyle={isDark ? 'dark' : 'light'}
+              initialRegion={{
+                latitude: (Number(currentRide.pickup_lat) + Number(currentRide.dropoff_lat)) / 2,
+                longitude: (Number(currentRide.pickup_lng) + Number(currentRide.dropoff_lng)) / 2,
+                latitudeDelta: Math.abs(Number(currentRide.pickup_lat) - Number(currentRide.dropoff_lat)) * 2.5 + 0.01,
+                longitudeDelta: Math.abs(Number(currentRide.pickup_lng) - Number(currentRide.dropoff_lng)) * 2.5 + 0.01,
+              }}
+            >
+              {GOOGLE_MAPS_API_KEY && (
+                <MapViewDirections
+                  origin={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }}
+                  destination={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }}
+                  apikey={GOOGLE_MAPS_API_KEY}
+                  strokeWidth={0}
+                  strokeColor="transparent"
+                  onReady={(result: any) => {
+                    setRouteCoords(result.coordinates);
+                    if (mapRef.current && result.coordinates?.length > 1) {
+                      mapRef.current.fitToCoordinates(result.coordinates, {
+                        edgePadding: { top: 32, right: 32, bottom: 32, left: 32 },
+                        animated: false,
+                      });
+                    }
+                  }}
+                />
+              )}
+              {routeCoords.length > 1 && (() => {
+                const total = routeCoords.length;
+                const SEGS = 15;
+                const chunk = Math.max(1, Math.floor(total / SEGS));
+                const segments: { coords: any[]; color: string }[] = [];
+                for (let i = 0; i < total - 1; i += chunk) {
+                  const end = Math.min(i + chunk + 1, total);
+                  const t = i / Math.max(total - 1, 1);
+                  segments.push({ coords: routeCoords.slice(i, end), color: `rgb(${Math.round(255 + (238 - 255) * t)},${Math.round(149 + (43 - 149) * t)},${Math.round(43 * t)})` });
+                }
+                return segments.map((seg, idx) => (
+                  <Polyline key={`seg-${idx}`} coordinates={seg.coords} strokeWidth={4} strokeColor={seg.color} lineCap="round" lineJoin="round" />
+                ));
+              })()}
+              <Marker coordinate={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }} anchor={{ x: 0.5, y: 0.5 }}>
+                <View style={styles.mapPin}><Ionicons name="location" size={14} color="#FFF" /></View>
+              </Marker>
+              <Marker coordinate={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }} anchor={{ x: 0.5, y: 0.5 }}>
+                <View style={[styles.mapPin, { backgroundColor: '#EF4444' }]}><Ionicons name="flag" size={14} color="#FFF" /></View>
+              </Marker>
+            </MapView>
+            <View style={styles.mapLabel}><Text style={styles.mapLabelText}>YOUR ROUTE</Text></View>
+          </View>
+        )}
+
       </ScrollView>
       </KeyboardAvoidingView>
 
-      {/* Submit Button */}
+      {/* ── Bottom bar ────────────────────────────────────────────── */}
       <View style={styles.bottomBar}>
-        {/* Google Pay button — Android only, card payments, not yet paid */}
-        {Platform.OS === 'android' && !alreadyPaid && currentRide?.payment_method === 'card' && (
+        {Platform.OS === 'android' && !alreadyPaid && payMethod === 'card' && (
           <TouchableOpacity
             style={[styles.submitBtn, styles.googlePayBtn]}
             onPress={handleGooglePay}
@@ -577,14 +639,9 @@ function RideCompletedScreenContent() {
             accessibilityLabel="Pay with Google Pay"
             accessibilityState={{ disabled: isSubmitting || sheetLoading }}
           >
-            {sheetLoading ? (
-              <ActivityIndicator size="small" color="#FFF" />
-            ) : (
-              <>
-                <Ionicons name="logo-google" size={18} color="#FFF" />
-                <Text style={styles.submitBtnText}>Pay with Google Pay</Text>
-              </>
-            )}
+            {sheetLoading
+              ? <ActivityIndicator size="small" color="#FFF" />
+              : <><Ionicons name="logo-google" size={18} color="#FFF" /><Text style={styles.submitBtnText}>Pay with Google Pay</Text></>}
           </TouchableOpacity>
         )}
         <TouchableOpacity
@@ -593,29 +650,25 @@ function RideCompletedScreenContent() {
           disabled={isSubmitting || sheetLoading}
           activeOpacity={0.8}
           accessibilityRole="button"
-          accessibilityLabel={alreadyPaid ? 'Rate and finish' : `Pay and finish`}
+          accessibilityLabel={alreadyPaid ? 'Rate and finish' : 'Pay and finish'}
           accessibilityState={{ disabled: isSubmitting || sheetLoading, busy: isSubmitting }}
         >
           {isSubmitting ? (
             <>
               <ActivityIndicator size="small" color="#FFF" />
-              <Text style={styles.submitBtnText}>
-                {submitPhase === 'confirming' ? 'Confirming payment…' : 'Submitting…'}
-              </Text>
+              <Text style={styles.submitBtnText}>{submitPhase === 'confirming' ? 'Confirming payment…' : 'Submitting…'}</Text>
             </>
           ) : (
             <>
               <Text style={styles.submitBtnText}>
-                {alreadyPaid
-                  ? 'Rate & Done'
-                  : `Pay $${(fare + (selectedTip || (customTip ? parseFloat(customTip) || 0 : 0))).toFixed(2)} & Done`
-                }
+                {alreadyPaid ? 'Rate & Done' : `Pay $${(fare + displayTip).toFixed(2)} & Done`}
               </Text>
               <Ionicons name={alreadyPaid ? 'checkmark' : 'card'} size={18} color="#FFF" />
             </>
           )}
         </TouchableOpacity>
       </View>
+
       <CustomAlert
         visible={alertState.visible}
         title={alertState.title}
@@ -639,139 +692,119 @@ export default function RideCompletedScreen() {
 function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.surface },
-    content: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 20 },
+    content: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 24, gap: 12 },
 
-    // Success
-    successSection: { alignItems: 'center', marginBottom: 20 },
+    // Header
+    successSection: { alignItems: 'center', paddingVertical: 8 },
     checkCircle: {
-      width: 80, height: 80, borderRadius: 40, backgroundColor: '#FEF2F2',
-      justifyContent: 'center', alignItems: 'center', marginBottom: 14,
+      width: 72, height: 72, borderRadius: 36,
+      backgroundColor: `${colors.primary}18`,
+      justifyContent: 'center', alignItems: 'center', marginBottom: 12,
     },
-    title: { fontSize: 24, fontWeight: '800', color: colors.text, marginBottom: 4 },
-    subtitle: { fontSize: 14, color: colors.textDim },
+    title: { fontSize: 22, fontWeight: '800', color: colors.text, marginBottom: 4 },
+    subtitle: { fontSize: 13, color: colors.textDim, textAlign: 'center', paddingHorizontal: 24 },
 
-    // Invoice
-    receiptRow: { flexDirection: 'row', gap: 8, marginBottom: 8 },
-    invoiceBtn: {
-      flexDirection: 'row', alignItems: 'center', gap: 8,
-      backgroundColor: colors.surfaceLight, borderRadius: 14, padding: 14,
-      borderWidth: 1, borderColor: '#ECECEC',
-    },
-    invoiceBtnText: { flex: 1, fontSize: 14, fontWeight: '600', color: colors.text },
-    copyReceiptBtn: {
-      backgroundColor: colors.surfaceLight, borderRadius: 14, paddingHorizontal: 16,
-      alignItems: 'center', justifyContent: 'center',
-      borderWidth: 1, borderColor: '#ECECEC',
-    },
-    postTripActions: { width: '100%', gap: 8, marginBottom: 8 },
-    chatBtn: {
-      flexDirection: 'row', alignItems: 'center', gap: 8, width: '100%',
-      backgroundColor: '#EFF6FF', borderRadius: 14, padding: 14,
-      borderWidth: 1, borderColor: '#DBEAFE',
-    },
-    chatBtnText: { flex: 1, fontSize: 14, fontWeight: '600', color: '#3B82F6' },
-    viewReceiptBtn: {
-      flexDirection: 'row', alignItems: 'center', gap: 8, width: '100%',
-      backgroundColor: colors.surfaceLight, borderRadius: 14, padding: 14,
-      borderWidth: 1, borderColor: colors.border,
-    },
-    viewReceiptBtnText: { flex: 1, fontSize: 14, fontWeight: '600', color: colors.text },
-
-    // Route Map
-    mapCard: {
-      width: '100%', height: 220, borderRadius: 18, overflow: 'hidden',
-      marginBottom: 16, backgroundColor: colors.border,
-    },
+    // Map
+    mapCard: { width: '100%', height: 210, borderRadius: 18, overflow: 'hidden', backgroundColor: colors.border },
     map: { flex: 1 },
     mapPin: {
-      width: 28, height: 28, borderRadius: 14,
-      backgroundColor: '#10B981', justifyContent: 'center', alignItems: 'center',
-      borderWidth: 2, borderColor: '#FFF',
+      width: 28, height: 28, borderRadius: 14, backgroundColor: '#10B981',
+      justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: '#FFF',
       elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.2, shadowRadius: 2,
     },
     mapLabel: {
       position: 'absolute', bottom: 8, left: 8,
-      backgroundColor: 'rgba(255,255,255,0.9)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6,
+      backgroundColor: 'rgba(255,255,255,0.92)', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6,
     },
-    mapLabelText: { fontSize: 10, fontWeight: '700', color: colors.text, letterSpacing: 0.5 },
+    mapLabelText: { fontSize: 10, fontWeight: '700', color: '#333', letterSpacing: 0.5 },
 
-    // Fare Card
-    fareCard: {
-      backgroundColor: colors.surfaceLight, borderRadius: 20, padding: 20, alignItems: 'center', marginBottom: 16,
+    // Fare card
+    fareCard: { backgroundColor: colors.surfaceLight, borderRadius: 20, padding: 16 },
+    driverRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 12 },
+    driverAvatar: {
+      width: 36, height: 36, borderRadius: 18,
+      backgroundColor: colors.surface, justifyContent: 'center', alignItems: 'center',
+      borderWidth: 1, borderColor: colors.border,
     },
-    fareAmount: { fontSize: 42, fontWeight: '800', color: colors.primary, marginBottom: 8 },
+    driverName: { fontSize: 14, fontWeight: '700', color: colors.text },
+    driverMeta: { fontSize: 11, color: colors.textDim, marginTop: 1 },
+    statsBadge: {
+      backgroundColor: colors.surface, paddingHorizontal: 10, paddingVertical: 5,
+      borderRadius: 10, borderWidth: 1, borderColor: colors.border,
+    },
+    statsBadgeText: { fontSize: 11, fontWeight: '600', color: colors.textDim },
+    divider: { height: 1, backgroundColor: colors.border, marginVertical: 10 },
+    fareRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 3 },
+    fareRowLabel: { fontSize: 13, color: colors.textDim },
+    fareRowAmount: { fontSize: 13, fontWeight: '600', color: colors.text },
+    promoLabel: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+    totalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+    totalLabel: { fontSize: 15, fontWeight: '700', color: colors.text },
+    totalAmount: { fontSize: 28, fontWeight: '800', color: colors.primary },
     paymentBadge: {
       flexDirection: 'row', alignItems: 'center', gap: 6,
-      backgroundColor: colors.surface, paddingHorizontal: 14, paddingVertical: 6, borderRadius: 20,
-      marginBottom: 16,
+      backgroundColor: colors.surface, paddingHorizontal: 12, paddingVertical: 8,
+      borderRadius: 12, borderWidth: 1, borderColor: colors.border, alignSelf: 'flex-start',
     },
     paymentText: { fontSize: 12, fontWeight: '600', color: colors.textDim },
-    statsRow: { flexDirection: 'row', width: '100%' },
-    stat: { flex: 1, alignItems: 'center' },
-    statVal: { fontSize: 16, fontWeight: '700', color: colors.text, marginTop: 4 },
-    statLbl: { fontSize: 10, color: colors.textDim, marginTop: 2 },
-    statDivider: { width: 1, backgroundColor: '#E8E8E8' },
+    paidText: { fontSize: 11, fontWeight: '700', color: '#10B981' },
 
-    // Rate Card
-    rateCard: {
-      backgroundColor: colors.surfaceLight, borderRadius: 20, padding: 20, marginBottom: 16,
-    },
-    driverRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
-    driverAvatar: {
-      width: 48, height: 48, borderRadius: 24, backgroundColor: '#E8E8E8',
-      justifyContent: 'center', alignItems: 'center', marginRight: 12,
-    },
-    driverName: { fontSize: 16, fontWeight: '700', color: colors.text },
-    driverMeta: { fontSize: 12, color: colors.textDim, marginTop: 2 },
-    rateLabel: { fontSize: 15, fontWeight: '600', color: colors.text, textAlign: 'center', marginBottom: 12 },
-    starsRow: { flexDirection: 'row', justifyContent: 'center', gap: 8, marginBottom: 6 },
+    // Rating card
+    rateCard: { backgroundColor: colors.surfaceLight, borderRadius: 20, padding: 16 },
+    rateLabel: { fontSize: 15, fontWeight: '700', color: colors.text, textAlign: 'center', marginBottom: 12 },
+    starsRow: { flexDirection: 'row', justifyContent: 'center', gap: 6, marginBottom: 6 },
     starBtn: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center' },
-    ratingText: { fontSize: 13, color: colors.textDim, textAlign: 'center', marginBottom: 14 },
+    ratingText: { fontSize: 13, color: colors.textDim, textAlign: 'center', marginBottom: 12 },
     commentInput: {
-      backgroundColor: colors.surface, borderRadius: 14, padding: 14, fontSize: 14, color: colors.text,
-      minHeight: 60, textAlignVertical: 'top', borderWidth: 1, borderColor: '#ECECEC',
+      backgroundColor: colors.surface, borderRadius: 12, padding: 12, fontSize: 13, color: colors.text,
+      minHeight: 56, textAlignVertical: 'top', borderWidth: 1, borderColor: colors.border,
     },
 
-    // Tip
-    tipCard: {
-      backgroundColor: colors.surfaceLight, borderRadius: 20, padding: 20,
-    },
-    tipTitle: { fontSize: 15, fontWeight: '600', color: colors.text, marginBottom: 14, textAlign: 'center' },
-    tipRow: { flexDirection: 'row', gap: 10, justifyContent: 'center' },
+    // Tip card
+    tipCard: { backgroundColor: colors.surfaceLight, borderRadius: 20, padding: 16 },
+    tipTitle: { fontSize: 14, fontWeight: '600', color: colors.text, marginBottom: 12, textAlign: 'center' },
+    tipRow: { flexDirection: 'row', gap: 8, justifyContent: 'center' },
     tipBtn: {
-      paddingHorizontal: 20, paddingVertical: 12, borderRadius: 14,
+      paddingHorizontal: 18, paddingVertical: 11, borderRadius: 12,
       backgroundColor: colors.surface, borderWidth: 1.5, borderColor: colors.border,
       minHeight: 44, justifyContent: 'center', alignItems: 'center',
     },
     tipBtnActive: { backgroundColor: `${colors.primary}15`, borderColor: colors.primary },
-    tipBtnText: { fontSize: 16, fontWeight: '700', color: colors.text },
+    tipBtnText: { fontSize: 15, fontWeight: '700', color: colors.text },
     tipBtnTextActive: { color: colors.primary },
     tipCustom: {
       flexDirection: 'row', alignItems: 'center',
-      backgroundColor: colors.surface, borderRadius: 14, borderWidth: 1.5, borderColor: colors.border,
-      paddingHorizontal: 12, minWidth: 80,
+      backgroundColor: colors.surface, borderRadius: 12, borderWidth: 1.5, borderColor: colors.border,
+      paddingHorizontal: 10, minWidth: 76,
     },
     tipCustomActive: { borderColor: colors.primary },
-    tipDollar: { fontSize: 16, fontWeight: '600', color: colors.textDim },
-    tipCustomInput: { fontSize: 16, fontWeight: '600', color: colors.text, paddingVertical: 12, paddingHorizontal: 4, minWidth: 44 },
+    tipDollar: { fontSize: 15, fontWeight: '600', color: colors.textDim },
+    tipCustomInput: { fontSize: 15, fontWeight: '600', color: colors.text, paddingVertical: 11, paddingHorizontal: 4, minWidth: 44 },
     tipDone: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
       paddingVertical: 12, backgroundColor: '#F0FFF4', borderRadius: 12,
     },
-    tipDoneText: { fontSize: 15, fontWeight: '600', color: '#059669' },
+    tipDoneText: { fontSize: 14, fontWeight: '600', color: '#059669' },
 
-    // Bottom
+    // Secondary actions
+    secondaryRow: { flexDirection: 'row', gap: 8 },
+    secondaryBtn: {
+      flex: 1, alignItems: 'center', gap: 5, paddingVertical: 12,
+      backgroundColor: colors.surfaceLight, borderRadius: 14, borderWidth: 1, borderColor: colors.border,
+    },
+    secondaryBtnText: { fontSize: 11, fontWeight: '600', color: colors.textDim },
+
+    // Bottom bar
     bottomBar: {
-      paddingHorizontal: 20, paddingVertical: 14,
+      paddingHorizontal: 16, paddingVertical: 12,
       borderTopWidth: 1, borderTopColor: colors.border,
+      backgroundColor: colors.surface,
     },
     submitBtn: {
       flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
       backgroundColor: colors.primary, paddingVertical: 16, borderRadius: 28,
     },
-    googlePayBtn: {
-      backgroundColor: '#3C4043', marginBottom: 10,
-    },
+    googlePayBtn: { backgroundColor: '#3C4043', marginBottom: 8 },
     submitBtnText: { fontSize: 17, fontWeight: '700', color: '#FFF' },
   });
 }

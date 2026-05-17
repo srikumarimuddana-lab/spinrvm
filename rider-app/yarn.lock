@@ -5433,6 +5433,11 @@ expo-notifications@~55.0.22:
     expo-application "~55.0.14"
     expo-constants "~55.0.15"
 
+expo-print@~14.0.3:
+  version "14.0.3"
+  resolved "https://registry.npmjs.org/expo-print/-/expo-print-14.0.3.tgz"
+  integrity sha512-VEGl7SX3q2Z3ZKwvxtOBAlXm9yDX8Jodewr+kouQcg2EaV0ciAH9rqLwRWZhAtEETpVdEG53ow7IAmwJU7jInA==
+
 expo-router@~55.0.14:
   version "55.0.14"
   resolved "https://registry.npmjs.org/expo-router/-/expo-router-55.0.14.tgz"
@@ -5474,6 +5479,11 @@ expo-server@^55.0.9:
   version "55.0.9"
   resolved "https://registry.npmjs.org/expo-server/-/expo-server-55.0.9.tgz"
   integrity sha512-N5Ipn1NwqaJzEm+G97o0Jbe4g/th3R/16N1DabnYryXKCiZwDkK13/w3VfGkQN9LOOaBP+JIRxGf4M8lQKPzyA==
+
+expo-sharing@~13.0.1:
+  version "13.0.1"
+  resolved "https://registry.npmjs.org/expo-sharing/-/expo-sharing-13.0.1.tgz"
+  integrity sha512-qych3Nw65wlFcnzE/gRrsdtvmdV0uF4U4qVMZBJYPG90vYyWh2QM9rp1gVu0KWOBc7N8CC2dSVYn4/BXqJy6Xw==
 
 expo-splash-screen@~55.0.20:
   version "55.0.20"

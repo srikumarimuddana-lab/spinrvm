@@ -250,7 +250,7 @@ async def admin_get_promo_usage(
     limit: int = Query(100),
     offset: int = Query(0),
 ):
-    """Get promo code usage/redemption history."""
+    """Get promo code usage/redemption history, enriched with user name and ride ID."""
     filters: Dict[str, Any] = {}
     if promo_id:
         filters["promo_id"] = promo_id
@@ -279,6 +279,47 @@ async def admin_get_promo_usage(
                 continue
             filtered.append(app)
         applications = filtered
+
+    if not applications:
+        return []
+
+    # Enrich with user display names (batch — one query for all unique user_ids).
+    user_ids = list({a["user_id"] for a in applications if a.get("user_id")})
+    user_name_map: Dict[str, str] = {}
+    try:
+        user_rows = await db_supabase.run_sync(
+            lambda: db_supabase.supabase.table("users")
+            .select("id, first_name, last_name, phone")
+            .in_("id", user_ids)
+            .execute()
+        )
+        for u in (getattr(user_rows, "data", None) or []):
+            first = u.get("first_name") or ""
+            last = u.get("last_name") or ""
+            name = f"{first} {last}".strip() or u.get("phone") or u["id"][:8]
+            user_name_map[u["id"]] = name
+    except Exception:
+        logger.warning("Could not enrich promo usage with user names", exc_info=True)
+
+    # Enrich with ride IDs (batch — rides store promo_application_id as FK).
+    app_ids = [a["id"] for a in applications if a.get("id")]
+    ride_id_map: Dict[str, str] = {}
+    try:
+        ride_rows = await db_supabase.run_sync(
+            lambda: db_supabase.supabase.table("rides")
+            .select("id, promo_application_id")
+            .in_("promo_application_id", app_ids)
+            .execute()
+        )
+        for r in (getattr(ride_rows, "data", None) or []):
+            if r.get("promo_application_id"):
+                ride_id_map[r["promo_application_id"]] = r["id"]
+    except Exception:
+        logger.warning("Could not enrich promo usage with ride IDs", exc_info=True)
+
+    for app in applications:
+        app["user_name"] = user_name_map.get(app.get("user_id", ""), "")
+        app["ride_id"] = ride_id_map.get(app.get("id", ""), None)
 
     return applications
 

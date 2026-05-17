@@ -255,6 +255,12 @@ export default function RideInvoice({ rideId, status }: Props) {
             if (typeof data.airport_fee === "number" && data.airport_fee > 0) {
                 fareLines.push(["Airport Fee", fmtMoney(data.airport_fee)]);
             }
+            if (typeof data.platform_fee === "number" && data.platform_fee > 0) {
+                fareLines.push(["Platform Fee", fmtMoney(data.platform_fee)]);
+            }
+            if (typeof data.city_fee === "number" && data.city_fee > 0) {
+                fareLines.push(["City Fee", fmtMoney(data.city_fee)]);
+            }
 
             doc.setTextColor(80);
             for (const [label, val] of fareLines) {

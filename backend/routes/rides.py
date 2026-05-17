@@ -895,6 +895,8 @@ async def estimate_ride(
                 "distance_fare": _money_str(fb.distance_fare),
                 "time_fare": _money_str(fb.time_fare),
                 "booking_fee": _money_str(fb.booking_fee),
+                "platform_fee": _money_str(fb.platform_fee),
+                "city_fee": _money_str(fb.city_fee),
                 "surge_multiplier": round(float(surge), 2),
                 "total_fare": _money_str(fb.total_fare),
                 "area_fees": fees_result.get("fees", []),
@@ -1153,6 +1155,8 @@ async def create_ride(body: CreateRideRequest, request: Request = None, current_
     total_fare = fb.total_fare
     driver_earnings = fb.driver_earnings
     admin_earnings = fb.admin_earnings
+    platform_fee = fb.platform_fee
+    city_fee = fb.city_fee
 
     # Calculate area fees + taxes (reuses all_areas + pre-resolved match)
     fees_result = {}
@@ -1234,6 +1238,8 @@ async def create_ride(body: CreateRideRequest, request: Request = None, current_
         distance_fare=_f(distance_fare),
         time_fare=_f(time_fare),
         booking_fee=_f(booking_fee),
+        platform_fee=_f(platform_fee),
+        city_fee=_f(city_fee),
         surge_multiplier=round(float(surge), 2),
         total_fare=_f(total_fare),
         stops=body.stops,
@@ -1365,9 +1371,9 @@ async def create_ride(body: CreateRideRequest, request: Request = None, current_
     if body.promo_code:
         try:
             try:
-                from ..routes.promotions import _validate_promo_for_user, _record_promo_application
+                from ..routes.promotions import _record_promo_application, _validate_promo_for_user
             except ImportError:
-                from routes.promotions import _validate_promo_for_user, _record_promo_application
+                from routes.promotions import _record_promo_application, _validate_promo_for_user
 
             server_fare = _d(fresh_ride.get("total_fare", 0))
             validation = await _validate_promo_for_user(
@@ -1386,14 +1392,18 @@ async def create_ride(body: CreateRideRequest, request: Request = None, current_
                 )
                 discounted_total = _f(_round(server_fare - discount))
                 discounted_grand = _f(_round(_d(fresh_ride.get("grand_total", server_fare)) - discount))
-                await db_supabase.update_one("rides", {"id": ride.id}, {
-                    "subtotal_fare": _f(server_fare),
-                    "discount_amount": _f(discount),
-                    "promo_code": validation["code"],
-                    "promo_application_id": application_id,
-                    "total_fare": discounted_total,
-                    "grand_total": discounted_grand,
-                })
+                await db_supabase.update_one(
+                    "rides",
+                    {"id": ride.id},
+                    {
+                        "subtotal_fare": _f(server_fare),
+                        "discount_amount": _f(discount),
+                        "promo_code": validation["code"],
+                        "promo_application_id": application_id,
+                        "total_fare": discounted_total,
+                        "grand_total": discounted_grand,
+                    },
+                )
                 fresh_ride["subtotal_fare"] = _f(server_fare)
                 fresh_ride["discount_amount"] = _f(discount)
                 fresh_ride["promo_code"] = validation["code"]
@@ -2935,14 +2945,18 @@ async def rider_complete_ride(ride_id: str, request: Request = None, current_use
         f"rider_{current_user['id']}",
     )
     await manager.broadcast_ride_status(
-        ride_id, RideStatus.COMPLETED,
-        rider_id=current_user["id"], driver_user_id=driver_user_id,
+        ride_id,
+        RideStatus.COMPLETED,
+        rider_id=current_user["id"],
+        driver_user_id=driver_user_id,
         total_fare=total_fare,
     )
     try:
-        await manager.broadcast_to_admins({"type": "ride_completed", "ride_id": ride_id, "total_fare": total_fare, "completed_by": "rider"})
-    except Exception:
-        pass
+        await manager.broadcast_to_admins(
+            {"type": "ride_completed", "ride_id": ride_id, "total_fare": total_fare, "completed_by": "rider"}
+        )
+    except Exception as _bcast_err:
+        logger.warning("admin broadcast failed for ride_completed %s: %s", ride_id, _bcast_err)
 
     return completed_ride or ride
 

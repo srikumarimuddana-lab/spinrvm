@@ -306,9 +306,10 @@ class Ride(BaseModel):
     ride_started_at: Optional[datetime] = None
     ride_completed_at: Optional[datetime] = None
     cancelled_at: Optional[datetime] = None
-    # Area-specific fees (set at booking from service_areas; flow to admin_earnings)
-    platform_fee: DecimalStr = Decimal("0.0")
-    city_fee: DecimalStr = Decimal("0.0")
+    # Dynamic area fees snapshotted from service_areas.fees at booking time.
+    # Keys are fee names (e.g. "platform_fee", "city_fee"); values are money strings.
+    # All values flow to admin_earnings.
+    extra_fees: Dict[str, Any] = {}
     # Earnings split
     driver_earnings: DecimalStr = Decimal("0.0")  # Distance fare goes to driver
     admin_earnings: DecimalStr = Decimal("0.0")  # Booking fee + platform/city fees go to admin

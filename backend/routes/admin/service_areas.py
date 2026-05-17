@@ -87,8 +87,7 @@ class ServiceAreaUpdateRequest(BaseModel):
     max_pickup_radius_km: Optional[float] = Field(default=None, ge=0.1, le=200)
     surge_source: Optional[str] = None
     insurance_fee_percent: Optional[float] = Field(default=None, ge=0, le=100)
-    platform_fee: Optional[float] = Field(default=None, ge=0, le=100)
-    city_fee: Optional[float] = Field(default=None, ge=0, le=100)
+    fees: Optional[Dict[str, Any]] = None
     rider_cancel_fee_before_driver: Optional[float] = Field(default=None, ge=0, le=100)
     rider_cancel_fee_after_arrival: Optional[float] = Field(default=None, ge=0, le=100)
     cancel_fee_driver_share: Optional[float] = Field(default=None, ge=0, le=100)
@@ -264,8 +263,7 @@ async def admin_update_service_area(
         "vehicle_pricing",
         "max_pickup_radius_km",
         "insurance_fee_percent",
-        "platform_fee",
-        "city_fee",
+        "fees",
         "rider_cancel_fee_before_driver",
         "rider_cancel_fee_after_arrival",
         "cancel_fee_driver_share",

@@ -903,8 +903,7 @@ async def estimate_ride(
                 "distance_fare": _money_str(fb.distance_fare),
                 "time_fare": _money_str(fb.time_fare),
                 "booking_fee": _money_str(fb.booking_fee),
-                "platform_fee": _money_str(fb.platform_fee),
-                "city_fee": _money_str(fb.city_fee),
+                "fees": {k: _money_str(v) for k, v in (fb.extra_fees or {}).items()},
                 "surge_multiplier": round(float(surge), 2),
                 "total_fare": _money_str(fb.total_fare),
                 "area_fees": fees_result.get("fees", []),
@@ -1164,8 +1163,6 @@ async def create_ride(body: CreateRideRequest, request: Request = None, current_
     total_fare = fb.total_fare
     driver_earnings = fb.driver_earnings
     admin_earnings = fb.admin_earnings
-    platform_fee = fb.platform_fee
-    city_fee = fb.city_fee
 
     # Calculate area fees + taxes (reuses all_areas + pre-resolved match)
     fees_result = {}
@@ -1247,8 +1244,7 @@ async def create_ride(body: CreateRideRequest, request: Request = None, current_
         distance_fare=_f(distance_fare),
         time_fare=_f(time_fare),
         booking_fee=_f(booking_fee),
-        platform_fee=_f(platform_fee),
-        city_fee=_f(city_fee),
+        extra_fees={k: _f(v) for k, v in (fb.extra_fees or {}).items()},
         surge_multiplier=round(float(surge), 2),
         total_fare=_f(total_fare),
         stops=body.stops,

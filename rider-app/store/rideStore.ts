@@ -53,8 +53,7 @@ interface RideEstimate {
   distance_fare: string; // MoneyString
   time_fare: string; // MoneyString
   booking_fee: string; // MoneyString
-  platform_fee?: string; // MoneyString — service area fee from admin panel
-  city_fee?: string; // MoneyString — municipal fee from admin panel
+  fees?: Record<string, string>; // dynamic area fees from service_areas.fees — any key/value
   surge_multiplier?: number; // ratio, not money — stays number
   total_fare: string; // MoneyString
   fare_breakdown?: FareLineItem[];
@@ -113,14 +112,12 @@ interface Ride {
   distance_km: number;
   duration_minutes: number;
   base_fare: string; // MoneyString
-  // Per-component fare breakdown (PR #664 stringified Decimal in API
-  // response). Optional because some legacy / partially-migrated rides
+  // Per-component fare breakdown. Optional because some legacy rides
   // may not have all components set.
   distance_fare?: string; // MoneyString
   time_fare?: string; // MoneyString
   booking_fee?: string; // MoneyString
-  platform_fee?: string; // MoneyString
-  city_fee?: string; // MoneyString
+  extra_fees?: Record<string, string>; // dynamic area fees snapshotted at booking
   total_fare: string; // MoneyString
   fare_breakdown?: FareLineItem[];
   grand_total?: string; // MoneyString

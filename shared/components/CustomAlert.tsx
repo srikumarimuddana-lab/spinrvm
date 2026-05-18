@@ -135,6 +135,8 @@ export default function CustomAlert({
   const cancelButton = buttons.find((b) => b.style === 'cancel');
   const actionButtons = buttons.filter((b) => b.style !== 'cancel');
 
+  if (!visible) return null;
+
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <KeyboardAvoidingView

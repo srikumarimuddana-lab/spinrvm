@@ -20,7 +20,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import MapView, { Marker, Circle, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
-import BottomSheet, { BottomSheetScrollView } from '../components/SafeBottomSheet';
+
 import { useRideStore } from '../store/rideStore';
 import { useWalletStore } from '../store/walletStore';
 import { useWorkProfileStore } from '../store/workProfileStore';
@@ -113,8 +113,7 @@ function RideOptionsScreenContent() {
 
   // ── Derived values ──
   const selectedEstimate = estimates.length > selectedIndex ? estimates[selectedIndex] : null;
-  const bottomSheetRef = useRef<any>(null);
-  const snapPoints = useMemo(() => ['38%', '60%', '85%'], []);
+  const sheetScrollMax = SCREEN_HEIGHT * 0.68 - 20 - 180;
 
   const allUnavailable = estimates.length > 0 && !estimates.some(e => e.available);
   // Use server-computed discount_amount — correct for percentage promos and free_ride.
@@ -444,14 +443,15 @@ function RideOptionsScreenContent() {
       )}
 
       {/* ═══ Bottom sheet ═══ */}
-      <BottomSheet
-        ref={bottomSheetRef}
-        index={1}
-        snapPoints={snapPoints}
-        backgroundStyle={styles.sheet}
-        handleIndicatorStyle={styles.sheetHandle}
-      >
-        <BottomSheetScrollView
+      {/* ═══ Bottom sheet ═══ */}
+      {/* pointerEvents="none" on the map wrapper above prevents Google Maps' native gesture
+          recognizer from stealing vertical scroll events from the sheet's ScrollView
+          on Android production builds. The map is decorative here (auto-fit route). */}
+      <View style={styles.sheet}>
+        {/* Drag handle */}
+        <View style={styles.sheetHandle} />
+        <ScrollView
+          style={{ flex: 1, maxHeight: sheetScrollMax }}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
@@ -641,7 +641,7 @@ function RideOptionsScreenContent() {
               Free cancellation within 2 min of driver acceptance.
             </Text>
           </View>
-        </BottomSheetScrollView>
+        </ScrollView>
 
         {/* ═══ Fixed footer — Uber style ═══ */}
         {!isLoading && !allUnavailable && estimates.length > 0 && selectedEstimate && (
@@ -701,7 +701,7 @@ function RideOptionsScreenContent() {
             </TouchableOpacity>
           </View>
         )}
-      </BottomSheet>
+      </View>
 
       {/* ═══ Payment method modal ═══ */}
       <Modal visible={showPaymentSheet} animationType="slide" transparent onRequestClose={() => setShowPaymentSheet(false)}>
@@ -1108,6 +1108,10 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
 
     // ── Bottom sheet ──
     sheet: {
+      position: 'absolute',
+      bottom: 0,
+      left: 0,
+      right: 0,
       backgroundColor: colors.surface,
       borderTopLeftRadius: 24,
       borderTopRightRadius: 24,
@@ -1122,6 +1126,9 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
       height: 4,
       borderRadius: 2,
       backgroundColor: '#D1D5DB',
+      alignSelf: 'center',
+      marginTop: 10,
+      marginBottom: 4,
     },
     sectionHeader: {
       flexDirection: 'row',
@@ -1483,8 +1490,6 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
       fontFamily: 'PlusJakartaSans_700Bold',
       color: colors.primary,
     },
-
-    // ── Fixed footer (Uber style) ──
     fixedFooter: {
       borderTopWidth: 1,
       borderTopColor: colors.border,

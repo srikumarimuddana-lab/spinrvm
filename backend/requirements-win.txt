@@ -79,9 +79,9 @@ pyasn1==0.6.3             # via pyasn1-modules
 pyasn1-modules==0.4.2     # via google-auth
 pycodestyle==2.14.0       # via flake8
 pycparser==3.0            # via cffi
-pydantic==2.13.3          # via -r requirements.in, fastapi, google-generativeai, postgrest, pydantic-settings, pyiceberg, realtime, storage3, supabase-auth
-pydantic-core==2.46.3     # via pydantic
-pydantic-settings==2.14.0  # via -r requirements.in
+pydantic==2.13.4          # via -r requirements.in, fastapi, google-generativeai, postgrest, pydantic-settings, pyiceberg, realtime, storage3, supabase-auth
+pydantic-core==2.46.4     # via pydantic
+pydantic-settings==2.14.1  # via -r requirements.in
 pyflakes==3.4.0           # via flake8
 pygments==2.20.0          # via pytest, rich
 pyiceberg==0.11.1         # via storage3
@@ -125,7 +125,7 @@ typing-extensions==4.15.0  # via aiosignal, anyio, fastapi, google-generativeai,
 typing-inspection==0.4.2  # via fastapi, pydantic, pydantic-settings
 uritemplate==4.2.0        # via google-api-python-client
 urllib3==2.6.3            # via -r requirements.in, botocore, cloudinary, requests, sentry-sdk
-uvicorn==0.46.0           # via -r requirements.in
+uvicorn==0.47.0           # via -r requirements.in
 watchfiles==1.1.1         # via uvicorn
 websockets==15.0.1        # via -r requirements.in, realtime, uvicorn
 wrapt==2.1.2              # via deprecated

@@ -183,12 +183,11 @@ async def retry_stuck_payouts() -> None:
 
 
 async def retry_failed_payments():
-    """Find and retry failed payments."""
+    """Find and retry failed/stuck payments."""
     try:
-        # Find rides with failed payments that haven't exceeded retry limit
         rides = await db.get_rows(
             "rides",
-            {"payment_status": {"$in": ["failed", "requires_action"]}},
+            {"payment_status": {"$in": ["failed", "requires_action", "processing"]}},
             limit=50,
             order="created_at",
         )
@@ -222,11 +221,16 @@ async def retry_failed_payments():
 
         # Skip rides older than 24 hours
         created_dt = parse_iso_utc(ride.get("created_at"))
-        if (
-            created_dt is not None
-            and (datetime.now(timezone.utc) - created_dt).total_seconds() > 86400
-        ):
+        now_utc = datetime.now(timezone.utc)
+        if created_dt is not None and (now_utc - created_dt).total_seconds() > 86400:
             continue
+
+        # "processing" means Stripe is mid-flight; only intervene after 30 min
+        # (the webhook should have arrived by then).
+        if current_status == "processing":
+            updated_dt = parse_iso_utc(ride.get("updated_at"))
+            if updated_dt is not None and (now_utc - updated_dt).total_seconds() < 1800:
+                continue
 
         payment_intent_id = ride.get("payment_intent_id")
         if not payment_intent_id or not stripe_secret:

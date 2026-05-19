@@ -61,7 +61,9 @@ async def init_database():
         logger.error(f"Supabase health check failed: {e}")
         if settings.ENV.lower() == "production":
             raise
-        logger.warning(f"Continuing in {settings.ENV} mode despite health-check failure")
+        logger.warning(
+            f"Continuing in {settings.ENV} mode despite health-check failure"
+        )
 
     return supabase
 
@@ -98,7 +100,9 @@ async def lifespan(app: FastAPI):
 
     executor_size = int(_os.environ.get("BACKEND_EXECUTOR_WORKERS", "64"))
     loop = _asyncio_lifespan.get_event_loop()
-    loop.set_default_executor(_Executor(max_workers=executor_size, thread_name_prefix="spinr-db"))
+    loop.set_default_executor(
+        _Executor(max_workers=executor_size, thread_name_prefix="spinr-db")
+    )
     logger.info(f"Default executor sized to {executor_size} workers")
 
     # Initialize database
@@ -122,6 +126,14 @@ async def lifespan(app: FastAPI):
             "state are stored in-process and reset on every restart. "
             "Set REDIS_URL (or RATE_LIMIT_REDIS_URL + WS_REDIS_URL) before launch."
         )
+
+    # Configure Stripe SDK globals (timeout, retries, API version pin)
+    try:
+        from utils.stripe_config import configure_stripe
+
+        configure_stripe()
+    except Exception as e:
+        logger.error(f"Failed to configure Stripe SDK: {e}", exc_info=True)
 
     # Start background tasks
     import asyncio
@@ -158,7 +170,9 @@ async def lifespan(app: FastAPI):
 
         _spawn("subscription_expiry (6h)", check_expiring_subscriptions)
     except Exception as e:
-        logger.error(f"Failed to import subscription expiry checker: {e}", exc_info=True)
+        logger.error(
+            f"Failed to import subscription expiry checker: {e}", exc_info=True
+        )
 
     # Automated surge pricing — recalculates demand/supply ratio every 2 min
     # and updates service_areas.surge_multiplier for auto-managed areas.
@@ -368,7 +382,9 @@ async def lifespan(app: FastAPI):
         from utils.ws_pubsub import pubsub as ws_pubsub
         from utils.ws_pubsub import resolve_ws_redis_url
 
-        ws_redis_url = resolve_ws_redis_url(settings.WS_REDIS_URL, settings.RATE_LIMIT_REDIS_URL)
+        ws_redis_url = resolve_ws_redis_url(
+            settings.WS_REDIS_URL, settings.RATE_LIMIT_REDIS_URL
+        )
         ws_started = await ws_pubsub.start(ws_manager, ws_redis_url)
         app.state.ws_pubsub = ws_pubsub
         if not ws_started and settings.ENV.lower() == "production":
@@ -386,7 +402,9 @@ async def lifespan(app: FastAPI):
         logger.error(f"Failed to start WS pub/sub: {e}", exc_info=True)
 
     # Perform startup checks
-    logger.info(f"Spinr API startup complete ({len(background_tasks)} background tasks running)")
+    logger.info(
+        f"Spinr API startup complete ({len(background_tasks)} background tasks running)"
+    )
 
     yield
 

@@ -28,6 +28,8 @@ _STRIPE_HANDLED_EVENTS = frozenset(
         "payment_intent.payment_failed",
         "checkout.session.completed",
         "charge.refunded",
+        "charge.dispute.created",
+        "charge.dispute.closed",
         "customer.subscription.deleted",
     }
 )
@@ -112,7 +114,9 @@ async def stripe_webhook(request: Request):
             except ImportError:
                 from services.corporate_wallet_service import apply_topup  # type: ignore
 
-            amount_cents = data_object.get("amount_received") or data_object.get("amount", 0)
+            amount_cents = data_object.get("amount_received") or data_object.get(
+                "amount", 0
+            )
             # Decimal-safe cents→dollars (2-dp HALF_UP). Float division
             # ``cents / 100`` drifts for arbitrary cent values; quantize
             # first, then hand the float to apply_topup (Postgres NUMERIC
@@ -139,7 +143,9 @@ async def stripe_webhook(request: Request):
             amount_cad_str = meta.get("amount_cad", "0")
             from decimal import ROUND_HALF_UP, Decimal
 
-            amount = Decimal(amount_cad_str).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            amount = Decimal(amount_cad_str).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
             new_balance = await wallet_increment_balance(wallet_id, amount)
 
             try:
@@ -178,7 +184,9 @@ async def stripe_webhook(request: Request):
                         data={"type": "wallet_topup", "amount": str(amount)},
                     )
                 except Exception:
-                    logger.warning("Push notification failed for wallet_topup", exc_info=True)
+                    logger.warning(
+                        "Push notification failed for wallet_topup", exc_info=True
+                    )
 
             return {"received": True, "scope": "wallet_topup", "event_id": event_id}
 
@@ -199,9 +207,15 @@ async def stripe_webhook(request: Request):
                 logger.error(
                     f"Webhook payment_intent.succeeded: ride {ride_id} not found or 0 rows "
                     f"updated — payment {payment_intent_id} unlinked",
-                    extra={"domain": "payments", "event_id": event_id, "ride_id": ride_id},
+                    extra={
+                        "domain": "payments",
+                        "event_id": event_id,
+                        "ride_id": ride_id,
+                    },
                 )
-                raise HTTPException(status_code=500, detail="Ride update failed — Stripe will retry")
+                raise HTTPException(
+                    status_code=500, detail="Ride update failed — Stripe will retry"
+                )
             else:
                 logger.info(f"Payment confirmed via webhook for ride {ride_id}")
 
@@ -216,13 +230,17 @@ async def stripe_webhook(request: Request):
                     {"type": "payment_confirmed", "ride_id": ride_id or ""},
                 )
             except Exception as _push_err:
-                logger.error(f"Webhook: push notification failed for user {user_id}: {_push_err}")
+                logger.error(
+                    f"Webhook: push notification failed for user {user_id}: {_push_err}"
+                )
 
     elif event_type == "payment_intent.payment_failed":
         ride_id = data_object.get("metadata", {}).get("ride_id")
         user_id = data_object.get("metadata", {}).get("user_id")
         payment_intent_id = data_object.get("id")
-        failure_message = data_object.get("last_payment_error", {}).get("message", "Payment failed")
+        failure_message = data_object.get("last_payment_error", {}).get(
+            "message", "Payment failed"
+        )
 
         if ride_id:
             updated = await db_supabase.update_ride(
@@ -237,9 +255,15 @@ async def stripe_webhook(request: Request):
                 logger.error(
                     f"Webhook payment_intent.payment_failed: ride {ride_id} not found or 0 rows "
                     f"updated — payment failure {payment_intent_id} unlinked",
-                    extra={"domain": "payments", "event_id": event_id, "ride_id": ride_id},
+                    extra={
+                        "domain": "payments",
+                        "event_id": event_id,
+                        "ride_id": ride_id,
+                    },
                 )
-                raise HTTPException(status_code=500, detail="Ride update failed — Stripe will retry")
+                raise HTTPException(
+                    status_code=500, detail="Ride update failed — Stripe will retry"
+                )
             logger.warning(f"Payment failed for ride {ride_id}: {failure_message}")
 
         if user_id:
@@ -251,7 +275,9 @@ async def stripe_webhook(request: Request):
                     {"type": "payment_failed", "ride_id": ride_id or ""},
                 )
             except Exception as _push_err:
-                logger.error(f"Webhook: push notification failed for user {user_id}: {_push_err}")
+                logger.error(
+                    f"Webhook: push notification failed for user {user_id}: {_push_err}"
+                )
 
         # Notify the driver so they know the rider's payment failed (13-10)
         if ride_id:
@@ -261,11 +287,15 @@ async def stripe_webhook(request: Request):
                 if ride_row:
                     driver_id = ride_row.get("driver_id")
                     if driver_id:
-                        driver_rows = await db_supabase.get_rows("drivers", {"id": driver_id}, limit=1)
+                        driver_rows = await db_supabase.get_rows(
+                            "drivers", {"id": driver_id}, limit=1
+                        )
                         if driver_rows:
                             driver_user_id = driver_rows[0].get("user_id")
             except Exception as lookup_err:
-                logger.error(f"Driver payment-failed lookup error: {lookup_err}", exc_info=True)
+                logger.error(
+                    f"Driver payment-failed lookup error: {lookup_err}", exc_info=True
+                )
                 driver_user_id = None
             if driver_user_id:
                 try:
@@ -325,7 +355,9 @@ async def stripe_webhook(request: Request):
             if rides:
                 ride = rides[0]
                 ride_id = ride["id"]
-                refunded_amount = charge.get("amount_refunded", 0) / 100  # cents → dollars
+                refunded_amount = (
+                    charge.get("amount_refunded", 0) / 100
+                )  # cents → dollars
                 await db_supabase.update_one(
                     "rides",
                     {"id": ride_id},
@@ -337,7 +369,11 @@ async def stripe_webhook(request: Request):
                 )
                 logger.info(
                     f"Stripe refund: ride {ride_id} marked refunded (${refunded_amount:.2f})",
-                    extra={"domain": "payments", "ride_id": ride_id, "event_id": event_id},
+                    extra={
+                        "domain": "payments",
+                        "ride_id": ride_id,
+                        "event_id": event_id,
+                    },
                 )
                 rider_id = ride.get("rider_id")
                 if rider_id:
@@ -361,12 +397,134 @@ async def stripe_webhook(request: Request):
                 extra={"domain": "payments", "event_id": event_id},
             )
 
+    elif event_type == "charge.dispute.created":
+        dispute_id_stripe = data_object.get("id", "")
+        payment_intent_id = data_object.get("payment_intent") or ""
+        dispute_amount_cents = data_object.get("amount", 0)
+        dispute_reason = data_object.get("reason", "unknown")
+        dispute_status = data_object.get("status", "")
+
+        ride = None
+        ride_id = None
+        if payment_intent_id:
+            rides = await db_supabase.get_rows(
+                "rides",
+                {"payment_intent_id": payment_intent_id},
+                limit=1,
+            )
+            if rides:
+                ride = rides[0]
+                ride_id = ride["id"]
+
+        await db_supabase.insert_one(
+            "stripe_disputes",
+            {
+                "id": str(__import__("uuid").uuid4()),
+                "stripe_dispute_id": dispute_id_stripe,
+                "payment_intent_id": payment_intent_id,
+                "ride_id": ride_id,
+                "amount_cents": dispute_amount_cents,
+                "reason": dispute_reason,
+                "status": dispute_status,
+                "stripe_event_id": event_id,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+
+        if ride_id:
+            await db_supabase.update_one(
+                "rides",
+                {"id": ride_id},
+                {
+                    "payment_status": "disputed",
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+
+        try:
+            from ..socket_manager import manager  # type: ignore
+        except ImportError:
+            from socket_manager import manager  # type: ignore
+
+        await manager.broadcast_to_admins(
+            {
+                "type": "charge_dispute_created",
+                "ride_id": ride_id,
+                "dispute_reason": dispute_reason,
+                "amount_cents": dispute_amount_cents,
+                "payment_intent_id": payment_intent_id,
+            }
+        )
+
+        logger.error(
+            "CHARGEBACK: dispute opened reason=%s amount_cents=%d ride=%s pi=%s",
+            dispute_reason,
+            dispute_amount_cents,
+            ride_id,
+            payment_intent_id,
+            extra={
+                "domain": "payments",
+                "event_id": event_id,
+                "ride_id": ride_id or "",
+            },
+        )
+
+    elif event_type == "charge.dispute.closed":
+        payment_intent_id = data_object.get("payment_intent") or ""
+        dispute_status = data_object.get("status", "")
+
+        existing = await db_supabase.find_one(
+            "stripe_disputes",
+            {"payment_intent_id": payment_intent_id},
+        )
+        if existing:
+            await db_supabase.update_one(
+                "stripe_disputes",
+                {"id": existing["id"]},
+                {
+                    "status": dispute_status,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+
+        ride_id = existing.get("ride_id") if existing else None
+        if not ride_id and payment_intent_id:
+            rides = await db_supabase.get_rows(
+                "rides",
+                {"payment_intent_id": payment_intent_id},
+                limit=1,
+            )
+            if rides:
+                ride_id = rides[0]["id"]
+
+        if ride_id:
+            new_payment_status = "paid" if dispute_status == "won" else "dispute_lost"
+            await db_supabase.update_one(
+                "rides",
+                {"id": ride_id},
+                {
+                    "payment_status": new_payment_status,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+
+        logger.info(
+            "Dispute closed: status=%s ride=%s pi=%s",
+            dispute_status,
+            ride_id,
+            payment_intent_id,
+            extra={"domain": "payments", "event_id": event_id},
+        )
+
     elif event_type == "customer.subscription.deleted":
         subscription = data_object
         stripe_customer_id = subscription.get("customer")
         if stripe_customer_id:
             # Look up the user by their Stripe customer ID, then find the linked driver
-            user_row = await db_supabase.find_one("users", {"stripe_customer_id": stripe_customer_id})
+            user_row = await db_supabase.find_one(
+                "users", {"stripe_customer_id": stripe_customer_id}
+            )
             if user_row:
                 user_id = user_row["id"]
                 driver_row = await db_supabase.find_one("drivers", {"user_id": user_id})
@@ -390,19 +548,30 @@ async def stripe_webhook(request: Request):
                         logger.info(
                             f"Stripe subscription cancelled for driver {driver_id} "
                             f"(subscription row {active_sub['id']})",
-                            extra={"domain": "drivers", "driver_id": driver_id, "event_id": event_id},
+                            extra={
+                                "domain": "drivers",
+                                "driver_id": driver_id,
+                                "event_id": event_id,
+                            },
                         )
                     else:
                         logger.info(
                             f"customer.subscription.deleted: no active subscription row for driver {driver_id}",
-                            extra={"domain": "drivers", "driver_id": driver_id, "event_id": event_id},
+                            extra={
+                                "domain": "drivers",
+                                "driver_id": driver_id,
+                                "event_id": event_id,
+                            },
                         )
                     try:
                         await send_push_notification(
                             user_id,
                             "Subscription cancelled",
                             "Your Spinr subscription has been cancelled. Renew to continue accepting rides.",
-                            data={"type": "subscription_cancelled", "deeplink": "/driver/subscription"},
+                            data={
+                                "type": "subscription_cancelled",
+                                "deeplink": "/driver/subscription",
+                            },
                         )
                     except Exception as _e:
                         logger.debug(f"Subscription cancel push failed: {_e}")

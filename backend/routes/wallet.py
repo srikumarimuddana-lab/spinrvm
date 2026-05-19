@@ -168,6 +168,7 @@ async def top_up_wallet(
             name=f"{user.get('first_name', '')} {user.get('last_name', '')}".strip(),
             metadata={"user_id": current_user["id"]},
             api_key=stripe_secret,
+            idempotency_key=f"cus-create-{current_user['id']}",
         )
         stripe_customer_id = customer.id
         await db_supabase.update_one(
@@ -175,6 +176,9 @@ async def top_up_wallet(
             {"id": current_user["id"]},
             {"stripe_customer_id": stripe_customer_id},
         )
+        fresh = await db_supabase.get_user_by_id(current_user["id"])
+        if fresh:
+            stripe_customer_id = fresh.get("stripe_customer_id") or stripe_customer_id
 
     amount_cents = int(_d(req.amount) * 100)
 

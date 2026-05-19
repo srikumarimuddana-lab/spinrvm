@@ -3976,8 +3976,13 @@ async def subscribe_to_plan(
                         customer=_customer_id,
                         confirm=True,
                         off_session=True,
-                        metadata={"driver_id": driver["id"], "plan_id": plan["id"]},
+                        metadata={
+                            "driver_id": driver["id"],
+                            "plan_id": plan["id"],
+                            "scope": "driver_subscription",
+                        },
                         api_key=_stripe_secret,
+                        idempotency_key=f"sub-charge-{driver['id']}-{plan['id']}-{now.strftime('%Y%m%d')}",
                     )
                     stripe_charge_id = _charge.id
                     payment_status = (

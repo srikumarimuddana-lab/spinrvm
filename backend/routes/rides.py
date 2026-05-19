@@ -1198,6 +1198,24 @@ async def create_ride(
             message_key=ErrorKeys.RIDE_INVALID_STATUS,
         )
 
+    unpaid_rides = await db_supabase.get_rows(
+        "rides",
+        {
+            "rider_id": current_user["id"],
+            "status": RideStatus.COMPLETED,
+            "payment_status": "failed",
+        },
+        limit=1,
+    )
+    if unpaid_rides:
+        raise SpinrException(
+            message="You have an unpaid ride. Please update your payment method to continue booking.",
+            error_code=ErrorCode.PAYMENT_UNPAID_RIDE_BLOCK,
+            status_code=402,
+            details={"unpaid_ride_id": unpaid_rides[0]["id"]},
+            message_key=ErrorKeys.PAYMENT_UNPAID_RIDE_BLOCK,
+        )
+
     distance_km = calculate_distance(
         body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng
     )

@@ -170,7 +170,11 @@ async def top_up_wallet(
             api_key=stripe_secret,
         )
         stripe_customer_id = customer.id
-        await db_supabase.update_one("users", {"id": current_user["id"]}, {"stripe_customer_id": stripe_customer_id})
+        await db_supabase.update_one(
+            "users",
+            {"id": current_user["id"]},
+            {"stripe_customer_id": stripe_customer_id},
+        )
 
     amount_cents = int(_d(req.amount) * 100)
 
@@ -208,11 +212,15 @@ async def top_up_wallet(
         }
     except stripe.error.StripeError as e:
         logger.error("Stripe wallet top-up error", exc_info=True)
-        raise HTTPException(status_code=502, detail="Payment provider error. Please try again.") from e
+        raise HTTPException(
+            status_code=502, detail="Payment provider error. Please try again."
+        ) from e
 
 
 @api_router.post("/pay")
-async def wallet_pay(req: WalletPayRequest, current_user: dict = Depends(get_current_user)):
+async def wallet_pay(
+    req: WalletPayRequest, current_user: dict = Depends(get_current_user)
+):
     """Pay for a ride using wallet balance."""
     wallet = await get_or_create_wallet(current_user["id"])
 
@@ -242,7 +250,9 @@ async def wallet_pay(req: WalletPayRequest, current_user: dict = Depends(get_cur
                 message_key=ErrorKeys.PAYMENT_INSUFFICIENT_FUNDS,
                 action_hint="Top up your wallet",
             ) from exc
-        raise HTTPException(status_code=503, detail="Wallet payment failed — please retry") from exc
+        raise HTTPException(
+            status_code=503, detail="Wallet payment failed — please retry"
+        ) from exc
 
     # Mark the ride payment method (the RPC already set payment_status='paid')
     await db.update_one(
@@ -269,7 +279,11 @@ async def wallet_pay(req: WalletPayRequest, current_user: dict = Depends(get_cur
             "wallet_payment",
             "wallets",
             wallet["id"],
-            {"amount": _money_str(req.amount), "ride_id": req.ride_id, "transaction_id": txn["id"]},
+            {
+                "amount": _money_str(req.amount),
+                "ride_id": req.ride_id,
+                "transaction_id": txn["id"],
+            },
         )
     )
     return {
@@ -305,6 +319,7 @@ async def get_transactions(
                 "balance_after": t["balance_after"],
                 "description": t.get("description"),
                 "reference_id": t.get("reference_id"),
+                "metadata": t.get("metadata") or {},
                 "created_at": t.get("created_at"),
             }
             for t in txns

@@ -72,12 +72,29 @@ async def record_payment_event(
     user_id: str,
     amount_cents: int,
     payment_intent_id: str | None = None,
+    *,
+    ride: dict | None = None,
+    tip_amount: Decimal | None = None,
 ) -> None:
     """Append a stripe_charge row to the financial_events ledger.
 
     Called BEFORE the ride DB update so a recovery record always exists even
     if the ride row stays stuck in 'processing'. Never raises — logs and returns.
     """
+    meta: Dict[str, Any] = {"source": "process_payment"}
+    if ride:
+        fare = _round(_d(ride.get("total_fare", 0)))
+        meta.update(
+            {
+                "fare_amount": str(fare),
+                "tip_amount": str(_round(_d(tip_amount))) if tip_amount else "0.00",
+                "driver_id": ride.get("driver_id") or "",
+                "surge_multiplier": str(ride.get("surge_multiplier") or "1.0"),
+                "payment_method": ride.get("payment_method") or "card",
+                "pickup_address": (ride.get("pickup_address") or "")[:200],
+                "dropoff_address": (ride.get("dropoff_address") or "")[:200],
+            }
+        )
     try:
         await db_supabase.insert_one(
             "financial_events",
@@ -87,7 +104,7 @@ async def record_payment_event(
                 "ride_id": ride_id,
                 "delta_cents": amount_cents,
                 "ref": payment_intent_id,
-                "metadata": {"source": "process_payment"},
+                "metadata": meta,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             },
         )
@@ -147,8 +164,12 @@ async def settle_wallet(
     await db_supabase.update_one(
         "wallets",
         {"id": wallet["id"]},
-        {"balance": _f(new_balance), "updated_at": datetime.now(timezone.utc).isoformat()},
+        {
+            "balance": _f(new_balance),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        },
     )
+    fare = _round(_d(ride.get("total_fare", 0)))
     await db_supabase.insert_one(
         "wallet_transactions",
         {
@@ -160,7 +181,15 @@ async def settle_wallet(
             "balance_after": _f(new_balance),
             "reference_id": ride_id,
             "description": f"Ride payment ${_f(debit):.2f}",
-            "metadata": {},
+            "metadata": {
+                "ride_id": ride_id,
+                "fare_amount": str(fare),
+                "tip_amount": str(_round(_d(tip_amount))),
+                "driver_id": ride.get("driver_id") or "",
+                "surge_multiplier": str(ride.get("surge_multiplier") or "1.0"),
+                "pickup_address": (ride.get("pickup_address") or "")[:200],
+                "dropoff_address": (ride.get("dropoff_address") or "")[:200],
+            },
             "created_at": datetime.now(timezone.utc).isoformat(),
         },
     )
@@ -194,7 +223,9 @@ async def settle_corporate(
         )
 
     memberships = await db_supabase.list_active_memberships_for_user(ride["rider_id"])
-    membership = next((m for m in memberships if m.get("company_id") == company_id), None)
+    membership = next(
+        (m for m in memberships if m.get("company_id") == company_id), None
+    )
     if not membership:
         await db_supabase.update_ride(ride_id, {"payment_status": "pending"})
         return PaymentResult(
@@ -211,13 +242,19 @@ async def settle_corporate(
         allowance_debit = total
         master_debit = _round(Decimal("0"))
     else:
-        remaining = _round(_d(str(allowance.get("amount") or 0)) - max(_d(str(allowance.get("used") or 0)), _d("0")))
+        remaining = _round(
+            _d(str(allowance.get("amount") or 0))
+            - max(_d(str(allowance.get("used") or 0)), _d("0"))
+        )
         remaining = max(remaining, _round(Decimal("0")))
         allowance_debit = min(remaining, total)
         master_debit = total - allowance_debit
 
     corp_policy = await db_supabase.get_corporate_policy(company_id) or {}
-    flag_violation = master_debit > 0 and corp_policy.get("allowed_payment_source") == "allowance_only"
+    flag_violation = (
+        master_debit > 0
+        and corp_policy.get("allowed_payment_source") == "allowance_only"
+    )
 
     allowance_applied = False
     if allowance_debit > 0 and allowance.get("id") and corp_wallet.get("id"):
@@ -260,7 +297,12 @@ async def settle_corporate(
                         exc_info=True,
                     )
             await db_supabase.update_ride(ride_id, {"payment_status": "pending"})
-            logger.error("[PAYMENT] Master wallet debit failed for ride %s: %s", ride_id, master_err, exc_info=True)
+            logger.error(
+                "[PAYMENT] Master wallet debit failed for ride %s: %s",
+                ride_id,
+                master_err,
+                exc_info=True,
+            )
             return PaymentResult(
                 success=False,
                 error="Corporate payment failed — please retry.",
@@ -325,7 +367,9 @@ async def settle_card(
     """Charge rider's card via Stripe."""
     rider_user = await db_supabase.get_user_by_id(rider_id)
     stripe_customer_id = (rider_user or {}).get("stripe_customer_id")
-    payment_method_id = ride.get("payment_method_id") or (rider_user or {}).get("default_payment_method")
+    payment_method_id = ride.get("payment_method_id") or (rider_user or {}).get(
+        "default_payment_method"
+    )
 
     if not payment_method_id:
         await db_supabase.update_ride(ride_id, {"payment_status": "pending"})
@@ -350,6 +394,8 @@ async def settle_card(
             user_id=rider_id,
             amount_cents=int(_round(total_charge * Decimal("100"))),
             payment_intent_id=outcome.payment_intent_id,
+            ride=ride,
+            tip_amount=tip_amount,
         )
         try:
             await db_supabase.update_ride(
@@ -376,7 +422,11 @@ async def settle_card(
                 status_code=503,
             )
         await manager.send_personal_message(
-            {"type": "payment_completed", "ride_id": ride_id, "charged_amount": _money_str(total_charge)},
+            {
+                "type": "payment_completed",
+                "ride_id": ride_id,
+                "charged_amount": _money_str(total_charge),
+            },
             f"rider_{rider_id}",
         )
         return PaymentResult(success=True, charged_amount=_money_str(total_charge))
@@ -413,7 +463,11 @@ async def settle_card(
                     rider_id_for_push,
                     "Payment failed",
                     "Your payment method was declined. Please update your payment method in the app.",
-                    data={"type": "payment_failed", "ride_id": ride_id, "deeplink": "/wallet"},
+                    data={
+                        "type": "payment_failed",
+                        "ride_id": ride_id,
+                        "deeplink": "/wallet",
+                    },
                 )
             except Exception as _push_err:
                 logger.debug(f"Payment failure push to rider failed: {_push_err}")
@@ -427,7 +481,9 @@ async def settle_card(
         )
 
     if outcome.status == "unconfigured":
-        logger.error("Stripe unconfigured — marking ride %s paid without real charge", ride_id)
+        logger.error(
+            "Stripe unconfigured — marking ride %s paid without real charge", ride_id
+        )
         await db_supabase.update_ride(
             ride_id,
             {
@@ -453,7 +509,11 @@ async def settle_card(
                 rider_id_for_push,
                 "Payment failed",
                 "Your payment method was declined. Please update your payment method in the app.",
-                data={"type": "payment_failed", "ride_id": ride_id, "deeplink": "/wallet"},
+                data={
+                    "type": "payment_failed",
+                    "ride_id": ride_id,
+                    "deeplink": "/wallet",
+                },
             )
         except Exception as _push_err:
             logger.debug(f"Payment failure push to rider failed: {_push_err}")
@@ -477,7 +537,10 @@ async def send_ride_receipt(ride: dict, rider_id: str, tip_amount: Decimal) -> b
         if drv:
             du = await db_supabase.get_user_by_id(drv.get("user_id"))
             if du:
-                driver_info = {**du, "name": f"{du.get('first_name', '')} {du.get('last_name', '')}".strip()}
+                driver_info = {
+                    **du,
+                    "name": f"{du.get('first_name', '')} {du.get('last_name', '')}".strip(),
+                }
     try:
         from utils.email_receipt import send_receipt_email
 

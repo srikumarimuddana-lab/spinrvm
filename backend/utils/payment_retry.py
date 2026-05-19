@@ -41,16 +41,63 @@ try:
     from ..db import db
     from ..features import send_push_notification
     from ..settings_loader import get_app_settings
+    from ..socket_manager import manager
     from .datetime_utils import parse_iso_utc
     from .redis_client import redis_set_nx
 except ImportError:
     from db import db
     from features import send_push_notification
     from settings_loader import get_app_settings
+    from socket_manager import manager
     from utils.datetime_utils import parse_iso_utc
     from utils.redis_client import redis_set_nx
 
 logger = logging.getLogger(__name__)
+
+
+async def _alert_admins_payment_exhausted(ride: dict) -> None:
+    """Notify admins when a ride's payment retries are exhausted."""
+    ride_id = ride.get("id", "")
+    rider_id = ride.get("rider_id", "")
+    total_fare = ride.get("total_fare", 0)
+
+    try:
+        await manager.broadcast_to_admins(
+            {
+                "type": "payment_retries_exhausted",
+                "ride_id": ride_id,
+                "rider_id": rider_id,
+                "total_fare": total_fare,
+                "payment_retry_count": ride.get("payment_retry_count", MAX_RETRIES),
+            }
+        )
+    except Exception as exc:
+        logger.error(
+            f"Admin WS broadcast failed for exhausted payment ride {ride_id}: {exc}"
+        )
+
+    try:
+        admin_users = await db.get_rows("users", {"role": "admin"}, limit=50)
+        for admin in admin_users:
+            try:
+                await send_push_notification(
+                    admin["id"],
+                    "Payment retries exhausted",
+                    f"Ride {ride_id[:8]}… — all {MAX_RETRIES} retries failed. Rider is blocked from booking.",
+                    data={"type": "payment_retries_exhausted", "ride_id": ride_id},
+                )
+            except Exception as _push_exc:
+                logger.debug(
+                    f"Payment alert push to admin {admin.get('id')} failed: {_push_exc}"
+                )
+    except Exception as exc:
+        logger.error(f"Failed to fetch admin users for payment alert: {exc}")
+
+    logger.error(
+        f"ADMIN ALERT: Ride {ride_id} payment retries exhausted ({MAX_RETRIES} attempts). "
+        f"Rider {rider_id} is now blocked from booking.",
+        extra={"domain": "payments", "ride_id": ride_id, "rider_id": rider_id},
+    )
 
 
 def _pod_id() -> str:
@@ -65,7 +112,12 @@ async def update_payout_status(payout_id: str, status: str) -> None:
     await db.update_one(
         "payouts",
         {"id": payout_id},
-        {"$set": {"status": status, "updated_at": datetime.now(timezone.utc).isoformat()}},
+        {
+            "$set": {
+                "status": status,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        },
     )
 
 
@@ -113,7 +165,12 @@ async def retry_stuck_payouts() -> None:
             claimed = await db.update_one(
                 "payouts",
                 {"id": payout_id, "status": "pending"},
-                {"$set": {"status": "failed", "updated_at": datetime.now(timezone.utc).isoformat()}},
+                {
+                    "$set": {
+                        "status": "failed",
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                },
             )
             if claimed is None:
                 continue
@@ -148,11 +205,27 @@ async def retry_failed_payments():
         current_status = ride.get("payment_status", "failed")
 
         if retry_count >= MAX_RETRIES:
+            if not ride.get("admin_alerted_payment_exhausted"):
+                claimed = await db.update_one(
+                    "rides",
+                    {"id": ride_id, "admin_alerted_payment_exhausted": False},
+                    {
+                        "$set": {
+                            "admin_alerted_payment_exhausted": True,
+                            "updated_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                    },
+                )
+                if claimed is not None:
+                    await _alert_admins_payment_exhausted(ride)
             continue
 
         # Skip rides older than 24 hours
         created_dt = parse_iso_utc(ride.get("created_at"))
-        if created_dt is not None and (datetime.now(timezone.utc) - created_dt).total_seconds() > 86400:
+        if (
+            created_dt is not None
+            and (datetime.now(timezone.utc) - created_dt).total_seconds() > 86400
+        ):
             continue
 
         payment_intent_id = ride.get("payment_intent_id")
@@ -165,7 +238,11 @@ async def retry_failed_payments():
         # preventing duplicate Stripe charges and double push notifications.
         claimed = await db.update_one(
             "rides",
-            {"id": ride_id, "payment_status": current_status, "payment_retry_count": retry_count},
+            {
+                "id": ride_id,
+                "payment_status": current_status,
+                "payment_retry_count": retry_count,
+            },
             {
                 "$set": {
                     "payment_status": "retrying",
@@ -180,7 +257,9 @@ async def retry_failed_payments():
             import stripe
 
             # Attempt to confirm the payment intent
-            intent = stripe.PaymentIntent.retrieve(payment_intent_id, api_key=stripe_secret)
+            intent = stripe.PaymentIntent.retrieve(
+                payment_intent_id, api_key=stripe_secret
+            )
 
             if intent.status == "succeeded":
                 await db.update_one(
@@ -193,7 +272,9 @@ async def retry_failed_payments():
                         }
                     },
                 )
-                logger.info(f"Payment retry: ride {ride_id} already paid (intent succeeded)")
+                logger.info(
+                    f"Payment retry: ride {ride_id} already paid (intent succeeded)"
+                )
                 continue
 
             elif intent.status in ("requires_payment_method", "requires_confirmation"):
@@ -268,6 +349,7 @@ async def retry_failed_payments():
                 },
             )
             if new_count >= MAX_RETRIES:
+                await _alert_admins_payment_exhausted(ride)
                 rider_id = ride.get("rider_id")
                 if rider_id:
                     try:
@@ -278,7 +360,9 @@ async def retry_failed_payments():
                             data={"type": "payment_failed", "ride_id": ride_id},
                         )
                     except Exception as push_err:
-                        logger.debug(f"Payment failure push notification failed: {push_err}")
+                        logger.debug(
+                            f"Payment failure push notification failed: {push_err}"
+                        )
 
 
 async def payment_retry_loop():

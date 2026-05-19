@@ -104,6 +104,7 @@ class ErrorCode(Enum):
     PAYMENT_METHOD_INVALID = 6002
     PAYMENT_INSUFFICIENT_FUNDS = 6003
     PAYMENT_REFUND_FAILED = 6004
+    PAYMENT_UNPAID_RIDE_BLOCK = 6005
 
     # System errors (9000-9999)
     INTERNAL_ERROR = 9001
@@ -185,49 +186,84 @@ class InvalidTokenException(AuthenticationException):
     """Invalid authentication token."""
 
     def __init__(self, message: str = "Invalid authentication token", **kwargs):
-        super().__init__(message=message, error_code=ErrorCode.AUTH_INVALID_TOKEN, status_code=401, **kwargs)
+        super().__init__(
+            message=message,
+            error_code=ErrorCode.AUTH_INVALID_TOKEN,
+            status_code=401,
+            **kwargs,
+        )
 
 
 class TokenExpiredException(AuthenticationException):
     """Expired authentication token."""
 
     def __init__(self, message: str = "Token has expired", **kwargs):
-        super().__init__(message=message, error_code=ErrorCode.AUTH_TOKEN_EXPIRED, status_code=401, **kwargs)
+        super().__init__(
+            message=message,
+            error_code=ErrorCode.AUTH_TOKEN_EXPIRED,
+            status_code=401,
+            **kwargs,
+        )
 
 
 class InvalidCredentialsException(AuthenticationException):
     """Invalid login credentials."""
 
     def __init__(self, message: str = "Invalid credentials", **kwargs):
-        super().__init__(message=message, error_code=ErrorCode.AUTH_INVALID_CREDENTIALS, status_code=401, **kwargs)
+        super().__init__(
+            message=message,
+            error_code=ErrorCode.AUTH_INVALID_CREDENTIALS,
+            status_code=401,
+            **kwargs,
+        )
 
 
 class InsufficientPermissionsException(AuthenticationException):
     """User lacks required permissions."""
 
     def __init__(self, message: str = "Insufficient permissions", **kwargs):
-        super().__init__(message=message, error_code=ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS, status_code=403, **kwargs)
+        super().__init__(
+            message=message,
+            error_code=ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS,
+            status_code=403,
+            **kwargs,
+        )
 
 
 class AccountDisabledException(AuthenticationException):
     """User account is disabled."""
 
     def __init__(self, message: str = "Account is disabled", **kwargs):
-        super().__init__(message=message, error_code=ErrorCode.AUTH_ACCOUNT_DISABLED, status_code=403, **kwargs)
+        super().__init__(
+            message=message,
+            error_code=ErrorCode.AUTH_ACCOUNT_DISABLED,
+            status_code=403,
+            **kwargs,
+        )
 
 
 class OTPExpiredException(AuthenticationException):
     """OTP code has expired."""
 
     def __init__(self, message: str = "OTP code has expired", **kwargs):
-        super().__init__(message=message, error_code=ErrorCode.AUTH_OTP_EXPIRED, status_code=401, **kwargs)
+        super().__init__(
+            message=message,
+            error_code=ErrorCode.AUTH_OTP_EXPIRED,
+            status_code=401,
+            **kwargs,
+        )
 
 
 class InvalidOTPException(AuthenticationException):
     """Invalid OTP code."""
 
     def __init__(self, message: str = "Invalid OTP code", **kwargs):
-        super().__init__(message=message, error_code=ErrorCode.AUTH_OTP_INVALID, status_code=401, **kwargs)
+        super().__init__(
+            message=message,
+            error_code=ErrorCode.AUTH_OTP_INVALID,
+            status_code=401,
+            **kwargs,
+        )
 
 
 # Validation exceptions
@@ -244,7 +280,12 @@ class InvalidFormatException(ValidationException):
     """Invalid data format."""
 
     def __init__(self, message: str = "Invalid format", **kwargs):
-        super().__init__(message=message, error_code=ErrorCode.VALIDATION_INVALID_FORMAT, status_code=400, **kwargs)
+        super().__init__(
+            message=message,
+            error_code=ErrorCode.VALIDATION_INVALID_FORMAT,
+            status_code=400,
+            **kwargs,
+        )
 
 
 class MissingFieldException(ValidationException):
@@ -262,7 +303,12 @@ class MissingFieldException(ValidationException):
 class InvalidRangeException(ValidationException):
     """Value outside valid range."""
 
-    def __init__(self, field: str, min_val: Optional[float] = None, max_val: Optional[float] = None):
+    def __init__(
+        self,
+        field: str,
+        min_val: Optional[float] = None,
+        max_val: Optional[float] = None,
+    ):
         range_str = []
         if min_val is not None:
             range_str.append(f">= {min_val}")
@@ -308,7 +354,12 @@ class ResourceConflictException(SpinrException):
     """Resource conflict."""
 
     def __init__(self, message: str = "Resource conflict", **kwargs):
-        super().__init__(message=message, error_code=ErrorCode.RESOURCE_CONFLICT, status_code=409, **kwargs)
+        super().__init__(
+            message=message,
+            error_code=ErrorCode.RESOURCE_CONFLICT,
+            status_code=409,
+            **kwargs,
+        )
 
 
 # Ride exceptions
@@ -327,7 +378,10 @@ class RideInvalidStatusException(SpinrException):
             message=f"Cannot transition from {current_status} to {requested_status}",
             error_code=ErrorCode.RIDE_INVALID_STATUS,
             status_code=400,
-            details={"current_status": current_status, "requested_status": requested_status},
+            details={
+                "current_status": current_status,
+                "requested_status": requested_status,
+            },
             **kwargs,
         )
 
@@ -424,7 +478,12 @@ class InternalErrorException(SpinrException):
     """Internal server error."""
 
     def __init__(self, message: str = "Internal server error", **kwargs):
-        super().__init__(message=message, error_code=ErrorCode.INTERNAL_ERROR, status_code=500, **kwargs)
+        super().__init__(
+            message=message,
+            error_code=ErrorCode.INTERNAL_ERROR,
+            status_code=500,
+            **kwargs,
+        )
 
 
 class ServiceUnavailableException(SpinrException):
@@ -434,7 +493,12 @@ class ServiceUnavailableException(SpinrException):
         message = "Service temporarily unavailable"
         if service_name:
             message += f": {service_name}"
-        super().__init__(message=message, error_code=ErrorCode.SERVICE_UNAVAILABLE, status_code=503, **kwargs)
+        super().__init__(
+            message=message,
+            error_code=ErrorCode.SERVICE_UNAVAILABLE,
+            status_code=503,
+            **kwargs,
+        )
 
 
 class RateLimitExceededException(SpinrException):
@@ -466,7 +530,12 @@ class ExternalServiceException(SpinrException):
 class DatabaseError(SpinrException):
     """Database operation failed (transient or permanent)."""
 
-    def __init__(self, message: str = "Database operation failed", details: Optional[Dict[str, Any]] = None, **kwargs):
+    def __init__(
+        self,
+        message: str = "Database operation failed",
+        details: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ):
         super().__init__(
             message=message,
             error_code=ErrorCode.DATABASE_ERROR,
@@ -479,7 +548,12 @@ class DatabaseError(SpinrException):
 class DuplicateRecordError(SpinrException):
     """Unique constraint violation — record already exists."""
 
-    def __init__(self, message: str = "Record already exists", details: Optional[Dict[str, Any]] = None, **kwargs):
+    def __init__(
+        self,
+        message: str = "Record already exists",
+        details: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ):
         super().__init__(
             message=message,
             error_code=ErrorCode.DUPLICATE_RECORD,
@@ -490,7 +564,9 @@ class DuplicateRecordError(SpinrException):
 
 
 # Error handling middleware
-async def spinr_exception_handler(request: Request, exc: SpinrException) -> JSONResponse:
+async def spinr_exception_handler(
+    request: Request, exc: SpinrException
+) -> JSONResponse:
     """Handle SpinrException and return formatted JSON response."""
     request_id = _resolve_request_id(request)
 
@@ -548,7 +624,9 @@ async def spinr_exception_handler(request: Request, exc: SpinrException) -> JSON
     )
 
 
-async def validation_exception_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+async def validation_exception_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
     """Handle validation errors and return formatted response."""
     errors = []
     for error in exc.errors():
@@ -690,6 +768,7 @@ _ALWAYS_ALLOWED = {
 def _resolve_cors_origins() -> set[str]:
     try:
         from core.config import settings  # local import to avoid a hard
+
         # dependency if utils is imported
         # before the settings module is
         # available (e.g. test harness).

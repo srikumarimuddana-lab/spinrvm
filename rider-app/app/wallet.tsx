@@ -8,7 +8,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useStripe } from '@stripe/stripe-react-native';
 import { StripeKeyContext } from './_layout';
-import { useWalletStore, WalletTransaction } from '../store/walletStore';
+import { useWalletStore, WalletTransaction, WalletTransactionMeta } from '../store/walletStore';
 import CustomAlert from '@shared/components/CustomAlert';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -140,20 +140,51 @@ export default function WalletScreen() {
     const color = TXN_COLORS[item.type] || colors.textDim;
     const amountNum = parseFloat(item.amount);
     const isCredit = amountNum > 0;
+    const meta = item.metadata as WalletTransactionMeta | null | undefined;
+    const hasRideDetails = item.type === 'ride_payment' && meta?.pickup_address;
+    const tipNum = parseFloat(meta?.tip_amount || '0');
+    const fareNum = parseFloat(meta?.fare_amount || '0');
+    const surgeNum = parseFloat(meta?.surge_multiplier || '1');
 
     return (
-      <View style={styles.txnRow}>
+      <TouchableOpacity
+        style={styles.txnRow}
+        activeOpacity={item.reference_id ? 0.6 : 1}
+        onPress={item.reference_id ? () => router.push(`/ride-details?rideId=${item.reference_id}` as any) : undefined}
+      >
         <View style={[styles.txnIcon, { backgroundColor: color + '15' }]}>
           <Ionicons name={icon as any} size={22} color={color} />
         </View>
         <View style={styles.txnInfo}>
           <Text style={styles.txnDesc}>{item.description || item.type.replace(/_/g, ' ')}</Text>
+          {hasRideDetails && (
+            <View style={styles.txnMeta}>
+              <View style={styles.txnMetaRow}>
+                <Ionicons name="location" size={11} color="#10B981" />
+                <Text style={styles.txnMetaText} numberOfLines={1}>{meta!.pickup_address}</Text>
+              </View>
+              <View style={styles.txnMetaRow}>
+                <Ionicons name="flag" size={11} color="#EF4444" />
+                <Text style={styles.txnMetaText} numberOfLines={1}>{meta!.dropoff_address}</Text>
+              </View>
+              <View style={styles.txnBreakdown}>
+                <Text style={styles.txnBreakdownItem}>Fare: ${fareNum.toFixed(2)}</Text>
+                {tipNum > 0 && <Text style={styles.txnBreakdownItem}>Tip: ${tipNum.toFixed(2)}</Text>}
+                {surgeNum > 1 && <Text style={styles.txnBreakdownItem}>Surge: {surgeNum}x</Text>}
+              </View>
+            </View>
+          )}
           <Text style={styles.txnDate}>{formatDate(item.created_at)}</Text>
         </View>
-        <Text style={[styles.txnAmount, { color: isCredit ? '#10B981' : '#EF4444' }]}>
-          {isCredit ? '+' : ''}{amountNum < 0 ? '-' : ''}${Math.abs(amountNum).toFixed(2)}
-        </Text>
-      </View>
+        <View style={styles.txnAmountCol}>
+          <Text style={[styles.txnAmount, { color: isCredit ? '#10B981' : '#EF4444' }]}>
+            {isCredit ? '+' : ''}{amountNum < 0 ? '-' : ''}${Math.abs(amountNum).toFixed(2)}
+          </Text>
+          {item.reference_id && (
+            <Ionicons name="chevron-forward" size={14} color={colors.border} style={{ marginTop: 2 }} />
+          )}
+        </View>
+      </TouchableOpacity>
     );
   };
 
@@ -364,7 +395,25 @@ function createStyles(colors: ThemeColors) {
     },
     txnInfo: { flex: 1 },
     txnDesc: { fontSize: 15, fontWeight: '500', color: colors.text, textTransform: 'capitalize' },
-    txnDate: { fontSize: 13, color: colors.textDim, marginTop: 2 },
+    txnMeta: {
+      marginTop: 6, paddingTop: 6, borderTopWidth: 1, borderTopColor: colors.border,
+    },
+    txnMetaRow: {
+      flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 2,
+    },
+    txnMetaText: {
+      fontSize: 12, color: colors.textDim, flex: 1,
+    },
+    txnBreakdown: {
+      flexDirection: 'row', gap: 10, marginTop: 4,
+    },
+    txnBreakdownItem: {
+      fontSize: 11, fontWeight: '600', color: colors.textDim,
+      backgroundColor: colors.surfaceLight, paddingHorizontal: 6, paddingVertical: 2,
+      borderRadius: 4, overflow: 'hidden',
+    },
+    txnDate: { fontSize: 13, color: colors.textDim, marginTop: 4 },
+    txnAmountCol: { alignItems: 'flex-end' },
     txnAmount: { fontSize: 16, fontWeight: '700' },
 
     loadingContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 40 },

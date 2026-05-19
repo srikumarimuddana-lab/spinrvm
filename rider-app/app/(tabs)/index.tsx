@@ -21,6 +21,7 @@ import { useAuthStore } from '@shared/store/authStore';
 import api from '@shared/api/client';
 import { useRideStore } from '../../store/rideStore';
 import AppMap from '@shared/components/AppMap';
+import CarMarker from '@shared/components/CarMarker';
 import { showToast } from '../../store/toastStore';
 import { SOSButton } from '@shared/components/SOSButton';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -37,6 +38,7 @@ export default function HomeScreen() {
   const [location, setLocation] = useState<any>(null);
   const [region, setRegion] = useState<any>(null);
   const [temperature, setTemperature] = useState<number | null>(null);
+  const [nearbyDrivers, setNearbyDrivers] = useState<{ id: string; lat: number; lng: number; heading?: number }[]>([]);
 
   const mapRef = useRef<any>(null);
   const bottomSheetRef = useRef<BottomSheet>(null);
@@ -160,6 +162,27 @@ export default function HomeScreen() {
     });
     return () => sub.remove();
   }, [refreshLocation]);
+
+  useEffect(() => {
+    if (!location) return;
+    const fetchDrivers = () => {
+      const { latitude, longitude } = location.coords;
+      api.get(`/drivers/nearby?lat=${latitude}&lng=${longitude}`)
+        .then((res: any) => {
+          const drivers = (res.data || []).map((d: any) => ({
+            id: d.id,
+            lat: d.lat,
+            lng: d.lng,
+            heading: d.heading ?? undefined,
+          }));
+          setNearbyDrivers(drivers);
+        })
+        .catch(() => {});
+    };
+    fetchDrivers();
+    const interval = setInterval(fetchDrivers, 15000);
+    return () => clearInterval(interval);
+  }, [location]);
 
   const hasCenteredRef = useRef(false);
   const regionRef = useRef(region);
@@ -286,7 +309,17 @@ export default function HomeScreen() {
             showsUserLocation={true}
             userInterfaceStyle={isDark ? 'dark' : 'light'}
             onRegionChangeComplete={setRegion}
-          />
+          >
+            {nearbyDrivers.map((driver) => (
+              <CarMarker
+                key={driver.id}
+                identifier={`nearby-${driver.id}`}
+                coordinate={{ latitude: driver.lat, longitude: driver.lng }}
+                heading={driver.heading}
+                size={32}
+              />
+            ))}
+          </AppMap>
         ) : (
           <View style={styles.mapPlaceholder}>
             <View style={styles.mapOverlay}>

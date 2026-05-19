@@ -13,6 +13,17 @@ export interface WalletInfo {
   is_active: boolean;
 }
 
+export interface WalletTransactionMeta {
+  ride_id?: string;
+  fare_amount?: string;
+  tip_amount?: string;
+  driver_id?: string;
+  surge_multiplier?: string;
+  pickup_address?: string;
+  dropoff_address?: string;
+  stripe_payment_intent_id?: string;
+}
+
 export interface WalletTransaction {
   id: string;
   type: string;
@@ -20,6 +31,7 @@ export interface WalletTransaction {
   balance_after: string; // MoneyString
   description: string | null;
   reference_id: string | null;
+  metadata?: WalletTransactionMeta | null;
   created_at: string;
 }
 

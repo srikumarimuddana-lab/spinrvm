@@ -40,6 +40,7 @@ class ErrorKeys:
     PAYMENT_METHOD_INVALID: Final[str] = "errors.payment.method_invalid"
     PAYMENT_INSUFFICIENT_FUNDS: Final[str] = "errors.payment.insufficient_funds"
     PAYMENT_REFUND_FAILED: Final[str] = "errors.payment.refund_failed"
+    PAYMENT_UNPAID_RIDE_BLOCK: Final[str] = "errors.payment.unpaid_ride_block"
 
     # System
     SYSTEM_INTERNAL: Final[str] = "errors.system.internal"

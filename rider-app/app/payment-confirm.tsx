@@ -154,7 +154,23 @@ function PaymentConfirmScreenContent() {
           return;
         }
       }
-      setAlertState({ visible: true, title: 'Error', message: error.message || 'Failed to book ride', variant: 'danger' });
+      const is402 = error?.response?.status === 402;
+      const errBody = error?.response?.data;
+      const unpaidRideId = errBody?.error?.details?.unpaid_ride_id;
+      if (is402 && unpaidRideId) {
+        setAlertState({
+          visible: true,
+          title: 'Unpaid Ride',
+          message: 'You have an unpaid ride. Please settle the payment before booking a new ride.',
+          variant: 'danger',
+          buttons: [
+            { text: 'Pay Now', onPress: () => router.push({ pathname: '/ride-completed', params: { rideId: unpaidRideId } } as any) },
+            { text: 'Cancel', style: 'cancel' as const },
+          ],
+        });
+      } else {
+        setAlertState({ visible: true, title: 'Error', message: error.message || 'Failed to book ride', variant: 'danger' });
+      }
     } finally {
       setIsBooking(false);
     }

@@ -126,7 +126,9 @@ async def charge_ride(
 
     if stripe is None:
         logger.error("stripe package not installed; cannot charge card")
-        return ChargeOutcome(status="unconfigured", error_message="stripe not installed")
+        return ChargeOutcome(
+            status="unconfigured", error_message="stripe not installed"
+        )
 
     settings = await get_app_settings()
     stripe_secret = settings.get("stripe_secret_key", "") or ""
@@ -161,6 +163,14 @@ async def charge_ride(
     # return the original PI on matching idempotency_key.
     idempotency_key = f"ride-charge-{ride_id}"
 
+    fare_amount = Decimal(str(ride.get("total_fare", 0) or 0)).quantize(
+        Decimal("0.01"), rounding=ROUND_HALF_UP
+    )
+    tip = Decimal(str(total_amount)) - fare_amount
+    tip_str = str(
+        max(tip, Decimal("0")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    )
+
     params: Dict[str, Any] = {
         "amount": amount_cents,
         "currency": CURRENCY,
@@ -175,6 +185,13 @@ async def charge_ride(
         "metadata": {
             "ride_id": ride_id,
             "rider_id": rider_id,
+            "driver_id": ride.get("driver_id") or "",
+            "fare_amount": str(fare_amount),
+            "tip_amount": tip_str,
+            "surge_multiplier": str(ride.get("surge_multiplier") or "1.0"),
+            "payment_method_type": ride.get("payment_method") or "card",
+            "pickup_address": (ride.get("pickup_address") or "")[:500],
+            "dropoff_address": (ride.get("dropoff_address") or "")[:500],
             "source": "ride_completion_charge",
         },
     }

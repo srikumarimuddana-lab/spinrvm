@@ -83,7 +83,11 @@ async def get_vehicle_types():
     # column added in migration 83 is `illustration_url`. Surface both keys
     # so neither side has to care which name "won".
     for vt in types or []:
-        if isinstance(vt, dict) and vt.get("illustration_url") and not vt.get("image_url"):
+        if (
+            isinstance(vt, dict)
+            and vt.get("illustration_url")
+            and not vt.get("image_url")
+        ):
             vt["image_url"] = vt["illustration_url"]
     return serialize_doc(types)
 
@@ -97,7 +101,9 @@ async def get_public_service_areas():
     active areas with the minimum fields the UI needs; admins use
     /admin/service-areas for the full record including surge config.
     """
-    areas = await db_supabase.get_rows("service_areas", {"is_active": True}, order="name", limit=500)
+    areas = await db_supabase.get_rows(
+        "service_areas", {"is_active": True}, order="name", limit=500
+    )
     return [
         {
             "id": a.get("id"),
@@ -145,7 +151,9 @@ async def resolve_service_area_for_point(
     falls back to fetching the list itself.
     """
     if all_areas is None:
-        all_areas = await db_supabase.get_rows("service_areas", {"is_active": True}, limit=100)
+        all_areas = await db_supabase.get_rows(
+            "service_areas", {"is_active": True}, limit=100
+        )
     for area in all_areas:
         poly = get_service_area_polygon(area)
         if poly and point_in_polygon(lat, lng, poly):
@@ -185,7 +193,9 @@ async def build_fares_for_area(matched_area, vehicle_types):
     # writes multiplier when active) and the admin UI toggle under
     # Service Areas → General.
     surge = (
-        min(matched_area.get("surge_multiplier", 1.0), SURGE_CAP) if matched_area.get("surge_active", False) else 1.0
+        min(matched_area.get("surge_multiplier", 1.0), SURGE_CAP)
+        if matched_area.get("surge_active", False)
+        else 1.0
     )
 
     # Name → pricing row from vehicle_pricing JSONB (source of truth).
@@ -204,7 +214,9 @@ async def build_fares_for_area(matched_area, vehicle_types):
         {"service_area_id": matched_area["id"], "is_active": True},
         limit=100,
     )
-    fc_by_vt_id: dict = {r.get("vehicle_type_id"): r for r in (fc_rows or []) if r.get("vehicle_type_id")}
+    fc_by_vt_id: dict = {
+        r.get("vehicle_type_id"): r for r in (fc_rows or []) if r.get("vehicle_type_id")
+    }
 
     def _pick(vt):
         """Return a pricing dict for this vehicle type or None."""
@@ -231,14 +243,19 @@ async def build_fares_for_area(matched_area, vehicle_types):
         return None
 
     result = []
+    has_area_pricing = bool(vp_by_name) or bool(fc_by_vt_id)
     for vt in vehicle_types:
-        pricing = _pick(vt) or {
-            "base_fare": DEFAULT_FARE["base_fare"],
-            "per_km_rate": DEFAULT_FARE["per_km_rate"],
-            "per_minute_rate": DEFAULT_FARE["per_minute_rate"],
-            "minimum_fare": DEFAULT_FARE["minimum_fare"],
-            "booking_fee": DEFAULT_FARE["booking_fee"],
-        }
+        pricing = _pick(vt)
+        if not pricing:
+            if has_area_pricing:
+                continue
+            pricing = {
+                "base_fare": DEFAULT_FARE["base_fare"],
+                "per_km_rate": DEFAULT_FARE["per_km_rate"],
+                "per_minute_rate": DEFAULT_FARE["per_minute_rate"],
+                "minimum_fare": DEFAULT_FARE["minimum_fare"],
+                "booking_fee": DEFAULT_FARE["booking_fee"],
+            }
         # Normalise all monetary values from DB through _money_str() so they
         # serialise as exact Decimal strings; surge_multiplier stays float.
         result.append(
@@ -273,12 +290,18 @@ async def _fares_for_location_impl(
     skip redundant round-trips.
     """
     if vehicle_types is None:
-        vehicle_types = await db_supabase.get_rows("vehicle_types", {"is_active": True}, limit=100)
+        vehicle_types = await db_supabase.get_rows(
+            "vehicle_types", {"is_active": True}, limit=100
+        )
     # Migration 83 added illustration_url; rider/driver apps key the car
     # image off `image_url`. Mirror the value here so embedded
     # vehicle_type objects in the estimate response carry both fields.
     for vt in vehicle_types or []:
-        if isinstance(vt, dict) and vt.get("illustration_url") and not vt.get("image_url"):
+        if (
+            isinstance(vt, dict)
+            and vt.get("illustration_url")
+            and not vt.get("image_url")
+        ):
             vt["image_url"] = vt["illustration_url"]
     logger.info(f"Fares: Found {len(vehicle_types)} active vehicle types")
 
@@ -291,7 +314,9 @@ async def _fares_for_location_impl(
         logger.info("Fares: No matching service area for location, using defaults")
         return _build_default_fares(vehicle_types)
 
-    logger.info(f"Fares: Matched service area '{matching_area.get('name', matching_area['id'])}'")
+    logger.info(
+        f"Fares: Matched service area '{matching_area.get('name', matching_area['id'])}'"
+    )
     return await build_fares_for_area(matching_area, vehicle_types)
 
 
@@ -322,9 +347,13 @@ async def get_fares_for_location(
     # Cap TTL at 60 s when surge is active so stale multipliers expire quickly.
     try:
         surge_multiplier = result[0].get("surge_multiplier", 1.0) if result else 1.0
-        effective_ttl = min(_FARE_CACHE_TTL, 60) if surge_multiplier > 1.0 else _FARE_CACHE_TTL
+        effective_ttl = (
+            min(_FARE_CACHE_TTL, 60) if surge_multiplier > 1.0 else _FARE_CACHE_TTL
+        )
         await redis_set(cache_key, json.dumps(result), ttl=effective_ttl)
-        logger.debug(f"Fare cache SET for key {cache_key} (TTL={effective_ttl}s, surge={surge_multiplier})")
+        logger.debug(
+            f"Fare cache SET for key {cache_key} (TTL={effective_ttl}s, surge={surge_multiplier})"
+        )
     except Exception as e:
         logger.warning(f"Could not cache fare result: {e}")
 

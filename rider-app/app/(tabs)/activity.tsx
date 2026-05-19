@@ -25,7 +25,9 @@ interface RideHistory {
   id: string;
   pickup_address: string;
   dropoff_address: string;
-  total_fare: number;
+  total_fare: number | string;
+  grand_total?: number | string;
+  tip_amount?: number | string;
   distance_km: number;
   duration_minutes: number;
   status: string;
@@ -213,7 +215,8 @@ export default function ActivityScreen() {
       return <Text style={styles.monthHeader}>{item.title}</Text>;
     }
     const { ride } = item;
-    const fare = ride.status === 'cancelled' ? '0.00' : ride.total_fare?.toFixed(2) || '0.00';
+    const fareNum = ride.status === 'cancelled' ? 0 : parseFloat(String(ride.grand_total ?? ride.total_fare ?? 0)) + parseFloat(String(ride.tip_amount ?? 0));
+    const fare = isNaN(fareNum) ? '0.00' : fareNum.toFixed(2);
     return (
       <TouchableOpacity
         style={styles.rideCard}
@@ -400,7 +403,7 @@ export default function ActivityScreen() {
                 </View>
                 <View style={styles.rideFareContainer}>
                   <Text style={styles.rideFare} allowFontScaling={false}>
-                    ${ride.total_fare?.toFixed(2) || '0.00'}
+                    ${parseFloat(String(ride.grand_total ?? ride.total_fare ?? 0)).toFixed(2)}
                   </Text>
                   <View style={styles.rideStatusContainer}>
                     <View style={[styles.statusDot, { backgroundColor: '#3B82F6' }]} />

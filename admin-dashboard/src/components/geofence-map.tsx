@@ -135,8 +135,9 @@ export default function GeofenceMap({
         map.on("load", () => {
             isLoadedRef.current = true;
 
-            // Committed polygon layers
-            map.addSource(POLY_SRC, { type: "geojson", data: pointsToGeoJSON([]) });
+            // Committed polygon layers — use current data so it renders immediately
+            const initPoly = committedRef.current;
+            map.addSource(POLY_SRC, { type: "geojson", data: pointsToGeoJSON(initPoly) });
             map.addLayer({
                 id: POLY_FILL,
                 type: "fill",
@@ -150,11 +151,12 @@ export default function GeofenceMap({
                 paint: { "line-color": "#7c3aed", "line-width": 2 },
             });
 
-            // Committed vertices (shown only in edit mode when draggable)
+            // Committed vertices (draggable handles)
             map.addSource(POLY_VERTICES_SRC, {
                 type: "geojson",
-                data: pointsToVerticesGeoJSON([]),
+                data: pointsToVerticesGeoJSON(initPoly),
             });
+            const showVertices = !readonly && initPoly.length >= 3;
             map.addLayer({
                 id: POLY_VERTICES_LAYER,
                 type: "circle",
@@ -165,7 +167,7 @@ export default function GeofenceMap({
                     "circle-stroke-color": "#7c3aed",
                     "circle-stroke-width": 2,
                 },
-                layout: { visibility: "none" },
+                layout: { visibility: showVertices ? "visible" : "none" },
             });
 
             // Draft (while drawing) layers
@@ -386,15 +388,26 @@ export default function GeofenceMap({
                         zIndex: 5,
                     }}
                 >
-                    {!drawing && (
+                    {!drawing && committed.length < 3 && (
                         <button
                             type="button"
                             onClick={startDrawing}
-                            title={committed.length >= 3 ? "Redraw polygon" : "Draw polygon"}
+                            title="Draw polygon"
                             style={toolbarButtonStyle}
                         >
                             <Pencil size={14} />
-                            <span>{committed.length >= 3 ? "Redraw" : "Draw"}</span>
+                            <span>Draw Zone</span>
+                        </button>
+                    )}
+                    {!drawing && committed.length >= 3 && (
+                        <button
+                            type="button"
+                            onClick={startDrawing}
+                            title="Redraw polygon from scratch"
+                            style={toolbarButtonStyle}
+                        >
+                            <Pencil size={14} />
+                            <span>Redraw</span>
                         </button>
                     )}
                     {drawing && (

@@ -293,8 +293,6 @@ export default function AccountScreen() {
               <MenuRow styles={styles} colors={colors} icon="card" iconColor="#7C3AED" iconBg="rgba(124, 58, 237, 0.1)" label="Payment Methods" onPress={() => router.push('/manage-cards' as any)} />
               <View style={styles.cardDivider} />
               <MenuRow styles={styles} colors={colors} icon="pricetag" iconColor="#10B981" iconBg="rgba(16, 185, 129, 0.1)" label="Promotions" onPress={() => router.push('/promotions' as any)} />
-              <View style={styles.cardDivider} />
-              <MenuRow styles={styles} colors={colors} icon="trophy" iconColor="#F59E0B" iconBg="rgba(245, 158, 11, 0.1)" label="Rewards" onPress={() => router.push('/loyalty' as any)} />
             </View>
           </View>
 
@@ -346,8 +344,6 @@ export default function AccountScreen() {
               <MenuRow styles={styles} colors={colors} icon="alert-circle" iconColor="#F59E0B" iconBg="rgba(245, 158, 11, 0.1)" label="Report a Safety Issue" onPress={() => router.push('/report-safety' as any)} />
               <View style={styles.cardDivider} />
               <MenuRow styles={styles} colors={colors} icon="lock-closed" iconColor={colors.textDim} iconBg={colors.surfaceLight} label="Privacy & Settings" onPress={() => router.push('/privacy-settings' as any)} />
-              <View style={styles.cardDivider} />
-              <MenuRow styles={styles} colors={colors} icon="accessibility" iconColor="#0284C7" iconBg="rgba(2, 132, 199, 0.1)" label="Accessibility" onPress={() => router.push('/accessibility' as any)} />
               <View style={styles.cardDivider} />
               <MenuRow styles={styles} colors={colors} icon="notifications" iconColor="#6366F1" iconBg="rgba(99, 102, 241, 0.1)" label="Notifications" onPress={() => router.push('/notifications' as any)} />
             </View>

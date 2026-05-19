@@ -14,19 +14,18 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useAuthStore, type User } from '@shared/store/authStore';
-import api, { setInMemoryToken } from '@shared/api/client';
+import api from '@shared/api/client';
 import CustomAlert from '@shared/components/CustomAlert';
 import Analytics from '@shared/analytics';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
+const CODE_LENGTH = 4;
 
 export default function OtpScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{ phoneNumber: string }>();
-  const { phoneNumber } = params;
-  const codeLength = 4;
+  const { phoneNumber } = useLocalSearchParams<{ phoneNumber: string }>();
 
   const [code, setCode] = useState('');
   const [verifying, setVerifying] = useState(false);
@@ -35,12 +34,12 @@ export default function OtpScreen() {
   const { user, initialize, clearError } = useAuthStore();
   const inputRef = useRef<TextInput>(null);
   const resendInFlight = useRef(false);
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   const shakeAnim = useRef(new Animated.Value(0)).current;
   const dotAnims = useRef(
-    Array.from({ length: 4 }, () => new Animated.Value(0))
+    Array.from({ length: CODE_LENGTH }, () => new Animated.Value(0)),
   ).current;
 
   const [alertState, setAlertState] = useState<{
@@ -51,9 +50,7 @@ export default function OtpScreen() {
   }>({ visible: false, title: '', message: '', variant: 'info' });
 
   useEffect(() => {
-    if (!phoneNumber) {
-      router.back();
-    }
+    if (!phoneNumber) router.back();
     return () => { resendInFlight.current = false; };
   }, []);
 
@@ -70,20 +67,19 @@ export default function OtpScreen() {
 
   useEffect(() => {
     if (countdown > 0) {
-      const timer = setTimeout(() => setCountdown(countdown - 1), 1000);
+      const timer = setTimeout(() => setCountdown(c => c - 1), 1000);
       return () => clearTimeout(timer);
     } else {
       setCanResend(true);
     }
   }, [countdown]);
 
-  // Post-auth routing — preserves rider-app behavior (route to /(tabs)/activity, not /driver)
   useEffect(() => {
     if (user) {
       const hasProfileData = !!(user.first_name && user.last_name && user.email);
       const profileComplete = !!user.profile_complete || hasProfileData;
       if (profileComplete) {
-        router.replace('/(tabs)/activity');
+        router.replace('/(tabs)' as any);
       } else {
         router.replace('/profile-setup');
       }
@@ -102,44 +98,33 @@ export default function OtpScreen() {
 
   const handleCodeChange = (text: string) => {
     const digits = text.replace(/\D/g, '');
-    if (digits.length <= codeLength) {
-      setCode(digits);
-    }
+    if (digits.length <= CODE_LENGTH) setCode(digits);
   };
 
   const handleVerify = async () => {
-    if (!code || code.length !== codeLength) {
+    if (code.length !== CODE_LENGTH) {
       triggerShake();
-      setAlertState({
-        visible: true,
-        title: 'Invalid Code',
-        message: `Please enter the ${codeLength}-digit code sent to your phone.`,
-        variant: 'warning',
-      });
+      setAlertState({ visible: true, title: 'Invalid Code', message: `Please enter the ${CODE_LENGTH}-digit code sent to your phone.`, variant: 'warning' });
       return;
     }
 
     setVerifying(true);
     clearError();
-
     try {
       const response = await api.post<{ token?: string; refresh_token?: string; expires_in?: number; user?: User }>('/auth/verify-otp', {
         phone: phoneNumber,
-        code: code,
+        code,
       });
       if (!response.data) throw new Error('Empty response from auth server');
-      const { token, refresh_token, expires_in, user: userData } = response.data as { token: string; refresh_token?: string; expires_in?: number; user?: any };
-      // P3 cookie auth: token is "" when HTTP-only cookies are used
+      const { token, refresh_token, expires_in, user: userData } = response.data as any;
+
       if (token) {
-        await useAuthStore.getState().setTokens(token, refresh_token ?? "", expires_in ?? 900);
+        await useAuthStore.getState().setTokens(token, refresh_token ?? '', expires_in ?? 900);
       }
       Analytics.otpVerified();
+
       if (userData) {
-        useAuthStore.setState({
-          user: userData,
-          isInitialized: true,
-          isLoading: false,
-        });
+        useAuthStore.setState({ user: userData, isInitialized: true, isLoading: false });
         Analytics.login();
       } else {
         await initialize();
@@ -147,11 +132,10 @@ export default function OtpScreen() {
     } catch (err: any) {
       triggerShake();
       setCode('');
-      const message = err.response?.data?.detail || err.message || 'Invalid code. Please try again.';
       setAlertState({
         visible: true,
         title: 'Verification Failed',
-        message,
+        message: err.response?.data?.detail || 'Invalid code. Please try again.',
         variant: 'danger',
       });
     } finally {
@@ -166,32 +150,16 @@ export default function OtpScreen() {
     setCountdown(30);
     try {
       await api.post('/auth/send-otp', { phone: phoneNumber });
-      setAlertState({
-        visible: true,
-        title: 'Code Sent',
-        message: 'A new verification code has been sent to your phone.',
-        variant: 'success',
-      });
+      setAlertState({ visible: true, title: 'Code Sent', message: 'A new verification code has been sent to your phone.', variant: 'success' });
     } catch (e: any) {
       if (e?.response?.status === 429) {
-        // Parse retry-after from header or detail message (e.g. "Try again in 60s")
         const retryAfterHeader = parseInt(e.response.headers?.['retry-after'] ?? '0', 10);
         const detailMatch = String(e.response?.data?.detail ?? '').match(/(\d+)\s*s/i);
         const retrySeconds = retryAfterHeader || (detailMatch ? parseInt(detailMatch[1], 10) : 60);
         setCountdown(retrySeconds > 0 ? retrySeconds : 60);
-        setAlertState({
-          visible: true,
-          title: 'Too Many Attempts',
-          message: `Please wait ${retrySeconds > 0 ? retrySeconds : 60} seconds before requesting another code.`,
-          variant: 'warning',
-        });
+        setAlertState({ visible: true, title: 'Too Many Attempts', message: `Please wait ${retrySeconds} seconds before requesting another code.`, variant: 'warning' });
       } else {
-        setAlertState({
-          visible: true,
-          title: 'Failed',
-          message: 'Could not resend code. Please try again.',
-          variant: 'danger',
-        });
+        setAlertState({ visible: true, title: 'Failed', message: 'Could not resend code. Please try again.', variant: 'danger' });
       }
     } finally {
       resendInFlight.current = false;
@@ -203,12 +171,7 @@ export default function OtpScreen() {
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
-      <View
-        style={[
-          styles.scrollContent,
-          { flex: 1, paddingTop: insets.top + 16, paddingBottom: insets.bottom + 24 },
-        ]}
-      >
+      <View style={[styles.scrollContent, { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 24 }]}>
         <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
           <Ionicons name="arrow-back" size={22} color={colors.text} />
         </TouchableOpacity>
@@ -223,38 +186,32 @@ export default function OtpScreen() {
 
         <View style={styles.titleSection}>
           <Text style={styles.title}>Verify Your Number</Text>
-          <Text style={styles.subtitle}>
-            We sent a {codeLength}-digit code to
-          </Text>
+          <Text style={styles.subtitle}>We sent a {CODE_LENGTH}-digit code to</Text>
           <Text style={styles.phoneDisplay}>{phoneNumber}</Text>
         </View>
 
-        <Animated.View
-          style={[styles.codeContainer, { transform: [{ translateX: shakeAnim }] }]}
-        >
+        <Animated.View style={[styles.codeContainer, { transform: [{ translateX: shakeAnim }] }]}>
           <TextInput
             ref={inputRef}
             style={styles.hiddenInput}
             value={code}
             onChangeText={handleCodeChange}
             keyboardType="phone-pad"
-            maxLength={codeLength}
+            maxLength={CODE_LENGTH}
             autoFocus
           />
-
           <TouchableOpacity
             style={styles.codeBoxes}
             activeOpacity={1}
             onPress={() => inputRef.current?.focus()}
           >
-            {Array.from({ length: codeLength }).map((_, i) => {
+            {Array.from({ length: CODE_LENGTH }).map((_, i) => {
               const isFilled = i < code.length;
               const isActive = i === code.length;
               const scale = dotAnims[i].interpolate({
                 inputRange: [0, 1],
                 outputRange: [1, 1.1],
               });
-
               return (
                 <Animated.View
                   key={i}
@@ -264,8 +221,7 @@ export default function OtpScreen() {
                     isFilled && styles.codeBoxFilled,
                     { transform: [{ scale }] },
                   ]}
-                  accessibilityLabel={`Digit ${i + 1}${isFilled ? `, entered` : ', empty'}`}
-                  accessibilityRole="text"
+                  accessibilityLabel={`Digit ${i + 1}${isFilled ? ', entered' : ', empty'}`}
                 >
                   <Text style={[styles.codeDigit, isFilled && styles.codeDigitFilled]}>
                     {code[i] || ''}
@@ -280,29 +236,26 @@ export default function OtpScreen() {
         <TouchableOpacity
           style={[
             styles.verifyBtn,
-            code.length !== codeLength && styles.verifyBtnInactive,
+            code.length !== CODE_LENGTH && styles.verifyBtnInactive,
             verifying && styles.verifyBtnLoading,
           ]}
           onPress={handleVerify}
-          disabled={verifying || code.length !== codeLength}
+          disabled={verifying || code.length !== CODE_LENGTH}
           activeOpacity={0.85}
+          accessibilityLabel="Verify and continue"
+          accessibilityState={{ disabled: verifying || code.length !== CODE_LENGTH }}
         >
           {verifying ? (
             <ActivityIndicator color="#fff" size="small" />
           ) : (
             <View style={styles.verifyBtnContent}>
-              <Text
-                style={[
-                  styles.verifyBtnText,
-                  code.length !== codeLength && styles.verifyBtnTextInactive,
-                ]}
-              >
+              <Text style={[styles.verifyBtnText, code.length !== CODE_LENGTH && styles.verifyBtnTextInactive]}>
                 Verify & Continue
               </Text>
               <Ionicons
                 name="checkmark-circle"
                 size={20}
-                color={code.length === codeLength ? '#fff' : colors.textDim}
+                color={code.length === CODE_LENGTH ? '#fff' : colors.textDim}
               />
             </View>
           )}
@@ -322,7 +275,6 @@ export default function OtpScreen() {
               </Text>
             </View>
           )}
-
           <TouchableOpacity onPress={() => router.back()} style={styles.changeNumberBtn}>
             <Ionicons name="call-outline" size={14} color={colors.textDim} />
             <Text style={styles.changeNumberText}>Change phone number</Text>

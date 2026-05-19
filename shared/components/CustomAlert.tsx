@@ -4,11 +4,11 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  Modal,
   Animated,
   TextInput,
   KeyboardAvoidingView,
   Platform,
+  BackHandler,
   useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -30,7 +30,6 @@ interface CustomAlertProps {
   icon?: any;
   buttons?: AlertButton[];
   onClose: () => void;
-  // For text input prompts
   showInput?: boolean;
   inputPlaceholder?: string;
   inputValue?: string;
@@ -56,8 +55,6 @@ export default function CustomAlert({
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [isPending, setIsPending] = useState(false);
 
-  // Variant config reads from the active theme, so dark mode renders dark
-  // tinted backgrounds instead of the legacy light-only hex literals.
   const variantConfig = useMemo(
     () => ({
       info: {
@@ -74,7 +71,7 @@ export default function CustomAlert({
       },
       danger: {
         icon: 'warning',
-        iconColor: colors.error,        // theme aliases `danger` to error
+        iconColor: colors.error,
         iconBg: colors.dangerBg,
         buttonColor: colors.error,
       },
@@ -92,9 +89,6 @@ export default function CustomAlert({
   const opacityAnim = useRef(new Animated.Value(0)).current;
   const inputRef = useRef<TextInput>(null);
 
-  // Focus the input after the open animation completes — firing earlier
-  // (e.g. autoFocus, or a fixed delay) races against Modal native-window
-  // readiness on Android and the keyboard request is silently dropped.
   useEffect(() => {
     if (visible) {
       Animated.parallel([
@@ -118,6 +112,16 @@ export default function CustomAlert({
     }
   }, [visible, showInput]);
 
+  // Android back button dismisses the alert (replaces Modal's onRequestClose)
+  useEffect(() => {
+    if (!visible) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      onClose();
+      return true;
+    });
+    return () => sub.remove();
+  }, [visible, onClose]);
+
   const config = variantConfig[variant];
   const iconName = (icon || config.icon) as any;
 
@@ -138,9 +142,9 @@ export default function CustomAlert({
   if (!visible) return null;
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <View style={styles.root} pointerEvents="auto">
       <KeyboardAvoidingView
-        behavior="padding"
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.overlay}
       >
         <TouchableOpacity
@@ -159,18 +163,14 @@ export default function CustomAlert({
             },
           ]}
         >
-          {/* Icon */}
           <View style={[styles.iconCircle, { backgroundColor: config.iconBg }]}>
             <Ionicons name={iconName} size={32} color={config.iconColor} />
           </View>
 
-          {/* Title */}
           <Text style={styles.title}>{title}</Text>
 
-          {/* Message */}
           {message && <Text style={styles.message}>{message}</Text>}
 
-          {/* Input field */}
           {showInput && (
             <TextInput
               ref={inputRef}
@@ -184,9 +184,7 @@ export default function CustomAlert({
             />
           )}
 
-          {/* Buttons */}
           <View style={styles.buttonContainer}>
-            {/* Action buttons first (stacked if multiple) */}
             {actionButtons.map((button, i) => {
               const isDestructive = button.style === 'destructive';
               return (
@@ -214,7 +212,6 @@ export default function CustomAlert({
               );
             })}
 
-            {/* Cancel button (ghost style) */}
             {cancelButton && (
               <TouchableOpacity
                 style={[styles.button, styles.cancelButton]}
@@ -230,12 +227,21 @@ export default function CustomAlert({
           </View>
         </Animated.View>
       </KeyboardAvoidingView>
-    </Modal>
+    </View>
   );
 }
 
 function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
+    root: {
+      position: 'absolute',
+      top: 0,
+      bottom: 0,
+      left: 0,
+      right: 0,
+      zIndex: 9998,
+      elevation: 9998,
+    },
     overlay: {
       flex: 1,
       justifyContent: 'center',

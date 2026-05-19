@@ -8,14 +8,12 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
-  StatusBar,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter, useFocusEffect } from 'expo-router';
+import { useRouter } from 'expo-router';
 import api from '@shared/api/client';
 import CustomAlert from '@shared/components/CustomAlert';
-import { useAuthStore } from '@shared/store/authStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -26,21 +24,9 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
   const [focused, setFocused] = useState(false);
   const inputRef = useRef<TextInput>(null);
-  const { user, logout } = useAuthStore();
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
-  // Clear partial auth state if the user swiped back from profile-setup.
-  // Without this, a stale `user` blocks a fresh phone-number entry.
-  useFocusEffect(
-    React.useCallback(() => {
-      if (user) {
-        logout();
-      }
-    }, [user, logout])
-  );
-
-  // Alert state
   const [alertState, setAlertState] = useState<{
     visible: boolean;
     title: string;
@@ -57,45 +43,25 @@ export default function LoginScreen() {
 
   const handlePhoneChange = (text: string) => {
     const digits = text.replace(/\D/g, '');
-    if (digits.length <= 10) {
-      setPhoneNumber(digits);
-    }
+    if (digits.length <= 10) setPhoneNumber(digits);
   };
 
   const handleSendCode = async () => {
-    if (!phoneNumber || phoneNumber.length < 10) {
-      setAlertState({
-        visible: true,
-        title: 'Invalid Number',
-        message: 'Please enter a valid 10-digit phone number.',
-        variant: 'warning',
-      });
-      return;
-    }
-
+    if (!isValid || loading) return;
     setLoading(true);
-    const formattedNumber = `+1${phoneNumber.replace(/\D/g, '')}`;
-
+    const formattedNumber = `+1${phoneNumber}`;
     try {
       const response = await api.post<{ success?: boolean }>('/auth/send-otp', { phone: formattedNumber });
       if (response.data.success) {
-        router.push({
-          pathname: '/otp',
-          params: { phoneNumber: formattedNumber, mode: 'backend' },
-        });
+        router.push({ pathname: '/otp', params: { phoneNumber: formattedNumber } } as any);
       } else {
-        setAlertState({
-          visible: true,
-          title: 'Failed',
-          message: 'Could not send verification code. Please try again.',
-          variant: 'danger',
-        });
+        setAlertState({ visible: true, title: 'Failed', message: 'Could not send verification code. Please try again.', variant: 'danger' });
       }
     } catch (error: any) {
       setAlertState({
         visible: true,
         title: 'Connection Error',
-        message: error.response?.data?.detail || error.message || 'Unable to reach server. Please check your connection.',
+        message: error.response?.data?.detail || 'Unable to reach server. Please check your connection.',
         variant: 'danger',
       });
     } finally {
@@ -110,9 +76,6 @@ export default function LoginScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       style={styles.container}
     >
-      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
-
-      {/* Top accent strip */}
       <View style={[styles.topStrip, { paddingTop: insets.top }]}>
         <View style={styles.brandRow}>
           <View style={styles.logoCircle}>
@@ -125,34 +88,24 @@ export default function LoginScreen() {
         </View>
       </View>
 
-      {/* Main content */}
       <View style={styles.content}>
         <View style={styles.welcomeSection}>
-          <Text style={styles.greeting}>Welcome back 👋</Text>
+          <Text style={styles.greeting}>Welcome back</Text>
           <Text style={styles.title}>Enter your phone number</Text>
           <Text style={styles.subtitle}>
             We'll send you a verification code to confirm your identity
           </Text>
         </View>
 
-        {/* Phone Input */}
         <View style={styles.inputSection}>
           <Text style={styles.inputLabel}>PHONE NUMBER</Text>
           <TouchableOpacity
             activeOpacity={1}
             onPress={() => inputRef.current?.focus()}
-            style={[
-              styles.inputContainer,
-              focused && styles.inputContainerFocused,
-            ]}
+            style={[styles.inputContainer, focused && styles.inputContainerFocused]}
             accessible={false}
           >
-            <View
-              style={styles.flagContainer}
-              accessible={true}
-              accessibilityLabel="Canada +1"
-              accessibilityRole="text"
-            >
+            <View style={styles.flagContainer} accessibilityLabel="Canada +1">
               <Text style={styles.flagEmoji}>🇨🇦</Text>
               <Text style={styles.countryCode}>+1</Text>
               <Ionicons name="chevron-down" size={14} color={colors.textDim} />
@@ -170,10 +123,8 @@ export default function LoginScreen() {
               editable={!loading}
               onFocus={() => setFocused(true)}
               onBlur={() => setFocused(false)}
-              testID="phone-input"
               accessibilityLabel="Phone number"
               accessibilityHint="Enter your 10-digit Canadian phone number"
-              accessibilityRole="text"
             />
             {isValid && (
               <View style={styles.checkIcon}>
@@ -190,21 +141,13 @@ export default function LoginScreen() {
           )}
         </View>
 
-        {/* Continue Button */}
         <TouchableOpacity
-          style={[
-            styles.button,
-            !isValid && styles.buttonInactive,
-            loading && styles.buttonLoading,
-          ]}
+          style={[styles.button, !isValid && styles.buttonInactive, loading && styles.buttonLoading]}
           onPress={handleSendCode}
           disabled={loading || !isValid}
           activeOpacity={0.85}
-          testID="send-otp-btn"
           accessibilityLabel="Send verification code"
-          accessibilityRole="button"
           accessibilityState={{ disabled: loading || !isValid }}
-          accessibilityHint="Sends a 6-digit code to your phone number"
         >
           {loading ? (
             <ActivityIndicator color="#fff" size="small" />
@@ -213,11 +156,7 @@ export default function LoginScreen() {
               <Text style={[styles.buttonText, !isValid && styles.buttonTextInactive]}>
                 Send Verification Code
               </Text>
-              <Ionicons
-                name="arrow-forward"
-                size={20}
-                color={isValid ? '#fff' : colors.textDim}
-              />
+              <Ionicons name="arrow-forward" size={20} color={isValid ? '#fff' : colors.textDim} />
             </View>
           )}
         </TouchableOpacity>
@@ -230,7 +169,6 @@ export default function LoginScreen() {
         </View>
       </View>
 
-      {/* Terms */}
       <View style={[styles.terms, { paddingBottom: insets.bottom + 16 }]}>
         <Text style={styles.termsText}>
           By continuing, you agree to our{' '}
@@ -271,7 +209,10 @@ function createStyles(colors: ThemeColors) {
     content: { flex: 1, paddingHorizontal: 24, justifyContent: 'center' },
     welcomeSection: { marginBottom: 36 },
     greeting: { fontSize: 16, color: colors.textDim, marginBottom: 8, fontWeight: '500' },
-    title: { fontSize: 28, fontWeight: '800', color: colors.text, letterSpacing: -0.5, marginBottom: 8 },
+    title: {
+      fontSize: 28, fontWeight: '800', color: colors.text,
+      letterSpacing: -0.5, marginBottom: 8,
+    },
     subtitle: { fontSize: 15, color: colors.textDim, lineHeight: 22 },
     inputSection: { marginBottom: 24 },
     inputLabel: {
@@ -294,7 +235,7 @@ function createStyles(colors: ThemeColors) {
     inputDivider: { width: 1, height: 28, backgroundColor: colors.border },
     input: {
       flex: 1, paddingHorizontal: 14, fontSize: 18,
-      fontWeight: '600', color: colors.text, height: '100%', letterSpacing: 0.5,
+      fontWeight: '600', color: colors.text, height: '100%' as any, letterSpacing: 0.5,
     },
     checkIcon: { paddingRight: 14 },
     devHintContainer: {

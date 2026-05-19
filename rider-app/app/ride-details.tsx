@@ -36,6 +36,37 @@ export default function RideDetailsScreen() {
     finally { setLoading(false); }
   };
 
+  const normalizedBreakdown = useMemo(() => {
+    const raw: any[] = ride?.fare_breakdown || [];
+
+    // Consolidate old separate fare lines into a single "Ride fare" line
+    const fareLines = raw.filter((l: any) => l.type === 'fare');
+    let lines: any[];
+    if (fareLines.length <= 1) {
+      lines = raw.map((l: any) => l.type === 'fare' ? { ...l, type: 'ride' } : l);
+    } else {
+      const rideTotal = fareLines.reduce((sum: number, l: any) => sum + parseFloat(String(l.amount || 0)), 0);
+      const distKm = ride?.distance_km ? `${parseFloat(ride.distance_km).toFixed(1)} km` : '';
+      const rideLine = { label: `Ride fare${distKm ? ` (${distKm})` : ''}`, amount: rideTotal.toFixed(2), type: 'ride' };
+      lines = [rideLine, ...raw.filter((l: any) => l.type !== 'fare')];
+    }
+
+    // Inject promo discount if ride has one but breakdown doesn't
+    const hasDiscount = lines.some((l: any) => l.type === 'discount');
+    if (!hasDiscount && ride?.discount_amount && parseFloat(ride.discount_amount) > 0) {
+      const promoLabel = ride.promo_code ? `Promo (${ride.promo_code})` : 'Promo discount';
+      lines.push({ label: promoLabel, amount: -parseFloat(ride.discount_amount), type: 'discount' });
+    }
+
+    // Inject tip if ride has one but breakdown doesn't
+    const hasTip = lines.some((l: any) => l.type === 'tip');
+    if (!hasTip && ride?.tip_amount && parseFloat(ride.tip_amount) > 0) {
+      lines.push({ label: 'Tip', amount: ride.tip_amount, type: 'tip' });
+    }
+
+    return lines;
+  }, [ride]);
+
   const formatDate = (d: string) => {
     try {
       const date = new Date(d);
@@ -185,32 +216,66 @@ export default function RideDetailsScreen() {
           </View>
         </View>
 
-        {/* Fare Card — dynamic from API */}
-        <View style={styles.fareCard}>
-          <Text style={styles.fareTitle}>Fare Breakdown</Text>
-          {(ride.fare_breakdown || []).map((line: any, i: number) => (
-            line.amount != null ? (
-              <FareRow
-                key={i}
-                label={line.label}
-                value={`$${parseFloat(String(line.amount)).toFixed(2)}`}
-                highlight={line.type === 'tip'}
-                colors={colors}
+        {/* Fare breakdown — same layout as ride-options */}
+        {normalizedBreakdown.length > 0 && (
+          <View style={styles.fareBreakdownCard}>
+            <Text style={styles.fareBreakdownTitle}>Fare breakdown</Text>
+            {normalizedBreakdown.map((line: any, i: number) => (
+              line.amount != null ? (
+                <View key={i} style={[styles.fareBreakdownRow, line.type === 'ride' && { alignItems: 'flex-start' }]}>
+                  {line.type === 'ride' ? (
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.fareBreakdownLabel}>{line.label}</Text>
+                      <Text style={styles.fareBreakdownDriverBadge}>100% goes to your driver · ride local, support local</Text>
+                    </View>
+                  ) : line.type === 'discount' ? (
+                    <Text style={[styles.fareBreakdownLabel, { color: '#10B981' }]}>{line.label}</Text>
+                  ) : line.type === 'tip' ? (
+                    <Text style={[styles.fareBreakdownLabel, { color: '#3B82F6' }]}>{line.label}</Text>
+                  ) : line.type === 'tax' ? (
+                    <Text style={[styles.fareBreakdownLabel, { color: '#6B7280' }]}>{line.label}</Text>
+                  ) : (
+                    <Text style={styles.fareBreakdownLabel}>{line.label}</Text>
+                  )}
+                  <Text style={[
+                    styles.fareBreakdownValue,
+                    line.type === 'discount' && { color: '#10B981' },
+                    line.type === 'tip' && { color: '#3B82F6' },
+                  ]}>
+                    {line.type === 'discount'
+                      ? `-$${Math.abs(parseFloat(String(line.amount))).toFixed(2)}`
+                      : `$${parseFloat(String(line.amount)).toFixed(2)}`}
+                  </Text>
+                </View>
+              ) : line.type === 'modifier' ? (
+                <View key={i} style={[styles.fareBreakdownRow, { gap: 4 }]}>
+                  <Ionicons name="flash" size={12} color="#F59E0B" />
+                  <Text style={[styles.fareBreakdownLabel, { color: '#F59E0B' }]}>{line.label}</Text>
+                </View>
+              ) : null
+            ))}
+            <View style={[styles.fareBreakdownRow, styles.fareBreakdownTotal]}>
+              <Text style={styles.fareBreakdownTotalLabel}>You paid</Text>
+              <Text style={styles.fareBreakdownTotalValue}>${parseFloat(ride.grand_total || ride.total_fare || '0').toFixed(2)}</Text>
+            </View>
+            <View style={styles.paymentRow}>
+              <Ionicons
+                name={ride.payment_method === 'wallet' ? 'wallet' : ride.payment_method === 'company_allowance' ? 'business' : 'card'}
+                size={14}
+                color={ride.payment_status === 'paid' ? '#10B981' : colors.textDim}
               />
-            ) : null
-          ))}
-          <View style={styles.fareDivider} />
-          <View style={styles.fareRowWrap}>
-            <Text style={styles.fareTotalLabel}>Total</Text>
-            <Text style={styles.fareTotalValue}>${parseFloat(ride.grand_total || ride.total_fare || '0').toFixed(2)}</Text>
+              <Text style={[styles.paymentText, ride.payment_status === 'paid' && { color: '#10B981' }]}>
+                {ride.payment_method === 'wallet'
+                  ? 'Spinr Wallet'
+                  : ride.payment_method === 'company_allowance'
+                    ? 'Company Account'
+                    : ride.card_last4 ? `Card •••• ${ride.card_last4}` : 'Card'}
+                {' · '}
+                {ride.payment_status === 'paid' ? 'Paid' : ride.payment_status === 'failed' ? 'Failed' : 'Pending'}
+              </Text>
+            </View>
           </View>
-          <View style={styles.paymentRow}>
-            <Ionicons name="card" size={14} color={colors.textDim} />
-            <Text style={styles.paymentText}>
-              {ride.payment_method === 'card' ? 'Card' : ride.payment_method || 'Card'} · {ride.payment_status === 'paid' ? 'Paid' : 'Pending'}
-            </Text>
-          </View>
-        </View>
+        )}
 
         {/* Trip Stats */}
         <View style={styles.statsRow}>
@@ -239,15 +304,6 @@ export default function RideDetailsScreen() {
         </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
-  );
-}
-
-function FareRow({ label, value, highlight, colors }: { label: string; value: string; highlight?: boolean; colors: ThemeColors }) {
-  return (
-    <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 5 }}>
-      <Text style={[{ fontSize: 14, color: colors.textDim }, highlight && { color: '#10B981' }]}>{label}</Text>
-      <Text style={[{ fontSize: 14, fontWeight: '500', color: colors.text }, highlight && { color: '#10B981' }]}>{value}</Text>
-    </View>
   );
 }
 
@@ -284,16 +340,38 @@ function createStyles(colors: ThemeColors) {
     routeLabel: { fontSize: 10, fontWeight: '600', color: colors.textDim, letterSpacing: 0.5, marginBottom: 2 },
     routeAddr: { fontSize: 14, fontWeight: '500', color: colors.text },
 
-    fareCard: { backgroundColor: colors.surfaceLight, borderRadius: 18, padding: 16, marginBottom: 16 },
-    fareTitle: { fontSize: 15, fontWeight: '700', color: colors.text, marginBottom: 12 },
-    fareRowWrap: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 5 },
-    fareLabel: { fontSize: 14, color: colors.textDim },
-    fareValue: { fontSize: 14, fontWeight: '500', color: colors.text },
-    fareDivider: { height: 1, backgroundColor: colors.border, marginVertical: 10 },
-    fareTotalLabel: { fontSize: 16, fontWeight: '700', color: colors.text },
-    fareTotalValue: { fontSize: 18, fontWeight: '800', color: colors.primary },
+    fareBreakdownCard: {
+      backgroundColor: colors.surfaceLight, borderRadius: 14, padding: 14,
+      marginBottom: 16, borderWidth: 1, borderColor: colors.border,
+    },
+    fareBreakdownTitle: {
+      fontSize: 12, fontFamily: 'PlusJakartaSans_600SemiBold',
+      color: colors.textDim, marginBottom: 8,
+      textTransform: 'uppercase', letterSpacing: 0.5,
+    },
+    fareBreakdownRow: {
+      flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 3,
+    },
+    fareBreakdownLabel: {
+      fontSize: 13, fontFamily: 'PlusJakartaSans_400Regular', color: colors.text,
+    },
+    fareBreakdownValue: {
+      fontSize: 13, fontFamily: 'PlusJakartaSans_500Medium', color: colors.text,
+    },
+    fareBreakdownDriverBadge: {
+      fontSize: 10, fontFamily: 'PlusJakartaSans_500Medium', color: '#10B981', marginTop: 2,
+    },
+    fareBreakdownTotal: {
+      borderTopWidth: 1, borderTopColor: colors.border, marginTop: 4, paddingTop: 6,
+    },
+    fareBreakdownTotalLabel: {
+      fontSize: 14, fontFamily: 'PlusJakartaSans_700Bold', color: colors.text,
+    },
+    fareBreakdownTotalValue: {
+      fontSize: 14, fontFamily: 'PlusJakartaSans_700Bold', color: colors.primary,
+    },
     paymentRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10 },
-    paymentText: { fontSize: 13, color: colors.textDim },
+    paymentText: { fontSize: 13, fontFamily: 'PlusJakartaSans_500Medium', color: colors.textDim },
 
     statsRow: { flexDirection: 'row', gap: 10, marginBottom: 16 },
     statCard: { flex: 1, backgroundColor: colors.surfaceLight, borderRadius: 14, padding: 14, alignItems: 'center' },

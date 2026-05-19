@@ -1,5 +1,5 @@
 {
-  "extends": "expo/tsconfig.base",
+  "extends": "./node_modules/expo/tsconfig.base",
   "compilerOptions": {
     "strict": true,
     "types": ["jest", "node"],
@@ -85,6 +85,7 @@
   ],
   "exclude": [
     "node_modules",
-    "../shared/types/peer-deps.d.ts"
+    "../shared/types/peer-deps.d.ts",
+    "app-backup"
   ]
 }

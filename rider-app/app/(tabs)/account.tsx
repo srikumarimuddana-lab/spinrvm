@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   StatusBar,
   Linking,
+  Alert,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -18,7 +19,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import { useAuthStore, type User } from '@shared/store/authStore';
 import api from '@shared/api/client';
-import CustomAlert from '@shared/components/CustomAlert';
+import { showToast } from '../../store/toastStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useWorkProfileStore } from '../../store/workProfileStore';
@@ -38,23 +39,13 @@ export default function AccountScreen() {
   const [companyInfo, setCompanyInfo] = useState<{
     name?: string; address?: string; phone?: string; email?: string; website?: string;
   }>({});
-
-  const [showLogoutAlert, setShowLogoutAlert] = useState(false);
-  const [showPhotoPickerAlert, setShowPhotoPickerAlert] = useState(false);
-  const [showDeleteAccountAlert, setShowDeleteAccountAlert] = useState(false);
-  const [showDeleteConfirmAlert, setShowDeleteConfirmAlert] = useState(false);
   const [isDeletingAccount, setIsDeletingAccount] = useState(false);
-  const [showDsarAlert, setShowDsarAlert] = useState(false);
-  const [feedbackAlert, setFeedbackAlert] = useState<{
-    visible: boolean; title: string; message?: string;
-    variant: 'info' | 'success' | 'danger' | 'warning';
-  }>({ visible: false, title: '', variant: 'info' });
 
   const showFeedback = (
     title: string,
     message: string,
     variant: 'success' | 'danger' | 'warning' | 'info' = 'info',
-  ) => setFeedbackAlert({ visible: true, title, message, variant });
+  ) => showToast(title, message, variant);
 
   useEffect(() => {
     api.get('/company-info')
@@ -165,8 +156,6 @@ export default function AccountScreen() {
         contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) + 24 }}
         showsVerticalScrollIndicator={false}
       >
-
-        {/* Header hero */}
         <LinearGradient
           colors={[colors.primary, colors.primaryDark]}
           style={[styles.headerHero, { paddingTop: insets.top + 20 }]}
@@ -179,7 +168,13 @@ export default function AccountScreen() {
 
           <TouchableOpacity
             style={styles.avatarContainer}
-            onPress={() => setShowPhotoPickerAlert(true)}
+            onPress={() => {
+              Alert.alert('Update Photo', 'Choose how to update your profile photo.', [
+                { text: 'Take Photo', onPress: launchCamera },
+                { text: 'Library', onPress: launchGallery },
+                { text: 'Cancel', style: 'cancel' },
+              ]);
+            }}
             activeOpacity={0.8}
           >
             {isUploadingPhoto ? (
@@ -246,8 +241,6 @@ export default function AccountScreen() {
         </LinearGradient>
 
         <View style={styles.contentBody}>
-
-          {/* Personal Info */}
           <View style={styles.section}>
             <View style={styles.sectionHeaderRow}>
               <Text style={styles.sectionTitle}>Personal Info</Text>
@@ -292,61 +285,28 @@ export default function AccountScreen() {
             </View>
           </View>
 
-          {/* Wallet & Payment */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Wallet & Payment</Text>
             <View style={styles.card}>
-              <MenuRow
-                styles={styles} colors={colors}
-                icon="wallet" iconColor="#8B5CF6" iconBg="rgba(139, 92, 246, 0.1)"
-                label="Wallet"
-                onPress={() => router.push('/wallet' as any)}
-              />
+              <MenuRow styles={styles} colors={colors} icon="wallet" iconColor="#8B5CF6" iconBg="rgba(139, 92, 246, 0.1)" label="Wallet" onPress={() => router.push('/wallet' as any)} />
               <View style={styles.cardDivider} />
-              <MenuRow
-                styles={styles} colors={colors}
-                icon="card" iconColor="#7C3AED" iconBg="rgba(124, 58, 237, 0.1)"
-                label="Payment Methods"
-                onPress={() => router.push('/manage-cards' as any)}
-              />
+              <MenuRow styles={styles} colors={colors} icon="card" iconColor="#7C3AED" iconBg="rgba(124, 58, 237, 0.1)" label="Payment Methods" onPress={() => router.push('/manage-cards' as any)} />
               <View style={styles.cardDivider} />
-              <MenuRow
-                styles={styles} colors={colors}
-                icon="pricetag" iconColor="#10B981" iconBg="rgba(16, 185, 129, 0.1)"
-                label="Promotions"
-                onPress={() => router.push('/promotions' as any)}
-              />
+              <MenuRow styles={styles} colors={colors} icon="pricetag" iconColor="#10B981" iconBg="rgba(16, 185, 129, 0.1)" label="Promotions" onPress={() => router.push('/promotions' as any)} />
               <View style={styles.cardDivider} />
-              <MenuRow
-                styles={styles} colors={colors}
-                icon="trophy" iconColor="#F59E0B" iconBg="rgba(245, 158, 11, 0.1)"
-                label="Rewards"
-                onPress={() => router.push('/loyalty' as any)}
-              />
+              <MenuRow styles={styles} colors={colors} icon="trophy" iconColor="#F59E0B" iconBg="rgba(245, 158, 11, 0.1)" label="Rewards" onPress={() => router.push('/loyalty' as any)} />
             </View>
           </View>
 
-          {/* Rides & Places */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Rides & Places</Text>
             <View style={styles.card}>
-              <MenuRow
-                styles={styles} colors={colors}
-                icon="calendar" iconColor="#3B82F6" iconBg="rgba(59, 130, 246, 0.1)"
-                label="Scheduled Rides"
-                onPress={() => router.push('/scheduled-rides' as any)}
-              />
+              <MenuRow styles={styles} colors={colors} icon="calendar" iconColor="#3B82F6" iconBg="rgba(59, 130, 246, 0.1)" label="Scheduled Rides" onPress={() => router.push('/scheduled-rides' as any)} />
               <View style={styles.cardDivider} />
-              <MenuRow
-                styles={styles} colors={colors}
-                icon="location" iconColor="#F59E0B" iconBg="rgba(245, 158, 11, 0.1)"
-                label="Saved Places"
-                onPress={() => router.push('/saved-places' as any)}
-              />
+              <MenuRow styles={styles} colors={colors} icon="location" iconColor="#F59E0B" iconBg="rgba(245, 158, 11, 0.1)" label="Saved Places" onPress={() => router.push('/saved-places' as any)} />
             </View>
           </View>
 
-          {/* Work Profile */}
           {profiles.length > 0 && (
             <View style={styles.section}>
               <Text style={styles.sectionTitle}>Work</Text>
@@ -378,70 +338,29 @@ export default function AccountScreen() {
             </View>
           )}
 
-          {/* Safety & Privacy */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Safety & Privacy</Text>
             <View style={styles.card}>
-              <MenuRow
-                styles={styles} colors={colors}
-                icon="shield-checkmark" iconColor="#EF4444" iconBg="rgba(239, 68, 68, 0.05)"
-                label="Emergency Contacts"
-                onPress={() => router.push('/emergency-contacts' as any)}
-              />
+              <MenuRow styles={styles} colors={colors} icon="shield-checkmark" iconColor="#EF4444" iconBg="rgba(239, 68, 68, 0.05)" label="Emergency Contacts" onPress={() => router.push('/emergency-contacts' as any)} />
               <View style={styles.cardDivider} />
-              <MenuRow
-                styles={styles} colors={colors}
-                icon="alert-circle" iconColor="#F59E0B" iconBg="rgba(245, 158, 11, 0.1)"
-                label="Report a Safety Issue"
-                onPress={() => router.push('/report-safety' as any)}
-              />
+              <MenuRow styles={styles} colors={colors} icon="alert-circle" iconColor="#F59E0B" iconBg="rgba(245, 158, 11, 0.1)" label="Report a Safety Issue" onPress={() => router.push('/report-safety' as any)} />
               <View style={styles.cardDivider} />
-              <MenuRow
-                styles={styles} colors={colors}
-                icon="lock-closed" iconColor={colors.textDim} iconBg={colors.surfaceLight}
-                label="Privacy & Settings"
-                onPress={() => router.push('/privacy-settings' as any)}
-              />
+              <MenuRow styles={styles} colors={colors} icon="lock-closed" iconColor={colors.textDim} iconBg={colors.surfaceLight} label="Privacy & Settings" onPress={() => router.push('/privacy-settings' as any)} />
               <View style={styles.cardDivider} />
-              <MenuRow
-                styles={styles} colors={colors}
-                icon="accessibility" iconColor="#0284C7" iconBg="rgba(2, 132, 199, 0.1)"
-                label="Accessibility"
-                onPress={() => router.push('/accessibility' as any)}
-              />
+              <MenuRow styles={styles} colors={colors} icon="accessibility" iconColor="#0284C7" iconBg="rgba(2, 132, 199, 0.1)" label="Accessibility" onPress={() => router.push('/accessibility' as any)} />
               <View style={styles.cardDivider} />
-              <MenuRow
-                styles={styles} colors={colors}
-                icon="notifications" iconColor="#6366F1" iconBg="rgba(99, 102, 241, 0.1)"
-                label="Notifications"
-                onPress={() => router.push('/notifications' as any)}
-              />
+              <MenuRow styles={styles} colors={colors} icon="notifications" iconColor="#6366F1" iconBg="rgba(99, 102, 241, 0.1)" label="Notifications" onPress={() => router.push('/notifications' as any)} />
             </View>
           </View>
 
-          {/* Settings */}
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Settings</Text>
             <View style={styles.card}>
-              <MenuRow
-                styles={styles} colors={colors}
-                icon="help-circle" iconColor="#2563EB" iconBg="rgba(37, 99, 235, 0.1)"
-                label="Help Center"
-                onPress={() => router.push('/support' as any)}
-              />
+              <MenuRow styles={styles} colors={colors} icon="help-circle" iconColor="#2563EB" iconBg="rgba(37, 99, 235, 0.1)" label="Help Center" onPress={() => router.push('/support' as any)} />
               <View style={styles.cardDivider} />
-              <MenuRow
-                styles={styles} colors={colors}
-                icon="document-text" iconColor={colors.textDim} iconBg={colors.surfaceLight}
-                label="Legal"
-                onPress={() => router.push('/legal?type=tos' as any)}
-              />
+              <MenuRow styles={styles} colors={colors} icon="document-text" iconColor={colors.textDim} iconBg={colors.surfaceLight} label="Legal" onPress={() => router.push('/legal?type=tos' as any)} />
               <View style={styles.cardDivider} />
-              <TouchableOpacity
-                style={styles.actionRow}
-                activeOpacity={0.7}
-                onPress={() => Linking.openURL('https://spinr.ca/privacy')}
-              >
+              <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => Linking.openURL('https://spinr.ca/privacy')}>
                 <View style={[styles.iconBox, { backgroundColor: 'rgba(99, 102, 241, 0.1)' }]}>
                   <Ionicons name="shield" size={18} color="#6366F1" />
                 </View>
@@ -452,7 +371,16 @@ export default function AccountScreen() {
               <TouchableOpacity
                 style={styles.actionRow}
                 activeOpacity={0.7}
-                onPress={() => setShowDsarAlert(true)}
+                onPress={() => {
+                  Alert.alert(
+                    'Request My Data',
+                    'Under PIPEDA you have the right to request a copy of your personal data. We will deliver your data export within 30 days.',
+                    [
+                      { text: 'Cancel', style: 'cancel' },
+                      { text: 'Submit Request', onPress: handleRequestDataExport },
+                    ],
+                  );
+                }}
               >
                 <View style={[styles.iconBox, { backgroundColor: 'rgba(16, 185, 129, 0.1)' }]}>
                   <Ionicons name="download" size={18} color="#10B981" />
@@ -464,7 +392,16 @@ export default function AccountScreen() {
               <TouchableOpacity
                 style={styles.actionRow}
                 activeOpacity={0.7}
-                onPress={() => setShowDeleteAccountAlert(true)}
+                onPress={() => {
+                  Alert.alert(
+                    'Delete Account',
+                    'Your account will enter a 30-day grace period before permanent deletion. Ride records are retained for 7 years per regulation. Are you sure?',
+                    [
+                      { text: 'Cancel', style: 'cancel' },
+                      { text: 'Delete My Account', style: 'destructive', onPress: handleDeleteAccountConfirmed },
+                    ],
+                  );
+                }}
               >
                 <View style={[styles.iconBox, { backgroundColor: 'rgba(239, 68, 68, 0.05)' }]}>
                   <Ionicons name="trash" size={18} color="#EF4444" />
@@ -473,7 +410,20 @@ export default function AccountScreen() {
                 <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
               </TouchableOpacity>
               <View style={styles.cardDivider} />
-              <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => setShowLogoutAlert(true)}>
+              <TouchableOpacity
+                style={styles.actionRow}
+                activeOpacity={0.7}
+                onPress={() => {
+                  Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
+                    { text: 'Cancel', style: 'cancel' },
+                    {
+                      text: 'Sign Out',
+                      style: 'destructive',
+                      onPress: async () => { await logout(); router.replace('/login' as any); },
+                    },
+                  ]);
+                }}
+              >
                 <View style={[styles.iconBox, { backgroundColor: 'rgba(239, 68, 68, 0.05)' }]}>
                   <Ionicons name="log-out" size={18} color="#EF4444" />
                 </View>
@@ -493,104 +443,6 @@ export default function AccountScreen() {
           )}
         </View>
       </ScrollView>
-
-      {/* Alerts — Modals render above the view hierarchy, safe in a fragment */}
-      <CustomAlert
-        visible={showLogoutAlert}
-        title="Sign Out"
-        message="Are you sure you want to sign out?"
-        variant="danger"
-        icon="log-out-outline"
-        buttons={[
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Sign Out', style: 'destructive', onPress: async () => { await logout(); router.replace('/login' as any); } },
-        ]}
-        onClose={() => setShowLogoutAlert(false)}
-      />
-      <CustomAlert
-        visible={showPhotoPickerAlert}
-        title="Update Photo"
-        message="Choose how to update your profile photo."
-        variant="info"
-        icon="camera-outline"
-        buttons={[
-          { text: 'Take Photo', style: 'default', onPress: launchCamera },
-          { text: 'Library', style: 'default', onPress: launchGallery },
-          { text: 'Cancel', style: 'cancel' },
-        ]}
-        onClose={() => setShowPhotoPickerAlert(false)}
-      />
-      <CustomAlert
-        visible={showDeleteAccountAlert}
-        title="Delete Account"
-        message={
-          'Before deleting your account, please note:\n\n' +
-          '• Ride records (dates, distances, fares) are retained for 7 years as required by Saskatchewan transportation regulations.\n' +
-          '• Your personal identifiers (name, phone, address) will be removed from those records immediately.\n' +
-          '• Your account will enter a 30-day grace period before permanent deletion.\n\n' +
-          'Are you sure you want to proceed?'
-        }
-        variant="danger"
-        icon="trash-outline"
-        buttons={[
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Continue',
-            style: 'destructive',
-            onPress: () => {
-              setShowDeleteAccountAlert(false);
-              setShowDeleteConfirmAlert(true);
-            },
-          },
-        ]}
-        onClose={() => setShowDeleteAccountAlert(false)}
-      />
-      <CustomAlert
-        visible={showDeleteConfirmAlert}
-        title="Confirm Deletion"
-        message="This will schedule your account for permanent deletion. You have 30 days to cancel by contacting support."
-        variant="danger"
-        icon="warning-outline"
-        buttons={[
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: isDeletingAccount ? 'Deleting…' : 'Delete My Account',
-            style: 'destructive',
-            onPress: handleDeleteAccountConfirmed,
-          },
-        ]}
-        onClose={() => setShowDeleteConfirmAlert(false)}
-      />
-      <CustomAlert
-        visible={showDsarAlert}
-        title="Request My Data"
-        message={
-          'Under PIPEDA you have the right to request a copy of your personal data held by Spinr.\n\n' +
-          'We will prepare and deliver your data export within 30 days of this request.'
-        }
-        variant="info"
-        icon="download-outline"
-        buttons={[
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Submit Request',
-            style: 'default',
-            onPress: async () => {
-              setShowDsarAlert(false);
-              await handleRequestDataExport();
-            },
-          },
-        ]}
-        onClose={() => setShowDsarAlert(false)}
-      />
-      <CustomAlert
-        visible={feedbackAlert.visible}
-        title={feedbackAlert.title}
-        message={feedbackAlert.message}
-        variant={feedbackAlert.variant}
-        buttons={[{ text: 'OK', style: 'default' }]}
-        onClose={() => setFeedbackAlert(prev => ({ ...prev, visible: false }))}
-      />
     </View>
   );
 }
@@ -614,284 +466,95 @@ function MenuRow({
 }
 
 function createStyles(colors: ThemeColors) { return StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.surfaceLight,
-  },
-
-  // ── Hero ──
+  container: { flex: 1, backgroundColor: colors.surfaceLight },
   headerHero: {
-    paddingHorizontal: 20,
-    paddingBottom: 40,
-    borderBottomLeftRadius: 32,
-    borderBottomRightRadius: 32,
+    paddingHorizontal: 20, paddingBottom: 40,
+    borderBottomLeftRadius: 32, borderBottomRightRadius: 32,
     alignItems: 'center',
     shadowColor: colors.primaryDark,
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.2,
-    shadowRadius: 20,
-    elevation: 10,
-    zIndex: 10,
+    shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.2, shadowRadius: 20,
+    elevation: 10, zIndex: 10,
   },
-  avatarContainer: {
-    position: 'relative',
-    marginBottom: 16,
-    marginTop: 10,
-  },
+  avatarContainer: { position: 'relative', marginBottom: 16, marginTop: 10 },
   avatar: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    borderWidth: 4,
-    borderColor: '#fff',
+    width: 100, height: 100, borderRadius: 50,
+    borderWidth: 4, borderColor: '#fff',
     backgroundColor: 'rgba(255,255,255,0.2)',
   },
   avatarPlaceholder: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 4,
-    borderColor: 'rgba(255,255,255,0.3)',
+    width: 100, height: 100, borderRadius: 50,
+    justifyContent: 'center', alignItems: 'center',
+    borderWidth: 4, borderColor: 'rgba(255,255,255,0.3)',
   },
   cameraButton: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    position: 'absolute', bottom: 0, left: 0,
+    width: 32, height: 32, borderRadius: 16,
     backgroundColor: colors.surface,
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 8,
-    elevation: 4,
+    justifyContent: 'center', alignItems: 'center',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 8, elevation: 4,
   },
   verifiedBadge: {
-    position: 'absolute',
-    bottom: 0,
-    right: 0,
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    position: 'absolute', bottom: 0, right: 0,
+    width: 32, height: 32, borderRadius: 16,
     backgroundColor: colors.surface,
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 8,
-    elevation: 4,
+    justifyContent: 'center', alignItems: 'center',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 8, elevation: 4,
   },
   photoStatusBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: 'rgba(0,0,0,0.15)',
-    borderRadius: 20,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    marginBottom: 12,
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: 'rgba(0,0,0,0.15)', borderRadius: 20,
+    paddingHorizontal: 12, paddingVertical: 6, marginBottom: 12,
   },
-  photoStatusText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#fff',
-  },
-  name: {
-    color: '#fff',
-    fontSize: 26,
-    fontWeight: '900',
-    letterSpacing: 0.5,
-  },
-  subtitle: {
-    color: 'rgba(255,255,255,0.8)',
-    fontSize: 14,
-    marginTop: 2,
-    fontWeight: '500',
-  },
+  photoStatusText: { fontSize: 12, fontWeight: '600', color: '#fff' },
+  name: { color: '#fff', fontSize: 26, fontWeight: '900', letterSpacing: 0.5 },
+  subtitle: { color: 'rgba(255,255,255,0.8)', fontSize: 14, marginTop: 2, fontWeight: '500' },
   ratingHeroContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    borderRadius: 16,
-    marginTop: 20,
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.3)',
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 16,
+    marginTop: 20, paddingVertical: 12, paddingHorizontal: 24,
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.3)',
   },
-  ratingBox: {
-    alignItems: 'center',
-    paddingHorizontal: 12,
-  },
-  ratingDivider: {
-    width: 1,
-    height: 30,
-    backgroundColor: 'rgba(255,255,255,0.3)',
-    marginHorizontal: 12,
-  },
-  ratingNumber: {
-    color: '#fff',
-    fontSize: 22,
-    fontWeight: '900',
-  },
-  ratingLabel: {
-    color: 'rgba(255,255,255,0.8)',
-    fontSize: 11,
-    fontWeight: '600',
-    marginTop: 2,
-    letterSpacing: 1,
-  },
-  starsRow: {
-    flexDirection: 'row',
-    marginTop: 4,
-    gap: 2,
-  },
-
-  // ── Body ──
-  contentBody: {
-    paddingTop: 10,
-  },
-  section: {
-    paddingHorizontal: 16,
-    marginTop: 20,
-  },
+  ratingBox: { alignItems: 'center', paddingHorizontal: 12 },
+  ratingDivider: { width: 1, height: 30, backgroundColor: 'rgba(255,255,255,0.3)', marginHorizontal: 12 },
+  ratingNumber: { color: '#fff', fontSize: 22, fontWeight: '900' },
+  ratingLabel: { color: 'rgba(255,255,255,0.8)', fontSize: 11, fontWeight: '600', marginTop: 2, letterSpacing: 1 },
+  starsRow: { flexDirection: 'row', marginTop: 4, gap: 2 },
+  contentBody: { paddingTop: 10 },
+  section: { paddingHorizontal: 16, marginTop: 20 },
   sectionHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-    paddingHorizontal: 4,
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    marginBottom: 12, paddingHorizontal: 4,
   },
   sectionTitle: {
-    color: colors.text,
-    fontSize: 18,
-    fontWeight: '800',
-    letterSpacing: 0.2,
-    marginBottom: 12,
-    paddingHorizontal: 4,
+    color: colors.text, fontSize: 18, fontWeight: '800', letterSpacing: 0.2,
+    marginBottom: 12, paddingHorizontal: 4,
   },
   editBtn: {
-    backgroundColor: colors.surface,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: colors.border,
+    backgroundColor: colors.surface, paddingHorizontal: 12, paddingVertical: 6,
+    borderRadius: 16, borderWidth: 1, borderColor: colors.border,
   },
-  editBtnText: {
-    color: colors.textDim,
-    fontSize: 12,
-    fontWeight: '700',
-  },
-
-  // ── Card rows ──
+  editBtnText: { color: colors.textDim, fontSize: 12, fontWeight: '700' },
   card: {
-    backgroundColor: colors.surface,
-    borderRadius: 24,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderWidth: 1,
-    borderColor: 'rgba(0,0,0,0.02)',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.04,
-    shadowRadius: 16,
-    elevation: 3,
+    backgroundColor: colors.surface, borderRadius: 24,
+    paddingHorizontal: 16, paddingVertical: 8,
+    borderWidth: 1, borderColor: 'rgba(0,0,0,0.02)',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.04, shadowRadius: 16, elevation: 3,
   },
-  cardRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
-    gap: 14,
-  },
-  cardDivider: {
-    height: 1,
-    backgroundColor: colors.surfaceLight,
-    marginLeft: 50,
-  },
-  iconBox: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  cardInfo: {
-    flex: 1,
-  },
-  cardLabel: {
-    color: colors.textDim,
-    fontSize: 11,
-    fontWeight: '600',
-    letterSpacing: 0.5,
-    textTransform: 'uppercase',
-  },
-  cardValue: {
-    color: colors.text,
-    fontSize: 15,
-    fontWeight: '700',
-    marginTop: 2,
-  },
-
-  // ── Menu rows ──
-  actionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 10,
-    gap: 14,
-  },
-  actionContent: {
-    flex: 1,
-  },
-  actionText: {
-    flex: 1,
-    color: colors.text,
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  actionSubtitle: {
-    color: colors.textDim,
-    fontSize: 12,
-    fontWeight: '500',
-    marginTop: 2,
-  },
-  badge: {
-    backgroundColor: colors.primary,
-    borderRadius: 10,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    marginRight: 8,
-  },
-  badgeText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: colors.surface,
-  },
-
-  // ── Company footer ──
+  cardRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, gap: 14 },
+  cardDivider: { height: 1, backgroundColor: colors.surfaceLight, marginLeft: 50 },
+  iconBox: { width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center' },
+  cardInfo: { flex: 1 },
+  cardLabel: { color: colors.textDim, fontSize: 11, fontWeight: '600', letterSpacing: 0.5, textTransform: 'uppercase' },
+  cardValue: { color: colors.text, fontSize: 15, fontWeight: '700', marginTop: 2 },
+  actionRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, gap: 14 },
+  actionContent: { flex: 1 },
+  actionText: { flex: 1, color: colors.text, fontSize: 15, fontWeight: '600' },
+  actionSubtitle: { color: colors.textDim, fontSize: 12, fontWeight: '500', marginTop: 2 },
+  badge: { backgroundColor: colors.primary, borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2, marginRight: 8 },
+  badgeText: { fontSize: 10, fontWeight: '700', color: colors.surface },
   companySection: {
-    marginHorizontal: 16,
-    marginTop: 24,
-    marginBottom: 40,
-    paddingTop: 16,
-    alignItems: 'center',
+    marginHorizontal: 16, marginTop: 24, marginBottom: 40, paddingTop: 16, alignItems: 'center',
   },
-  companyName: {
-    color: colors.textDim,
-    fontSize: 13,
-    fontWeight: '700',
-    marginBottom: 6,
-  },
-  companyLine: {
-    color: colors.textDim,
-    fontSize: 11,
-    marginTop: 2,
-    textAlign: 'center',
-  },
+  companyName: { color: colors.textDim, fontSize: 13, fontWeight: '700', marginBottom: 6 },
+  companyLine: { color: colors.textDim, fontSize: 11, marginTop: 2, textAlign: 'center' },
 }); }

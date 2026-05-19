@@ -105,6 +105,106 @@ index 5ce30f3..428ffb8 100644
  
  export type RefreshControlPropsIOS = Readonly<{
    /**
+diff --git a/node_modules/react-native/Libraries/Components/Switch/Switch.js b/node_modules/react-native/Libraries/Components/Switch/Switch.js
+index 8d3c553..ce4ef96 100644
+--- a/node_modules/react-native/Libraries/Components/Switch/Switch.js
++++ b/node_modules/react-native/Libraries/Components/Switch/Switch.js
+@@ -16,7 +16,7 @@ import type {ViewProps} from '../View/ViewPropTypes';
+ import StyleSheet from '../../StyleSheet/StyleSheet';
+ import Platform from '../../Utilities/Platform';
+ import useMergeRefs from '../../Utilities/useMergeRefs';
+-import AndroidSwitchNativeComponent, {
++import _NativeAndroidSwitch, {
+   Commands as AndroidSwitchCommands,
+ } from './AndroidSwitchNativeComponent';
+ import SwitchNativeComponent, {
+@@ -25,6 +25,86 @@ import SwitchNativeComponent, {
+ import * as React from 'react';
+ import {useLayoutEffect, useRef, useState} from 'react';
+ 
++// PATCH (spinr rider-app/driver-app):
++// RN 0.85.2's AndroidSwitchNativeComponent is declared with
++// `interfaceOnly: true` — codegenNativeComponent returns a non-renderable
++// placeholder object. Under the New Architecture (Bridgeless), JSX
++// `<AndroidSwitchNativeComponent>` throws "Element type is invalid... got:
++// object". Reproduced on driver-app SettingsScreen.
++//
++// Strategy: detect the broken codegen object and fall back to a JS-only
++// Pressable toggle that fires onChange on press. Visual chrome is a
++// minimal track + thumb in the requested colors. Loses the native
++// material switch animation; functionally equivalent for state.
++const _PressableModule = require('../Pressable/Pressable');
++const _Pressable = _PressableModule.default || _PressableModule;
++const _ViewModule = require('../View/View');
++const _SwitchView = _ViewModule.default || _ViewModule;
++const _isAndroidSwitchNativeValid =
++  typeof _NativeAndroidSwitch === 'function' ||
++  typeof _NativeAndroidSwitch === 'string';
++
++function AndroidSwitchJSFallback(props: $FlowFixMe): React.Node {
++  const {
++    on,
++    enabled,
++    style,
++    thumbTintColor,
++    trackTintColor,
++    trackColorForTrue,
++    trackColorForFalse,
++    onChange,
++    accessibilityState,
++    accessibilityRole,
++    ...rest
++  } = props;
++  const isOn = on === true;
++  const trackBg =
++    (isOn ? trackColorForTrue : trackColorForFalse) ?? trackTintColor ?? (isOn ? '#34C759' : '#787880');
++  const thumbBg = thumbTintColor ?? '#FFFFFF';
++  const handlePress = () => {
++    if (enabled === false) return;
++    if (typeof onChange === 'function') {
++      onChange({nativeEvent: {value: !isOn, target: 0}});
++    }
++  };
++  return (
++    <_Pressable
++      {...rest}
++      accessibilityRole={accessibilityRole ?? 'switch'}
++      accessibilityState={{...(accessibilityState ?? {}), checked: isOn, disabled: enabled === false}}
++      disabled={enabled === false}
++      onPress={handlePress}
++      style={[
++        {
++          width: 51,
++          height: 31,
++          borderRadius: 31 / 2,
++          padding: 2,
++          backgroundColor: trackBg,
++          opacity: enabled === false ? 0.5 : 1,
++          justifyContent: 'center',
++        },
++        style,
++      ]}>
++      <_SwitchView
++        style={{
++          width: 27,
++          height: 27,
++          borderRadius: 27 / 2,
++          backgroundColor: thumbBg,
++          alignSelf: isOn ? 'flex-end' : 'flex-start',
++        }}
++      />
++    </_Pressable>
++  );
++}
++
++const AndroidSwitchNativeComponent: $FlowFixMe =
++  Platform.OS === 'android' && !_isAndroidSwitchNativeValid
++    ? AndroidSwitchJSFallback
++    : _NativeAndroidSwitch;
++
+ export type SwitchPropsIOS = {
+   /**
+    * Background color when the switch is turned on.
 diff --git a/node_modules/react-native/Libraries/Debugging/DebuggingOverlay.js b/node_modules/react-native/Libraries/Debugging/DebuggingOverlay.js
 index a668765..3d96b9c 100644
 --- a/node_modules/react-native/Libraries/Debugging/DebuggingOverlay.js
@@ -250,6 +350,18 @@ index 1fabac7..2beef39 100644
  const ScrollView = require('../Components/ScrollView/ScrollView').default;
  const View = require('../Components/View/View').default;
  const AppContainer = require('../ReactNative/AppContainer').default;
+diff --git a/node_modules/react-native/src/private/components/scrollview/HScrollViewNativeComponents.js b/node_modules/react-native/src/private/components/scrollview/HScrollViewNativeComponents.js
+index da05855..c7eb322 100644
+--- a/node_modules/react-native/src/private/components/scrollview/HScrollViewNativeComponents.js
++++ b/node_modules/react-native/src/private/components/scrollview/HScrollViewNativeComponents.js
+@@ -15,6 +15,7 @@ import type {HostComponent} from '../../types/HostComponent';
+ import AndroidHorizontalScrollViewNativeComponent from '../../../../Libraries/Components/ScrollView/AndroidHorizontalScrollViewNativeComponent';
+ import ScrollContentViewNativeComponent from '../../../../Libraries/Components/ScrollView/ScrollContentViewNativeComponent';
+ import ScrollViewNativeComponent from '../../../../Libraries/Components/ScrollView/ScrollViewNativeComponent';
++import View from '../../../../Libraries/Components/View/View';
+ import Platform from '../../../../Libraries/Utilities/Platform';
+ import AndroidHorizontalScrollContentViewNativeComponent from '../../specs_DEPRECATED/components/AndroidHorizontalScrollContentViewNativeComponent';
+ 
 diff --git a/node_modules/react-native/src/private/components/virtualview/VirtualViewExperimentalNativeComponent.js b/node_modules/react-native/src/private/components/virtualview/VirtualViewExperimentalNativeComponent.js
 index c640b5a..a6f35b1 100644
 --- a/node_modules/react-native/src/private/components/virtualview/VirtualViewExperimentalNativeComponent.js
@@ -404,195 +516,3 @@ index 4ba5b68..a746a97 100644
  }>;
  
  export default codegenNativeComponent<VirtualViewNativeProps>('VirtualView', {
-diff --git a/node_modules/react-native/src/private/components/scrollview/VScrollViewNativeComponents.js b/node_modules/react-native/src/private/components/scrollview/VScrollViewNativeComponents.js
---- a/node_modules/react-native/src/private/components/scrollview/VScrollViewNativeComponents.js
-+++ b/node_modules/react-native/src/private/components/scrollview/VScrollViewNativeComponents.js
-@@ -17,8 +17,19 @@
- import View from '../../../../Libraries/Components/View/View';
- import Platform from '../../../../Libraries/Utilities/Platform';
- 
-+// PATCH (spinr rider-app/driver-app):
-+// Under RN 0.85.2 + New Architecture (Bridgeless), the native ScrollView
-+// component (`RCTScrollView` resolved via NativeComponentRegistry.get) renders
-+// as a broken host element, throwing "Element type is invalid... got:
-+// undefined" inside ScrollView's render tree. Empirically reproduced on
-+// driver-app's OtpScreen and rider-app's profile/activity tabs.
-+// Fallback to View on Android keeps content rendering (loses native scroll
-+// gesture; layouts that fit the viewport still work). When upstream RN fixes
-+// the Bridgeless lookup this patch becomes a no-op and can be deleted.
- export const VScrollViewNativeComponent: HostComponent<ScrollViewNativeProps> =
--  ScrollViewNativeComponent;
-+  Platform.OS === 'android'
-+    ? ((View: $FlowFixMe): HostComponent<ScrollViewNativeProps>)
-+    : ScrollViewNativeComponent;
- 
- export const VScrollContentViewNativeComponent: HostComponent<ViewProps> =
-   Platform.OS === 'android' ? View : ScrollContentViewNativeComponent;
-diff --git a/node_modules/react-native/src/private/components/scrollview/HScrollViewNativeComponents.js b/node_modules/react-native/src/private/components/scrollview/HScrollViewNativeComponents.js
---- a/node_modules/react-native/src/private/components/scrollview/HScrollViewNativeComponents.js
-+++ b/node_modules/react-native/src/private/components/scrollview/HScrollViewNativeComponents.js
-@@ -15,15 +15,21 @@
- import AndroidHorizontalScrollViewNativeComponent from '../../../../Libraries/Components/ScrollView/AndroidHorizontalScrollViewNativeComponent';
- import ScrollContentViewNativeComponent from '../../../../Libraries/Components/ScrollView/ScrollContentViewNativeComponent';
- import ScrollViewNativeComponent from '../../../../Libraries/Components/ScrollView/ScrollViewNativeComponent';
-+import View from '../../../../Libraries/Components/View/View';
- import Platform from '../../../../Libraries/Utilities/Platform';
- import AndroidHorizontalScrollContentViewNativeComponent from '../../specs_DEPRECATED/components/AndroidHorizontalScrollContentViewNativeComponent';
- 
-+// PATCH (spinr rider-app/driver-app):
-+// Same Bridgeless ScrollView issue as VScrollViewNativeComponents.js plus
-+// AndroidHorizontalScrollContentView is declared with interfaceOnly:true (the
-+// codegen returns a non-renderable object). Both layers fall back to View on
-+// Android — keeps horizontal lists rendering, loses native horizontal scroll.
- export const HScrollViewNativeComponent: HostComponent<ScrollViewNativeProps> =
-   Platform.OS === 'android'
--    ? AndroidHorizontalScrollViewNativeComponent
-+    ? ((View: $FlowFixMe): HostComponent<ScrollViewNativeProps>)
-     : ScrollViewNativeComponent;
- 
- export const HScrollContentViewNativeComponent: HostComponent<ViewProps> =
-   Platform.OS === 'android'
--    ? AndroidHorizontalScrollContentViewNativeComponent
-+    ? View
-     : ScrollContentViewNativeComponent;
-diff --git a/node_modules/react-native/Libraries/Components/Switch/Switch.js b/node_modules/react-native/Libraries/Components/Switch/Switch.js
---- a/node_modules/react-native/Libraries/Components/Switch/Switch.js
-+++ b/node_modules/react-native/Libraries/Components/Switch/Switch.js
-@@ -16,7 +16,7 @@
- import StyleSheet from '../../StyleSheet/StyleSheet';
- import Platform from '../../Utilities/Platform';
- import useMergeRefs from '../../Utilities/useMergeRefs';
--import AndroidSwitchNativeComponent, {
-+import _NativeAndroidSwitch, {
-   Commands as AndroidSwitchCommands,
- } from './AndroidSwitchNativeComponent';
- import SwitchNativeComponent, {
-@@ -24,3 +24,83 @@
- } from './SwitchNativeComponent';
- import * as React from 'react';
- import {useLayoutEffect, useRef, useState} from 'react';
-+
-+// PATCH (spinr rider-app/driver-app):
-+// RN 0.85.2's AndroidSwitchNativeComponent is declared with
-+// `interfaceOnly: true` — codegenNativeComponent returns a non-renderable
-+// placeholder object. Under the New Architecture (Bridgeless), JSX
-+// `<AndroidSwitchNativeComponent>` throws "Element type is invalid... got:
-+// object". Reproduced on driver-app SettingsScreen.
-+//
-+// Strategy: detect the broken codegen object and fall back to a JS-only
-+// Pressable toggle that fires onChange on press. Visual chrome is a
-+// minimal track + thumb in the requested colors. Loses the native
-+// material switch animation; functionally equivalent for state.
-+const _PressableModule = require('../Pressable/Pressable');
-+const _Pressable = _PressableModule.default || _PressableModule;
-+const _ViewModule = require('../View/View');
-+const _SwitchView = _ViewModule.default || _ViewModule;
-+const _isAndroidSwitchNativeValid =
-+  typeof _NativeAndroidSwitch === 'function' ||
-+  typeof _NativeAndroidSwitch === 'string';
-+
-+function AndroidSwitchJSFallback(props: $FlowFixMe): React.Node {
-+  const {
-+    on,
-+    enabled,
-+    style,
-+    thumbTintColor,
-+    trackTintColor,
-+    trackColorForTrue,
-+    trackColorForFalse,
-+    onChange,
-+    accessibilityState,
-+    accessibilityRole,
-+    ...rest
-+  } = props;
-+  const isOn = on === true;
-+  const trackBg =
-+    (isOn ? trackColorForTrue : trackColorForFalse) ?? trackTintColor ?? (isOn ? '#34C759' : '#787880');
-+  const thumbBg = thumbTintColor ?? '#FFFFFF';
-+  const handlePress = () => {
-+    if (enabled === false) return;
-+    if (typeof onChange === 'function') {
-+      onChange({nativeEvent: {value: !isOn, target: 0}});
-+    }
-+  };
-+  return (
-+    <_Pressable
-+      {...rest}
-+      accessibilityRole={accessibilityRole ?? 'switch'}
-+      accessibilityState={{...(accessibilityState ?? {}), checked: isOn, disabled: enabled === false}}
-+      disabled={enabled === false}
-+      onPress={handlePress}
-+      style={[
-+        {
-+          width: 51,
-+          height: 31,
-+          borderRadius: 31 / 2,
-+          padding: 2,
-+          backgroundColor: trackBg,
-+          opacity: enabled === false ? 0.5 : 1,
-+          justifyContent: 'center',
-+        },
-+        style,
-+      ]}>
-+      <_SwitchView
-+        style={{
-+          width: 27,
-+          height: 27,
-+          borderRadius: 27 / 2,
-+          backgroundColor: thumbBg,
-+          alignSelf: isOn ? 'flex-end' : 'flex-start',
-+        }}
-+      />
-+    </_Pressable>
-+  );
-+}
-+
-+const AndroidSwitchNativeComponent: $FlowFixMe =
-+  Platform.OS === 'android' && !_isAndroidSwitchNativeValid
-+    ? AndroidSwitchJSFallback
-+    : _NativeAndroidSwitch;
-diff --git a/node_modules/react-native/Libraries/Components/ScrollView/ScrollView.js b/node_modules/react-native/Libraries/Components/ScrollView/ScrollView.js
---- a/node_modules/react-native/Libraries/Components/ScrollView/ScrollView.js
-+++ b/node_modules/react-native/Libraries/Components/ScrollView/ScrollView.js
-@@ -1643,10 +1643,38 @@
-   render(): React.Node {
-     const horizontal = this.props.horizontal === true;
- 
--    const NativeScrollView = horizontal
-+    // PATCH (spinr): defensive guard. The H/VScrollView native components are
-+    // patched to fall back to View on Android, but if for any reason
-+    // (module-init order, Hermes quirk, partial patch apply) they resolve to
-+    // a non-renderable value, swap in View directly so ScrollView renders
-+    // instead of crashing with "Element type is invalid... got: undefined".
-+    let NativeScrollView: $FlowFixMe = horizontal
-       ? HScrollViewNativeComponent
-       : VScrollViewNativeComponent;
--
--    const NativeScrollContentView = horizontal
-+    let NativeScrollContentView: $FlowFixMe = horizontal
-       ? HScrollContentViewNativeComponent
-       : VScrollContentViewNativeComponent;
-+    const _isRenderable = (c: $FlowFixMe): boolean =>
-+      typeof c === 'function' ||
-+      typeof c === 'string' ||
-+      (c != null && typeof c === 'object' && c.$$typeof != null);
-+    if (!_isRenderable(NativeScrollView)) {
-+      if (__DEV__) {
-+        // eslint-disable-next-line no-console
-+        console.warn(
-+          '[spinr-patch] NativeScrollView non-renderable, falling back to View. typeof=',
-+          typeof NativeScrollView,
-+        );
-+      }
-+      NativeScrollView = View;
-+    }
-+    if (!_isRenderable(NativeScrollContentView)) {
-+      if (__DEV__) {
-+        // eslint-disable-next-line no-console
-+        console.warn(
-+          '[spinr-patch] NativeScrollContentView non-renderable, falling back to View. typeof=',
-+          typeof NativeScrollContentView,
-+        );
-+      }
-+      NativeScrollContentView = View;
-+    }

@@ -13,7 +13,6 @@ import {
   ActivityIndicator,
   ScrollView,
   Linking,
-  StatusBar,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -30,7 +29,6 @@ export default function ProfileSetupScreen() {
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
-  // Detect if editing existing profile vs first-time setup
   const isEditing = !!(user?.profile_complete || user?.first_name);
 
   const [form, setForm] = useState({
@@ -54,30 +52,21 @@ export default function ProfileSetupScreen() {
     buttons?: { text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }[];
   }>({ visible: false, title: '', message: '', variant: 'info' });
 
-  const validateEmail = (email: string): boolean => {
-    const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    return re.test(email);
-  };
-
   const updateForm = (key: keyof typeof form, value: string) => {
-    setForm((prev) => ({ ...prev, [key]: value }));
+    setForm(prev => ({ ...prev, [key]: value }));
   };
 
   const launchCamera = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== 'granted') return setAlertState({ visible: true, title: 'Permission Denied', message: 'Camera access is needed.', variant: 'warning' });
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.7,
-    });
+    const result = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.7 });
     if (!result.canceled && result.assets[0]) uploadPhoto(result.assets[0].uri);
   };
 
   const launchGallery = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') return setAlertState({ visible: true, title: 'Permission Denied', message: 'Library access is needed.', variant: 'warning' });
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.7,
-    });
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.7 });
     if (!result.canceled && result.assets[0]) uploadPhoto(result.assets[0].uri);
   };
 
@@ -95,18 +84,14 @@ export default function ProfileSetupScreen() {
 
   const handleSubmit = async () => {
     if (!form.firstName.trim() || !form.lastName.trim() || !form.email.trim() || !form.gender) {
-      setAlertState({ visible: true, title: 'Missing Info', message: 'Please fill in all fields', variant: 'warning' });
-      return;
+      return setAlertState({ visible: true, title: 'Missing Info', message: 'Please fill in all fields.', variant: 'warning' });
     }
-
-    if (!validateEmail(form.email)) {
-      setAlertState({ visible: true, title: 'Invalid Email', message: 'Please enter a valid email address', variant: 'warning' });
-      return;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) {
+      return setAlertState({ visible: true, title: 'Invalid Email', message: 'Please enter a valid email address.', variant: 'warning' });
     }
 
     Keyboard.dismiss();
     setIsSubmitting(true);
-
     try {
       await createProfile({
         first_name: form.firstName.trim(),
@@ -117,7 +102,7 @@ export default function ProfileSetupScreen() {
       if (isEditing) {
         router.back();
       } else {
-        router.replace('/(tabs)');
+        router.replace('/(tabs)' as any);
       }
     } catch (err: any) {
       setAlertState({ visible: true, title: 'Error', message: err.message || 'Failed to save profile', variant: 'danger' });
@@ -132,7 +117,6 @@ export default function ProfileSetupScreen() {
   };
 
   const isFormValid = form.firstName.trim() && form.lastName.trim() && form.email.trim() && form.gender && (isEditing || tosAccepted);
-
   const genderOptions = ['Male', 'Female', 'Other'];
 
   const renderInput = (
@@ -141,7 +125,7 @@ export default function ProfileSetupScreen() {
     placeholder: string,
     icon: keyof typeof Ionicons.glyphMap,
     keyboardType: 'default' | 'email-address' = 'default',
-    autoCapitalize: 'none' | 'sentences' | 'words' | 'characters' = 'words'
+    autoCapitalize: 'none' | 'sentences' | 'words' | 'characters' = 'words',
   ) => {
     const isFocused = focusedField === key;
     return (
@@ -152,7 +136,7 @@ export default function ProfileSetupScreen() {
           <TextInput
             style={styles.textInput}
             value={form[key]}
-            onChangeText={(val) => updateForm(key, val)}
+            onChangeText={val => updateForm(key, val)}
             placeholder={placeholder}
             placeholderTextColor={colors.textDim}
             keyboardType={keyboardType}
@@ -173,30 +157,20 @@ export default function ProfileSetupScreen() {
       keyboardShouldPersistTaps="handled"
       showsVerticalScrollIndicator={false}
     >
-      {/* Header Profile Section */}
       <View style={styles.headerContainer}>
         {isEditing && (
           <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
             <Ionicons name="arrow-back" size={24} color={colors.text} />
           </TouchableOpacity>
         )}
-        
-        <TouchableOpacity 
-          style={styles.avatarContainer} 
-          activeOpacity={0.8}
-          onPress={() => setShowPhotoPickerAlert(true)}
-        >
+
+        <TouchableOpacity style={styles.avatarContainer} activeOpacity={0.8} onPress={() => setShowPhotoPickerAlert(true)}>
           {isUploadingPhoto ? (
-             <View style={[styles.avatarCircle, { backgroundColor: colors.surface }]}>
-               <ActivityIndicator size="large" color={colors.primary} />
-             </View>
+            <View style={[styles.avatarCircle, { backgroundColor: colors.surface }]}>
+              <ActivityIndicator size="large" color={colors.primary} />
+            </View>
           ) : user?.profile_image ? (
-            <Image
-              source={{ uri: user.profile_image }}
-              style={styles.avatarCircle}
-              contentFit="cover"
-              transition={200}
-            />
+            <Image source={{ uri: user.profile_image }} style={styles.avatarCircle} contentFit="cover" transition={200} />
           ) : (
             <View style={styles.avatarCircle}>
               <Ionicons name="person" size={40} color={colors.primary} />
@@ -225,10 +199,9 @@ export default function ProfileSetupScreen() {
         )}
       </View>
 
-      {/* Form Fields */}
       <View style={styles.formCard}>
-        {renderInput('firstName', 'FIRST NAME', 'Enter your first name', 'person-outline', 'default', 'words')}
-        {renderInput('lastName', 'LAST NAME', 'Enter your last name', 'people-outline', 'default', 'words')}
+        {renderInput('firstName', 'FIRST NAME', 'Enter your first name', 'person-outline')}
+        {renderInput('lastName', 'LAST NAME', 'Enter your last name', 'people-outline')}
         {renderInput('email', 'EMAIL ADDRESS', 'name@example.com', 'mail-outline', 'email-address', 'none')}
 
         <View style={styles.inputContainer}>
@@ -253,16 +226,11 @@ export default function ProfileSetupScreen() {
                   style={[
                     styles.dropdownOption,
                     index !== genderOptions.length - 1 && styles.dropdownOptionBorder,
-                    form.gender === g && styles.dropdownOptionSelected
+                    form.gender === g && styles.dropdownOptionSelected,
                   ]}
-                  onPress={() => {
-                    updateForm('gender', g);
-                    setShowGenderPicker(false);
-                  }}
+                  onPress={() => { updateForm('gender', g); setShowGenderPicker(false); }}
                 >
-                  <Text style={[styles.dropdownOptionText, form.gender === g && styles.dropdownOptionTextActive]}>
-                    {g}
-                  </Text>
+                  <Text style={[styles.dropdownOptionText, form.gender === g && styles.dropdownOptionTextActive]}>{g}</Text>
                   {form.gender === g && <Ionicons name="checkmark-circle" size={20} color={colors.primary} />}
                 </TouchableOpacity>
               ))}
@@ -271,7 +239,6 @@ export default function ProfileSetupScreen() {
         </View>
       </View>
 
-      {/* Terms & Conditions for new users */}
       {!isEditing && (
         <TouchableOpacity style={styles.tosContainer} activeOpacity={0.8} onPress={() => setTosAccepted(!tosAccepted)}>
           <View style={[styles.checkbox, tosAccepted && styles.checkboxActive]}>
@@ -286,7 +253,6 @@ export default function ProfileSetupScreen() {
         </TouchableOpacity>
       )}
 
-      {/* Submit */}
       <TouchableOpacity
         style={[styles.submitBtn, (!isFormValid || isSubmitting || authLoading) && styles.submitBtnDisabled]}
         onPress={handleSubmit}
@@ -307,7 +273,6 @@ export default function ProfileSetupScreen() {
 
   return (
     <View style={styles.container}>
-      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
       {Platform.OS === 'ios' ? (
         <KeyboardAvoidingView behavior="padding" style={styles.container}>
           {contentNode}
@@ -342,234 +307,83 @@ export default function ProfileSetupScreen() {
 
 function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
-    container: {
-      flex: 1,
-      backgroundColor: colors.surfaceLight,
-    },
-    scrollView: {
-      flex: 1,
-    },
-    scrollContent: {
-      paddingHorizontal: 24,
-    },
-    headerContainer: {
-      alignItems: 'center',
-      marginBottom: 32,
-      position: 'relative',
-    },
+    container: { flex: 1, backgroundColor: colors.surfaceLight },
+    scrollView: { flex: 1 },
+    scrollContent: { paddingHorizontal: 24 },
+    headerContainer: { alignItems: 'center', marginBottom: 32, position: 'relative' },
     backButton: {
-      position: 'absolute',
-      left: 0,
-      top: 0,
-      padding: 8,
-      backgroundColor: colors.surface,
-      borderRadius: 12,
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: 2 },
-      shadowOpacity: 0.05,
-      shadowRadius: 4,
-      elevation: 2,
+      position: 'absolute', left: 0, top: 0, padding: 8,
+      backgroundColor: colors.surface, borderRadius: 12,
+      shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.05, shadowRadius: 4, elevation: 2,
     },
-    avatarContainer: {
-      position: 'relative',
-      marginBottom: 16,
-    },
+    avatarContainer: { position: 'relative', marginBottom: 16 },
     avatarCircle: {
-      width: 90,
-      height: 90,
-      borderRadius: 45,
+      width: 90, height: 90, borderRadius: 45,
       backgroundColor: `${colors.primary}15`,
-      justifyContent: 'center',
-      alignItems: 'center',
-      borderWidth: 2,
-      borderColor: colors.primary,
+      justifyContent: 'center', alignItems: 'center',
+      borderWidth: 2, borderColor: colors.primary,
     },
     badge: {
-      position: 'absolute',
-      bottom: 0,
-      right: 0,
-      backgroundColor: colors.primary,
-      width: 28,
-      height: 28,
-      borderRadius: 14,
-      justifyContent: 'center',
-      alignItems: 'center',
-      borderWidth: 2,
-      borderColor: colors.surfaceLight,
+      position: 'absolute', bottom: 0, right: 0,
+      backgroundColor: colors.primary, width: 28, height: 28, borderRadius: 14,
+      justifyContent: 'center', alignItems: 'center',
+      borderWidth: 2, borderColor: colors.surfaceLight,
     },
-    title: {
-      fontSize: 28,
-      fontFamily: 'PlusJakartaSans_700Bold',
-      color: colors.text,
-      marginBottom: 6,
-    },
-    subtitle: {
-      fontSize: 15,
-      fontFamily: 'PlusJakartaSans_400Regular',
-      color: colors.textDim,
-      textAlign: 'center',
-    },
+    title: { fontSize: 28, fontFamily: 'PlusJakartaSans_700Bold', color: colors.text, marginBottom: 6 },
+    subtitle: { fontSize: 15, fontFamily: 'PlusJakartaSans_400Regular', color: colors.textDim, textAlign: 'center' },
     signedInCard: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      backgroundColor: colors.surface,
-      paddingHorizontal: 16,
-      paddingVertical: 12,
-      borderRadius: 16,
-      marginTop: 20,
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: 2 },
-      shadowOpacity: 0.05,
-      shadowRadius: 8,
-      elevation: 2,
-      width: '100%',
+      flexDirection: 'row', alignItems: 'center',
+      backgroundColor: colors.surface, paddingHorizontal: 16, paddingVertical: 12,
+      borderRadius: 16, marginTop: 20,
+      shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.05, shadowRadius: 8, elevation: 2, width: '100%',
     },
-    signedInText: {
-      flex: 1,
-      fontSize: 13,
-      fontFamily: 'PlusJakartaSans_500Medium',
-      color: colors.textDim,
-      marginLeft: 10,
-    },
-    signedInPhone: {
-      color: colors.text,
-      fontFamily: 'PlusJakartaSans_700Bold',
-    },
-    changeText: {
-      color: colors.primary,
-      fontFamily: 'PlusJakartaSans_700Bold',
-      fontSize: 13,
-    },
+    signedInText: { flex: 1, fontSize: 13, fontFamily: 'PlusJakartaSans_500Medium', color: colors.textDim, marginLeft: 10 },
+    signedInPhone: { color: colors.text, fontFamily: 'PlusJakartaSans_700Bold' },
+    changeText: { color: colors.primary, fontFamily: 'PlusJakartaSans_700Bold', fontSize: 13 },
     formCard: {
-      backgroundColor: colors.surface,
-      borderRadius: 24,
-      padding: 24,
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.05,
-      shadowRadius: 12,
-      elevation: 3,
-      marginBottom: 24,
+      backgroundColor: colors.surface, borderRadius: 24, padding: 24,
+      shadowColor: '#000', shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.05, shadowRadius: 12, elevation: 3, marginBottom: 24,
     },
-    inputContainer: {
-      marginBottom: 20,
-    },
+    inputContainer: { marginBottom: 20 },
     inputLabel: {
-      fontSize: 11,
-      fontFamily: 'PlusJakartaSans_700Bold',
-      color: colors.textDim,
-      letterSpacing: 1,
-      marginBottom: 8,
-      marginLeft: 4,
+      fontSize: 11, fontFamily: 'PlusJakartaSans_700Bold', color: colors.textDim,
+      letterSpacing: 1, marginBottom: 8, marginLeft: 4,
     },
     inputBox: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      backgroundColor: colors.surfaceLight,
-      borderWidth: 1.5,
-      borderColor: 'transparent',
-      borderRadius: 16,
-      height: 56,
-      paddingHorizontal: 16,
+      flexDirection: 'row', alignItems: 'center',
+      backgroundColor: colors.surfaceLight, borderWidth: 1.5, borderColor: 'transparent',
+      borderRadius: 16, height: 56, paddingHorizontal: 16,
     },
-    inputBoxFocused: {
-      borderColor: colors.primary,
-      backgroundColor: `${colors.primary}05`,
-    },
-    inputIcon: {
-      marginRight: 12,
-    },
+    inputBoxFocused: { borderColor: colors.primary, backgroundColor: `${colors.primary}05` },
+    inputIcon: { marginRight: 12 },
     textInput: {
-      flex: 1,
-      fontSize: 16,
-      fontFamily: 'PlusJakartaSans_600SemiBold',
-      color: colors.text,
-      includeFontPadding: false,
+      flex: 1, fontSize: 16, fontFamily: 'PlusJakartaSans_600SemiBold',
+      color: colors.text, includeFontPadding: false,
     },
-    dropdownContainer: {
-      marginTop: 8,
-      backgroundColor: colors.surfaceLight,
-      borderRadius: 16,
-      overflow: 'hidden',
-    },
-    dropdownOption: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      paddingVertical: 14,
-      paddingHorizontal: 16,
-    },
-    dropdownOptionBorder: {
-      borderBottomWidth: 1,
-      borderBottomColor: colors.border,
-    },
-    dropdownOptionSelected: {
-      backgroundColor: `${colors.primary}10`,
-    },
-    dropdownOptionText: {
-      fontSize: 15,
-      fontFamily: 'PlusJakartaSans_500Medium',
-      color: colors.text,
-    },
-    dropdownOptionTextActive: {
-      fontFamily: 'PlusJakartaSans_700Bold',
-      color: colors.primary,
-    },
-    tosContainer: {
-      flexDirection: 'row',
-      alignItems: 'flex-start',
-      marginBottom: 32,
-      paddingHorizontal: 8,
-    },
+    dropdownContainer: { marginTop: 8, backgroundColor: colors.surfaceLight, borderRadius: 16, overflow: 'hidden' },
+    dropdownOption: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14, paddingHorizontal: 16 },
+    dropdownOptionBorder: { borderBottomWidth: 1, borderBottomColor: colors.border },
+    dropdownOptionSelected: { backgroundColor: `${colors.primary}10` },
+    dropdownOptionText: { fontSize: 15, fontFamily: 'PlusJakartaSans_500Medium', color: colors.text },
+    dropdownOptionTextActive: { fontFamily: 'PlusJakartaSans_700Bold', color: colors.primary },
+    tosContainer: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 32, paddingHorizontal: 8 },
     checkbox: {
-      width: 24,
-      height: 24,
-      borderRadius: 8,
-      borderWidth: 2,
-      borderColor: colors.textDim,
-      justifyContent: 'center',
-      alignItems: 'center',
-      marginRight: 12,
-      marginTop: 2,
+      width: 24, height: 24, borderRadius: 8, borderWidth: 2, borderColor: colors.textDim,
+      justifyContent: 'center', alignItems: 'center', marginRight: 12, marginTop: 2,
     },
-    checkboxActive: {
-      backgroundColor: colors.primary,
-      borderColor: colors.primary,
-    },
-    tosText: {
-      flex: 1,
-      fontSize: 14,
-      fontFamily: 'PlusJakartaSans_400Regular',
-      color: colors.textDim,
-      lineHeight: 22,
-    },
-    link: {
-      color: colors.primary,
-      fontFamily: 'PlusJakartaSans_600SemiBold',
-    },
+    checkboxActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+    tosText: { flex: 1, fontSize: 14, fontFamily: 'PlusJakartaSans_400Regular', color: colors.textDim, lineHeight: 22 },
+    link: { color: colors.primary, fontFamily: 'PlusJakartaSans_600SemiBold' },
     submitBtn: {
-      backgroundColor: colors.primary,
-      height: 60,
-      borderRadius: 20,
-      flexDirection: 'row',
-      justifyContent: 'center',
-      alignItems: 'center',
-      shadowColor: colors.primary,
-      shadowOffset: { width: 0, height: 6 },
-      shadowOpacity: 0.3,
-      shadowRadius: 12,
-      elevation: 6,
+      backgroundColor: colors.primary, height: 60, borderRadius: 20,
+      flexDirection: 'row', justifyContent: 'center', alignItems: 'center',
+      shadowColor: colors.primary, shadowOffset: { width: 0, height: 6 },
+      shadowOpacity: 0.3, shadowRadius: 12, elevation: 6,
     },
-    submitBtnDisabled: {
-      backgroundColor: colors.border,
-      shadowOpacity: 0,
-      elevation: 0,
-    },
-    submitBtnText: {
-      color: '#FFF',
-      fontSize: 17,
-      fontFamily: 'PlusJakartaSans_700Bold',
-      marginRight: 8,
-    },
+    submitBtnDisabled: { backgroundColor: colors.border, shadowOpacity: 0, elevation: 0 },
+    submitBtnText: { color: '#FFF', fontSize: 17, fontFamily: 'PlusJakartaSans_700Bold', marginRight: 8 },
   });
 }

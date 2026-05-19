@@ -256,7 +256,7 @@ export default function RideDetailsScreen() {
             ))}
             <View style={[styles.fareBreakdownRow, styles.fareBreakdownTotal]}>
               <Text style={styles.fareBreakdownTotalLabel}>You paid</Text>
-              <Text style={styles.fareBreakdownTotalValue}>${parseFloat(ride.grand_total || ride.total_fare || '0').toFixed(2)}</Text>
+              <Text style={styles.fareBreakdownTotalValue}>${normalizedBreakdown.reduce((sum: number, l: any) => l.amount != null ? sum + parseFloat(String(l.amount)) : sum, 0).toFixed(2)}</Text>
             </View>
             <View style={styles.paymentRow}>
               <Ionicons

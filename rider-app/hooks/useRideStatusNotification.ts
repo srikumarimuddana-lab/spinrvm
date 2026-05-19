@@ -24,7 +24,6 @@ import { useEffect, useRef } from 'react';
 import { Platform } from 'react-native';
 import { useRideStore } from '../store/rideStore';
 
-// Lazy-require so the app still mounts in Expo Go / web.
 let Notifications: any = null;
 try {
   Notifications = require('expo-notifications');
@@ -33,40 +32,82 @@ try {
 const NOTIF_ID = 'spinr_ride_status_live';
 export const RIDE_STATUS_CHANNEL = 'ride-status-live';
 
-const STATUS_CONTENT: Record<string, { title: string; body: string }> = {
-  searching:       { title: 'Spinr — Finding your driver 🔍', body: 'Searching for a nearby driver…' },
-  driver_assigned: { title: 'Spinr — Driver found', body: 'Driver has been notified. Waiting for acceptance…' },
-  driver_accepted: { title: 'Spinr — Driver on the way 🚗', body: 'Your driver accepted and is heading to the pickup.' },
-  driver_arrived:  { title: 'Spinr — Driver arrived! 📍', body: 'Your driver is waiting at the pickup point.' },
-  in_progress:     { title: 'Spinr — Ride in progress', body: 'Sit back and enjoy your ride.' },
-};
+const ACTIVE_STATUSES = new Set([
+  'searching', 'driver_assigned', 'driver_accepted', 'driver_arrived', 'in_progress',
+]);
 
-const ACTIVE_STATUSES = new Set(Object.keys(STATUS_CONTENT));
+function formatEta(seconds: number | null | undefined): string {
+  if (!seconds || seconds <= 0) return '';
+  const mins = Math.ceil(seconds / 60);
+  return mins === 1 ? '1 min away' : `${mins} min away`;
+}
+
+function buildContent(
+  status: string,
+  ride: any,
+  driver: any,
+  etaSeconds: number | null,
+): { title: string; body: string } {
+  const driverName = driver?.name?.split(' ')[0] || 'Driver';
+  const vehicle = driver
+    ? [driver.vehicle_color, driver.vehicle_make, driver.vehicle_model].filter(Boolean).join(' ')
+    : '';
+  const plate = driver?.license_plate || '';
+  const eta = formatEta(etaSeconds);
+  const dropoff = ride?.dropoff_address || '';
+  const otp = ride?.pickup_otp;
+
+  switch (status) {
+    case 'searching':
+      return {
+        title: 'Finding your driver 🔍',
+        body: dropoff ? `To ${dropoff}` : 'Searching for a nearby driver…',
+      };
+    case 'driver_assigned':
+      return {
+        title: `${driverName} is being notified`,
+        body: [vehicle, plate].filter(Boolean).join(' · '),
+      };
+    case 'driver_accepted':
+      return {
+        title: `${driverName} is on the way 🚗`,
+        body: [eta, vehicle, plate].filter(Boolean).join(' · '),
+      };
+    case 'driver_arrived':
+      return {
+        title: `${driverName} has arrived! 📍`,
+        body: [vehicle, plate, otp ? `PIN: ${otp}` : ''].filter(Boolean).join(' · '),
+      };
+    case 'in_progress':
+      return {
+        title: `Heading to destination`,
+        body: [eta || 'Ride in progress', dropoff].filter(Boolean).join(' · '),
+      };
+    default:
+      return { title: 'Spinr', body: '' };
+  }
+}
 
 export function useRideStatusNotification() {
   const currentRide = useRideStore(s => s.currentRide);
+  const currentDriver = useRideStore(s => s.currentDriver);
+  const driverEtaSeconds = useRideStore(s => s.driverEtaSeconds);
   const isPostedRef = useRef(false);
 
   useEffect(() => {
-    // Android APK only — Expo Go / web / iOS are all no-ops.
     if (!Notifications || Platform.OS !== 'android') return;
 
     const status = currentRide?.status as string | undefined;
 
     if (status && ACTIVE_STATUSES.has(status)) {
-      const { title, body } = STATUS_CONTENT[status];
+      const { title, body } = buildContent(status, currentRide, currentDriver, driverEtaSeconds);
       Notifications.scheduleNotificationAsync({
         identifier: NOTIF_ID,
         content: {
           title,
           body,
           data: { rideId: currentRide!.id, type: 'ride_status_live' },
-          // No sound — individual lifecycle alerts (driver accepted, arrived)
-          // are handled by the WS handler with the high-importance channel.
           sound: false,
-          // sticky: true prevents the rider from accidentally swiping the
-          // status bar notification away mid-trip. The app dismisses it
-          // programmatically when the ride ends.
           sticky: true,
           autoDismiss: false,
           channelId: RIDE_STATUS_CHANNEL,
@@ -77,9 +118,8 @@ export function useRideStatusNotification() {
         .then(() => { isPostedRef.current = true; })
         .catch((e: any) => console.warn('[RideNotif] Failed to post status notification:', e));
     } else if (isPostedRef.current) {
-      // Ride completed or cancelled — remove the persistent notification.
       Notifications.dismissNotificationAsync(NOTIF_ID).catch(() => {});
       isPostedRef.current = false;
     }
-  }, [currentRide?.status, currentRide?.id]);
+  }, [currentRide?.status, currentRide?.id, currentDriver?.name, driverEtaSeconds]);
 }

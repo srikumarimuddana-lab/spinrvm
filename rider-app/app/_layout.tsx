@@ -1,9 +1,10 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 export const StripeKeyContext = React.createContext<string | null>(null);
 import { Stack, router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { View, ActivityIndicator, StyleSheet, Text, Platform } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { StripeProvider } from '@stripe/stripe-react-native';
 import {
   useFonts,
   PlusJakartaSans_400Regular,
@@ -16,11 +17,13 @@ import * as SplashScreen from 'expo-splash-screen';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 
+import api from '@shared/api/client';
 import { useAuthStore } from '@shared/store/authStore';
 import { useLocationStore } from '@shared/store/locationStore';
 import SpinrConfig from '@shared/config/spinr.config';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { ThemeProvider, useTheme } from '@shared/theme/ThemeContext';
+import { useRideStatusNotification } from '../hooks/useRideStatusNotification';
 import Toast from '../components/Toast';
 
 export default function RootLayout() {
@@ -33,16 +36,55 @@ export default function RootLayout() {
 
   const { initialize: initializeAuth, isInitialized: isAuthInitialized } = useAuthStore();
   const { initialize: initializeLocation, isInitialized: isLocationInitialized } = useLocationStore();
+  const [stripePublishableKey, setStripePublishableKey] = useState<string | null>(null);
 
   useEffect(() => {
     const init = async () => {
       try {
         await Promise.all([initializeAuth(), initializeLocation()]);
+        if (Platform.OS === 'android') {
+          try {
+            const Notif = require('expo-notifications');
+            await Notif.setNotificationChannelAsync('ride-updates', {
+              name: 'Ride Updates',
+              importance: Notif.AndroidImportance.HIGH,
+              sound: 'default',
+              vibrationPattern: [0, 300, 150, 300],
+              enableVibrate: true,
+            });
+            await Notif.setNotificationChannelAsync('ride-status-live', {
+              name: 'Live Ride Status',
+              description: 'Shows current ride progress in the notification bar.',
+              importance: Notif.AndroidImportance.LOW,
+              sound: null,
+              enableVibrate: false,
+            });
+            await Notif.setNotificationChannelAsync('default', {
+              name: 'Default',
+              importance: Notif.AndroidImportance.DEFAULT,
+              sound: 'default',
+            });
+          } catch (e) {
+            console.log('[Push] Channel setup failed:', e);
+          }
+        }
       } catch (err) {
         console.error('Initialization error:', err);
       }
     };
     init();
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await api.get<{ stripe_publishable_key?: string }>('/settings');
+        const key = res.data?.stripe_publishable_key;
+        if (key) setStripePublishableKey(key);
+      } catch (e) {
+        console.log('[Stripe] Failed to fetch publishable key:', e);
+      }
+    })();
   }, []);
 
   const onLoadingLayout = useCallback(() => {
@@ -62,19 +104,37 @@ export default function RootLayout() {
 
   return (
     <ThemeProvider>
-      <RootLayoutInner />
+      <RootLayoutInner stripePublishableKey={stripePublishableKey} />
     </ThemeProvider>
   );
 }
 
-function RootLayoutInner() {
+function MaybeStripeProvider({
+  publishableKey,
+  children,
+}: {
+  publishableKey: string | null;
+  children: React.ReactNode;
+}) {
+  if (!publishableKey) return <>{children}</>;
+  return (
+    <StripeProvider publishableKey={publishableKey} merchantIdentifier="merchant.com.spinr.user">
+      {children as React.ReactElement}
+    </StripeProvider>
+  );
+}
+
+function RootLayoutInner({ stripePublishableKey }: { stripePublishableKey: string | null }) {
   const { isDark } = useTheme();
+  useRideStatusNotification();
 
   return (
     <ErrorBoundary>
       <GestureHandlerRootView style={{ flex: 1 }}>
         <SafeAreaProvider>
           <StatusBar style={isDark ? 'light' : 'dark'} />
+          <StripeKeyContext.Provider value={stripePublishableKey}>
+          <MaybeStripeProvider publishableKey={stripePublishableKey}>
           <Stack
             screenOptions={{
               headerShown: false,
@@ -117,6 +177,8 @@ function RootLayoutInner() {
             <Stack.Screen name="work-allowance-request" />
             <Stack.Screen name="become-driver" />
           </Stack>
+          </MaybeStripeProvider>
+          </StripeKeyContext.Provider>
           <Toast />
         </SafeAreaProvider>
       </GestureHandlerRootView>

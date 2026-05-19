@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, useMemo } from 'react';
+import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View,
@@ -14,6 +14,7 @@ import {
   Animated,
   TextInput,
 } from 'react-native';
+import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import CustomToggle from '../components/CustomToggle';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -109,11 +110,12 @@ function RideOptionsScreenContent() {
   }>({ visible: false, title: '', message: '', variant: 'info' });
 
   const mapRef = useRef<MapView>(null);
+  const sheetRef = useRef<BottomSheet>(null);
+  const snapPoints = useMemo(() => ['40%', '68%'], []);
   const { scheduleReminder } = useScheduledRideReminder();
 
   // ── Derived values ──
   const selectedEstimate = estimates.length > selectedIndex ? estimates[selectedIndex] : null;
-  const sheetScrollMax = SCREEN_HEIGHT * 0.68 - 20 - 180;
 
   const allUnavailable = estimates.length > 0 && !estimates.some(e => e.available);
   // Use server-computed discount_amount — correct for percentage promos and free_ride.
@@ -443,15 +445,16 @@ function RideOptionsScreenContent() {
       )}
 
       {/* ═══ Bottom sheet ═══ */}
-      {/* ═══ Bottom sheet ═══ */}
-      {/* pointerEvents="none" on the map wrapper above prevents Google Maps' native gesture
-          recognizer from stealing vertical scroll events from the sheet's ScrollView
-          on Android production builds. The map is decorative here (auto-fit route). */}
-      <View style={styles.sheet}>
-        {/* Drag handle */}
-        <View style={styles.sheetHandle} />
-        <ScrollView
-          style={{ flex: 1, maxHeight: sheetScrollMax }}
+      <BottomSheet
+        ref={sheetRef}
+        index={0}
+        snapPoints={snapPoints}
+        backgroundStyle={styles.sheetBackground}
+        handleIndicatorStyle={styles.sheetIndicator}
+        overDragResistanceFactor={10}
+        enablePanDownToClose={false}
+      >
+        <BottomSheetScrollView
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
@@ -641,67 +644,67 @@ function RideOptionsScreenContent() {
               Free cancellation within 2 min of driver acceptance.
             </Text>
           </View>
-        </ScrollView>
 
-        {/* ═══ Fixed footer — Uber style ═══ */}
-        {!isLoading && !allUnavailable && estimates.length > 0 && selectedEstimate && (
-          <View style={[styles.fixedFooter, { paddingBottom: Math.max(insets.bottom, 12) + 4 }]}>
-            {/* Payment method row */}
-            <TouchableOpacity style={styles.actionRow} onPress={() => setShowPaymentSheet(true)} activeOpacity={0.7}>
-              <View style={styles.actionRowIcon}>
-                <Ionicons name={paymentIcon} size={18} color={colors.primary} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.actionRowValue}>{paymentLabel}</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={16} color="#9CA3AF" />
-            </TouchableOpacity>
-
-            {/* Schedule row */}
-            <TouchableOpacity
-              style={styles.actionRow}
-              onPress={() => scheduledTime ? setScheduledTime(null) : setShowScheduleModal(true)}
-              activeOpacity={0.7}
-            >
-              <View style={styles.actionRowIcon}>
-                <Ionicons name="time" size={18} color={colors.primary} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.actionRowValue}>
-                  {scheduledTime
-                    ? `${scheduledTime.toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' })} at ${scheduledTime.toLocaleTimeString('en-CA', { hour: '2-digit', minute: '2-digit' })}`
-                    : 'Now'}
-                </Text>
-              </View>
-              {scheduledTime ? (
-                <TouchableOpacity onPress={() => setScheduledTime(null)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                  <Ionicons name="close-circle" size={18} color="#9CA3AF" />
-                </TouchableOpacity>
-              ) : (
+          {/* ═══ Fixed footer — Uber style ═══ */}
+          {!isLoading && !allUnavailable && estimates.length > 0 && selectedEstimate && (
+            <View style={[styles.fixedFooter, { paddingBottom: Math.max(insets.bottom, 12) + 4 }]}>
+              {/* Payment method row */}
+              <TouchableOpacity style={styles.actionRow} onPress={() => setShowPaymentSheet(true)} activeOpacity={0.7}>
+                <View style={styles.actionRowIcon}>
+                  <Ionicons name={paymentIcon} size={18} color={colors.primary} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.actionRowValue}>{paymentLabel}</Text>
+                </View>
                 <Ionicons name="chevron-forward" size={16} color="#9CA3AF" />
-              )}
-            </TouchableOpacity>
+              </TouchableOpacity>
 
-            {/* Confirm button */}
-            <TouchableOpacity
-              style={[styles.confirmButton, (!selectedEstimate.available || isBooking) && { opacity: 0.5 }]}
-              onPress={handleBookRide}
-              activeOpacity={0.8}
-              disabled={!selectedEstimate.available || isBooking}
-              accessibilityRole="button"
-              accessibilityLabel={`${scheduledTime ? 'Schedule' : 'Confirm'} ${selectedEstimate.vehicle_type.name}`}
-            >
-              {isBooking ? (
-                <ActivityIndicator color="#FFFFFF" />
-              ) : (
-                <Text style={styles.confirmButtonText} allowFontScaling={false}>
-                  {scheduledTime ? 'Schedule' : 'Confirm'} {selectedEstimate.vehicle_type.name} · ${totalFare.toFixed(2)}
-                </Text>
-              )}
-            </TouchableOpacity>
-          </View>
-        )}
-      </View>
+              {/* Schedule row */}
+              <TouchableOpacity
+                style={styles.actionRow}
+                onPress={() => scheduledTime ? setScheduledTime(null) : setShowScheduleModal(true)}
+                activeOpacity={0.7}
+              >
+                <View style={styles.actionRowIcon}>
+                  <Ionicons name="time" size={18} color={colors.primary} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.actionRowValue}>
+                    {scheduledTime
+                      ? `${scheduledTime.toLocaleDateString('en-CA', { weekday: 'short', month: 'short', day: 'numeric' })} at ${scheduledTime.toLocaleTimeString('en-CA', { hour: '2-digit', minute: '2-digit' })}`
+                      : 'Now'}
+                  </Text>
+                </View>
+                {scheduledTime ? (
+                  <TouchableOpacity onPress={() => setScheduledTime(null)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                    <Ionicons name="close-circle" size={18} color="#9CA3AF" />
+                  </TouchableOpacity>
+                ) : (
+                  <Ionicons name="chevron-forward" size={16} color="#9CA3AF" />
+                )}
+              </TouchableOpacity>
+
+              {/* Confirm button */}
+              <TouchableOpacity
+                style={[styles.confirmButton, (!selectedEstimate.available || isBooking) && { opacity: 0.5 }]}
+                onPress={handleBookRide}
+                activeOpacity={0.8}
+                disabled={!selectedEstimate.available || isBooking}
+                accessibilityRole="button"
+                accessibilityLabel={`${scheduledTime ? 'Schedule' : 'Confirm'} ${selectedEstimate.vehicle_type.name}`}
+              >
+                {isBooking ? (
+                  <ActivityIndicator color="#FFFFFF" />
+                ) : (
+                  <Text style={styles.confirmButtonText} allowFontScaling={false}>
+                    {scheduledTime ? 'Schedule' : 'Confirm'} {selectedEstimate.vehicle_type.name} · ${totalFare.toFixed(2)}
+                  </Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          )}
+        </BottomSheetScrollView>
+      </BottomSheet>
 
       {/* ═══ Payment method modal ═══ */}
       <Modal visible={showPaymentSheet} animationType="slide" transparent onRequestClose={() => setShowPaymentSheet(false)}>
@@ -1107,11 +1110,7 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
     },
 
     // ── Bottom sheet ──
-    sheet: {
-      position: 'absolute',
-      bottom: 0,
-      left: 0,
-      right: 0,
+    sheetBackground: {
       backgroundColor: colors.surface,
       borderTopLeftRadius: 24,
       borderTopRightRadius: 24,
@@ -1121,14 +1120,11 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
       shadowRadius: 12,
       elevation: 16,
     },
-    sheetHandle: {
+    sheetIndicator: {
       width: 40,
       height: 4,
       borderRadius: 2,
       backgroundColor: '#D1D5DB',
-      alignSelf: 'center',
-      marginTop: 10,
-      marginBottom: 4,
     },
     sectionHeader: {
       flexDirection: 'row',

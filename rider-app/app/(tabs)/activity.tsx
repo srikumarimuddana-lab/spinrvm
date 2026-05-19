@@ -82,7 +82,6 @@ export default function ActivityScreen() {
       setVehicleTypes(typesMap);
     } catch (error) {
       setFetchError('Could not load rides. Pull to refresh.');
-      console.log('Error fetching activity data:', error);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -102,7 +101,7 @@ export default function ActivityScreen() {
   }, [loadingMore, nextCursor, fetchPage]);
 
   const lastFetchedAt = useRef<number>(0);
-  const ACTIVITY_TTL_MS = 30 * 1000; // re-fetch if tab hasn't been loaded in 30s
+  const ACTIVITY_TTL_MS = 30 * 1000;
 
   useFocusEffect(
     useCallback(() => {
@@ -174,7 +173,6 @@ export default function ActivityScreen() {
     return true;
   }), [rides, filter]);
 
-  // Group rides by month for section headers
   const sections = useMemo(() => {
     const groups: { title: string; data: RideHistory[] }[] = [];
     const keyMap: Record<string, RideHistory[]> = {};
@@ -197,7 +195,6 @@ export default function ActivityScreen() {
     return groups;
   }, [filteredRides]);
 
-  // Flatten sections into FlatList items (header + rides)
   type ListItem =
     | { type: 'header'; key: string; title: string }
     | { type: 'ride'; key: string; ride: RideHistory };
@@ -223,7 +220,6 @@ export default function ActivityScreen() {
         onPress={() => handleRidePress(ride)}
         accessibilityRole="button"
         accessibilityLabel={`${getStatusText(ride.status)} ride to ${ride.dropoff_address || 'unknown destination'}, $${fare}`}
-        accessibilityHint="Double-tap to view ride details"
       >
         <View style={[styles.rideIcon, { backgroundColor: '#FFF0F0' }]}>
           <Ionicons
@@ -238,7 +234,7 @@ export default function ActivityScreen() {
             {ride.dropoff_address || 'Unknown destination'}
           </Text>
           <Text style={styles.rideInfo}>
-            {formatDate(ride.created_at)} • {getVehicleType(ride.vehicle_type_id)}
+            {formatDate(ride.created_at)} · {getVehicleType(ride.vehicle_type_id)}
           </Text>
         </View>
 
@@ -263,27 +259,23 @@ export default function ActivityScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      {/* Header */}
       <View style={styles.header}>
         <Text style={styles.title}>{t('activity.title')}</Text>
         <TouchableOpacity
           style={styles.filterIcon}
           accessibilityRole="button"
           accessibilityLabel="Filter rides"
-          accessibilityHint="Opens ride filter options"
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
         >
           <Ionicons name="options-outline" size={24} color={colors.text} />
         </TouchableOpacity>
       </View>
 
-      {/* Tab Switcher — History vs Upcoming (R-P1-5) */}
       <View style={styles.tabRow} accessibilityRole="tablist">
         <TouchableOpacity
           style={[styles.tab, activeTab === 'history' && styles.tabActive]}
           onPress={() => setActiveTab('history')}
           accessibilityRole="tab"
-          accessibilityLabel="Ride history"
           accessibilityState={{ selected: activeTab === 'history' }}
         >
           <Text style={[styles.tabText, activeTab === 'history' && styles.tabTextActive]}>{t('activity.history_tab')}</Text>
@@ -292,7 +284,6 @@ export default function ActivityScreen() {
           style={[styles.tab, activeTab === 'upcoming' && styles.tabActive]}
           onPress={() => setActiveTab('upcoming')}
           accessibilityRole="tab"
-          accessibilityLabel={`Upcoming rides${scheduledRides.length > 0 ? `, ${scheduledRides.length} scheduled` : ''}`}
           accessibilityState={{ selected: activeTab === 'upcoming' }}
         >
           <Text style={[styles.tabText, activeTab === 'upcoming' && styles.tabTextActive]}>
@@ -303,7 +294,6 @@ export default function ActivityScreen() {
 
       {activeTab === 'history' && (
         <>
-          {/* Filter Tabs */}
           <View style={styles.filterTabs}>
             {(['all', 'personal', 'business'] as FilterType[]).map(f => (
               <TouchableOpacity
@@ -311,7 +301,6 @@ export default function ActivityScreen() {
                 style={[styles.filterTab, filter === f && styles.filterTabActive]}
                 onPress={() => setFilter(f as FilterType)}
                 accessibilityRole="radio"
-                accessibilityLabel={`${f.charAt(0).toUpperCase() + f.slice(1)} rides`}
                 accessibilityState={{ checked: filter === f }}
               >
                 <Text style={[styles.filterTabText, filter === f && styles.filterTabTextActive]}>
@@ -396,8 +385,7 @@ export default function ActivityScreen() {
                 style={styles.rideCard}
                 onPress={() => handleRidePress(ride)}
                 accessibilityRole="button"
-                accessibilityLabel={`Scheduled ride to ${ride.dropoff_address || 'unknown destination'}, ${ride.scheduled_time ? formatDate(ride.scheduled_time) : 'scheduled'}`}
-                accessibilityHint="Double-tap to view ride details"
+                accessibilityLabel={`Scheduled ride to ${ride.dropoff_address || 'unknown destination'}`}
               >
                 <View style={[styles.rideIcon, { backgroundColor: '#EFF6FF' }]}>
                   <Ionicons name="calendar" size={20} color="#3B82F6" />
@@ -407,7 +395,7 @@ export default function ActivityScreen() {
                     {ride.dropoff_address || 'Unknown destination'}
                   </Text>
                   <Text style={styles.rideInfo}>
-                    {ride.scheduled_time ? formatDate(ride.scheduled_time) : 'Scheduled'} • {getVehicleType(ride.vehicle_type_id)}
+                    {ride.scheduled_time ? formatDate(ride.scheduled_time) : 'Scheduled'} · {getVehicleType(ride.vehicle_type_id)}
                   </Text>
                 </View>
                 <View style={styles.rideFareContainer}>

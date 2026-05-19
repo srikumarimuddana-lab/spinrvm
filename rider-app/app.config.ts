@@ -151,7 +151,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
             android: {
                 minSdkVersion: 25,
                 compileSdkVersion: 36,
-                targetSdkVersion: 36,
+                targetSdkVersion: 35,
                 kotlinVersion: '2.2.21',
             }
         }],

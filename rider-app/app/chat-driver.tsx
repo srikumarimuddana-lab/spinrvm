@@ -14,6 +14,7 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useRideStore } from '../store/rideStore';
 import api from '@shared/api/client';
+import CustomAlert from '@shared/components/CustomAlert';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -32,6 +33,10 @@ export default function ChatDriverScreen() {
   const scrollViewRef = useRef<ScrollView>(null);
   const [message, setMessage] = useState('');
   const [sending, setSending] = useState(false);
+  const [alertState, setAlertState] = useState<{
+    visible: boolean; title: string; message: string;
+    variant: 'info' | 'warning' | 'danger' | 'success';
+  }>({ visible: false, title: '', message: '', variant: 'info' });
 
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -92,18 +97,37 @@ export default function ChatDriverScreen() {
 
   const sendMessage = async (text: string) => {
     if (!text.trim() || !rideId || sending) return;
+    const trimmed = text.trim();
     setSending(true);
+    setMessage('');
+
+    const optimisticId = `local-${Date.now()}`;
+    addChatMessage({
+      id: optimisticId,
+      text: trimmed,
+      sender: 'rider',
+      timestamp: new Date().toISOString(),
+    });
+
     try {
-      const res = await api.post<{ message?: unknown }>(`/rides/${rideId}/messages`, { text: text.trim() });
+      const res = await api.post<{ message?: unknown }>(`/rides/${rideId}/messages`, { text: trimmed });
       if (res.data?.message) {
-        // Optimistically add to local state (deduplicated by the store).
-        addChatMessage(res.data.message as import('../store/rideStore').ChatMessage);
+        const serverMsg = res.data.message as import('../store/rideStore').ChatMessage;
+        const current = useRideStore.getState().chatMessages;
+        setChatMessages(
+          current
+            .filter(m => m.id !== optimisticId)
+            .concat(serverMsg),
+        );
       }
-    } catch (e) {
-      console.log('[Chat] Send failed:', e);
+    } catch (e: any) {
+      const current = useRideStore.getState().chatMessages;
+      setChatMessages(current.filter(m => m.id !== optimisticId));
+      setMessage(trimmed);
+      const detail = e?.response?.data?.detail || e?.message || 'Could not send message. Check your connection.';
+      setAlertState({ visible: true, title: 'Send Failed', message: detail, variant: 'danger' });
     } finally {
       setSending(false);
-      setMessage('');
     }
   };
 
@@ -220,14 +244,23 @@ export default function ChatDriverScreen() {
           </View>
 
           <TouchableOpacity
-            style={[styles.sendButton, message.trim() && styles.sendButtonActive]}
+            style={[styles.sendButton, message.trim() && !sending && styles.sendButtonActive]}
             onPress={() => sendMessage(message)}
-            disabled={!message.trim()}
+            disabled={!message.trim() || sending}
           >
             <Ionicons name="send" size={20} color="#FFF" />
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
+
+      <CustomAlert
+        visible={alertState.visible}
+        title={alertState.title}
+        message={alertState.message}
+        variant={alertState.variant}
+        buttons={[{ text: 'OK', style: 'default' }]}
+        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
+      />
     </SafeAreaView>
   );
 }

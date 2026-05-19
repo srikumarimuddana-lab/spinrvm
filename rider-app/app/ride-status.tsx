@@ -166,7 +166,7 @@ export default function RideStatusScreen() {
                 clearRide();
                 router.replace('/(tabs)' as any);
               } catch {
-                setAlertState({ visible: true, title: 'Could not cancel', message: 'The server rejected the request. Please try again.', variant: 'error', buttons: [{ text: 'OK', style: 'default' }] });
+                setAlertState({ visible: true, title: 'Could not cancel', message: 'The server rejected the request. Please try again.', variant: 'danger', buttons: [{ text: 'OK', style: 'default' }] });
               }
             }
           },
@@ -191,7 +191,7 @@ export default function RideStatusScreen() {
                 clearRide();
                 router.replace('/(tabs)' as any);
               } catch {
-                setAlertState({ visible: true, title: 'Could not cancel', message: 'The server rejected the request. Please try again.', variant: 'error', buttons: [{ text: 'OK', style: 'default' }] });
+                setAlertState({ visible: true, title: 'Could not cancel', message: 'The server rejected the request. Please try again.', variant: 'danger', buttons: [{ text: 'OK', style: 'default' }] });
               }
             }
           },
@@ -213,7 +213,7 @@ export default function RideStatusScreen() {
                 clearRide();
                 router.replace('/(tabs)' as any);
               } catch {
-                setAlertState({ visible: true, title: 'Could not cancel', message: 'The server rejected the request. Please try again.', variant: 'error', buttons: [{ text: 'OK', style: 'default' }] });
+                setAlertState({ visible: true, title: 'Could not cancel', message: 'The server rejected the request. Please try again.', variant: 'danger', buttons: [{ text: 'OK', style: 'default' }] });
               }
             }
           },

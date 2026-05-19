@@ -25,7 +25,7 @@ const path = require('path');
 // (verified by a build whose [ExpoRootProject] log line shows compileSdk: 36 with this
 // plugin DISABLED in app.config.ts). See docs/android-build-strategy.md.
 const COMPILE_SDK = '36';
-const TARGET_SDK = '36';
+const TARGET_SDK = '35';
 
 const setOrAppend = (contents, key, value) => {
     const escaped = key.replace(/\./g, '\\.');

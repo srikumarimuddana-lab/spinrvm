@@ -259,15 +259,16 @@ def _money_str(v: Decimal) -> str:
 def _actual_duration_minutes(ride: dict) -> int | None:
     """Derive the actual trip-in-progress duration in whole minutes.
 
-    Backend records per-phase seconds in ``rides.phase_durations`` on
-    completion (migration 15). The original ``duration_minutes`` column
-    is the estimate at booking time and is never overwritten, so the
-    rider-facing receipt would show the estimate without this helper.
-
-    Returns None for rides that have no GPS-derived data (e.g. cancelled
-    before pickup, or completed before migration 15 landed). Callers
-    should fall back to ``duration_minutes`` in that case.
+    Preferred source is ``ride_metrics.phases.trip_in_progress.actual_duration_minutes``
+    (migration 89), assembled at completion from ride timestamps. Falls back
+    to the GPS-derived ``phase_durations`` (migration 15) for rides completed
+    before migration 89 landed. Returns None when neither source is populated
+    so callers can fall back to the booking-time estimate.
     """
+    trip_phase = ((ride.get("ride_metrics") or {}).get("phases") or {}).get("trip_in_progress") or {}
+    persisted = trip_phase.get("actual_duration_minutes")
+    if isinstance(persisted, (int, float)) and persisted > 0:
+        return int(persisted)
     phase = (ride.get("phase_durations") or {}).get("trip_in_progress")
     if phase is None:
         return None

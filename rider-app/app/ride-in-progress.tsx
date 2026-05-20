@@ -347,11 +347,28 @@ I've shared my live location with you for safety.
           </View>
         </View>
 
-        {/* Fare + Distance */}
+        {/* Fare + Distance — `Fare` is the rider's actual bill, NOT the
+            fare-side subtotal. Prefer grand_total (server source of truth);
+            fall back to a client-side compose only when grand_total is
+            missing on the row, so legacy rides without the column still
+            show something sensible. */}
         <View style={styles.fareRow}>
           <View style={styles.fareItem}>
             <Ionicons name="cash-outline" size={16} color={colors.textDim} />
-            <Text style={styles.fareValue} allowFontScaling={false}>${parseFloat((currentRide as any)?.grand_total || currentRide?.total_fare || '0').toFixed(2)}</Text>
+            <Text style={styles.fareValue} allowFontScaling={false}>
+              ${(() => {
+                const r = currentRide as any;
+                const gt = parseFloat(r?.grand_total ?? '0');
+                if (gt > 0) return gt.toFixed(2);
+                // Compose from breakdown: subtotal + area_fees + tax − discount
+                const subtotal = parseFloat(r?.total_fare ?? '0');
+                const areaFees = parseFloat(r?.area_fees_total ?? '0');
+                const tax = parseFloat(r?.tax_amount ?? '0');
+                const discount = parseFloat(r?.discount_amount ?? '0');
+                const composed = subtotal + areaFees + tax - discount;
+                return Math.max(0, composed).toFixed(2);
+              })()}
+            </Text>
             <Text style={styles.fareLabel}>Fare</Text>
           </View>
           <View style={styles.fareDivider} />

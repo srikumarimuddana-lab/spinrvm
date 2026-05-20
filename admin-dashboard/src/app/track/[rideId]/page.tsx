@@ -4,7 +4,28 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import { DEFAULT_CENTER, MAP_STYLE_URL, addStandardControls, fitBoundsToPoints } from '@/lib/map/maplibre-base';
+import { DEFAULT_CENTER, addStandardControls } from '@/lib/map/maplibre-base';
+
+// Inline raster style — no remote style.json fetch, no CSP surprises.
+// Works on any mobile browser as long as OSM raster tiles are reachable
+// (which they are from every modern carrier). Falls back gracefully even
+// if the page is opened on a flaky network.
+const RASTER_STYLE = {
+  version: 8 as const,
+  sources: {
+    osm: {
+      type: 'raster' as const,
+      tiles: [
+        'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        'https://c.tile.openstreetmap.org/{z}/{x}/{y}.png',
+      ],
+      tileSize: 256,
+      attribution: '© OpenStreetMap contributors',
+    },
+  },
+  layers: [{ id: 'osm-tiles', type: 'raster' as const, source: 'osm' }],
+};
 
 interface RideInfo {
   status: string;
@@ -55,6 +76,9 @@ export default function TrackRide() {
   const pickupMarkerRef = useRef<maplibregl.Marker | null>(null);
   const dropoffMarkerRef = useRef<maplibregl.Marker | null>(null);
   const didFitRef = useRef(false);
+  const routeFetchedRef = useRef(false);
+  const ROUTE_SOURCE_ID = 'spinr-route';
+  const ROUTE_LAYER_ID = 'spinr-route-line';
 
   // Poll the public endpoint every 5 s while the ride is active. The endpoint
   // is the canonical source — page just renders what it sends, no client math.
@@ -99,10 +123,16 @@ export default function TrackRide() {
     if (!mapContainerRef.current || mapRef.current) return;
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
-      style: MAP_STYLE_URL,
+      style: RASTER_STYLE as unknown as maplibregl.StyleSpecification,
       center: DEFAULT_CENTER,
       zoom: 11,
-      attributionControl: false,
+      attributionControl: { compact: true },
+    });
+    map.on('error', (e) => {
+      // Surface tile/style load failures so they don't fail silently in
+      // the field — the screen would otherwise just stay blank.
+      // eslint-disable-next-line no-console
+      console.warn('[track-map] map error:', e?.error?.message || e);
     });
     addStandardControls(map);
     mapRef.current = map;
@@ -156,10 +186,59 @@ export default function TrackRide() {
         driverMarkerRef.current = null;
       }
 
+      // Draw a road-following route between pickup and drop-off once both
+      // endpoints are known. OSRM (public OSM routing service, no key
+      // required) returns the polyline; we render it as a layer underneath
+      // the markers so the rider sees the actual streets the driver will
+      // take, not a straight line cutting across the map.
+      if (
+        !routeFetchedRef.current
+        && ride!.pickup_lat != null && ride!.pickup_lng != null
+        && ride!.dropoff_lat != null && ride!.dropoff_lng != null
+      ) {
+        routeFetchedRef.current = true;
+        const url =
+          `https://router.project-osrm.org/route/v1/driving/` +
+          `${ride!.pickup_lng},${ride!.pickup_lat};${ride!.dropoff_lng},${ride!.dropoff_lat}` +
+          `?overview=full&geometries=geojson`;
+        fetch(url)
+          .then((r) => (r.ok ? r.json() : null))
+          .then((data) => {
+            const coords: [number, number][] | undefined =
+              data?.routes?.[0]?.geometry?.coordinates;
+            if (!coords || coords.length < 2 || !mapRef.current) return;
+            const m = mapRef.current;
+            if (m.getSource(ROUTE_SOURCE_ID)) {
+              (m.getSource(ROUTE_SOURCE_ID) as maplibregl.GeoJSONSource).setData({
+                type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: coords },
+              });
+            } else {
+              m.addSource(ROUTE_SOURCE_ID, {
+                type: 'geojson',
+                data: { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: coords } },
+              });
+              m.addLayer({
+                id: ROUTE_LAYER_ID,
+                type: 'line',
+                source: ROUTE_SOURCE_ID,
+                layout: { 'line-cap': 'round', 'line-join': 'round' },
+                paint: { 'line-color': '#111827', 'line-width': 4, 'line-opacity': 0.85 },
+              });
+            }
+          })
+          .catch(() => { /* silent fallback — markers remain visible */ });
+      }
+
       // Fit once on first load so the rider sees the whole trip; afterwards
       // only re-center on the driver so the camera doesn't keep snapping back.
       if (!didFitRef.current && points.length >= 2) {
-        fitBoundsToPoints(map!, points, { padding: 80, maxZoom: 15 });
+        // Build a LngLatBounds from the points and fit with our own options
+        // (the shared helper only takes a number for padding — no maxZoom).
+        const bounds = points.reduce(
+          (b, p) => b.extend([p.lng, p.lat] as [number, number]),
+          new maplibregl.LngLatBounds(),
+        );
+        map!.fitBounds(bounds, { padding: 80, maxZoom: 15, duration: 500 });
         didFitRef.current = true;
       } else if (d?.lat != null && d?.lng != null && didFitRef.current) {
         map!.easeTo({ center: [d.lng, d.lat], duration: 800 });
@@ -191,9 +270,12 @@ export default function TrackRide() {
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
-      {/* Map fills the top of the viewport */}
-      <div className="relative flex-1 min-h-[55vh]">
-        <div ref={mapContainerRef} className="absolute inset-0" />
+      {/* Map fills the top of the viewport. Use explicit height (h-[60vh])
+          rather than flex-1 so the canvas always has dimensions on first
+          paint — flex-grow can resolve to 0 height on some mobile browsers
+          while the layout is settling, which kills MapLibre silently. */}
+      <div className="relative w-full" style={{ height: '60vh', minHeight: 320 }}>
+        <div ref={mapContainerRef} className="absolute inset-0 bg-gray-200" />
 
         {/* Status pill, top-left over the map */}
         <div

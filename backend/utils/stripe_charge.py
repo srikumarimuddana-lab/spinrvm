@@ -81,7 +81,7 @@ class ChargeOutcome:
     status: str  # one of: succeeded, requires_action, declined, failed, unconfigured
     payment_intent_id: Optional[str] = None
     client_secret: Optional[str] = None
-    charged_amount: float = 0.0
+    charged_amount: Decimal = Decimal("0.00")
     decline_code: Optional[str] = None
     error_message: Optional[str] = None
     raw: Dict[str, Any] = field(default_factory=dict)
@@ -122,7 +122,7 @@ async def charge_ride(
     if total_amount <= 0:
         # A $0 ride is probably a bug upstream, but we don't want to
         # hit Stripe for it. Treat as a no-op success — no charge needed.
-        return ChargeOutcome(status="succeeded", charged_amount=0.0)
+        return ChargeOutcome(status="succeeded", charged_amount=Decimal("0.00"))
 
     if stripe is None:
         logger.error("stripe package not installed; cannot charge card")
@@ -190,8 +190,6 @@ async def charge_ride(
             "tip_amount": tip_str,
             "surge_multiplier": str(ride.get("surge_multiplier") or "1.0"),
             "payment_method_type": ride.get("payment_method") or "card",
-            "pickup_address": (ride.get("pickup_address") or "")[:500],
-            "dropoff_address": (ride.get("dropoff_address") or "")[:500],
             "source": "ride_completion_charge",
         },
     }
@@ -248,7 +246,9 @@ async def charge_ride(
         return ChargeOutcome(
             status="succeeded",
             payment_intent_id=pi_id,
-            charged_amount=float(total_amount),
+            charged_amount=Decimal(str(total_amount)).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            ),
         )
 
     if status == "requires_action" or status == "requires_source_action":

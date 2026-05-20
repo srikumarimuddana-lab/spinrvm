@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS stripe_disputes (
     stripe_dispute_id text NOT NULL,
     payment_intent_id text,
     ride_id         text REFERENCES rides(id),
-    amount_cents    integer NOT NULL DEFAULT 0,
+    amount_cents    integer NOT NULL DEFAULT 0 CHECK (amount_cents >= 0),
     reason          text NOT NULL DEFAULT 'unknown',
     status          text NOT NULL DEFAULT 'needs_response',
     stripe_event_id text,

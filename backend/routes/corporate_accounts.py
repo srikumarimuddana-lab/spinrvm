@@ -7,6 +7,7 @@ for business rides and expense management.
 
 import logging
 from datetime import datetime
+from decimal import Decimal
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
@@ -72,8 +73,8 @@ class CorporateAccountBase(BaseModel):
     )
     contact_email: Optional[str] = Field(None, description="Contact email address")
     contact_phone: Optional[str] = Field(None, description="Contact phone number")
-    credit_limit: float = Field(
-        0, ge=0, description="Credit limit for corporate billing"
+    credit_limit: Decimal = Field(
+        Decimal("0"), ge=0, description="Credit limit for corporate billing"
     )
     is_active: bool = Field(True, description="Whether the account is active")
 
@@ -87,7 +88,7 @@ class CorporateAccountUpdate(BaseModel):
     contact_name: Optional[str] = Field(None, max_length=100)
     contact_email: Optional[str] = Field(None)
     contact_phone: Optional[str] = Field(None)
-    credit_limit: Optional[float] = Field(None, ge=0)
+    credit_limit: Optional[Decimal] = Field(None, ge=0)
     is_active: Optional[bool] = Field(None)
 
 

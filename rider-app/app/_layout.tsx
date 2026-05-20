@@ -1,30 +1,102 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+
 export const StripeKeyContext = React.createContext<string | null>(null);
 import { Stack, router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { View, ActivityIndicator, StyleSheet, Text, Platform } from 'react-native';
+import { AppState, View, ActivityIndicator, StyleSheet, Text, Platform } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { StripeProvider } from '@stripe/stripe-react-native';
-import {
-  useFonts,
-  PlusJakartaSans_400Regular,
-  PlusJakartaSans_500Medium,
-  PlusJakartaSans_600SemiBold,
-  PlusJakartaSans_700Bold,
-} from '@expo-google-fonts/plus-jakarta-sans';
+import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold, PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as SplashScreen from 'expo-splash-screen';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
-
+import Constants, { ExecutionEnvironment } from 'expo-constants';
+import NetInfo from '@react-native-community/netinfo';
 import api from '@shared/api/client';
 import { useAuthStore } from '@shared/store/authStore';
 import { useLocationStore } from '@shared/store/locationStore';
+import { useRideStore } from '../store/rideStore';
+import { useWorkProfileStore } from '../store/workProfileStore';
+import { useRiderSocket } from '../hooks/useRiderSocket';
 import SpinrConfig from '@shared/config/spinr.config';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
+import { OfflineBanner } from '@shared/components/OfflineBanner';
 import { ThemeProvider, useTheme } from '@shared/theme/ThemeContext';
+import { captureMessage, setUser } from '@shared/services/errorReporting';
+import Analytics from '@shared/analytics';
+import {
+  initFirebaseServices,
+  requestPushPermissionAndGetToken,
+  onForegroundMessage,
+  setBackgroundMessageHandler,
+  onTokenRefresh,
+} from '@shared/services/firebase';
+import { handleScheduledRideReminderFCM } from '../hooks/useScheduledRideReminder';
 import { useRideStatusNotification } from '../hooks/useRideStatusNotification';
+import ConfirmSheet from '../components/ConfirmSheet';
+import type { ConfirmSheetButton } from '../components/ConfirmSheet';
 import Toast from '../components/Toast';
+
+
+function routeFromNotificationData(data: Record<string, string> | undefined) {
+  if (!data?.type || !data?.ride_id) return;
+  const { type, ride_id } = data;
+  switch (type) {
+    case 'driver_accepted':
+    case 'driver_arrived':
+      router.push({ pathname: '/driver-arriving', params: { rideId: ride_id } } as any);
+      break;
+    case 'ride_started':
+      router.push({ pathname: '/ride-in-progress', params: { rideId: ride_id } } as any);
+      break;
+    case 'ride_completed':
+      router.push({ pathname: '/ride-completed', params: { rideId: ride_id } } as any);
+      break;
+    case 'ride_cancelled':
+      router.replace('/(tabs)' as any);
+      break;
+    default:
+      break;
+  }
+}
+
+const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
+const canUseNotifications = !isExpoGo && Platform.OS !== 'web';
+let Notifications: any = null;
+if (canUseNotifications) {
+  try {
+    Notifications = require('expo-notifications');
+  } catch (e) {
+    console.log('[Push] expo-notifications unavailable:', e);
+  }
+}
+
+let LogRocket: any = null;
+if (!isExpoGo && Platform.OS !== 'web') {
+  try {
+    LogRocket = require('@logrocket/react-native').default ?? require('@logrocket/react-native');
+  } catch (e) {
+    console.log('[LogRocket] unavailable:', e);
+  }
+}
+
+if (Notifications) {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: true,
+      shouldSetBadge: true,
+      shouldShowAlert: true,
+    }),
+  });
+}
+
+setBackgroundMessageHandler(async (remoteMessage: any) => {
+  console.log('[Push] Rider background FCM:', remoteMessage?.data?.type || remoteMessage?.notification?.title);
+});
+
 
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
@@ -34,45 +106,29 @@ export default function RootLayout() {
     PlusJakartaSans_700Bold,
   });
 
-  const { initialize: initializeAuth, isInitialized: isAuthInitialized } = useAuthStore();
+  const { initialize: initializeAuth, isInitialized: isAuthInitialized, token: authToken } = useAuthStore();
   const { initialize: initializeLocation, isInitialized: isLocationInitialized } = useLocationStore();
+  const hydrateWorkProfile = useWorkProfileStore(s => s.hydrate);
+  const [isOffline, setIsOffline] = useState(false);
   const [stripePublishableKey, setStripePublishableKey] = useState<string | null>(null);
+  const fcmRegisteredRef = useRef(false);
+  const [confirmSheet, setConfirmSheet] = useState<{
+    visible: boolean;
+    title: string;
+    message: string;
+    variant: 'info' | 'warning' | 'danger' | 'success';
+    buttons: ConfirmSheetButton[];
+  }>({ visible: false, title: '', message: '', variant: 'info', buttons: [] });
+
+  const { connectionState: wsState } = useRiderSocket();
 
   useEffect(() => {
-    const init = async () => {
-      try {
-        await Promise.all([initializeAuth(), initializeLocation()]);
-        if (Platform.OS === 'android') {
-          try {
-            const Notif = require('expo-notifications');
-            await Notif.setNotificationChannelAsync('ride-updates', {
-              name: 'Ride Updates',
-              importance: Notif.AndroidImportance.HIGH,
-              sound: 'default',
-              vibrationPattern: [0, 300, 150, 300],
-              enableVibrate: true,
-            });
-            await Notif.setNotificationChannelAsync('ride-status-live', {
-              name: 'Live Ride Status',
-              description: 'Shows current ride progress in the notification bar.',
-              importance: Notif.AndroidImportance.LOW,
-              sound: null,
-              enableVibrate: false,
-            });
-            await Notif.setNotificationChannelAsync('default', {
-              name: 'Default',
-              importance: Notif.AndroidImportance.DEFAULT,
-              sound: 'default',
-            });
-          } catch (e) {
-            console.log('[Push] Channel setup failed:', e);
-          }
-        }
-      } catch (err) {
-        console.error('Initialization error:', err);
-      }
-    };
-    init();
+    if (!LogRocket) return;
+    try {
+      LogRocket.init('gfuign/spinr');
+    } catch (e) {
+      console.log('[LogRocket] init failed:', e);
+    }
   }, []);
 
   useEffect(() => {
@@ -86,6 +142,297 @@ export default function RootLayout() {
       }
     })();
   }, []);
+
+  useEffect(() => {
+    const init = async () => {
+      try {
+        try {
+          const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+          const saved = await AsyncStorage.getItem('spinr_last_location');
+          if (saved) {
+            const { lat, lng } = JSON.parse(saved);
+            if (typeof lat === 'number' && typeof lng === 'number') {
+              useRideStore.getState().setUserLocation({ latitude: lat, longitude: lng });
+            }
+          }
+        } catch (e) { /* non-fatal */ }
+
+        await Promise.all([
+          initializeAuth(),
+          initializeLocation(),
+          hydrateWorkProfile(),
+        ]);
+
+        await useRideStore.getState().hydrateActiveRide();
+        await initFirebaseServices();
+        captureMessage('rider-app cold start', 'log');
+
+        if (Notifications && Platform.OS === 'android') {
+          try {
+            await Notifications.setNotificationChannelAsync('ride-updates', {
+              name: 'Ride Updates',
+              description: 'Status updates for your current ride.',
+              importance: Notifications.AndroidImportance.HIGH,
+              sound: 'default',
+              vibrationPattern: [0, 300, 150, 300],
+              lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+              enableVibrate: true,
+            });
+            await Notifications.setNotificationChannelAsync('default', {
+              name: 'Default',
+              importance: Notifications.AndroidImportance.DEFAULT,
+              sound: 'default',
+            });
+            await Notifications.setNotificationChannelAsync('scheduled-reminders', {
+              name: 'Scheduled Ride Reminders',
+              description: 'Reminder 15 minutes before your scheduled ride departs.',
+              importance: Notifications.AndroidImportance.HIGH,
+              sound: 'default',
+              vibrationPattern: [0, 250, 150, 250],
+              lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+              enableVibrate: true,
+            });
+            await Notifications.setNotificationChannelAsync('ride-status-live', {
+              name: 'Live Ride Status',
+              description: 'Shows current ride progress in the notification bar.',
+              importance: Notifications.AndroidImportance.LOW,
+              sound: null,
+              vibrationPattern: [0],
+              lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+              enableVibrate: false,
+            });
+          } catch (e) {
+            console.log('[Push] Android channel setup failed:', e);
+          }
+        }
+      } catch (err: any) {
+        console.error('Initialization error:', err);
+      }
+    };
+    init();
+
+    if (Platform.OS === 'web') {
+      const script = document.createElement('script');
+      const apiKey = Constants.expoConfig?.extra?.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
+      if (apiKey) {
+        script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places`;
+        script.async = true;
+        document.body.appendChild(script);
+      }
+    }
+  }, []);
+
+  // FCM token registration, gated on auth
+  useEffect(() => {
+    if (!isAuthInitialized || !authToken || fcmRegisteredRef.current) return;
+
+    (async () => {
+      try {
+        const fcmToken = await requestPushPermissionAndGetToken();
+        if (!fcmToken) return;
+        await api.post('/notifications/register-token', {
+          token: fcmToken,
+          platform: Platform.OS,
+        });
+        fcmRegisteredRef.current = true;
+        const uid = useAuthStore.getState().user?.id;
+        if (uid) {
+          setUser(uid);
+          if (LogRocket) {
+            try { LogRocket.identify(uid); } catch (e) { console.log('[LogRocket] identify failed:', e); }
+          }
+        }
+        Analytics.login();
+        console.log('[Push] Rider FCM token registered with backend');
+      } catch (e) {
+        console.log('[Push] Rider FCM token registration failed:', e);
+      }
+    })();
+
+    const unsubTokenRefresh = onTokenRefresh(async (newToken: string) => {
+      try {
+        await api.post('/notifications/register-token', {
+          token: newToken,
+          platform: Platform.OS,
+        });
+      } catch (e) {
+        console.log('[Push] Rider refreshed FCM token registration failed:', e);
+      }
+    });
+
+    return () => {
+      if (typeof unsubTokenRefresh === 'function') unsubTokenRefresh();
+    };
+  }, [isAuthInitialized, authToken]);
+
+  // Foreground FCM message handler
+  useEffect(() => {
+    if (!isAuthInitialized) return;
+
+    const unsubscribe = onForegroundMessage((remoteMessage: any) => {
+      console.log('[Push] Rider foreground FCM:', remoteMessage?.notification?.title);
+
+      const reminderRideId = handleScheduledRideReminderFCM(remoteMessage);
+      if (reminderRideId) {
+        if (Notifications) {
+          const scheduledTime = remoteMessage?.data?.scheduled_time;
+          const timeLabel = scheduledTime
+            ? new Date(scheduledTime).toLocaleTimeString('en-CA', { hour: '2-digit', minute: '2-digit' })
+            : 'soon';
+          Notifications.scheduleNotificationAsync({
+            content: {
+              title: 'Ride in 15 minutes',
+              body: `Your scheduled Spinr ride departs at ${timeLabel}. Get ready!`,
+              data: { type: 'scheduled_ride_reminder', rideId: reminderRideId },
+              sound: 'default',
+              ...(Platform.OS === 'android' ? { channelId: 'scheduled-reminders' } : {}),
+            },
+            trigger: null,
+          }).catch(() => {});
+        }
+        return;
+      }
+
+      // Safety check-in
+      if (remoteMessage?.data?.type === 'safety_checkin') {
+        const checkinRideId = remoteMessage?.data?.ride_id as string | undefined;
+        if (checkinRideId) {
+          setConfirmSheet({
+            visible: true,
+            title: 'Safety check-in',
+            message: "Just checking in — are you okay?\n\nIf you don't respond, we'll follow up with you shortly.",
+            variant: 'info',
+            buttons: [
+              {
+                text: "I'm okay",
+                style: 'default',
+                onPress: () => {
+                  api.post(`/rides/${checkinRideId}/safety-checkin`).catch((e) => console.warn('[Layout] Safety checkin failed:', e?.message ?? e));
+                },
+              },
+            ],
+          });
+        }
+        return;
+      }
+
+      const currentRide = useRideStore.getState().currentRide;
+      if (currentRide?.id) {
+        useRideStore.getState().fetchRide(currentRide.id).catch((e) => console.warn('[Layout] fetchRide on foreground failed:', e?.message ?? e));
+      }
+    });
+
+    return () => {
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
+  }, [isAuthInitialized]);
+
+  // Killed-state notification tap routing
+  useEffect(() => {
+    if (!isAuthInitialized || !canUseNotifications || !Notifications) return;
+    let timer: ReturnType<typeof setTimeout>;
+    (async () => {
+      try {
+        const response = await Notifications.getInitialNotificationResponseAsync?.();
+        if (response?.notification?.request?.content?.data) {
+          const data = response.notification.request.content.data as Record<string, string>;
+          timer = setTimeout(() => {
+            routeFromNotificationData(data);
+          }, 100);
+        }
+      } catch (e) {
+        console.log('[Push] getInitialNotification failed:', e);
+      }
+    })();
+    return () => clearTimeout(timer);
+  }, [isAuthInitialized]);
+
+  // Cold-start ride resume
+  useEffect(() => {
+    if (!isAuthInitialized || !isLocationInitialized) return;
+    const timer = setTimeout(() => {
+      const ride = useRideStore.getState().currentRide;
+      if (!ride?.id) return;
+      const s = ride.status;
+      if (s === 'searching' || s === 'driver_assigned' || s === 'driver_accepted') {
+        router.push({ pathname: '/driver-arriving', params: { rideId: ride.id } } as any);
+      } else if (s === 'driver_arrived') {
+        router.push({ pathname: '/driver-arrived', params: { rideId: ride.id } } as any);
+      } else if (s === 'in_progress') {
+        router.push({ pathname: '/ride-in-progress', params: { rideId: ride.id } } as any);
+      } else if (s === 'completed') {
+        if (ride.payment_status !== 'paid' && ride.payment_status !== 'waived_admin') {
+          router.push({ pathname: '/ride-completed', params: { rideId: ride.id } } as any);
+        }
+      }
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [isAuthInitialized, isLocationInitialized]);
+
+  // Foreground resume: re-check active ride
+  useEffect(() => {
+    if (!isAuthInitialized) return;
+    const sub = AppState.addEventListener('change', async (nextState) => {
+      if (nextState !== 'active') return;
+      try {
+        const result = await useRideStore.getState().fetchActiveRide();
+        if (!result?.active || !result.ride) return;
+        const s = result.ride.status;
+        if (s === 'searching' || s === 'driver_assigned' || s === 'driver_accepted') {
+          router.replace({ pathname: '/driver-arriving', params: { rideId: result.ride.id } } as any);
+        } else if (s === 'driver_arrived') {
+          router.replace({ pathname: '/driver-arrived', params: { rideId: result.ride.id } } as any);
+        } else if (s === 'in_progress') {
+          router.replace({ pathname: '/ride-in-progress', params: { rideId: result.ride.id } } as any);
+        } else if (s === 'completed') {
+          const ps = result.ride.payment_status;
+          if (ps !== 'paid' && ps !== 'waived_admin') {
+            router.replace({ pathname: '/ride-completed', params: { rideId: result.ride.id } } as any);
+          }
+        }
+      } catch (e) {
+        console.warn('[Layout] Foreground ride check failed:', e);
+      }
+    });
+    return () => sub.remove();
+  }, [isAuthInitialized]);
+
+  // Background notification tap routing
+  useEffect(() => {
+    if (!isAuthInitialized || !canUseNotifications || !Notifications) return;
+    const sub = Notifications.addNotificationResponseReceivedListener((response: any) => {
+      const data = response?.notification?.request?.content?.data as Record<string, string> | undefined;
+      if (data) routeFromNotificationData(data);
+    });
+    return () => sub?.remove?.();
+  }, [isAuthInitialized]);
+
+  // Clear ride state on logout
+  const prevAuthTokenRef = useRef(authToken);
+  useEffect(() => {
+    if (prevAuthTokenRef.current && !authToken) {
+      useRideStore.getState().clearRide();
+    }
+    prevAuthTokenRef.current = authToken;
+  }, [authToken]);
+
+  // Network connectivity monitoring
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener(state => {
+      const wasOffline = isOffline;
+      const isNowOffline = !state.isConnected || !state.isInternetReachable;
+
+      setIsOffline(isNowOffline);
+
+      if (wasOffline && !isNowOffline && isAuthInitialized) {
+        useRideStore.getState().syncOfflineRequests().catch(error => {
+          console.error('Failed to sync offline requests:', error);
+        });
+      }
+    });
+
+    return unsubscribe;
+  }, [isAuthInitialized, isOffline]);
 
   const onLoadingLayout = useCallback(() => {
     SplashScreen.hideAsync().catch(() => {});
@@ -104,9 +451,13 @@ export default function RootLayout() {
 
   return (
     <ThemeProvider>
-      <RootLayoutInner stripePublishableKey={stripePublishableKey} />
+      <RootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} stripePublishableKey={stripePublishableKey} wsState={wsState} confirmSheet={confirmSheet} setConfirmSheet={setConfirmSheet} />
     </ThemeProvider>
   );
+}
+
+function GestureRootWrapper({ children }: { children: React.ReactNode }) {
+  return <GestureHandlerRootView style={{ flex: 1 }}>{children}</GestureHandlerRootView>;
 }
 
 function MaybeStripeProvider({
@@ -124,15 +475,36 @@ function MaybeStripeProvider({
   );
 }
 
-function RootLayoutInner({ stripePublishableKey }: { stripePublishableKey: string | null }) {
+function RootLayoutInner({
+  isOffline,
+  setIsOffline,
+  stripePublishableKey,
+  wsState,
+  confirmSheet,
+  setConfirmSheet,
+}: {
+  isOffline: boolean;
+  setIsOffline: (v: boolean) => void;
+  stripePublishableKey: string | null;
+  wsState: import('../hooks/useRiderSocket').RiderSocketState;
+  confirmSheet: { visible: boolean; title: string; message: string; variant: 'info' | 'warning' | 'danger' | 'success'; buttons: ConfirmSheetButton[] };
+  setConfirmSheet: React.Dispatch<React.SetStateAction<typeof confirmSheet>>;
+}) {
   const { isDark } = useTheme();
   useRideStatusNotification();
-
   return (
     <ErrorBoundary>
-      <GestureHandlerRootView style={{ flex: 1 }}>
+      <OfflineBanner visible={isOffline} onVisibilityChange={setIsOffline} />
+      <GestureRootWrapper>
         <SafeAreaProvider>
-          <StatusBar style={isDark ? 'light' : 'dark'} />
+          <StatusBar style={isOffline ? "light" : isDark ? "light" : "dark"} />
+          {wsState === 'reconnecting' && (
+            <View style={{ backgroundColor: '#F59E0B', paddingVertical: 4, alignItems: 'center' }}>
+              <Text style={{ color: '#fff', fontSize: 12, fontWeight: '600' }}>
+                Reconnecting to ride updates…
+              </Text>
+            </View>
+          )}
           <StripeKeyContext.Provider value={stripePublishableKey}>
           <MaybeStripeProvider publishableKey={stripePublishableKey}>
           <Stack
@@ -142,29 +514,30 @@ function RootLayoutInner({ stripePublishableKey }: { stripePublishableKey: strin
             }}
           >
             <Stack.Screen name="index" options={{ animation: 'none' }} />
-            <Stack.Screen name="(tabs)" options={{ headerShown: false, animation: 'none' }} />
             <Stack.Screen name="login" />
             <Stack.Screen name="otp" />
-            <Stack.Screen name="profile-setup" />
-            <Stack.Screen name="search-destination" />
-            <Stack.Screen name="ride-options" />
+            <Stack.Screen name="profile-setup" options={{ headerShown: false }} />
+
+            <Stack.Screen name="(tabs)" options={{ animation: 'none' }} />
+
+            <Stack.Screen name="search-destination" options={{ animation: 'slide_from_bottom' }} />
+            <Stack.Screen name="pick-on-map" options={{ animation: 'slide_from_bottom', headerShown: false }} />
             <Stack.Screen name="confirm-pickup" />
-            <Stack.Screen name="pick-on-map" />
-            <Stack.Screen name="driver-arriving" />
-            <Stack.Screen name="driver-arrived" />
-            <Stack.Screen name="ride-in-progress" />
-            <Stack.Screen name="ride-completed" />
-            <Stack.Screen name="ride-details" />
-            <Stack.Screen name="ride-status" />
+            <Stack.Screen name="ride-options" />
+            <Stack.Screen name="payment-confirm" />
+            <Stack.Screen name="ride-status" options={{ gestureEnabled: false }} />
+            <Stack.Screen name="driver-arriving" options={{ gestureEnabled: false }} />
+            <Stack.Screen name="driver-arrived" options={{ gestureEnabled: false }} />
+            <Stack.Screen name="ride-in-progress" options={{ gestureEnabled: false }} />
+            <Stack.Screen name="ride-completed" options={{ gestureEnabled: false }} />
             <Stack.Screen name="ride-tracking-webview" />
             <Stack.Screen name="chat-driver" />
+
             <Stack.Screen name="wallet" />
             <Stack.Screen name="manage-cards" />
-            <Stack.Screen name="payment-confirm" />
             <Stack.Screen name="notifications" />
             <Stack.Screen name="saved-places" />
             <Stack.Screen name="scheduled-rides" />
-            <Stack.Screen name="settings" />
             <Stack.Screen name="promotions" />
             <Stack.Screen name="loyalty" />
             <Stack.Screen name="support" />
@@ -173,15 +546,25 @@ function RootLayoutInner({ stripePublishableKey }: { stripePublishableKey: strin
             <Stack.Screen name="report-safety" />
             <Stack.Screen name="privacy-settings" />
             <Stack.Screen name="accessibility" />
+            <Stack.Screen name="settings" />
+            <Stack.Screen name="ride-details" />
             <Stack.Screen name="work-profile" />
             <Stack.Screen name="work-allowance-request" />
             <Stack.Screen name="become-driver" />
           </Stack>
           </MaybeStripeProvider>
           </StripeKeyContext.Provider>
+          <ConfirmSheet
+            visible={confirmSheet.visible}
+            title={confirmSheet.title}
+            message={confirmSheet.message}
+            variant={confirmSheet.variant}
+            buttons={confirmSheet.buttons}
+            onClose={() => setConfirmSheet(prev => ({ ...prev, visible: false }))}
+          />
           <Toast />
         </SafeAreaProvider>
-      </GestureHandlerRootView>
+      </GestureRootWrapper>
     </ErrorBoundary>
   );
 }

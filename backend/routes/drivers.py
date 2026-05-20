@@ -40,6 +40,7 @@ try:
     from ..utils.error_keys import ErrorKeys
     from ..utils.idempotency import idempotent_endpoint
     from ..utils.insurance_periods import record_period_transition
+    from ..utils.money import dollars_to_cents
     from ..utils.t4a_pdf import generate_t4a_pdf
 except ImportError:
     import db_supabase
@@ -62,6 +63,7 @@ except ImportError:
     from utils.error_keys import ErrorKeys
     from utils.idempotency import idempotent_endpoint
     from utils.insurance_periods import record_period_transition  # type: ignore[assignment]
+    from utils.money import dollars_to_cents
     from utils.t4a_pdf import generate_t4a_pdf  # noqa: F401 – used in download_t4a_pdf
 
 db = db_supabase  # legacy alias
@@ -1896,7 +1898,7 @@ async def request_payout(
     if stripe_secret and stripe_account_id:
         try:
             transfer = stripe.Transfer.create(
-                amount=int(req.amount * 100),
+                amount=dollars_to_cents(req.amount),
                 currency="cad",
                 destination=stripe_account_id,
                 api_key=stripe_secret,
@@ -3929,17 +3931,17 @@ async def subscribe_to_plan(
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found or inactive")
 
-        # Check for existing active subscription
-        existing = (lambda _r: _r[0] if _r else None)(
-            await db_supabase.get_rows(
-                "driver_subscriptions",
-                {
-                    "driver_id": driver["id"],
-                    "status": "active",
-                },
-                limit=1,
-            )
+    # Check for existing active subscription
+    existing = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows(
+            "driver_subscriptions",
+            {
+                "driver_id": driver["id"],
+                "status": "active",
+            },
+            limit=1,
         )
+    )
     if existing:
         # Cancel old subscription
         await db_supabase.update_one(
@@ -3957,8 +3959,8 @@ async def subscribe_to_plan(
     # Attempt Stripe charge if configured; fall back gracefully if not.
     payment_status = "paid"
     stripe_charge_id = None
-    plan_price = plan.get("price", 0)
-    if plan_price and plan_price > 0:
+    plan_price = Decimal(str(plan.get("price", 0) or 0))
+    if plan_price > 0:
         try:
             from ..settings_loader import get_app_settings
 
@@ -3969,7 +3971,7 @@ async def subscribe_to_plan(
                 _user = await db.find_one("users", {"id": current_user["id"]})
                 _customer_id = _user.get("stripe_customer_id") if _user else None
                 if _customer_id:
-                    _amount_cents = int(Decimal(str(plan_price)) * 100)
+                    _amount_cents = dollars_to_cents(plan_price)
                     _charge = stripe.PaymentIntent.create(
                         amount=_amount_cents,
                         currency="cad",

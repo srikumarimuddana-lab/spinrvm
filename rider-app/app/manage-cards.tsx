@@ -9,7 +9,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { CardField, CardFieldInput, useStripe } from '@stripe/stripe-react-native';
 import { StripeKeyContext } from './_layout';
 import api from '@shared/api/client';
-import CustomAlert from '@shared/components/CustomAlert';
+import ConfirmSheet from '../components/ConfirmSheet';
+import { showToast } from '../store/toastStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -40,13 +41,13 @@ export default function ManageCardsScreen() {
   // cardholder_name remains a plain input because it's not sensitive.
   const [cardDetailsComplete, setCardDetailsComplete] = useState(false);
   const [cardName, setCardName] = useState('');
-  const [alertState, setAlertState] = useState<{
+  const [confirmState, setConfirmState] = useState<{
     visible: boolean;
     title: string;
     message: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
-    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
-  }>({ visible: false, title: '', message: '', variant: 'info' });
+    buttons: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+  }>({ visible: false, title: '', message: '', variant: 'info', buttons: [] });
 
   useEffect(() => {
     fetchCards();
@@ -74,23 +75,16 @@ export default function ManageCardsScreen() {
     }
   };
 
-  const showAlert = (title: string, message: string, variant: 'info' | 'warning' | 'danger' | 'success' = 'warning') => {
-    setAlertState({ visible: true, title, message, variant });
-  };
-
   const handleAddCard = async () => {
-    if (!cardDetailsComplete) { showAlert('Error', 'Enter complete card details'); return; }
-    if (!cardName.trim()) { showAlert('Error', 'Enter cardholder name'); return; }
+    if (!cardDetailsComplete) { showToast('Error', 'Enter complete card details', 'warning'); return; }
+    if (!cardName.trim()) { showToast('Error', 'Enter cardholder name', 'warning'); return; }
     if (!createPaymentMethod) {
-      showAlert('Payments unavailable', 'Payment processing is still starting up. Try again in a moment.', 'warning');
+      showToast('Payments unavailable', 'Payment processing is still starting up. Try again in a moment.', 'warning');
       return;
     }
 
     setSaving(true);
     try {
-      // Tokenize on-device. Raw PAN/CVC/expiry never leave the Stripe
-      // native view and NEVER touch our backend — the server only sees
-      // the resulting payment_method_id (pm_xxx).
       const { paymentMethod, error } = await createPaymentMethod({
         paymentMethodType: 'Card',
         paymentMethodData: {
@@ -99,7 +93,7 @@ export default function ManageCardsScreen() {
       });
 
       if (error || !paymentMethod) {
-        showAlert('Error', error?.message || 'Could not process card', 'danger');
+        showToast('Error', error?.message || 'Could not process card', 'danger');
         return;
       }
 
@@ -107,9 +101,9 @@ export default function ManageCardsScreen() {
       setShowAdd(false);
       resetForm();
       fetchCards();
-      showAlert('Success', 'Card added successfully', 'success');
+      showToast('Card Added', 'Card added successfully', 'success');
     } catch (err: any) {
-      showAlert('Error', err.response?.data?.detail || 'Failed to add card', 'danger');
+      showToast('Error', err.response?.data?.detail || 'Failed to add card', 'danger');
     } finally {
       setSaving(false);
     }
@@ -120,12 +114,12 @@ export default function ManageCardsScreen() {
       await api.post(`/payments/cards/${cardId}/default`);
       fetchCards();
     } catch {
-      showAlert('Error', 'Failed to set default card', 'danger');
+      showToast('Error', 'Failed to set default card', 'danger');
     }
   };
 
   const handleDeleteCard = (cardId: string) => {
-    setAlertState({
+    setConfirmState({
       visible: true,
       title: 'Remove Card',
       message: 'Are you sure you want to remove this card?',
@@ -139,7 +133,7 @@ export default function ManageCardsScreen() {
               await api.delete(`/payments/cards/${cardId}`);
               fetchCards();
             } catch {
-              showAlert('Error', 'Failed to remove card', 'danger');
+              showToast('Error', 'Failed to remove card', 'danger');
             }
           },
         },
@@ -283,13 +277,13 @@ export default function ManageCardsScreen() {
           />
         </KeyboardAvoidingView>
       )}
-      <CustomAlert
-        visible={alertState.visible}
-        title={alertState.title}
-        message={alertState.message}
-        variant={alertState.variant}
-        buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
-        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
+      <ConfirmSheet
+        visible={confirmState.visible}
+        title={confirmState.title}
+        message={confirmState.message}
+        variant={confirmState.variant}
+        buttons={confirmState.buttons}
+        onClose={() => setConfirmState(prev => ({ ...prev, visible: false }))}
       />
     </SafeAreaView>
   );

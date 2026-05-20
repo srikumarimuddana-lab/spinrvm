@@ -16,7 +16,8 @@ try:
     from ..features import send_push_notification
 except ImportError:
     import db_supabase
-    from dependencies import get_current_user  # type: ignore
+    from dependencies import get_admin_user, get_current_user  # type: ignore
+    from features import send_push_notification  # type: ignore
 
 db = db_supabase  # legacy alias
 

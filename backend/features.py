@@ -107,23 +107,32 @@ async def calculate_airport_fee(
     Returns {'airport_fee': float, 'airport_zone_name': str | None,
     'is_pickup': bool, 'is_dropoff': bool, 'is_stop': bool}
     """
+
+    # Airport zone model:
+    #   service_areas is a parent/child tree. A "service area" is a top-level
+    #   row (e.g. Regina) with parent_service_area_id IS NULL. An "airport
+    #   zone" is a CHILD row (parent_service_area_id set) with is_airport=true,
+    #   its own polygon (just the airport property), and its own airport_fee.
+    #   The parent's airport_fee column is functionally dead and must be ignored
+    #   — surcharging by parent caused every Regina ride to look airport-bound.
+    # Only sub-regions matched + active + flagged + fee > 0 + valid polygon
+    # below count as airport zones.
+    def _is_real_airport_zone(a: Dict[str, Any]) -> bool:
+        return bool(
+            a.get("is_airport")
+            and a.get("is_active", True) is not False
+            and a.get("parent_service_area_id")  # must be a sub-region
+        )
+
     if _all_areas is not None:
-        # Filter strictly: only count an area as an airport zone when BOTH
-        # is_airport is truthy AND is_active is not False. A row that's been
-        # soft-deactivated in the admin (is_active=false) must not surcharge
-        # rides — that's the same intent as "remove this airport zone".
-        areas = [a for a in _all_areas if a.get("is_airport") and a.get("is_active", True) is not False]
+        areas = [a for a in _all_areas if _is_real_airport_zone(a)]
     else:
-        # Same intent at the DB layer: exclude soft-deactivated rows. Without
-        # the is_active filter, unchecking "Active" on an airport zone in the
-        # admin UI leaves the row matching every ride — the exact failure
-        # mode reported in the "I removed the airport zone but surcharge
-        # still applies" thread.
-        areas = await db_supabase.get_rows(
+        raw = await db_supabase.get_rows(
             "service_areas",
             {"is_airport": True, "is_active": True},
             limit=50,
         )
+        areas = [a for a in raw if a.get("parent_service_area_id")]
     result: Dict[str, Any] = {
         "airport_fee": 0.0,
         "airport_zone_name": None,
@@ -735,7 +744,15 @@ async def calculate_all_fees(
     # row (is_active=false) must not count as an airport zone, otherwise an
     # area_fees row with fee_type='airport' would still be gated to "in_airport"
     # against a ghost zone the admin thought they had removed.
-    airport_areas = [a for a in all_areas if a.get("is_airport") and a.get("is_active", True) is not False]
+    # Only sub-region rows (parent_service_area_id set) count as airport
+    # zones — same rule applied in calculate_airport_fee. A top-level row
+    # with is_airport=true is a misconfiguration and must not gate
+    # area_fees of fee_type='airport'.
+    airport_areas = [
+        a
+        for a in all_areas
+        if a.get("is_airport") and a.get("is_active", True) is not False and a.get("parent_service_area_id")
+    ]
     in_airport = False
     for ap in airport_areas:
         ap_poly = get_service_area_polygon(ap)

@@ -86,6 +86,54 @@ def _guard_airport_polygon(is_airport: bool, polygon: Any) -> None:
         )
 
 
+def _guard_airport_is_subregion(is_airport: bool, parent_service_area_id: Optional[str]) -> None:
+    """Reject is_airport=true on a top-level row.
+
+    The data model is parent / child: a service area like Regina is a
+    top-level row (parent_service_area_id NULL); an airport zone like
+    YQR is a CHILD row under Regina. Letting a top-level row carry
+    is_airport=true is what produced the "every Regina ride gets the
+    surcharge" report — the city-sized polygon then matches every
+    pickup/dropoff.
+
+    The runtime helpers (calculate_airport_fee, calculate_all_fees)
+    already ignore top-level rows for the airport check; this guard
+    keeps the data shape consistent so a future regression can't
+    re-introduce the bug.
+    """
+    if is_airport and not parent_service_area_id:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "is_airport may only be set on a sub-region (a service area "
+                "with a parent_service_area_id). Top-level service areas "
+                "cannot be airport zones — create the airport as a child "
+                "row under its parent service area instead."
+            ),
+        )
+
+
+def _coerce_airport_fields(is_airport: Optional[bool], airport_fee: Optional[float]) -> Dict[str, Any]:
+    """Keep `is_airport` and `airport_fee` mutually consistent on writes.
+
+      * is_airport=false  → airport_fee must be 0
+      * airport_fee == 0  → is_airport must be false
+
+    Caller passes the values being written (None when unchanged). Returns
+    overrides to fold into the update payload. This makes "the admin
+    deletes the airport fee" automatically also turn off the zone, which
+    matches what an operator means when they zero the amount.
+    """
+    overrides: Dict[str, Any] = {}
+    if is_airport is False:
+        overrides["airport_fee"] = 0
+    if airport_fee is not None and float(airport_fee) == 0 and is_airport is not False:
+        # Treat explicit fee=0 as "this is no longer an airport zone" — also
+        # flip the flag off so future queries skip the row cleanly.
+        overrides["is_airport"] = False
+    return overrides
+
+
 # ---------- Pydantic models ----------
 
 
@@ -244,6 +292,8 @@ async def admin_airport_zones_diagnostic():
             continue
         bbox = _polygon_bbox_km(r.get("polygon"))
         too_large = bool(bbox and (bbox["lat_km"] > _AIRPORT_MAX_BBOX_KM or bbox["lng_km"] > _AIRPORT_MAX_BBOX_KM))
+        parent_id = r.get("parent_service_area_id")
+        is_top_level_with_flag = is_flagged and not parent_id
         out.append(
             {
                 "id": r.get("id"),
@@ -253,10 +303,11 @@ async def admin_airport_zones_diagnostic():
                 "is_airport_effective": is_flagged,
                 "airport_fee": fee,
                 "is_active": r.get("is_active"),
-                "parent_service_area_id": r.get("parent_service_area_id"),
+                "parent_service_area_id": parent_id,
                 "bbox_km": bbox,
                 "max_allowed_km": _AIRPORT_MAX_BBOX_KM,
-                "looks_misconfigured": too_large,
+                "looks_misconfigured": too_large or is_top_level_with_flag,
+                "is_top_level_with_airport_flag": is_top_level_with_flag,
             }
         )
 
@@ -305,6 +356,10 @@ async def admin_create_service_area(area: ServiceAreaCreateRequest, admin: dict 
     """Create service area with full configuration."""
     polygon = area.geojson if area.geojson is not None else area.polygon or []
     _guard_airport_polygon(area.is_airport, polygon)
+    _guard_airport_is_subregion(area.is_airport, area.parent_service_area_id)
+    coerced = _coerce_airport_fields(area.is_airport, area.airport_fee)
+    effective_is_airport = bool(coerced.get("is_airport", area.is_airport))
+    effective_airport_fee = coerced.get("airport_fee", area.airport_fee)
     surge_active = area.surge_active if area.surge_active is not None else (area.surge_enabled or False)
     doc = {
         "id": str(uuid.uuid4()),
@@ -313,8 +368,8 @@ async def admin_create_service_area(area: ServiceAreaCreateRequest, admin: dict 
         "polygon": polygon,
         "is_active": area.is_active,
         "parent_service_area_id": area.parent_service_area_id,
-        "is_airport": area.is_airport,
-        "airport_fee": area.airport_fee,
+        "is_airport": effective_is_airport,
+        "airport_fee": effective_airport_fee,
         "surge_active": surge_active,
         "surge_multiplier": area.surge_multiplier,
         "gst_enabled": area.gst_enabled,
@@ -366,12 +421,20 @@ async def admin_update_service_area(
 
     # Block "city polygon flipped to airport" — the failure mode that
     # surcharges every ride in town. Resolve the effective is_airport +
-    # polygon by overlaying the request on the current row before checking.
-    if area.is_airport is True or polygon is not None:
+    # polygon + parent by overlaying the request on the current row before
+    # checking. Same lookup also enforces the sub-region requirement so a
+    # top-level row cannot become an airport zone via an update.
+    if area.is_airport is True or polygon is not None or area.airport_fee is not None:
         existing = await db_supabase.find_one("service_areas", {"id": area_id}) or {}
         effective_is_airport = area.is_airport if area.is_airport is not None else existing.get("is_airport", False)
         effective_polygon = polygon if polygon is not None else existing.get("polygon")
+        effective_parent = (
+            area.parent_service_area_id
+            if area.parent_service_area_id is not None
+            else existing.get("parent_service_area_id")
+        )
         _guard_airport_polygon(bool(effective_is_airport), effective_polygon)
+        _guard_airport_is_subregion(bool(effective_is_airport), effective_parent)
 
     # Validate surge_multiplier at the API boundary (F-26).
     # fare_service.py always applies SURGE_CAP (2.5×) at calculation time, so
@@ -436,6 +499,13 @@ async def admin_update_service_area(
         update_payload["polygon"] = polygon
     if surge_active is not None:
         update_payload["surge_active"] = surge_active
+
+    # Keep is_airport <-> airport_fee consistent: deleting the fee turns the
+    # zone off; turning the zone off zeroes the fee. Operators can do either
+    # one and get the same end state.
+    coerced_airport = _coerce_airport_fields(area.is_airport, area.airport_fee)
+    for k, v in coerced_airport.items():
+        update_payload[k] = v
 
     if update_payload:
         # NOTE: service_areas table does not have an updated_at column in Supabase schema.

@@ -37,28 +37,69 @@ def _f(v: Decimal) -> float:
     return float(_round(_d(v)))
 
 
+def _resolve_cancel_fees(
+    settings: dict,
+    area: dict | None = None,
+) -> Tuple[Decimal, Decimal, int]:
+    """Resolve (admin_fee, driver_fee, free_cancel_window) from area → global fallback."""
+    if area and area.get("cancel_fee_admin_share") is not None:
+        fee_admin = _d(area["cancel_fee_admin_share"])
+    else:
+        fee_admin = _d(settings.get("cancellation_fee_admin", "0.50"))
+
+    if area and area.get("cancel_fee_driver_share") is not None:
+        fee_driver = _d(area["cancel_fee_driver_share"])
+    else:
+        fee_driver = _d(settings.get("cancellation_fee_driver", "4.00"))
+
+    if area and area.get("free_cancel_window_seconds") is not None:
+        window = int(area["free_cancel_window_seconds"])
+    else:
+        window = int(settings.get("free_cancel_window_seconds", 120))
+
+    return fee_admin, fee_driver, window
+
+
 def calculate_cancellation_fee(
     ride: dict,
     settings: dict,
+    area: dict | None = None,
 ) -> Tuple[Decimal, Decimal]:
     """Return (admin_fee, driver_fee) based on ride state and timing.
 
+    ``area`` is the service_area row for per-area fee overrides.
     Returns (0, 0) when no fee applies (early cancel, no driver yet).
     """
     driver_id = ride.get("driver_id")
-    fee_admin = _d(settings.get("cancellation_fee_admin", "0.50"))
-    fee_driver = _d(settings.get("cancellation_fee_driver", "2.50"))
+    fee_admin, fee_driver, free_window = _resolve_cancel_fees(settings, area)
 
     if ride.get("status") == RideStatus.DRIVER_ARRIVED and driver_id:
-        return fee_admin, Decimal("5.00")
+        return fee_admin, fee_driver
 
     if driver_id and ride.get("driver_accepted_at"):
         accepted_at = parse_iso_utc(ride["driver_accepted_at"])
-        time_diff = (datetime.now(timezone.utc) - accepted_at).total_seconds() if accepted_at else 0
-        if time_diff > 120:
+        time_diff = (
+            (datetime.now(timezone.utc) - accepted_at).total_seconds()
+            if accepted_at
+            else 0
+        )
+        if time_diff > free_window:
             return fee_admin, fee_driver
 
     return _d(0), _d(0)
+
+
+def calculate_noshow_fee(
+    ride: dict,
+    settings: dict,
+    area: dict | None = None,
+) -> Tuple[Decimal, Decimal]:
+    """Return (admin_fee, driver_fee) for a no-show cancellation.
+
+    Uses per-area overrides when available, falls back to global settings.
+    """
+    fee_admin, fee_driver, _ = _resolve_cancel_fees(settings, area)
+    return fee_admin, fee_driver
 
 
 async def pay_driver_cancellation_fee(
@@ -87,7 +128,10 @@ async def pay_driver_cancellation_fee(
         await db_supabase.update_one(
             "wallets",
             {"id": wallet["id"]},
-            {"balance": _f(new_balance), "updated_at": datetime.now(timezone.utc).isoformat()},
+            {
+                "balance": _f(new_balance),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
         )
         await db_supabase.insert_one(
             "wallet_transactions",
@@ -100,7 +144,10 @@ async def pay_driver_cancellation_fee(
                 "balance_after": _f(new_balance),
                 "reference_id": ride_id,
                 "description": f"Cancellation fee for ride {ride_id}",
-                "metadata": {"ride_id": ride_id, "status_at_cancel": ride_status_at_cancel},
+                "metadata": {
+                    "ride_id": ride_id,
+                    "status_at_cancel": ride_status_at_cancel,
+                },
                 "created_at": datetime.now(timezone.utc).isoformat(),
             },
         )
@@ -122,7 +169,9 @@ async def pay_driver_cancellation_fee(
                 },
             )
         except Exception:
-            logger.warning("audit_log write failed for cancellation_fee_charged", exc_info=True)
+            logger.warning(
+                "audit_log write failed for cancellation_fee_charged", exc_info=True
+            )
 
         await send_push_notification(
             driver_user_id,

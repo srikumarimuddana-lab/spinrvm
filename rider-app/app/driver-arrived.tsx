@@ -15,7 +15,8 @@ import { useRideStore } from '../store/rideStore';
 import { RideStatus } from '../constants/rideStatus';
 import { CarMarker } from '@shared/components/CarMarker';
 import api from '@shared/api/client';
-import CustomAlert from '@shared/components/CustomAlert';
+import { showToast } from '../store/toastStore';
+import ConfirmSheet from '../components/ConfirmSheet';
 import { SOSButton } from '@shared/components/SOSButton';
 import { FreeCancelTimer } from '../components/FreeCancelTimer';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -40,13 +41,13 @@ function DriverArrivedScreenContent() {
   const snapPoints = useMemo(() => ['42%', '70%', '92%'], []);
   const resumeKey = useAppResumeKey();
   const [routeCoords, setRouteCoords] = React.useState<any[]>([]);
-  const [alertState, setAlertState] = useState<{
+  const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean;
     title: string;
-    message: string;
+    message?: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
     buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
-  }>({ visible: false, title: '', message: '', variant: 'info' });
+  }>({ visible: false, title: '', variant: 'info' });
   const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY;
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -59,13 +60,12 @@ function DriverArrivedScreenContent() {
   const pickupOtp = currentRide?.pickup_otp || '----';
 
   const handleCancelPress = () => {
-    setAlertState({
+    setConfirmSheet({
       visible: true,
       title: 'Driver is waiting',
       message: `Your driver has arrived. A cancellation fee of $${cancellationFee.toFixed(2)} will be charged.`,
       variant: 'warning',
       buttons: [
-        { text: 'Keep Ride', style: 'cancel' },
         {
           text: `Cancel & Pay $${cancellationFee.toFixed(2)}`, style: 'destructive',
           onPress: async () => {
@@ -74,10 +74,11 @@ function DriverArrivedScreenContent() {
               clearRide();
               router.replace('/(tabs)' as any);
             } catch {
-              setAlertState({ visible: true, title: 'Could not cancel', message: 'The server rejected the request. Please try again.', variant: 'danger', buttons: [{ text: 'OK', style: 'default' }] });
+              showToast('Could not cancel', 'The server rejected the request. Please try again.', 'danger');
             }
           },
         },
+        { text: 'Keep Ride', style: 'cancel' },
       ],
     });
   };
@@ -136,7 +137,7 @@ function DriverArrivedScreenContent() {
 
   const handleCopyOtp = async () => {
     await Clipboard.setStringAsync(pickupOtp);
-    setAlertState({ visible: true, title: 'Copied!', message: 'OTP copied to clipboard', variant: 'success' });
+    showToast('Copied!', 'OTP copied to clipboard.', 'success');
   };
 
   return (
@@ -371,6 +372,7 @@ function DriverArrivedScreenContent() {
           <View style={{ marginBottom: 8 }}>
             <FreeCancelTimer
               driverAcceptedAt={(currentRide as any)?.driver_accepted_at}
+              rideStatus={currentRide?.status}
               freeCancelWindowSeconds={freeCancelWindowSeconds}
               cancellationFee={cancellationFee}
             />
@@ -397,13 +399,13 @@ function DriverArrivedScreenContent() {
           )}
         </BottomSheetScrollView>
       </BottomSheet>
-      <CustomAlert
-        visible={alertState.visible}
-        title={alertState.title}
-        message={alertState.message}
-        variant={alertState.variant}
-        buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
-        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
+      <ConfirmSheet
+        visible={confirmSheet.visible}
+        title={confirmSheet.title}
+        message={confirmSheet.message}
+        variant={confirmSheet.variant}
+        buttons={confirmSheet.buttons || [{ text: 'OK', style: 'default' }]}
+        onClose={() => setConfirmSheet(prev => ({ ...prev, visible: false }))}
       />
     </View>
   );

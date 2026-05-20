@@ -15,7 +15,10 @@ this service can be unit-tested against a mocked db with no socket /
 push / asyncio.create_task machinery in the tests.
 """
 
+import logging
 from typing import Any, Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 try:
     from ..geo_utils import calculate_distance
@@ -108,14 +111,20 @@ def select_driver_by_algorithm(
         return None
 
     if algorithm == "rating_based":
-        ranked = sorted(drivers_with_distance, key=lambda x: x[0].get("rating", 5.0), reverse=True)
+        ranked = sorted(
+            drivers_with_distance, key=lambda x: x[0].get("rating", 5.0), reverse=True
+        )
         return ranked[0][0]
 
     if algorithm == "round_robin":
         if last_assigned_driver_id is None:
             return drivers_with_distance[0][0]
         last_idx = next(
-            (i for i, (d, _) in enumerate(drivers_with_distance) if d["id"] == last_assigned_driver_id),
+            (
+                i
+                for i, (d, _) in enumerate(drivers_with_distance)
+                if d["id"] == last_assigned_driver_id
+            ),
             -1,
         )
         next_idx = (last_idx + 1) % len(drivers_with_distance)
@@ -160,7 +169,9 @@ class DispatchService:
 
         area_settings: Dict[str, Any] = {}
         if ride.get("service_area_id"):
-            area = await self.db.find_one("service_areas", {"id": ride["service_area_id"]})
+            area = await self.db.find_one(
+                "service_areas", {"id": ride["service_area_id"]}
+            )
             if area:
                 area_settings = area
 
@@ -168,14 +179,18 @@ class DispatchService:
             "driver_matching_algorithm", "nearest"
         )
         min_rating = float(
-            area_settings.get("min_driver_rating") or app_settings.get("min_driver_rating", DEFAULT_MIN_RATING)
+            area_settings.get("min_driver_rating")
+            or app_settings.get("min_driver_rating", DEFAULT_MIN_RATING)
         )
         search_radius_km = float(
-            area_settings.get("search_radius_km") or app_settings.get("search_radius_km", DEFAULT_SEARCH_RADIUS_KM)
+            area_settings.get("search_radius_km")
+            or app_settings.get("search_radius_km", DEFAULT_SEARCH_RADIUS_KM)
         )
         return algorithm, min_rating, search_radius_km
 
-    async def find_candidate_drivers(self, ride: Dict[str, Any]) -> List[Dict[str, Any]]:
+    async def find_candidate_drivers(
+        self, ride: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
         """Online + available + verified + *present* drivers for this ride.
 
         is_verified + status='active' gate unverified / suspended / needs_review
@@ -214,41 +229,15 @@ class DispatchService:
 
         try:
             present = await present_driver_ids([d["id"] for d in rows])
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "Presence filter failed, dispatching all DB-online drivers",
+                exc_info=exc,
+            )
             return rows
         if not present:
             return rows
         return [d for d in rows if d["id"] in present]
-
-    async def claim_driver(self, driver_id: str) -> bool:
-        """
-        Atomically mark a driver unavailable (claim them for a ride).
-
-        Returns True iff the claim succeeded — i.e. the row was still
-        ``is_available: True`` at write time. Two dispatchers racing
-        on the same driver will see exactly one True and one False.
-        """
-        result = await self.db.update_one(
-            "drivers",
-            {"id": driver_id, "is_available": True},
-            {"$set": {"is_available": False}},
-        )
-        return result.modified_count > 0
-
-    async def claim_any_driver(
-        self, drivers_with_distance: List[Tuple[Dict[str, Any], float]]
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Try to claim drivers in ranked order. Return the first one claimed.
-
-        Used as a fallback when the algorithm's first choice was taken
-        between the read and the write — walk the ranked list and claim
-        the first still-available driver. Returns None if all are taken.
-        """
-        for d, _ in drivers_with_distance:
-            if await self.claim_driver(d["id"]):
-                return d
-        return None
 
     async def assign_driver_to_ride(self, ride_id: str, driver_id: str, now) -> None:
         """
@@ -281,7 +270,11 @@ class DispatchService:
         # assigned_at is indexed by idx_rides_driver_assigned_at (migration 54);
         # ordering by it is semantically correct and uses the index.
         _last_rides = await self.db.get_rows(
-            "rides", {"driver_id": {"$ne": None}}, order="assigned_at", desc=True, limit=1
+            "rides",
+            {"driver_id": {"$ne": None}},
+            order="assigned_at",
+            desc=True,
+            limit=1,
         )
         last_ride = _last_rides[0] if _last_rides else None
         return last_ride["driver_id"] if last_ride else None

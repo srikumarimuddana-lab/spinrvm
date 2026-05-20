@@ -25,7 +25,8 @@ import MapViewDirections from 'react-native-maps-directions';
 import { useRideStore } from '../store/rideStore';
 import { useWalletStore } from '../store/walletStore';
 import { useWorkProfileStore } from '../store/workProfileStore';
-import CustomAlert from '@shared/components/CustomAlert';
+import { showToast } from '../store/toastStore';
+import ConfirmSheet from '../components/ConfirmSheet';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { CarMarker } from '@shared/components/CarMarker';
@@ -103,7 +104,7 @@ function RideOptionsScreenContent() {
   const [showPromoSheet, setShowPromoSheet] = useState(false);
   const [promoInput, setPromoInput] = useState('');
   const [promoError, setPromoError] = useState('');
-  const [alertState, setAlertState] = useState<{
+  const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean; title: string; message: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
     buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
@@ -240,7 +241,7 @@ function RideOptionsScreenContent() {
 
   const handleSelect = (index: number) => {
     if (!estimates[index]?.available) {
-      setAlertState({ visible: true, title: 'Unavailable', message: 'This vehicle type is not available right now.', variant: 'warning' });
+      showToast('Unavailable', 'This vehicle type is not available right now.', 'warning');
       return;
     }
     setSelectedIndex(index);
@@ -258,7 +259,7 @@ function RideOptionsScreenContent() {
     if (scheduledTime) {
       const minTime = new Date(Date.now() + 15 * 60000);
       if (scheduledTime < minTime) {
-        setAlertState({ visible: true, title: 'Invalid Time', message: 'Scheduled time must be at least 15 minutes from now.', variant: 'warning' });
+        showToast('Invalid Time', 'Scheduled time must be at least 15 minutes from now.', 'warning');
         return;
       }
     }
@@ -266,7 +267,7 @@ function RideOptionsScreenContent() {
       const when = scheduledTime ?? undefined;
       const check = checkRide(parseFloat(selectedEstimate.total_fare || '0'), when);
       if (!check.ok) {
-        setAlertState({
+        setConfirmSheet({
           visible: true, title: 'Blocked by company policy',
           message: check.reasons.join('\n'), variant: 'warning',
           buttons: [
@@ -314,7 +315,7 @@ function RideOptionsScreenContent() {
       const errBody = error?.response?.data;
       const unpaidRideId = errBody?.error?.details?.unpaid_ride_id;
       if (is402 && unpaidRideId) {
-        setAlertState({
+        setConfirmSheet({
           visible: true,
           title: 'Unpaid Ride',
           message: 'You have an unpaid ride. Please settle the payment before booking a new ride.',
@@ -325,7 +326,7 @@ function RideOptionsScreenContent() {
           ],
         });
       } else {
-        setAlertState({ visible: true, title: 'Error', message: error.message || 'Failed to book ride', variant: 'danger' });
+        showToast('Booking Failed', error.message || 'Failed to book ride. Please try again.', 'danger');
       }
     } finally {
       setIsBooking(false);
@@ -335,7 +336,7 @@ function RideOptionsScreenContent() {
   const handleScheduleConfirm = (date: Date) => {
     setShowScheduleModal(false);
     if (date < new Date(Date.now() + 15 * 60000)) {
-      setAlertState({ visible: true, title: 'Invalid Time', message: 'Scheduled time must be at least 15 minutes from now.', variant: 'warning' });
+      setConfirmSheet({ visible: true, title: 'Invalid Time', message: 'Scheduled time must be at least 15 minutes from now.', variant: 'warning' });
       return;
     }
     setTempDate(date);
@@ -946,10 +947,10 @@ function RideOptionsScreenContent() {
         maxDate={new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)}
       />
 
-      <CustomAlert
-        visible={alertState.visible} title={alertState.title} message={alertState.message}
-        variant={alertState.variant} buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
-        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))} />
+      <ConfirmSheet
+        visible={confirmSheet.visible} title={confirmSheet.title} message={confirmSheet.message}
+        variant={confirmSheet.variant} buttons={confirmSheet.buttons || [{ text: 'OK', style: 'default' }]}
+        onClose={() => setConfirmSheet(prev => ({ ...prev, visible: false }))} />
     </View>
   );
 }

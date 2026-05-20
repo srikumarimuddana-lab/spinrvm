@@ -24,7 +24,8 @@ import { useAppResumeKey } from '../hooks/useAppResumeKey';
 import { useRideStore } from '../store/rideStore';
 import { RideStatus } from '../constants/rideStatus';
 import api from '@shared/api/client';
-import CustomAlert from '@shared/components/CustomAlert';
+import { showToast } from '../store/toastStore';
+import ConfirmSheet from '../components/ConfirmSheet';
 import { SOSButton } from '@shared/components/SOSButton';
 import { CarMarker } from '@shared/components/CarMarker';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -39,10 +40,10 @@ function RideInProgressScreenContent() {
   const [currentLocation, setCurrentLocation] = useState('4th Avenue North');
   const [isSharingLocation, setIsSharingLocation] = useState(false);
   const [tripRouteCoords, setTripRouteCoords] = useState<any[]>([]);
-  const [alertState, setAlertState] = useState<{
+  const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean;
     title: string;
-    message: string;
+    message?: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
     buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
   }>({ visible: false, title: '', message: '', variant: 'info' });
@@ -127,22 +128,22 @@ function RideInProgressScreenContent() {
 
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      setAlertState({
+      setConfirmSheet({
         visible: true,
         title: 'End ride early?',
         message: `Full fare of $${parseFloat(currentRide?.total_fare || '0').toFixed(2)} applies. Your driver will continue.`,
         variant: 'warning',
         buttons: [
-          { text: 'Continue Ride', style: 'cancel' },
           {
             text: 'End & Pay Full Fare',
             style: 'destructive',
             onPress: async () => {
               try { await api.post(`/rides/${currentRide?.id}/complete`); }
-              catch { setAlertState({ visible: true, title: 'Error', message: 'Could not end ride. Please try again.', variant: 'danger' }); }
+              catch { showToast('Error', 'Could not end ride. Please try again.', 'danger'); }
               if (rideId) fetchRide(rideId);
             },
           },
+          { text: 'Continue Ride', style: 'cancel' },
         ],
       });
       return true;
@@ -151,31 +152,23 @@ function RideInProgressScreenContent() {
   }, [currentRide?.status]);
 
   const handleSafety = () => {
-    setAlertState({
+    setConfirmSheet({
       visible: true,
       title: 'Emergency',
       message: 'Are you sure you want to contact emergency services?',
       variant: 'danger',
       buttons: [
-        { text: 'Cancel', style: 'cancel' },
         {
           text: 'Call 911',
           style: 'destructive',
           onPress: () => {
-            // Fire-and-forget — 911 is the primary action regardless of backend result.
-            // .catch() prevents unhandled rejection now that triggerEmergency rethrows.
             if (rideId) void triggerEmergency(rideId as string).catch(() => {
-              setAlertState({
-                visible: true,
-                title: 'Alert Not Sent',
-                message: "We couldn't reach Spinr's emergency service. Please call 911 directly.",
-                variant: 'danger',
-                buttons: [{ text: 'Call 911', style: 'destructive', onPress: () => Linking.openURL('tel:911') }],
-              });
+              showToast('Alert Not Sent', "We couldn't reach Spinr's emergency service. Please call 911 directly.", 'danger');
             });
             Linking.openURL('tel:911');
           },
         },
+        { text: 'Cancel', style: 'cancel' },
       ],
     });
   };
@@ -224,14 +217,9 @@ I've shared my live location with you for safety.
         title: 'Track My Spinr Ride',
       });
       setIsSharingLocation(true);
-      setAlertState({
-        visible: true,
-        title: 'Trip Shared!',
-        message: 'Your live location is now being shared. They can track your journey in real-time.',
-        variant: 'success',
-      });
+      showToast('Trip Shared!', 'Your live location is now being shared.', 'success');
     } catch {
-      setAlertState({ visible: true, title: 'Share Failed', message: 'Unable to share trip details. Please try again.', variant: 'warning' });
+      showToast('Share Failed', 'Unable to share trip details. Please try again.', 'warning');
     }
   };
 
@@ -247,7 +235,7 @@ I've shared my live location with you for safety.
     }
     const trackingLink = `https://spinr-track.app/${shareToken}`;
     await Clipboard.setStringAsync(trackingLink);
-    setAlertState({ visible: true, title: 'Copied!', message: 'Live tracking link copied to clipboard', variant: 'success' });
+    showToast('Copied!', 'Live tracking link copied to clipboard.', 'success');
   };
 
   const handleOpenTrackingView = () => {
@@ -399,21 +387,21 @@ I've shared my live location with you for safety.
           <Text style={styles.actionBtnText}>SOS</Text>
         </View>
         <TouchableOpacity style={styles.actionBtn} onPress={() => {
-          setAlertState({
+          setConfirmSheet({
             visible: true,
             title: 'End ride early?',
             message: `You will be charged the full agreed fare of $${parseFloat(currentRide?.total_fare || '0').toFixed(2)}. This cannot be undone.`,
             variant: 'warning',
             buttons: [
-              { text: 'Continue Ride', style: 'cancel' },
               {
                 text: 'End & Pay Full Fare', style: 'destructive',
                 onPress: async () => {
                   try { await api.post(`/rides/${currentRide?.id}/complete`); }
-                  catch { setAlertState({ visible: true, title: 'Error', message: 'Could not end ride. Please try again.', variant: 'danger' }); }
+                  catch { showToast('Error', 'Could not end ride. Please try again.', 'danger'); }
                   if (rideId) fetchRide(rideId);
                 },
               },
+              { text: 'Continue Ride', style: 'cancel' },
             ],
           });
         }}>
@@ -614,13 +602,13 @@ I've shared my live location with you for safety.
           </BottomSheetScrollView>
         </BottomSheet>
       )}
-      <CustomAlert
-        visible={alertState.visible}
-        title={alertState.title}
-        message={alertState.message}
-        variant={alertState.variant}
-        buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
-        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
+      <ConfirmSheet
+        visible={confirmSheet.visible}
+        title={confirmSheet.title}
+        message={confirmSheet.message}
+        variant={confirmSheet.variant}
+        buttons={confirmSheet.buttons || [{ text: 'OK', style: 'default' }]}
+        onClose={() => setConfirmSheet(prev => ({ ...prev, visible: false }))}
       />
     </View>
   );

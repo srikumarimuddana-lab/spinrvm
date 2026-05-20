@@ -15,6 +15,7 @@ interface ErrorBoundaryState {
   hasError: boolean;
   error: Error | null;
   errorInfo: ErrorInfo | null;
+  retryCount: number;
 }
 
 // ── Functional fallback UI ────────────────────────────────────────────────────
@@ -73,16 +74,14 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       hasError: false,
       error: null,
       errorInfo: null,
+      retryCount: 0,
     };
   }
 
   componentDidMount(): void {
     this.appStateSub = AppState.addEventListener('change', (nextState) => {
       if (nextState === 'active' && this.state.hasError) {
-        // Auto-retry in-place on unlock. If the same crash recurs the user
-        // will see the boundary again and can tap "Try Again" which navigates
-        // home for a guaranteed clean state.
-        this.handleAutoRetry();
+        this.reloadApp();
       }
     });
   }
@@ -114,18 +113,25 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   }
 
   handleRetry = (): void => {
-    this.setState({ hasError: false, error: null, errorInfo: null }, () => {
-      // Navigate to the tab root after clearing error state.
-      // This guarantees a clean slate even if the crashed component
-      // would re-crash on the same render — the user always lands on home.
+    const nextCount = this.state.retryCount + 1;
+    if (nextCount >= 2) {
+      this.reloadApp();
+      return;
+    }
+    this.setState({ hasError: false, error: null, errorInfo: null, retryCount: nextCount }, () => {
       try { router.replace('/(tabs)' as any); } catch { /* navigation not ready */ }
     });
   };
 
-  handleAutoRetry = (): void => {
-    // In-place retry (no navigation). Used on AppState 'active' unlock so
-    // the user can resume their screen if the crash was transient.
-    this.setState({ hasError: false, error: null, errorInfo: null });
+  reloadApp = async (): Promise<void> => {
+    try {
+      const Updates = require('expo-updates');
+      await Updates.reloadAsync();
+    } catch {
+      this.setState({ hasError: false, error: null, errorInfo: null, retryCount: 0 }, () => {
+        try { router.replace('/(tabs)' as any); } catch {}
+      });
+    }
   };
 
   render(): ReactNode {

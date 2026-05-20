@@ -93,6 +93,7 @@ class ServiceAreaUpdateRequest(BaseModel):
     cancel_fee_admin_share: Optional[float] = Field(default=None, ge=0, le=100)
     driver_cancel_fee: Optional[float] = Field(default=None, ge=0, le=100)
     free_cancel_window_seconds: Optional[int] = Field(default=None, ge=0, le=3600)
+    noshow_wait_seconds: Optional[int] = Field(default=None, ge=60, le=1800)
     currency: Optional[str] = None
 
 
@@ -153,10 +154,16 @@ async def admin_get_service_areas():
 
 
 @router.post("/service-areas")
-async def admin_create_service_area(area: ServiceAreaCreateRequest, admin: dict = Depends(get_admin_user)):
+async def admin_create_service_area(
+    area: ServiceAreaCreateRequest, admin: dict = Depends(get_admin_user)
+):
     """Create service area with full configuration."""
     polygon = area.geojson if area.geojson is not None else area.polygon or []
-    surge_active = area.surge_active if area.surge_active is not None else (area.surge_enabled or False)
+    surge_active = (
+        area.surge_active
+        if area.surge_active is not None
+        else (area.surge_enabled or False)
+    )
     doc = {
         "id": str(uuid.uuid4()),
         "name": area.name,
@@ -185,7 +192,9 @@ async def admin_create_service_area(area: ServiceAreaCreateRequest, admin: dict 
     # Seed vehicle_pricing with all active vehicle types so every type
     # appears on the rider's ride-options screen from day one.
     if not doc.get("vehicle_pricing"):
-        vt_rows = await db_supabase.get_rows("vehicle_types", {"is_active": True}, limit=100)
+        vt_rows = await db_supabase.get_rows(
+            "vehicle_types", {"is_active": True}, limit=100
+        )
         doc["vehicle_pricing"] = [
             {
                 "vehicle_type": vt["name"],
@@ -202,7 +211,9 @@ async def admin_create_service_area(area: ServiceAreaCreateRequest, admin: dict 
     await db_supabase.insert_one("service_areas", doc)
     # PERF-001: Invalidate fare cache
     await invalidate_fare_cache()
-    await log_admin_action(admin, "service_area_created", "service_areas", doc["id"], {"name": area.name})
+    await log_admin_action(
+        admin, "service_area_created", "service_areas", doc["id"], {"name": area.name}
+    )
     return {"area_id": doc["id"]}
 
 
@@ -213,7 +224,9 @@ async def admin_update_service_area(
     """Update service area — accepts any field."""
     # Resolve aliases
     polygon = area.geojson if area.geojson is not None else area.polygon
-    surge_active = area.surge_active if area.surge_active is not None else area.surge_enabled
+    surge_active = (
+        area.surge_active if area.surge_active is not None else area.surge_enabled
+    )
 
     # Validate surge_multiplier at the API boundary (F-26).
     # fare_service.py always applies SURGE_CAP (2.5×) at calculation time, so
@@ -268,6 +281,7 @@ async def admin_update_service_area(
         "cancel_fee_admin_share",
         "driver_cancel_fee",
         "free_cancel_window_seconds",
+        "noshow_wait_seconds",
         "currency",
     ]:
         val = getattr(area, field)
@@ -285,13 +299,19 @@ async def admin_update_service_area(
         # PERF-001: Invalidate fare cache
         await invalidate_fare_cache()
         await log_admin_action(
-            admin, "service_area_updated", "service_areas", area_id, {"updated_fields": list(update_payload.keys())}
+            admin,
+            "service_area_updated",
+            "service_areas",
+            area_id,
+            {"updated_fields": list(update_payload.keys())},
         )
     return {"message": "Service area updated"}
 
 
 @router.delete("/service-areas/{area_id}")
-async def admin_delete_service_area(area_id: str, admin: dict = Depends(get_admin_user)):
+async def admin_delete_service_area(
+    area_id: str, admin: dict = Depends(get_admin_user)
+):
     """Delete service area."""
     await db_supabase.delete_many("service_areas", {"id": area_id})
     # PERF-001: Invalidate fare cache
@@ -304,7 +324,9 @@ async def admin_delete_service_area(area_id: str, admin: dict = Depends(get_admi
 
 
 @router.put("/service-areas/{area_id}/surge")
-async def admin_update_surge_pricing(area_id: str, surge: SurgePricingRequest, admin: dict = Depends(get_admin_user)):
+async def admin_update_surge_pricing(
+    area_id: str, surge: SurgePricingRequest, admin: dict = Depends(get_admin_user)
+):
     """Update surge pricing for a service area."""
     surge_doc = {
         "id": str(uuid.uuid4()),
@@ -320,10 +342,14 @@ async def admin_update_surge_pricing(area_id: str, surge: SurgePricingRequest, a
     }
 
     existing = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows("surge_pricing", {"service_area_id": area_id}, limit=1)
+        await db_supabase.get_rows(
+            "surge_pricing", {"service_area_id": area_id}, limit=1
+        )
     )
     if existing:
-        await db_supabase.update_one("surge_pricing", {"service_area_id": area_id}, surge_doc)
+        await db_supabase.update_one(
+            "surge_pricing", {"service_area_id": area_id}, surge_doc
+        )
     else:
         await db_supabase.insert_one("surge_pricing", surge_doc)
 
@@ -345,12 +371,16 @@ async def admin_get_surge_status():
     """Get current surge status for all active service areas."""
     try:
         from utils.surge_engine import get_surge_status
-
-        return await get_surge_status()
     except ImportError:
         from ...utils.surge_engine import get_surge_status
 
+    try:
         return await get_surge_status()
+    except Exception as exc:
+        logger.error("Surge status fetch failed", exc_info=exc)
+        raise HTTPException(
+            status_code=503, detail="Unable to fetch surge status"
+        ) from exc
 
 
 # ---------- Area Management (Pricing, Tax, Vehicle Pricing) ----------
@@ -359,7 +389,9 @@ async def admin_get_surge_status():
 @router.get("/areas/{area_id}/fees")
 async def admin_get_area_fees(area_id: str):
     """Get all fees for a service area."""
-    fees = await db_supabase.get_rows("area_fees", {"service_area_id": area_id}, order="created_at", limit=100)
+    fees = await db_supabase.get_rows(
+        "area_fees", {"service_area_id": area_id}, order="created_at", limit=100
+    )
     return fees
 
 
@@ -417,7 +449,9 @@ async def admin_delete_area_fee(area_id: str, fee_id: str):
 @router.get("/areas/{area_id}/tax")
 async def admin_get_area_tax(area_id: str):
     """Get tax configuration for a service area."""
-    area = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1))
+    area = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1)
+    )
     if not area:
         return {
             "service_area_id": area_id,
@@ -445,8 +479,17 @@ async def admin_update_area_tax(area_id: str, tax: AreaTaxRequest):
     updates = tax.model_dump(exclude_none=True)
     if updates:
         await db_supabase.update_one("service_areas", {"id": area_id}, updates)
-    area = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1))
-    _TAX_FIELDS = ["gst_enabled", "gst_rate", "pst_enabled", "pst_rate", "hst_enabled", "hst_rate"]
+    area = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1)
+    )
+    _TAX_FIELDS = [
+        "gst_enabled",
+        "gst_rate",
+        "pst_enabled",
+        "pst_rate",
+        "hst_enabled",
+        "hst_rate",
+    ]
     return {k: area.get(k) for k in _TAX_FIELDS}
 
 
@@ -457,8 +500,12 @@ async def admin_get_vehicle_pricing(area_id: str):
     Returns {vehicle_types, fare_configs} so the fare-config editor can
     display a row per vehicle type with the area's specific rates.
     """
-    vehicle_types = await db_supabase.get_rows("vehicle_types", {"is_active": True}, order="name", limit=50)
-    fare_configs = await db_supabase.get_rows("fare_configs", {"service_area_id": area_id}, limit=100)
+    vehicle_types = await db_supabase.get_rows(
+        "vehicle_types", {"is_active": True}, order="name", limit=50
+    )
+    fare_configs = await db_supabase.get_rows(
+        "fare_configs", {"service_area_id": area_id}, limit=100
+    )
     return {
         "vehicle_types": vehicle_types or [],
         "fare_configs": fare_configs or [],

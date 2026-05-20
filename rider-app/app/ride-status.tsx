@@ -17,7 +17,8 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useRideStore } from '../store/rideStore';
 import api from '@shared/api/client';
-import CustomAlert from '@shared/components/CustomAlert';
+import { showToast } from '../store/toastStore';
+import ConfirmSheet from '../components/ConfirmSheet';
 import { FreeCancelTimer } from '../components/FreeCancelTimer';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -82,13 +83,13 @@ export default function RideStatusScreen() {
     return () => clearInterval(interval);
   }, [currentRide?.status, (currentRide as any)?.offer_expires_at, (currentRide as any)?.offer_timeout_seconds]);
 
-  const [alertState, setAlertState] = useState<{
+  const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean;
     title: string;
-    message: string;
+    message?: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
     buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
-  }>({ visible: false, title: '', message: '', variant: 'info' });
+  }>({ visible: false, title: '', variant: 'info' });
 
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -147,33 +148,29 @@ export default function RideStatusScreen() {
     const isFreeCancel = freeCancelSecondsLeft === null || freeCancelSecondsLeft > 0;
     const status = currentRide.status;
 
+    const doCancel = async () => {
+      try {
+        await cancelRide();
+        clearRide();
+        router.replace('/(tabs)' as any);
+      } catch {
+        showToast('Could not cancel', 'The server rejected the request. Please try again.', 'danger');
+      }
+    };
+
     if (status === 'driver_arrived') {
-      setAlertState({
+      setConfirmSheet({
         visible: true,
         title: 'Driver is waiting',
-        message: isFreeCancel
-          ? 'Your driver has arrived. Cancel for free before the window closes.'
-          : `Your driver has arrived. A cancellation fee of $${cancellationFee.toFixed(2)} will be charged.`,
+        message: `Your driver has arrived. A cancellation fee of $${cancellationFee.toFixed(2)} will be charged.`,
         variant: 'warning',
         buttons: [
+          { text: `Cancel & Pay $${cancellationFee.toFixed(2)}`, style: 'destructive', onPress: doCancel },
           { text: 'Keep Ride', style: 'cancel' },
-          {
-            text: isFreeCancel ? 'Cancel (Free)' : `Cancel & Pay $${cancellationFee.toFixed(2)}`,
-            style: 'destructive',
-            onPress: async () => {
-              try {
-                await cancelRide();
-                clearRide();
-                router.replace('/(tabs)' as any);
-              } catch {
-                setAlertState({ visible: true, title: 'Could not cancel', message: 'The server rejected the request. Please try again.', variant: 'danger', buttons: [{ text: 'OK', style: 'default' }] });
-              }
-            }
-          },
         ],
       });
     } else if (status === 'driver_assigned' || status === 'driver_accepted') {
-      setAlertState({
+      setConfirmSheet({
         visible: true,
         title: 'Cancel ride?',
         message: isFreeCancel
@@ -181,42 +178,19 @@ export default function RideStatusScreen() {
           : `Cancellation fee of $${cancellationFee.toFixed(2)} applies.`,
         variant: 'warning',
         buttons: [
+          { text: isFreeCancel ? 'Cancel (Free)' : `Cancel & Pay $${cancellationFee.toFixed(2)}`, style: 'destructive', onPress: doCancel },
           { text: 'Keep Ride', style: 'cancel' },
-          {
-            text: isFreeCancel ? 'Cancel (Free)' : `Cancel & Pay $${cancellationFee.toFixed(2)}`,
-            style: 'destructive',
-            onPress: async () => {
-              try {
-                await cancelRide();
-                clearRide();
-                router.replace('/(tabs)' as any);
-              } catch {
-                setAlertState({ visible: true, title: 'Could not cancel', message: 'The server rejected the request. Please try again.', variant: 'danger', buttons: [{ text: 'OK', style: 'default' }] });
-              }
-            }
-          },
         ],
       });
     } else {
-      setAlertState({
+      setConfirmSheet({
         visible: true,
         title: 'Cancel search?',
         message: 'Stop looking for a driver? No charge.',
         variant: 'info',
         buttons: [
+          { text: 'Cancel', onPress: doCancel },
           { text: 'Keep searching', style: 'cancel' },
-          {
-            text: 'Cancel',
-            onPress: async () => {
-              try {
-                await cancelRide();
-                clearRide();
-                router.replace('/(tabs)' as any);
-              } catch {
-                setAlertState({ visible: true, title: 'Could not cancel', message: 'The server rejected the request. Please try again.', variant: 'danger', buttons: [{ text: 'OK', style: 'default' }] });
-              }
-            }
-          },
         ],
       });
     }
@@ -323,6 +297,7 @@ export default function RideStatusScreen() {
       <View style={{ marginTop: 12 }}>
         <FreeCancelTimer
           driverAcceptedAt={(currentRide as any)?.driver_accepted_at}
+          rideStatus={currentRide?.status}
           freeCancelWindowSeconds={(currentRide as any)?.free_cancel_window_seconds ?? 120}
           cancellationFee={(currentRide as any)?.cancellation_fee ?? 3.0}
         />
@@ -472,17 +447,17 @@ export default function RideStatusScreen() {
           </>
         )}
       </View>
-      <CustomAlert
-        visible={alertState.visible}
-        title={alertState.title}
-        message={alertState.message}
-        variant={alertState.variant}
-        buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
-        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
+      <ConfirmSheet
+        visible={confirmSheet.visible}
+        title={confirmSheet.title}
+        message={confirmSheet.message}
+        variant={confirmSheet.variant}
+        buttons={confirmSheet.buttons || [{ text: 'OK', style: 'default' }]}
+        onClose={() => setConfirmSheet(prev => ({ ...prev, visible: false }))}
       />
 
       {/* Note-for-driver editor — opened from the chip above. Backend
-          rejects late edits (post-pickup) so 409 surfaces as a CustomAlert. */}
+          rejects late edits (post-pickup) so 409 surfaces as a toast. */}
       <Modal
         visible={notesSheetOpen}
         transparent
@@ -534,12 +509,7 @@ export default function RideStatusScreen() {
                       (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
                       (err as Error)?.message ||
                       'Could not save note.';
-                    setAlertState({
-                      visible: true,
-                      title: 'Note not saved',
-                      message,
-                      variant: 'warning',
-                    });
+                    showToast('Note not saved', message, 'warning');
                   } finally {
                     setSavingNotes(false);
                   }

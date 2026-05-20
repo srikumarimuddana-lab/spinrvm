@@ -172,9 +172,7 @@ async def settle_wallet(
     )
     grand_total = _round(_d(ride.get("grand_total") or ride.get("total_fare", 0) or 0))
     ride_fare = _round(
-        _d(ride.get("base_fare") or 0)
-        + _d(ride.get("distance_fare") or 0)
-        + _d(ride.get("time_fare") or 0)
+        _d(ride.get("base_fare") or 0) + _d(ride.get("distance_fare") or 0) + _d(ride.get("time_fare") or 0)
     )
     await db_supabase.insert_one(
         "wallet_transactions",
@@ -189,6 +187,7 @@ async def settle_wallet(
             "description": f"Ride payment ${_f(debit):.2f}",
             "metadata": {
                 "ride_id": ride_id,
+                "ride_code": ride.get("ride_code") or "",
                 "fare_amount": str(grand_total),
                 "ride_fare": str(ride_fare),
                 "tip_amount": str(_round(_d(tip_amount))),
@@ -234,9 +233,7 @@ async def settle_corporate(
         )
 
     memberships = await db_supabase.list_active_memberships_for_user(ride["rider_id"])
-    membership = next(
-        (m for m in memberships if m.get("company_id") == company_id), None
-    )
+    membership = next((m for m in memberships if m.get("company_id") == company_id), None)
     if not membership:
         await db_supabase.update_ride(ride_id, {"payment_status": "pending"})
         return PaymentResult(
@@ -253,19 +250,13 @@ async def settle_corporate(
         allowance_debit = total
         master_debit = _round(Decimal("0"))
     else:
-        remaining = _round(
-            _d(str(allowance.get("amount") or 0))
-            - max(_d(str(allowance.get("used") or 0)), _d("0"))
-        )
+        remaining = _round(_d(str(allowance.get("amount") or 0)) - max(_d(str(allowance.get("used") or 0)), _d("0")))
         remaining = max(remaining, _round(Decimal("0")))
         allowance_debit = min(remaining, total)
         master_debit = total - allowance_debit
 
     corp_policy = await db_supabase.get_corporate_policy(company_id) or {}
-    flag_violation = (
-        master_debit > 0
-        and corp_policy.get("allowed_payment_source") == "allowance_only"
-    )
+    flag_violation = master_debit > 0 and corp_policy.get("allowed_payment_source") == "allowance_only"
 
     allowance_applied = False
     if allowance_debit > 0 and allowance.get("id") and corp_wallet.get("id"):
@@ -378,9 +369,7 @@ async def settle_card(
     """Charge rider's card via Stripe."""
     rider_user = await db_supabase.get_user_by_id(rider_id)
     stripe_customer_id = (rider_user or {}).get("stripe_customer_id")
-    payment_method_id = ride.get("payment_method_id") or (rider_user or {}).get(
-        "default_payment_method"
-    )
+    payment_method_id = ride.get("payment_method_id") or (rider_user or {}).get("default_payment_method")
 
     if not payment_method_id:
         await db_supabase.update_ride(ride_id, {"payment_status": "pending"})
@@ -492,9 +481,7 @@ async def settle_card(
         )
 
     if outcome.status == "unconfigured":
-        logger.error(
-            "Stripe unconfigured — marking ride %s paid without real charge", ride_id
-        )
+        logger.error("Stripe unconfigured — marking ride %s paid without real charge", ride_id)
         await db_supabase.update_ride(
             ride_id,
             {

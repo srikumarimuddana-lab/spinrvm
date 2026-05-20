@@ -18,7 +18,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRideStore } from '../store/rideStore';
 import { useWalletStore } from '../store/walletStore';
 import { useWorkProfileStore } from '../store/workProfileStore';
-import CustomAlert from '@shared/components/CustomAlert';
+import { showToast } from '../store/toastStore';
+import ConfirmSheet from '../components/ConfirmSheet';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -55,13 +56,13 @@ function PaymentConfirmScreenContent() {
   const [selectedCorporateId, setSelectedCorporateId] = useState<string | null>(
     workModeEnabled ? (activeCompanyId ?? null) : null,
   );
-  const [alertState, setAlertState] = useState<{
+  const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean;
     title: string;
     message: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
-    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
-  }>({ visible: false, title: '', message: '', variant: 'info' });
+    buttons: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+  }>({ visible: false, title: '', message: '', variant: 'info', buttons: [] });
 
   const { colors, isDark } = useTheme();
   const { sf } = useResponsive();
@@ -158,7 +159,7 @@ function PaymentConfirmScreenContent() {
       const errBody = error?.response?.data;
       const unpaidRideId = errBody?.error?.details?.unpaid_ride_id;
       if (is402 && unpaidRideId) {
-        setAlertState({
+        setConfirmSheet({
           visible: true,
           title: 'Unpaid Ride',
           message: 'You have an unpaid ride. Please settle the payment before booking a new ride.',
@@ -169,7 +170,7 @@ function PaymentConfirmScreenContent() {
           ],
         });
       } else {
-        setAlertState({ visible: true, title: 'Error', message: error.message || 'Failed to book ride', variant: 'danger' });
+        showToast('Error', error.message || 'Failed to book ride', 'danger');
       }
     } finally {
       setIsBooking(false);
@@ -470,13 +471,13 @@ function PaymentConfirmScreenContent() {
           )}
         </TouchableOpacity>
       </Animated.View>
-      <CustomAlert
-        visible={alertState.visible}
-        title={alertState.title}
-        message={alertState.message}
-        variant={alertState.variant}
-        buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
-        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
+      <ConfirmSheet
+        visible={confirmSheet.visible}
+        title={confirmSheet.title}
+        message={confirmSheet.message}
+        variant={confirmSheet.variant}
+        buttons={confirmSheet.buttons.length ? confirmSheet.buttons : [{ text: 'OK' }]}
+        onClose={() => setConfirmSheet(prev => ({ ...prev, visible: false }))}
       />
     </SafeAreaView>
   );

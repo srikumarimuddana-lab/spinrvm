@@ -7,7 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '@shared/store/authStore';
-import CustomAlert from '@shared/components/CustomAlert';
+import { showToast } from '../store/toastStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import i18n, { useTranslation, useLanguageStore, LANGUAGES, type Language } from '../i18n';
@@ -24,14 +24,6 @@ export default function SettingsScreen() {
   const [emailEnabled, setEmailEnabled] = useState(true);
   const [smsEnabled, setSmsEnabled] = useState(true);
   const [showLangModal, setShowLangModal] = useState(false);
-  const [alertState, setAlertState] = useState<{
-    visible: boolean;
-    title: string;
-    message: string;
-    variant: 'info' | 'warning' | 'danger' | 'success';
-    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
-  }>({ visible: false, title: '', message: '', variant: 'info' });
-
   const handleDarkModeToggle = (value: boolean) => {
     setTheme(value ? 'dark' : 'light');
   };
@@ -176,14 +168,6 @@ export default function SettingsScreen() {
         </TouchableOpacity>
       </Modal>
 
-      <CustomAlert
-        visible={alertState.visible}
-        title={alertState.title}
-        message={alertState.message}
-        variant={alertState.variant}
-        buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
-        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
-      />
     </SafeAreaView>
   );
 }

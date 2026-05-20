@@ -14,7 +14,7 @@ import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useRideStore } from '../store/rideStore';
 import api from '@shared/api/client';
-import CustomAlert from '@shared/components/CustomAlert';
+import { showToast } from '../store/toastStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -33,10 +33,6 @@ export default function ChatDriverScreen() {
   const scrollViewRef = useRef<ScrollView>(null);
   const [message, setMessage] = useState('');
   const [sending, setSending] = useState(false);
-  const [alertState, setAlertState] = useState<{
-    visible: boolean; title: string; message: string;
-    variant: 'info' | 'warning' | 'danger' | 'success';
-  }>({ visible: false, title: '', message: '', variant: 'info' });
 
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -125,7 +121,7 @@ export default function ChatDriverScreen() {
       setChatMessages(current.filter(m => m.id !== optimisticId));
       setMessage(trimmed);
       const detail = e?.response?.data?.detail || e?.message || 'Could not send message. Check your connection.';
-      setAlertState({ visible: true, title: 'Send Failed', message: detail, variant: 'danger' });
+      showToast('Send Failed', detail, 'danger');
     } finally {
       setSending(false);
     }
@@ -253,14 +249,6 @@ export default function ChatDriverScreen() {
         </View>
       </KeyboardAvoidingView>
 
-      <CustomAlert
-        visible={alertState.visible}
-        title={alertState.title}
-        message={alertState.message}
-        variant={alertState.variant}
-        buttons={[{ text: 'OK', style: 'default' }]}
-        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
-      />
     </SafeAreaView>
   );
 }

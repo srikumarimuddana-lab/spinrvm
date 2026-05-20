@@ -18,7 +18,8 @@ import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuthStore } from '@shared/store/authStore';
-import CustomAlert from '@shared/components/CustomAlert';
+import { showToast } from '../store/toastStore';
+import ConfirmSheet from '../components/ConfirmSheet';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -43,14 +44,7 @@ export default function ProfileSetupScreen() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [tosAccepted, setTosAccepted] = useState(false);
-  const [showPhotoPickerAlert, setShowPhotoPickerAlert] = useState(false);
-  const [alertState, setAlertState] = useState<{
-    visible: boolean;
-    title: string;
-    message: string;
-    variant: 'info' | 'warning' | 'danger' | 'success';
-    buttons?: { text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }[];
-  }>({ visible: false, title: '', message: '', variant: 'info' });
+  const [showPhotoPicker, setShowPhotoPicker] = useState(false);
 
   const updateForm = (key: keyof typeof form, value: string) => {
     setForm(prev => ({ ...prev, [key]: value }));
@@ -58,14 +52,14 @@ export default function ProfileSetupScreen() {
 
   const launchCamera = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') return setAlertState({ visible: true, title: 'Permission Denied', message: 'Camera access is needed.', variant: 'warning' });
+    if (status !== 'granted') return showToast('Permission Denied', 'Camera access is needed.', 'warning');
     const result = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.7 });
     if (!result.canceled && result.assets[0]) uploadPhoto(result.assets[0].uri);
   };
 
   const launchGallery = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') return setAlertState({ visible: true, title: 'Permission Denied', message: 'Library access is needed.', variant: 'warning' });
+    if (status !== 'granted') return showToast('Permission Denied', 'Library access is needed.', 'warning');
     const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.7 });
     if (!result.canceled && result.assets[0]) uploadPhoto(result.assets[0].uri);
   };
@@ -74,9 +68,9 @@ export default function ProfileSetupScreen() {
     setIsUploadingPhoto(true);
     try {
       await updateProfileImage(uri);
-      setAlertState({ visible: true, title: 'Photo Updated', message: 'Your profile photo has been updated.', variant: 'success' });
+      showToast('Photo Updated', 'Your profile photo has been updated.', 'success');
     } catch (err: any) {
-      setAlertState({ visible: true, title: 'Upload Failed', message: err.message || 'Failed to upload photo', variant: 'danger' });
+      showToast('Upload Failed', err.message || 'Failed to upload photo', 'danger');
     } finally {
       setIsUploadingPhoto(false);
     }
@@ -84,10 +78,10 @@ export default function ProfileSetupScreen() {
 
   const handleSubmit = async () => {
     if (!form.firstName.trim() || !form.lastName.trim() || !form.email.trim() || !form.gender) {
-      return setAlertState({ visible: true, title: 'Missing Info', message: 'Please fill in all fields.', variant: 'warning' });
+      return showToast('Missing Info', 'Please fill in all fields.', 'warning');
     }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) {
-      return setAlertState({ visible: true, title: 'Invalid Email', message: 'Please enter a valid email address.', variant: 'warning' });
+      return showToast('Invalid Email', 'Please enter a valid email address.', 'warning');
     }
 
     Keyboard.dismiss();
@@ -105,7 +99,7 @@ export default function ProfileSetupScreen() {
         router.replace('/(tabs)' as any);
       }
     } catch (err: any) {
-      setAlertState({ visible: true, title: 'Error', message: err.message || 'Failed to save profile', variant: 'danger' });
+      showToast('Error', err.message || 'Failed to save profile', 'danger');
     } finally {
       setIsSubmitting(false);
     }
@@ -164,7 +158,7 @@ export default function ProfileSetupScreen() {
           </TouchableOpacity>
         )}
 
-        <TouchableOpacity style={styles.avatarContainer} activeOpacity={0.8} onPress={() => setShowPhotoPickerAlert(true)}>
+        <TouchableOpacity style={styles.avatarContainer} activeOpacity={0.8} onPress={() => setShowPhotoPicker(true)}>
           {isUploadingPhoto ? (
             <View style={[styles.avatarCircle, { backgroundColor: colors.surface }]}>
               <ActivityIndicator size="large" color={colors.primary} />
@@ -280,26 +274,17 @@ export default function ProfileSetupScreen() {
       ) : (
         contentNode
       )}
-      <CustomAlert
-        visible={alertState.visible}
-        title={alertState.title}
-        message={alertState.message}
-        variant={alertState.variant}
-        buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
-        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
-      />
-      <CustomAlert
-        visible={showPhotoPickerAlert}
+      <ConfirmSheet
+        visible={showPhotoPicker}
         title="Update Photo"
         message="Choose how to update your profile photo."
         variant="info"
-        icon="camera-outline"
         buttons={[
-          { text: 'Take Photo', style: 'default', onPress: launchCamera },
-          { text: 'Library', style: 'default', onPress: launchGallery },
+          { text: 'Take Photo', style: 'default', onPress: () => { setShowPhotoPicker(false); launchCamera(); } },
+          { text: 'Choose from Library', style: 'default', onPress: () => { setShowPhotoPicker(false); launchGallery(); } },
           { text: 'Cancel', style: 'cancel' },
         ]}
-        onClose={() => setShowPhotoPickerAlert(false)}
+        onClose={() => setShowPhotoPicker(false)}
       />
     </View>
   );

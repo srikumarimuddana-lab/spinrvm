@@ -20,6 +20,7 @@ import type { ThemeColors } from '@shared/theme/index';
 import api from '@shared/api/client';
 import { useAuthStore } from '@shared/store/authStore';
 import { useTranslation } from '../../i18n';
+import { computeFareFromRide } from '../../utils/fareBreakdown';
 
 interface RideHistory {
   id: string;
@@ -28,6 +29,8 @@ interface RideHistory {
   total_fare: number | string;
   grand_total?: number | string;
   tip_amount?: number | string;
+  discount_amount?: number | string;
+  promo_code?: string;
   distance_km: number;
   duration_minutes: number;
   status: string;
@@ -215,8 +218,8 @@ export default function ActivityScreen() {
       return <Text style={styles.monthHeader}>{item.title}</Text>;
     }
     const { ride } = item;
-    const fareNum = ride.status === 'cancelled' ? 0 : parseFloat(String(ride.grand_total ?? ride.total_fare ?? 0)) + parseFloat(String(ride.tip_amount ?? 0));
-    const fare = isNaN(fareNum) ? '0.00' : fareNum.toFixed(2);
+    const fb = computeFareFromRide(ride);
+    const fare = fb.total.toFixed(2);
     return (
       <TouchableOpacity
         style={styles.rideCard}
@@ -245,6 +248,14 @@ export default function ActivityScreen() {
           <Text style={[styles.rideFare, ride.status === 'cancelled' && styles.rideFareCancelled]} allowFontScaling={false}>
             ${fare}
           </Text>
+          {ride.status !== 'cancelled' && (fb.hasTip || fb.hasDiscount) && (
+            <Text style={styles.rideFareBreakdown} numberOfLines={1}>
+              {[
+                fb.hasTip ? `Tip $${fb.tip.toFixed(2)}` : '',
+                fb.hasDiscount ? `Saved $${fb.discount.toFixed(2)}` : '',
+              ].filter(Boolean).join(' · ')}
+            </Text>
+          )}
           <View style={styles.rideStatusContainer}>
             <View style={[styles.statusDot, { backgroundColor: getStatusColor(ride.status) }]} />
             <Text style={[styles.rideStatus, { color: getStatusColor(ride.status) }]} allowFontScaling={false}>
@@ -475,6 +486,7 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
   rideFareContainer: { alignItems: 'flex-end' },
   rideFare: { fontSize: 17, fontFamily: 'PlusJakartaSans_700Bold', color: colors.primary, marginBottom: 4 },
   rideFareCancelled: { color: colors.textDim },
+  rideFareBreakdown: { fontSize: 10, color: '#10B981', marginBottom: 3 },
   rideStatusContainer: { flexDirection: 'row', alignItems: 'center' },
   statusDot: { width: 6, height: 6, borderRadius: 3, marginRight: 4 },
   rideStatus: { fontSize: 12, fontFamily: 'PlusJakartaSans_500Medium' },

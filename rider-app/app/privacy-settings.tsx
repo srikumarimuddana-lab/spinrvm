@@ -6,7 +6,8 @@ import CustomToggle from '../components/CustomToggle';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import CustomAlert from '@shared/components/CustomAlert';
+import { showToast } from '../store/toastStore';
+import ConfirmSheet from '../components/ConfirmSheet';
 import { useTheme } from '@shared/theme/ThemeContext';
 import api from '@shared/api/client';
 import { useAuthStore } from '@shared/store/authStore';
@@ -23,7 +24,7 @@ export default function PrivacySettingsScreen() {
   const [shareRideData, setShareRideData] = useState(true);
   const [marketingEmails, setMarketingEmails] = useState(true);
   const [pushNotifications, setPushNotifications] = useState(true);
-  const [alertState, setAlertState] = useState<{
+  const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean;
     title: string;
     message: string;
@@ -35,31 +36,20 @@ export default function PrivacySettingsScreen() {
   const handleDownloadData = async () => {
     try {
       await api.post('/users/data-export');
-      setAlertState({
-        visible: true,
-        title: t('privacy.download_requested'),
-        message: t('privacy.download_requested_msg'),
-        variant: 'success',
-      });
+      showToast(t('privacy.download_requested'), t('privacy.download_requested_msg'), 'success');
     } catch (err: any) {
-      setAlertState({
-        visible: true,
-        title: 'Error',
-        message: err?.response?.data?.detail || 'Failed to request data export. Please try again.',
-        variant: 'danger',
-      });
+      showToast('Error', err?.response?.data?.detail || 'Failed to request data export. Please try again.', 'danger');
     }
   };
 
   // R-P1-6: PIPEDA — wire Delete Account to real backend endpoint + logout
   const handleDeleteAccount = () => {
-    setAlertState({
+    setConfirmSheet({
       visible: true,
       title: t('privacy.delete_confirm_title'),
       message: t('privacy.delete_confirm_msg'),
       variant: 'danger',
       buttons: [
-        { text: t('common.cancel'), style: 'cancel' },
         {
           text: t('privacy.delete_my_account'),
           style: 'destructive',
@@ -69,15 +59,11 @@ export default function PrivacySettingsScreen() {
               await logout();
               router.replace('/login' as any);
             } catch (err: any) {
-              setAlertState({
-                visible: true,
-                title: 'Error',
-                message: err?.response?.data?.detail || 'Failed to delete account. Please contact support.',
-                variant: 'danger',
-              });
+              showToast('Error', err?.response?.data?.detail || 'Failed to delete account. Please contact support.', 'danger');
             }
           },
         },
+        { text: t('common.cancel'), style: 'cancel' },
       ],
     });
   };
@@ -153,13 +139,13 @@ export default function PrivacySettingsScreen() {
 
         <Text style={styles.footerText}>{t('privacy.footer')}</Text>
       </ScrollView>
-      <CustomAlert
-        visible={alertState.visible}
-        title={alertState.title}
-        message={alertState.message}
-        variant={alertState.variant}
-        buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
-        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
+      <ConfirmSheet
+        visible={confirmSheet.visible}
+        title={confirmSheet.title}
+        message={confirmSheet.message}
+        variant={confirmSheet.variant}
+        buttons={confirmSheet.buttons}
+        onClose={() => setConfirmSheet(prev => ({ ...prev, visible: false }))}
       />
     </SafeAreaView>
   );

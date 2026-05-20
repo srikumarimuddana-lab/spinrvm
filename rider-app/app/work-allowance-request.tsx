@@ -15,7 +15,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-import CustomAlert from '@shared/components/CustomAlert';
+import { showToast } from '../store/toastStore';
 import { useWorkProfileStore } from '../store/workProfileStore';
 
 const QUICK_AMOUNTS = [25, 50, 100, 200];
@@ -30,11 +30,6 @@ export default function WorkAllowanceRequestScreen() {
   const [amount, setAmount] = useState('');
   const [reason, setReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [alertState, setAlertState] = useState<{
-    visible: boolean; title: string; message: string;
-    variant: 'info' | 'warning' | 'danger' | 'success';
-  }>({ visible: false, title: '', message: '', variant: 'info' });
-
   useEffect(() => {
     fetchRequests();
   }, [activeCompanyId]);
@@ -51,19 +46,18 @@ export default function WorkAllowanceRequestScreen() {
     try {
       const result = await submitRequest(parsedAmount, reason.trim());
       const autoApproved = result?.status === 'auto_approved';
-      setAlertState({
-        visible: true,
-        title: autoApproved ? 'Auto-approved!' : 'Request submitted',
-        message: autoApproved
+      showToast(
+        autoApproved ? 'Auto-approved!' : 'Request Submitted',
+        autoApproved
           ? `$${parsedAmount.toFixed(2)} has been added to your allowance automatically.`
           : 'Your request has been sent to your company admin for review.',
-        variant: 'success',
-      });
+        'success',
+      );
       setAmount('');
       setReason('');
     } catch (e: any) {
       const msg = e?.response?.data?.detail || e?.message || 'Failed to submit request';
-      setAlertState({ visible: true, title: 'Error', message: msg, variant: 'danger' });
+      showToast('Error', msg, 'danger');
     } finally {
       setSubmitting(false);
     }
@@ -208,18 +202,6 @@ export default function WorkAllowanceRequestScreen() {
         </ScrollView>
       </KeyboardAvoidingView>
 
-      <CustomAlert
-        visible={alertState.visible}
-        title={alertState.title}
-        message={alertState.message}
-        variant={alertState.variant}
-        buttons={[{
-          text: 'OK',
-          style: 'default',
-          onPress: () => alertState.variant === 'success' && router.back(),
-        }]}
-        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
-      />
     </SafeAreaView>
   );
 }

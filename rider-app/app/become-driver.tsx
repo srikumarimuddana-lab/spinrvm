@@ -18,7 +18,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import { useAuthStore } from '@shared/store/authStore';
 import SpinrConfig from '@shared/config/spinr.config';
 import { uploadFile } from '@shared/api/upload';
-import CustomAlert from '@shared/components/CustomAlert';
+import { showToast } from '../store/toastStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -76,13 +76,6 @@ export default function BecomeDriverScreen() {
   const [vehicleTypes, setVehicleTypes] = useState<any[]>([]);
   const [loadingTypes, setLoadingTypes] = useState(false);
   const [uploadingDoc, setUploadingDoc] = useState<string | null>(null); // reqId_side
-  const [alertState, setAlertState] = useState<{
-    visible: boolean;
-    title: string;
-    message: string;
-    variant: 'info' | 'warning' | 'danger' | 'success';
-    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
-  }>({ visible: false, title: '', message: '', variant: 'info' });
 
   useEffect(() => {
     fetchVehicleTypes();
@@ -148,9 +141,9 @@ export default function BecomeDriverScreen() {
           [side]: url
         }
       }));
-      setAlertState({ visible: true, title: 'Success', message: 'Document uploaded successfully', variant: 'success' });
+      showToast('Success', 'Document uploaded successfully', 'success');
     } catch (err: any) {
-      setAlertState({ visible: true, title: 'Upload Failed', message: (err as any)?.statusCode ? 'Please try again.' : 'Something went wrong. Please try again.', variant: 'danger' });
+      showToast('Upload Failed', (err as any)?.statusCode ? 'Please try again.' : 'Something went wrong. Please try again.', 'danger');
     } finally {
       setUploadingDoc(null);
     }
@@ -164,7 +157,7 @@ export default function BecomeDriverScreen() {
         const year = parseInt(vehicleYear);
         const currentYear = new Date().getFullYear();
         if (!vehicleYear || isNaN(year) || year < currentYear - 9) {
-          setAlertState({ visible: true, title: 'Invalid Year', message: 'Vehicle must be 9 years old or newer.', variant: 'warning' });
+          showToast('Invalid Year', 'Vehicle must be 9 years old or newer.', 'warning');
           return false;
         }
         return vehicleMake && vehicleModel && vehicleColor && licensePlate && vehicleVin && vehicleType;
@@ -190,7 +183,7 @@ export default function BecomeDriverScreen() {
         });
 
         if (missing.length > 0) {
-          setAlertState({ visible: true, title: 'Missing Documents', message: `Please provide: ${missing.join(', ')}`, variant: 'warning' });
+          showToast('Missing Documents', `Please provide: ${missing.join(', ')}`, 'warning');
           return false;
         }
         return true;
@@ -268,17 +261,10 @@ export default function BecomeDriverScreen() {
         documents: documentsPayload,
       });
 
-      setAlertState({
-        visible: true,
-        title: 'Application Submitted!',
-        message: 'Waiting for approval. To start driving, download the Spinr Driver app.',
-        variant: 'success',
-        buttons: [
-          { text: 'OK', onPress: () => router.replace('/(tabs)' as any) },
-        ],
-      });
+      showToast('Application Submitted!', 'Waiting for approval. To start driving, download the Spinr Driver app.', 'success');
+      router.replace('/(tabs)' as any);
     } catch (err: any) {
-      setAlertState({ visible: true, title: 'Registration Failed', message: (err as any)?.statusCode ? 'Please try again.' : 'Something went wrong. Please try again.', variant: 'danger' });
+      showToast('Registration Failed', (err as any)?.statusCode ? 'Please try again.' : 'Something went wrong. Please try again.', 'danger');
     }
   };
 
@@ -487,14 +473,6 @@ export default function BecomeDriverScreen() {
 
         </ScrollView>
       </KeyboardAvoidingView>
-      <CustomAlert
-        visible={alertState.visible}
-        title={alertState.title}
-        message={alertState.message}
-        variant={alertState.variant}
-        buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
-        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
-      />
     </SafeAreaView>
   );
 }

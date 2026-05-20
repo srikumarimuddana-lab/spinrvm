@@ -7,7 +7,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useRideStore } from '../store/rideStore';
-import CustomAlert from '@shared/components/CustomAlert';
+import { showToast } from '../store/toastStore';
+import ConfirmSheet from '../components/ConfirmSheet';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useScheduledRideReminder } from '../hooks/useScheduledRideReminder';
@@ -20,7 +21,7 @@ export default function ScheduledRidesScreen() {
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [alertState, setAlertState] = useState<{
+  const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean; title: string; message: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
     buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
@@ -43,34 +44,25 @@ export default function ScheduledRidesScreen() {
   };
 
   const handleCancel = (rideId: string) => {
-    setAlertState({
+    setConfirmSheet({
       visible: true,
       title: 'Cancel Scheduled Ride',
       message: 'Are you sure you want to cancel this scheduled ride?',
       variant: 'warning',
       buttons: [
-        { text: 'Keep', style: 'cancel' },
         {
           text: 'Cancel Ride', style: 'destructive',
           onPress: async () => {
-            setAlertState(prev => ({ ...prev, visible: false }));
             try {
               await cancelScheduledRide(rideId);
               cancelReminder(rideId).catch(() => {});
-              setAlertState({
-                visible: true, title: 'Cancelled',
-                message: 'Your scheduled ride has been cancelled.',
-                variant: 'success',
-              });
+              showToast('Cancelled', 'Your scheduled ride has been cancelled.', 'success');
             } catch (err: any) {
-              setAlertState({
-                visible: true, title: 'Error',
-                message: err.message || 'Failed to cancel ride',
-                variant: 'danger',
-              });
+              showToast('Error', err.message || 'Failed to cancel ride', 'danger');
             }
           },
         },
+        { text: 'Keep', style: 'cancel' },
       ],
     });
   };
@@ -183,13 +175,13 @@ export default function ScheduledRidesScreen() {
         />
       )}
 
-      <CustomAlert
-        visible={alertState.visible}
-        title={alertState.title}
-        message={alertState.message}
-        variant={alertState.variant}
-        buttons={alertState.buttons || [{ text: 'OK', onPress: () => setAlertState(prev => ({ ...prev, visible: false })) }]}
-        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
+      <ConfirmSheet
+        visible={confirmSheet.visible}
+        title={confirmSheet.title}
+        message={confirmSheet.message}
+        variant={confirmSheet.variant}
+        buttons={confirmSheet.buttons}
+        onClose={() => setConfirmSheet(prev => ({ ...prev, visible: false }))}
       />
     </SafeAreaView>
   );

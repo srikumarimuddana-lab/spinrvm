@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import { DEFAULT_CENTER, MAP_STYLE_URL, addStandardControls, fitBoundsToPoints } from '@/lib/map/maplibre-base';
+import { DEFAULT_CENTER, MAP_STYLE_URL, addStandardControls } from '@/lib/map/maplibre-base';
 
 interface RideInfo {
   status: string;
@@ -159,7 +159,13 @@ export default function TrackRide() {
       // Fit once on first load so the rider sees the whole trip; afterwards
       // only re-center on the driver so the camera doesn't keep snapping back.
       if (!didFitRef.current && points.length >= 2) {
-        fitBoundsToPoints(map!, points, { padding: 80, maxZoom: 15 });
+        // Build a LngLatBounds from the points and fit with our own options
+        // (the shared helper only takes a number for padding — no maxZoom).
+        const bounds = points.reduce(
+          (b, p) => b.extend([p.lng, p.lat] as [number, number]),
+          new maplibregl.LngLatBounds(),
+        );
+        map!.fitBounds(bounds, { padding: 80, maxZoom: 15, duration: 500 });
         didFitRef.current = true;
       } else if (d?.lat != null && d?.lng != null && didFitRef.current) {
         map!.easeTo({ center: [d.lng, d.lat], duration: 800 });

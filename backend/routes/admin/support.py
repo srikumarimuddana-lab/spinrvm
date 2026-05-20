@@ -166,7 +166,9 @@ async def admin_create_dispute(dispute: DisputeCreateRequest):
 @router.get("/disputes/{dispute_id}")
 async def admin_get_dispute_details(dispute_id: str):
     """Get detailed dispute information."""
-    dispute = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("disputes", {"id": dispute_id}, limit=1))
+    dispute = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("disputes", {"id": dispute_id}, limit=1)
+    )
     if not dispute:
         raise HTTPException(status_code=404, detail="Dispute not found")
 
@@ -196,7 +198,9 @@ async def admin_update_dispute(dispute_id: str, dispute: DisputeUpdateRequest):
 
 @router.put("/disputes/{dispute_id}/resolve")
 async def admin_resolve_dispute(
-    dispute_id: str, resolution: DisputeResolveRequest, admin: dict = Depends(get_admin_user)
+    dispute_id: str,
+    resolution: DisputeResolveRequest,
+    admin: dict = Depends(get_admin_user),
 ):
     """Resolve a dispute. resolved_by is set from the authenticated admin (F-32)."""
     resolution_data = {
@@ -279,12 +283,16 @@ async def admin_get_ticket_details(ticket_id: str):
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
 
-    messages = await db_supabase.get_rows("support_messages", {"ticket_id": ticket_id}, order="created_at", limit=100)
+    messages = await db_supabase.get_rows(
+        "support_messages", {"ticket_id": ticket_id}, order="created_at", limit=100
+    )
     return {**ticket, "messages": messages}
 
 
 @router.post("/tickets/{ticket_id}/reply")
-async def admin_reply_to_ticket(ticket_id: str, reply: TicketReplyRequest, admin: dict = Depends(get_admin_user)):
+async def admin_reply_to_ticket(
+    ticket_id: str, reply: TicketReplyRequest, admin: dict = Depends(get_admin_user)
+):
     """Reply to a support ticket. sender_id is set from the authenticated admin (F-29)."""
     message_doc = {
         "ticket_id": ticket_id,
@@ -299,7 +307,10 @@ async def admin_reply_to_ticket(ticket_id: str, reply: TicketReplyRequest, admin
         await db_supabase.update_one(
             "support_tickets",
             {"id": ticket_id},
-            {"status": reply.status, "updated_at": datetime.now(timezone.utc).isoformat()},
+            {
+                "status": reply.status,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            },
         )
 
     await log_admin_action(
@@ -316,7 +327,9 @@ async def admin_reply_to_ticket(ticket_id: str, reply: TicketReplyRequest, admin
 async def admin_close_ticket(ticket_id: str):
     """Close a support ticket."""
     await db_supabase.update_one(
-        "support_tickets", {"id": ticket_id}, {"status": "closed", "closed_at": datetime.now(timezone.utc).isoformat()}
+        "support_tickets",
+        {"id": ticket_id},
+        {"status": "closed", "closed_at": datetime.now(timezone.utc).isoformat()},
     )
     return {"message": "Ticket closed"}
 
@@ -350,18 +363,26 @@ async def admin_delete_ticket(ticket_id: str):
 
 
 @router.post("/rides/{ride_id}/flag")
-async def admin_flag_ride_participant(ride_id: str, req: FlagRequest, admin: dict = Depends(get_admin_user)):
+async def admin_flag_ride_participant(
+    ride_id: str, req: FlagRequest, admin: dict = Depends(get_admin_user)
+):
     """Flag a rider or driver from a ride. 3 active flags = auto-ban."""
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
     if req.target_type not in ("rider", "driver"):
-        raise HTTPException(status_code=400, detail="target_type must be 'rider' or 'driver'")
+        raise HTTPException(
+            status_code=400, detail="target_type must be 'rider' or 'driver'"
+        )
 
-    target_id = ride.get("rider_id") if req.target_type == "rider" else ride.get("driver_id")
+    target_id = (
+        ride.get("rider_id") if req.target_type == "rider" else ride.get("driver_id")
+    )
     if not target_id:
-        raise HTTPException(status_code=400, detail=f"No {req.target_type} assigned to this ride")
+        raise HTTPException(
+            status_code=400, detail=f"No {req.target_type} assigned to this ride"
+        )
 
     flag_data = {
         "id": str(uuid.uuid4()),
@@ -379,7 +400,12 @@ async def admin_flag_ride_participant(ride_id: str, req: FlagRequest, admin: dic
         "flag_created",
         "flags",
         flag_data["id"],
-        {"ride_id": ride_id, "target_type": req.target_type, "target_id": target_id, "reason": req.reason},
+        {
+            "ride_id": ride_id,
+            "target_type": req.target_type,
+            "target_id": target_id,
+            "reason": req.reason,
+        },
     )
     return result
 
@@ -400,14 +426,18 @@ async def admin_list_flags(
         filters["service_area_id"] = service_area_id
     if is_active is not None:
         filters["is_active"] = is_active
-    flags = await db_supabase.get_rows("flags", filters, order="created_at", desc=True, limit=limit, offset=offset)
+    flags = await db_supabase.get_rows(
+        "flags", filters, order="created_at", desc=True, limit=limit, offset=offset
+    )
     return flags
 
 
 @router.put("/flags/{flag_id}/deactivate")
 async def admin_deactivate_flag(flag_id: str, admin: dict = Depends(get_admin_user)):
     """Deactivate a flag (soft delete)."""
-    result = await db_supabase.update_one("flags", {"id": flag_id}, {"$set": {"is_active": False}})
+    result = await db_supabase.update_one(
+        "flags", {"id": flag_id}, {"$set": {"is_active": False}}
+    )
     if not result:
         raise HTTPException(status_code=404, detail="Flag not found")
     await log_admin_action(admin, "flag_deactivated", "flags", flag_id, {})
@@ -432,11 +462,17 @@ async def admin_create_complaint(ride_id: str, req: ComplaintRequest):
         raise HTTPException(status_code=404, detail="Ride not found")
 
     if req.against_type not in ("rider", "driver"):
-        raise HTTPException(status_code=400, detail="against_type must be 'rider' or 'driver'")
+        raise HTTPException(
+            status_code=400, detail="against_type must be 'rider' or 'driver'"
+        )
 
-    against_id = ride.get("rider_id") if req.against_type == "rider" else ride.get("driver_id")
+    against_id = (
+        ride.get("rider_id") if req.against_type == "rider" else ride.get("driver_id")
+    )
     if not against_id:
-        raise HTTPException(status_code=400, detail=f"No {req.against_type} assigned to this ride")
+        raise HTTPException(
+            status_code=400, detail=f"No {req.against_type} assigned to this ride"
+        )
 
     complaint_data = {
         "id": str(uuid.uuid4()),
@@ -454,7 +490,9 @@ async def admin_create_complaint(ride_id: str, req: ComplaintRequest):
 
 @router.put("/complaints/{complaint_id}/resolve")
 async def admin_resolve_complaint(
-    complaint_id: str, req: ComplaintResolveRequest, admin: dict = Depends(get_admin_user)
+    complaint_id: str,
+    req: ComplaintResolveRequest,
+    admin: dict = Depends(get_admin_user),
 ):
     """Resolve or dismiss a complaint. resolved_by is set from the authenticated admin (F-32)."""
     result = await db_supabase.resolve_complaint(
@@ -494,7 +532,9 @@ async def admin_list_complaints(
         filters["against_type"] = against_type
     if service_area_id and service_area_id != "all":
         filters["service_area_id"] = service_area_id
-    return await db_supabase.get_rows("complaints", filters, order="created_at", desc=True, limit=limit, offset=offset)
+    return await db_supabase.get_rows(
+        "complaints", filters, order="created_at", desc=True, limit=limit, offset=offset
+    )
 
 
 @router.delete("/complaints/{complaint_id}")

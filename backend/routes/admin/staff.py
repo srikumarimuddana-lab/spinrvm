@@ -129,7 +129,9 @@ async def list_staff(
 
 
 @router.post("/staff")
-async def create_staff(req: StaffCreateRequest, admin: dict = Depends(require_role("super_admin"))):
+async def create_staff(
+    req: StaffCreateRequest, admin: dict = Depends(require_role("super_admin"))
+):
     """Create a new staff member with role-based module access.
 
     Only super_admin can create new staff members.
@@ -203,7 +205,9 @@ async def list_modules():
 @router.get("/staff/{staff_id}")
 async def get_staff(staff_id: str):
     """Get a single staff member."""
-    s = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("admin_staff", {"id": staff_id}, limit=1))
+    s = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("admin_staff", {"id": staff_id}, limit=1)
+    )
     if not s:
         raise HTTPException(status_code=404, detail="Staff member not found")
     s.pop("password_hash", None)
@@ -212,18 +216,27 @@ async def get_staff(staff_id: str):
 
 
 @router.put("/staff/{staff_id}")
-async def update_staff(staff_id: str, req: StaffUpdateRequest, admin: dict = Depends(get_admin_user)):
+async def update_staff(
+    staff_id: str, req: StaffUpdateRequest, admin: dict = Depends(get_admin_user)
+):
     """Update staff member role/modules/status. Only super_admin may call this (A-P3-5)."""
     if admin.get("role") != "super_admin":
-        raise HTTPException(status_code=403, detail="Only super admins can update staff members")
-    s = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("admin_staff", {"id": staff_id}, limit=1))
+        raise HTTPException(
+            status_code=403, detail="Only super admins can update staff members"
+        )
+    s = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("admin_staff", {"id": staff_id}, limit=1)
+    )
     if not s:
         raise HTTPException(status_code=404, detail="Staff member not found")
 
     # A-P3-6: promotion to super_admin requires password re-entry.
     if req.role == "super_admin" and s.get("role") != "super_admin":
         if not req.password_confirmation:
-            raise HTTPException(status_code=422, detail="password_confirmation required for super_admin promotion")
+            raise HTTPException(
+                status_code=422,
+                detail="password_confirmation required for super_admin promotion",
+            )
         actor_id = admin.get("id")
         if actor_id and actor_id != "admin-001":
             actor_row = (lambda _r: _r[0] if _r else None)(
@@ -231,15 +244,27 @@ async def update_staff(staff_id: str, req: StaffUpdateRequest, admin: dict = Dep
             )
             if not actor_row:
                 raise HTTPException(status_code=401, detail="Actor not found")
-            ok, _ = verify_password(req.password_confirmation, actor_row.get("password_hash", ""))
+            ok, _ = verify_password(
+                req.password_confirmation, actor_row.get("password_hash", "")
+            )
             if not ok:
-                raise HTTPException(status_code=401, detail="Incorrect password — promotion denied")
+                raise HTTPException(
+                    status_code=401, detail="Incorrect password — promotion denied"
+                )
         logger.info(f"super_admin promotion: target={staff_id} actor={actor_id}")
 
-    if req.role is not None and req.role != "super_admin" and s.get("role") == "super_admin":
-        count = await db_supabase.count_documents("admin_staff", {"role": "super_admin", "is_active": True})
+    if (
+        req.role is not None
+        and req.role != "super_admin"
+        and s.get("role") == "super_admin"
+    ):
+        count = await db_supabase.count_documents(
+            "admin_staff", {"role": "super_admin", "is_active": True}
+        )
         if count <= 1:
-            raise HTTPException(status_code=400, detail="Cannot demote the last active super admin")
+            raise HTTPException(
+                status_code=400, detail="Cannot demote the last active super admin"
+            )
 
     updates = {}
     if req.first_name is not None:
@@ -282,11 +307,15 @@ async def update_staff(staff_id: str, req: StaffUpdateRequest, admin: dict = Dep
 
 @router.delete("/staff/{staff_id}")
 @admin_staff_delete_limit
-async def delete_staff(request: Request, staff_id: str, admin: dict = Depends(require_role("super_admin"))):
+async def delete_staff(
+    request: Request, staff_id: str, admin: dict = Depends(require_role("super_admin"))
+):
     """Delete a staff member. Requires super_admin (A-P3-5)."""
     if staff_id == admin.get("id"):
         raise HTTPException(status_code=400, detail="Cannot delete your own account")
-    s = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("admin_staff", {"id": staff_id}, limit=1))
+    s = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("admin_staff", {"id": staff_id}, limit=1)
+    )
     # Revoke all refresh tokens before the row is gone so any in-flight
     # session cannot exchange a refresh token after deletion (audit [03-3]).
     await revoke_all_for_user(staff_id)

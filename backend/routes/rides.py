@@ -474,7 +474,8 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
             await db_supabase.get_rows(
                 "rides",
                 {"driver_id": {"$ne": None}},
-                sort=[("created_at", -1)],
+                order="created_at",
+                desc=True,
                 limit=1,
             )
         )
@@ -1388,23 +1389,33 @@ async def create_ride(
     # Only runs when rider explicitly books with company_allowance payment method.
     _corp_member_id: Optional[str] = None
     if body.corporate_account_id and body.payment_method == "company_allowance":
-        try:
-            from ..services.corporate_policy_service import evaluate_policy  # type: ignore
-        except ImportError:
-            from services.corporate_policy_service import evaluate_policy  # type: ignore
-
-        _policy_result = await evaluate_policy(
+        _policy_result = await evaluate_policy_for_ride(
             corporate_account_id=body.corporate_account_id,
             rider_id=current_user["id"],
             estimated_fare=total_fare,
             ride_type="standard",
             pickup_time=datetime.now(timezone.utc),
         )
-        if not _policy_result.allowed:
+        if not _policy_result.passed:
+            reasons = []
+            for rule in _policy_result.failed_rules:
+                if rule == "max_fare_per_ride":
+                    reasons.append("Fare exceeds company limit per ride.")
+                elif rule == "time_window":
+                    reasons.append("Booking is outside allowed company hours.")
+                elif rule == "allowed_payment_source":
+                    reasons.append("Insufficient corporate allowance balance.")
+                else:
+                    reasons.append(f"Violated corporate policy: {rule}.")
+            message = (
+                "Blocked by company policy:\n" + "\n".join(reasons)
+                if reasons
+                else "Violated corporate policy."
+            )
             raise HTTPException(
                 status_code=403,
                 detail={
-                    "message": _policy_result.reason,
+                    "message": message,
                     "failed_rules": _policy_result.failed_rules,
                 },
             )

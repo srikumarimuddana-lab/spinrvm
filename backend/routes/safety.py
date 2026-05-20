@@ -83,7 +83,9 @@ async def submit_safety_report(
             f"[SAFETY] Failed to persist incident user_id={user_id} category={body.category}: {exc}",
             exc_info=True,
         )
-        raise HTTPException(status_code=503, detail="Unable to record report. Please try again.") from exc
+        raise HTTPException(
+            status_code=503, detail="Unable to record report. Please try again."
+        ) from exc
 
     logger.info(
         f"[SAFETY] Incident {incident_id} reported by {user_role} {user_id} "

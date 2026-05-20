@@ -31,18 +31,27 @@ async def get_profile(current_user: dict = Depends(get_current_user)):
 
 
 @api_router.post("/profile", response_model=UserProfile)
-async def create_profile(request: CreateProfileRequest, current_user: dict = Depends(get_current_user)):
+async def create_profile(
+    request: CreateProfileRequest, current_user: dict = Depends(get_current_user)
+):
     valid_genders = ["Male", "Female", "Other"]
     if request.gender not in valid_genders:
-        raise HTTPException(status_code=400, detail=f"Gender must be one of: {', '.join(valid_genders)}")
+        raise HTTPException(
+            status_code=400, detail=f"Gender must be one of: {', '.join(valid_genders)}"
+        )
 
     # GAP FIX: Check for duplicate email across users
     email_lower = request.email.strip().lower()
     existing_email_user = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows("users", {"email": email_lower, "id": {"$ne": current_user["id"]}}, limit=1)
+        await db_supabase.get_rows(
+            "users", {"email": email_lower, "id": {"$ne": current_user["id"]}}, limit=1
+        )
     )
     if existing_email_user:
-        raise HTTPException(status_code=400, detail="This email address is already in use by another account")
+        raise HTTPException(
+            status_code=400,
+            detail="This email address is already in use by another account",
+        )
 
     update_data = {
         "first_name": request.first_name.strip(),
@@ -76,7 +85,9 @@ async def request_data_export(current_user: dict = Depends(get_current_user)):
     request_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
     response_due_at = (now + timedelta(days=30)).isoformat()
-    logger.info(f"DSAR submitted for user {user_id} request_id={request_id} due={response_due_at}")
+    logger.info(
+        f"DSAR submitted for user {user_id} request_id={request_id} due={response_due_at}"
+    )
     try:
         export_record = {
             "id": request_id,
@@ -87,7 +98,10 @@ async def request_data_export(current_user: dict = Depends(get_current_user)):
         }
         await db_supabase.insert_one("data_export_requests", export_record)
     except Exception as e:
-        logger.error(f"Could not record data export request for user {user_id}: {e}", exc_info=True)
+        logger.error(
+            f"Could not record data export request for user {user_id}: {e}",
+            exc_info=True,
+        )
         raise HTTPException(status_code=503, detail="data_export_request_failed") from e
     return {
         "success": True,
@@ -126,11 +140,15 @@ async def _anonymise_rides(user_id: str) -> None:
                 if ride.get(lng_field) is not None:
                     updates[lng_field] = round(float(ride[lng_field]), 2)
             await db_supabase.update_one("rides", {"id": ride["id"]}, updates)
-        logger.info(f"Anonymised {len(rides)} completed rides for deleted user {user_id}")
+        logger.info(
+            f"Anonymised {len(rides)} completed rides for deleted user {user_id}"
+        )
     except Exception as e:
         # Log but don't fail the deletion — ride anonymisation is best-effort;
         # the account is still marked pending_deletion so the purge loop retries.
-        logger.error(f"Ride anonymisation failed for user {user_id}: {e}", exc_info=True)
+        logger.error(
+            f"Ride anonymisation failed for user {user_id}: {e}", exc_info=True
+        )
 
 
 @api_router.delete("/account")
@@ -139,15 +157,23 @@ async def delete_account_pipeda(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
     logger.info(f"Account deletion (PIPEDA) requested for user {user_id}")
 
-    grace_period_end = (datetime.now(timezone.utc).replace(microsecond=0) + timedelta(days=30)).isoformat()
+    grace_period_end = (
+        datetime.now(timezone.utc).replace(microsecond=0) + timedelta(days=30)
+    ).isoformat()
     now = datetime.now(timezone.utc).isoformat()
     try:
         await db_supabase.update_one(
             "users",
             {"id": user_id},
-            {"deletion_requested_at": now, "deletion_scheduled_at": grace_period_end, "status": "pending_deletion"},
+            {
+                "deletion_requested_at": now,
+                "deletion_scheduled_at": grace_period_end,
+                "status": "pending_deletion",
+            },
         )
-        await db_supabase.update_one("drivers", {"user_id": user_id}, {"deleted_at": now})
+        await db_supabase.update_one(
+            "drivers", {"user_id": user_id}, {"deleted_at": now}
+        )
         # R-P2-46: strip PII from ride records immediately even though the account
         # itself has a 30-day grace period.  Ride rows are retained for SK regulatory
         # retention (7 years) but personal identifiers are removed now.
@@ -159,7 +185,9 @@ async def delete_account_pipeda(current_user: dict = Depends(get_current_user)):
             resource_id=user_id,
             details={"grace_period_end": grace_period_end, "pipeda": True},
         )
-        logger.info(f"Account deletion scheduled for user {user_id} (grace period until {grace_period_end})")
+        logger.info(
+            f"Account deletion scheduled for user {user_id} (grace period until {grace_period_end})"
+        )
         return {
             "success": True,
             "message": "Account deletion scheduled. Your account will be permanently deleted after 30 days.",
@@ -167,7 +195,8 @@ async def delete_account_pipeda(current_user: dict = Depends(get_current_user)):
     except Exception as e:
         logger.error(f"Account deletion failed for user {user_id}: {e}")
         raise HTTPException(
-            status_code=500, detail="Failed to schedule account deletion. Please contact support."
+            status_code=500,
+            detail="Failed to schedule account deletion. Please contact support.",
         ) from e
 
 
@@ -180,7 +209,9 @@ async def delete_account(current_user: dict = Depends(get_current_user)):
     now = datetime.now(timezone.utc).isoformat()
     try:
         # Soft-delete driver record (preserves audit trail)
-        await db_supabase.update_one("drivers", {"user_id": user_id}, {"deleted_at": now})
+        await db_supabase.update_one(
+            "drivers", {"user_id": user_id}, {"deleted_at": now}
+        )
         # Hard-delete non-sensitive ancillary data (no soft-delete column)
         await db_supabase.delete_many("driver_documents", {"driver_id": user_id})
         await db_supabase.delete_many("emergency_contacts", {"user_id": user_id})
@@ -200,7 +231,9 @@ async def delete_account(current_user: dict = Depends(get_current_user)):
         return {"success": True, "message": "Account permanently deleted"}
     except Exception as e:
         logger.error(f"Account deletion failed for user {user_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to delete account. Please contact support.") from e
+        raise HTTPException(
+            status_code=500, detail="Failed to delete account. Please contact support."
+        ) from e
 
 
 from pydantic import BaseModel  # type: ignore  # noqa: E402
@@ -211,7 +244,9 @@ class UpdatePhoneRequest(BaseModel):
 
 
 @api_router.patch("/profile/phone", response_model=UserProfile)
-async def update_phone(request: UpdatePhoneRequest, current_user: dict = Depends(get_current_user)):
+async def update_phone(
+    request: UpdatePhoneRequest, current_user: dict = Depends(get_current_user)
+):
     """Update the current user's phone number."""
     phone = request.phone.strip()
     if len(phone) < 10:
@@ -219,7 +254,9 @@ async def update_phone(request: UpdatePhoneRequest, current_user: dict = Depends
 
     # Check if phone is already in use by another user
     existing = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows("users", {"phone": phone, "id": {"$ne": current_user["id"]}}, limit=1)
+        await db_supabase.get_rows(
+            "users", {"phone": phone, "id": {"$ne": current_user["id"]}}, limit=1
+        )
     )
     if existing:
         raise HTTPException(status_code=400, detail="Phone number already in use")
@@ -228,23 +265,34 @@ async def update_phone(request: UpdatePhoneRequest, current_user: dict = Depends
     updated_user = await db_supabase.get_user_by_id(current_user["id"])
 
     if not updated_user:
-        raise HTTPException(status_code=500, detail="Database error: Could not retrieve updated user profile.")
+        raise HTTPException(
+            status_code=500,
+            detail="Database error: Could not retrieve updated user profile.",
+        )
 
     return UserProfile(**updated_user)
 
 
 @api_router.put("/profile-image", response_model=UserProfile)
-async def upload_profile_image(file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
+async def upload_profile_image(
+    file: UploadFile = File(...), current_user: dict = Depends(get_current_user)
+):
     """Upload a profile image for the current user (stored as base64 in database)."""
     # Validate file type
     allowed_types = ["image/jpeg", "image/png", "image/webp", "image/gif"]
     if file.content_type not in allowed_types:
-        raise HTTPException(status_code=400, detail="File must be an image (JPEG, PNG, WebP, or GIF)")
+        raise HTTPException(
+            status_code=400, detail="File must be an image (JPEG, PNG, WebP, or GIF)"
+        )
 
     # Validate file size (max 5MB)
     content = await file.read()
     if not isinstance(content, bytes):
-        content = bytes(content) if hasattr(content, "__bytes__") else str(content).encode("utf-8")
+        content = (
+            bytes(content)
+            if hasattr(content, "__bytes__")
+            else str(content).encode("utf-8")
+        )
 
     if len(content) > 5 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="Image must be smaller than 5MB")
@@ -265,7 +313,10 @@ async def upload_profile_image(file: UploadFile = File(...), current_user: dict 
     updated_user = await db_supabase.get_user_by_id(current_user["id"])
 
     if not updated_user:
-        raise HTTPException(status_code=500, detail="Database error: Could not retrieve updated user profile.")
+        raise HTTPException(
+            status_code=500,
+            detail="Database error: Could not retrieve updated user profile.",
+        )
 
     return UserProfile(**updated_user)
 
@@ -275,22 +326,30 @@ class LinkCorporateRequest(BaseModel):
 
 
 @api_router.patch("/profile/corporate", response_model=UserProfile)
-async def link_corporate_account(request: LinkCorporateRequest, current_user: dict = Depends(get_current_user)):
+async def link_corporate_account(
+    request: LinkCorporateRequest, current_user: dict = Depends(get_current_user)
+):
     """Link or unlink a corporate account to the user profile."""
     if request.corporate_account_id:
         account = (lambda _r: _r[0] if _r else None)(
-            await db_supabase.get_rows("corporate_accounts", {"id": request.corporate_account_id}, limit=1)
+            await db_supabase.get_rows(
+                "corporate_accounts", {"id": request.corporate_account_id}, limit=1
+            )
         )
         if not account:
             raise HTTPException(status_code=404, detail="Corporate account not found")
 
     await db_supabase.update_one(
-        "users", {"id": current_user["id"]}, {"corporate_account_id": request.corporate_account_id}
+        "users",
+        {"id": current_user["id"]},
+        {"corporate_account_id": request.corporate_account_id},
     )
 
     updated_user = await db_supabase.get_user_by_id(current_user["id"])
     if not updated_user:
-        raise HTTPException(status_code=500, detail="Could not retrieve updated profile.")
+        raise HTTPException(
+            status_code=500, detail="Could not retrieve updated profile."
+        )
 
     return UserProfile(**updated_user)
 
@@ -318,23 +377,36 @@ class EmergencyContactResponse(BaseModel):
 async def get_emergency_contacts(current_user: dict = Depends(get_current_user)):
     """Get the user's emergency contacts."""
     try:
-        contacts_cursor = db_supabase.get_rows("emergency_contacts", {"user_id": current_user["id"]}, limit=100)
+        contacts_cursor = db_supabase.get_rows(
+            "emergency_contacts", {"user_id": current_user["id"]}, limit=100
+        )
         contacts = (
-            await contacts_cursor.to_list(length=10) if hasattr(contacts_cursor, "to_list") else list(contacts_cursor)
+            await contacts_cursor.to_list(length=10)
+            if hasattr(contacts_cursor, "to_list")
+            else list(contacts_cursor)
         )
     except Exception as e:
-        logger.error(f"Could not fetch emergency contacts for user {current_user['id']}: {e}", exc_info=True)
+        logger.error(
+            f"Could not fetch emergency contacts for user {current_user['id']}: {e}",
+            exc_info=True,
+        )
         contacts = []
     return {"contacts": contacts}
 
 
 @api_router.post("/emergency-contacts")
-async def add_emergency_contact(contact: EmergencyContactCreate, current_user: dict = Depends(get_current_user)):
+async def add_emergency_contact(
+    contact: EmergencyContactCreate, current_user: dict = Depends(get_current_user)
+):
     """Add an emergency contact (max 3 contacts per user, matching Uber/Lyft)."""
     try:
-        existing_cursor = db_supabase.get_rows("emergency_contacts", {"user_id": current_user["id"]}, limit=100)
+        existing_cursor = db_supabase.get_rows(
+            "emergency_contacts", {"user_id": current_user["id"]}, limit=100
+        )
         existing = (
-            await existing_cursor.to_list(length=10) if hasattr(existing_cursor, "to_list") else list(existing_cursor)
+            await existing_cursor.to_list(length=10)
+            if hasattr(existing_cursor, "to_list")
+            else list(existing_cursor)
         )
     except Exception:
         existing = []
@@ -348,7 +420,9 @@ async def add_emergency_contact(contact: EmergencyContactCreate, current_user: d
 
     phone = contact.phone.strip()
     if len(phone) < 10:
-        raise HTTPException(status_code=400, detail="Invalid phone number for emergency contact")
+        raise HTTPException(
+            status_code=400, detail="Invalid phone number for emergency contact"
+        )
 
     contact_doc = {
         "id": str(uuid.uuid4()),
@@ -363,10 +437,16 @@ async def add_emergency_contact(contact: EmergencyContactCreate, current_user: d
 
 
 @api_router.delete("/emergency-contacts/{contact_id}")
-async def delete_emergency_contact(contact_id: str, current_user: dict = Depends(get_current_user)):
+async def delete_emergency_contact(
+    contact_id: str, current_user: dict = Depends(get_current_user)
+):
     """Remove an emergency contact."""
     contact = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows("emergency_contacts", {"id": contact_id, "user_id": current_user["id"]}, limit=1)
+        await db_supabase.get_rows(
+            "emergency_contacts",
+            {"id": contact_id, "user_id": current_user["id"]},
+            limit=1,
+        )
     )
     if not contact:
         raise HTTPException(status_code=404, detail="Emergency contact not found")

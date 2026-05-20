@@ -46,7 +46,9 @@ class RegisterTokenRequest(BaseModel):
 
 
 @api_router.post("/register-token")
-async def register_push_token(body: RegisterTokenRequest, current_user: dict = Depends(get_current_user)):
+async def register_push_token(
+    body: RegisterTokenRequest, current_user: dict = Depends(get_current_user)
+):
     """Save FCM push token for this user/device.
 
     Writes to two places:
@@ -100,9 +102,13 @@ async def register_push_token(body: RegisterTokenRequest, current_user: dict = D
     # This is best-effort: if the column doesn't exist yet (pre sql/03_features),
     # the update is a no-op rather than a hard failure.
     try:
-        await db.update_one("users", {"id": current_user["id"]}, {"$set": {"fcm_token": token}})
+        await db.update_one(
+            "users", {"id": current_user["id"]}, {"$set": {"fcm_token": token}}
+        )
     except Exception as exc:
-        logger.error(f"Failed to mirror FCM token onto users.fcm_token: {exc}", exc_info=True)
+        logger.error(
+            f"Failed to mirror FCM token onto users.fcm_token: {exc}", exc_info=True
+        )
 
     logger.info(f"FCM token registered for user {current_user['id']} ({platform})")
     return {"success": True}
@@ -137,14 +143,18 @@ async def get_notifications(
         )
     except Exception:  # noqa: S110
         logger.warning(
-            "list_notifications: failed to fetch unread_count for user %s", current_user.get("id"), exc_info=True
+            "list_notifications: failed to fetch unread_count for user %s",
+            current_user.get("id"),
+            exc_info=True,
         )
 
     return {"notifications": notifications, "unread_count": unread_count}
 
 
 @api_router.put("/{notification_id}/read")
-async def mark_as_read(notification_id: str, current_user: dict = Depends(get_current_user)):
+async def mark_as_read(
+    notification_id: str, current_user: dict = Depends(get_current_user)
+):
     """Mark a single notification as read."""
     await db_supabase.update_one(
         "notifications",
@@ -169,7 +179,9 @@ async def mark_all_read(current_user: dict = Depends(get_current_user)):
 async def get_preferences(current_user: dict = Depends(get_current_user)):
     """Get user's notification preferences."""
     prefs = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows("notification_preferences", {"user_id": current_user["id"]}, limit=1)
+        await db_supabase.get_rows(
+            "notification_preferences", {"user_id": current_user["id"]}, limit=1
+        )
     )
     if not prefs:
         # Return defaults
@@ -185,7 +197,9 @@ async def get_preferences(current_user: dict = Depends(get_current_user)):
 
 
 @api_router.put("/preferences")
-async def update_preferences(req: PreferencesUpdate, current_user: dict = Depends(get_current_user)):
+async def update_preferences(
+    req: PreferencesUpdate, current_user: dict = Depends(get_current_user)
+):
     """Update notification preferences."""
     update_data: Dict[str, Any] = {"updated_at": datetime.now(timezone.utc).isoformat()}
     for field in [
@@ -201,10 +215,14 @@ async def update_preferences(req: PreferencesUpdate, current_user: dict = Depend
             update_data[field] = val
 
     existing = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows("notification_preferences", {"user_id": current_user["id"]}, limit=1)
+        await db_supabase.get_rows(
+            "notification_preferences", {"user_id": current_user["id"]}, limit=1
+        )
     )
     if existing:
-        await db_supabase.update_one("notification_preferences", {"user_id": current_user["id"]}, update_data)
+        await db_supabase.update_one(
+            "notification_preferences", {"user_id": current_user["id"]}, update_data
+        )
     else:
         update_data["id"] = str(uuid.uuid4())
         update_data["user_id"] = current_user["id"]

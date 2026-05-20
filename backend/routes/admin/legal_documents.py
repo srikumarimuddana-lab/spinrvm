@@ -43,7 +43,9 @@ async def admin_upsert_legal_document(payload: Dict[str, Any]):
     content = payload.get("content") or ""
 
     if audience not in ALLOWED_AUDIENCES:
-        raise HTTPException(status_code=400, detail="audience must be 'rider' or 'driver'")
+        raise HTTPException(
+            status_code=400, detail="audience must be 'rider' or 'driver'"
+        )
     if doc_type not in ALLOWED_TYPES:
         raise HTTPException(status_code=400, detail="type must be 'tos' or 'privacy'")
 

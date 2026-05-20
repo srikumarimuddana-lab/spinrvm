@@ -43,7 +43,8 @@ class CreateQuestRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
     description: str = Field(..., min_length=1, max_length=1000)
     type: str = Field(
-        ..., pattern="^(ride_count|earnings_target|online_hours|peak_rides|consecutive_days|rating_maintained)$"
+        ...,
+        pattern="^(ride_count|earnings_target|online_hours|peak_rides|consecutive_days|rating_maintained)$",
     )
     target_value: float = Field(..., gt=0)
     reward_amount: float = Field(..., gt=0, le=500)
@@ -117,7 +118,9 @@ async def get_available_quests(current_user: dict = Depends(get_current_user)):
                 {"driver_id": driver["id"]},
                 limit=100,
             )
-            progress_map = {p["quest_id"]: p for p in progress_rows if p["quest_id"] in quest_ids}
+            progress_map = {
+                p["quest_id"]: p for p in progress_rows if p["quest_id"] in quest_ids
+            }
         except Exception as e:
             logger.error(f"Error fetching progress: {e}")
 
@@ -168,7 +171,9 @@ async def join_quest(quest_id: str, current_user: dict = Depends(get_current_use
         raise HTTPException(status_code=400, detail="Quest has ended")
 
     # Check if already joined
-    existing = await db.find_one("quest_progress", {"quest_id": quest_id, "driver_id": driver["id"]})
+    existing = await db.find_one(
+        "quest_progress", {"quest_id": quest_id, "driver_id": driver["id"]}
+    )
     if existing:
         raise HTTPException(status_code=400, detail="Already joined this quest")
 
@@ -263,7 +268,9 @@ async def get_my_quests(current_user: dict = Depends(get_current_user)):
 
 
 @api_router.post("/progress/{progress_id}/claim")
-async def claim_quest_reward(progress_id: str, current_user: dict = Depends(get_current_user)):
+async def claim_quest_reward(
+    progress_id: str, current_user: dict = Depends(get_current_user)
+):
     """Claim the reward for a completed quest."""
     driver = await db.find_one("drivers", {"user_id": current_user["id"]})
     if not driver:
@@ -296,7 +303,12 @@ async def claim_quest_reward(progress_id: str, current_user: dict = Depends(get_
         await db.update_one(
             "wallets",
             {"id": wallet["id"]},
-            {"$set": {"balance": _f(new_balance), "updated_at": datetime.now(timezone.utc).isoformat()}},
+            {
+                "$set": {
+                    "balance": _f(new_balance),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+            },
         )
         await _record_transaction(
             wallet_id=wallet["id"],
@@ -332,7 +344,9 @@ async def claim_quest_reward(progress_id: str, current_user: dict = Depends(get_
 
 
 @api_router.post("/admin/create")
-async def admin_create_quest(req: CreateQuestRequest, admin: dict = Depends(get_admin_user)):
+async def admin_create_quest(
+    req: CreateQuestRequest, admin: dict = Depends(get_admin_user)
+):
     """Create a new quest (admin only)."""
     quest_data = {
         "id": str(uuid.uuid4()),
@@ -391,7 +405,9 @@ async def admin_list_quests(
                 limit=1000,
             )
             total_participants = len(progress_rows)
-            completed = sum(1 for p in progress_rows if p["status"] in ("completed", "claimed"))
+            completed = sum(
+                1 for p in progress_rows if p["status"] in ("completed", "claimed")
+            )
             claimed = sum(1 for p in progress_rows if p["status"] == "claimed")
         except Exception:
             total_participants = completed = claimed = 0
@@ -411,7 +427,9 @@ async def admin_list_quests(
 
 
 @api_router.patch("/admin/{quest_id}")
-async def admin_update_quest(quest_id: str, req: UpdateQuestRequest, admin: dict = Depends(get_admin_user)):
+async def admin_update_quest(
+    quest_id: str, req: UpdateQuestRequest, admin: dict = Depends(get_admin_user)
+):
     """Update a quest (admin only)."""
     quest = await db.find_one("quests", {"id": quest_id})
     if not quest:
@@ -470,7 +488,9 @@ async def admin_get_quest_participants(
         if driver:
             user = await db.find_one("users", {"id": driver.get("user_id")})
             if user:
-                driver_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
+                driver_name = (
+                    f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
+                )
 
         target = quest["target_value"]
         current = p["current_value"]

@@ -18,7 +18,13 @@ try:
     from ...dependencies import JWT_AUD_ADMIN, get_admin_user
     from ...utils.audit_logger import log_admin_action
     from ...utils.password import hash_password, verify_password
-    from ...utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set
+    from ...utils.redis_client import (
+        redis_delete,
+        redis_expire,
+        redis_get,
+        redis_incr,
+        redis_set,
+    )
     from ...utils.refresh_tokens import (
         issue_refresh_token,
         lookup_refresh_token,
@@ -31,7 +37,13 @@ except ImportError:
     from dependencies import JWT_AUD_ADMIN, get_admin_user
     from utils.audit_logger import log_admin_action
     from utils.password import hash_password, verify_password
-    from utils.redis_client import redis_delete, redis_expire, redis_get, redis_incr, redis_set
+    from utils.redis_client import (
+        redis_delete,
+        redis_expire,
+        redis_get,
+        redis_incr,
+        redis_set,
+    )
     from utils.refresh_tokens import (
         issue_refresh_token,
         lookup_refresh_token,
@@ -56,7 +68,9 @@ limiter = Limiter(key_func=get_remote_address)
 _LOGIN_MAX_FAILURES = 5
 # 24h lockout in production; 2 minutes in dev so a mistyped password doesn't
 # lock you out of a local environment for the rest of the day.
-_LOGIN_LOCKOUT_TTL_SECONDS = 2 * 60 if settings.ENV.lower() != "production" else 24 * 60 * 60
+_LOGIN_LOCKOUT_TTL_SECONDS = (
+    2 * 60 if settings.ENV.lower() != "production" else 24 * 60 * 60
+)
 
 
 def _lockout_key(email: str) -> str:
@@ -70,7 +84,9 @@ async def _is_account_locked(email: str) -> bool:
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"[REDIS] _is_account_locked check failed for admin login ({email!r}): {e}")
+        logger.error(
+            f"[REDIS] _is_account_locked check failed for admin login ({email!r}): {e}"
+        )
         raise HTTPException(status_code=503, detail="ERR_AUTH_UNAVAILABLE") from None
 
 
@@ -81,14 +97,18 @@ async def _record_login_failure(email: str) -> None:
         if count == 1:
             await redis_expire(key, _LOGIN_LOCKOUT_TTL_SECONDS)
     except Exception as e:
-        logger.error(f"[REDIS] _record_login_failure could not persist failure count ({email!r}): {e}")
+        logger.error(
+            f"[REDIS] _record_login_failure could not persist failure count ({email!r}): {e}"
+        )
 
 
 async def _clear_login_failures(email: str) -> None:
     try:
         await redis_delete(_lockout_key(email))
     except Exception as e:
-        logger.error(f"[REDIS] _clear_login_failures could not clear failure count ({email!r}): {e}")
+        logger.error(
+            f"[REDIS] _clear_login_failures could not clear failure count ({email!r}): {e}"
+        )
 
 
 ALL_MODULES = [
@@ -292,7 +312,9 @@ async def admin_login(request: Request, response: Response, body: LoginRequest):
 
     # 2. Staff member
     staff = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows("admin_staff", {"email": body.email.lower()}, limit=1)
+        await db_supabase.get_rows(
+            "admin_staff", {"email": body.email.lower()}, limit=1
+        )
     )
     if staff:
         stored_hash = staff.get("password_hash", "") or ""
@@ -303,7 +325,10 @@ async def admin_login(request: Request, response: Response, body: LoginRequest):
             updates: dict = {"last_login": datetime.now(timezone.utc).isoformat()}
             if needs_upgrade:
                 updates["password_hash"] = hash_password(body.password)
-                logger.info("admin auth: upgraded legacy password hash for staff %s", staff["id"])
+                logger.info(
+                    "admin auth: upgraded legacy password hash for staff %s",
+                    staff["id"],
+                )
             await db_supabase.update_one("admin_staff", {"id": staff["id"]}, updates)
             if staff.get("mfa_enabled"):
                 mfa_token = _mint_mfa_challenge_token(staff["id"])
@@ -464,7 +489,9 @@ async def admin_logout(
 
 @admin_auth_router.post("/logout-all")
 @limiter.limit("5/minute")
-async def admin_logout_all(request: Request, authorization: Optional[str] = Header(None)):
+async def admin_logout_all(
+    request: Request, authorization: Optional[str] = Header(None)
+):
     """Force-invalidate every admin session for the caller.
 
     Only valid for staff (admin-001 uses env-var creds and has no
@@ -492,7 +519,11 @@ async def admin_logout_all(request: Request, authorization: Optional[str] = Head
         # generic "Invalid token" so the auth path can't be
         # fingerprinted by sending malformed tokens and reading the
         # rejection reasons.
-        logger.error("Admin auth rejected malformed token", exc_info=True, extra={"domain": "admin"})
+        logger.error(
+            "Admin auth rejected malformed token",
+            exc_info=True,
+            extra={"domain": "admin"},
+        )
         raise HTTPException(status_code=401, detail="Invalid token") from e
 
     user_id = payload.get("user_id")
@@ -507,7 +538,9 @@ async def admin_logout_all(request: Request, authorization: Optional[str] = Head
         raise HTTPException(status_code=404, detail="Staff member not found")
 
     new_version = int(staff.get("token_version") or 0) + 1
-    await db.update_one("admin_staff", {"id": user_id}, {"$set": {"token_version": new_version}})
+    await db.update_one(
+        "admin_staff", {"id": user_id}, {"$set": {"token_version": new_version}}
+    )
     revoked = await revoke_all_for_user(user_id)
 
     # B-P1-11: kick any live admin WebSocket sockets (live monitoring
@@ -526,7 +559,9 @@ async def admin_logout_all(request: Request, authorization: Optional[str] = Head
     except Exception as e:
         logger.warning(f"admin logout-all: WS kick failed for {user_id}: {e}")
 
-    logger.info(f"admin logout-all: user={user_id} token_version→{new_version} revoked_refresh={revoked}")
+    logger.info(
+        f"admin logout-all: user={user_id} token_version→{new_version} revoked_refresh={revoked}"
+    )
     return {"success": True, "revoked_refresh_tokens": revoked}
 
 
@@ -537,7 +572,11 @@ class ChangePasswordRequest(BaseModel):
 
 @admin_auth_router.post("/change-password")
 @limiter.limit("3/minute")
-async def change_password(request: Request, body: ChangePasswordRequest, authorization: Optional[str] = Header(None)):
+async def change_password(
+    request: Request,
+    body: ChangePasswordRequest,
+    authorization: Optional[str] = Header(None),
+):
     """Change the authenticated staff member's own password.
 
     Requires the current password for verification (prevents session
@@ -572,7 +611,11 @@ async def change_password(request: Request, body: ChangePasswordRequest, authori
         # generic "Invalid token" so the auth path can't be
         # fingerprinted by sending malformed tokens and reading the
         # rejection reasons.
-        logger.error("Admin auth rejected malformed token", exc_info=True, extra={"domain": "admin"})
+        logger.error(
+            "Admin auth rejected malformed token",
+            exc_info=True,
+            extra={"domain": "admin"},
+        )
         raise HTTPException(status_code=401, detail="Invalid token") from e
 
     user_id = payload.get("user_id")
@@ -594,7 +637,9 @@ async def change_password(request: Request, body: ChangePasswordRequest, authori
 
     # Enforce minimum length on the new password.
     if len(body.new_password) < 12:
-        raise HTTPException(status_code=400, detail="New password must be at least 12 characters")
+        raise HTTPException(
+            status_code=400, detail="New password must be at least 12 characters"
+        )
 
     # Hash + store.
     new_hash = hash_password(body.new_password)
@@ -631,7 +676,11 @@ class MfaChallengeRequest(BaseModel):
 def _mint_mfa_challenge_token(user_id: str) -> str:
     now = datetime.now(timezone.utc)
     return jwt.encode(
-        {"type": "mfa_challenge", "user_id": user_id, "exp": now + timedelta(minutes=5)},
+        {
+            "type": "mfa_challenge",
+            "user_id": user_id,
+            "exp": now + timedelta(minutes=5),
+        },
         settings.JWT_SECRET,
         algorithm=settings.ALGORITHM,
     )
@@ -722,30 +771,47 @@ async def admin_mfa_status(authorization: Optional[str] = Header(None)):
 
 @admin_auth_router.post("/mfa/enroll")
 @limiter.limit("5/minute")
-async def admin_mfa_enroll(request: Request, authorization: Optional[str] = Header(None)):
+async def admin_mfa_enroll(
+    request: Request, authorization: Optional[str] = Header(None)
+):
     """Begin TOTP enrollment. Returns secret + otpauth URI; confirm with /mfa/confirm."""
     staff = await _require_staff_from_token(authorization)
     secret = pyotp.random_base32()
-    uri = pyotp.TOTP(secret).provisioning_uri(name=staff["email"], issuer_name="Spinr Admin")
-    await db_supabase.update_one("admin_staff", {"id": staff["id"]}, {"mfa_secret_pending": secret})
+    uri = pyotp.TOTP(secret).provisioning_uri(
+        name=staff["email"], issuer_name="Spinr Admin"
+    )
+    await db_supabase.update_one(
+        "admin_staff", {"id": staff["id"]}, {"mfa_secret_pending": secret}
+    )
     return {"secret": secret, "otpauth_uri": uri}
 
 
 @admin_auth_router.post("/mfa/confirm")
 @limiter.limit("5/minute")
-async def admin_mfa_confirm(request: Request, body: MfaConfirmRequest, authorization: Optional[str] = Header(None)):
+async def admin_mfa_confirm(
+    request: Request,
+    body: MfaConfirmRequest,
+    authorization: Optional[str] = Header(None),
+):
     """Confirm TOTP enrollment by verifying the first code. Activates MFA and issues backup codes."""
     staff = await _require_staff_from_token(authorization)
     pending = staff.get("mfa_secret_pending")
     if not pending:
-        raise HTTPException(status_code=400, detail="No pending MFA enrollment. Call /mfa/enroll first.")
+        raise HTTPException(
+            status_code=400, detail="No pending MFA enrollment. Call /mfa/enroll first."
+        )
     if not pyotp.TOTP(pending).verify(body.totp_code, valid_window=1):
         raise HTTPException(status_code=400, detail="Invalid TOTP code")
     plaintext_codes, hashed_records = _generate_backup_codes()
     await db_supabase.update_one(
         "admin_staff",
         {"id": staff["id"]},
-        {"mfa_enabled": True, "mfa_secret": pending, "mfa_secret_pending": None, "mfa_backup_codes": hashed_records},
+        {
+            "mfa_enabled": True,
+            "mfa_secret": pending,
+            "mfa_secret_pending": None,
+            "mfa_backup_codes": hashed_records,
+        },
     )
     await log_admin_action(staff, "mfa_enabled", "admin_staff", staff["id"], {})
     return {"backup_codes": plaintext_codes}
@@ -753,11 +819,17 @@ async def admin_mfa_confirm(request: Request, body: MfaConfirmRequest, authoriza
 
 @admin_auth_router.post("/mfa/disable")
 @limiter.limit("3/minute")
-async def admin_mfa_disable(request: Request, body: MfaDisableRequest, authorization: Optional[str] = Header(None)):
+async def admin_mfa_disable(
+    request: Request,
+    body: MfaDisableRequest,
+    authorization: Optional[str] = Header(None),
+):
     """Disable MFA. Requires current password + valid TOTP code."""
     staff = await _require_staff_from_token(authorization)
     if not staff.get("mfa_enabled"):
-        raise HTTPException(status_code=400, detail="MFA is not enabled on this account")
+        raise HTTPException(
+            status_code=400, detail="MFA is not enabled on this account"
+        )
     ok, _ = verify_password(body.password, staff.get("password_hash", ""))
     if not ok:
         raise HTTPException(status_code=400, detail="Incorrect password")
@@ -777,7 +849,9 @@ async def admin_mfa_disable(request: Request, body: MfaDisableRequest, authoriza
 async def admin_mfa_challenge(request: Request, body: MfaChallengeRequest):
     """Exchange an MFA challenge token + TOTP (or backup code) for full admin tokens."""
     try:
-        payload = jwt.decode(body.mfa_token, settings.JWT_SECRET, algorithms=[settings.ALGORITHM])
+        payload = jwt.decode(
+            body.mfa_token, settings.JWT_SECRET, algorithms=[settings.ALGORITHM]
+        )
     except jwt.InvalidTokenError as e:
         raise HTTPException(status_code=401, detail=f"Invalid MFA token: {e}") from e
     if payload.get("type") != "mfa_challenge":
@@ -789,14 +863,20 @@ async def admin_mfa_challenge(request: Request, body: MfaChallengeRequest):
     if not staff or not staff.get("is_active", True):
         raise HTTPException(status_code=401, detail="Account not found or inactive")
     if not staff.get("mfa_enabled") or not staff.get("mfa_secret"):
-        raise HTTPException(status_code=400, detail="MFA not configured for this account")
+        raise HTTPException(
+            status_code=400, detail="MFA not configured for this account"
+        )
     totp_valid = pyotp.TOTP(staff["mfa_secret"]).verify(body.totp_code, valid_window=1)
     if not totp_valid:
         backup_codes = staff.get("mfa_backup_codes") or []
         matched, updated_codes = _consume_backup_code(body.totp_code, backup_codes)
         if not matched:
-            raise HTTPException(status_code=401, detail="Invalid TOTP code or backup code")
-        await db_supabase.update_one("admin_staff", {"id": user_id}, {"mfa_backup_codes": updated_codes})
+            raise HTTPException(
+                status_code=401, detail="Invalid TOTP code or backup code"
+            )
+        await db_supabase.update_one(
+            "admin_staff", {"id": user_id}, {"mfa_backup_codes": updated_codes}
+        )
     user_agent = request.headers.get("user-agent", "")
     client_ip = get_remote_address(request)
     modules = staff.get("modules", ["dashboard"])
@@ -880,11 +960,17 @@ async def break_glass_access(request: Request, body: BreakGlassRequest):
             client_ip,
             len(justification),
         )
-        raise HTTPException(status_code=400, detail="justification must be at least 10 characters")
+        raise HTTPException(
+            status_code=400, detail="justification must be at least 10 characters"
+        )
 
     # 3. Daily rate limit (5 attempts total, including failed token checks)
     try:
-        from utils.redis_client import redis_expire, redis_get, redis_incr  # noqa: PLC0415
+        from utils.redis_client import (
+            redis_expire,
+            redis_get,
+            redis_incr,
+        )  # noqa: PLC0415
     except ImportError:
         from ..utils.redis_client import redis_expire, redis_get, redis_incr  # type: ignore[no-redef]
 
@@ -901,7 +987,9 @@ async def break_glass_access(request: Request, body: BreakGlassRequest):
             client_ip,
             count,
         )
-        raise HTTPException(status_code=429, detail="Break-glass rate limit exceeded for today")
+        raise HTTPException(
+            status_code=429, detail="Break-glass rate limit exceeded for today"
+        )
 
     # Increment before token validation so brute-force attempts consume quota
     try:

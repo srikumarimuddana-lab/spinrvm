@@ -64,7 +64,9 @@ async def get_cancellation_breakdown(
         logger.error(f"Failed to fetch cancelled rides: {e}", exc_info=True)
         from fastapi import HTTPException as _HTTPException
 
-        raise _HTTPException(status_code=503, detail="Analytics data unavailable — database error") from e
+        raise _HTTPException(
+            status_code=503, detail="Analytics data unavailable — database error"
+        ) from e
 
     # Categorize cancellation reasons
     reason_counter = Counter()
@@ -77,9 +79,14 @@ async def get_cancellation_breakdown(
 
         if not raw_reason:
             reason = "unspecified"
-        elif "no nearby drivers" in raw_reason.lower() or "no driver" in raw_reason.lower():
+        elif (
+            "no nearby drivers" in raw_reason.lower()
+            or "no driver" in raw_reason.lower()
+        ):
             reason = "no_drivers_available"
-        elif "rider" in raw_reason.lower() or "cancelled by rider" in raw_reason.lower():
+        elif (
+            "rider" in raw_reason.lower() or "cancelled by rider" in raw_reason.lower()
+        ):
             reason = "rider_cancelled"
             cancelled_by = "rider"
         elif "driver" in raw_reason.lower():
@@ -97,7 +104,9 @@ async def get_cancellation_breakdown(
         cancelled_by_counter[cancelled_by] += 1
 
         # Hourly distribution
-        created = r.get("cancelled_at") or r.get("updated_at") or r.get("created_at", "")
+        created = (
+            r.get("cancelled_at") or r.get("updated_at") or r.get("created_at", "")
+        )
         if isinstance(created, str) and len(created) >= 13:
             try:
                 hour = int(created[11:13])
@@ -107,12 +116,20 @@ async def get_cancellation_breakdown(
 
     total = len(filtered)
     reasons = [
-        {"reason": reason, "count": count, "pct": round(count / total * 100, 1) if total > 0 else 0}
+        {
+            "reason": reason,
+            "count": count,
+            "pct": round(count / total * 100, 1) if total > 0 else 0,
+        }
         for reason, count in reason_counter.most_common()
     ]
 
     by_party = [
-        {"party": party, "count": count, "pct": round(count / total * 100, 1) if total > 0 else 0}
+        {
+            "party": party,
+            "count": count,
+            "pct": round(count / total * 100, 1) if total > 0 else 0,
+        }
         for party, count in cancelled_by_counter.most_common()
     ]
 
@@ -143,7 +160,9 @@ async def get_driver_acceptance_rates(
     try:
         drivers = await db.get_rows("drivers", {}, limit=500)
     except Exception as e:
-        logger.error(f"Failed to fetch drivers: {e}", exc_info=True, extra={"domain": "admin"})
+        logger.error(
+            f"Failed to fetch drivers: {e}", exc_info=True, extra={"domain": "admin"}
+        )
         raise HTTPException(status_code=503, detail="analytics_unavailable") from e
 
     if service_area_id:
@@ -158,19 +177,32 @@ async def get_driver_acceptance_rates(
         try:
             all_rides = await db.get_rows(
                 "rides",
-                {"driver_id": {"$in": driver_ids}, "created_at": {"$gte": start_date.isoformat()}},
+                {
+                    "driver_id": {"$in": driver_ids},
+                    "created_at": {"$gte": start_date.isoformat()},
+                },
                 limit=10000,
             )
         except Exception as e:
-            logger.error(f"Failed to fetch rides for acceptance stats: {e}", exc_info=True, extra={"domain": "admin"})
+            logger.error(
+                f"Failed to fetch rides for acceptance stats: {e}",
+                exc_info=True,
+                extra={"domain": "admin"},
+            )
             raise HTTPException(status_code=503, detail="analytics_unavailable") from e
 
     users_list: list = []
     if user_ids:
         try:
-            users_list = await db.get_rows("users", {"id": {"$in": user_ids}}, limit=len(user_ids))
+            users_list = await db.get_rows(
+                "users", {"id": {"$in": user_ids}}, limit=len(user_ids)
+            )
         except Exception as e:
-            logger.error(f"Failed to fetch users for acceptance stats: {e}", exc_info=True, extra={"domain": "admin"})
+            logger.error(
+                f"Failed to fetch users for acceptance stats: {e}",
+                exc_info=True,
+                extra={"domain": "admin"},
+            )
             raise HTTPException(status_code=503, detail="analytics_unavailable") from e
 
     rides_by_driver: dict = {}
@@ -190,14 +222,25 @@ async def get_driver_acceptance_rates(
         cancelled_by_driver = sum(
             1
             for r in period_rides
-            if r.get("status") == "cancelled" and "driver" in (r.get("cancellation_reason") or "").lower()
+            if r.get("status") == "cancelled"
+            and "driver" in (r.get("cancellation_reason") or "").lower()
         )
 
-        acceptance_rate = round((completed / total_assigned * 100), 1) if total_assigned > 0 else 0
-        cancellation_rate = round((cancelled_by_driver / total_assigned * 100), 1) if total_assigned > 0 else 0
+        acceptance_rate = (
+            round((completed / total_assigned * 100), 1) if total_assigned > 0 else 0
+        )
+        cancellation_rate = (
+            round((cancelled_by_driver / total_assigned * 100), 1)
+            if total_assigned > 0
+            else 0
+        )
 
         user = users_map.get(driver.get("user_id"))
-        name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else "Unknown"
+        name = (
+            f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
+            if user
+            else "Unknown"
+        )
 
         result.append(
             {
@@ -219,8 +262,14 @@ async def get_driver_acceptance_rates(
     result.sort(key=lambda x: x["acceptance_rate"], reverse=True)
 
     # Summary stats
-    avg_acceptance = round(sum(r["acceptance_rate"] for r in result) / len(result), 1) if result else 0
-    low_performers = [r for r in result if r["acceptance_rate"] < 70 and r["total_rides"] >= 5]
+    avg_acceptance = (
+        round(sum(r["acceptance_rate"] for r in result) / len(result), 1)
+        if result
+        else 0
+    )
+    low_performers = [
+        r for r in result if r["acceptance_rate"] < 70 and r["total_rides"] >= 5
+    ]
 
     return {
         "date_range": date_range,
@@ -263,13 +312,17 @@ async def get_analytics_overview(
         logger.error(f"Failed to fetch rides: {e}", exc_info=True)
         from fastapi import HTTPException as _HTTPException
 
-        raise _HTTPException(status_code=503, detail="Analytics data unavailable — database error") from e
+        raise _HTTPException(
+            status_code=503, detail="Analytics data unavailable — database error"
+        ) from e
 
     total = len(period_rides)
     completed = sum(1 for r in period_rides if r.get("status") == "completed")
     cancelled = sum(1 for r in period_rides if r.get("status") == "cancelled")
     in_progress = sum(
-        1 for r in period_rides if r.get("status") in ("in_progress", "driver_arrived", "driver_accepted")
+        1
+        for r in period_rides
+        if r.get("status") in ("in_progress", "driver_arrived", "driver_accepted")
     )
     searching = sum(1 for r in period_rides if r.get("status") == "searching")
     scheduled = sum(1 for r in period_rides if r.get("is_scheduled"))
@@ -278,10 +331,18 @@ async def get_analytics_overview(
     cancellation_rate = round(cancelled / total * 100, 1) if total > 0 else 0
 
     total_revenue = float(
-        sum(Decimal(str(r.get("total_fare") or 0)) for r in period_rides if r.get("status") == "completed")
+        sum(
+            Decimal(str(r.get("total_fare") or 0))
+            for r in period_rides
+            if r.get("status") == "completed"
+        )
     )
     total_tips = float(
-        sum(Decimal(str(r.get("tip_amount") or 0)) for r in period_rides if r.get("status") == "completed")
+        sum(
+            Decimal(str(r.get("tip_amount") or 0))
+            for r in period_rides
+            if r.get("status") == "completed"
+        )
     )
     avg_fare = round(total_revenue / completed, 2) if completed > 0 else 0
 
@@ -396,13 +457,20 @@ async def get_surge_history(
                 "created_at": r.get("created_at"),
             }
             for r in records
-            if isinstance(r.get("created_at", ""), str) and r.get("created_at", "") >= cutoff
+            if isinstance(r.get("created_at", ""), str)
+            and r.get("created_at", "") >= cutoff
         ]
         # Reverse to chronological order
         filtered.reverse()
         return {"area_id": area_id, "hours": hours, "history": filtered}
     except Exception as e:
-        logger.error(f"Failed to fetch surge history: {e}", exc_info=True, extra={"domain": "admin"})
+        logger.error(
+            f"Failed to fetch surge history: {e}",
+            exc_info=True,
+            extra={"domain": "admin"},
+        )
         from fastapi import HTTPException as _HTTPException
 
-        raise _HTTPException(status_code=503, detail="Surge history unavailable — database error") from e
+        raise _HTTPException(
+            status_code=503, detail="Surge history unavailable — database error"
+        ) from e

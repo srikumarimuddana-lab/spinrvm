@@ -43,12 +43,16 @@ class DocumentRequirementUpdateRequest(BaseModel):
 @router.get("/documents/requirements")
 async def admin_get_document_requirements():
     """Get all document requirements."""
-    requirements = await db_supabase.get_rows("document_requirements", order="created_at", limit=100)
+    requirements = await db_supabase.get_rows(
+        "document_requirements", order="created_at", limit=100
+    )
     return requirements or []
 
 
 @router.post("/documents/requirements")
-async def admin_create_document_requirement(requirement: DocumentRequirementCreateRequest):
+async def admin_create_document_requirement(
+    requirement: DocumentRequirementCreateRequest,
+):
     """Create a new document requirement."""
     doc = {
         "name": requirement.name,
@@ -59,11 +63,15 @@ async def admin_create_document_requirement(requirement: DocumentRequirementCrea
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     row = await db_supabase.insert_one("document_requirements", doc)
-    return {"requirement_id": str(row.get("id") if row and isinstance(row, dict) else "")}
+    return {
+        "requirement_id": str(row.get("id") if row and isinstance(row, dict) else "")
+    }
 
 
 @router.put("/documents/requirements/{requirement_id}")
-async def admin_update_document_requirement(requirement_id: str, requirement: DocumentRequirementUpdateRequest):
+async def admin_update_document_requirement(
+    requirement_id: str, requirement: DocumentRequirementUpdateRequest
+):
     """Update a document requirement."""
     updates: Dict[str, Any] = {}
     if requirement.name is not None:
@@ -79,7 +87,9 @@ async def admin_update_document_requirement(requirement_id: str, requirement: Do
 
     if updates:
         updates["updated_at"] = datetime.now(timezone.utc).isoformat()
-        await db_supabase.update_one("document_requirements", {"id": requirement_id}, updates)
+        await db_supabase.update_one(
+            "document_requirements", {"id": requirement_id}, updates
+        )
     return {"message": "Document requirement updated"}
 
 
@@ -207,7 +217,9 @@ async def admin_review_driver_document(
     new_expiry_iso: Optional[str] = None
     if expiry_raw:
         try:
-            new_expiry_iso = datetime.fromisoformat(str(expiry_raw).replace("Z", "+00:00")).isoformat()
+            new_expiry_iso = datetime.fromisoformat(
+                str(expiry_raw).replace("Z", "+00:00")
+            ).isoformat()
         except ValueError:
             new_expiry_iso = None
 
@@ -250,7 +262,9 @@ async def admin_review_driver_document(
         if existing_req_id:
             try:
                 req_row = (lambda _r: _r[0] if _r else None)(
-                    await db_supabase.get_rows("document_requirements", {"id": existing_req_id}, limit=1)
+                    await db_supabase.get_rows(
+                        "document_requirements", {"id": existing_req_id}, limit=1
+                    )
                 )
                 if req_row:
                     req_name = req_row.get("name")
@@ -301,10 +315,14 @@ async def admin_review_driver_document(
                     drv = await db_supabase.get_driver_by_id(driver_id)
                     if drv and drv.get("status") == "needs_review":
                         await db_supabase.update_one(
-                            "drivers", {"id": driver_id}, {"status": "active", "is_verified": True}
+                            "drivers",
+                            {"id": driver_id},
+                            {"status": "active", "is_verified": True},
                         )
                 except Exception as _exc:
-                    logger.debug(f"Could not reset driver {driver_id} status to active: {_exc}")
+                    logger.debug(
+                        f"Could not reset driver {driver_id} status to active: {_exc}"
+                    )
 
     # Log to activity timeline
     doc_type = existing.get("document_type", "Document")

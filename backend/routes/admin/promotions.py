@@ -153,16 +153,24 @@ async def admin_get_promotions(
 
 
 @router.post("/promotions")
-async def admin_create_promotion(promotion: PromotionCreateRequest, admin: dict = Depends(get_admin_user)):
+async def admin_create_promotion(
+    promotion: PromotionCreateRequest, admin: dict = Depends(get_admin_user)
+):
     """Create a new promotion/discount code."""
     # Reject negative discount values — a negative discount is a charge (F-30).
     if promotion.discount_value < 0:
         raise HTTPException(status_code=400, detail="discount_value cannot be negative")
     # TASK-4-1: enforce upper bound so a typo can't grant 9999% off.
     if promotion.discount_type == "percentage" and promotion.discount_value > 100:
-        raise HTTPException(status_code=400, detail="discount_value cannot exceed 100 for percentage discounts")
+        raise HTTPException(
+            status_code=400,
+            detail="discount_value cannot exceed 100 for percentage discounts",
+        )
     if promotion.discount_type == "flat" and promotion.discount_value > 500:
-        raise HTTPException(status_code=400, detail="discount_value cannot exceed $500 for flat discounts")
+        raise HTTPException(
+            status_code=400,
+            detail="discount_value cannot exceed $500 for flat discounts",
+        )
     for field, value in [
         ("max_discount", promotion.max_discount),
         ("total_budget", promotion.total_budget),
@@ -228,7 +236,10 @@ async def admin_create_promotion(promotion: PromotionCreateRequest, admin: dict 
         row = await db_supabase.insert_one("promotions", full_doc)
     except Exception:
         # Fallback: insert without optional fields that may not exist in schema
-        logger.error("Promotions insert failed with optional fields, retrying without them", exc_info=True)
+        logger.error(
+            "Promotions insert failed with optional fields, retrying without them",
+            exc_info=True,
+        )
         row = await db_supabase.insert_one("promotions", doc)
 
     promotion_id = str(row.get("id") if row and isinstance(row, dict) else "")
@@ -237,7 +248,11 @@ async def admin_create_promotion(promotion: PromotionCreateRequest, admin: dict 
         "promotion_created",
         "promotions",
         promotion_id,
-        {"code": doc["code"], "promo_type": doc["promo_type"], "discount_value": doc["discount_value"]},
+        {
+            "code": doc["code"],
+            "promo_type": doc["promo_type"],
+            "discount_value": doc["discount_value"],
+        },
     )
     return {"promotion_id": promotion_id}
 
@@ -293,7 +308,7 @@ async def admin_get_promo_usage(
             .in_("id", user_ids)
             .execute()
         )
-        for u in (getattr(user_rows, "data", None) or []):
+        for u in getattr(user_rows, "data", None) or []:
             first = u.get("first_name") or ""
             last = u.get("last_name") or ""
             name = f"{first} {last}".strip() or u.get("phone") or u["id"][:8]
@@ -311,7 +326,7 @@ async def admin_get_promo_usage(
             .in_("promo_application_id", app_ids)
             .execute()
         )
-        for r in (getattr(ride_rows, "data", None) or []):
+        for r in getattr(ride_rows, "data", None) or []:
             if r.get("promo_application_id"):
                 ride_id_map[r["promo_application_id"]] = r["id"]
     except Exception:
@@ -352,7 +367,11 @@ async def admin_get_promo_stats(date_range: Optional[str] = Query(None, alias="r
     usage_filter: Dict[str, Any] = {"created_at": {"$gte": range_start}}
     try:
         all_usage = await db_supabase.get_rows(
-            "promo_applications", usage_filter, order="created_at", desc=True, limit=5000
+            "promo_applications",
+            usage_filter,
+            order="created_at",
+            desc=True,
+            limit=5000,
         )
     except Exception:
         logger.error("promo_applications table missing or query failed", exc_info=True)
@@ -362,7 +381,13 @@ async def admin_get_promo_stats(date_range: Optional[str] = Query(None, alias="r
 
     # Promo counts
     total_codes = len([p for p in all_promos if p.get("promo_type") != "private"])
-    active_codes = len([p for p in all_promos if p.get("promo_type") != "private" and p.get("is_active")])
+    active_codes = len(
+        [
+            p
+            for p in all_promos
+            if p.get("promo_type") != "private" and p.get("is_active")
+        ]
+    )
     expired_codes = len(
         [
             p
@@ -374,11 +399,19 @@ async def admin_get_promo_stats(date_range: Optional[str] = Query(None, alias="r
         ]
     )
     total_private = len([p for p in all_promos if p.get("promo_type") == "private"])
-    active_private = len([p for p in all_promos if p.get("promo_type") == "private" and p.get("is_active")])
+    active_private = len(
+        [
+            p
+            for p in all_promos
+            if p.get("promo_type") == "private" and p.get("is_active")
+        ]
+    )
 
     # Usage stats
     total_redemptions = len(filtered_usage)
-    total_discount = float(sum(Decimal(str(u.get("discount_applied", 0))) for u in filtered_usage))
+    total_discount = float(
+        sum(Decimal(str(u.get("discount_applied", 0))) for u in filtered_usage)
+    )
 
     # Daily usage for charts (last 30 days)
     daily: Dict[str, Dict[str, Any]] = {}
@@ -390,7 +423,10 @@ async def admin_get_promo_stats(date_range: Optional[str] = Query(None, alias="r
         d = u.get("created_at", "")[:10]
         if d in daily:
             daily[d]["count"] += 1
-            daily[d]["amount"] = float(Decimal(str(daily[d]["amount"])) + Decimal(str(u.get("discount_applied", 0))))
+            daily[d]["amount"] = float(
+                Decimal(str(daily[d]["amount"]))
+                + Decimal(str(u.get("discount_applied", 0)))
+            )
 
     daily_usage = sorted(daily.values(), key=lambda x: x["date"])
 
@@ -408,7 +444,9 @@ async def admin_get_promo_stats(date_range: Optional[str] = Query(None, alias="r
 
 @router.put("/promotions/{promotion_id}")
 async def admin_update_promotion(
-    promotion_id: str, promotion: PromotionUpdateRequest, admin: dict = Depends(get_admin_user)
+    promotion_id: str,
+    promotion: PromotionUpdateRequest,
+    admin: dict = Depends(get_admin_user),
 ):
     """Update a promotion."""
     updates = promotion.model_dump(exclude_none=True)
@@ -419,10 +457,17 @@ async def admin_update_promotion(
             await db_supabase.update_one("promotions", {"id": promotion_id}, updates)
         except Exception:
             # If update fails (e.g. column doesn't exist yet), remove optional fields and retry
-            for f in ["assigned_user_ids", "inactive_days", "min_total_rides", "max_total_rides"]:
+            for f in [
+                "assigned_user_ids",
+                "inactive_days",
+                "min_total_rides",
+                "max_total_rides",
+            ]:
                 updates.pop(f, None)
             if updates:
-                await db_supabase.update_one("promotions", {"id": promotion_id}, updates)
+                await db_supabase.update_one(
+                    "promotions", {"id": promotion_id}, updates
+                )
         await log_admin_action(
             admin,
             "promotion_updated",
@@ -434,7 +479,9 @@ async def admin_update_promotion(
 
 
 @router.delete("/promotions/{promotion_id}")
-async def admin_delete_promotion(promotion_id: str, admin: dict = Depends(get_admin_user)):
+async def admin_delete_promotion(
+    promotion_id: str, admin: dict = Depends(get_admin_user)
+):
     """Delete a promotion."""
     await db_supabase.delete_many("promotions", {"id": promotion_id})
     await log_admin_action(admin, "promotion_deleted", "promotions", promotion_id)

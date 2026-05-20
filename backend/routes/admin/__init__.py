@@ -88,23 +88,59 @@ admin_router = APIRouter(
 # `auth_router` is an empty placeholder; the real login/session/logout routes
 # live on `admin_auth_router`, mounted separately by server.py (no auth gate).
 admin_router.include_router(auth_router)
-admin_router.include_router(settings_router, dependencies=[Depends(require_module("settings"))])
-admin_router.include_router(service_areas_router, dependencies=[Depends(require_module("service_areas"))])
-admin_router.include_router(vehicle_fleet_router, dependencies=[Depends(require_module("vehicle_types"))])
-admin_router.include_router(drivers_router, dependencies=[Depends(require_module("drivers"))])
-admin_router.include_router(rides_router, dependencies=[Depends(require_module("rides"))])
-admin_router.include_router(users_router, dependencies=[Depends(require_module("users"))])
-admin_router.include_router(promotions_router, dependencies=[Depends(require_module("promotions"))])
-admin_router.include_router(support_router, dependencies=[Depends(require_module("support"))])
-admin_router.include_router(faqs_router, dependencies=[Depends(require_module("support"))])
-admin_router.include_router(legal_documents_router, dependencies=[Depends(require_module("documents"))])
-admin_router.include_router(documents_router, dependencies=[Depends(require_module("documents"))])
-admin_router.include_router(staff_router, dependencies=[Depends(require_module("staff"))])
-admin_router.include_router(subscriptions_router, dependencies=[Depends(require_module("earnings"))])
-admin_router.include_router(messaging_router, dependencies=[Depends(require_module("notifications"))])
-admin_router.include_router(maintenance_router, dependencies=[Depends(require_module("dashboard"))])
-admin_router.include_router(analytics_router, dependencies=[Depends(require_module("dashboard"))])
-admin_router.include_router(wallet_router, dependencies=[Depends(require_module("earnings"))])
-admin_router.include_router(disputes_admin_router, dependencies=[Depends(require_module("disputes"))])
+admin_router.include_router(
+    settings_router, dependencies=[Depends(require_module("settings"))]
+)
+admin_router.include_router(
+    service_areas_router, dependencies=[Depends(require_module("service_areas"))]
+)
+admin_router.include_router(
+    vehicle_fleet_router, dependencies=[Depends(require_module("vehicle_types"))]
+)
+admin_router.include_router(
+    drivers_router, dependencies=[Depends(require_module("drivers"))]
+)
+admin_router.include_router(
+    rides_router, dependencies=[Depends(require_module("rides"))]
+)
+admin_router.include_router(
+    users_router, dependencies=[Depends(require_module("users"))]
+)
+admin_router.include_router(
+    promotions_router, dependencies=[Depends(require_module("promotions"))]
+)
+admin_router.include_router(
+    support_router, dependencies=[Depends(require_module("support"))]
+)
+admin_router.include_router(
+    faqs_router, dependencies=[Depends(require_module("support"))]
+)
+admin_router.include_router(
+    legal_documents_router, dependencies=[Depends(require_module("documents"))]
+)
+admin_router.include_router(
+    documents_router, dependencies=[Depends(require_module("documents"))]
+)
+admin_router.include_router(
+    staff_router, dependencies=[Depends(require_module("staff"))]
+)
+admin_router.include_router(
+    subscriptions_router, dependencies=[Depends(require_module("earnings"))]
+)
+admin_router.include_router(
+    messaging_router, dependencies=[Depends(require_module("notifications"))]
+)
+admin_router.include_router(
+    maintenance_router, dependencies=[Depends(require_module("dashboard"))]
+)
+admin_router.include_router(
+    analytics_router, dependencies=[Depends(require_module("dashboard"))]
+)
+admin_router.include_router(
+    wallet_router, dependencies=[Depends(require_module("earnings"))]
+)
+admin_router.include_router(
+    disputes_admin_router, dependencies=[Depends(require_module("disputes"))]
+)
 
 __all__ = ["admin_router", "admin_auth_router"]

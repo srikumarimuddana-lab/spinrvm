@@ -118,7 +118,9 @@ async def do_accept_invite(
     current_user: dict = Depends(get_current_user),
 ):
     try:
-        company, member = await accept_invite(token=body.token, user_id=current_user["id"])
+        company, member = await accept_invite(
+            token=body.token, user_id=current_user["id"]
+        )
     except InviteNotFound:
         raise HTTPException(status_code=404, detail="invite not found") from None
     except InviteAlreadyConsumed:
@@ -133,17 +135,25 @@ async def do_join_domain(
 ):
     # Validate that the rider's JWT email domain is authorized for this company.
     # body.email is not trusted for this check — we use the JWT-sourced identity.
-    user_email = (current_user.get("phone_or_email") or current_user.get("email") or "").lower()
+    user_email = (
+        current_user.get("phone_or_email") or current_user.get("email") or ""
+    ).lower()
     domain = user_email.split("@")[-1] if "@" in user_email else ""
     if not domain:
-        raise HTTPException(status_code=400, detail="Account has no email address; cannot join via domain")
+        raise HTTPException(
+            status_code=400,
+            detail="Account has no email address; cannot join via domain",
+        )
     allowed = await get_rows(
         "corporate_allowed_domains",
         {"company_id": body.company_id, "domain": domain},
         limit=1,
     )
     if not allowed:
-        raise HTTPException(status_code=403, detail="Your email domain is not authorized for this company")
+        raise HTTPException(
+            status_code=403,
+            detail="Your email domain is not authorized for this company",
+        )
 
     member = await join_via_domain(
         company_id=body.company_id,
@@ -208,7 +218,11 @@ async def my_rides(
     rides_by_id = {r["id"]: r for r in rides_list}
 
     rps_by_ride = {r["ride_id"]: r for r in rps_rows}
-    return [{**rides_by_id[rid], "payment_source": rps_by_ride[rid]} for rid in ride_ids if rid in rides_by_id]
+    return [
+        {**rides_by_id[rid], "payment_source": rps_by_ride[rid]}
+        for rid in ride_ids
+        if rid in rides_by_id
+    ]
 
 
 @router.post("/{company_id}/allowance-requests")
@@ -263,4 +277,6 @@ async def my_requests(
     current_user: dict = Depends(get_current_user),
 ):
     membership = await _ensure_member(current_user, company_id)
-    return await list_company_allowance_requests(company_id, statuses=None, member_id=membership["id"])
+    return await list_company_allowance_requests(
+        company_id, statuses=None, member_id=membership["id"]
+    )

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View,
   Text,
@@ -29,7 +30,7 @@ import type { ThemeColors } from '@shared/theme/index';
 
 const HOME_DATA_TTL_MS = 5 * 60 * 1000;
 
-export default function HomeScreen() {
+function HomeScreenContent() {
   const router = useRouter();
   const { user } = useAuthStore();
   const { savedAddresses, fetchSavedAddresses, setUserLocation, currentRide, triggerEmergency, fetchActiveRide } = useRideStore();
@@ -433,6 +434,18 @@ export default function HomeScreen() {
         </BottomSheet>
       )}
     </View>
+  );
+}
+
+// Wrap in an ErrorBoundary so a render error on the post-ride-completion
+// return-to-home does not white-screen the app. Every other screen in
+// rider-app/app/* uses the same pattern (ride-completed, ride-in-progress,
+// driver-arriving, ride-options) — home was the one outlier.
+export default function HomeScreen() {
+  return (
+    <ErrorBoundary>
+      <HomeScreenContent />
+    </ErrorBoundary>
   );
 }
 

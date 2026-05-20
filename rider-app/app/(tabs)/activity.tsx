@@ -24,6 +24,7 @@ import type { FareBreakdownLine } from '../../store/walletStore';
 
 interface RideHistory {
   id: string;
+  ride_code?: string;
   pickup_address: string;
   dropoff_address: string;
   total_fare: number | string;
@@ -248,6 +249,11 @@ export default function ActivityScreen() {
           <Text style={styles.rideInfo}>
             {formatDate(ride.created_at)} · {getVehicleType(ride.vehicle_type_id)}
           </Text>
+          {(ride.ride_code || ride.id) && (
+            <Text style={styles.rideBookingId} numberOfLines={1}>
+              {ride.ride_code || ride.id.slice(0, 8).toUpperCase()}
+            </Text>
+          )}
         </View>
 
         <View style={styles.rideFareContainer}>
@@ -489,6 +495,10 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
     fontSize: 16, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.text, marginBottom: 4,
   },
   rideInfo: { fontSize: 13, fontFamily: 'PlusJakartaSans_400Regular', color: colors.textDim },
+  rideBookingId: {
+    fontSize: 11, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.textDim,
+    letterSpacing: 0.5, marginTop: 4,
+  },
   rideFareContainer: { alignItems: 'flex-end' },
   rideFare: { fontSize: 17, fontFamily: 'PlusJakartaSans_700Bold', color: colors.primary, marginBottom: 4 },
   rideFareCancelled: { color: colors.textDim },

@@ -128,9 +128,7 @@ class AppSettings(BaseModel):
     search_radius_km: float = 10.0
     cancellation_fee_admin: DecimalStr = Decimal("0.50")  # Admin gets $0.50
     cancellation_fee_driver: DecimalStr = Decimal("4.00")  # Driver gets $4.00
-    platform_fee_percent: DecimalStr = Decimal(
-        "0.0"
-    )  # 0% commission - driver keeps all fare
+    platform_fee_percent: DecimalStr = Decimal("0.0")  # 0% commission - driver keeps all fare
     # When false, drivers can go online without an active Spinr Pass. Set
     # this to true to enforce the subscription gate at the "go online" call.
     # Defaults to false so the product works out of the box pre-launch.
@@ -293,6 +291,17 @@ class Ride(BaseModel):
     booking_fee: DecimalStr = Decimal("2.0")
     surge_multiplier: float = 1.0
     total_fare: DecimalStr
+    # Rider-facing bill: total_fare + area_fees + tax − discount. Source of
+    # truth for the amount displayed on in-progress / end-ride / receipt /
+    # wallet screens. Optional in the model so legacy rows without the
+    # column (pre-migration 46) still validate.
+    grand_total: Optional[DecimalStr] = None
+    # Pre-promo fare-side subtotal (mirror of total_fare at creation time,
+    # kept stable for receipt math even if a refund or recalc later mutates
+    # total_fare).
+    subtotal_fare: Optional[DecimalStr] = None
+    discount_amount: DecimalStr = Decimal("0.0")
+    promo_code: Optional[str] = None
     tip_amount: DecimalStr = Decimal("0.0")
     payment_method: str = "card"
     payment_method_id: Optional[str] = None
@@ -301,9 +310,7 @@ class Ride(BaseModel):
     status: str = "searching"
     pickup_otp: str = ""
     # Timeline tracking
-    ride_requested_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc)
-    )
+    ride_requested_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     driver_notified_at: Optional[datetime] = None
     driver_accepted_at: Optional[datetime] = None
     driver_arrived_at: Optional[datetime] = None
@@ -312,9 +319,7 @@ class Ride(BaseModel):
     cancelled_at: Optional[datetime] = None
     # Earnings split
     driver_earnings: DecimalStr = Decimal("0.0")  # Distance fare goes to driver
-    admin_earnings: DecimalStr = Decimal(
-        "0.0"
-    )  # Booking fee + platform/city fees go to admin
+    admin_earnings: DecimalStr = Decimal("0.0")  # Booking fee + platform/city fees go to admin
     cancellation_fee_driver: DecimalStr = Decimal("0.0")
     cancellation_fee_admin: DecimalStr = Decimal("0.0")
     # Rating
@@ -327,9 +332,7 @@ class Ride(BaseModel):
 class RideRatingRequest(BaseModel):
     rating: int = Field(ge=1, le=5, description="Rating must be between 1 and 5")
     comment: Optional[str] = None
-    tip_amount: DecimalStr = Field(
-        default=Decimal("0.0"), ge=0, description="Tip amount must be non-negative"
-    )
+    tip_amount: DecimalStr = Field(default=Decimal("0.0"), ge=0, description="Tip amount must be non-negative")
 
 
 class CreateRideRequest(BaseModel):
@@ -345,9 +348,7 @@ class CreateRideRequest(BaseModel):
     requires_wav: bool = False
     quiet_mode: bool = False
     rider_notes: Optional[str] = None
-    scheduled_timezone: Optional[str] = (
-        None  # IANA name e.g. "America/Toronto"; used for DST-gap guard
-    )
+    scheduled_timezone: Optional[str] = None  # IANA name e.g. "America/Toronto"; used for DST-gap guard
     scheduled_time: Optional[datetime] = None
     corporate_account_id: Optional[str] = None
     payment_method: str = "card"
@@ -403,9 +404,7 @@ class CreateRideRequest(BaseModel):
 
     @field_validator("scheduled_time", mode="after")
     @classmethod
-    def validate_scheduled_time(
-        cls, value: Optional[datetime], info
-    ) -> Optional[datetime]:
+    def validate_scheduled_time(cls, value: Optional[datetime], info) -> Optional[datetime]:
         if value is not None:
             from datetime import timedelta
 
@@ -413,9 +412,7 @@ class CreateRideRequest(BaseModel):
             # strip tz for the DST-gap round-trip check which needs a naive wall time.
             v_utc = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
             if v_utc < datetime.now(timezone.utc) + timedelta(minutes=5):
-                raise ValueError(
-                    "Scheduled time must be at least 5 minutes in the future"
-                )
+                raise ValueError("Scheduled time must be at least 5 minutes in the future")
 
             naive = v_utc.replace(tzinfo=None)
 
@@ -426,9 +423,7 @@ class CreateRideRequest(BaseModel):
 
                     tz = zoneinfo.ZoneInfo(tz_name)
                 except (ImportError, KeyError) as exc:
-                    raise ValueError(
-                        f"Unknown or unsupported timezone: {tz_name}"
-                    ) from exc
+                    raise ValueError(f"Unknown or unsupported timezone: {tz_name}") from exc
 
                 # DST-gap guard: construct the wall-clock time in the named
                 # timezone (fold=0 = pre-transition assumption), convert to UTC,

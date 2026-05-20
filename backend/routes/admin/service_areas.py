@@ -27,6 +27,64 @@ router = APIRouter()
 
 _SURGE_MAX = 10.0  # absolute ceiling for manual admin override
 
+# Airport zones must be small. The actual airport property is typically
+# under ~3 km on either dimension (YQR ≈ 2 km, even YVR ≈ 3 km). 10 km
+# is a generous ceiling that still blocks "Regina city limits accidentally
+# saved with is_airport=True" — the failure mode that surcharges every ride.
+_AIRPORT_MAX_BBOX_KM = 10.0
+
+
+def _polygon_bbox_km(polygon: Any) -> Optional[Dict[str, float]]:
+    """Compute a coarse bounding-box size (km) for a polygon.
+
+    Returns None when the polygon can't be parsed as a sequence of
+    {lat,lng} dicts. Uses a haversine-on-axes approximation — exact enough
+    to reject "city-sized airport zones" by an order of magnitude. The
+    canonical polygon parser lives in geo_utils; we duplicate the shape
+    sniff here to keep the admin validation self-contained.
+    """
+    try:
+        from ...geo_utils import get_service_area_polygon
+    except ImportError:
+        from geo_utils import get_service_area_polygon  # type: ignore
+    parsed = get_service_area_polygon({"polygon": polygon})
+    if len(parsed) < 3:
+        return None
+    lats = [p["lat"] for p in parsed]
+    lngs = [p["lng"] for p in parsed]
+    lat_span_km = (max(lats) - min(lats)) * 111.0  # 1° lat ≈ 111 km
+    import math
+
+    mean_lat = (max(lats) + min(lats)) / 2.0
+    lng_span_km = (max(lngs) - min(lngs)) * 111.0 * math.cos(math.radians(mean_lat))
+    return {"lat_km": lat_span_km, "lng_km": lng_span_km}
+
+
+def _guard_airport_polygon(is_airport: bool, polygon: Any) -> None:
+    """Reject an airport zone whose polygon spans more than _AIRPORT_MAX_BBOX_KM.
+
+    Real-world failure mode this prevents: an admin checks "is_airport"
+    on the city-wide Regina service area row, leaving its city-sized
+    polygon — which causes calculate_airport_fee to match every Regina
+    pickup/dropoff and surcharge every ride.
+    """
+    if not is_airport or not polygon:
+        return
+    bbox = _polygon_bbox_km(polygon)
+    if bbox is None:
+        return  # malformed polygon — let the existing shape validation handle it
+    if bbox["lat_km"] > _AIRPORT_MAX_BBOX_KM or bbox["lng_km"] > _AIRPORT_MAX_BBOX_KM:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Airport polygon is too large "
+                f"(bbox {bbox['lat_km']:.1f} km × {bbox['lng_km']:.1f} km, "
+                f"max {_AIRPORT_MAX_BBOX_KM} km per side). "
+                "Either redraw the polygon to cover only the actual airport "
+                "property, or uncheck 'is_airport' on this service area."
+            ),
+        )
+
 
 # ---------- Pydantic models ----------
 
@@ -153,17 +211,101 @@ async def admin_get_service_areas():
     return parents
 
 
+@router.get("/airport-zones/diagnostic", dependencies=[Depends(get_admin_user)])
+async def admin_airport_zones_diagnostic():
+    """List every row that could be triggering the airport surcharge.
+
+    Returns rows where is_airport is truthy (covers boolean True AND the
+    occasional string "true" / 1 written by older admin tools) plus rows
+    that aren't flagged but carry a non-zero airport_fee — both shapes
+    can leak into calculate_airport_fee when the column type drifts.
+
+    For "I removed the airport zone but the surcharge still shows":
+      * If `airport_zones` is empty → no live row matches; the surcharge
+        you're seeing is frozen on an OLD ride row (ride.airport_fee was
+        captured at creation). New rides won't be charged.
+      * If `airport_zones` is non-empty → the listed row(s) still match.
+        Uncheck `is_airport` on each, or delete sub-region rows that
+        survived the parent removal.
+    """
+    rows = await db_supabase.get_rows("service_areas", limit=1000)
+    out = []
+    for r in rows:
+        raw_flag = r.get("is_airport")
+        # Treat truthy strings / ints as flagged too — surfaces type drift
+        # introduced by older versions of the admin form.
+        is_flagged = raw_flag in (True, 1, "true", "True", "TRUE", "1")
+        fee = r.get("airport_fee") or 0
+        has_fee = float(fee) > 0
+        if not (is_flagged or (has_fee and r.get("parent_service_area_id"))):
+            # Skip rows that are neither flagged nor a sub-region with a fee.
+            # Plain service areas with an unrelated `airport_fee=0` are not
+            # signal noise to surface here.
+            continue
+        bbox = _polygon_bbox_km(r.get("polygon"))
+        too_large = bool(bbox and (bbox["lat_km"] > _AIRPORT_MAX_BBOX_KM or bbox["lng_km"] > _AIRPORT_MAX_BBOX_KM))
+        out.append(
+            {
+                "id": r.get("id"),
+                "name": r.get("name"),
+                "city": r.get("city"),
+                "is_airport_raw": raw_flag,
+                "is_airport_effective": is_flagged,
+                "airport_fee": fee,
+                "is_active": r.get("is_active"),
+                "parent_service_area_id": r.get("parent_service_area_id"),
+                "bbox_km": bbox,
+                "max_allowed_km": _AIRPORT_MAX_BBOX_KM,
+                "looks_misconfigured": too_large,
+            }
+        )
+
+    # SECOND SURFACE: area_fees rows. A row in area_fees with fee_name
+    # containing "airport" but fee_type != "airport" is the silent-fail
+    # case — calculate_all_fees only gates fee_type=="airport" on
+    # in_airport, so any other type applies to every ride and the
+    # receipt still shows the row's fee_name verbatim. This is the
+    # common cause of "I removed the airport zone but the surcharge
+    # still shows" once airport_zones above is empty.
+    area_fees = await db_supabase.get_rows("area_fees", {"is_active": True}, limit=500)
+    suspicious_fees = []
+    for fee_row in area_fees:
+        name = (fee_row.get("fee_name") or "").lower()
+        fee_type = (fee_row.get("fee_type") or "").lower()
+        if "airport" in name and fee_type != "airport":
+            suspicious_fees.append(
+                {
+                    "id": fee_row.get("id"),
+                    "service_area_id": fee_row.get("service_area_id"),
+                    "fee_name": fee_row.get("fee_name"),
+                    "fee_type": fee_row.get("fee_type"),
+                    "calc_mode": fee_row.get("calc_mode"),
+                    "amount": fee_row.get("amount"),
+                    "is_active": fee_row.get("is_active"),
+                    "issue": (
+                        "Fee name contains 'airport' but fee_type is not "
+                        "'airport' — calculate_all_fees will NOT gate this on "
+                        "the airport zone, so it applies to every ride in the "
+                        "service area. Either change fee_type to 'airport' OR "
+                        "rename / deactivate this row."
+                    ),
+                }
+            )
+
+    return {
+        "airport_zones": out,
+        "total_service_areas_scanned": len(rows),
+        "suspicious_area_fees": suspicious_fees,
+        "total_active_area_fees_scanned": len(area_fees),
+    }
+
+
 @router.post("/service-areas")
-async def admin_create_service_area(
-    area: ServiceAreaCreateRequest, admin: dict = Depends(get_admin_user)
-):
+async def admin_create_service_area(area: ServiceAreaCreateRequest, admin: dict = Depends(get_admin_user)):
     """Create service area with full configuration."""
     polygon = area.geojson if area.geojson is not None else area.polygon or []
-    surge_active = (
-        area.surge_active
-        if area.surge_active is not None
-        else (area.surge_enabled or False)
-    )
+    _guard_airport_polygon(area.is_airport, polygon)
+    surge_active = area.surge_active if area.surge_active is not None else (area.surge_enabled or False)
     doc = {
         "id": str(uuid.uuid4()),
         "name": area.name,
@@ -192,9 +334,7 @@ async def admin_create_service_area(
     # Seed vehicle_pricing with all active vehicle types so every type
     # appears on the rider's ride-options screen from day one.
     if not doc.get("vehicle_pricing"):
-        vt_rows = await db_supabase.get_rows(
-            "vehicle_types", {"is_active": True}, limit=100
-        )
+        vt_rows = await db_supabase.get_rows("vehicle_types", {"is_active": True}, limit=100)
         doc["vehicle_pricing"] = [
             {
                 "vehicle_type": vt["name"],
@@ -211,9 +351,7 @@ async def admin_create_service_area(
     await db_supabase.insert_one("service_areas", doc)
     # PERF-001: Invalidate fare cache
     await invalidate_fare_cache()
-    await log_admin_action(
-        admin, "service_area_created", "service_areas", doc["id"], {"name": area.name}
-    )
+    await log_admin_action(admin, "service_area_created", "service_areas", doc["id"], {"name": area.name})
     return {"area_id": doc["id"]}
 
 
@@ -224,9 +362,16 @@ async def admin_update_service_area(
     """Update service area — accepts any field."""
     # Resolve aliases
     polygon = area.geojson if area.geojson is not None else area.polygon
-    surge_active = (
-        area.surge_active if area.surge_active is not None else area.surge_enabled
-    )
+    surge_active = area.surge_active if area.surge_active is not None else area.surge_enabled
+
+    # Block "city polygon flipped to airport" — the failure mode that
+    # surcharges every ride in town. Resolve the effective is_airport +
+    # polygon by overlaying the request on the current row before checking.
+    if area.is_airport is True or polygon is not None:
+        existing = await db_supabase.find_one("service_areas", {"id": area_id}) or {}
+        effective_is_airport = area.is_airport if area.is_airport is not None else existing.get("is_airport", False)
+        effective_polygon = polygon if polygon is not None else existing.get("polygon")
+        _guard_airport_polygon(bool(effective_is_airport), effective_polygon)
 
     # Validate surge_multiplier at the API boundary (F-26).
     # fare_service.py always applies SURGE_CAP (2.5×) at calculation time, so
@@ -309,9 +454,7 @@ async def admin_update_service_area(
 
 
 @router.delete("/service-areas/{area_id}")
-async def admin_delete_service_area(
-    area_id: str, admin: dict = Depends(get_admin_user)
-):
+async def admin_delete_service_area(area_id: str, admin: dict = Depends(get_admin_user)):
     """Delete service area."""
     await db_supabase.delete_many("service_areas", {"id": area_id})
     # PERF-001: Invalidate fare cache
@@ -324,9 +467,7 @@ async def admin_delete_service_area(
 
 
 @router.put("/service-areas/{area_id}/surge")
-async def admin_update_surge_pricing(
-    area_id: str, surge: SurgePricingRequest, admin: dict = Depends(get_admin_user)
-):
+async def admin_update_surge_pricing(area_id: str, surge: SurgePricingRequest, admin: dict = Depends(get_admin_user)):
     """Update surge pricing for a service area."""
     surge_doc = {
         "id": str(uuid.uuid4()),
@@ -342,14 +483,10 @@ async def admin_update_surge_pricing(
     }
 
     existing = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows(
-            "surge_pricing", {"service_area_id": area_id}, limit=1
-        )
+        await db_supabase.get_rows("surge_pricing", {"service_area_id": area_id}, limit=1)
     )
     if existing:
-        await db_supabase.update_one(
-            "surge_pricing", {"service_area_id": area_id}, surge_doc
-        )
+        await db_supabase.update_one("surge_pricing", {"service_area_id": area_id}, surge_doc)
     else:
         await db_supabase.insert_one("surge_pricing", surge_doc)
 
@@ -378,9 +515,7 @@ async def admin_get_surge_status():
         return await get_surge_status()
     except Exception as exc:
         logger.error("Surge status fetch failed", exc_info=exc)
-        raise HTTPException(
-            status_code=503, detail="Unable to fetch surge status"
-        ) from exc
+        raise HTTPException(status_code=503, detail="Unable to fetch surge status") from exc
 
 
 # ---------- Area Management (Pricing, Tax, Vehicle Pricing) ----------
@@ -389,9 +524,7 @@ async def admin_get_surge_status():
 @router.get("/areas/{area_id}/fees")
 async def admin_get_area_fees(area_id: str):
     """Get all fees for a service area."""
-    fees = await db_supabase.get_rows(
-        "area_fees", {"service_area_id": area_id}, order="created_at", limit=100
-    )
+    fees = await db_supabase.get_rows("area_fees", {"service_area_id": area_id}, order="created_at", limit=100)
     return fees
 
 
@@ -449,9 +582,7 @@ async def admin_delete_area_fee(area_id: str, fee_id: str):
 @router.get("/areas/{area_id}/tax")
 async def admin_get_area_tax(area_id: str):
     """Get tax configuration for a service area."""
-    area = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1)
-    )
+    area = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1))
     if not area:
         return {
             "service_area_id": area_id,
@@ -479,9 +610,7 @@ async def admin_update_area_tax(area_id: str, tax: AreaTaxRequest):
     updates = tax.model_dump(exclude_none=True)
     if updates:
         await db_supabase.update_one("service_areas", {"id": area_id}, updates)
-    area = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1)
-    )
+    area = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("service_areas", {"id": area_id}, limit=1))
     _TAX_FIELDS = [
         "gst_enabled",
         "gst_rate",
@@ -500,12 +629,8 @@ async def admin_get_vehicle_pricing(area_id: str):
     Returns {vehicle_types, fare_configs} so the fare-config editor can
     display a row per vehicle type with the area's specific rates.
     """
-    vehicle_types = await db_supabase.get_rows(
-        "vehicle_types", {"is_active": True}, order="name", limit=50
-    )
-    fare_configs = await db_supabase.get_rows(
-        "fare_configs", {"service_area_id": area_id}, limit=100
-    )
+    vehicle_types = await db_supabase.get_rows("vehicle_types", {"is_active": True}, order="name", limit=50)
+    fare_configs = await db_supabase.get_rows("fare_configs", {"service_area_id": area_id}, limit=100)
     return {
         "vehicle_types": vehicle_types or [],
         "fare_configs": fare_configs or [],

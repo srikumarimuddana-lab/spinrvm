@@ -1250,6 +1250,30 @@ async def create_ride(
         )
     service_area_id = matched_area["id"] if matched_area else None
 
+    # Geofence gate: pickup must fall inside an active service area. Without
+    # this the request silently dispatches against drivers anywhere on the
+    # map, which is what produced the "I'm outside the zone but the app is
+    # still searching for drivers" report. Dropoff is intentionally NOT
+    # checked here — riders frequently travel out of town and we don't want
+    # to block that, but we do require their pickup to be inside coverage.
+    if matched_area is None and all_areas:
+        logger.info(
+            "[geofence] reject pickup=(%.5f,%.5f) — outside %d active service area(s)",
+            body.pickup_lat,
+            body.pickup_lng,
+            len(all_areas),
+        )
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "OUTSIDE_SERVICE_AREA",
+                "message": (
+                    "Sorry, your pickup location is outside our coverage area. "
+                    "Please choose a pickup within a serviced zone."
+                ),
+            },
+        )
+
     # Vehicle types are also needed by fare building — fetch once, reuse.
     vehicle_types = await db_supabase.get_rows("vehicle_types", {"is_active": True}, limit=100)
 

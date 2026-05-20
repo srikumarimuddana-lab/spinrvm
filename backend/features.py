@@ -108,9 +108,22 @@ async def calculate_airport_fee(
     'is_pickup': bool, 'is_dropoff': bool, 'is_stop': bool}
     """
     if _all_areas is not None:
-        areas = [a for a in _all_areas if a.get("is_airport")]
+        # Filter strictly: only count an area as an airport zone when BOTH
+        # is_airport is truthy AND is_active is not False. A row that's been
+        # soft-deactivated in the admin (is_active=false) must not surcharge
+        # rides — that's the same intent as "remove this airport zone".
+        areas = [a for a in _all_areas if a.get("is_airport") and a.get("is_active", True) is not False]
     else:
-        areas = await db_supabase.get_rows("service_areas", {"is_airport": True}, limit=50)
+        # Same intent at the DB layer: exclude soft-deactivated rows. Without
+        # the is_active filter, unchecking "Active" on an airport zone in the
+        # admin UI leaves the row matching every ride — the exact failure
+        # mode reported in the "I removed the airport zone but surcharge
+        # still applies" thread.
+        areas = await db_supabase.get_rows(
+            "service_areas",
+            {"is_airport": True, "is_active": True},
+            limit=50,
+        )
     result: Dict[str, Any] = {
         "airport_fee": 0.0,
         "airport_zone_name": None,
@@ -118,6 +131,20 @@ async def calculate_airport_fee(
         "is_dropoff": False,
         "is_stop": False,
     }
+
+    # One-line trace of every invocation so "I removed the airport zone but
+    # the surcharge still shows" reports are debuggable: confirms how many
+    # is_airport=true rows the function considered. If this logs "areas=0"
+    # but a ride still shows airport_fee, the value is frozen on the ride
+    # row from before the removal — historical rides don't get retro-fixed.
+    logger.info(
+        "[AIRPORT_FEE] check pickup=(%.5f,%.5f) dropoff=(%.5f,%.5f) areas=%d",
+        pickup_lat,
+        pickup_lng,
+        dropoff_lat,
+        dropoff_lng,
+        len(areas),
+    )
 
     for area in areas:
         polygon = get_service_area_polygon(area)
@@ -144,6 +171,34 @@ async def calculate_airport_fee(
             result["is_pickup"] = pickup_in
             result["is_dropoff"] = dropoff_in
             result["is_stop"] = stop_in
+            # Surcharge is real money charged to the rider — log why it
+            # applied so an "I went to Walmart and still got an airport
+            # surcharge" report is debuggable. The most common cause when
+            # neither endpoint looks like an airport is an oversized or
+            # mirrored polygon saved in the admin Service Areas screen.
+            lats = [p["lat"] for p in polygon]
+            lngs = [p["lng"] for p in polygon]
+            logger.info(
+                "[AIRPORT_FEE] applied $%.2f for zone %r (id=%s): "
+                "pickup_in=%s dropoff_in=%s stop_in=%s | "
+                "pickup=(%.5f,%.5f) dropoff=(%.5f,%.5f) | "
+                "polygon vertices=%d bbox lat=[%.5f,%.5f] lng=[%.5f,%.5f]",
+                fee,
+                area.get("name", "Airport"),
+                area.get("id"),
+                pickup_in,
+                dropoff_in,
+                stop_in,
+                pickup_lat,
+                pickup_lng,
+                dropoff_lat,
+                dropoff_lng,
+                len(polygon),
+                min(lats),
+                max(lats),
+                min(lngs),
+                max(lngs),
+            )
             break  # Use the first matching airport zone
 
     return result
@@ -675,8 +730,12 @@ async def calculate_all_fees(
         "area_fees", {"service_area_id": matched_area["id"], "is_active": True}, limit=50
     )
 
-    # Pre-compute airport zone check once (reuses all_areas already fetched above)
-    airport_areas = [a for a in all_areas if a.get("is_airport")]
+    # Pre-compute airport zone check once (reuses all_areas already fetched above).
+    # Mirror the strict filter from calculate_airport_fee — a soft-deactivated
+    # row (is_active=false) must not count as an airport zone, otherwise an
+    # area_fees row with fee_type='airport' would still be gated to "in_airport"
+    # against a ghost zone the admin thought they had removed.
+    airport_areas = [a for a in all_areas if a.get("is_airport") and a.get("is_active", True) is not False]
     in_airport = False
     for ap in airport_areas:
         ap_poly = get_service_area_polygon(ap)
@@ -801,7 +860,12 @@ async def fare_estimate(
 
     # Calculate area fees + taxes
     fees_result = await calculate_all_fees(
-        pickup_lat, pickup_lng, dropoff_lat, dropoff_lng, distance_km, subtotal,
+        pickup_lat,
+        pickup_lng,
+        dropoff_lat,
+        dropoff_lng,
+        distance_km,
+        subtotal,
         _all_areas=all_areas,
     )
 
@@ -1146,12 +1210,11 @@ async def send_push_notification(
     if priority in ("dispatch", "safety"):
         try:
             from utils.push_retry import enqueue_push
+
             await enqueue_push(user_id, title, body, data, priority=priority)
             return True
         except Exception as exc:
-            logger.warning(
-                f"push enqueue failed, falling back to direct send: {exc}"
-            )
+            logger.warning(f"push enqueue failed, falling back to direct send: {exc}")
 
     user = await db.find_one("users", {"id": user_id})
     if not user or not user.get("fcm_token"):

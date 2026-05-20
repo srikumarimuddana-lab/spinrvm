@@ -31,6 +31,16 @@ import { CarMarker } from '@shared/components/CarMarker';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
+// Public tracking URL base. Recipients (safety contacts) open
+// `${BASE}/${share_token}` — the admin-dashboard `/track/[rideId]` Next.js
+// page renders status/driver/map by calling GET /rides/track/{token}.
+// Override per-env via EXPO_PUBLIC_TRACK_BASE_URL — e.g. point at your
+// local Vercel/Next dev server (http://localhost:3000/track) for testing.
+function getTrackBaseUrl(): string {
+  const fromEnv = process.env.EXPO_PUBLIC_TRACK_BASE_URL?.replace(/\/$/, '');
+  return fromEnv && fromEnv.length > 0 ? fromEnv : 'https://spinr-track.app';
+}
+
 function RideInProgressScreenContent() {
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
@@ -185,7 +195,7 @@ function RideInProgressScreenContent() {
       // Fall back to ride ID
     }
 
-    const liveTrackingUrl = `https://spinr-track.app/${shareToken}`;
+    const liveTrackingUrl = `${getTrackBaseUrl()}/${shareToken}`;
     // Include the human-readable ride code so the recipient can quote it
     // to support without guessing at a truncated UUID.
     const rideRef = currentRide?.ride_code
@@ -233,7 +243,7 @@ I've shared my live location with you for safety.
     } catch {
       // Fall back to ride ID
     }
-    const trackingLink = `https://spinr-track.app/${shareToken}`;
+    const trackingLink = `${getTrackBaseUrl()}/${shareToken}`;
     await Clipboard.setStringAsync(trackingLink);
     showToast('Copied!', 'Live tracking link copied to clipboard.', 'success');
   };

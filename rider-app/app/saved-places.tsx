@@ -7,7 +7,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useRideStore } from '../store/rideStore';
-import CustomAlert from '@shared/components/CustomAlert';
+import { showToast } from '../store/toastStore';
+import ConfirmSheet from '../components/ConfirmSheet';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import api from '@shared/api/client';
@@ -52,7 +53,7 @@ export default function SavedPlacesScreen() {
     sessionToken,
   } = usePlacesAutocomplete(selectedPlace ? '' : searchText, bias);
 
-  const [alertState, setAlertState] = useState<{
+  const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean;
     title: string;
     message: string;
@@ -99,7 +100,7 @@ export default function SavedPlacesScreen() {
   };
 
   const handleSave = async () => {
-    if (!selectedPlace) { setAlertState({ visible: true, title: 'Error', message: 'Search and select an address', variant: 'warning' }); return; }
+    if (!selectedPlace) { showToast('Error', 'Search and select an address', 'warning'); return; }
     const name = placeName.trim() || selectedType;
     setSaving(true);
     try {
@@ -113,19 +114,19 @@ export default function SavedPlacesScreen() {
       setShowAdd(false);
       resetForm();
     } catch (err: any) {
-      setAlertState({ visible: true, title: 'Error', message: err.response?.data?.detail || err.message || 'Failed to save place', variant: 'danger' });
+      showToast('Error', err.response?.data?.detail || err.message || 'Failed to save place', 'danger');
     } finally { setSaving(false); }
   };
 
   const handleDelete = (id: string, name: string) => {
-    setAlertState({
+    setConfirmSheet({
       visible: true,
       title: 'Remove Place',
       message: `Remove "${name}" from saved places?`,
       variant: 'warning',
       buttons: [
-        { text: 'Cancel', style: 'cancel' },
         { text: 'Remove', style: 'destructive', onPress: () => deleteSavedAddress(id) },
+        { text: 'Cancel', style: 'cancel' },
       ],
     });
   };
@@ -266,13 +267,13 @@ export default function SavedPlacesScreen() {
           />
         </KeyboardAvoidingView>
       )}
-      <CustomAlert
-        visible={alertState.visible}
-        title={alertState.title}
-        message={alertState.message}
-        variant={alertState.variant}
-        buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
-        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
+      <ConfirmSheet
+        visible={confirmSheet.visible}
+        title={confirmSheet.title}
+        message={confirmSheet.message}
+        variant={confirmSheet.variant}
+        buttons={confirmSheet.buttons}
+        onClose={() => setConfirmSheet(prev => ({ ...prev, visible: false }))}
       />
     </SafeAreaView>
   );

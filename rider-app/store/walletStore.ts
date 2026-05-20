@@ -22,6 +22,9 @@ export interface WalletTransactionMeta {
   pickup_address?: string;
   dropoff_address?: string;
   stripe_payment_intent_id?: string;
+  discount_amount?: string;
+  promo_code?: string;
+  grand_total?: string;
 }
 
 export interface WalletTransaction {

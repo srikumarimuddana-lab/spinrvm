@@ -9,7 +9,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useStripe } from '@stripe/stripe-react-native';
 import { StripeKeyContext } from './_layout';
 import { useWalletStore, WalletTransaction, WalletTransactionMeta } from '../store/walletStore';
-import CustomAlert from '@shared/components/CustomAlert';
+import { showToast } from '../store/toastStore';
+import { computeFareBreakdown } from '../utils/fareBreakdown';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -55,11 +56,6 @@ export default function WalletScreen() {
   const [selectedPreset, setSelectedPreset] = useState<number | null>(null);
   const [customAmount, setCustomAmount] = useState('');
   const [topUpLoading, setTopUpLoading] = useState(false);
-  const [alertState, setAlertState] = useState<{
-    visible: boolean; title: string; message: string;
-    variant: 'info' | 'warning' | 'danger' | 'success';
-  }>({ visible: false, title: '', message: '', variant: 'info' });
-
   const effectiveAmount = selectedPreset ?? (parseFloat(customAmount) || 0);
   const canTopUp = effectiveAmount >= 1 && effectiveAmount <= 500 && !topUpLoading;
 
@@ -80,11 +76,11 @@ export default function WalletScreen() {
 
   const handleTopUp = async () => {
     if (!stripeKey) {
-      setAlertState({ visible: true, title: 'Payment Not Available', message: 'Payment processing is not set up yet. Please add a card in Cards settings first, or try again later.', variant: 'warning' });
+      showToast('Payment Not Available', 'Payment processing is not set up yet. Please add a card in Cards settings first, or try again later.', 'warning');
       return;
     }
     if (effectiveAmount < 1 || effectiveAmount > 500) {
-      setAlertState({ visible: true, title: 'Invalid Amount', message: 'Please select or enter an amount between $1 and $500.', variant: 'warning' });
+      showToast('Invalid Amount', 'Please select or enter an amount between $1 and $500.', 'warning');
       return;
     }
     setTopUpLoading(true);
@@ -106,14 +102,14 @@ export default function WalletScreen() {
       });
 
       if (initError) {
-        setAlertState({ visible: true, title: 'Payment Error', message: initError.message, variant: 'danger' });
+        showToast('Payment Error', initError.message, 'danger');
         return;
       }
 
       const { error: presentError } = await presentPaymentSheet();
       if (presentError) {
         if (presentError.code !== 'Canceled') {
-          setAlertState({ visible: true, title: 'Payment Failed', message: presentError.message, variant: 'danger' });
+          showToast('Payment Failed', presentError.message, 'danger');
         }
         return;
       }
@@ -121,10 +117,10 @@ export default function WalletScreen() {
       setShowTopUp(false);
       setSelectedPreset(null);
       setCustomAmount('');
-      setAlertState({ visible: true, title: 'Payment Successful', message: `$${effectiveAmount.toFixed(2)} will be added to your wallet shortly.`, variant: 'success' });
+      showToast('Payment Successful', `$${effectiveAmount.toFixed(2)} will be added to your wallet shortly.`, 'success');
       setTimeout(() => { fetchWallet(); fetchTransactions(30); }, 2000);
     } catch (err: any) {
-      setAlertState({ visible: true, title: 'Top-up Failed', message: err.response?.data?.detail || err.message || 'Please try again', variant: 'danger' });
+      showToast('Top-up Failed', err.response?.data?.detail || err.message || 'Please try again', 'danger');
     } finally {
       setTopUpLoading(false);
     }
@@ -142,9 +138,18 @@ export default function WalletScreen() {
     const isCredit = amountNum > 0;
     const meta = item.metadata as WalletTransactionMeta | null | undefined;
     const hasRideDetails = item.type === 'ride_payment' && meta?.pickup_address;
-    const tipNum = parseFloat(meta?.tip_amount || '0');
-    const fareNum = parseFloat(meta?.fare_amount || '0');
-    const surgeNum = parseFloat(meta?.surge_multiplier || '1');
+    const fb = computeFareBreakdown({
+      totalAmount: amountNum,
+      fareAmount: parseFloat(meta?.fare_amount || '0'),
+      tipAmount: parseFloat(meta?.tip_amount || '0'),
+      discountAmount: parseFloat(meta?.discount_amount || '0'),
+      promoCode: meta?.promo_code || '',
+      surgeMultiplier: parseFloat(meta?.surge_multiplier || '1'),
+    });
+
+    const displayDesc = item.type === 'ride_payment'
+      ? 'Ride payment'
+      : (item.description || item.type.replace(/_/g, ' '));
 
     return (
       <TouchableOpacity
@@ -156,7 +161,7 @@ export default function WalletScreen() {
           <Ionicons name={icon as any} size={22} color={color} />
         </View>
         <View style={styles.txnInfo}>
-          <Text style={styles.txnDesc}>{item.description || item.type.replace(/_/g, ' ')}</Text>
+          <Text style={styles.txnDesc}>{displayDesc}</Text>
           {hasRideDetails && (
             <View style={styles.txnMeta}>
               <View style={styles.txnMetaRow}>
@@ -168,9 +173,16 @@ export default function WalletScreen() {
                 <Text style={styles.txnMetaText} numberOfLines={1}>{meta!.dropoff_address}</Text>
               </View>
               <View style={styles.txnBreakdown}>
-                <Text style={styles.txnBreakdownItem}>Fare: ${fareNum.toFixed(2)}</Text>
-                {tipNum > 0 && <Text style={styles.txnBreakdownItem}>Tip: ${tipNum.toFixed(2)}</Text>}
-                {surgeNum > 1 && <Text style={styles.txnBreakdownItem}>Surge: {surgeNum}x</Text>}
+                <Text style={styles.txnBreakdownItem}>
+                  Fare: ${fb.hasDiscount ? fb.originalFare.toFixed(2) : fb.fareAfterDiscount.toFixed(2)}
+                </Text>
+                {fb.hasDiscount && (
+                  <Text style={styles.txnBreakdownPromo}>
+                    {fb.promoCode ? `${fb.promoCode}: ` : 'Promo: '}-${fb.discount.toFixed(2)}
+                  </Text>
+                )}
+                {fb.hasTip && <Text style={styles.txnBreakdownItem}>Tip: ${fb.tip.toFixed(2)}</Text>}
+                {fb.hasSurge && <Text style={styles.txnBreakdownItem}>Surge: {fb.surge}x</Text>}
               </View>
             </View>
           )}
@@ -310,14 +322,6 @@ export default function WalletScreen() {
         />
       )}
 
-      <CustomAlert
-        visible={alertState.visible}
-        title={alertState.title}
-        message={alertState.message}
-        variant={alertState.variant}
-        onClose={() => setAlertState({ ...alertState, visible: false })}
-        buttons={[{ text: 'OK', onPress: () => setAlertState({ ...alertState, visible: false }) }]}
-      />
     </SafeAreaView>
   );
 }
@@ -410,6 +414,11 @@ function createStyles(colors: ThemeColors) {
     txnBreakdownItem: {
       fontSize: 11, fontWeight: '600', color: colors.textDim,
       backgroundColor: colors.surfaceLight, paddingHorizontal: 6, paddingVertical: 2,
+      borderRadius: 4, overflow: 'hidden',
+    },
+    txnBreakdownPromo: {
+      fontSize: 11, fontWeight: '600', color: '#10B981',
+      backgroundColor: '#10B98115', paddingHorizontal: 6, paddingVertical: 2,
       borderRadius: 4, overflow: 'hidden',
     },
     txnDate: { fontSize: 13, color: colors.textDim, marginTop: 4 },

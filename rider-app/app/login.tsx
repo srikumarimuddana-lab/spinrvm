@@ -13,7 +13,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import api from '@shared/api/client';
-import CustomAlert from '@shared/components/CustomAlert';
+import { showToast } from '../store/toastStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -26,13 +26,6 @@ export default function LoginScreen() {
   const inputRef = useRef<TextInput>(null);
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
-
-  const [alertState, setAlertState] = useState<{
-    visible: boolean;
-    title: string;
-    message: string;
-    variant: 'info' | 'warning' | 'danger' | 'success';
-  }>({ visible: false, title: '', message: '', variant: 'info' });
 
   const formatPhoneDisplay = (raw: string) => {
     const digits = raw.replace(/\D/g, '');
@@ -55,15 +48,10 @@ export default function LoginScreen() {
       if (response.data.success) {
         router.push({ pathname: '/otp', params: { phoneNumber: formattedNumber } } as any);
       } else {
-        setAlertState({ visible: true, title: 'Failed', message: 'Could not send verification code. Please try again.', variant: 'danger' });
+        showToast('Failed', 'Could not send verification code. Please try again.', 'danger');
       }
     } catch (error: any) {
-      setAlertState({
-        visible: true,
-        title: 'Connection Error',
-        message: error.response?.data?.detail || 'Unable to reach server. Please check your connection.',
-        variant: 'danger',
-      });
+      showToast('Connection Error', error.response?.data?.detail || 'Unable to reach server. Please check your connection.', 'danger');
     } finally {
       setLoading(false);
     }
@@ -178,14 +166,6 @@ export default function LoginScreen() {
         </Text>
       </View>
 
-      <CustomAlert
-        visible={alertState.visible}
-        title={alertState.title}
-        message={alertState.message}
-        variant={alertState.variant}
-        buttons={[{ text: 'OK', style: 'default' }]}
-        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
-      />
     </KeyboardAvoidingView>
   );
 }

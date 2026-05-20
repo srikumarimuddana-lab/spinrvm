@@ -12,7 +12,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import api from '@shared/api/client';
-import CustomAlert from '@shared/components/CustomAlert';
+import { showToast } from '../store/toastStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -22,32 +22,20 @@ export default function ReportSafetyScreen() {
     const styles = useMemo(() => createStyles(colors), [colors]);
     const [issue, setIssue] = useState('');
     const [submitting, setSubmitting] = useState(false);
-    const [alertState, setAlertState] = useState<{
-        visible: boolean;
-        title: string;
-        message: string;
-        variant: 'info' | 'warning' | 'danger' | 'success';
-        buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
-    }>({ visible: false, title: '', message: '', variant: 'info' });
 
     const handleSubmit = async () => {
         if (!issue.trim()) {
-            setAlertState({ visible: true, title: 'Error', message: 'Please describe the safety issue before submitting.', variant: 'warning' });
+            showToast('Error', 'Please describe the safety issue before submitting.', 'warning');
             return;
         }
 
         setSubmitting(true);
         try {
             await api.post('/support/tickets/safety-report', { description: issue });
-            setAlertState({
-                visible: true,
-                title: 'Report Submitted',
-                message: 'Your safety report has been submitted. Our trust and safety team will review it immediately.',
-                variant: 'success',
-                buttons: [{ text: 'OK', onPress: () => router.back() }],
-            });
+            showToast('Report Submitted', 'Your safety report has been submitted. Our trust and safety team will review it immediately.', 'success');
+            router.back();
         } catch (e) {
-            setAlertState({ visible: true, title: 'Error', message: 'Failed to submit report. Please try again.', variant: 'danger' });
+            showToast('Error', 'Failed to submit report. Please try again.', 'danger');
             setSubmitting(false);
         }
     };
@@ -102,14 +90,6 @@ export default function ReportSafetyScreen() {
                     </TouchableOpacity>
                 </View>
             </KeyboardAvoidingView>
-            <CustomAlert
-                visible={alertState.visible}
-                title={alertState.title}
-                message={alertState.message}
-                variant={alertState.variant}
-                buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
-                onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
-            />
         </SafeAreaView>
     );
 }

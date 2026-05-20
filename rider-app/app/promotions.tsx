@@ -7,7 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import api from '@shared/api/client';
-import CustomAlert from '@shared/components/CustomAlert';
+import { showToast } from '../store/toastStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -30,14 +30,6 @@ export default function PromotionsScreen() {
   const [loading, setLoading] = useState(true);
   const [code, setCode] = useState('');
   const [applying, setApplying] = useState(false);
-  const [alertState, setAlertState] = useState<{
-    visible: boolean;
-    title: string;
-    message: string;
-    variant: 'info' | 'warning' | 'danger' | 'success';
-    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
-  }>({ visible: false, title: '', message: '', variant: 'info' });
-
   useEffect(() => { loadPromos(); }, []);
 
   const loadPromos = async () => {
@@ -55,21 +47,11 @@ export default function PromotionsScreen() {
     setApplying(true);
     try {
       const res = await api.post<{ discount_type?: string; discount_value?: number }>('/promo/validate', { code: c, ride_fare: 20 });
-      setAlertState({
-        visible: true,
-        title: 'Promo Valid!',
-        message: `${res.data.discount_type === 'percentage' ? `${res.data.discount_value}% off` : `$${res.data.discount_value} off`} — will apply on your next ride.`,
-        variant: 'success',
-      });
+      showToast('Promo Valid!', `${res.data.discount_type === 'percentage' ? `${res.data.discount_value}% off` : `$${res.data.discount_value} off`} — will apply on your next ride.`, 'success');
       setCode('');
       loadPromos();
     } catch (err: any) {
-      setAlertState({
-        visible: true,
-        title: 'Invalid Code',
-        message: err.response?.data?.detail || 'This promo code is not valid.',
-        variant: 'danger',
-      });
+      showToast('Invalid Code', err.response?.data?.detail || 'This promo code is not valid.', 'danger');
     } finally { setApplying(false); }
   };
 
@@ -158,14 +140,6 @@ export default function PromotionsScreen() {
           }
         />
       )}
-      <CustomAlert
-        visible={alertState.visible}
-        title={alertState.title}
-        message={alertState.message}
-        variant={alertState.variant}
-        buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
-        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
-      />
     </SafeAreaView>
   );
 }

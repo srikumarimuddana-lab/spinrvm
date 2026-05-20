@@ -14,7 +14,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import api from '@shared/api/client';
-import CustomAlert from '@shared/components/CustomAlert';
+import { showToast } from '../store/toastStore';
+import ConfirmSheet from '../components/ConfirmSheet';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -45,7 +46,7 @@ export default function EmergencyContactsScreen() {
   const [phone, setPhone] = useState('');
   const [relationship, setRelationship] = useState('Friend');
   const [saving, setSaving] = useState(false);
-  const [alertState, setAlertState] = useState<{
+  const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean;
     title: string;
     message: string;
@@ -73,11 +74,11 @@ export default function EmergencyContactsScreen() {
     const trimmedPhone = phone.trim().replace(/\D/g, '');
 
     if (!trimmedName) {
-      setAlertState({ visible: true, title: 'Missing Name', message: 'Please enter a contact name.', variant: 'warning' });
+      showToast('Missing Name', 'Please enter a contact name.', 'warning');
       return;
     }
     if (trimmedPhone.length < 10) {
-      setAlertState({ visible: true, title: 'Invalid Phone', message: 'Please enter a valid phone number (at least 10 digits).', variant: 'warning' });
+      showToast('Invalid Phone', 'Please enter a valid phone number (at least 10 digits).', 'warning');
       return;
     }
 
@@ -93,23 +94,22 @@ export default function EmergencyContactsScreen() {
       setPhone('');
       setRelationship('Friend');
       await fetchContacts();
-      setAlertState({ visible: true, title: 'Contact Added', message: `${trimmedName} has been added as an emergency contact.`, variant: 'success' });
+      showToast('Contact Added', `${trimmedName} has been added as an emergency contact.`, 'success');
     } catch (error: any) {
       const msg = error?.response?.data?.detail || 'Could not add contact.';
-      setAlertState({ visible: true, title: 'Error', message: msg, variant: 'danger' });
+      showToast('Error', msg, 'danger');
     } finally {
       setSaving(false);
     }
   };
 
   const handleDelete = (contact: EmergencyContact) => {
-    setAlertState({
+    setConfirmSheet({
       visible: true,
       title: 'Remove Contact',
       message: `Remove ${contact.name} as an emergency contact?`,
       variant: 'warning',
       buttons: [
-        { text: 'Cancel', style: 'cancel' },
         {
           text: 'Remove',
           style: 'destructive',
@@ -118,10 +118,11 @@ export default function EmergencyContactsScreen() {
               await api.delete(`/users/emergency-contacts/${contact.id}`);
               await fetchContacts();
             } catch {
-              setAlertState({ visible: true, title: 'Error', message: 'Could not remove contact.', variant: 'danger' });
+              showToast('Error', 'Could not remove contact.', 'danger');
             }
           },
         },
+        { text: 'Cancel', style: 'cancel' },
       ],
     });
   };
@@ -298,13 +299,13 @@ export default function EmergencyContactsScreen() {
           )}
         </ScrollView>
       </KeyboardAvoidingView>
-      <CustomAlert
-        visible={alertState.visible}
-        title={alertState.title}
-        message={alertState.message}
-        variant={alertState.variant}
-        buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
-        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
+      <ConfirmSheet
+        visible={confirmSheet.visible}
+        title={confirmSheet.title}
+        message={confirmSheet.message}
+        variant={confirmSheet.variant}
+        buttons={confirmSheet.buttons}
+        onClose={() => setConfirmSheet(prev => ({ ...prev, visible: false }))}
       />
     </SafeAreaView>
   );

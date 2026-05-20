@@ -1634,8 +1634,15 @@ async def create_ride(
                     user_id=current_user["id"],
                     discount=discount,
                 )
-                discounted_total = _f(_round(server_fare - discount))
                 discounted_grand = _f(_round(_d(fresh_ride.get("grand_total", server_fare)) - discount))
+                # NOTE: do NOT mutate total_fare. total_fare is the fare-side
+                # subtotal (base+dist+time+booking+airport) used by area-fee
+                # and tax math downstream. The rider's effective bill goes on
+                # grand_total only. Overwriting total_fare to server_fare-discount
+                # produced bills like total_fare=$2.14 (12.14-10) while
+                # grand_total=$5.30 — and any rider-app path that fell back to
+                # total_fare displayed the wrong amount to the customer.
+                # subtotal_fare records the pre-promo subtotal for receipts.
                 await db_supabase.update_one(
                     "rides",
                     {"id": ride.id},
@@ -1644,7 +1651,6 @@ async def create_ride(
                         "discount_amount": _f(discount),
                         "promo_code": validation["code"],
                         "promo_application_id": application_id,
-                        "total_fare": discounted_total,
                         "grand_total": discounted_grand,
                     },
                 )
@@ -1652,7 +1658,6 @@ async def create_ride(
                 fresh_ride["discount_amount"] = _f(discount)
                 fresh_ride["promo_code"] = validation["code"]
                 fresh_ride["promo_application_id"] = application_id
-                fresh_ride["total_fare"] = discounted_total
                 fresh_ride["grand_total"] = discounted_grand
         except HTTPException:
             pass  # promo invalid/expired — ride still created without discount
@@ -1677,7 +1682,7 @@ async def create_ride(
                 "pickup_lng": fresh_ride.get("pickup_lng"),
                 "dropoff_lat": fresh_ride.get("dropoff_lat"),
                 "dropoff_lng": fresh_ride.get("dropoff_lng"),
-                "fare": fresh_ride.get("total_fare"),
+                "fare": fresh_ride.get("grand_total") or fresh_ride.get("total_fare"),
                 "status": fresh_ride.get("status"),
             }
         )

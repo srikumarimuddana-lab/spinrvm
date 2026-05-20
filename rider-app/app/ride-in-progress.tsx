@@ -43,25 +43,11 @@ function RideInProgressScreenContent() {
   const [isSharingLocation, setIsSharingLocation] = useState(false);
   const [tripRouteCoords, setTripRouteCoords] = useState<any[]>([]);
 
-  // Source-of-truth rider bill, matching how ride-details.tsx renders "You
-  // paid": sum the server-supplied fare_breakdown line items. Falls through
-  // to grand_total / total_fare scalars only when no breakdown is on the row.
-  // Memoised so all three display sites (fare card, end-ride confirms) share
-  // one number per render.
-  const riderBill = useMemo(() => {
-    const r = currentRide as any;
-    const fb: any[] = Array.isArray(r?.fare_breakdown) ? r.fare_breakdown : [];
-    if (fb.length > 0) {
-      const sum = fb.reduce(
-        (acc, l) => (l?.amount != null ? acc + parseFloat(String(l.amount)) : acc),
-        0,
-      );
-      return Math.max(0, sum);
-    }
-    const gt = parseFloat(r?.grand_total ?? '0');
-    if (gt > 0) return gt;
-    return parseFloat(r?.total_fare ?? '0');
-  }, [currentRide]);
+  // Source-of-truth rider bill. The API computes grand_total as the sum of
+  // the fare_breakdown line items (see backend/routes/rides.py::
+  // _sum_fare_breakdown), so this screen, the end-ride confirms, and the
+  // ride-details receipt all read the same number. No client-side math.
+  const riderBill = parseFloat(((currentRide as any)?.grand_total ?? '0').toString()) || 0;
   const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean;
     title: string;

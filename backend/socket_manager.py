@@ -392,7 +392,36 @@ class ConnectionManager:
         }
 
     def get_driver_location(self, driver_id: str):
-        return self.driver_locations.get(driver_id)
+        entry = self.driver_locations.get(driver_id)
+        if entry is None:
+            return None
+        # Evict on read if the driver's last ping is older than 2 minutes —
+        # guards against network-drop disconnects where disconnect() is never
+        # called and the dict would otherwise grow unbounded over a long shift.
+        updated_at = datetime.fromisoformat(entry["updated_at"])
+        if (datetime.now(timezone.utc) - updated_at).total_seconds() > 120:
+            self.driver_locations.pop(driver_id, None)
+            return None
+        return entry
+
+    def cleanup_stale_locations(self, max_age_seconds: int = 120) -> int:
+        """Remove location entries not updated within ``max_age_seconds``.
+
+        Called by the lifespan background sweep every 60 s so the dict
+        stays bounded even if no one calls get_driver_location for a
+        dropped driver.  Returns the count of evicted entries.
+        """
+        cutoff = datetime.now(timezone.utc)
+        stale = [
+            driver_id
+            for driver_id, entry in list(self.driver_locations.items())
+            if (cutoff - datetime.fromisoformat(entry["updated_at"])).total_seconds() > max_age_seconds
+        ]
+        for driver_id in stale:
+            self.driver_locations.pop(driver_id, None)
+        if stale:
+            logger.info("cleanup_stale_locations evicted=%d", len(stale))
+        return len(stale)
 
 
 manager = ConnectionManager()

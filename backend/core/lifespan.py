@@ -61,9 +61,7 @@ async def init_database():
         logger.error(f"Supabase health check failed: {e}")
         if settings.ENV.lower() == "production":
             raise
-        logger.warning(
-            f"Continuing in {settings.ENV} mode despite health-check failure"
-        )
+        logger.warning(f"Continuing in {settings.ENV} mode despite health-check failure")
 
     return supabase
 
@@ -100,9 +98,7 @@ async def lifespan(app: FastAPI):
 
     executor_size = int(_os.environ.get("BACKEND_EXECUTOR_WORKERS", "64"))
     loop = _asyncio_lifespan.get_event_loop()
-    loop.set_default_executor(
-        _Executor(max_workers=executor_size, thread_name_prefix="spinr-db")
-    )
+    loop.set_default_executor(_Executor(max_workers=executor_size, thread_name_prefix="spinr-db"))
     logger.info(f"Default executor sized to {executor_size} workers")
 
     # Initialize database
@@ -172,9 +168,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("subscription_expiry (6h)", check_expiring_subscriptions)
     except Exception as e:
-        logger.error(
-            f"Failed to import subscription expiry checker: {e}", exc_info=True
-        )
+        logger.error(f"Failed to import subscription expiry checker: {e}", exc_info=True)
 
     # Automated surge pricing — recalculates demand/supply ratio every 2 min
     # and updates service_areas.surge_multiplier for auto-managed areas.
@@ -325,6 +319,33 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to import push retry loop: {e}", exc_info=True)
 
+    # Driver location sweep — evicts in-process entries not updated within
+    # 120 s. Guards against network-drop disconnects where the WebSocket
+    # close frame is never received and driver_locations grows unbounded.
+    try:
+        from socket_manager import manager as _ws_manager
+
+        async def _location_sweep_loop():
+            import asyncio as _asyncio
+
+            try:
+                from utils.loop_monitor import record_heartbeat as _hb
+            except ImportError:
+                _hb = None
+
+            while True:
+                try:
+                    _ws_manager.cleanup_stale_locations()
+                    if _hb:
+                        _hb("location_sweep (60s)")
+                except Exception:
+                    logger.error("location_sweep tick failed", exc_info=True)
+                await _asyncio.sleep(60)
+
+        _spawn("location_sweep (60s)", _location_sweep_loop)
+    except Exception as e:
+        logger.error(f"Failed to start location sweep loop: {e}", exc_info=True)
+
     # Loop watchdog — scans heartbeats every 5 minutes and posts a
     # Slack-compatible alert when any loop has gone stale.  No-op when
     # ALERT_WEBHOOK_URL is unset.
@@ -344,6 +365,7 @@ async def lifespan(app: FastAPI):
             "t4a_annual_job (yearly Feb 28)",
             "stuck_ride_sweeper (60s)",
             "push_retry (30s)",
+            "location_sweep (60s)",
         ]
     )
 
@@ -384,9 +406,7 @@ async def lifespan(app: FastAPI):
         from utils.ws_pubsub import pubsub as ws_pubsub
         from utils.ws_pubsub import resolve_ws_redis_url
 
-        ws_redis_url = resolve_ws_redis_url(
-            settings.WS_REDIS_URL, settings.RATE_LIMIT_REDIS_URL
-        )
+        ws_redis_url = resolve_ws_redis_url(settings.WS_REDIS_URL, settings.RATE_LIMIT_REDIS_URL)
         ws_started = await ws_pubsub.start(ws_manager, ws_redis_url)
         app.state.ws_pubsub = ws_pubsub
         if not ws_started and settings.ENV.lower() == "production":
@@ -404,9 +424,7 @@ async def lifespan(app: FastAPI):
         logger.error(f"Failed to start WS pub/sub: {e}", exc_info=True)
 
     # Perform startup checks
-    logger.info(
-        f"Spinr API startup complete ({len(background_tasks)} background tasks running)"
-    )
+    logger.info(f"Spinr API startup complete ({len(background_tasks)} background tasks running)")
 
     yield
 

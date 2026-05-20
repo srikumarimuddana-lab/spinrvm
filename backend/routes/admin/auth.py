@@ -763,12 +763,23 @@ async def admin_mfa_disable(request: Request, body: MfaDisableRequest, authoriza
         raise HTTPException(status_code=400, detail="Incorrect password")
     if not pyotp.TOTP(staff["mfa_secret"]).verify(body.totp_code, valid_window=1):
         raise HTTPException(status_code=400, detail="Invalid TOTP code")
+    # Bump token_version so every outstanding access token is rejected on
+    # next validation — an attacker who held an active session before MFA
+    # was disabled cannot retain access past their current token TTL.
+    new_version = int(staff.get("token_version") or 0) + 1
     await db_supabase.update_one(
         "admin_staff",
         {"id": staff["id"]},
-        {"mfa_enabled": False, "mfa_secret": None, "mfa_backup_codes": None},
+        {
+            "mfa_enabled": False,
+            "mfa_secret": None,
+            "mfa_backup_codes": None,
+            "token_version": new_version,
+        },
     )
-    await log_admin_action(staff, "mfa_disabled", "admin_staff", staff["id"], {})
+    # Revoke all refresh tokens so the session cannot be silently extended.
+    await revoke_all_for_user(staff["id"])
+    await log_admin_action(staff, "mfa_disabled", "admin_staff", staff["id"], {"token_version": new_version})
     return {"success": True}
 
 

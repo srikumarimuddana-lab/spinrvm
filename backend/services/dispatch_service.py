@@ -111,6 +111,26 @@ def select_driver_by_algorithm(
         ranked = sorted(drivers_with_distance, key=lambda x: x[0].get("rating", 5.0), reverse=True)
         return ranked[0][0]
 
+    if algorithm == "combined":
+        # Weighted score: ETA proxy (distance) 60%, rating 20%, acceptance rate 20%.
+        # Each component is normalised to [0, 1] within the candidate pool so that
+        # distance (km) and rating (0-5 scale) don't dominate each other by unit size.
+        # Lower score = better driver.
+        distances = [dist for _, dist in drivers_with_distance]
+        max_dist = max(distances) if max(distances) > 0 else 1.0
+
+        def _combined_score(item: Tuple[Dict[str, Any], float]) -> float:
+            driver, dist = item
+            eta_score = dist / max_dist
+            rating = float(driver.get("rating") or 5.0)
+            rating_score = 1.0 - (min(rating, 5.0) / 5.0)
+            acceptance_rate = float(driver.get("acceptance_rate") or 1.0)
+            acc_score = 1.0 - min(acceptance_rate, 1.0)
+            return 0.6 * eta_score + 0.2 * rating_score + 0.2 * acc_score
+
+        ranked = sorted(drivers_with_distance, key=_combined_score)
+        return ranked[0][0]
+
     if algorithm == "round_robin":
         if last_assigned_driver_id is None:
             return drivers_with_distance[0][0]
@@ -121,8 +141,7 @@ def select_driver_by_algorithm(
         next_idx = (last_idx + 1) % len(drivers_with_distance)
         return drivers_with_distance[next_idx][0]
 
-    # Default + "nearest" + "combined" all pick the closest driver that
-    # passed the (already-applied) rating floor.
+    # Default + "nearest": pick the closest driver that passed the rating floor.
     ranked = sorted(drivers_with_distance, key=lambda x: x[1])
     return ranked[0][0]
 

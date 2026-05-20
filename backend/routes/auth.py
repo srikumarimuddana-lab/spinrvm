@@ -75,47 +75,84 @@ limiter = Limiter(key_func=get_remote_address)
 api_router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 # ── OTP brute-force lockout (SEC-008) ───────────────────────────────────
-# Redis key prefixes; falls back to in-process dict when REDIS_URL unset.
+# Redis is the fast path; Postgres (users.otp_locked_until / otp_fail_count)
+# is the durable record. A Redis restart cannot grant an attacker a fresh
+# attempt window — the DB check catches it.
 _FAIL_KEY = "otp_fail:{}"
 _LOCK_KEY = "otp_lock:{}"
 
 
+def _otp_429(retry_after: int) -> HTTPException:
+    return HTTPException(
+        status_code=429,
+        detail="Too many failed attempts — try again later",
+        headers={
+            "Retry-After": str(retry_after),
+            "RateLimit-Limit": str(int(settings.OTP_MAX_FAILURES)),
+            "RateLimit-Remaining": "0",
+            "RateLimit-Reset": str(retry_after),
+        },
+    )
+
+
 async def _check_otp_lockout(phone: str) -> None:
-    """Raise 429 if phone is currently locked out. Raises 503 on Redis errors (fail closed).
+    """Raise 429 if phone is currently locked out.
+
+    Check order:
+      1. Redis (fast path — populated on lockout trigger)
+      2. DB (fallback — survives Redis restart)
 
     B-P1-8: Mirrors the response shape pinned by the slowapi 429 path
     (utils/rate_limiter.py::rate_limit_exceeded_handler) so mobile
-    clients can use a single 429 parser regardless of which gate
-    (slowapi window or OTP lockout) tripped. RateLimit-* headers per
-    draft-ietf-httpapi-ratelimit-headers; Retry-After per RFC 9110.
+    clients can use a single 429 parser regardless of which gate tripped.
+    RateLimit-* headers per draft-ietf-httpapi-ratelimit-headers;
+    Retry-After per RFC 9110.
     """
+    retry_after = int(settings.OTP_LOCKOUT_DURATION_SECONDS)
+    redis_ok = False
     try:
         locked = await redis_get(_LOCK_KEY.format(phone))
+        redis_ok = True
         if locked:
-            retry_after = int(settings.OTP_LOCKOUT_DURATION_SECONDS)
-            raise HTTPException(
-                status_code=429,
-                detail="Too many failed attempts — try again later",
-                headers={
-                    "Retry-After": str(retry_after),
-                    "RateLimit-Limit": str(int(settings.OTP_MAX_FAILURES)),
-                    "RateLimit-Remaining": "0",
-                    "RateLimit-Reset": str(retry_after),
-                },
-            )
+            raise _otp_429(retry_after)
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Redis unavailable in OTP lockout check: {e}")
-        raise HTTPException(
-            status_code=503,
-            detail="Auth service temporarily unavailable, please try again",
-        ) from None
+        logger.error("Redis unavailable in OTP lockout check, falling back to DB: %s", e)
+
+    if not redis_ok:
+        # Redis is down — check Postgres as the authoritative lockout store.
+        try:
+            user = await db_supabase.get_user_by_phone(phone)
+            if user:
+                locked_until = user.get("otp_locked_until")
+                if locked_until:
+                    if isinstance(locked_until, str):
+                        locked_until = datetime.fromisoformat(locked_until.replace("Z", "+00:00"))
+                    if locked_until.tzinfo is None:
+                        locked_until = locked_until.replace(tzinfo=timezone.utc)
+                    if datetime.now(timezone.utc) < locked_until:
+                        remaining = int((locked_until - datetime.now(timezone.utc)).total_seconds())
+                        raise _otp_429(remaining)
+        except HTTPException:
+            raise
+        except Exception as db_err:
+            logger.error("DB lockout fallback also failed: %s", db_err, exc_info=True)
+            raise HTTPException(
+                status_code=503,
+                detail="Auth service temporarily unavailable, please try again",
+            ) from None
 
 
 async def _record_otp_failure(phone: str) -> None:
-    """Increment failure counter; trigger lockout at threshold. Best-effort."""
+    """Increment failure counter; trigger lockout at threshold.
+
+    Writes to both Redis (TTL-bounded counter) and Postgres
+    (otp_fail_count + otp_locked_until) so the lockout survives a
+    Redis restart.
+    """
     fail_key = _FAIL_KEY.format(phone)
+    count = 0
     try:
         count = await redis_incr(fail_key)
         if count == 1:
@@ -126,8 +163,23 @@ async def _record_otp_failure(phone: str) -> None:
                 "1",
                 settings.OTP_LOCKOUT_DURATION_SECONDS,
             )
-            logger.warning(f"OTP_LOCKOUT_TRIGGERED phone=...{phone[-4:]} after {count} failures")
-            try:
+    except Exception as e:
+        logger.error("_record_otp_failure Redis write: %s", e, exc_info=True)
+
+    # Persist to DB regardless of Redis outcome so lockout survives restarts.
+    try:
+        user = await db_supabase.get_user_by_phone(phone)
+        if user:
+            new_count = int(user.get("otp_fail_count") or 0) + 1
+            update: dict = {"otp_fail_count": new_count}
+            if new_count >= settings.OTP_MAX_FAILURES:
+                locked_until = datetime.now(timezone.utc) + timedelta(seconds=settings.OTP_LOCKOUT_DURATION_SECONDS)
+                update["otp_locked_until"] = locked_until.isoformat()
+                logger.warning(
+                    "OTP_LOCKOUT_TRIGGERED phone=...%s after %d failures (DB+Redis)",
+                    phone[-4:],
+                    new_count,
+                )
                 import asyncio
 
                 asyncio.create_task(
@@ -136,22 +188,27 @@ async def _record_otp_failure(phone: str) -> None:
                         "otp_lockout_triggered",
                         "users",
                         phone[-4:],
-                        {"failures": count, "phone_last4": phone[-4:]},
+                        {"failures": new_count, "phone_last4": phone[-4:]},
                     )
                 )
-            except Exception:
-                logger.debug("audit_log write failed for OTP failure event", exc_info=True)
+            await db_supabase.update_one("users", {"phone": phone}, update)
     except Exception as e:
-        logger.error(f"_record_otp_failure: {e}", exc_info=True)
+        logger.error("_record_otp_failure DB write: %s", e, exc_info=True)
 
 
 async def _clear_otp_failures(phone: str) -> None:
-    """Reset counter + lockout on successful verify. Best-effort."""
+    """Reset counter + lockout on successful verify (Redis + DB). Best-effort."""
     try:
         await redis_delete(_FAIL_KEY.format(phone))
         await redis_delete(_LOCK_KEY.format(phone))
     except Exception as e:
-        logger.error(f"_clear_otp_failures: {e}", exc_info=True)
+        logger.error("_clear_otp_failures Redis: %s", e, exc_info=True)
+    try:
+        user = await db_supabase.get_user_by_phone(phone)
+        if user:
+            await db_supabase.update_one("users", {"phone": phone}, {"otp_fail_count": 0, "otp_locked_until": None})
+    except Exception as e:
+        logger.error("_clear_otp_failures DB: %s", e, exc_info=True)
 
 
 # ── Helpers for Auth Responses ──────────────────────────────────────────

@@ -259,7 +259,45 @@ async def admin_airport_zones_diagnostic():
                 "looks_misconfigured": too_large,
             }
         )
-    return {"airport_zones": out, "total_service_areas_scanned": len(rows)}
+
+    # SECOND SURFACE: area_fees rows. A row in area_fees with fee_name
+    # containing "airport" but fee_type != "airport" is the silent-fail
+    # case — calculate_all_fees only gates fee_type=="airport" on
+    # in_airport, so any other type applies to every ride and the
+    # receipt still shows the row's fee_name verbatim. This is the
+    # common cause of "I removed the airport zone but the surcharge
+    # still shows" once airport_zones above is empty.
+    area_fees = await db_supabase.get_rows("area_fees", {"is_active": True}, limit=500)
+    suspicious_fees = []
+    for fee_row in area_fees:
+        name = (fee_row.get("fee_name") or "").lower()
+        fee_type = (fee_row.get("fee_type") or "").lower()
+        if "airport" in name and fee_type != "airport":
+            suspicious_fees.append(
+                {
+                    "id": fee_row.get("id"),
+                    "service_area_id": fee_row.get("service_area_id"),
+                    "fee_name": fee_row.get("fee_name"),
+                    "fee_type": fee_row.get("fee_type"),
+                    "calc_mode": fee_row.get("calc_mode"),
+                    "amount": fee_row.get("amount"),
+                    "is_active": fee_row.get("is_active"),
+                    "issue": (
+                        "Fee name contains 'airport' but fee_type is not "
+                        "'airport' — calculate_all_fees will NOT gate this on "
+                        "the airport zone, so it applies to every ride in the "
+                        "service area. Either change fee_type to 'airport' OR "
+                        "rename / deactivate this row."
+                    ),
+                }
+            )
+
+    return {
+        "airport_zones": out,
+        "total_service_areas_scanned": len(rows),
+        "suspicious_area_fees": suspicious_fees,
+        "total_active_area_fees_scanned": len(area_fees),
+    }
 
 
 @router.post("/service-areas")

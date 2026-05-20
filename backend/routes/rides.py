@@ -256,6 +256,30 @@ def _money_str(v: Decimal) -> str:
     return str(_round(_d(v)))
 
 
+def _actual_duration_minutes(ride: dict) -> int | None:
+    """Derive the actual trip-in-progress duration in whole minutes.
+
+    Backend records per-phase seconds in ``rides.phase_durations`` on
+    completion (migration 15). The original ``duration_minutes`` column
+    is the estimate at booking time and is never overwritten, so the
+    rider-facing receipt would show the estimate without this helper.
+
+    Returns None for rides that have no GPS-derived data (e.g. cancelled
+    before pickup, or completed before migration 15 landed). Callers
+    should fall back to ``duration_minutes`` in that case.
+    """
+    phase = (ride.get("phase_durations") or {}).get("trip_in_progress")
+    if phase is None:
+        return None
+    try:
+        secs = float(phase)
+    except (TypeError, ValueError):
+        return None
+    if secs <= 0:
+        return None
+    return max(1, int(round(secs / 60)))
+
+
 def _build_fare_breakdown(ride: dict) -> list[dict]:
     """Build a dynamic fare_breakdown list from ride fields.
 
@@ -1784,6 +1808,7 @@ async def get_ride_history(
 
     for r in rides:
         r["fare_breakdown"] = _build_fare_breakdown(r)
+        r["actual_duration_minutes"] = _actual_duration_minutes(r)
 
     next_cursor = rides[-1]["id"] if len(rides) == limit else None
 
@@ -2018,6 +2043,7 @@ async def get_ride(
                 ride.pop(_addr_key, None)
 
     ride["fare_breakdown"] = _build_fare_breakdown(ride)
+    ride["actual_duration_minutes"] = _actual_duration_minutes(ride)
 
     def serialize_doc(doc):
         return doc

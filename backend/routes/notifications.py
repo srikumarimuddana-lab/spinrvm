@@ -7,15 +7,16 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 try:
     from .. import db_supabase
-    from ..dependencies import get_current_user
+    from ..dependencies import get_admin_user, get_current_user
+    from ..features import send_push_notification
 except ImportError:
     import db_supabase
-    from dependencies import get_current_user
+    from dependencies import get_current_user  # type: ignore
 
 db = db_supabase  # legacy alias
 
@@ -45,10 +46,71 @@ class RegisterTokenRequest(BaseModel):
     platform: str = "unknown"
 
 
+class TestPushRequest(BaseModel):
+    user_id: Optional[str] = None  # None → send to the admin's own account
+    title: str = "Spinr test push"
+    body: str = "If you can see this, push notifications are wired up correctly."
+
+
+def _mask_token(token: Optional[str]) -> Optional[str]:
+    if not token:
+        return None
+    if len(token) <= 12:
+        return token[:4] + "..."
+    return f"{token[:8]}...{token[-4:]}"
+
+
+@api_router.post("/test-push")
+async def admin_send_test_push(body: TestPushRequest, admin: dict = Depends(get_admin_user)):
+    """Send a manual push to verify the end-to-end pipeline is wired up.
+
+    Admin-only. Use this when:
+      * You've just set FIREBASE_SERVICE_ACCOUNT_JSON and want to confirm
+        firebase_admin can sign and dispatch a message.
+      * A rider/driver reports "I'm not getting notifications" — call this
+        against their user_id; the response shows whether a token is on
+        file and the result of the send.
+
+    Returns:
+      success: bool — True when firebase_admin returned a message id (or
+        the Expo REST API returned 200 for an ExponentPushToken).
+      token_on_file: bool — whether users.fcm_token has a value.
+      token_preview: masked token (first 8 + last 4) for sanity-check
+        against the device's "Show FCM token" debug view.
+      platform_hint: 'expo' | 'fcm' | None — how send_push_notification
+        will route the message.
+    """
+    target_user_id = body.user_id or admin.get("id")
+    if not target_user_id:
+        raise HTTPException(status_code=400, detail="No user_id and admin has no id claim")
+
+    user = await db.find_one("users", {"id": target_user_id})
+    if not user:
+        raise HTTPException(status_code=404, detail=f"User {target_user_id} not found")
+
+    token = user.get("fcm_token")
+    platform_hint = None
+    if token:
+        platform_hint = "expo" if token.startswith(("ExponentPushToken", "ExpoPushToken")) else "fcm"
+
+    ok = await send_push_notification(
+        target_user_id,
+        body.title,
+        body.body,
+        data={"type": "test_push"},
+    )
+
+    return {
+        "success": bool(ok),
+        "target_user_id": target_user_id,
+        "token_on_file": bool(token),
+        "token_preview": _mask_token(token),
+        "platform_hint": platform_hint,
+    }
+
+
 @api_router.post("/register-token")
-async def register_push_token(
-    body: RegisterTokenRequest, current_user: dict = Depends(get_current_user)
-):
+async def register_push_token(body: RegisterTokenRequest, current_user: dict = Depends(get_current_user)):
     """Save FCM push token for this user/device.
 
     Writes to two places:
@@ -102,13 +164,9 @@ async def register_push_token(
     # This is best-effort: if the column doesn't exist yet (pre sql/03_features),
     # the update is a no-op rather than a hard failure.
     try:
-        await db.update_one(
-            "users", {"id": current_user["id"]}, {"$set": {"fcm_token": token}}
-        )
+        await db.update_one("users", {"id": current_user["id"]}, {"$set": {"fcm_token": token}})
     except Exception as exc:
-        logger.error(
-            f"Failed to mirror FCM token onto users.fcm_token: {exc}", exc_info=True
-        )
+        logger.error(f"Failed to mirror FCM token onto users.fcm_token: {exc}", exc_info=True)
 
     logger.info(f"FCM token registered for user {current_user['id']} ({platform})")
     return {"success": True}
@@ -152,9 +210,7 @@ async def get_notifications(
 
 
 @api_router.put("/{notification_id}/read")
-async def mark_as_read(
-    notification_id: str, current_user: dict = Depends(get_current_user)
-):
+async def mark_as_read(notification_id: str, current_user: dict = Depends(get_current_user)):
     """Mark a single notification as read."""
     await db_supabase.update_one(
         "notifications",
@@ -179,9 +235,7 @@ async def mark_all_read(current_user: dict = Depends(get_current_user)):
 async def get_preferences(current_user: dict = Depends(get_current_user)):
     """Get user's notification preferences."""
     prefs = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows(
-            "notification_preferences", {"user_id": current_user["id"]}, limit=1
-        )
+        await db_supabase.get_rows("notification_preferences", {"user_id": current_user["id"]}, limit=1)
     )
     if not prefs:
         # Return defaults
@@ -197,9 +251,7 @@ async def get_preferences(current_user: dict = Depends(get_current_user)):
 
 
 @api_router.put("/preferences")
-async def update_preferences(
-    req: PreferencesUpdate, current_user: dict = Depends(get_current_user)
-):
+async def update_preferences(req: PreferencesUpdate, current_user: dict = Depends(get_current_user)):
     """Update notification preferences."""
     update_data: Dict[str, Any] = {"updated_at": datetime.now(timezone.utc).isoformat()}
     for field in [
@@ -215,14 +267,10 @@ async def update_preferences(
             update_data[field] = val
 
     existing = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows(
-            "notification_preferences", {"user_id": current_user["id"]}, limit=1
-        )
+        await db_supabase.get_rows("notification_preferences", {"user_id": current_user["id"]}, limit=1)
     )
     if existing:
-        await db_supabase.update_one(
-            "notification_preferences", {"user_id": current_user["id"]}, update_data
-        )
+        await db_supabase.update_one("notification_preferences", {"user_id": current_user["id"]}, update_data)
     else:
         update_data["id"] = str(uuid.uuid4())
         update_data["user_id"] = current_user["id"]

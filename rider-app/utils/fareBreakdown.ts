@@ -1,6 +1,7 @@
 export interface FareBreakdownInput {
   totalAmount: number;
   fareAmount: number;
+  rideFare: number;
   tipAmount: number;
   discountAmount: number;
   promoCode: string;
@@ -9,7 +10,7 @@ export interface FareBreakdownInput {
 
 export interface FareBreakdownResult {
   total: number;
-  originalFare: number;
+  rideFare: number;
   fareAfterDiscount: number;
   tip: number;
   discount: number;
@@ -21,13 +22,13 @@ export interface FareBreakdownResult {
 }
 
 export function computeFareBreakdown(input: FareBreakdownInput): FareBreakdownResult {
-  const { totalAmount, fareAmount, tipAmount, discountAmount, promoCode, surgeMultiplier } = input;
-  const fareAfterDiscount = tipAmount > 0 ? Math.abs(totalAmount) - tipAmount : fareAmount;
-  const originalFare = discountAmount > 0 ? fareAfterDiscount + discountAmount : fareAfterDiscount;
+  const { totalAmount, fareAmount, rideFare, tipAmount, discountAmount, promoCode, surgeMultiplier } = input;
+  const total = Math.abs(totalAmount);
+  const fareAfterDiscount = fareAmount > 0 ? fareAmount : total - tipAmount;
 
   return {
-    total: Math.abs(totalAmount),
-    originalFare,
+    total,
+    rideFare,
     fareAfterDiscount,
     tip: tipAmount,
     discount: discountAmount,
@@ -43,6 +44,9 @@ export function computeFareFromRide(ride: {
   status?: string;
   grand_total?: number | string;
   total_fare?: number | string;
+  base_fare?: number | string;
+  distance_fare?: number | string;
+  time_fare?: number | string;
   tip_amount?: number | string;
   discount_amount?: number | string;
   promo_code?: string;
@@ -50,7 +54,7 @@ export function computeFareFromRide(ride: {
 }): FareBreakdownResult {
   if (ride.status === 'cancelled') {
     return {
-      total: 0, originalFare: 0, fareAfterDiscount: 0,
+      total: 0, rideFare: 0, fareAfterDiscount: 0,
       tip: 0, discount: 0, promoCode: '', surge: 1,
       hasTip: false, hasDiscount: false, hasSurge: false,
     };
@@ -60,12 +64,15 @@ export function computeFareFromRide(ride: {
   const tip = parseFloat(String(ride.tip_amount ?? 0)) || 0;
   const discount = parseFloat(String(ride.discount_amount ?? 0)) || 0;
   const surge = parseFloat(String(ride.surge_multiplier ?? 1)) || 1;
+  const baseFare = parseFloat(String(ride.base_fare ?? 0)) || 0;
+  const distFare = parseFloat(String(ride.distance_fare ?? 0)) || 0;
+  const timeFare = parseFloat(String(ride.time_fare ?? 0)) || 0;
+  const rideFare = baseFare + distFare + timeFare;
   const total = grandTotal + tip;
-  const originalFare = discount > 0 ? grandTotal + discount : grandTotal;
 
   return {
     total,
-    originalFare,
+    rideFare,
     fareAfterDiscount: grandTotal,
     tip,
     discount,

@@ -20,7 +20,7 @@ import type { ThemeColors } from '@shared/theme/index';
 import api from '@shared/api/client';
 import { useAuthStore } from '@shared/store/authStore';
 import { useTranslation } from '../../i18n';
-import { computeFareFromRide } from '../../utils/fareBreakdown';
+import type { FareBreakdownLine } from '../../store/walletStore';
 
 interface RideHistory {
   id: string;
@@ -38,6 +38,7 @@ interface RideHistory {
   created_at: string;
   corporate_account_id?: string | null;
   scheduled_time?: string;
+  fare_breakdown?: FareBreakdownLine[];
 }
 
 type FilterType = 'all' | 'personal' | 'business';
@@ -218,14 +219,19 @@ export default function ActivityScreen() {
       return <Text style={styles.monthHeader}>{item.title}</Text>;
     }
     const { ride } = item;
-    const fb = computeFareFromRide(ride);
-    const fare = fb.total.toFixed(2);
+    const fb = ride.fare_breakdown || [];
+    const tipLine = fb.find(l => l.type === 'tip');
+    const discountLine = fb.find(l => l.type === 'discount');
+    const grandTotal = parseFloat(String(ride.grand_total ?? ride.total_fare ?? 0)) || 0;
+    const tip = tipLine ? Math.abs(parseFloat(String(tipLine.amount ?? 0))) : 0;
+    const total = (grandTotal + tip).toFixed(2);
+    const discount = discountLine ? Math.abs(parseFloat(String(discountLine.amount ?? 0))) : 0;
     return (
       <TouchableOpacity
         style={styles.rideCard}
         onPress={() => handleRidePress(ride)}
         accessibilityRole="button"
-        accessibilityLabel={`${getStatusText(ride.status)} ride to ${ride.dropoff_address || 'unknown destination'}, $${fare}`}
+        accessibilityLabel={`${getStatusText(ride.status)} ride to ${ride.dropoff_address || 'unknown destination'}, $${total}`}
       >
         <View style={[styles.rideIcon, { backgroundColor: '#FFF0F0' }]}>
           <Ionicons
@@ -246,13 +252,13 @@ export default function ActivityScreen() {
 
         <View style={styles.rideFareContainer}>
           <Text style={[styles.rideFare, ride.status === 'cancelled' && styles.rideFareCancelled]} allowFontScaling={false}>
-            ${fare}
+            ${total}
           </Text>
-          {ride.status !== 'cancelled' && (fb.hasTip || fb.hasDiscount) && (
+          {ride.status !== 'cancelled' && (tip > 0 || discount > 0) && (
             <Text style={styles.rideFareBreakdown} numberOfLines={1}>
               {[
-                fb.hasTip ? `Tip $${fb.tip.toFixed(2)}` : '',
-                fb.hasDiscount ? `Saved $${fb.discount.toFixed(2)}` : '',
+                tip > 0 ? `Tip $${tip.toFixed(2)}` : '',
+                discount > 0 ? `Saved $${discount.toFixed(2)}` : '',
               ].filter(Boolean).join(' · ')}
             </Text>
           )}

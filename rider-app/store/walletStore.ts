@@ -13,9 +13,16 @@ export interface WalletInfo {
   is_active: boolean;
 }
 
+export interface FareBreakdownLine {
+  label: string;
+  amount: number | string | null;
+  type: 'ride' | 'fee' | 'modifier' | 'tax' | 'discount' | 'tip';
+}
+
 export interface WalletTransactionMeta {
   ride_id?: string;
   fare_amount?: string;
+  ride_fare?: string;
   tip_amount?: string;
   driver_id?: string;
   surge_multiplier?: string;
@@ -25,6 +32,7 @@ export interface WalletTransactionMeta {
   discount_amount?: string;
   promo_code?: string;
   grand_total?: string;
+  fare_breakdown?: FareBreakdownLine[];
 }
 
 export interface WalletTransaction {

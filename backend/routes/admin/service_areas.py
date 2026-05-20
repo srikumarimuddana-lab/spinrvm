@@ -213,17 +213,35 @@ async def admin_get_service_areas():
 
 @router.get("/airport-zones/diagnostic", dependencies=[Depends(get_admin_user)])
 async def admin_airport_zones_diagnostic():
-    """List every row where is_airport=True with bbox + flag for likely misconfig.
+    """List every row that could be triggering the airport surcharge.
 
-    Rolled in for the "airport surcharge applied to every Regina ride"
-    report — the failure mode is a city-sized polygon left flagged as
-    is_airport=True. A bbox larger than _AIRPORT_MAX_BBOX_KM is the
-    smoking gun. Read-only — admins fix the offending row from the
-    existing Service Areas screen.
+    Returns rows where is_airport is truthy (covers boolean True AND the
+    occasional string "true" / 1 written by older admin tools) plus rows
+    that aren't flagged but carry a non-zero airport_fee — both shapes
+    can leak into calculate_airport_fee when the column type drifts.
+
+    For "I removed the airport zone but the surcharge still shows":
+      * If `airport_zones` is empty → no live row matches; the surcharge
+        you're seeing is frozen on an OLD ride row (ride.airport_fee was
+        captured at creation). New rides won't be charged.
+      * If `airport_zones` is non-empty → the listed row(s) still match.
+        Uncheck `is_airport` on each, or delete sub-region rows that
+        survived the parent removal.
     """
-    rows = await db_supabase.get_rows("service_areas", {"is_airport": True}, limit=500)
+    rows = await db_supabase.get_rows("service_areas", limit=1000)
     out = []
     for r in rows:
+        raw_flag = r.get("is_airport")
+        # Treat truthy strings / ints as flagged too — surfaces type drift
+        # introduced by older versions of the admin form.
+        is_flagged = raw_flag in (True, 1, "true", "True", "TRUE", "1")
+        fee = r.get("airport_fee") or 0
+        has_fee = float(fee) > 0
+        if not (is_flagged or (has_fee and r.get("parent_service_area_id"))):
+            # Skip rows that are neither flagged nor a sub-region with a fee.
+            # Plain service areas with an unrelated `airport_fee=0` are not
+            # signal noise to surface here.
+            continue
         bbox = _polygon_bbox_km(r.get("polygon"))
         too_large = bool(bbox and (bbox["lat_km"] > _AIRPORT_MAX_BBOX_KM or bbox["lng_km"] > _AIRPORT_MAX_BBOX_KM))
         out.append(
@@ -231,7 +249,9 @@ async def admin_airport_zones_diagnostic():
                 "id": r.get("id"),
                 "name": r.get("name"),
                 "city": r.get("city"),
-                "airport_fee": r.get("airport_fee"),
+                "is_airport_raw": raw_flag,
+                "is_airport_effective": is_flagged,
+                "airport_fee": fee,
                 "is_active": r.get("is_active"),
                 "parent_service_area_id": r.get("parent_service_area_id"),
                 "bbox_km": bbox,
@@ -239,7 +259,7 @@ async def admin_airport_zones_diagnostic():
                 "looks_misconfigured": too_large,
             }
         )
-    return {"airport_zones": out}
+    return {"airport_zones": out, "total_service_areas_scanned": len(rows)}
 
 
 @router.post("/service-areas")

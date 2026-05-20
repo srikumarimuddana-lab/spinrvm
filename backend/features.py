@@ -119,6 +119,20 @@ async def calculate_airport_fee(
         "is_stop": False,
     }
 
+    # One-line trace of every invocation so "I removed the airport zone but
+    # the surcharge still shows" reports are debuggable: confirms how many
+    # is_airport=true rows the function considered. If this logs "areas=0"
+    # but a ride still shows airport_fee, the value is frozen on the ride
+    # row from before the removal — historical rides don't get retro-fixed.
+    logger.info(
+        "[AIRPORT_FEE] check pickup=(%.5f,%.5f) dropoff=(%.5f,%.5f) areas=%d",
+        pickup_lat,
+        pickup_lng,
+        dropoff_lat,
+        dropoff_lng,
+        len(areas),
+    )
+
     for area in areas:
         polygon = get_service_area_polygon(area)
         fee = float(area.get("airport_fee", 0))

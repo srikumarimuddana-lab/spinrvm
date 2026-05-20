@@ -27,9 +27,12 @@ def get_service_area_polygon(area: Dict[str, Any]) -> List[Dict[str, float]]:
     if isinstance(geojson, dict):
         geom = geojson.get("geometry", geojson)
         coords = geom.get("coordinates") if isinstance(geom, dict) else None
-        if coords is not None:
-            # GeoJSON Polygon: coordinates[0] is exterior ring, each point [lng, lat]
-            ring = coords[0] if isinstance(coords[0], (list, tuple)) and coords else coords
+        if coords:
+            # GeoJSON Polygon: coordinates[0] is exterior ring, each point [lng, lat].
+            # Guard against empty `coords` before indexing — admins occasionally save
+            # malformed shapes via the Service Areas screen and we don't want that to
+            # IndexError inside the airport-fee check.
+            ring = coords[0] if isinstance(coords[0], (list, tuple)) else coords
             if isinstance(ring, (list, tuple)) and len(ring) >= 3:
                 return [{"lat": float(c[1]), "lng": float(c[0])} for c in ring]
     if isinstance(geojson, list) and len(geojson) >= 3:

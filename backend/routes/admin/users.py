@@ -50,7 +50,9 @@ async def admin_get_users(
         # page, not here.
         filters["role"] = {"$ne": "admin"}
     else:
-        raise HTTPException(status_code=400, detail="role must be one of rider, driver, admin, all")
+        raise HTTPException(
+            status_code=400, detail="role must be one of rider, driver, admin, all"
+        )
 
     if search:
         # Basic contains-match on phone / email / first_name; callers typically
@@ -63,7 +65,9 @@ async def admin_get_users(
                 {"first_name": {"$regex": re.escape(term), "$options": "i"}},
                 {"last_name": {"$regex": re.escape(term), "$options": "i"}},
             ]
-    users = await db_supabase.get_rows("users", filters, order="created_at", desc=True, limit=limit, offset=offset)
+    users = await db_supabase.get_rows(
+        "users", filters, order="created_at", desc=True, limit=limit, offset=offset
+    )
     return users
 
 
@@ -90,17 +94,23 @@ async def admin_get_user_details(user_id: str):
         raise HTTPException(status_code=404, detail="User not found")
 
     # Get user's recent rides
-    rides = await db_supabase.get_rows("rides", {"rider_id": user_id}, order="created_at", desc=True, limit=10)
+    rides = await db_supabase.get_rows(
+        "rides", {"rider_id": user_id}, order="created_at", desc=True, limit=10
+    )
 
     return {
         **user,
-        "total_rides": await db_supabase.count_documents("rides", {"rider_id": user_id}),
+        "total_rides": await db_supabase.count_documents(
+            "rides", {"rider_id": user_id}
+        ),
         "recent_rides": rides,
     }
 
 
 @router.put("/users/{user_id}/status")
-async def admin_update_user_status(user_id: str, status_data: UserStatusRequest, admin: dict = Depends(get_admin_user)):
+async def admin_update_user_status(
+    user_id: str, status_data: UserStatusRequest, admin: dict = Depends(get_admin_user)
+):
     """Update user status (e.g., suspend, activate)."""
     new_status = status_data.status
 
@@ -110,7 +120,9 @@ async def admin_update_user_status(user_id: str, status_data: UserStatusRequest,
     old_status = user.get("status")
 
     await db_supabase.update_one(
-        "users", {"id": user_id}, {"status": new_status, "updated_at": datetime.now(timezone.utc).isoformat()}
+        "users",
+        {"id": user_id},
+        {"status": new_status, "updated_at": datetime.now(timezone.utc).isoformat()},
     )
 
     await db_supabase.insert_one(
@@ -175,7 +187,10 @@ async def admin_update_dsar_status(
 ):
     """Update DSAR status (in_progress, completed, rejected)."""
     if status not in ("in_progress", "completed", "rejected"):
-        raise HTTPException(status_code=400, detail="status must be one of in_progress, completed, rejected")
+        raise HTTPException(
+            status_code=400,
+            detail="status must be one of in_progress, completed, rejected",
+        )
 
     req = await db_supabase.get_one("data_export_requests", {"id": request_id})
     if not req:

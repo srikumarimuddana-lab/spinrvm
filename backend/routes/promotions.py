@@ -38,8 +38,12 @@ api_router = APIRouter(prefix="/promo", tags=["Promotions"])
 
 class ValidatePromoRequest(BaseModel):
     code: str
-    ride_fare: Decimal = Decimal("0.00")  # ride portion only (base+dist+time); ignored when ride_id is provided
-    grand_total: Optional[Decimal] = None  # full amount including fees; required for free_ride promos
+    ride_fare: Decimal = Decimal(
+        "0.00"
+    )  # ride portion only (base+dist+time); ignored when ride_id is provided
+    grand_total: Optional[Decimal] = (
+        None  # full amount including fees; required for free_ride promos
+    )
     ride_id: Optional[str] = None  # When set, fare is fetched server-side (R-P2-33)
 
 
@@ -50,9 +54,13 @@ class ApplyPromoRequest(BaseModel):
 
 class CreatePromoCodeRequest(BaseModel):
     code: str
-    free_ride: bool = False  # when True, covers entire grand_total; discount_type/value ignored
+    free_ride: bool = (
+        False  # when True, covers entire grand_total; discount_type/value ignored
+    )
     discount_type: str = "flat"  # flat | percentage
-    discount_value: Decimal = Field(default=Decimal("0"), ge=0, le=500)  # 0 allowed for free_ride
+    discount_value: Decimal = Field(
+        default=Decimal("0"), ge=0, le=500
+    )  # 0 allowed for free_ride
     max_discount: Optional[Decimal] = None  # Cap for percentage discounts
     max_uses: int = 100
     max_uses_per_user: int = 1
@@ -94,7 +102,9 @@ async def _validate_promo_for_user(
     user_id: str,
     ride_fare: Decimal,  # ride portion only (base+dist+time = driver earnings)
     ride_id: Optional[str] = None,
-    grand_total: Optional[Decimal] = None,  # full amount including fees; required for free_ride promos
+    grand_total: Optional[
+        Decimal
+    ] = None,  # full amount including fees; required for free_ride promos
 ) -> Dict[str, Any]:
     """Validate ``code`` against all 10 promo rules for ``user_id``.
 
@@ -114,13 +124,17 @@ async def _validate_promo_for_user(
     """
     code = code.strip().upper()
     now = datetime.now(timezone.utc)
-    promo = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("promotions", {"code": code}, limit=1))
+    promo = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("promotions", {"code": code}, limit=1)
+    )
 
     if not promo:
         raise HTTPException(status_code=404, detail="Invalid promo code")
 
     if not promo.get("is_active", False):
-        raise HTTPException(status_code=400, detail="This promo code is no longer active")
+        raise HTTPException(
+            status_code=400, detail="This promo code is no longer active"
+        )
 
     # 1. Expiry
     expiry = promo.get("expiry_date")
@@ -130,7 +144,9 @@ async def _validate_promo_for_user(
             if exp_dt.tzinfo is None:
                 exp_dt = exp_dt.replace(tzinfo=timezone.utc)
             if exp_dt < now:
-                raise HTTPException(status_code=400, detail="This promo code has expired")
+                raise HTTPException(
+                    status_code=400, detail="This promo code has expired"
+                )
         except (ValueError, HTTPException) as e:
             if isinstance(e, HTTPException):
                 raise  # noqa: E701
@@ -138,7 +154,9 @@ async def _validate_promo_for_user(
     # 2. Total usage limit (0 = unlimited)
     max_uses = promo.get("max_uses", 0)
     if max_uses > 0 and promo.get("uses", 0) >= max_uses:
-        raise HTTPException(status_code=400, detail="This promo code has reached its usage limit")
+        raise HTTPException(
+            status_code=400, detail="This promo code has reached its usage limit"
+        )
 
     # 3. Per-user usage limit (0 = unlimited)
     max_per_user = promo.get("max_uses_per_user", 1)
@@ -152,14 +170,17 @@ async def _validate_promo_for_user(
         )
         if user_uses >= max_per_user:
             raise HTTPException(
-                status_code=400, detail="You have already used this promo code the maximum number of times"
+                status_code=400,
+                detail="You have already used this promo code the maximum number of times",
             )
 
     # 4. Minimum ride fare — check against grand_total when available (R-P2-33)
     min_fare = promo.get("min_ride_fare", 0)
     if min_fare > 0:
         if ride_id:
-            ride_rows = await db_supabase.get_rows("rides", {"id": ride_id, "rider_id": user_id}, limit=1)
+            ride_rows = await db_supabase.get_rows(
+                "rides", {"id": ride_id, "rider_id": user_id}, limit=1
+            )
             if not ride_rows:
                 raise HTTPException(status_code=404, detail="Ride not found")
             effective_fare = Decimal(str(ride_rows[0].get("total_fare") or "0"))
@@ -167,18 +188,27 @@ async def _validate_promo_for_user(
             # grand_total includes fees; a better basis for min-fare checks than ride portion alone
             effective_fare = grand_total if grand_total is not None else ride_fare
         if effective_fare < min_fare:
-            raise HTTPException(status_code=400, detail=f"Minimum ride fare of ${min_fare:.2f} required for this promo")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Minimum ride fare of ${min_fare:.2f} required for this promo",
+            )
 
     # 5. Private coupon — assigned to specific users only
     assigned_users = promo.get("assigned_user_ids", [])
     if assigned_users and user_id not in assigned_users:
-        raise HTTPException(status_code=400, detail="This promo code is not available for your account")
+        raise HTTPException(
+            status_code=400, detail="This promo code is not available for your account"
+        )
 
     # 6. First ride only
     if promo.get("first_ride_only"):
-        ride_count = await db_supabase.count_documents("rides", {"rider_id": user_id, "status": RideStatus.COMPLETED})
+        ride_count = await db_supabase.count_documents(
+            "rides", {"rider_id": user_id, "status": RideStatus.COMPLETED}
+        )
         if ride_count > 0:
-            raise HTTPException(status_code=400, detail="This promo is for first-time riders only")
+            raise HTTPException(
+                status_code=400, detail="This promo is for first-time riders only"
+            )
 
     # 7. New user restriction (user account must be less than X days old)
     new_user_days = promo.get("new_user_days", 0)
@@ -187,7 +217,9 @@ async def _validate_promo_for_user(
         if user and user.get("created_at"):
             created = parse_iso_utc(user["created_at"])
             if created is not None and (now - created).days > new_user_days:
-                raise HTTPException(status_code=400, detail="This promo is for new users only")
+                raise HTTPException(
+                    status_code=400, detail="This promo is for new users only"
+                )
 
     # 8. Inactive user targeting (no rides in X days)
     inactive_days = promo.get("inactive_days", 0)
@@ -203,25 +235,34 @@ async def _validate_promo_for_user(
         )
         if recent_rides > 0:
             raise HTTPException(
-                status_code=400, detail="This promo is for returning riders who haven't ridden recently"
+                status_code=400,
+                detail="This promo is for returning riders who haven't ridden recently",
             )
 
     # 9. Minimum / maximum total rides
     min_rides = promo.get("min_total_rides", 0)
     max_rides = promo.get("max_total_rides", 0)
     if min_rides > 0 or max_rides > 0:
-        total_rides = await db_supabase.count_documents("rides", {"rider_id": user_id, "status": RideStatus.COMPLETED})
+        total_rides = await db_supabase.count_documents(
+            "rides", {"rider_id": user_id, "status": RideStatus.COMPLETED}
+        )
         if min_rides > 0 and total_rides < min_rides:
             raise HTTPException(
-                status_code=400, detail=f"You need at least {min_rides} completed rides to use this promo"
+                status_code=400,
+                detail=f"You need at least {min_rides} completed rides to use this promo",
             )
         if max_rides > 0 and total_rides >= max_rides:
-            raise HTTPException(status_code=400, detail="This promo is not available for your ride count")
+            raise HTTPException(
+                status_code=400,
+                detail="This promo is not available for your ride count",
+            )
 
     # 10. Budget check
     total_budget = promo.get("total_budget", 0)
     if total_budget > 0 and promo.get("budget_used", 0) >= total_budget:
-        raise HTTPException(status_code=400, detail="This promotion has reached its budget limit")
+        raise HTTPException(
+            status_code=400, detail="This promotion has reached its budget limit"
+        )
 
     # Calculate discount
     free_ride = promo.get("free_ride", False)
@@ -256,7 +297,9 @@ async def _validate_promo_for_user(
     }
 
 
-async def _record_promo_application(promo_id: str, code: str, user_id: str, discount: Decimal) -> str:
+async def _record_promo_application(
+    promo_id: str, code: str, user_id: str, discount: Decimal
+) -> str:
     """Insert promo_applications row and atomically increment promotions.uses.
 
     Returns the application id. Raises 409 if the promo just got fully
@@ -272,11 +315,15 @@ async def _record_promo_application(promo_id: str, code: str, user_id: str, disc
     }
     await db_supabase.insert_one("promo_applications", application)
 
-    promo_row = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("promotions", {"id": promo_id}, limit=1))
+    promo_row = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("promotions", {"id": promo_id}, limit=1)
+    )
     max_uses = int((promo_row or {}).get("max_uses", 0))
     incremented = await increment_promo_uses(promo_id, max_uses)
     if not incremented:
-        raise HTTPException(status_code=409, detail="Promo code has been fully redeemed")
+        raise HTTPException(
+            status_code=409, detail="Promo code has been fully redeemed"
+        )
     return application["id"]
 
 
@@ -376,8 +423,12 @@ async def apply_promo(
 @promo_available_limit
 async def get_available_promos(
     request: Request,
-    ride_fare: float = Query(0.0),  # grand total (kept for backward compat + min-fare check)
-    ride_portion: Optional[float] = Query(None),  # ride-only portion (base+dist+time) for promo calculation
+    ride_fare: float = Query(
+        0.0
+    ),  # grand total (kept for backward compat + min-fare check)
+    ride_portion: Optional[float] = Query(
+        None
+    ),  # ride-only portion (base+dist+time) for promo calculation
     pickup_lat: Optional[float] = Query(None),
     pickup_lng: Optional[float] = Query(None),
     current_user: dict = Depends(get_current_user),
@@ -396,13 +447,23 @@ async def get_available_promos(
             if rows:
                 pickup_area_id = rows[0].get("id")
         except Exception as e:
-            logger.warning("Could not resolve service area for pickup (%.4f, %.4f): %s", pickup_lat, pickup_lng, e)
+            logger.warning(
+                "Could not resolve service area for pickup (%.4f, %.4f): %s",
+                pickup_lat,
+                pickup_lng,
+                e,
+            )
 
     promos = await db_supabase.get_rows("promotions", {"is_active": True}, limit=100)
 
     # Keep only promos that match the pickup area (or have no area restriction).
     if pickup_area_id:
-        promos = [p for p in promos if p.get("service_area_id") is None or p.get("service_area_id") == pickup_area_id]
+        promos = [
+            p
+            for p in promos
+            if p.get("service_area_id") is None
+            or p.get("service_area_id") == pickup_area_id
+        ]
     else:
         # Pickup unknown — show only global (unrestricted) promos.
         promos = [p for p in promos if p.get("service_area_id") is None]
@@ -424,7 +485,12 @@ async def get_available_promos(
 
     # Pre-fetch all user promo applications in one query so per-promo usage
     # check is O(1) instead of one DB call per promo (N+1 reduction).
-    all_user_apps = await db_supabase.get_rows("promo_applications", {"user_id": current_user["id"]}, limit=2000) or []
+    all_user_apps = (
+        await db_supabase.get_rows(
+            "promo_applications", {"user_id": current_user["id"]}, limit=2000
+        )
+        or []
+    )
     user_usage_by_promo: dict = {}
     for app in all_user_apps:
         pid = app.get("promo_id")
@@ -497,7 +563,10 @@ async def get_available_promos(
                 continue  # noqa: E701
 
             # Budget
-            if p.get("total_budget", 0) > 0 and p.get("budget_used", 0) >= p["total_budget"]:
+            if (
+                p.get("total_budget", 0) > 0
+                and p.get("budget_used", 0) >= p["total_budget"]
+            ):
                 continue  # noqa: E701
 
             # Calculate discount
@@ -509,12 +578,20 @@ async def get_available_promos(
                 discount = ride_fare  # covers everything; rider pays $0
             elif discount_type == "percentage":
                 # Applies to ride portion only (never to fees/taxes)
-                discount = round(effective_ride * (discount_value / 100), 2) if effective_ride > 0 else 0
+                discount = (
+                    round(effective_ride * (discount_value / 100), 2)
+                    if effective_ride > 0
+                    else 0
+                )
                 max_cap = p.get("max_discount")
                 if max_cap and discount > max_cap:
                     discount = max_cap  # noqa: E701
             else:
-                discount = min(discount_value, effective_ride) if effective_ride > 0 else discount_value
+                discount = (
+                    min(discount_value, effective_ride)
+                    if effective_ride > 0
+                    else discount_value
+                )
 
             available.append(
                 {
@@ -531,7 +608,9 @@ async def get_available_promos(
                 }
             )
         except Exception as promo_err:
-            logger.error(f"[PROMOS] Skipping promo {p.get('id')} due to error: {promo_err}")
+            logger.error(
+                f"[PROMOS] Skipping promo {p.get('id')} due to error: {promo_err}"
+            )
             continue
 
     # Sort by biggest discount first
@@ -551,7 +630,9 @@ admin_router = APIRouter(
 @admin_router.get("")
 async def admin_get_promo_codes():
     """Get all promo codes."""
-    codes = await db_supabase.get_rows("promotions", order="created_at", desc=True, limit=500)
+    codes = await db_supabase.get_rows(
+        "promotions", order="created_at", desc=True, limit=500
+    )
     return codes
 
 
@@ -568,19 +649,29 @@ async def admin_create_promo_code(req: CreatePromoCodeRequest):
     existing_rows = await db_supabase.get_rows("promotions", lookup, limit=1)
     # For global promos (area_id is None) we must also exclude rows where service_area_id IS NULL.
     if area_id is None:
-        existing_rows = [r for r in (existing_rows or []) if r.get("service_area_id") is None]
+        existing_rows = [
+            r for r in (existing_rows or []) if r.get("service_area_id") is None
+        ]
     if existing_rows:
         area_label = " in this service area" if area_id else " (global)"
-        raise HTTPException(status_code=400, detail=f"Promo code '{code}' already exists{area_label}")
+        raise HTTPException(
+            status_code=400, detail=f"Promo code '{code}' already exists{area_label}"
+        )
 
     if not req.free_ride:
         if req.discount_type not in ("flat", "percentage"):
-            raise HTTPException(status_code=400, detail="discount_type must be 'flat' or 'percentage'")
+            raise HTTPException(
+                status_code=400, detail="discount_type must be 'flat' or 'percentage'"
+            )
         # P1-4: cap discount_value to prevent absurd promo creation
         if req.discount_type == "percentage" and req.discount_value > 100:
-            raise HTTPException(status_code=400, detail="Percentage discount cannot exceed 100%")
+            raise HTTPException(
+                status_code=400, detail="Percentage discount cannot exceed 100%"
+            )
         if req.discount_type == "flat" and req.discount_value > 500:
-            raise HTTPException(status_code=400, detail="Flat discount cannot exceed $500")
+            raise HTTPException(
+                status_code=400, detail="Flat discount cannot exceed $500"
+            )
 
     promo = {
         "id": str(uuid.uuid4()),
@@ -625,7 +716,9 @@ async def admin_update_promo_code(promo_id: str, req: UpdatePromoCodeRequest):
             update_data[field] = val
 
     await db_supabase.update_one("promotions", {"id": promo_id}, update_data)
-    updated = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("promotions", {"id": promo_id}, limit=1))
+    updated = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("promotions", {"id": promo_id}, limit=1)
+    )
     if not updated:
         raise HTTPException(status_code=404, detail="Promo code not found")
     return updated

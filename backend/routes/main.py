@@ -40,7 +40,9 @@ async def health_check(request: Request = None):
         db_info = await db_supabase.ping()
         db_ok = True
     except Exception:  # noqa: S110
-        logger.warning("health_check: db_supabase absolute import failed", exc_info=True)
+        logger.warning(
+            "health_check: db_supabase absolute import failed", exc_info=True
+        )
     if not db_ok:
         try:
             from .. import db_supabase as _db  # noqa: PLC0415
@@ -70,13 +72,23 @@ async def health_check(request: Request = None):
 
             loop_status = _gls(None)
         except Exception:  # noqa: S110
-            logger.warning("health_check: loop_monitor relative import failed; loops field omitted", exc_info=True)
+            logger.warning(
+                "health_check: loop_monitor relative import failed; loops field omitted",
+                exc_info=True,
+            )
     except Exception:  # noqa: S110
-        logger.warning("health_check: loop_monitor import failed; health still reports DB status", exc_info=True)
+        logger.warning(
+            "health_check: loop_monitor import failed; health still reports DB status",
+            exc_info=True,
+        )
 
     # ── Aggregate ────────────────────────────────────────────────────────────
     overall_healthy = db_ok and loop_status.get("healthy", True)
-    db_payload = {"status": "ok", **db_info} if db_ok else {"status": "error", "error": db_error, **db_info}
+    db_payload = (
+        {"status": "ok", **db_info}
+        if db_ok
+        else {"status": "error", "error": db_error, **db_info}
+    )
     payload = {
         "status": "healthy" if overall_healthy else "degraded",
         "db": db_payload,

@@ -66,7 +66,9 @@ async def _maps_key() -> str:
     settings_row = await get_app_settings()
     api_key = (settings_row or {}).get("google_maps_api_key") or ""
     if not api_key:
-        raise HTTPException(status_code=503, detail="Google Maps API key not configured")
+        raise HTTPException(
+            status_code=503, detail="Google Maps API key not configured"
+        )
     return api_key
 
 
@@ -234,7 +236,9 @@ async def reverse_geocode(
             data = resp.json()
     except Exception as e:
         logger.error("[maps_proxy] reverse-geocode request failed: %s", e)
-        raise HTTPException(status_code=502, detail="Failed to call Geocoding API") from e
+        raise HTTPException(
+            status_code=502, detail="Failed to call Geocoding API"
+        ) from e
 
     if data.get("status") not in ("OK", "ZERO_RESULTS"):
         logger.error("[maps_proxy] reverse-geocode API error: %s", data.get("status"))
@@ -243,11 +247,15 @@ async def reverse_geocode(
     await record_call("geocode")
 
     results = data.get("results", [])
-    formatted = results[0]["formatted_address"] if results else f"{cache_lat}, {cache_lng}"
+    formatted = (
+        results[0]["formatted_address"] if results else f"{cache_lat}, {cache_lng}"
+    )
 
     try:
         await redis_set(cache_key, formatted, ttl=_REVERSE_GEOCODE_TTL)
     except Exception:
-        logger.warning("[maps_proxy] failed to cache reverse-geocode result", exc_info=False)
+        logger.warning(
+            "[maps_proxy] failed to cache reverse-geocode result", exc_info=False
+        )
 
     return {"formatted_address": formatted, "cached": False}

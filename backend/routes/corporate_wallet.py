@@ -53,7 +53,9 @@ async def get_wallet(
     limit: int = 50,
     current_admin: dict = Depends(get_admin_user),
 ):
-    _valid, normalized_id = validate_id(company_id, "Corporate Account ID", raise_exception=True)
+    _valid, normalized_id = validate_id(
+        company_id, "Corporate Account ID", raise_exception=True
+    )
     wallet = await get_corporate_wallet_by_company(normalized_id)
     if not wallet:
         raise HTTPException(status_code=404, detail="Wallet not found")
@@ -67,7 +69,9 @@ async def get_wallet(
 
 class TopUpRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    amount: float = Field(..., ge=100, le=10000, description="CAD between 100 and 10000")
+    amount: float = Field(
+        ..., ge=100, le=10000, description="CAD between 100 and 10000"
+    )
     payment_method_id: Optional[str] = None
     client_idempotency_key: Optional[str] = None
 
@@ -84,7 +88,9 @@ async def manual_topup(
     body: TopUpRequest,
     current_admin: dict = Depends(get_admin_user),
 ):
-    _valid, normalized_id = validate_id(company_id, "Corporate Account ID", raise_exception=True)
+    _valid, normalized_id = validate_id(
+        company_id, "Corporate Account ID", raise_exception=True
+    )
     company = await get_corporate_account_by_id(normalized_id)
     if not company:
         raise HTTPException(status_code=404, detail="Company not found")
@@ -125,7 +131,8 @@ async def manual_topup(
     # track); fall back to a 1-minute time-bucket keyed on the wallet so the
     # same top-up amount within the same minute reuses the same intent.
     intent_kwargs["idempotency_key"] = (
-        body.client_idempotency_key or f"corp-topup-{wallet['id']}-{int(time.time() // 60)}"
+        body.client_idempotency_key
+        or f"corp-topup-{wallet['id']}-{int(time.time() // 60)}"
     )
     intent = stripe.PaymentIntent.create(**intent_kwargs)
     return {"payment_intent_id": intent.id, "client_secret": intent.client_secret}
@@ -137,7 +144,9 @@ async def manual_adjust(
     body: AdjustRequest,
     current_admin: dict = Depends(get_admin_user),
 ):
-    _valid, normalized_id = validate_id(company_id, "Corporate Account ID", raise_exception=True)
+    _valid, normalized_id = validate_id(
+        company_id, "Corporate Account ID", raise_exception=True
+    )
     wallet = await get_corporate_wallet_by_company(normalized_id)
     if not wallet:
         raise HTTPException(status_code=404, detail="Wallet not found")
@@ -165,7 +174,9 @@ async def update_wallet_config(
     body: WalletConfigPatch,
     current_admin: dict = Depends(get_admin_user),
 ):
-    _valid, normalized_id = validate_id(company_id, "Corporate Account ID", raise_exception=True)
+    _valid, normalized_id = validate_id(
+        company_id, "Corporate Account ID", raise_exception=True
+    )
     wallet = await get_corporate_wallet_by_company(normalized_id)
     if not wallet:
         raise HTTPException(status_code=404, detail="Wallet not found")
@@ -175,7 +186,9 @@ async def update_wallet_config(
     # Enabling auto-topup requires enough config to actually run a tick.
     new_enabled = patch.get("auto_topup_enabled", wallet.get("auto_topup_enabled"))
     if new_enabled:
-        threshold = patch.get("auto_topup_threshold", wallet.get("auto_topup_threshold"))
+        threshold = patch.get(
+            "auto_topup_threshold", wallet.get("auto_topup_threshold")
+        )
         amount = patch.get("auto_topup_amount", wallet.get("auto_topup_amount"))
         if threshold is None or amount is None:
             raise HTTPException(

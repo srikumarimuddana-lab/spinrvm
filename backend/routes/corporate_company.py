@@ -94,15 +94,23 @@ def _validate_geofence(geofence: Optional[dict]) -> None:
     if geofence is None:
         return
     if not isinstance(geofence, dict) or geofence.get("type") != "FeatureCollection":
-        raise HTTPException(status_code=422, detail="geofence must be a GeoJSON FeatureCollection")
+        raise HTTPException(
+            status_code=422, detail="geofence must be a GeoJSON FeatureCollection"
+        )
     features = geofence.get("features")
     if not isinstance(features, list):
         raise HTTPException(status_code=422, detail="geofence.features must be a list")
     for feat in features:
         if not isinstance(feat, dict):
-            raise HTTPException(status_code=422, detail="each geofence feature must be an object")
+            raise HTTPException(
+                status_code=422, detail="each geofence feature must be an object"
+            )
         geom = feat.get("geometry")
-        if not isinstance(geom, dict) or not geom.get("type") or "coordinates" not in geom:
+        if (
+            not isinstance(geom, dict)
+            or not geom.get("type")
+            or "coordinates" not in geom
+        ):
             raise HTTPException(
                 status_code=422,
                 detail="each geofence feature must have a geometry with type and coordinates",
@@ -210,7 +218,11 @@ async def set_allowance(
             patch[k] = patch[k].isoformat()
     for money_key in ("amount", "auto_approve_topup_amount"):
         if patch.get(money_key) is not None:
-            patch[money_key] = str(Decimal(str(patch[money_key])).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+            patch[money_key] = str(
+                Decimal(str(patch[money_key])).quantize(
+                    Decimal("0.01"), rounding=ROUND_HALF_UP
+                )
+            )
     return await upsert_member_allowance(member_id=member_id, patch=patch)
 
 
@@ -231,7 +243,11 @@ async def patch_allowance(
         return await get_member_allowance(member_id) or {}
     for money_key in ("amount", "auto_approve_topup_amount"):
         if money_key in patch and patch[money_key] is not None:
-            patch[money_key] = str(Decimal(str(patch[money_key])).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+            patch[money_key] = str(
+                Decimal(str(patch[money_key])).quantize(
+                    Decimal("0.01"), rounding=ROUND_HALF_UP
+                )
+            )
     return await upsert_member_allowance(member_id=member_id, patch=patch)
 
 
@@ -298,7 +314,9 @@ async def decide_allowance_request(
             raise HTTPException(status_code=409, detail="missing allowance or wallet")
         amount_raw = request.get("amount")
         if amount_raw is None:
-            raise HTTPException(status_code=422, detail="allowance request amount is required")
+            raise HTTPException(
+                status_code=422, detail="allowance request amount is required"
+            )
         await apply_grant(
             wallet_id=wallet["id"],
             allowance_id=allowance["id"],
@@ -355,7 +373,8 @@ async def replace_policy(
     # Serialise TimeWindow objects to plain dicts for JSON storage.
     if patch.get("allowed_time_windows") is not None:
         patch["allowed_time_windows"] = [
-            w.model_dump() if hasattr(w, "model_dump") else w for w in patch["allowed_time_windows"]
+            w.model_dump() if hasattr(w, "model_dump") else w
+            for w in patch["allowed_time_windows"]
         ]
 
     return await upsert_corporate_policy(company_id, patch)
@@ -376,7 +395,9 @@ async def patch_policy(
     if not patch:
         return await get_corporate_policy(company_id) or {}
 
-    if "allowed_payment_source" in patch and hasattr(patch["allowed_payment_source"], "value"):
+    if "allowed_payment_source" in patch and hasattr(
+        patch["allowed_payment_source"], "value"
+    ):
         patch["allowed_payment_source"] = patch["allowed_payment_source"].value
 
     if "allowed_geofence" in patch:
@@ -384,7 +405,8 @@ async def patch_policy(
 
     if "allowed_time_windows" in patch and patch["allowed_time_windows"] is not None:
         patch["allowed_time_windows"] = [
-            w.model_dump() if hasattr(w, "model_dump") else w for w in patch["allowed_time_windows"]
+            w.model_dump() if hasattr(w, "model_dump") else w
+            for w in patch["allowed_time_windows"]
         ]
 
     return await upsert_corporate_policy(company_id, patch)
@@ -440,7 +462,13 @@ def _aggregate_rows(rows: list[dict]) -> dict:
         mid = r.get("member_id") or "unknown"
         slot = by_member.setdefault(
             mid,
-            {"member_id": mid, "ride_count": 0, "allowance_total": _ZERO, "master_total": _ZERO, "total": _ZERO},
+            {
+                "member_id": mid,
+                "ride_count": 0,
+                "allowance_total": _ZERO,
+                "master_total": _ZERO,
+                "total": _ZERO,
+            },
         )
         slot["ride_count"] += 1
         slot["allowance_total"] += ad

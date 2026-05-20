@@ -22,14 +22,18 @@ router = APIRouter()
 class CloudMessageRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=100)
     description: str = Field(..., min_length=1, max_length=500)
-    audience: Literal["customers", "drivers", "particular_customer", "particular_driver", "all"] = "customers"
+    audience: Literal[
+        "customers", "drivers", "particular_customer", "particular_driver", "all"
+    ] = "customers"
     type: str = "info"
     channels: List[Literal["push", "sms", "email"]] = ["push"]
     particular_ids: Optional[List[str]] = None
     scheduled_at: Optional[str] = None
 
 
-async def _fan_out_push(message_id: str, target_users: list, title: str, description: str) -> None:
+async def _fan_out_push(
+    message_id: str, target_users: list, title: str, description: str
+) -> None:
     """Fan-out push notifications concurrently and persist final stats to the cloud_messages record."""
     try:
         from ...features import send_push_notification
@@ -48,11 +52,15 @@ async def _fan_out_push(message_id: str, target_users: list, title: str, descrip
     uids = [u.get("id") if isinstance(u, dict) else u for u in target_users]
     uids = [uid for uid in uids if uid]
 
-    results = await asyncio.gather(*[_send_one(uid) for uid in uids], return_exceptions=True)
+    results = await asyncio.gather(
+        *[_send_one(uid) for uid in uids], return_exceptions=True
+    )
     successful = sum(1 for r in results if r is True)
     failed_count = len(results) - successful
 
-    logger.info(f"Cloud message {message_id} fan-out complete: success={successful} failed={failed_count}")
+    logger.info(
+        f"Cloud message {message_id} fan-out complete: success={successful} failed={failed_count}"
+    )
 
     try:
         await db_supabase.update_one(
@@ -61,7 +69,9 @@ async def _fan_out_push(message_id: str, target_users: list, title: str, descrip
             {"successful": successful, "failed_count": failed_count},
         )
     except Exception:
-        logger.error(f"Failed to update cloud_message stats for {message_id}", exc_info=True)
+        logger.error(
+            f"Failed to update cloud_message stats for {message_id}", exc_info=True
+        )
 
 
 # ---------- Cloud Messaging ----------
@@ -141,7 +151,9 @@ async def admin_send_cloud_message(
         ) from e
 
     if not is_scheduled:
-        background_tasks.add_task(_fan_out_push, doc["id"], target_users, title, description)
+        background_tasks.add_task(
+            _fan_out_push, doc["id"], target_users, title, description
+        )
         response.status_code = 202
 
     return {"success": True, "message": doc}
@@ -191,7 +203,11 @@ async def admin_get_cloud_message_stats():
     total_failed = sum(1 for m in all_messages if m.get("status") == "failed")
     total_reached = sum(m.get("successful", 0) for m in all_messages)
     total_recipients = sum(m.get("total_recipients", 0) for m in all_messages)
-    success_rate = round((total_reached / total_recipients * 100), 1) if total_recipients > 0 else 0
+    success_rate = (
+        round((total_reached / total_recipients * 100), 1)
+        if total_recipients > 0
+        else 0
+    )
 
     return {
         "total_messages": total,
@@ -215,5 +231,7 @@ async def admin_delete_cloud_message(message_id: str):
     if existing.get("status") == "sent":
         raise HTTPException(status_code=400, detail="Cannot delete a sent message")
 
-    await db_supabase.update_one("cloud_messages", {"id": message_id}, {"status": "cancelled"})
+    await db_supabase.update_one(
+        "cloud_messages", {"id": message_id}, {"status": "cancelled"}
+    )
     return {"message": "Message cancelled"}

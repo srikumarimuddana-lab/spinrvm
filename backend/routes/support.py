@@ -12,6 +12,7 @@ replaced with redaction tokens so they do not appear in Google's telemetry.
 """
 
 import re
+
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
@@ -22,9 +23,7 @@ except ImportError:
 
 api_router = APIRouter(tags=["Support Chat"])
 
-FALLBACK_REPLY = (
-    "I'm unable to answer that right now. Please call our driver support line: 1-800-SPINR or email support@spinr.ca"
-)
+FALLBACK_REPLY = "I'm unable to answer that right now. Please call our driver support line: 1-800-SPINR or email support@spinr.ca"
 
 SYSTEM_PROMPT = """You are a helpful support assistant for Spinr, a Canadian rideshare platform.
 You help drivers with questions about the Spinr driver app.

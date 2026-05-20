@@ -14,7 +14,12 @@ try:
     from ...supabase_client import supabase
     from ...utils.driver_presence import PRESENCE_TTL, present_driver_ids
     from ...utils.metrics import snapshot as _metrics_snapshot
-    from ...utils.redis_client import KNOWN_KEY_PREFIXES, count_keys_by_prefix, get_redis_stats, redis_delete_pattern
+    from ...utils.redis_client import (
+        KNOWN_KEY_PREFIXES,
+        count_keys_by_prefix,
+        get_redis_stats,
+        redis_delete_pattern,
+    )
 except ImportError:
     from db_supabase import _breaker as _db_breaker  # type: ignore
     from db_supabase import _rows_from_res, run_sync
@@ -159,7 +164,12 @@ async def fetch_monitoring_rides() -> List[Dict[str, Any]]:
                 .execute()
             )
         ),
-        run_sync(lambda: supabase.table("drivers").select("id, user_id, lat, lng").in_("id", driver_ids).execute()),
+        run_sync(
+            lambda: supabase.table("drivers")
+            .select("id, user_id, lat, lng")
+            .in_("id", driver_ids)
+            .execute()
+        ),
     )
     riders_by_id = {u["id"]: u for u in _rows_from_res(riders_res)}
     drivers_rows = _rows_from_res(drivers_map_res)
@@ -167,7 +177,10 @@ async def fetch_monitoring_rides() -> List[Dict[str, Any]]:
 
     driver_user_ids = [d["user_id"] for d in drivers_rows if d.get("user_id")]
     driver_users_res = await run_sync(
-        lambda: supabase.table("users").select("id, first_name, last_name, phone").in_("id", driver_user_ids).execute()
+        lambda: supabase.table("users")
+        .select("id, first_name, last_name, phone")
+        .in_("id", driver_user_ids)
+        .execute()
     )
     driver_users_by_id = {u["id"]: u for u in _rows_from_res(driver_users_res)}
 
@@ -182,11 +195,13 @@ async def fetch_monitoring_rides() -> List[Dict[str, Any]]:
                 "id": r["id"],
                 "status": r["status"],
                 "rider_id": r.get("rider_id"),
-                "rider_name": f"{rider.get('first_name', '')} {rider.get('last_name', '')}".strip() or "Unknown",
+                "rider_name": f"{rider.get('first_name', '')} {rider.get('last_name', '')}".strip()
+                or "Unknown",
                 "rider_phone": rider.get("phone"),
                 "rider_photo": rider.get("profile_image"),
                 "driver_id": r.get("driver_id"),
-                "driver_name": f"{drv_user.get('first_name', '')} {drv_user.get('last_name', '')}".strip() or None,
+                "driver_name": f"{drv_user.get('first_name', '')} {drv_user.get('last_name', '')}".strip()
+                or None,
                 "driver_phone": drv_user.get("phone"),
                 "pickup_lat": r.get("pickup_lat"),
                 "pickup_lng": r.get("pickup_lng"),
@@ -198,7 +213,11 @@ async def fetch_monitoring_rides() -> List[Dict[str, Any]]:
                 "driver_lng": r.get("driver_current_lng") or drv_row.get("lng"),
                 "total_fare": r.get("total_fare"),
                 "distance_km": r.get("distance_km"),
-                "created_at": created.isoformat() if hasattr(created, "isoformat") else str(created),
+                "created_at": (
+                    created.isoformat()
+                    if hasattr(created, "isoformat")
+                    else str(created)
+                ),
                 "is_corporate": bool(r.get("corporate_account_id")),
             }
         )
@@ -206,13 +225,17 @@ async def fetch_monitoring_rides() -> List[Dict[str, Any]]:
 
 
 @router.get("/drivers")
-async def get_monitoring_drivers(current_admin: dict = Depends(get_admin_user)) -> List[Dict[str, Any]]:
+async def get_monitoring_drivers(
+    current_admin: dict = Depends(get_admin_user),
+) -> List[Dict[str, Any]]:
     """Return all drivers with current location and status for the live map."""
     return await fetch_monitoring_drivers()
 
 
 @router.get("/rides")
-async def get_monitoring_rides(current_admin: dict = Depends(get_admin_user)) -> List[Dict[str, Any]]:
+async def get_monitoring_rides(
+    current_admin: dict = Depends(get_admin_user),
+) -> List[Dict[str, Any]]:
     """Return all active rides with rider/driver info for the live map."""
     return await fetch_monitoring_rides()
 
@@ -227,7 +250,9 @@ async def get_monitoring_rides(current_admin: dict = Depends(get_admin_user)) ->
 
 
 @router.get("/redis")
-async def get_redis_health(current_admin: dict = Depends(get_admin_user)) -> Dict[str, Any]:
+async def get_redis_health(
+    current_admin: dict = Depends(get_admin_user),
+) -> Dict[str, Any]:
     """Redis memory/usage snapshot + per-prefix key counts.
 
     Returns a two-part payload:
@@ -248,7 +273,9 @@ async def get_redis_health(current_admin: dict = Depends(get_admin_user)) -> Dic
     hits = stats.get("keyspace_hits_total") or 0
     misses = stats.get("keyspace_misses_total") or 0
     total_ops = hits + misses
-    stats["hit_rate_percent"] = round(hits / total_ops * 100, 2) if total_ops > 0 else None
+    stats["hit_rate_percent"] = (
+        round(hits / total_ops * 100, 2) if total_ops > 0 else None
+    )
 
     # Annotate each prefix so the dashboard can label rows without
     # hard-coding the mapping in the frontend. Add new prefixes here
@@ -286,7 +313,9 @@ async def get_redis_health(current_admin: dict = Depends(get_admin_user)) -> Dic
 
 
 class FlushPrefixRequest(BaseModel):
-    prefix: str = Field(..., description="Key prefix ending with ':' — e.g. 'cache:user:'")
+    prefix: str = Field(
+        ..., description="Key prefix ending with ':' — e.g. 'cache:user:'"
+    )
     confirm: str = Field(
         ...,
         description="Must be 'FLUSH' to proceed. Prevents accidental one-click wipes.",
@@ -336,7 +365,9 @@ async def flush_redis_prefix(
 
 
 @router.get("/infrastructure")
-async def get_infrastructure_stats(current_admin: dict = Depends(get_admin_user)) -> Dict[str, Any]:
+async def get_infrastructure_stats(
+    current_admin: dict = Depends(get_admin_user),
+) -> Dict[str, Any]:
     """System-level health for the current backend replica + summary
     of the DB/cache counters.
 
@@ -378,7 +409,9 @@ async def get_infrastructure_stats(current_admin: dict = Depends(get_admin_user)
 
     loop = _asyncio.get_running_loop()
     executor = getattr(loop, "_default_executor", None)
-    max_workers = getattr(executor, "_max_workers", None) if executor is not None else None
+    max_workers = (
+        getattr(executor, "_max_workers", None) if executor is not None else None
+    )
 
     # DB circuit breaker snapshot
     db_circuit = {
@@ -429,7 +462,9 @@ async def get_infrastructure_stats(current_admin: dict = Depends(get_admin_user)
 
 
 @router.get("/health")
-async def get_dashboard_health(current_admin: dict = Depends(get_admin_user)) -> Dict[str, Any]:
+async def get_dashboard_health(
+    current_admin: dict = Depends(get_admin_user),
+) -> Dict[str, Any]:
     """Concise operational health for uptime checkers and ops dashboards.
 
     Returns status 'ok' | 'degraded' | 'down' based on DB circuit breaker
@@ -447,10 +482,18 @@ async def get_dashboard_health(current_admin: dict = Depends(get_admin_user)) ->
     db_state = _db_breaker._state  # "closed" | "open" | "half-open"
     db_failures = len(_db_breaker._failure_times)
     if db_state == "open":
-        checks["db"] = {"status": "down", "circuit": db_state, "recent_failures": db_failures}
+        checks["db"] = {
+            "status": "down",
+            "circuit": db_state,
+            "recent_failures": db_failures,
+        }
         overall = "down"
     elif db_state == "half-open" or db_failures > 0:
-        checks["db"] = {"status": "degraded", "circuit": db_state, "recent_failures": db_failures}
+        checks["db"] = {
+            "status": "degraded",
+            "circuit": db_state,
+            "recent_failures": db_failures,
+        }
         if overall == "ok":
             overall = "degraded"
     else:
@@ -459,28 +502,44 @@ async def get_dashboard_health(current_admin: dict = Depends(get_admin_user)) ->
     # Redis health
     redis_stats = await get_redis_stats()
     redis_connected = redis_stats.get("connected", False)
-    checks["redis"] = {"status": "ok" if redis_connected else "degraded", "connected": redis_connected}
+    checks["redis"] = {
+        "status": "ok" if redis_connected else "degraded",
+        "connected": redis_connected,
+    }
     if not redis_connected and overall == "ok":
         overall = "degraded"
 
     # Operational counts — best-effort; query failures don't change overall status
     try:
         active_res = await run_sync(
-            lambda: supabase.table("rides").select("id", count="exact").in_("status", ACTIVE_RIDE_STATUSES).execute()
+            lambda: supabase.table("rides")
+            .select("id", count="exact")
+            .in_("status", ACTIVE_RIDE_STATUSES)
+            .execute()
         )
-        active_rides: Optional[int] = getattr(active_res, "count", None) or len(_rows_from_res(active_res))
+        active_rides: Optional[int] = getattr(active_res, "count", None) or len(
+            _rows_from_res(active_res)
+        )
     except Exception:
         active_rides = None
 
     try:
         online_res = await run_sync(
-            lambda: supabase.table("drivers").select("id", count="exact").eq("is_online", True).execute()
+            lambda: supabase.table("drivers")
+            .select("id", count="exact")
+            .eq("is_online", True)
+            .execute()
         )
-        online_drivers: Optional[int] = getattr(online_res, "count", None) or len(_rows_from_res(online_res))
+        online_drivers: Optional[int] = getattr(online_res, "count", None) or len(
+            _rows_from_res(online_res)
+        )
     except Exception:
         online_drivers = None
 
-    checks["operations"] = {"active_rides": active_rides, "online_drivers": online_drivers}
+    checks["operations"] = {
+        "active_rides": active_rides,
+        "online_drivers": online_drivers,
+    }
 
     payload: Dict[str, Any] = {
         "status": overall,

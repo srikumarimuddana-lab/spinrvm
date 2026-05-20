@@ -20,12 +20,16 @@ def serialize_doc(doc):
 
 @api_router.get("")
 async def get_saved_addresses(current_user: dict = Depends(get_current_user)):
-    addresses = await db_supabase.get_rows("saved_addresses", {"user_id": current_user["id"]}, limit=100)
+    addresses = await db_supabase.get_rows(
+        "saved_addresses", {"user_id": current_user["id"]}, limit=100
+    )
     return serialize_doc(addresses)
 
 
 @api_router.post("")
-async def create_saved_address(request: SavedAddressCreate, current_user: dict = Depends(get_current_user)):
+async def create_saved_address(
+    request: SavedAddressCreate, current_user: dict = Depends(get_current_user)
+):
     address = SavedAddress(
         user_id=current_user["id"],
         name=sanitize_string(request.name)[1],
@@ -39,8 +43,12 @@ async def create_saved_address(request: SavedAddressCreate, current_user: dict =
 
 
 @api_router.delete("/{address_id}")
-async def delete_saved_address(address_id: str, current_user: dict = Depends(get_current_user)):
-    result = await db_supabase.delete_one("saved_addresses", {"id": address_id, "user_id": current_user["id"]})
+async def delete_saved_address(
+    address_id: str, current_user: dict = Depends(get_current_user)
+):
+    result = await db_supabase.delete_one(
+        "saved_addresses", {"id": address_id, "user_id": current_user["id"]}
+    )
     if not result:
         raise HTTPException(status_code=404, detail="Address not found")
     return {"success": True}

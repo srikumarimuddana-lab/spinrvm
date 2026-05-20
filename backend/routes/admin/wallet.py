@@ -38,11 +38,15 @@ def _q(v) -> Decimal:
 class AdminCreditRequest(BaseModel):
     user_id: str
     amount: Decimal = Field(
-        ..., gt=Decimal("0.01"), le=Decimal("10000"), description="CAD amount to credit (max $10,000/txn)"
+        ...,
+        gt=Decimal("0.01"),
+        le=Decimal("10000"),
+        description="CAD amount to credit (max $10,000/txn)",
     )
     reason: str = Field(..., min_length=3, max_length=200)
     idempotency_key: str | None = Field(
-        None, description="Caller-supplied key; duplicate requests return the original result"
+        None,
+        description="Caller-supplied key; duplicate requests return the original result",
     )
 
 
@@ -51,7 +55,8 @@ class AdminDebitRequest(BaseModel):
     amount: float = Field(..., gt=0, le=10_000)
     reason: str = Field(..., min_length=3, max_length=200)
     idempotency_key: str | None = Field(
-        None, description="Caller-supplied key; duplicate requests return the original result"
+        None,
+        description="Caller-supplied key; duplicate requests return the original result",
     )
 
 
@@ -123,7 +128,10 @@ async def admin_credit_wallet(
         )
         if existing_txns:
             t = existing_txns[0]
-            return {"balance": _money_str(t["balance_after"]), "transaction_id": t["id"]}
+            return {
+                "balance": _money_str(t["balance_after"]),
+                "transaction_id": t["id"],
+            }
 
     user = await db_supabase.get_user_by_id(req.user_id)
     if not user:
@@ -140,7 +148,12 @@ async def admin_credit_wallet(
     await db.update_one(
         "wallets",
         {"id": wallet["id"]},
-        {"$set": {"balance": _q(new_balance), "updated_at": datetime.now(timezone.utc).isoformat()}},
+        {
+            "$set": {
+                "balance": _q(new_balance),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        },
     )
     txn = await _record_transaction(
         wallet_id=wallet["id"],
@@ -198,7 +211,10 @@ async def admin_debit_wallet(
         )
         if existing_txns:
             t = existing_txns[0]
-            return {"balance": _money_str(t["balance_after"]), "transaction_id": t["id"]}
+            return {
+                "balance": _money_str(t["balance_after"]),
+                "transaction_id": t["id"],
+            }
 
     user = await db_supabase.get_user_by_id(req.user_id)
     if not user:
@@ -217,7 +233,12 @@ async def admin_debit_wallet(
     await db.update_one(
         "wallets",
         {"id": wallet["id"]},
-        {"$set": {"balance": _q(new_balance), "updated_at": datetime.now(timezone.utc).isoformat()}},
+        {
+            "$set": {
+                "balance": _q(new_balance),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        },
     )
     txn = await _record_transaction(
         wallet_id=wallet["id"],

@@ -38,10 +38,14 @@ def _user_display_name(user: Optional[Dict]) -> str:
     return f"{fn} {ln}".strip() or user.get("email") or user.get("phone") or ""
 
 
-async def _batch_fetch_drivers_and_users(rider_ids: List[str], driver_ids: List[str]) -> tuple:
+async def _batch_fetch_drivers_and_users(
+    rider_ids: List[str], driver_ids: List[str]
+) -> tuple:
     """Batch-fetch drivers and users in 2-3 queries instead of N+1 loops."""
     drivers_list = (
-        await db_supabase.get_rows("drivers", {"id": {"$in": driver_ids}}, limit=max(len(driver_ids), 1))
+        await db_supabase.get_rows(
+            "drivers", {"id": {"$in": driver_ids}}, limit=max(len(driver_ids), 1)
+        )
         if driver_ids
         else []
     )
@@ -54,7 +58,9 @@ async def _batch_fetch_drivers_and_users(rider_ids: List[str], driver_ids: List[
         }
     )
     users_list = (
-        await db_supabase.get_rows("users", {"id": {"$in": all_user_ids}}, limit=max(len(all_user_ids), 1))
+        await db_supabase.get_rows(
+            "users", {"id": {"$in": all_user_ids}}, limit=max(len(all_user_ids), 1)
+        )
         if all_user_ids
         else []
     )
@@ -163,7 +169,9 @@ async def admin_get_drivers(
                     {"last_name": {"$regex": re.escape(term), "$options": "i"}},
                 ]
             }
-            matching_users = await db_supabase.get_rows("users", user_filters, limit=100)
+            matching_users = await db_supabase.get_rows(
+                "users", user_filters, limit=100
+            )
             matching_uids = [u["id"] for u in matching_users if u.get("id")]
 
             # Match driver rows by phone/plate directly OR by user_id from user search above.
@@ -175,7 +183,9 @@ async def admin_get_drivers(
             if matching_uids:
                 filters["$or"].append({"user_id": {"$in": matching_uids}})
 
-    drivers = await db_supabase.get_rows("drivers", filters, order="created_at", desc=True, limit=limit, offset=offset)
+    drivers = await db_supabase.get_rows(
+        "drivers", filters, order="created_at", desc=True, limit=limit, offset=offset
+    )
 
     # Defensive dedup — keep the earliest-created row per (user_id, phone).
     seen_user_ids: set = set()
@@ -196,7 +206,11 @@ async def admin_get_drivers(
 
     user_ids = list({d.get("user_id") for d in deduped if d.get("user_id")})
     users_list = (
-        await db_supabase.get_rows("users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)) if user_ids else []
+        await db_supabase.get_rows(
+            "users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)
+        )
+        if user_ids
+        else []
     )
     users_map = {u["id"]: u for u in users_list if u.get("id")}
     out = []
@@ -269,20 +283,30 @@ async def admin_get_driver_stats(
     driver_filters: Dict[str, Any] = {}
     if service_area_id:
         driver_filters["service_area_id"] = service_area_id
-    all_drivers = await db_supabase.get_rows("drivers", driver_filters, order="created_at", desc=True, limit=5000)
+    all_drivers = await db_supabase.get_rows(
+        "drivers", driver_filters, order="created_at", desc=True, limit=5000
+    )
 
     # Enrich with user info (batch)
     user_ids = list({d.get("user_id") for d in all_drivers if d.get("user_id")})
     users_list = (
-        await db_supabase.get_rows("users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)) if user_ids else []
+        await db_supabase.get_rows(
+            "users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)
+        )
+        if user_ids
+        else []
     )
     users_map: Dict[str, Any] = {u["id"]: u for u in users_list if u.get("id")}
 
     # Auto-detect needs_review: active drivers with expired docs or pending re-uploads.
     # Capped at 500 for the inline needs_review flag; full paginated list via
     # GET /documents/pending (A-P4-4).
-    all_docs = await db_supabase.get_rows("driver_documents", {"status": "pending"}, limit=500)
-    pending_doc_driver_ids = {d.get("driver_id") for d in all_docs if d.get("driver_id")}
+    all_docs = await db_supabase.get_rows(
+        "driver_documents", {"status": "pending"}, limit=500
+    )
+    pending_doc_driver_ids = {
+        d.get("driver_id") for d in all_docs if d.get("driver_id")
+    }
 
     now_iso = datetime.now(timezone.utc).isoformat()
     expiry_fields = [
@@ -324,13 +348,19 @@ async def admin_get_driver_stats(
     online = sum(1 for d in enriched_drivers if d.get("is_online"))
     active_count = sum(1 for d in enriched_drivers if d.get("status") == "active")
     pending_count = sum(1 for d in enriched_drivers if d.get("status") == "pending")
-    needs_review_count = sum(1 for d in enriched_drivers if d.get("status") == "needs_review")
+    needs_review_count = sum(
+        1 for d in enriched_drivers if d.get("status") == "needs_review"
+    )
     suspended_count = sum(1 for d in enriched_drivers if d.get("status") == "suspended")
     banned_count = sum(1 for d in enriched_drivers if d.get("status") == "banned")
     total_rides_sum = sum(int(d.get("total_rides") or 0) for d in enriched_drivers)
-    total_earnings_sum = float(sum(Decimal(str(d.get("total_earnings") or 0)) for d in enriched_drivers))
+    total_earnings_sum = float(
+        sum(Decimal(str(d.get("total_earnings") or 0)) for d in enriched_drivers)
+    )
     avg_rating = 0.0
-    rated = [d for d in enriched_drivers if d.get("rating") and float(d.get("rating", 0)) > 0]
+    rated = [
+        d for d in enriched_drivers if d.get("rating") and float(d.get("rating", 0)) > 0
+    ]
     if rated:
         avg_rating = round(sum(float(d["rating"]) for d in rated) / len(rated), 2)
 
@@ -358,7 +388,8 @@ async def admin_get_driver_stats(
             area_stats[aid]["unverified"] += 1
         area_stats[aid]["total_rides"] += int(d.get("total_rides") or 0)
         area_stats[aid]["total_earnings"] = float(
-            Decimal(str(area_stats[aid]["total_earnings"])) + Decimal(str(d.get("total_earnings") or 0))
+            Decimal(str(area_stats[aid]["total_earnings"]))
+            + Decimal(str(d.get("total_earnings") or 0))
         )
 
     # ── Daily charts (within date range) ──
@@ -379,10 +410,16 @@ async def admin_get_driver_stats(
     # Rides + earnings per day (for drivers matching the service_area filter)
     driver_ids_set = {d["id"] for d in enriched_drivers}
     ride_filters: Dict[str, Any] = {"created_at": {"$gte": range_start.isoformat()}}
-    all_rides = await db_supabase.get_rows("rides", ride_filters, order="created_at", desc=True, limit=5000)
+    all_rides = await db_supabase.get_rows(
+        "rides", ride_filters, order="created_at", desc=True, limit=5000
+    )
 
     # Filter rides to only those belonging to our driver set
-    relevant_rides = [r for r in all_rides if r.get("driver_id") in driver_ids_set] if service_area_id else all_rides
+    relevant_rides = (
+        [r for r in all_rides if r.get("driver_id") in driver_ids_set]
+        if service_area_id
+        else all_rides
+    )
 
     daily_rides: Dict[str, int] = defaultdict(int)
     daily_earnings: Dict[str, float] = defaultdict(float)
@@ -395,7 +432,8 @@ async def admin_get_driver_stats(
             daily_rides[day_key] += 1
             if r.get("status") == "completed":
                 daily_earnings[day_key] = float(
-                    Decimal(str(daily_earnings[day_key])) + Decimal(str(r.get("driver_earnings") or 0))
+                    Decimal(str(daily_earnings[day_key]))
+                    + Decimal(str(r.get("driver_earnings") or 0))
                 )
 
     # Build chart arrays
@@ -406,10 +444,26 @@ async def admin_get_driver_stats(
         day = range_start + timedelta(days=i)
         day_key = day.strftime("%Y-%m-%d")
         day_label = day.strftime("%b %d")
-        joins_chart.append({"date": day_label, "date_raw": day_key, "count": daily_joins.get(day_key, 0)})
-        rides_chart.append({"date": day_label, "date_raw": day_key, "count": daily_rides.get(day_key, 0)})
+        joins_chart.append(
+            {
+                "date": day_label,
+                "date_raw": day_key,
+                "count": daily_joins.get(day_key, 0),
+            }
+        )
+        rides_chart.append(
+            {
+                "date": day_label,
+                "date_raw": day_key,
+                "count": daily_rides.get(day_key, 0),
+            }
+        )
         earnings_chart.append(
-            {"date": day_label, "date_raw": day_key, "amount": round(daily_earnings.get(day_key, 0), 2)}
+            {
+                "date": day_label,
+                "date_raw": day_key,
+                "amount": round(daily_earnings.get(day_key, 0), 2),
+            }
         )
 
     return {
@@ -432,12 +486,16 @@ async def admin_get_driver_stats(
             "daily_earnings": earnings_chart,
         },
         "drivers": enriched_drivers,
-        "service_areas": [{"id": a["id"], "name": a.get("name", "Unknown")} for a in service_areas],
+        "service_areas": [
+            {"id": a["id"], "name": a.get("name", "Unknown")} for a in service_areas
+        ],
     }
 
 
 @router.put("/drivers/{driver_id}")
-async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: dict = Depends(get_admin_user)):
+async def admin_update_driver(
+    driver_id: str, updates: Dict[str, Any], admin: dict = Depends(get_admin_user)
+):
     """Update driver details from admin dashboard."""
     allowed = {
         "first_name",
@@ -479,12 +537,20 @@ async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: di
             status_code=500,
             detail="Failed to update driver.",
         ) from e
-    await log_admin_action(admin, "driver_updated", "drivers", driver_id, {"updated_fields": list(filtered.keys())})
+    await log_admin_action(
+        admin,
+        "driver_updated",
+        "drivers",
+        driver_id,
+        {"updated_fields": list(filtered.keys())},
+    )
     return {"message": "Driver updated", "updated_fields": list(filtered.keys())}
 
 
 @router.post("/drivers/{driver_id}/verify")
-async def admin_verify_driver(driver_id: str, req: DriverVerifyRequest, admin: dict = Depends(get_admin_user)):
+async def admin_verify_driver(
+    driver_id: str, req: DriverVerifyRequest, admin: dict = Depends(get_admin_user)
+):
     """Verify or unverify a driver.
 
     NOTE: the Supabase `drivers` table in production was created from
@@ -535,12 +601,16 @@ async def admin_verify_driver(driver_id: str, req: DriverVerifyRequest, admin: d
     except Exception as e:
         logger.warning(f"[ADMIN] Push notification failed for driver {driver_id}: {e}")
 
-    await log_admin_action(admin, "driver_verified", "drivers", driver_id, {"verified": req.verified})
+    await log_admin_action(
+        admin, "driver_verified", "drivers", driver_id, {"verified": req.verified}
+    )
     return {"message": f"Driver {'verified' if req.verified else 'unverified'}"}
 
 
 @router.post("/drivers/{driver_id}/action")
-async def admin_driver_action(driver_id: str, req: DriverActionRequest, admin: dict = Depends(get_admin_user)):
+async def admin_driver_action(
+    driver_id: str, req: DriverActionRequest, admin: dict = Depends(get_admin_user)
+):
     """Perform a lifecycle action on a driver.
 
     Actions: approve, reject, suspend, ban, unban, reactivate.
@@ -565,7 +635,9 @@ async def admin_driver_action(driver_id: str, req: DriverActionRequest, admin: d
     elif req.action == "suspend":
         # Suspend: temporarily disable, store reason
         if not req.reason:
-            raise HTTPException(status_code=400, detail="Reason is required when suspending")
+            raise HTTPException(
+                status_code=400, detail="Reason is required when suspending"
+            )
         updates["status"] = "suspended"
         updates["suspension_reason"] = req.reason
         updates["suspended_at"] = now
@@ -575,7 +647,9 @@ async def admin_driver_action(driver_id: str, req: DriverActionRequest, admin: d
     elif req.action == "ban":
         # Ban: permanently block, store reason
         if not req.reason:
-            raise HTTPException(status_code=400, detail="Reason is required when banning")
+            raise HTTPException(
+                status_code=400, detail="Reason is required when banning"
+            )
         updates["status"] = "banned"
         updates["is_verified"] = False
         updates["ban_reason"] = req.reason
@@ -606,7 +680,9 @@ async def admin_driver_action(driver_id: str, req: DriverActionRequest, admin: d
         await db_supabase.update_one("drivers", {"id": driver_id}, updates)
     except Exception as e:
         logger.error(f"Failed driver action {req.action} on {driver_id}: {e}")
-        raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
+        raise HTTPException(
+            status_code=500, detail="An internal error occurred. Please try again."
+        ) from e
 
     logger.info(f"[ADMIN] Driver {driver_id} action={req.action} reason={req.reason}")
 
@@ -624,14 +700,23 @@ async def admin_driver_action(driver_id: str, req: DriverActionRequest, admin: d
         req.action,
         action_titles.get(req.action, f"Action: {req.action}"),
         req.reason or "",
-        {"old_status": current_status, "new_status": updates.get("status"), "reason": req.reason},
+        {
+            "old_status": current_status,
+            "new_status": updates.get("status"),
+            "reason": req.reason,
+        },
     )
     audit_id = await log_admin_action(
         admin,
         f"driver_{req.action}",
         "drivers",
         driver_id,
-        {"action": req.action, "reason": req.reason, "old_status": current_status, "new_status": updates.get("status")},
+        {
+            "action": req.action,
+            "reason": req.reason,
+            "old_status": current_status,
+            "new_status": updates.get("status"),
+        },
     )
 
     # G4: Notify the driver about their status change. Critical for
@@ -642,7 +727,10 @@ async def admin_driver_action(driver_id: str, req: DriverActionRequest, admin: d
             "You're Approved! 🎉",
             "Your driver application has been approved. You can now go online and start earning!",
         ),
-        "reject": ("Application Update", "Your driver application needs attention. Please check your documents."),
+        "reject": (
+            "Application Update",
+            "Your driver application needs attention. Please check your documents.",
+        ),
         "suspend": (
             "Account Suspended ⚠️",
             f"Your account has been suspended. Reason: {req.reason or 'Contact support for details.'}",
@@ -651,7 +739,10 @@ async def admin_driver_action(driver_id: str, req: DriverActionRequest, admin: d
             "Account Deactivated",
             "Your driver account has been deactivated. Contact support for more information.",
         ),
-        "unban": ("Account Restored! ✅", "Your driver account has been restored. You can now go online again."),
+        "unban": (
+            "Account Restored! ✅",
+            "Your driver account has been restored. You can now go online again.",
+        ),
         "reactivate": (
             "Account Reactivated! ✅",
             "Your account has been reactivated. You can now go online and accept rides!",
@@ -664,10 +755,15 @@ async def admin_driver_action(driver_id: str, req: DriverActionRequest, admin: d
                 driver["user_id"],
                 push_info[0],
                 push_info[1],
-                {"type": f"driver_{req.action}", "new_status": updates.get("status", "")},
+                {
+                    "type": f"driver_{req.action}",
+                    "new_status": updates.get("status", ""),
+                },
             )
         except Exception as e:
-            logger.warning(f"[ADMIN] Push notification failed for driver action {req.action}: {e}")
+            logger.warning(
+                f"[ADMIN] Push notification failed for driver action {req.action}: {e}"
+            )
 
     return {
         "message": f"Driver {req.action}d successfully",
@@ -683,7 +779,10 @@ async def admin_override_driver_status(
     """Manually move a driver to any status. Use with caution."""
     valid = {"pending", "active", "needs_review", "suspended", "banned"}
     if req.status not in valid:
-        raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {', '.join(valid)}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status. Must be one of: {', '.join(valid)}",
+        )
 
     driver = await db_supabase.get_driver_by_id(driver_id)
     if not driver:
@@ -707,20 +806,30 @@ async def admin_override_driver_status(
             updates["ban_reason"] = req.reason
 
     await db_supabase.update_one("drivers", {"id": driver_id}, updates)
-    logger.info(f"[ADMIN] Driver {driver_id} status overridden to {req.status} reason={req.reason}")
+    logger.info(
+        f"[ADMIN] Driver {driver_id} status overridden to {req.status} reason={req.reason}"
+    )
     await _log_driver_activity(
         driver_id,
         "status_override",
         f"Status changed to {req.status}",
         req.reason or "Manual admin override",
-        {"old_status": driver.get("status"), "new_status": req.status, "reason": req.reason},
+        {
+            "old_status": driver.get("status"),
+            "new_status": req.status,
+            "reason": req.reason,
+        },
     )
     await log_admin_action(
         admin,
         "driver_status_override",
         "drivers",
         driver_id,
-        {"old_status": driver.get("status"), "new_status": req.status, "reason": req.reason},
+        {
+            "old_status": driver.get("status"),
+            "new_status": req.status,
+            "reason": req.reason,
+        },
     )
     return {"message": f"Driver status set to {req.status}"}
 
@@ -732,7 +841,11 @@ async def admin_override_driver_status(
 async def admin_get_driver_notes(driver_id: str):
     """Get all notes for a driver, newest first."""
     notes = await db_supabase.get_rows(
-        "driver_notes", {"driver_id": driver_id}, order="created_at", desc=True, limit=200
+        "driver_notes",
+        {"driver_id": driver_id},
+        order="created_at",
+        desc=True,
+        limit=200,
     )
     return notes or []
 
@@ -790,7 +903,9 @@ async def admin_get_driver_rides(
     offset: int = Query(0, ge=0),
 ):
     """Get rides for a driver with pagination (max 500 per page)."""
-    rides = await db_supabase.get_rows("rides", {"driver_id": driver_id}, order="created_at", desc=True, limit=limit)
+    rides = await db_supabase.get_rows(
+        "rides", {"driver_id": driver_id}, order="created_at", desc=True, limit=limit
+    )
     # Apply offset in-process (Supabase helper doesn't expose OFFSET natively)
     page = rides[offset : offset + limit]
     return {"rides": page, "total": len(rides), "offset": offset, "limit": limit}
@@ -806,7 +921,9 @@ async def admin_get_driver_daily_stats(
     if not end_date:
         end_date = datetime.now(timezone.utc).date().isoformat()
     if not start_date:
-        start_date = (datetime.now(timezone.utc).date() - timedelta(days=30)).isoformat()
+        start_date = (
+            datetime.now(timezone.utc).date() - timedelta(days=30)
+        ).isoformat()
 
     stats = await db_supabase.get_rows(
         "driver_daily_stats",

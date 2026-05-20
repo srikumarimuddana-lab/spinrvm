@@ -55,7 +55,9 @@ async def get_favorite_routes(
 
 
 @api_router.post("")
-async def save_favorite_route(req: SaveFavoriteRequest, current_user: dict = Depends(get_current_user)):
+async def save_favorite_route(
+    req: SaveFavoriteRequest, current_user: dict = Depends(get_current_user)
+):
     """Save a route as a favorite for quick rebooking."""
     # Check for duplicate (same pickup + dropoff)
     try:
@@ -92,9 +94,13 @@ async def save_favorite_route(req: SaveFavoriteRequest, current_user: dict = Dep
 
 
 @api_router.post("/{favorite_id}/use")
-async def use_favorite_route(favorite_id: str, current_user: dict = Depends(get_current_user)):
+async def use_favorite_route(
+    favorite_id: str, current_user: dict = Depends(get_current_user)
+):
     """Increment use count when rider books from a favorite. Returns the route data."""
-    fav = await db.find_one("favorite_routes", {"id": favorite_id, "user_id": current_user["id"]})
+    fav = await db.find_one(
+        "favorite_routes", {"id": favorite_id, "user_id": current_user["id"]}
+    )
     if not fav:
         raise HTTPException(status_code=404, detail="Favorite not found")
 
@@ -112,9 +118,13 @@ async def use_favorite_route(favorite_id: str, current_user: dict = Depends(get_
 
 
 @api_router.delete("/{favorite_id}")
-async def delete_favorite_route(favorite_id: str, current_user: dict = Depends(get_current_user)):
+async def delete_favorite_route(
+    favorite_id: str, current_user: dict = Depends(get_current_user)
+):
     """Remove a favorite route."""
-    fav = await db.find_one("favorite_routes", {"id": favorite_id, "user_id": current_user["id"]})
+    fav = await db.find_one(
+        "favorite_routes", {"id": favorite_id, "user_id": current_user["id"]}
+    )
     if not fav:
         raise HTTPException(status_code=404, detail="Favorite not found")
 
@@ -124,7 +134,9 @@ async def delete_favorite_route(favorite_id: str, current_user: dict = Depends(g
 
 @api_router.post("/from-ride/{ride_id}")
 async def save_favorite_from_ride(
-    ride_id: str, name: str = Query("My Route"), current_user: dict = Depends(get_current_user)
+    ride_id: str,
+    name: str = Query("My Route"),
+    current_user: dict = Depends(get_current_user),
 ):
     """Save a completed ride's route as a favorite."""
     ride = await db.find_one("rides", {"id": ride_id})

@@ -134,6 +134,8 @@ async def lifespan(app: FastAPI):
         configure_stripe()
     except Exception as e:
         logger.error(f"Failed to configure Stripe SDK: {e}", exc_info=True)
+        if settings.ENV.lower() == "production":
+            raise
 
     # Start background tasks
     import asyncio

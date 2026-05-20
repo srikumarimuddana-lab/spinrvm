@@ -4,11 +4,11 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
+  Modal,
   Animated,
   TextInput,
   KeyboardAvoidingView,
   Platform,
-  BackHandler,
   useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -112,16 +112,6 @@ export default function CustomAlert({
     }
   }, [visible, showInput]);
 
-  // Android back button dismisses the alert (replaces Modal's onRequestClose)
-  useEffect(() => {
-    if (!visible) return;
-    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      onClose();
-      return true;
-    });
-    return () => sub.remove();
-  }, [visible, onClose]);
-
   const config = variantConfig[variant];
   const iconName = (icon || config.icon) as any;
 
@@ -142,9 +132,9 @@ export default function CustomAlert({
   if (!visible) return null;
 
   return (
-    <View style={styles.root} pointerEvents="auto">
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior="padding"
         style={styles.overlay}
       >
         <TouchableOpacity
@@ -227,21 +217,12 @@ export default function CustomAlert({
           </View>
         </Animated.View>
       </KeyboardAvoidingView>
-    </View>
+    </Modal>
   );
 }
 
 function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
-    root: {
-      position: 'absolute',
-      top: 0,
-      bottom: 0,
-      left: 0,
-      right: 0,
-      zIndex: 9998,
-      elevation: 9998,
-    },
     overlay: {
       flex: 1,
       justifyContent: 'center',

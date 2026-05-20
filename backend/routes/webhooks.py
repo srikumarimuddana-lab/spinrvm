@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from fastapi import APIRouter, HTTPException, Request
 
 try:
@@ -14,6 +16,8 @@ except ImportError:
     from utils.money import cents_to_dollars
 import logging
 from datetime import datetime, timezone
+
+_TWO_PLACES = Decimal("0.01")
 
 logger = logging.getLogger(__name__)
 api_router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
@@ -121,7 +125,7 @@ async def stripe_webhook(request: Request):
             # ``cents / 100`` drifts for arbitrary cent values; quantize
             # first, then hand the float to apply_topup (Postgres NUMERIC
             # rounds to column scale).
-            amount_cad = float(cents_to_dollars(amount_cents))
+            amount_cad = cents_to_dollars(amount_cents)
             await apply_topup(
                 wallet_id=meta["wallet_id"],
                 amount=amount_cad,
@@ -355,9 +359,12 @@ async def stripe_webhook(request: Request):
             if rides:
                 ride = rides[0]
                 ride_id = ride["id"]
-                refunded_amount = (
-                    charge.get("amount_refunded", 0) / 100
-                )  # cents → dollars
+                refunded_amount = Decimal(
+                    str(charge.get("amount_refunded", 0))
+                ) / Decimal("100")
+                refunded_amount = refunded_amount.quantize(
+                    _TWO_PLACES, rounding=ROUND_HALF_UP
+                )
                 await db_supabase.update_one(
                     "rides",
                     {"id": ride_id},
@@ -443,19 +450,22 @@ async def stripe_webhook(request: Request):
             )
 
         try:
-            from ..socket_manager import manager  # type: ignore
-        except ImportError:
-            from socket_manager import manager  # type: ignore
+            try:
+                from ..socket_manager import manager  # type: ignore
+            except ImportError:
+                from socket_manager import manager  # type: ignore
 
-        await manager.broadcast_to_admins(
-            {
-                "type": "charge_dispute_created",
-                "ride_id": ride_id,
-                "dispute_reason": dispute_reason,
-                "amount_cents": dispute_amount_cents,
-                "payment_intent_id": payment_intent_id,
-            }
-        )
+            await manager.broadcast_to_admins(
+                {
+                    "type": "charge_dispute_created",
+                    "ride_id": ride_id,
+                    "dispute_reason": dispute_reason,
+                    "amount_cents": dispute_amount_cents,
+                    "payment_intent_id": payment_intent_id,
+                }
+            )
+        except Exception as ws_err:
+            logger.warning("Dispute WS broadcast failed: %s", ws_err)
 
         logger.error(
             "CHARGEBACK: dispute opened reason=%s amount_cents=%d ride=%s pi=%s",

@@ -623,7 +623,9 @@ async def add_card(
                 "users", {"id": current_user["id"]}, {"default_payment_method": pm.id}
             )
             stripe.Customer.modify(
-                customer_id, invoice_settings={"default_payment_method": pm.id}
+                customer_id,
+                invoice_settings={"default_payment_method": pm.id},
+                api_key=stripe_secret,
             )
 
         logger.info(
@@ -779,7 +781,7 @@ async def create_payment_sheet(
         customer_id = await get_or_create_stripe_customer(
             current_user["id"], stripe_secret
         )
-        amount_cents = int(Decimal(str(body.amount)).quantize(Decimal("0.01")) * 100)
+        amount_cents = dollars_to_cents(body.amount)
 
         # EphemeralKey lets the PaymentSheet modal manage the customer's
         # saved cards. api_version must match the version configured on the

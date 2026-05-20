@@ -27,6 +27,7 @@ try:
     from ..utils.error_handling import ErrorCode, SpinrException
     from ..utils.error_keys import ErrorKeys
     from ..utils.idempotency import idempotent_endpoint
+    from ..utils.money import dollars_to_cents
 except ImportError:
     import db_supabase
     from db import db
@@ -36,6 +37,7 @@ except ImportError:
     from utils.error_handling import ErrorCode, SpinrException
     from utils.error_keys import ErrorKeys
     from utils.idempotency import idempotent_endpoint
+    from utils.money import dollars_to_cents
 
 import stripe
 
@@ -180,7 +182,7 @@ async def top_up_wallet(
         if fresh:
             stripe_customer_id = fresh.get("stripe_customer_id") or stripe_customer_id
 
-    amount_cents = int(_d(req.amount) * 100)
+    amount_cents = dollars_to_cents(req.amount)
 
     import time as _time
 

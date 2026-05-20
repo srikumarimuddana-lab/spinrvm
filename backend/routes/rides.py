@@ -2257,7 +2257,7 @@ async def process_payment(
     email_sent = await send_ride_receipt(ride, current_user["id"], tip_amount)
     return {
         "success": True,
-        "charged_amount": result.charged_amount,
+        "charged_amount": _money_str(result.charged_amount),
         "email_sent": email_sent,
     }
 

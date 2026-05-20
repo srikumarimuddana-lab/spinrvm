@@ -21,6 +21,7 @@ export interface FareBreakdownLine {
 
 export interface WalletTransactionMeta {
   ride_id?: string;
+  ride_code?: string;
   fare_amount?: string;
   ride_fare?: string;
   tip_amount?: string;

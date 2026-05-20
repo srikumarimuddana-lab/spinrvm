@@ -119,21 +119,8 @@ function RideOptionsScreenContent() {
   const selectedEstimate = estimates.length > selectedIndex ? estimates[selectedIndex] : null;
 
   const allUnavailable = estimates.length > 0 && !estimates.some(e => e.available);
-  // Promos discount the ride fare (driver earnings: base+dist+time) only — never
-  // fees or taxes. Cap the server-supplied discount_amount at the selected
-  // estimate's ride portion so a $10 promo on a $6.58 ride shows as -$6.58.
-  // free_ride promos cover the full grand_total by design and bypass the cap.
-  const selectedRidePortion = selectedEstimate
-    ? parseFloat(selectedEstimate.base_fare || '0')
-      + parseFloat(selectedEstimate.distance_fare || '0')
-      + parseFloat(selectedEstimate.time_fare || '0')
-    : 0;
-  const rawPromoDiscount = appliedPromo?.discount_amount ?? 0;
-  const promoDiscount = appliedPromo?.free_ride
-    ? rawPromoDiscount
-    : selectedRidePortion > 0
-      ? Math.min(rawPromoDiscount, selectedRidePortion)
-      : rawPromoDiscount;
+  // Use server-computed discount_amount — correct for percentage promos and free_ride.
+  const promoDiscount = appliedPromo?.discount_amount ?? 0;
   const totalFare = Math.max(0, parseFloat((selectedEstimate as any)?.grand_total || selectedEstimate?.total_fare || '0') - promoDiscount);
 
   const paymentLabel = useMemo(() => {
@@ -564,7 +551,7 @@ function RideOptionsScreenContent() {
                     ? 'Free ride — 100% covered'
                     : appliedPromo.discount_type === 'percentage'
                       ? `${appliedPromo.discount_value}% off your ride fare`
-                      : `$${promoDiscount.toFixed(2)} off your ride fare`}
+                      : `$${Number(appliedPromo.discount_amount ?? appliedPromo.discount_value).toFixed(2)} off`}
                 </Text>
               </View>
             ) : (
@@ -1048,29 +1035,16 @@ function AnimatedVehicleCard({
           )}
         </View>
         <View style={[styles.optionPriceContainer, !isAvailable && { opacity: 0.4 }]}>
-          {appliedPromo && (appliedPromo.discount_amount ?? 0) > 0 && isSelected ? (() => {
-            // Cap the displayed discount at this card's ride portion. Promos
-            // never discount fees/taxes, so a $10 promo on a $6.58 ride caps at $6.58.
-            const cardRidePortion = parseFloat(estimate.base_fare || '0')
-              + parseFloat(estimate.distance_fare || '0')
-              + parseFloat(estimate.time_fare || '0');
-            const cappedDiscount = appliedPromo.free_ride
-              ? (appliedPromo.discount_amount ?? 0)
-              : cardRidePortion > 0
-                ? Math.min(appliedPromo.discount_amount ?? 0, cardRidePortion)
-                : (appliedPromo.discount_amount ?? 0);
-            const grandTotalNum = parseFloat((estimate as any).grand_total || estimate.total_fare || '0');
-            return (
-              <View style={{ alignItems: 'flex-end' }}>
-                <Text style={styles.optionPriceStruck} allowFontScaling={false}>
-                  ${grandTotalNum.toFixed(2)}
-                </Text>
-                <Text style={styles.optionPriceDiscounted} allowFontScaling={false}>
-                  ${Math.max(0, grandTotalNum - cappedDiscount).toFixed(2)}
-                </Text>
-              </View>
-            );
-          })() : (
+          {appliedPromo && (appliedPromo.discount_amount ?? 0) > 0 && isSelected ? (
+            <View style={{ alignItems: 'flex-end' }}>
+              <Text style={styles.optionPriceStruck} allowFontScaling={false}>
+                ${parseFloat((estimate as any).grand_total || estimate.total_fare || '0').toFixed(2)}
+              </Text>
+              <Text style={styles.optionPriceDiscounted} allowFontScaling={false}>
+                ${Math.max(0, parseFloat((estimate as any).grand_total || estimate.total_fare || '0') - (appliedPromo.discount_amount ?? 0)).toFixed(2)}
+              </Text>
+            </View>
+          ) : (
             <Text style={styles.optionPrice} allowFontScaling={false}>
               ${parseFloat((estimate as any).grand_total || estimate.total_fare || '0').toFixed(2)}
             </Text>

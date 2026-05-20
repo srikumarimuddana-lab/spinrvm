@@ -144,6 +144,34 @@ async def calculate_airport_fee(
             result["is_pickup"] = pickup_in
             result["is_dropoff"] = dropoff_in
             result["is_stop"] = stop_in
+            # Surcharge is real money charged to the rider — log why it
+            # applied so an "I went to Walmart and still got an airport
+            # surcharge" report is debuggable. The most common cause when
+            # neither endpoint looks like an airport is an oversized or
+            # mirrored polygon saved in the admin Service Areas screen.
+            lats = [p["lat"] for p in polygon]
+            lngs = [p["lng"] for p in polygon]
+            logger.info(
+                "[AIRPORT_FEE] applied $%.2f for zone %r (id=%s): "
+                "pickup_in=%s dropoff_in=%s stop_in=%s | "
+                "pickup=(%.5f,%.5f) dropoff=(%.5f,%.5f) | "
+                "polygon vertices=%d bbox lat=[%.5f,%.5f] lng=[%.5f,%.5f]",
+                fee,
+                area.get("name", "Airport"),
+                area.get("id"),
+                pickup_in,
+                dropoff_in,
+                stop_in,
+                pickup_lat,
+                pickup_lng,
+                dropoff_lat,
+                dropoff_lng,
+                len(polygon),
+                min(lats),
+                max(lats),
+                min(lngs),
+                max(lngs),
+            )
             break  # Use the first matching airport zone
 
     return result
@@ -801,7 +829,12 @@ async def fare_estimate(
 
     # Calculate area fees + taxes
     fees_result = await calculate_all_fees(
-        pickup_lat, pickup_lng, dropoff_lat, dropoff_lng, distance_km, subtotal,
+        pickup_lat,
+        pickup_lng,
+        dropoff_lat,
+        dropoff_lng,
+        distance_km,
+        subtotal,
         _all_areas=all_areas,
     )
 
@@ -1146,12 +1179,11 @@ async def send_push_notification(
     if priority in ("dispatch", "safety"):
         try:
             from utils.push_retry import enqueue_push
+
             await enqueue_push(user_id, title, body, data, priority=priority)
             return True
         except Exception as exc:
-            logger.warning(
-                f"push enqueue failed, falling back to direct send: {exc}"
-            )
+            logger.warning(f"push enqueue failed, falling back to direct send: {exc}")
 
     user = await db.find_one("users", {"id": user_id})
     if not user or not user.get("fcm_token"):

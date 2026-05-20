@@ -51,11 +51,25 @@ export default function RideDetailsScreen() {
       lines = [rideLine, ...raw.filter((l: any) => l.type !== 'fare')];
     }
 
-    // Inject promo discount if ride has one but breakdown doesn't
+    // Promo discount line — cap at ride fare (driver earnings: base+dist+time).
+    // Promos never discount fees or taxes, so a $10 promo on a $6.58 ride
+    // should display as -$6.58. Apply the cap whether the line came from the
+    // backend breakdown or we're injecting it here from ride.discount_amount.
+    const rideFarePortion = parseFloat(ride?.base_fare || '0')
+      + parseFloat(ride?.distance_fare || '0')
+      + parseFloat(ride?.time_fare || '0');
+    const capDiscount = (raw: number) =>
+      rideFarePortion > 0 ? Math.min(raw, rideFarePortion) : raw;
     const hasDiscount = lines.some((l: any) => l.type === 'discount');
-    if (!hasDiscount && ride?.discount_amount && parseFloat(ride.discount_amount) > 0) {
+    if (hasDiscount) {
+      lines = lines.map((l: any) => {
+        if (l.type !== 'discount' || l.amount == null) return l;
+        const raw = Math.abs(parseFloat(String(l.amount)));
+        return { ...l, amount: -capDiscount(raw) };
+      });
+    } else if (ride?.discount_amount && parseFloat(ride.discount_amount) > 0) {
       const promoLabel = ride.promo_code ? `Promo (${ride.promo_code})` : 'Promo discount';
-      lines.push({ label: promoLabel, amount: -parseFloat(ride.discount_amount), type: 'discount' });
+      lines.push({ label: promoLabel, amount: -capDiscount(parseFloat(ride.discount_amount)), type: 'discount' });
     }
 
     // Inject tip if ride has one but breakdown doesn't

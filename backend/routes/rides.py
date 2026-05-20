@@ -144,9 +144,7 @@ except ImportError:
 db = db_supabase  # legacy alias
 
 
-async def _require_ride_in_state_rider(
-    ride_id: str, rider_id: str, allowed_states: tuple
-) -> dict:
+async def _require_ride_in_state_rider(ride_id: str, rider_id: str, allowed_states: tuple) -> dict:
     """Load a rider's ride only if it is in one of allowed_states.
 
     Raises 409 if the ride exists but is in the wrong state.
@@ -204,9 +202,7 @@ def _reestimate_fare_for_stops(ride: dict, new_stops: list) -> dict:
         (ride["dropoff_lat"], ride["dropoff_lng"]),
     ]
     new_distance_km = sum(
-        calculate_distance(
-            waypoints[i][0], waypoints[i][1], waypoints[i + 1][0], waypoints[i + 1][1]
-        )
+        calculate_distance(waypoints[i][0], waypoints[i][1], waypoints[i + 1][0], waypoints[i + 1][1])
         for i in range(len(waypoints) - 1)
     )
     new_duration_minutes = max(5, int(new_distance_km / 30 * 60) + 5)
@@ -221,10 +217,7 @@ def _reestimate_fare_for_stops(ride: dict, new_stops: list) -> dict:
     new_distance_fare = _round(per_km_effective * _d(new_distance_km) * surge)
     new_time_fare = _round(per_min_effective * _d(new_duration_minutes) * surge)
     new_total = _round(
-        _d(ride.get("base_fare", 0))
-        + new_distance_fare
-        + new_time_fare
-        + _d(ride.get("booking_fee", 0))
+        _d(ride.get("base_fare", 0)) + new_distance_fare + new_time_fare + _d(ride.get("booking_fee", 0))
     )
 
     return {
@@ -270,16 +263,10 @@ def _build_fare_breakdown(ride: dict) -> list[dict]:
     line-item structure.
     """
     lines: list[dict] = []
-    ride_fare = float(
-        _d(ride.get("base_fare", 0))
-        + _d(ride.get("distance_fare", 0))
-        + _d(ride.get("time_fare", 0))
-    )
+    ride_fare = float(_d(ride.get("base_fare", 0)) + _d(ride.get("distance_fare", 0)) + _d(ride.get("time_fare", 0)))
     if ride_fare > 0:
         dist_km = round(float(ride.get("distance_km") or 0), 1)
-        lines.append(
-            {"label": f"Ride fare ({dist_km} km)", "amount": _f(Decimal(str(ride_fare))), "type": "ride"}
-        )
+        lines.append({"label": f"Ride fare ({dist_km} km)", "amount": _f(Decimal(str(ride_fare))), "type": "ride"})
     if ride.get("airport_fee") and float(ride["airport_fee"]) > 0:
         lines.append({"label": "Airport surcharge", "amount": ride["airport_fee"], "type": "fee"})
     if ride.get("booking_fee") and float(ride["booking_fee"]) > 0:
@@ -297,10 +284,13 @@ def _build_fare_breakdown(ride: dict) -> list[dict]:
             lbl = f"{tax_name} ({rate}%)" if rate else tax_name
             lines.append({"label": lbl, "amount": tax_info["amount"], "type": "tax"})
     if ride.get("discount_amount") and float(ride["discount_amount"]) > 0:
-        promo_label = (
-            f"Promo ({ride['promo_code']})" if ride.get("promo_code") else "Promo discount"
-        )
-        lines.append({"label": promo_label, "amount": -float(ride["discount_amount"]), "type": "discount"})
+        promo_label = f"Promo ({ride['promo_code']})" if ride.get("promo_code") else "Promo discount"
+        # Promos apply to ride fare (driver earnings) only — never to fees or
+        # taxes. Cap the displayed discount at ride_fare so legacy rides with
+        # an uncapped discount_amount still render a sane breakdown.
+        raw_discount = float(ride["discount_amount"])
+        capped_discount = min(raw_discount, ride_fare) if ride_fare > 0 else raw_discount
+        lines.append({"label": promo_label, "amount": -capped_discount, "type": "discount"})
     if ride.get("tip_amount") and float(ride["tip_amount"]) > 0:
         lines.append({"label": "Tip", "amount": ride["tip_amount"], "type": "tip"})
     return lines
@@ -413,9 +403,7 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
     offer_timeout = int(app_settings.get("ride_offer_timeout_seconds", 15))
 
     # Algorithm + radius + rating floor (area overrides app settings).
-    algorithm, min_rating, search_radius = await dispatch.resolve_matching_config(
-        ride, app_settings=app_settings
-    )
+    algorithm, min_rating, search_radius = await dispatch.resolve_matching_config(ride, app_settings=app_settings)
 
     logger.info(
         f"[DISPATCH] match start ride_id={ride_id} "
@@ -462,15 +450,11 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
             _skip_ids.add(_d["id"])
     if _skip_ids:
         all_drivers = [d for d in all_drivers if d["id"] not in _skip_ids]
-        logger.info(
-            f"[DISPATCH] skipped {len(_skip_ids)} driver(s) with recent timeout/decline for ride {ride_id}"
-        )
+        logger.info(f"[DISPATCH] skipped {len(_skip_ids)} driver(s) with recent timeout/decline for ride {ride_id}")
 
     # Pure filter+rank: drops orphan/no-location/low-rated drivers and
     # attaches per-driver distance. Pure function — no I/O.
-    drivers_with_distance = filter_and_rank_drivers(
-        ride, all_drivers, algorithm, min_rating, search_radius
-    )
+    drivers_with_distance = filter_and_rank_drivers(ride, all_drivers, algorithm, min_rating, search_radius)
     logger.info(
         f"[DISPATCH] candidate pool (post-filter): {len(drivers_with_distance)} "
         f"real drivers within {search_radius}km with valid lat/lng and "
@@ -478,9 +462,7 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
     )
 
     if not drivers_with_distance:
-        logger.info(
-            f"[DISPATCH] no eligible drivers for ride {ride_id} — ride stays in searching"
-        )
+        logger.info(f"[DISPATCH] no eligible drivers for ride {ride_id} — ride stays in searching")
         return
 
     selected_driver = None
@@ -503,9 +485,7 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
             _rpc_claimed = True
         else:
             drivers_with_distance.sort(key=lambda x: x[1])
-            selected_driver = (
-                drivers_with_distance[0][0] if drivers_with_distance else None
-            )
+            selected_driver = drivers_with_distance[0][0] if drivers_with_distance else None
     elif algorithm == "combined":
         drivers_with_distance.sort(key=lambda x: x[1])
         selected_driver = drivers_with_distance[0][0]
@@ -524,11 +504,7 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
         )
         if last_ride:
             last_driver_idx = next(
-                (
-                    i
-                    for i, (d, _) in enumerate(drivers_with_distance)
-                    if d["id"] == last_ride["driver_id"]
-                ),
+                (i for i, (d, _) in enumerate(drivers_with_distance) if d["id"] == last_ride["driver_id"]),
                 -1,
             )
             next_idx = (last_driver_idx + 1) % len(drivers_with_distance)
@@ -615,9 +591,7 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
         if rider_user:
             first = rider_user.get("first_name") or ""
             last = rider_user.get("last_name") or ""
-            rider_display_name = (
-                (first + " " + last).strip() or rider_user.get("name") or None
-            )
+            rider_display_name = (first + " " + last).strip() or rider_user.get("name") or None
 
         # Build the full dispatch payload. Keys MUST match what the driver
         # app consumes in useDriverDashboard.ts handleWSMessage:
@@ -626,9 +600,7 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
         # rider_name, rider_rating.
         from datetime import timedelta as _td
 
-        _offer_expires_at = (
-            datetime.now(timezone.utc) + _td(seconds=offer_timeout + 15)
-        ).isoformat()
+        _offer_expires_at = (datetime.now(timezone.utc) + _td(seconds=offer_timeout + 15)).isoformat()
         dispatch_payload = {
             "type": "new_ride_assignment",
             "ride_id": ride_id,
@@ -661,9 +633,7 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
                 f"driver_{selected_driver['user_id']} payload_keys="
                 f"{list(dispatch_payload.keys())}"
             )
-            await manager.send_personal_message(
-                dispatch_payload, f"driver_{selected_driver['user_id']}"
-            )
+            await manager.send_personal_message(dispatch_payload, f"driver_{selected_driver['user_id']}")
 
             # Push-notification fallback for backgrounded/killed app.
             # The driver-app background handler (app/_layout.tsx) persists
@@ -701,9 +671,7 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
                     },
                     priority="dispatch",
                 )
-                logger.info(
-                    f"[DISPATCH] push new_ride_assignment sent to user_id={selected_driver['user_id']}"
-                )
+                logger.info(f"[DISPATCH] push new_ride_assignment sent to user_id={selected_driver['user_id']}")
             except Exception as e:
                 logger.error(
                     f"[DISPATCH] push notification failed for user_id={selected_driver['user_id']}: {e}",
@@ -763,10 +731,7 @@ async def _offer_timeout_handler(
             return
 
         # Only act if the ride hasn't progressed past assignment.
-        if (
-            ride.get("status") != RideStatus.DRIVER_ASSIGNED
-            or ride.get("driver_id") != driver_id
-        ):
+        if ride.get("status") != RideStatus.DRIVER_ASSIGNED or ride.get("driver_id") != driver_id:
             return
 
         logger.info(
@@ -823,9 +788,7 @@ async def _offer_timeout_handler(
                     f"driver_{driver_user_id}",
                 )
         except Exception as e:
-            logger.warning(
-                f"[DISPATCH] could not notify driver of offer expiry for ride {ride_id}: {e}"
-            )
+            logger.warning(f"[DISPATCH] could not notify driver of offer expiry for ride {ride_id}: {e}")
 
         # Record this driver's timeout so they are skipped on the next
         # dispatch cycle for this ride (5-minute cooldown).
@@ -836,9 +799,7 @@ async def _offer_timeout_handler(
         try:
             await _redis_set(f"spinr:offer_skip:{ride_id}:{driver_id}", "1", ttl=300)
         except Exception as _e:
-            logger.warning(
-                f"[DISPATCH] could not set offer cooldown key for ride {ride_id} driver {driver_id}: {_e}"
-            )
+            logger.warning(f"[DISPATCH] could not set offer cooldown key for ride {ride_id} driver {driver_id}: {_e}")
 
         # Attempt re-dispatch to the next available driver.
         await match_driver_to_ride(ride_id)
@@ -872,29 +833,21 @@ async def estimate_ride(
     request: Request = None,
     current_user: dict = Depends(get_current_user),
 ):
-    validate_ride_location(
-        body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng
-    )
-    distance_km = calculate_distance(
-        body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng
-    )
+    validate_ride_location(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng)
+    distance_km = calculate_distance(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng)
     duration_minutes = int(distance_km / 30 * 60) + 5
 
     fares = await get_fares_for_location(body.pickup_lat, body.pickup_lng)
 
     # Resolve service area once for fees/taxes — shared across all vehicle-type iterations
     # so calculate_all_fees doesn't re-fetch service_areas N times.
-    _est_all_areas = await db_supabase.get_rows(
-        "service_areas", {"is_active": True}, limit=100
-    )
+    _est_all_areas = await db_supabase.get_rows("service_areas", {"is_active": True}, limit=100)
     _est_matched_area = next(
         (
             a
             for a in _est_all_areas
             if get_service_area_polygon(a)
-            and point_in_polygon(
-                body.pickup_lat, body.pickup_lng, get_service_area_polygon(a)
-            )
+            and point_in_polygon(body.pickup_lat, body.pickup_lng, get_service_area_polygon(a))
         ),
         None,
     )
@@ -990,11 +943,7 @@ async def estimate_ride(
 
     estimates = []
     for fare_info in fares:
-        surge = (
-            Decimal("1.0")
-            if corporate_bypass
-            else _d(fare_info.get("surge_multiplier", 1.0))
-        )
+        surge = Decimal("1.0") if corporate_bypass else _d(fare_info.get("surge_multiplier", 1.0))
         fb = calculate_fare(
             fare_info,
             distance_km,
@@ -1029,9 +978,7 @@ async def estimate_ride(
         nearby_for_type = drivers_by_type.get(vt_id, [])
         driver_count = len(nearby_for_type)
         is_available = driver_count > 0
-        wav_available = sum(
-            1 for entry in nearby_for_type if entry["driver"].get("is_wav")
-        )
+        wav_available = sum(1 for entry in nearby_for_type if entry["driver"].get("is_wav"))
 
         # Calculate ETA: closest driver's distance / avg speed (30km/h in city)
         eta_minutes = None
@@ -1089,10 +1036,7 @@ async def estimate_ride(
     logger.info(
         "[estimate] returning %d estimates: %s",
         len(estimates),
-        [
-            (e["vehicle_type"].get("name", "?"), e["available"], e["driver_count"])
-            for e in estimates
-        ],
+        [(e["vehicle_type"].get("name", "?"), e["available"], e["driver_count"]) for e in estimates],
     )
     return estimates
 
@@ -1133,9 +1077,7 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
                     },
                 )
             except Exception as _col_exc:
-                logger.warning(
-                    f"[AUTO-CANCEL] attribution write failed ({_col_exc}); retrying minimal"
-                )
+                logger.warning(f"[AUTO-CANCEL] attribution write failed ({_col_exc}); retrying minimal")
                 await db_supabase.update_ride(r_id, base_update)
             await manager.send_personal_message(
                 {
@@ -1169,9 +1111,7 @@ async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):
                 "No nearby drivers were found. Your ride has been automatically cancelled. Please try again.",
                 {"type": "ride_cancelled", "ride_id": r_id, "is_auto": True},
             )
-            logger.info(
-                f"Ride {r_id} auto-cancelled after {timeout_seconds}s - no driver found"
-            )
+            logger.info(f"Ride {r_id} auto-cancelled after {timeout_seconds}s - no driver found")
     except Exception as e:
         logger.error(f"Ride timeout handler error for {r_id}: {e}", exc_info=True)
 
@@ -1189,9 +1129,7 @@ async def create_ride(
     # "parameter `request` must be an instance of starlette.requests.Request"
     # for every call. The Pydantic body is ``body`` — do not rename it
     # back to ``request`` without also reworking the rate-limit decorator.
-    validate_ride_location(
-        body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng
-    )
+    validate_ride_location(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng)
 
     # R-P1-7: Idempotency — if the client retries after a network drop, return
     # the previously-created ride instead of charging the rider twice.
@@ -1260,9 +1198,7 @@ async def create_ride(
             message_key=ErrorKeys.PAYMENT_UNPAID_RIDE_BLOCK,
         )
 
-    distance_km = calculate_distance(
-        body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng
-    )
+    distance_km = calculate_distance(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng)
     duration_minutes = int(distance_km / 30 * 60) + 5
 
     # Fetch service_areas ONCE for this request and share across:
@@ -1271,34 +1207,26 @@ async def create_ride(
     # table independently — 3-4 full scans per POST /rides.
     all_areas = []
     try:
-        all_areas = await db_supabase.get_rows(
-            "service_areas", {"is_active": True}, limit=100
-        )
+        all_areas = await db_supabase.get_rows("service_areas", {"is_active": True}, limit=100)
     except Exception as e:
         logger.error(f"Failed to fetch service areas: {e}", exc_info=True)
 
     # Resolve the pickup service area once and pass the match downstream.
-    matched_area = await db_supabase.get_service_area_for_point(
-        body.pickup_lat, body.pickup_lng
-    )
+    matched_area = await db_supabase.get_service_area_for_point(body.pickup_lat, body.pickup_lng)
     if matched_area is None and all_areas:
         matched_area = next(
             (
                 a
                 for a in all_areas
                 if get_service_area_polygon(a)
-                and point_in_polygon(
-                    body.pickup_lat, body.pickup_lng, get_service_area_polygon(a)
-                )
+                and point_in_polygon(body.pickup_lat, body.pickup_lng, get_service_area_polygon(a))
             ),
             None,
         )
     service_area_id = matched_area["id"] if matched_area else None
 
     # Vehicle types are also needed by fare building — fetch once, reuse.
-    vehicle_types = await db_supabase.get_rows(
-        "vehicle_types", {"is_active": True}, limit=100
-    )
+    vehicle_types = await db_supabase.get_rows("vehicle_types", {"is_active": True}, limit=100)
 
     fares = await _fares_for_location_impl(
         body.pickup_lat,
@@ -1367,9 +1295,7 @@ async def create_ride(
     # multiplier than the rider was shown — a hidden-fee violation. Reset to 1.0
     # unconditionally when is_scheduled is True or a scheduled_time is present.
     if (body.is_scheduled or body.scheduled_time) and surge > Decimal("1.0"):
-        logger.info(
-            f"Scheduled ride: surge reset from {float(surge)} to 1.0 for rider={current_user['id']}"
-        )
+        logger.info(f"Scheduled ride: surge reset from {float(surge)} to 1.0 for rider={current_user['id']}")
         surge = Decimal("1.0")
 
     # Airport surcharge (pickup, dropoff, or any stop in airport sub-region).
@@ -1385,9 +1311,7 @@ async def create_ride(
     airport_fee = _d(airport_result.get("airport_fee", 0.0))
     airport_zone_name = airport_result.get("airport_zone_name")
 
-    fb = calculate_fare(
-        fare_info, distance_km, duration_minutes, surge=surge, airport_fee=airport_fee
-    )
+    fb = calculate_fare(fare_info, distance_km, duration_minutes, surge=surge, airport_fee=airport_fee)
     base_fare = fb.base_fare
     distance_fare = fb.distance_fare
     time_fare = fb.time_fare
@@ -1450,11 +1374,7 @@ async def create_ride(
                     reasons.append("Insufficient corporate allowance balance.")
                 else:
                     reasons.append(f"Violated corporate policy: {rule}.")
-            message = (
-                "Blocked by company policy:\n" + "\n".join(reasons)
-                if reasons
-                else "Violated corporate policy."
-            )
+            message = "Blocked by company policy:\n" + "\n".join(reasons) if reasons else "Violated corporate policy."
             raise HTTPException(
                 status_code=403,
                 detail={
@@ -1542,12 +1462,8 @@ async def create_ride(
         _corp_company_id = body.corporate_account_id
 
         # 1. Resolve active membership
-        _memberships = await db_supabase.list_active_memberships_for_user(
-            current_user["id"]
-        )
-        _membership = next(
-            (m for m in _memberships if m.get("company_id") == _corp_company_id), None
-        )
+        _memberships = await db_supabase.list_active_memberships_for_user(current_user["id"])
+        _membership = next((m for m in _memberships if m.get("company_id") == _corp_company_id), None)
         if not _membership:
             raise HTTPException(
                 status_code=400,
@@ -1578,17 +1494,12 @@ async def create_ride(
         _allowance = _policy_result.allowance
         _policy = _policy_result.policy
         if _allowance.get("type") != "unlimited":
-            _remaining = _d(str(_allowance.get("amount") or 0)) - max(
-                _d(str(_allowance.get("used") or 0)), _d("0")
-            )
+            _remaining = _d(str(_allowance.get("amount") or 0)) - max(_d(str(_allowance.get("used") or 0)), _d("0"))
             _master_permitted = _policy.get("allowed_payment_source", "both") in (
                 "master_only",
                 "both",
             )
-            if (
-                _remaining < _round(_d(str(_f(total_fare))) * _d("1.5"))
-                and not _master_permitted
-            ):
+            if _remaining < _round(_d(str(_f(total_fare))) * _d("1.5")) and not _master_permitted:
                 raise HTTPException(
                     status_code=400,
                     detail={"reason": "allowance_low"},
@@ -1622,16 +1533,12 @@ async def create_ride(
                 inserted = await db_supabase.insert_ride(ride_data)
                 break
             if "rides_one_active_per_rider" in msg:
-                raise HTTPException(
-                    status_code=409, detail="You already have an active ride"
-                ) from e
+                raise HTTPException(status_code=409, detail="You already have an active ride") from e
             if "unique" in msg or "duplicate" in msg or "23505" in msg:
                 continue  # retry with a new code for ride_code conflicts
             raise
     else:
-        logger.error(
-            f"create_ride: could not allocate unique ride_code after 3 tries: {last_exc}"
-        )
+        logger.error(f"create_ride: could not allocate unique ride_code after 3 tries: {last_exc}")
         raise HTTPException(status_code=503, detail="Could not allocate ride code")
 
     fresh_ride = inserted or ride_data
@@ -1665,6 +1572,13 @@ async def create_ride(
             )
             if validation.get("valid"):
                 discount = _d(validation["discount_amount"])
+                # Backstop cap: promos discount the ride fare only (driver
+                # earnings = base+dist+time), never fees or taxes. _validate_promo_for_user
+                # already caps for flat/percentage promos; mirror it here so any
+                # future validation path cannot store a discount > ride_portion.
+                # free_ride covers the full grand_total by design and bypasses this cap.
+                if not validation.get("free_ride") and ride_portion > 0:
+                    discount = min(discount, ride_portion)
                 application_id = await _record_promo_application(
                     promo_id=validation["promo_id"],
                     code=validation["code"],
@@ -1672,9 +1586,7 @@ async def create_ride(
                     discount=discount,
                 )
                 discounted_total = _f(_round(server_fare - discount))
-                discounted_grand = _f(
-                    _round(_d(fresh_ride.get("grand_total", server_fare)) - discount)
-                )
+                discounted_grand = _f(_round(_d(fresh_ride.get("grand_total", server_fare)) - discount))
                 await db_supabase.update_one(
                     "rides",
                     {"id": ride.id},
@@ -1746,11 +1658,7 @@ async def create_ride(
             "ride_created",
             "rides",
             ride.id,
-            {
-                "status": (
-                    updated_ride.get("status") if updated_ride else RideStatus.SEARCHING
-                )
-            },
+            {"status": (updated_ride.get("status") if updated_ride else RideStatus.SEARCHING)},
         )
     )
     return serialize_doc(updated_ride)
@@ -1761,9 +1669,7 @@ from fastapi import Request  # noqa: E402
 
 @ride_read_limit
 @api_router.get("/active")
-async def get_active_ride(
-    request: Request = None, current_user: dict = Depends(get_current_user)
-):
+async def get_active_ride(request: Request = None, current_user: dict = Depends(get_current_user)):
     """Get rider's current active/pending ride (if any). Used on app launch to resume."""
     # First check for rides that need payment (completed but not paid)
     # Then check for active rides
@@ -1809,11 +1715,7 @@ async def get_active_ride(
             user = await db_supabase.get_user_by_id(driver.get("user_id"))
             driver = {
                 "id": driver["id"],
-                "name": (
-                    f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
-                    if user
-                    else "Driver"
-                ),
+                "name": (f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else "Driver"),
                 "rating": driver.get("rating", 4.8),
                 "total_rides": driver.get("total_rides", 0),
                 "vehicle_make": driver.get("vehicle_make"),
@@ -1851,9 +1753,7 @@ async def get_ride_history(
     # Fetching 500 rows and slicing in Python caused O(n) reads on busy accounts.
     cursor_ts = None
     if before:
-        cursor_ride = await db_supabase.find_one(
-            "rides", {"id": before, "rider_id": current_user["id"]}
-        )
+        cursor_ride = await db_supabase.find_one("rides", {"id": before, "rider_id": current_user["id"]})
         if cursor_ride:
             cursor_ts = cursor_ride.get("created_at")
 
@@ -1879,8 +1779,7 @@ async def get_ride_history(
     rides = [
         r
         for r in candidates
-        if r.get("status") == RideStatus.COMPLETED
-        or (r.get("status") == RideStatus.CANCELLED and r.get("driver_id"))
+        if r.get("status") == RideStatus.COMPLETED or (r.get("status") == RideStatus.CANCELLED and r.get("driver_id"))
     ][:limit]
 
     for r in rides:
@@ -1893,9 +1792,7 @@ async def get_ride_history(
 
 @ride_read_limit
 @api_router.get("/scheduled")
-async def get_scheduled_rides(
-    request: Request = None, current_user: dict = Depends(get_current_user)
-):
+async def get_scheduled_rides(request: Request = None, current_user: dict = Depends(get_current_user)):
     """Get all upcoming scheduled rides for the current rider."""
     rides = await db_supabase.get_rows(
         "rides",
@@ -1936,9 +1833,7 @@ async def get_ride(
     if not (is_rider or is_driver):
         # Admin check
         if current_user.get("role") != "admin":
-            raise HTTPException(
-                status_code=403, detail="Not authorized to view this ride"
-            )
+            raise HTTPException(status_code=403, detail="Not authorized to view this ride")
 
     # Include driver details if assigned.
     # Previously this dumped the ENTIRE driver row to the rider, which
@@ -1985,32 +1880,20 @@ async def get_ride(
             # Per-service-area overrides take priority over global settings
             area = None
             if ride.get("service_area_id"):
-                area = await db_supabase.find_one(
-                    "service_areas", {"id": ride["service_area_id"]}
-                )
+                area = await db_supabase.find_one("service_areas", {"id": ride["service_area_id"]})
             if area and area.get("free_cancel_window_seconds") is not None:
                 free_cancel_window = int(area["free_cancel_window_seconds"])
             else:
-                free_cancel_window = int(
-                    settings.get("free_cancel_window_seconds", 120)
-                )
+                free_cancel_window = int(settings.get("free_cancel_window_seconds", 120))
             fee_admin = Decimal(
-                str(
-                    (area or {}).get("cancel_fee_admin_share")
-                    or settings.get("cancellation_fee_admin", "0.50")
-                )
+                str((area or {}).get("cancel_fee_admin_share") or settings.get("cancellation_fee_admin", "0.50"))
             )
             fee_driver = Decimal(
-                str(
-                    (area or {}).get("cancel_fee_driver_share")
-                    or settings.get("cancellation_fee_driver", "4.00")
-                )
+                str((area or {}).get("cancel_fee_driver_share") or settings.get("cancellation_fee_driver", "4.00"))
             )
             cancellation_fee_amount = fee_admin + fee_driver
         except Exception:
-            logger.error(
-                "Failed to fetch app settings for cancellation config", exc_info=True
-            )
+            logger.error("Failed to fetch app settings for cancellation config", exc_info=True)
 
     driver_accepted_at = ride.get("driver_accepted_at")
     ride_status = ride.get("status")
@@ -2024,9 +1907,7 @@ async def get_ride(
 
         try:
             if isinstance(driver_accepted_at, str):
-                accepted_dt = datetime.fromisoformat(
-                    driver_accepted_at.replace("Z", "+00:00")
-                )
+                accepted_dt = datetime.fromisoformat(driver_accepted_at.replace("Z", "+00:00"))
             else:
                 accepted_dt = driver_accepted_at
             if accepted_dt.tzinfo is None:
@@ -2054,9 +1935,7 @@ async def get_ride(
             else:
                 noshow_wait_seconds = int(settings.get("noshow_wait_seconds", 300))
         except Exception:
-            logger.warning(
-                "Failed to load settings or service area override for noshow_wait_seconds"
-            )
+            logger.warning("Failed to load settings or service area override for noshow_wait_seconds")
     ride["noshow_wait_seconds"] = noshow_wait_seconds
 
     if ride_status == RideStatus.DRIVER_ARRIVED:
@@ -2066,9 +1945,7 @@ async def get_ride(
 
             try:
                 if isinstance(driver_arrived_at, str):
-                    arrived_dt = datetime.fromisoformat(
-                        driver_arrived_at.replace("Z", "+00:00")
-                    )
+                    arrived_dt = datetime.fromisoformat(driver_arrived_at.replace("Z", "+00:00"))
                 else:
                     arrived_dt = driver_arrived_at
                 if arrived_dt.tzinfo is None:
@@ -2095,9 +1972,7 @@ async def get_ride(
         if get_app_settings:
             try:
                 settings = await get_app_settings()
-                offer_timeout_seconds = int(
-                    settings.get("ride_offer_timeout_seconds", 15)
-                )
+                offer_timeout_seconds = int(settings.get("ride_offer_timeout_seconds", 15))
             except Exception:
                 # Non-fatal: fall back to hardcoded default if settings fetch fails
                 logger.error(
@@ -2110,9 +1985,7 @@ async def get_ride(
                 from datetime import datetime, timedelta, timezone
 
                 if isinstance(driver_notified_at, str):
-                    notified_dt = datetime.fromisoformat(
-                        driver_notified_at.replace("Z", "+00:00")
-                    )
+                    notified_dt = datetime.fromisoformat(driver_notified_at.replace("Z", "+00:00"))
                 else:
                     notified_dt = driver_notified_at
                 if notified_dt.tzinfo is None:
@@ -2165,9 +2038,7 @@ async def add_tip(
     # path drifted when summed with existing driver_earnings.
     tip_amount = _round(_d(req.amount))
     if tip_amount <= 0:
-        raise HTTPException(
-            status_code=400, detail="Tip amount must be greater than zero"
-        )
+        raise HTTPException(status_code=400, detail="Tip amount must be greater than zero")
 
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
@@ -2272,9 +2143,7 @@ async def process_payment(
         )
 
     if ride.get("payment_status") in ("paid", "processing"):
-        logger.info(
-            f"[PAYMENT] Ride {ride_id} already {ride['payment_status']} — skipping duplicate charge"
-        )
+        logger.info(f"[PAYMENT] Ride {ride_id} already {ride['payment_status']} — skipping duplicate charge")
         return {
             "success": True,
             "charged_amount": _money_str(
@@ -2311,15 +2180,17 @@ async def process_payment(
 
     if payment_method == "wallet":
         result = await settle_wallet(
-            ride, ride_id, current_user["id"], total_charge, tip_amount,
+            ride,
+            ride_id,
+            current_user["id"],
+            total_charge,
+            tip_amount,
             fare_breakdown=_build_fare_breakdown(ride),
         )
     elif payment_method == "company_allowance":
         result = await settle_corporate(ride, ride_id, total_charge, tip_amount)
     else:
-        result = await settle_card(
-            ride, ride_id, current_user["id"], total_charge, tip_amount
-        )
+        result = await settle_card(ride, ride_id, current_user["id"], total_charge, tip_amount)
 
     if not result.success:
         detail = result.error or "Payment failed"
@@ -2345,9 +2216,7 @@ async def process_payment(
 
 
 @api_router.get("/{ride_id}/share")
-async def get_share_trip_link(
-    ride_id: str, current_user: dict = Depends(get_current_user)
-):
+async def get_share_trip_link(ride_id: str, current_user: dict = Depends(get_current_user)):
     """Generate a shareable trip tracking link for safety contacts (like Uber's 'Share My Trip')."""
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
@@ -2357,9 +2226,7 @@ async def get_share_trip_link(
         raise HTTPException(status_code=403, detail="Not authorized to share this ride")
 
     if ride.get("status") in RideStatus.terminal_statuses():
-        raise HTTPException(
-            status_code=400, detail="Cannot share a completed or cancelled ride"
-        )
+        raise HTTPException(status_code=400, detail="Cannot share a completed or cancelled ride")
 
     # Generate or reuse a share token (with creation timestamp for expiry)
     share_token = ride.get("shared_trip_token")
@@ -2399,9 +2266,7 @@ async def share_trip_with_contact(
     if ride.get("rider_id") != current_user["id"]:
         raise HTTPException(status_code=403, detail="Not authorized")
     if ride.get("status") in RideStatus.terminal_statuses():
-        raise HTTPException(
-            status_code=400, detail="Cannot share a completed or cancelled ride"
-        )
+        raise HTTPException(status_code=400, detail="Cannot share a completed or cancelled ride")
 
     # Get or create share token
     share_token = ride.get("shared_trip_token")
@@ -2413,9 +2278,7 @@ async def share_trip_with_contact(
             {
                 "$set": {
                     "shared_trip_token": share_token,
-                    "shared_trip_token_created_at": datetime.now(
-                        timezone.utc
-                    ).isoformat(),
+                    "shared_trip_token_created_at": datetime.now(timezone.utc).isoformat(),
                 }
             },
         )
@@ -2442,11 +2305,7 @@ async def share_trip_with_contact(
     contact_user = await db.find_one("users", {"phone": body.contact_phone})
     if contact_user:
         rider = await db.find_one("users", {"id": current_user["id"]})
-        rider_name = (
-            f"{rider.get('first_name', '')} {rider.get('last_name', '')}".strip()
-            if rider
-            else "Someone"
-        )
+        rider_name = f"{rider.get('first_name', '')} {rider.get('last_name', '')}".strip() if rider else "Someone"
         try:
             await send_push_notification(
                 contact_user["id"],
@@ -2474,9 +2333,7 @@ async def share_trip_with_contact(
 
 
 @api_router.get("/{ride_id}/shared-contacts")
-async def get_shared_contacts(
-    ride_id: str, current_user: dict = Depends(get_current_user)
-):
+async def get_shared_contacts(ride_id: str, current_user: dict = Depends(get_current_user)):
     """Get list of contacts this ride has been shared with."""
     ride = await db.find_one("rides", {"id": ride_id})
     if not ride:
@@ -2493,9 +2350,7 @@ async def track_shared_ride(share_token: str):
         await db_supabase.get_rows("rides", {"shared_trip_token": share_token}, limit=1)
     )
     if not ride:
-        raise HTTPException(
-            status_code=404, detail="Shared ride not found or link expired"
-        )
+        raise HTTPException(status_code=404, detail="Shared ride not found or link expired")
 
     # Expire share tokens after 24 hours
     token_created = ride.get("shared_trip_token_created_at")
@@ -2503,18 +2358,12 @@ async def track_shared_ride(share_token: str):
         from datetime import timedelta
 
         try:
-            created_dt = (
-                datetime.fromisoformat(token_created)
-                if isinstance(token_created, str)
-                else token_created
-            )
+            created_dt = datetime.fromisoformat(token_created) if isinstance(token_created, str) else token_created
             if datetime.now(timezone.utc) - created_dt > timedelta(hours=24):
                 raise HTTPException(status_code=404, detail="Share link has expired")
         except (ValueError, TypeError):
             pass  # Malformed timestamp — allow access but log
-            logger.error(
-                f"Malformed shared_trip_token_created_at for ride {ride.get('id')}"
-            )
+            logger.error(f"Malformed shared_trip_token_created_at for ride {ride.get('id')}")
 
     if ride.get("status") in RideStatus.terminal_statuses():
         return {
@@ -2560,9 +2409,7 @@ async def rate_driver(
         raise HTTPException(status_code=404, detail="Ride not found or unauthorized")
 
     if ride.get("status") != RideStatus.COMPLETED:
-        raise HTTPException(
-            status_code=400, detail="Ride must be completed before rating"
-        )
+        raise HTTPException(status_code=400, detail="Ride must be completed before rating")
 
     # Save rating using existing columns (rider_rating = rating rider gave the driver)
     await db_supabase.update_ride(
@@ -2599,9 +2446,9 @@ async def rate_driver(
         old_count = int(driver.get("total_ratings") or 0)
         old_avg = Decimal(str(driver.get("rating") or 0))
         new_count = old_count + 1
-        new_avg = (
-            (old_avg * old_count + Decimal(str(rating_data.rating))) / new_count
-        ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        new_avg = ((old_avg * old_count + Decimal(str(rating_data.rating))) / new_count).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
         await db_supabase.update_one(
             "drivers",
             {"id": driver_id},
@@ -2616,11 +2463,7 @@ async def rate_driver(
     # instead of only noticing on their next profile check.
     if driver and driver.get("user_id") and rating_data.rating:
         stars = "⭐" * int(rating_data.rating)
-        tip_note = (
-            f" + ${rating_data.tip_amount:.2f} tip!"
-            if rating_data.tip_amount > 0
-            else ""
-        )
+        tip_note = f" + ${rating_data.tip_amount:.2f} tip!" if rating_data.tip_amount > 0 else ""
         try:
             await send_push_notification(
                 driver["user_id"],
@@ -2660,9 +2503,7 @@ async def cancel_ride_rider(
     except ImportError:
         from logging_utils import diag_logger  # type: ignore
 
-    diag_logger.info(
-        f"[CANCEL] called ride_id={ride_id} user_id={current_user.get('id')}"
-    )
+    diag_logger.info(f"[CANCEL] called ride_id={ride_id} user_id={current_user.get('id')}")
 
     ride = await _require_ride_in_state_rider(
         ride_id,
@@ -2684,9 +2525,7 @@ async def cancel_ride_rider(
     settings = await get_app_settings()
     area = None
     if ride.get("service_area_id"):
-        area = await db_supabase.find_one(
-            "service_areas", {"id": ride["service_area_id"]}
-        )
+        area = await db_supabase.find_one("service_areas", {"id": ride["service_area_id"]})
     charged_admin, charged_driver = calculate_cancellation_fee(ride, settings, area)
 
     total_cancel_fee = _round(charged_admin + charged_driver)
@@ -2695,9 +2534,7 @@ async def cancel_ride_rider(
     if total_cancel_fee > 0:
         payment_method = (ride.get("payment_method") or "card").lower()
         if payment_method == "wallet":
-            rider_wallet = await db_supabase.find_one(
-                "wallets", {"user_id": current_user["id"]}
-            )
+            rider_wallet = await db_supabase.find_one("wallets", {"user_id": current_user["id"]})
             if rider_wallet:
                 old_balance = _round(_d(rider_wallet.get("balance", 0)))
                 new_balance = max(_round(old_balance - total_cancel_fee), Decimal("0"))
@@ -2757,9 +2594,7 @@ async def cancel_ride_rider(
             },
         )
     except Exception as _col_exc:
-        logger.warning(
-            f"[CANCEL] attribution write failed ({_col_exc}); retrying minimal"
-        )
+        logger.warning(f"[CANCEL] attribution write failed ({_col_exc}); retrying minimal")
         await db_supabase.update_ride(ride_id, _base_update)
 
     # Verify the cancel actually landed in the database. Same class of
@@ -2831,9 +2666,7 @@ async def cancel_ride_rider(
         reason="rider_cancelled",
     )
     try:
-        await manager.broadcast_to_admins(
-            {"type": "ride_cancelled", "ride_id": ride_id, "reason": "rider_cancelled"}
-        )
+        await manager.broadcast_to_admins({"type": "ride_cancelled", "ride_id": ride_id, "reason": "rider_cancelled"})
     except Exception as _exc:  # pragma: no cover - best effort
         logger.warning(f"rider cancel admin broadcast failed: {_exc}")
 
@@ -2881,9 +2714,7 @@ async def add_stop_mid_trip(
         RideStatus.DRIVER_ARRIVED,
         RideStatus.IN_PROGRESS,
     ):
-        raise HTTPException(
-            status_code=400, detail="Can only edit stops on an active ride"
-        )
+        raise HTTPException(status_code=400, detail="Can only edit stops on an active ride")
 
     stops = ride.get("stops") or []
     new_stop = {"address": req.address, "lat": req.lat, "lng": req.lng}
@@ -2942,9 +2773,7 @@ async def remove_stop_mid_trip(
         RideStatus.DRIVER_ARRIVED,
         RideStatus.IN_PROGRESS,
     ):
-        raise HTTPException(
-            status_code=400, detail="Can only edit stops on an active ride"
-        )
+        raise HTTPException(status_code=400, detail="Can only edit stops on an active ride")
 
     stops = ride.get("stops") or []
     if stop_index < 0 or stop_index >= len(stops):
@@ -3075,9 +2904,7 @@ async def trigger_emergency(
     is_driver = driver and ride.get("driver_id") == driver["id"]
 
     if not (is_rider or is_driver):
-        raise HTTPException(
-            status_code=403, detail="Not authorized to trigger emergency for this ride"
-        )
+        raise HTTPException(status_code=403, detail="Not authorized to trigger emergency for this ride")
 
     incident = {
         "id": str(uuid.uuid4()),
@@ -3097,36 +2924,22 @@ async def trigger_emergency(
     # replica's admin connections. The previous ``admin_notifications``
     # client_id pointed at no real socket, so alerts silently disappeared.
     try:
-        await manager.broadcast_to_admins(
-            {"type": "emergency_alert", "incident": incident}
-        )
+        await manager.broadcast_to_admins({"type": "emergency_alert", "incident": incident})
     except Exception as _exc:  # pragma: no cover - best effort
         logger.error(f"emergency_alert admin broadcast failed: {_exc}", exc_info=True)
-    logger.critical(
-        f"EMERGENCY ALERT TRIGGERED for ride {ride_id} by user {current_user['id']}"
-    )
+    logger.critical(f"EMERGENCY ALERT TRIGGERED for ride {ride_id} by user {current_user['id']}")
 
     # Notify emergency contacts via SMS (Twilio when configured, console log in dev)
     contacts_notified = 0
     try:
         sms_settings = await get_app_settings()
-        contacts_rows = await db_supabase.get_rows(
-            "emergency_contacts", {"user_id": current_user["id"]}, limit=5
-        )
+        contacts_rows = await db_supabase.get_rows("emergency_contacts", {"user_id": current_user["id"]}, limit=5)
         contacts = list(contacts_rows) if contacts_rows else []
 
         user = await db_supabase.get_user_by_id(current_user["id"])
-        user_name = (
-            f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
-            if user
-            else "A Spinr user"
-        )
+        user_name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else "A Spinr user"
 
-        location_text = (
-            " Location shared with emergency services."
-            if body.latitude and body.longitude
-            else ""
-        )
+        location_text = " Location shared with emergency services." if body.latitude and body.longitude else ""
         sms_body = (
             f"URGENT: {user_name} triggered an emergency alert during a Spinr ride."
             f"{location_text} Call them or emergency services immediately."
@@ -3139,22 +2952,14 @@ async def trigger_emergency(
             result = await send_sms(
                 phone,
                 sms_body,
-                twilio_sid=(
-                    sms_settings.get("twilio_account_sid", "") if sms_settings else ""
-                ),
-                twilio_token=(
-                    sms_settings.get("twilio_auth_token", "") if sms_settings else ""
-                ),
-                twilio_from=(
-                    sms_settings.get("twilio_from_number", "") if sms_settings else ""
-                ),
+                twilio_sid=(sms_settings.get("twilio_account_sid", "") if sms_settings else ""),
+                twilio_token=(sms_settings.get("twilio_auth_token", "") if sms_settings else ""),
+                twilio_from=(sms_settings.get("twilio_from_number", "") if sms_settings else ""),
             )
             if result.get("success"):
                 contacts_notified += 1
             else:
-                logger.error(
-                    f"SOS SMS failed for contact {contact.get('id')}: {result.get('error')}"
-                )
+                logger.error(f"SOS SMS failed for contact {contact.get('id')}: {result.get('error')}")
 
         if contacts:
             logger.info(
@@ -3188,9 +2993,7 @@ async def get_chat_status(ride_id: str, current_user: dict = Depends(get_current
         return {"available": False, "reason": "Ride was cancelled"}
 
     if status == RideStatus.COMPLETED:
-        completed_at = parse_iso_utc(
-            ride.get("ride_completed_at") or ride.get("updated_at")
-        )
+        completed_at = parse_iso_utc(ride.get("ride_completed_at") or ride.get("updated_at"))
         if completed_at:
             elapsed = (datetime.now(timezone.utc) - completed_at).total_seconds()
             remaining = max(0, 86400 - elapsed)
@@ -3218,9 +3021,7 @@ async def get_call_info(ride_id: str, current_user: dict = Depends(get_current_u
         raise HTTPException(status_code=404, detail="Ride not found")
 
     if ride.get("status") in RideStatus.terminal_statuses():
-        raise HTTPException(
-            status_code=400, detail="Cannot call on a completed or cancelled ride"
-        )
+        raise HTTPException(status_code=400, detail="Cannot call on a completed or cancelled ride")
 
     is_rider = ride.get("rider_id") == current_user["id"]
     driver = await db.find_one("drivers", {"user_id": current_user["id"]})
@@ -3269,9 +3070,7 @@ async def get_call_info(ride_id: str, current_user: dict = Depends(get_current_u
 
 
 @api_router.get("/{ride_id}/messages")
-async def get_ride_messages(
-    ride_id: str, current_user: dict = Depends(get_current_user)
-):
+async def get_ride_messages(ride_id: str, current_user: dict = Depends(get_current_user)):
     """Fetch persistent chat messages for a ride"""
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
@@ -3331,31 +3130,20 @@ async def send_ride_message(
 
     # Block chat on cancelled rides
     if ride.get("status") == RideStatus.CANCELLED:
-        raise HTTPException(
-            status_code=400, detail="Cannot send messages on a cancelled ride"
-        )
+        raise HTTPException(status_code=400, detail="Cannot send messages on a cancelled ride")
 
     # Post-trip chat window: allow messages for 24h after completion
     if ride.get("status") == RideStatus.COMPLETED:
-        completed_at = parse_iso_utc(
-            ride.get("ride_completed_at") or ride.get("updated_at")
-        )
-        if (
-            completed_at
-            and (datetime.now(timezone.utc) - completed_at).total_seconds() > 86400
-        ):
-            raise HTTPException(
-                status_code=400, detail="Post-trip chat window has expired (24 hours)"
-            )
+        completed_at = parse_iso_utc(ride.get("ride_completed_at") or ride.get("updated_at"))
+        if completed_at and (datetime.now(timezone.utc) - completed_at).total_seconds() > 86400:
+            raise HTTPException(status_code=400, detail="Post-trip chat window has expired (24 hours)")
 
     is_rider = ride.get("rider_id") == current_user["id"]
     driver = await db.find_one("drivers", {"user_id": current_user["id"]})
     is_driver = driver and ride.get("driver_id") == driver["id"]
 
     if not (is_rider or is_driver):
-        raise HTTPException(
-            status_code=403, detail="Not authorized to send messages in this ride"
-        )
+        raise HTTPException(status_code=403, detail="Not authorized to send messages in this ride")
 
     sender = "rider" if is_rider else "driver"
     msg_data = {
@@ -3378,9 +3166,7 @@ async def send_ride_message(
         target = f"rider_{ride['rider_id']}"
 
     if target:
-        await manager.send_personal_message(
-            {**msg_data, "type": "chat_message"}, target
-        )
+        await manager.send_personal_message({**msg_data, "type": "chat_message"}, target)
 
     return {"success": True, "message": msg_data}
 
@@ -3426,9 +3212,7 @@ async def cancel_scheduled_ride(
             {**_base, "cancelled_by": "rider", "cancellation_type": "rider_cancel"},
         )
     except Exception as _col_exc:
-        logger.warning(
-            f"[SCHED-CANCEL] attribution write failed ({_col_exc}); retrying minimal"
-        )
+        logger.warning(f"[SCHED-CANCEL] attribution write failed ({_col_exc}); retrying minimal")
         await db_supabase.update_ride(ride_id, _base)
     return {"success": True}
 
@@ -3531,9 +3315,7 @@ async def rider_complete_ride(
     driver_id = ride.get("driver_id")
     driver_user_id = None
     if driver_id:
-        await db_supabase.set_driver_available(
-            driver_id, available=True, total_rides_inc=1
-        )
+        await db_supabase.set_driver_available(driver_id, available=True, total_rides_inc=1)
         try:
             await record_period_transition(driver_id, 1)
         except Exception:
@@ -3573,26 +3355,20 @@ async def rider_complete_ride(
             }
         )
     except Exception as _bcast_err:
-        logger.warning(
-            "admin broadcast failed for ride_completed %s: %s", ride_id, _bcast_err
-        )
+        logger.warning("admin broadcast failed for ride_completed %s: %s", ride_id, _bcast_err)
 
     return completed_ride or ride
 
 
 @api_router.get("/{ride_id}/receipt")
-async def get_ride_receipt(
-    ride_id: str, current_user: dict = Depends(get_current_user)
-):
+async def get_ride_receipt(ride_id: str, current_user: dict = Depends(get_current_user)):
     """Get a detailed receipt for a completed ride"""
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
     if ride.get("rider_id") != current_user["id"]:
-        raise HTTPException(
-            status_code=403, detail="Not authorized to view this receipt"
-        )
+        raise HTTPException(status_code=403, detail="Not authorized to view this receipt")
 
     if ride.get("status") not in RideStatus.terminal_statuses():
         raise HTTPException(
@@ -3611,25 +3387,19 @@ async def get_ride_receipt(
     vehicle = None
     if ride.get("vehicle_type_id"):
         vehicle = (lambda _r: _r[0] if _r else None)(
-            await db_supabase.get_rows(
-                "vehicle_types", {"id": ride["vehicle_type_id"]}, limit=1
-            )
+            await db_supabase.get_rows("vehicle_types", {"id": ride["vehicle_type_id"]}, limit=1)
         )
 
     corporate_account = None
     if ride.get("corporate_account_id"):
         corporate_account = (lambda _r: _r[0] if _r else None)(
-            await db_supabase.get_rows(
-                "corporate_accounts", {"id": ride["corporate_account_id"]}, limit=1
-            )
+            await db_supabase.get_rows("corporate_accounts", {"id": ride["corporate_account_id"]}, limit=1)
         )
 
     receipt_data = {
         "ride_id": ride_id,
         "ride_code": ride.get("ride_code"),
-        "date": ride.get("ride_completed_at")
-        or ride.get("cancelled_at")
-        or ride.get("created_at"),
+        "date": ride.get("ride_completed_at") or ride.get("cancelled_at") or ride.get("created_at"),
         "status": ride.get("status"),
         "pickup_address": ride.get("pickup_address"),
         "dropoff_address": ride.get("dropoff_address"),
@@ -3642,10 +3412,7 @@ async def get_ride_receipt(
         "airport_fee": ride.get("airport_fee", 0),
         "booking_fee": ride.get("booking_fee", 0),
         "cancellation_fee": (
-            (
-                ride.get("cancellation_fee_admin", 0)
-                + ride.get("cancellation_fee_driver", 0)
-            )
+            (ride.get("cancellation_fee_admin", 0) + ride.get("cancellation_fee_driver", 0))
             if ride.get("status") == RideStatus.CANCELLED
             else 0
         ),
@@ -3672,9 +3439,7 @@ async def get_ride_receipt(
             if corporate_account
             else (ride.get("payment_method_id") or "Credit Card ending in ****")
         ),
-        "corporate_account_name": (
-            corporate_account.get("company_name") if corporate_account else None
-        ),
+        "corporate_account_name": (corporate_account.get("company_name") if corporate_account else None),
         "driver_name": (
             f"{driver_profile.get('first_name', '')} {driver_profile.get('last_name', '')}".strip()
             if driver_profile
@@ -3700,9 +3465,7 @@ async def email_ride_receipt(
     if ride.get("rider_id") != current_user["id"]:
         raise HTTPException(status_code=403, detail="Not authorized")
     if ride.get("status") not in RideStatus.terminal_statuses():
-        raise HTTPException(
-            status_code=400, detail="Receipts are only available for completed rides"
-        )
+        raise HTTPException(status_code=400, detail="Receipts are only available for completed rides")
 
     tip_amount = Decimal(str(ride.get("tip_amount") or 0))
     email_sent = await send_ride_receipt(ride, current_user["id"], tip_amount)
@@ -3812,9 +3575,7 @@ async def safety_checkin_response(
     user_id = current_user.get("id")
 
     # Verify the ride belongs to this rider and is still in_progress.
-    ride = await db_supabase.get_rows(
-        "rides", {"id": ride_id, "rider_id": user_id}, limit=1
-    )
+    ride = await db_supabase.get_rows("rides", {"id": ride_id, "rider_id": user_id}, limit=1)
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
     if ride[0].get("status") != RideStatus.IN_PROGRESS:

@@ -145,7 +145,7 @@ function DriverArrivingScreenContent() {
   // ── Cancel handler (fixed: errors are caught, user stays on page) ──
   const handleCancel = () => {
     const status = currentRide?.status;
-    const fare = parseFloat(currentRide?.total_fare || '0');
+    const fare = parseFloat((currentRide as any)?.grand_total || currentRide?.total_fare || '0');
 
     const doCancel = async () => {
       cancelInitiatedRef.current = true;

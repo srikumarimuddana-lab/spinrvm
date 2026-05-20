@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useContext } from 'react';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View,
@@ -30,20 +30,12 @@ import { SOSButton } from '@shared/components/SOSButton';
 import { CarMarker } from '@shared/components/CarMarker';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-
-// Public tracking URL base. Recipients (safety contacts) open
-// `${BASE}/${share_token}` — the admin-dashboard `/track/[rideId]` Next.js
-// page renders status/driver/map by calling GET /rides/track/{token}.
-// Override per-env via EXPO_PUBLIC_TRACK_BASE_URL — e.g. point at your
-// local Vercel/Next dev server (http://localhost:3000/track) for testing.
-function getTrackBaseUrl(): string {
-  const fromEnv = process.env.EXPO_PUBLIC_TRACK_BASE_URL?.replace(/\/$/, '');
-  return fromEnv && fromEnv.length > 0 ? fromEnv : 'https://spinr-track.app';
-}
+import { TrackBaseUrlContext } from './_layout';
 
 function RideInProgressScreenContent() {
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
+  const trackBaseUrl = useContext(TrackBaseUrlContext);
   const { currentRide, currentDriver, fetchRide, cancelRide, clearRide, triggerEmergency, isLoading, error, wsConnected } = useRideStore();
   const [eta, setEta] = useState(15);
   const [estimatedTime, setEstimatedTime] = useState('12:45 PM');
@@ -184,6 +176,17 @@ function RideInProgressScreenContent() {
   };
 
   const handleShareTrip = async () => {
+    // Public tracking URL base is served by GET /settings → app_settings.track_base_url
+    // so ops can rotate the domain without a mobile rebuild. Disable the share
+    // action if the admin hasn't configured one yet.
+    if (!trackBaseUrl) {
+      showToast(
+        'Tracking Not Configured',
+        'Live trip tracking is not set up yet. Please contact support.',
+        'warning',
+      );
+      return;
+    }
     // Get share token from backend API
     let shareToken = rideId || 'demo';
     try {
@@ -195,7 +198,7 @@ function RideInProgressScreenContent() {
       // Fall back to ride ID
     }
 
-    const liveTrackingUrl = `${getTrackBaseUrl()}/${shareToken}`;
+    const liveTrackingUrl = `${trackBaseUrl}/${shareToken}`;
     // Include the human-readable ride code so the recipient can quote it
     // to support without guessing at a truncated UUID.
     const rideRef = currentRide?.ride_code
@@ -234,6 +237,14 @@ I've shared my live location with you for safety.
   };
 
   const handleCopyTrackingLink = async () => {
+    if (!trackBaseUrl) {
+      showToast(
+        'Tracking Not Configured',
+        'Live trip tracking is not set up yet. Please contact support.',
+        'warning',
+      );
+      return;
+    }
     let shareToken = rideId || 'demo';
     try {
       const shareRes = await api.get<{ share_token?: string }>(`/rides/${rideId}/share`);
@@ -243,7 +254,7 @@ I've shared my live location with you for safety.
     } catch {
       // Fall back to ride ID
     }
-    const trackingLink = `${getTrackBaseUrl()}/${shareToken}`;
+    const trackingLink = `${trackBaseUrl}/${shareToken}`;
     await Clipboard.setStringAsync(trackingLink);
     showToast('Copied!', 'Live tracking link copied to clipboard.', 'success');
   };

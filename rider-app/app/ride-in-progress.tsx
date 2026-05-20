@@ -42,6 +42,26 @@ function RideInProgressScreenContent() {
   const [currentLocation, setCurrentLocation] = useState('4th Avenue North');
   const [isSharingLocation, setIsSharingLocation] = useState(false);
   const [tripRouteCoords, setTripRouteCoords] = useState<any[]>([]);
+
+  // Source-of-truth rider bill, matching how ride-details.tsx renders "You
+  // paid": sum the server-supplied fare_breakdown line items. Falls through
+  // to grand_total / total_fare scalars only when no breakdown is on the row.
+  // Memoised so all three display sites (fare card, end-ride confirms) share
+  // one number per render.
+  const riderBill = useMemo(() => {
+    const r = currentRide as any;
+    const fb: any[] = Array.isArray(r?.fare_breakdown) ? r.fare_breakdown : [];
+    if (fb.length > 0) {
+      const sum = fb.reduce(
+        (acc, l) => (l?.amount != null ? acc + parseFloat(String(l.amount)) : acc),
+        0,
+      );
+      return Math.max(0, sum);
+    }
+    const gt = parseFloat(r?.grand_total ?? '0');
+    if (gt > 0) return gt;
+    return parseFloat(r?.total_fare ?? '0');
+  }, [currentRide]);
   const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean;
     title: string;
@@ -133,7 +153,7 @@ function RideInProgressScreenContent() {
       setConfirmSheet({
         visible: true,
         title: 'End ride early?',
-        message: `Full fare of $${parseFloat((currentRide as any)?.grand_total || currentRide?.total_fare || '0').toFixed(2)} applies. Your driver will continue.`,
+        message: `Full fare of $${riderBill.toFixed(2)} applies. Your driver will continue.`,
         variant: 'warning',
         buttons: [
           {
@@ -347,28 +367,17 @@ I've shared my live location with you for safety.
           </View>
         </View>
 
-        {/* Fare + Distance — `Fare` is the rider's actual bill, NOT the
-            fare-side subtotal. Prefer grand_total (server source of truth);
-            fall back to a client-side compose only when grand_total is
-            missing on the row, so legacy rides without the column still
-            show something sensible. */}
+        {/* Fare — the rider's bill, computed exactly the same way
+            ride-details.tsx renders "You paid": sum of the server-supplied
+            fare_breakdown line items. This guarantees the in-progress and
+            ride-details pages always agree, regardless of whether
+            grand_total is on the row or how total_fare has been mutated
+            by recalc/promo paths. Falls back to grand_total / total_fare
+            scalars only when fare_breakdown is empty. */}
         <View style={styles.fareRow}>
           <View style={styles.fareItem}>
             <Ionicons name="cash-outline" size={16} color={colors.textDim} />
-            <Text style={styles.fareValue} allowFontScaling={false}>
-              ${(() => {
-                const r = currentRide as any;
-                const gt = parseFloat(r?.grand_total ?? '0');
-                if (gt > 0) return gt.toFixed(2);
-                // Compose from breakdown: subtotal + area_fees + tax − discount
-                const subtotal = parseFloat(r?.total_fare ?? '0');
-                const areaFees = parseFloat(r?.area_fees_total ?? '0');
-                const tax = parseFloat(r?.tax_amount ?? '0');
-                const discount = parseFloat(r?.discount_amount ?? '0');
-                const composed = subtotal + areaFees + tax - discount;
-                return Math.max(0, composed).toFixed(2);
-              })()}
-            </Text>
+            <Text style={styles.fareValue} allowFontScaling={false}>${riderBill.toFixed(2)}</Text>
             <Text style={styles.fareLabel}>Fare</Text>
           </View>
           <View style={styles.fareDivider} />
@@ -428,7 +437,7 @@ I've shared my live location with you for safety.
           setConfirmSheet({
             visible: true,
             title: 'End ride early?',
-            message: `You will be charged the full agreed fare of $${parseFloat((currentRide as any)?.grand_total || currentRide?.total_fare || '0').toFixed(2)}. This cannot be undone.`,
+            message: `You will be charged the full agreed fare of $${riderBill.toFixed(2)}. This cannot be undone.`,
             variant: 'warning',
             buttons: [
               {

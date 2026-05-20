@@ -23,7 +23,8 @@ import MapViewDirections from 'react-native-maps-directions';
 import { useRideStore } from '../store/rideStore';
 import { RideStatus } from '../constants/rideStatus';
 import api from '@shared/api/client';
-import CustomAlert from '@shared/components/CustomAlert';
+import { showToast } from '../store/toastStore';
+import ConfirmSheet from '../components/ConfirmSheet';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { SOSButton } from '@shared/components/SOSButton';
@@ -57,11 +58,11 @@ function DriverArrivingScreenContent() {
   const [rideRouteCoords, setRideRouteCoords] = useState<any[]>([]);
   const [isCancelling, setIsCancelling] = useState(false);
   const cancelInitiatedRef = useRef(false);
-  const [alertState, setAlertState] = useState<{
-    visible: boolean; title: string; message: string;
+  const [confirmSheet, setConfirmSheet] = useState<{
+    visible: boolean; title: string; message?: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
     buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
-  }>({ visible: false, title: '', message: '', variant: 'info' });
+  }>({ visible: false, title: '', variant: 'info' });
 
   // Searching animation
   const pulseAnim = useRef(new Animated.Value(0)).current;
@@ -156,52 +157,48 @@ function DriverArrivingScreenContent() {
       } catch {
         cancelInitiatedRef.current = false;
         setIsCancelling(false);
-        setAlertState({
-          visible: true, title: 'Cancel failed',
-          message: 'Could not cancel the ride. Please try again.',
-          variant: 'danger',
-        });
+        showToast('Cancel Failed', 'Could not cancel the ride. Please try again.', 'danger');
       }
     };
 
     if (status === RideStatus.IN_PROGRESS) {
-      setAlertState({
+      setConfirmSheet({
         visible: true, title: 'Ride in progress',
         message: `If you cancel now, you will be charged the full fare of $${fare.toFixed(2)}.`,
-        variant: 'warning',
+        variant: 'danger',
         buttons: [
-          { text: 'Continue Ride', style: 'cancel' },
           { text: `Cancel & Pay $${fare.toFixed(2)}`, style: 'destructive', onPress: doCancel },
+          { text: 'Continue Ride', style: 'cancel' },
         ],
       });
     } else if (status === RideStatus.DRIVER_ARRIVED) {
-      setAlertState({
+      setConfirmSheet({
         visible: true, title: 'Driver is waiting',
         message: `A cancellation fee of $${cancellationFee.toFixed(2)} will be charged.`,
         variant: 'warning',
         buttons: [
-          { text: 'Keep Ride', style: 'cancel' },
           { text: `Cancel & Pay $${cancellationFee.toFixed(2)}`, style: 'destructive', onPress: doCancel },
+          { text: 'Keep Ride', style: 'cancel' },
         ],
       });
     } else if (status === RideStatus.DRIVER_ACCEPTED) {
-      setAlertState({
+      setConfirmSheet({
         visible: true, title: 'Cancel ride?',
         message: 'Your driver is on the way. Cancel for free right now.',
         variant: 'warning',
         buttons: [
-          { text: 'Keep Ride', style: 'cancel' },
           { text: 'Cancel (Free)', style: 'destructive', onPress: doCancel },
+          { text: 'Keep Ride', style: 'cancel' },
         ],
       });
     } else {
-      setAlertState({
+      setConfirmSheet({
         visible: true, title: 'Cancel search?',
         message: 'Stop looking for a driver? No charge.',
         variant: 'info',
         buttons: [
-          { text: 'Keep searching', style: 'cancel' },
           { text: 'Cancel', onPress: doCancel },
+          { text: 'Keep searching', style: 'cancel' },
         ],
       });
     }
@@ -228,7 +225,7 @@ function DriverArrivingScreenContent() {
   const handleCopyDetails = async () => {
     const d = `Driver: ${currentDriver?.name || 'Searching'} | ${currentDriver?.vehicle_color || ''} ${currentDriver?.vehicle_make || ''} ${currentDriver?.vehicle_model || ''} | Plate: ${currentDriver?.license_plate || 'N/A'}`;
     await Clipboard.setStringAsync(d);
-    setAlertState({ visible: true, title: 'Copied!', message: 'Driver details copied', variant: 'success' });
+    showToast('Copied!', 'Driver details copied to clipboard.', 'success');
   };
 
   // ── Render ──
@@ -453,13 +450,14 @@ function DriverArrivingScreenContent() {
                 currentRide?.status === RideStatus.DRIVER_ARRIVED) && (
                 <FreeCancelTimer
                   driverAcceptedAt={(currentRide as any)?.driver_accepted_at}
+                  rideStatus={currentRide?.status}
                   freeCancelWindowSeconds={freeCancelWindowSeconds}
                   cancellationFee={cancellationFee}
-                  onExpire={() => setAlertState({
-                    visible: true, title: 'Free cancel window closed',
-                    message: `A $${cancellationFee.toFixed(2)} fee now applies if you cancel.`,
-                    variant: 'warning', buttons: [{ text: 'OK' }],
-                  })}
+                  onExpire={() => showToast(
+                    'Free cancel window closed',
+                    `A $${cancellationFee.toFixed(2)} fee now applies if you cancel.`,
+                    'warning',
+                  )}
                 />
               )}
 
@@ -512,10 +510,10 @@ function DriverArrivingScreenContent() {
         </BottomSheetScrollView>
       </BottomSheet>
 
-      <CustomAlert
-        visible={alertState.visible} title={alertState.title} message={alertState.message}
-        variant={alertState.variant} buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
-        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))} />
+      <ConfirmSheet
+        visible={confirmSheet.visible} title={confirmSheet.title} message={confirmSheet.message}
+        variant={confirmSheet.variant} buttons={confirmSheet.buttons || [{ text: 'OK', style: 'default' }]}
+        onClose={() => setConfirmSheet(prev => ({ ...prev, visible: false }))} />
     </View>
   );
 }

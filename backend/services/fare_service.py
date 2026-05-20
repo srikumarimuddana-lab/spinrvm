@@ -9,9 +9,12 @@ Pure helpers (`_fd`, `build_default_fares`) are static so they can be
 tested without instantiating the service.
 """
 
+import logging
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 try:
     from ..geo_utils import get_service_area_polygon, point_in_polygon
@@ -54,7 +57,9 @@ def _fd(v: Any) -> float:
     return float(_round(_d(v)))
 
 
-def build_default_fares(vehicle_types: List[Dict[str, Any]], surge: Any = _d(1)) -> List[Dict[str, Any]]:
+def build_default_fares(
+    vehicle_types: List[Dict[str, Any]], surge: Any = _d(1)
+) -> List[Dict[str, Any]]:
     """
     Build a default fare entry per vehicle type.
 
@@ -78,7 +83,9 @@ def build_default_fares(vehicle_types: List[Dict[str, Any]], surge: Any = _d(1))
     ]
 
 
-def find_service_area_for_point(areas: List[Dict[str, Any]], lat: float, lng: float) -> Optional[Dict[str, Any]]:
+def find_service_area_for_point(
+    areas: List[Dict[str, Any]], lat: float, lng: float
+) -> Optional[Dict[str, Any]]:
     """
     Return the first service area whose polygon contains (lat, lng), or None.
 
@@ -196,21 +203,39 @@ def build_fare_breakdown_lines(
 
     # Consolidated ride line — driver earns 100% of this amount (0% commission model)
     ride_subtotal = _f(fb.base_fare + fb.distance_fare + fb.time_fare)
-    lines.append({"label": f"Ride fare ({round(distance_km, 1)} km)", "amount": ride_subtotal, "type": "ride"})
+    lines.append(
+        {
+            "label": f"Ride fare ({round(distance_km, 1)} km)",
+            "amount": ride_subtotal,
+            "type": "ride",
+        }
+    )
 
     if fb.airport_fee > Decimal("0"):
-        lines.append({"label": "Airport surcharge", "amount": _f(fb.airport_fee), "type": "fee"})
+        lines.append(
+            {"label": "Airport surcharge", "amount": _f(fb.airport_fee), "type": "fee"}
+        )
 
     if fb.booking_fee > Decimal("0"):
-        lines.append({"label": "Booking fee", "amount": _f(fb.booking_fee), "type": "fee"})
+        lines.append(
+            {"label": "Booking fee", "amount": _f(fb.booking_fee), "type": "fee"}
+        )
 
     if fb.surge_multiplier > Decimal("1"):
-        lines.append({"label": f"Surge ({float(fb.surge_multiplier)}×)", "amount": None, "type": "modifier"})
+        lines.append(
+            {
+                "label": f"Surge ({float(fb.surge_multiplier)}×)",
+                "amount": None,
+                "type": "modifier",
+            }
+        )
 
-    for fee in (area_fees or []):
+    for fee in area_fees or []:
         val = fee.get("calculated_value", 0)
         if float(val) > 0:
-            lines.append({"label": fee.get("name", "Fee"), "amount": float(val), "type": "fee"})
+            lines.append(
+                {"label": fee.get("name", "Fee"), "amount": float(val), "type": "fee"}
+            )
 
     if tax_breakdown:
         for tax_name, info in tax_breakdown.items():
@@ -229,14 +254,23 @@ def recalculate_fare_for_distance(
     """Recalculate fare when actual distance differs from the estimate.
 
     Derives the effective per-km rate from the stored ride row, then
-    reapplies it to the actual distance. Returns the update fields dict
-    (empty if planned distance is zero).
+    reapplies it to the actual distance. Falls back to the default
+    per-km rate (with surge) when planned distance is missing/zero.
     """
     planned = _d(ride.get("distance_km") or ride.get("planned_distance_km") or 0)
     if planned <= 0:
-        return {}
-
-    per_km_rate = _d(ride.get("distance_fare", 0)) / planned
+        surge = _d(ride.get("surge_multiplier") or 1)
+        per_km_rate = _round(_d(DEFAULT_FARE["per_km_rate"]) * surge)
+        logger.error(
+            "recalculate_fare_for_distance: planned distance is %s for ride %s — "
+            "falling back to default per-km rate %s (surge=%s)",
+            planned,
+            ride.get("id", "?"),
+            per_km_rate,
+            surge,
+        )
+    else:
+        per_km_rate = _d(ride.get("distance_fare", 0)) / planned
     new_distance_fare = _round(per_km_rate * _d(actual_distance_km))
     new_total_fare = _round(
         _d(ride.get("base_fare", 0))
@@ -245,7 +279,9 @@ def recalculate_fare_for_distance(
         + _d(ride.get("booking_fee", 0))
         + _d(ride.get("airport_fee") or 0)
     )
-    new_driver_earnings = _round(_d(ride.get("base_fare", 0)) + new_distance_fare + _d(ride.get("time_fare", 0)))
+    new_driver_earnings = _round(
+        _d(ride.get("base_fare", 0)) + new_distance_fare + _d(ride.get("time_fare", 0))
+    )
 
     return {
         "distance_km": round(actual_distance_km, 2),
@@ -286,7 +322,9 @@ class FareService:
         if not vehicle_types:
             return []
 
-        all_areas = await self.db.get_rows("service_areas", {"is_active": True}, limit=100)
+        all_areas = await self.db.get_rows(
+            "service_areas", {"is_active": True}, limit=100
+        )
         matching_area = find_service_area_for_point(all_areas, lat, lng)
 
         if not matching_area:
@@ -302,7 +340,9 @@ class FareService:
         if not fare_configs:
             return build_default_fares(vehicle_types, surge)
 
-        merged = merge_fare_configs_with_vehicle_types(fare_configs, vehicle_types, surge)
+        merged = merge_fare_configs_with_vehicle_types(
+            fare_configs, vehicle_types, surge
+        )
         if not merged:
             return build_default_fares(vehicle_types, surge)
 

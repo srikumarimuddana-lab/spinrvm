@@ -1915,22 +1915,48 @@ async def get_ride(
             get_app_settings = None  # type: ignore
 
     free_cancel_window = 120
-    cancellation_fee_amount = Decimal("3.0")
+    cancellation_fee_amount = Decimal("4.50")
     if get_app_settings:
         try:
             settings = await get_app_settings()
-            free_cancel_window = int(settings.get("free_cancel_window_seconds", 120))
-            cancellation_fee_amount = Decimal(
-                str(settings.get("cancellation_fee", "3.0"))
+            # Per-service-area overrides take priority over global settings
+            area = None
+            if ride.get("service_area_id"):
+                area = await db_supabase.find_one(
+                    "service_areas", {"id": ride["service_area_id"]}
+                )
+            if area and area.get("free_cancel_window_seconds") is not None:
+                free_cancel_window = int(area["free_cancel_window_seconds"])
+            else:
+                free_cancel_window = int(
+                    settings.get("free_cancel_window_seconds", 120)
+                )
+            fee_admin = Decimal(
+                str(
+                    (area or {}).get("cancel_fee_admin_share")
+                    or settings.get("cancellation_fee_admin", "0.50")
+                )
             )
+            fee_driver = Decimal(
+                str(
+                    (area or {}).get("cancel_fee_driver_share")
+                    or settings.get("cancellation_fee_driver", "4.00")
+                )
+            )
+            cancellation_fee_amount = fee_admin + fee_driver
         except Exception:
-            # Non-fatal: fall back to hardcoded defaults if settings fetch fails
             logger.error(
                 "Failed to fetch app settings for cancellation config", exc_info=True
             )
 
     driver_accepted_at = ride.get("driver_accepted_at")
-    if driver_accepted_at:
+    ride_status = ride.get("status")
+
+    # Once the driver has physically arrived, the free-cancel window is over
+    # regardless of elapsed time — the driver already spent fuel/time.
+    if ride_status == RideStatus.DRIVER_ARRIVED:
+        ride["free_cancel_seconds_remaining"] = 0
+    elif driver_accepted_at:
         from datetime import datetime, timezone
 
         try:
@@ -1951,6 +1977,51 @@ async def get_ride(
 
     ride["free_cancel_window_seconds"] = free_cancel_window
     ride["cancellation_fee"] = cancellation_fee_amount
+
+    # No-show timer: once the driver arrives, they must wait 5 minutes
+    # before they can mark the rider as a no-show. Expose the countdown
+    # so both apps can show an accurate timer.
+    noshow_wait_seconds = 300
+    if get_app_settings:
+        try:
+            settings = await get_app_settings()
+            # Per-service-area override → global fallback
+            if area and area.get("noshow_wait_seconds") is not None:
+                noshow_wait_seconds = int(area["noshow_wait_seconds"])
+            else:
+                noshow_wait_seconds = int(settings.get("noshow_wait_seconds", 300))
+        except Exception:
+            logger.warning(
+                "Failed to load settings or service area override for noshow_wait_seconds"
+            )
+    ride["noshow_wait_seconds"] = noshow_wait_seconds
+
+    if ride_status == RideStatus.DRIVER_ARRIVED:
+        driver_arrived_at = ride.get("driver_arrived_at")
+        if driver_arrived_at:
+            from datetime import datetime, timezone
+
+            try:
+                if isinstance(driver_arrived_at, str):
+                    arrived_dt = datetime.fromisoformat(
+                        driver_arrived_at.replace("Z", "+00:00")
+                    )
+                else:
+                    arrived_dt = driver_arrived_at
+                if arrived_dt.tzinfo is None:
+                    arrived_dt = arrived_dt.replace(tzinfo=timezone.utc)
+                elapsed = int((datetime.now(timezone.utc) - arrived_dt).total_seconds())
+                ride["noshow_seconds_remaining"] = max(0, noshow_wait_seconds - elapsed)
+                ride["noshow_eligible"] = elapsed >= noshow_wait_seconds
+            except Exception:
+                ride["noshow_seconds_remaining"] = noshow_wait_seconds
+                ride["noshow_eligible"] = False
+        else:
+            ride["noshow_seconds_remaining"] = noshow_wait_seconds
+            ride["noshow_eligible"] = False
+    else:
+        ride["noshow_seconds_remaining"] = None
+        ride["noshow_eligible"] = False
 
     # M-4: Expose offer expiry so the rider app can show an accurate
     # countdown progress bar while waiting for the driver to accept.
@@ -2556,7 +2627,7 @@ async def rate_driver(
                 },
             )
         except Exception as push_err:
-            logger.warning(f"[RATING] Push notification failed: {push_err}")
+            logger.info("[RATING] Push failed (non-fatal)", exc_info=push_err)
 
     asyncio.create_task(
         log_user_action(
@@ -2605,7 +2676,12 @@ async def cancel_ride_rider(
 
     driver_id = ride.get("driver_id")
     settings = await get_app_settings()
-    charged_admin, charged_driver = calculate_cancellation_fee(ride, settings)
+    area = None
+    if ride.get("service_area_id"):
+        area = await db_supabase.find_one(
+            "service_areas", {"id": ride["service_area_id"]}
+        )
+    charged_admin, charged_driver = calculate_cancellation_fee(ride, settings, area)
 
     total_cancel_fee = _round(charged_admin + charged_driver)
 

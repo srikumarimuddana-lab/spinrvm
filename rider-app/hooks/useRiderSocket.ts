@@ -123,10 +123,16 @@ export function useRiderSocket() {
       case 'ride_cancelled': {
         const currentId = useRideStore.getState().currentRide?.id;
         if (data.ride_id && currentId && data.ride_id !== currentId) break;
+        const cancelMessages: Record<string, string> = {
+          driver_cancelled: 'Your driver has cancelled the ride. We apologize for the inconvenience.',
+          rider_cancelled: 'Your ride has been cancelled.',
+          noshow: `You were marked as a no-show. A $${data.noshow_fee?.toFixed(2) ?? '4.50'} fee has been charged.`,
+          auto_cancelled: 'No drivers were available. Please try again.',
+        };
         showToast(
           'Ride Cancelled',
-          data.reason || 'Your ride has been cancelled.',
-          'warning',
+          cancelMessages[data.reason] || 'Your ride has been cancelled.',
+          data.reason === 'noshow' ? 'danger' : 'warning',
         );
         clearRide();
         router.replace('/(tabs)' as any);

@@ -11,7 +11,8 @@ import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import { useRideStore } from '../store/rideStore';
 import { useAuthStore } from '@shared/store/authStore';
-import CustomAlert from '@shared/components/CustomAlert';
+import { showToast } from '../store/toastStore';
+import ConfirmSheet from '../components/ConfirmSheet';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -56,13 +57,13 @@ function RideCompletedScreenContent() {
   const [paymentProcessed, setPaymentProcessed] = useState(false);
 
   const [routeCoords, setRouteCoords] = useState<any[]>([]);
-  const [alertState, setAlertState] = useState<{
+  const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean;
     title: string;
     message: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
-    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
-  }>({ visible: false, title: '', message: '', variant: 'info' });
+    buttons: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
+  }>({ visible: false, title: '', message: '', variant: 'info', buttons: [] });
   const mapRef = React.useRef<MapView>(null);
   const successScale = useRef(new Animated.Value(0)).current;
   const successOpacity = useRef(new Animated.Value(0)).current;
@@ -123,17 +124,9 @@ function RideCompletedScreenContent() {
     try {
       await api.post(`/rides/${rideId}/email-receipt`);
       const user = useAuthStore.getState().user;
-      setAlertState({
-        visible: true, title: 'Receipt Sent',
-        message: `Receipt emailed to ${user?.email || 'your registered email'}.`,
-        variant: 'success',
-      });
+      showToast('Receipt Sent', `Receipt emailed to ${user?.email || 'your registered email'}.`, 'success');
     } catch (e: any) {
-      setAlertState({
-        visible: true, title: 'Failed',
-        message: e?.response?.data?.detail || e?.message || 'Could not send receipt email.',
-        variant: 'danger',
-      });
+      showToast('Failed', e?.response?.data?.detail || e?.message || 'Could not send receipt email.', 'danger');
     } finally {
       setEmailSending(false);
     }
@@ -153,17 +146,9 @@ function RideCompletedScreenContent() {
       });
       setLostItemVisible(false);
       setLostItemText('');
-      setAlertState({
-        visible: true, title: 'Report Submitted',
-        message: "Your driver has been notified. They'll get back to you if the item is found.",
-        variant: 'success',
-      });
+      showToast('Report Submitted', "Your driver has been notified. They'll get back to you if the item is found.", 'success');
     } catch (e: any) {
-      setAlertState({
-        visible: true, title: 'Failed',
-        message: e?.response?.data?.detail || e?.message || 'Could not submit report.',
-        variant: 'danger',
-      });
+      showToast('Failed', e?.response?.data?.detail || e?.message || 'Could not submit report.', 'danger');
     } finally {
       setLostItemSending(false);
     }
@@ -174,7 +159,7 @@ function RideCompletedScreenContent() {
 
   /**
    * Map a PaymentAttemptResult's alert (pure data) to the local
-   * alertState shape (with onPress handlers). Split from the attempt
+   * confirmSheet shape (with onPress handlers). Split from the attempt
    * itself so the attempt stays pure-data and unit-testable.
    */
   const showPaymentAlert = (alert: NonNullable<Awaited<ReturnType<typeof attemptRidePayment>>['alert']>) => {
@@ -183,7 +168,7 @@ function RideCompletedScreenContent() {
       style: (b.kind === 'cancel' ? 'cancel' : 'default') as 'default' | 'cancel',
       onPress: b.kind === 'change_card' ? () => router.push('/manage-cards' as any) : undefined,
     }));
-    setAlertState({
+    setConfirmSheet({
       visible: true,
       title: alert.title,
       message: alert.message,
@@ -247,7 +232,7 @@ function RideCompletedScreenContent() {
       clearRide();
       router.replace('/(tabs)');
     } catch {
-      setAlertState({ visible: true, title: 'Error', message: 'Failed to submit. Please try again.', variant: 'danger' });
+      showToast('Error', 'Failed to submit. Please try again.', 'danger');
     } finally {
       setIsSubmitting(false);
       setSubmitPhase('idle');
@@ -267,7 +252,7 @@ function RideCompletedScreenContent() {
     });
     if (!result.ok) {
       if (result.errorMessage !== 'Payment cancelled.') {
-        setAlertState({ visible: true, title: 'Payment failed', message: result.errorMessage || 'Please try again.', variant: 'danger' });
+        showToast('Payment Failed', result.errorMessage || 'Please try again.', 'danger');
       }
       return;
     }
@@ -709,13 +694,13 @@ function RideCompletedScreenContent() {
           </View>
         </View>
       </Modal>
-      <CustomAlert
-        visible={alertState.visible}
-        title={alertState.title}
-        message={alertState.message}
-        variant={alertState.variant}
-        buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
-        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
+      <ConfirmSheet
+        visible={confirmSheet.visible}
+        title={confirmSheet.title}
+        message={confirmSheet.message}
+        variant={confirmSheet.variant}
+        buttons={confirmSheet.buttons.length ? confirmSheet.buttons : [{ text: 'OK' }]}
+        onClose={() => setConfirmSheet(prev => ({ ...prev, visible: false }))}
       />
     </SafeAreaView>
   );

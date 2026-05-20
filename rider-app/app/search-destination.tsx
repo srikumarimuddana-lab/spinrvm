@@ -19,7 +19,7 @@ import { useRideStore } from '../store/rideStore';
 import { useAuthStore } from '@shared/store/authStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-import CustomAlert from '@shared/components/CustomAlert';
+import { showToast } from '../store/toastStore';
 import api from '@shared/api/client';
 import { usePlacesAutocomplete } from '@shared/hooks/usePlacesAutocomplete';
 import type { PlacePrediction } from '@shared/api/places';
@@ -44,13 +44,6 @@ export default function SearchDestinationScreen() {
   const [dropoffText, setDropoffText] = useState(dropoff?.address || '');
   const [stopTexts, setStopTexts] = useState<string[]>(stops.map(s => s.address || ''));
   const [searchQuery, setSearchQuery] = useState('');
-  const [alertState, setAlertState] = useState<{
-    visible: boolean;
-    title: string;
-    message: string;
-    variant: 'info' | 'warning' | 'danger' | 'success';
-    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
-  }>({ visible: false, title: '', message: '', variant: 'info' });
 
   // Bias prediction results to the rider's location so e.g. "Walmart"
   // surfaces nearby stores first instead of generic matches across Canada.
@@ -557,7 +550,7 @@ export default function SearchDestinationScreen() {
                             if (homeAddr) {
                               handleSelectLocation({ address: homeAddr.address, lat: homeAddr.lat, lng: homeAddr.lng });
                             } else {
-                              setAlertState({ visible: true, title: 'No Home Address', message: 'Set your home address in Account > Saved Places', variant: 'info' });
+                              showToast('No Home Address', 'Set your home address in Account > Saved Places', 'info');
                             }
                           }}
                           accessibilityRole="button"
@@ -579,7 +572,7 @@ export default function SearchDestinationScreen() {
                             if (workAddr) {
                               handleSelectLocation({ address: workAddr.address, lat: workAddr.lat, lng: workAddr.lng });
                             } else {
-                              setAlertState({ visible: true, title: 'No Work Address', message: 'Set your work address in Account > Saved Places', variant: 'info' });
+                              showToast('No Work Address', 'Set your work address in Account > Saved Places', 'info');
                             }
                           }}
                           accessibilityRole="button"
@@ -706,14 +699,6 @@ export default function SearchDestinationScreen() {
           <Text style={styles.searchRideButtonText}>Search Ride</Text>
         </TouchableOpacity>
       </View>
-      <CustomAlert
-        visible={alertState.visible}
-        title={alertState.title}
-        message={alertState.message}
-        variant={alertState.variant}
-        buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
-        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
-      />
       </KeyboardAvoidingView>
     </SafeAreaView>
   );

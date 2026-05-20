@@ -8,6 +8,8 @@ const COLORS = SpinrConfig.theme.colors;
 interface FreeCancelTimerProps {
   /** ISO timestamp when driver accepted the ride (null if not yet accepted). */
   driverAcceptedAt: string | null | undefined;
+  /** Current ride status — when 'driver_arrived', free cancel window is over. */
+  rideStatus?: string;
   /** Seconds within which cancellation is free. Default 120 (2 minutes). */
   freeCancelWindowSeconds?: number;
   /** Flat cancellation fee applied once the window expires. Default $3.00. */
@@ -30,18 +32,26 @@ interface FreeCancelTimerProps {
  */
 export function FreeCancelTimer({
   driverAcceptedAt,
+  rideStatus,
   freeCancelWindowSeconds = 120,
   cancellationFee = 3.0,
   compact = false,
   onExpire,
 }: FreeCancelTimerProps) {
+  const driverArrived = rideStatus === 'driver_arrived';
+
   const [secondsLeft, setSecondsLeft] = useState<number>(() => {
+    if (driverArrived) return 0;
     if (!driverAcceptedAt) return freeCancelWindowSeconds;
     const elapsed = Math.floor((Date.now() - new Date(driverAcceptedAt).getTime()) / 1000);
     return Math.max(0, freeCancelWindowSeconds - elapsed);
   });
 
   useEffect(() => {
+    if (driverArrived) {
+      setSecondsLeft(0);
+      return;
+    }
     if (!driverAcceptedAt || secondsLeft <= 0) return;
 
     const interval = setInterval(() => {
@@ -55,9 +65,10 @@ export function FreeCancelTimer({
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [driverAcceptedAt, freeCancelWindowSeconds]);
+  }, [driverAcceptedAt, freeCancelWindowSeconds, driverArrived]);
 
-  const isWindowOpen = secondsLeft > 0 && !!driverAcceptedAt;
+  const isWindowOpen = secondsLeft > 0 && !!driverAcceptedAt && !driverArrived;
+  const displayFee = cancellationFee;
   const minutes = Math.floor(secondsLeft / 60);
   const seconds = secondsLeft % 60;
   const timerLabel = `${minutes}:${String(seconds).padStart(2, '0')}`;
@@ -67,7 +78,7 @@ export function FreeCancelTimer({
       <Text style={isWindowOpen ? styles.compactFree : styles.compactFee}>
         {isWindowOpen
           ? `Free cancel — ${timerLabel} left`
-          : `Cancel fee: $${cancellationFee.toFixed(2)}`}
+          : `Cancel fee: $${displayFee.toFixed(2)}`}
       </Text>
     );
   }
@@ -94,7 +105,7 @@ export function FreeCancelTimer({
         ) : (
           <>
             <Text style={styles.feeLabel}>Cancellation fee applies</Text>
-            <Text style={styles.feeAmount}>${cancellationFee.toFixed(2)}</Text>
+            <Text style={styles.feeAmount}>${displayFee.toFixed(2)}</Text>
           </>
         )}
       </View>

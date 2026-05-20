@@ -1,6 +1,7 @@
-import React, { useCallback, useEffect, useMemo, useRef } from 'react';
-import { Text, TouchableOpacity, View, StyleSheet } from 'react-native';
-import BottomSheet, { BottomSheetView } from '@gorhom/bottom-sheet';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Text, TouchableOpacity, View, StyleSheet, useWindowDimensions } from 'react-native';
+import BottomSheet, { BottomSheetView, BottomSheetBackdrop } from '@gorhom/bottom-sheet';
+import type { BottomSheetBackdropProps } from '@gorhom/bottom-sheet';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -38,9 +39,11 @@ export default function ConfirmSheet({
   onClose,
 }: ConfirmSheetProps) {
   const { colors } = useTheme();
+  const { height: windowHeight } = useWindowDimensions();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const sheetRef = useRef<BottomSheet>(null);
   const config = VARIANT_CONFIG[variant];
+  const [isPending, setIsPending] = useState(false);
 
   useEffect(() => {
     if (visible) {
@@ -52,9 +55,33 @@ export default function ConfirmSheet({
 
   const handleSheetChange = useCallback(
     (index: number) => {
-      if (index === -1) onClose();
+      if (index === -1 && !isPending) onClose();
     },
-    [onClose],
+    [onClose, isPending],
+  );
+
+  const handlePress = async (button: ConfirmSheetButton) => {
+    if (isPending) return;
+    setIsPending(true);
+    try {
+      await button.onPress?.();
+    } finally {
+      setIsPending(false);
+      onClose();
+    }
+  };
+
+  const renderBackdrop = useCallback(
+    (props: BottomSheetBackdropProps) => (
+      <BottomSheetBackdrop
+        {...props}
+        appearsOnIndex={0}
+        disappearsOnIndex={-1}
+        opacity={0.5}
+        pressBehavior={isPending ? 'none' : 'close'}
+      />
+    ),
+    [isPending],
   );
 
   const cancelButton = buttons.find((b) => b.style === 'cancel');
@@ -67,8 +94,10 @@ export default function ConfirmSheet({
       ref={sheetRef}
       index={0}
       enableDynamicSizing
-      enablePanDownToClose
+      maxDynamicContentSize={windowHeight * 0.6}
+      enablePanDownToClose={!isPending}
       onChange={handleSheetChange}
+      backdropComponent={renderBackdrop}
       backgroundStyle={styles.sheetBg}
       handleIndicatorStyle={styles.handle}
       style={styles.sheet}
@@ -93,11 +122,9 @@ export default function ConfirmSheet({
                     ? styles.destructiveButton
                     : { backgroundColor: config.color },
                 ]}
-                onPress={() => {
-                  button.onPress?.();
-                  onClose();
-                }}
+                onPress={() => handlePress(button)}
                 activeOpacity={0.8}
+                disabled={isPending}
               >
                 <Text style={styles.buttonText}>{button.text}</Text>
               </TouchableOpacity>
@@ -107,11 +134,9 @@ export default function ConfirmSheet({
           {cancelButton && (
             <TouchableOpacity
               style={[styles.button, styles.cancelButton]}
-              onPress={() => {
-                cancelButton.onPress?.();
-                onClose();
-              }}
+              onPress={() => handlePress(cancelButton)}
               activeOpacity={0.7}
+              disabled={isPending}
             >
               <Text style={[styles.buttonText, styles.cancelButtonText]}>
                 {cancelButton.text}

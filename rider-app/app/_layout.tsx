@@ -9,6 +9,7 @@ import { StripeProvider } from '@stripe/stripe-react-native';
 import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold, PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import * as SplashScreen from 'expo-splash-screen';
+import * as Updates from 'expo-updates';
 
 SplashScreen.preventAutoHideAsync().catch(() => {});
 import Constants, { ExecutionEnvironment } from 'expo-constants';
@@ -112,6 +113,7 @@ export default function RootLayout() {
   const [isOffline, setIsOffline] = useState(false);
   const [stripePublishableKey, setStripePublishableKey] = useState<string | null>(null);
   const fcmRegisteredRef = useRef(false);
+  const backgroundedAtRef = useRef<number | null>(null);
   const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean;
     title: string;
@@ -369,11 +371,29 @@ export default function RootLayout() {
     return () => clearTimeout(timer);
   }, [isAuthInitialized, isLocationInitialized]);
 
-  // Foreground resume: re-check active ride
+  // Foreground resume: track background duration + re-check active ride
   useEffect(() => {
     if (!isAuthInitialized) return;
+    const STALE_THRESHOLD_MS = 5 * 60 * 1000;
     const sub = AppState.addEventListener('change', async (nextState) => {
+      if (nextState === 'background' || nextState === 'inactive') {
+        backgroundedAtRef.current = Date.now();
+        return;
+      }
       if (nextState !== 'active') return;
+
+      const bgAt = backgroundedAtRef.current;
+      backgroundedAtRef.current = null;
+      if (bgAt && Date.now() - bgAt > STALE_THRESHOLD_MS) {
+        console.log('[Layout] Long background detected, reloading JS bundle');
+        try {
+          await Updates.reloadAsync();
+        } catch {
+          router.replace('/(tabs)' as any);
+        }
+        return;
+      }
+
       try {
         const result = await useRideStore.getState().fetchActiveRide();
         if (!result?.active || !result.ride) return;

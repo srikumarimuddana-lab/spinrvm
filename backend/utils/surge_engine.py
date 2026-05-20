@@ -26,8 +26,6 @@ try:
     from db import db
     from geo_utils import get_service_area_polygon, point_in_polygon
     from utils.driver_presence import present_driver_ids
-    from utils.metrics import inc as _metric_inc
-    from utils.metrics import set_gauge as _metric_gauge
 except ImportError:
     from ..db import db
     from ..geo_utils import get_service_area_polygon, point_in_polygon
@@ -64,7 +62,9 @@ def ratio_to_multiplier(ratio: float) -> float:
 
 async def _count_demand_in_area(area_id: str) -> int:
     """Count active/recent ride requests in a service area."""
-    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=DEMAND_WINDOW_MINUTES)).isoformat()
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(minutes=DEMAND_WINDOW_MINUTES)
+    ).isoformat()
     try:
         rides = await db.get_rows(
             "rides",
@@ -75,10 +75,18 @@ async def _count_demand_in_area(area_id: str) -> int:
             limit=500,
         )
         # Count rides that are still active or very recently requested
-        active_statuses = {"searching", "driver_assigned", "driver_en_route"}
+        active_statuses = {
+            "searching",
+            "driver_assigned",
+            "driver_accepted",
+            "driver_arrived",
+            "in_progress",
+        }
         return sum(1 for r in rides if r.get("status") in active_statuses)
     except Exception as e:
-        logger.error(f"Surge: failed to count demand for area {area_id}: {e}", exc_info=True)
+        logger.error(
+            f"Surge: failed to count demand for area {area_id}: {e}", exc_info=True
+        )
         return 0
 
 
@@ -89,7 +97,9 @@ async def _count_supply_in_area(area: Dict[str, Any]) -> int:
         return 0
 
     try:
-        drivers = await db.get_rows("drivers", {"is_online": True, "is_available": True}, limit=500)
+        drivers = await db.get_rows(
+            "drivers", {"is_online": True, "is_available": True}, limit=500
+        )
 
         # Presence filter: ghost-online drivers (app force-killed, phone dead)
         # shouldn't count as "supply" or we'd compute a lower surge than the
@@ -113,7 +123,10 @@ async def _count_supply_in_area(area: Dict[str, Any]) -> int:
                     count += 1
         return count
     except Exception as e:
-        logger.error(f"Surge: failed to count supply for area {area.get('id')}: {e}", exc_info=True)
+        logger.error(
+            f"Surge: failed to count supply for area {area.get('id')}: {e}",
+            exc_info=True,
+        )
         return 0
 
 
@@ -151,7 +164,9 @@ async def recalculate_all_surges() -> List[Dict[str, Any]]:
     try:
         areas = await db.get_rows("service_areas", {"is_active": True}, limit=100)
     except Exception as e:
-        original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
+        original = (
+            getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
+        )
         logger.error(f"Surge: failed to fetch service areas: {e} | original={original}")
         return results
 
@@ -206,7 +221,9 @@ async def recalculate_all_surges() -> List[Dict[str, Any]]:
 
             results.append(metrics)
         except Exception as e:
-            logger.error(f"Surge: failed to update area {area.get('id')}: {e}", exc_info=True)
+            logger.error(
+                f"Surge: failed to update area {area.get('id')}: {e}", exc_info=True
+            )
 
     return results
 
@@ -216,11 +233,7 @@ async def get_surge_status() -> List[Dict[str, Any]]:
     Get current surge status for all active service areas.
     Used by the admin dashboard to display live surge info.
     """
-    try:
-        areas = await db.get_rows("service_areas", {"is_active": True}, limit=100)
-    except Exception as e:
-        logger.error(f"Surge: failed to fetch areas for status: {e}")
-        return []
+    areas = await db.get_rows("service_areas", {"is_active": True}, limit=100)
 
     statuses = []
     for area in areas:
@@ -257,7 +270,9 @@ async def surge_recalculation_loop():
             results = await recalculate_all_surges()
             if results:
                 active = sum(1 for r in results if r["multiplier"] > 1.0)
-                logger.debug(f"Surge recalc complete: {len(results)} areas, {active} surging")
+                logger.debug(
+                    f"Surge recalc complete: {len(results)} areas, {active} surging"
+                )
         except Exception as e:
             logger.error(f"Surge recalculation loop error: {e}")
         _record_heartbeat("surge_engine (2min)")

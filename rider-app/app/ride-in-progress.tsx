@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useContext } from 'react';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View,
@@ -30,10 +30,12 @@ import { SOSButton } from '@shared/components/SOSButton';
 import { CarMarker } from '@shared/components/CarMarker';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { TrackBaseUrlContext } from './_layout';
 
 function RideInProgressScreenContent() {
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
+  const trackBaseUrl = useContext(TrackBaseUrlContext);
   const { currentRide, currentDriver, fetchRide, cancelRide, clearRide, triggerEmergency, isLoading, error, wsConnected } = useRideStore();
   const [eta, setEta] = useState(15);
   const [estimatedTime, setEstimatedTime] = useState('12:45 PM');
@@ -131,7 +133,7 @@ function RideInProgressScreenContent() {
       setConfirmSheet({
         visible: true,
         title: 'End ride early?',
-        message: `Full fare of $${parseFloat(currentRide?.total_fare || '0').toFixed(2)} applies. Your driver will continue.`,
+        message: `Full fare of $${parseFloat((currentRide as any)?.grand_total || currentRide?.total_fare || '0').toFixed(2)} applies. Your driver will continue.`,
         variant: 'warning',
         buttons: [
           {
@@ -174,6 +176,17 @@ function RideInProgressScreenContent() {
   };
 
   const handleShareTrip = async () => {
+    // Public tracking URL base is served by GET /settings → app_settings.track_base_url
+    // so ops can rotate the domain without a mobile rebuild. Disable the share
+    // action if the admin hasn't configured one yet.
+    if (!trackBaseUrl) {
+      showToast(
+        'Tracking Not Configured',
+        'Live trip tracking is not set up yet. Please contact support.',
+        'warning',
+      );
+      return;
+    }
     // Get share token from backend API
     let shareToken = rideId || 'demo';
     try {
@@ -185,7 +198,7 @@ function RideInProgressScreenContent() {
       // Fall back to ride ID
     }
 
-    const liveTrackingUrl = `https://spinr-track.app/${shareToken}`;
+    const liveTrackingUrl = `${trackBaseUrl}/${shareToken}`;
     // Include the human-readable ride code so the recipient can quote it
     // to support without guessing at a truncated UUID.
     const rideRef = currentRide?.ride_code
@@ -224,6 +237,14 @@ I've shared my live location with you for safety.
   };
 
   const handleCopyTrackingLink = async () => {
+    if (!trackBaseUrl) {
+      showToast(
+        'Tracking Not Configured',
+        'Live trip tracking is not set up yet. Please contact support.',
+        'warning',
+      );
+      return;
+    }
     let shareToken = rideId || 'demo';
     try {
       const shareRes = await api.get<{ share_token?: string }>(`/rides/${rideId}/share`);
@@ -233,7 +254,7 @@ I've shared my live location with you for safety.
     } catch {
       // Fall back to ride ID
     }
-    const trackingLink = `https://spinr-track.app/${shareToken}`;
+    const trackingLink = `${trackBaseUrl}/${shareToken}`;
     await Clipboard.setStringAsync(trackingLink);
     showToast('Copied!', 'Live tracking link copied to clipboard.', 'success');
   };
@@ -330,7 +351,7 @@ I've shared my live location with you for safety.
         <View style={styles.fareRow}>
           <View style={styles.fareItem}>
             <Ionicons name="cash-outline" size={16} color={colors.textDim} />
-            <Text style={styles.fareValue} allowFontScaling={false}>${parseFloat(currentRide?.total_fare || '0').toFixed(2)}</Text>
+            <Text style={styles.fareValue} allowFontScaling={false}>${parseFloat((currentRide as any)?.grand_total || currentRide?.total_fare || '0').toFixed(2)}</Text>
             <Text style={styles.fareLabel}>Fare</Text>
           </View>
           <View style={styles.fareDivider} />
@@ -390,7 +411,7 @@ I've shared my live location with you for safety.
           setConfirmSheet({
             visible: true,
             title: 'End ride early?',
-            message: `You will be charged the full agreed fare of $${parseFloat(currentRide?.total_fare || '0').toFixed(2)}. This cannot be undone.`,
+            message: `You will be charged the full agreed fare of $${parseFloat((currentRide as any)?.grand_total || currentRide?.total_fare || '0').toFixed(2)}. This cannot be undone.`,
             variant: 'warning',
             buttons: [
               {

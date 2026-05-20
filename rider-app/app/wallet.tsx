@@ -137,16 +137,10 @@ export default function WalletScreen() {
     const isCredit = amountNum > 0;
     const meta = item.metadata as WalletTransactionMeta | null | undefined;
     const hasRideDetails = item.type === 'ride_payment' && meta?.pickup_address;
-    const fb = meta?.fare_breakdown || [];
+    const bookingId =
+      meta?.ride_code || (item.reference_id ? item.reference_id.slice(0, 8).toUpperCase() : null);
 
     const displayDesc = item.description || item.type.replace(/_/g, ' ');
-
-    const formatLineAmount = (line: typeof fb[number]) => {
-      if (line.amount == null) return '';
-      const val = parseFloat(String(line.amount));
-      if (line.type === 'discount') return `-$${Math.abs(val).toFixed(2)}`;
-      return `$${Math.abs(val).toFixed(2)}`;
-    };
 
     return (
       <TouchableOpacity
@@ -169,16 +163,9 @@ export default function WalletScreen() {
                 <Ionicons name="flag" size={11} color="#EF4444" />
                 <Text style={styles.txnMetaText} numberOfLines={1}>{meta!.dropoff_address}</Text>
               </View>
-              {fb.length > 0 && (
-                <View style={styles.txnBreakdown}>
-                  {fb.map((line, i) => (
-                    <Text
-                      key={i}
-                      style={line.type === 'discount' ? styles.txnBreakdownPromo : styles.txnBreakdownItem}
-                    >
-                      {line.label}: {formatLineAmount(line)}
-                    </Text>
-                  ))}
+              {bookingId && (
+                <View style={styles.txnBookingRow}>
+                  <Text style={styles.txnBookingId}>{bookingId}</Text>
                 </View>
               )}
             </View>
@@ -405,18 +392,13 @@ function createStyles(colors: ThemeColors) {
     txnMetaText: {
       fontSize: 12, color: colors.textDim, flex: 1,
     },
-    txnBreakdown: {
-      flexDirection: 'row', gap: 10, marginTop: 4,
+    txnBookingRow: {
+      flexDirection: 'row', marginTop: 4,
     },
-    txnBreakdownItem: {
+    txnBookingId: {
       fontSize: 11, fontWeight: '600', color: colors.textDim,
-      backgroundColor: colors.surfaceLight, paddingHorizontal: 6, paddingVertical: 2,
-      borderRadius: 4, overflow: 'hidden',
-    },
-    txnBreakdownPromo: {
-      fontSize: 11, fontWeight: '600', color: '#10B981',
-      backgroundColor: '#10B98115', paddingHorizontal: 6, paddingVertical: 2,
-      borderRadius: 4, overflow: 'hidden',
+      backgroundColor: colors.surfaceLight, paddingHorizontal: 8, paddingVertical: 2,
+      borderRadius: 4, overflow: 'hidden', letterSpacing: 0.5,
     },
     txnDate: { fontSize: 13, color: colors.textDim, marginTop: 4 },
     txnAmountCol: { alignItems: 'flex-end' },

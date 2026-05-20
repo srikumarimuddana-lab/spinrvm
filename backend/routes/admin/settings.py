@@ -88,6 +88,11 @@ class SettingsUpdateRequest(BaseModel):
     # bucket `audio-assets`. Empty string clears the override and reverts
     # the driver-app to the bundled placeholder.
     ride_offer_sound_url: Optional[str] = None
+    # Public base URL for the rider-app "Share Trip" tracking page (the
+    # admin-dashboard `/track/[token]` route). Set this to your deployed
+    # admin domain so safety contacts can open ${base}/${share_token}.
+    # Empty string disables the in-app share link until configured.
+    track_base_url: Optional[str] = None
 
 
 @router.get("/settings")
@@ -101,13 +106,9 @@ async def admin_get_settings(admin: dict = Depends(get_admin_user)):
 async def admin_reveal_setting(field: str, admin: dict = Depends(get_admin_user)):
     """Return the plaintext value of a single credential field. super_admin only. Always audited."""
     if admin.get("role") != "super_admin":
-        raise HTTPException(
-            status_code=403, detail="Only super admins can reveal credential values"
-        )
+        raise HTTPException(status_code=403, detail="Only super admins can reveal credential values")
     if field not in _CREDENTIAL_FIELDS:
-        raise HTTPException(
-            status_code=400, detail=f"Field '{field}' is not a revealable credential"
-        )
+        raise HTTPException(status_code=400, detail=f"Field '{field}' is not a revealable credential")
     raw = await get_app_settings()
     value = raw.get(field)
     await db_supabase.insert_one(
@@ -127,9 +128,7 @@ async def admin_reveal_setting(field: str, admin: dict = Depends(get_admin_user)
 
 
 @router.put("/settings")
-async def admin_update_settings(
-    settings: SettingsUpdateRequest, admin: dict = Depends(get_admin_user)
-):
+async def admin_update_settings(settings: SettingsUpdateRequest, admin: dict = Depends(get_admin_user)):
     """Update settings (upsert single app_settings row). Writes an audit log entry."""
     # First check if settings row exists
     existing = (lambda _r: _r[0] if _r else None)(
@@ -212,15 +211,9 @@ async def admin_upload_ride_offer_sound(
         raise HTTPException(status_code=502, detail="Storage upload failed") from e
 
     public_url_res = supabase.storage.from_(_SOUND_BUCKET).get_public_url(object_path)
-    public_url = (
-        public_url_res
-        if isinstance(public_url_res, str)
-        else getattr(public_url_res, "public_url", None)
-    )
+    public_url = public_url_res if isinstance(public_url_res, str) else getattr(public_url_res, "public_url", None)
     if not public_url:
-        raise HTTPException(
-            status_code=502, detail="Could not resolve public URL for uploaded sound"
-        )
+        raise HTTPException(status_code=502, detail="Could not resolve public URL for uploaded sound")
 
     # Persist on the single app_settings row.
     existing = (lambda _r: _r[0] if _r else None)(
@@ -307,17 +300,11 @@ async def admin_get_heatmap_settings(admin: dict = Depends(get_admin_user)):
 
 
 @router.put("/settings/heatmap")
-async def admin_update_heatmap_settings(
-    data: HeatmapSettingsRequest, admin: dict = Depends(get_admin_user)
-):
+async def admin_update_heatmap_settings(data: HeatmapSettingsRequest, admin: dict = Depends(get_admin_user)):
     """Update heat-map display settings."""
     payload = {
         "id": _HEATMAP_SETTINGS_ID,
-        **{
-            k: v
-            for k, v in data.model_dump(exclude_none=True).items()
-            if k in _DEFAULT_HEATMAP_SETTINGS
-        },
+        **{k: v for k, v in data.model_dump(exclude_none=True).items() if k in _DEFAULT_HEATMAP_SETTINGS},
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -326,9 +313,7 @@ async def admin_update_heatmap_settings(
     )
     if existing:
         update_fields = {k: v for k, v in payload.items() if k != "id"}
-        await db_supabase.update_one(
-            "settings", {"id": _HEATMAP_SETTINGS_ID}, update_fields
-        )
+        await db_supabase.update_one("settings", {"id": _HEATMAP_SETTINGS_ID}, update_fields)
     else:
         await db_supabase.insert_one("settings", payload)
 

@@ -52,7 +52,7 @@ function DriverArrivedScreenContent() {
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
-  const fare = parseFloat(currentRide?.total_fare || '0');
+  const fare = parseFloat((currentRide as any)?.grand_total || currentRide?.total_fare || '0');
   // Use server-provided cancellation fee; fall back to $3 default (matches app_settings).
   // The old Math.min(5, fare * 0.2) formula did not match the server-side value.
   const cancellationFee = (currentRide as any)?.cancellation_fee ?? 3.0;
@@ -88,7 +88,7 @@ function DriverArrivedScreenContent() {
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => { handleCancelPress(); return true; });
     return () => sub.remove();
-  }, [currentRide?.total_fare]);
+  }, [currentRide?.total_fare, (currentRide as any)?.grand_total]);
 
   useEffect(() => {
     if (!rideId) return;

@@ -256,6 +256,31 @@ def _money_str(v: Decimal) -> str:
     return str(_round(_d(v)))
 
 
+def _actual_duration_minutes(ride: dict) -> int | None:
+    """Derive the actual trip-in-progress duration in whole minutes.
+
+    Preferred source is ``ride_metrics.phases.trip_in_progress.actual_duration_minutes``
+    (migration 89), assembled at completion from ride timestamps. Falls back
+    to the GPS-derived ``phase_durations`` (migration 15) for rides completed
+    before migration 89 landed. Returns None when neither source is populated
+    so callers can fall back to the booking-time estimate.
+    """
+    trip_phase = ((ride.get("ride_metrics") or {}).get("phases") or {}).get("trip_in_progress") or {}
+    persisted = trip_phase.get("actual_duration_minutes")
+    if isinstance(persisted, (int, float)) and persisted > 0:
+        return int(persisted)
+    phase = (ride.get("phase_durations") or {}).get("trip_in_progress")
+    if phase is None:
+        return None
+    try:
+        secs = float(phase)
+    except (TypeError, ValueError):
+        return None
+    if secs <= 0:
+        return None
+    return max(1, int(round(secs / 60)))
+
+
 def _build_fare_breakdown(ride: dict) -> list[dict]:
     """Build a dynamic fare_breakdown list from ride fields.
 
@@ -1784,6 +1809,7 @@ async def get_ride_history(
 
     for r in rides:
         r["fare_breakdown"] = _build_fare_breakdown(r)
+        r["actual_duration_minutes"] = _actual_duration_minutes(r)
 
     next_cursor = rides[-1]["id"] if len(rides) == limit else None
 
@@ -2018,6 +2044,7 @@ async def get_ride(
                 ride.pop(_addr_key, None)
 
     ride["fare_breakdown"] = _build_fare_breakdown(ride)
+    ride["actual_duration_minutes"] = _actual_duration_minutes(ride)
 
     def serialize_doc(doc):
         return doc

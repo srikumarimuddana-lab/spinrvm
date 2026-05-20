@@ -1,6 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 export const StripeKeyContext = React.createContext<string | null>(null);
+// Public base URL for the "Share Trip" tracking page, served from
+// app_settings.track_base_url via GET /settings. Null while loading or
+// until the admin configures it. Consumers should disable the share
+// action when null/empty rather than fall back to a hardcoded URL.
+export const TrackBaseUrlContext = React.createContext<string | null>(null);
 import { Stack, router } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { AppState, View, ActivityIndicator, StyleSheet, Text, Platform } from 'react-native';
@@ -112,6 +117,7 @@ export default function RootLayout() {
   const hydrateWorkProfile = useWorkProfileStore(s => s.hydrate);
   const [isOffline, setIsOffline] = useState(false);
   const [stripePublishableKey, setStripePublishableKey] = useState<string | null>(null);
+  const [trackBaseUrl, setTrackBaseUrl] = useState<string | null>(null);
   const fcmRegisteredRef = useRef(false);
   const backgroundedAtRef = useRef<number | null>(null);
   const [confirmSheet, setConfirmSheet] = useState<{
@@ -136,11 +142,13 @@ export default function RootLayout() {
   useEffect(() => {
     (async () => {
       try {
-        const res = await api.get<{ stripe_publishable_key?: string }>('/settings');
+        const res = await api.get<{ stripe_publishable_key?: string; track_base_url?: string }>('/settings');
         const key = res.data?.stripe_publishable_key;
         if (key) setStripePublishableKey(key);
+        const trackUrl = (res.data?.track_base_url || '').replace(/\/$/, '');
+        setTrackBaseUrl(trackUrl.length > 0 ? trackUrl : null);
       } catch (e) {
-        console.log('[Stripe] Failed to fetch publishable key:', e);
+        console.log('[Settings] Failed to fetch public settings:', e);
       }
     })();
   }, []);
@@ -471,7 +479,7 @@ export default function RootLayout() {
 
   return (
     <ThemeProvider>
-      <RootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} stripePublishableKey={stripePublishableKey} wsState={wsState} confirmSheet={confirmSheet} setConfirmSheet={setConfirmSheet} />
+      <RootLayoutInner isOffline={isOffline} setIsOffline={setIsOffline} stripePublishableKey={stripePublishableKey} trackBaseUrl={trackBaseUrl} wsState={wsState} confirmSheet={confirmSheet} setConfirmSheet={setConfirmSheet} />
     </ThemeProvider>
   );
 }
@@ -499,6 +507,7 @@ function RootLayoutInner({
   isOffline,
   setIsOffline,
   stripePublishableKey,
+  trackBaseUrl,
   wsState,
   confirmSheet,
   setConfirmSheet,
@@ -506,6 +515,7 @@ function RootLayoutInner({
   isOffline: boolean;
   setIsOffline: (v: boolean) => void;
   stripePublishableKey: string | null;
+  trackBaseUrl: string | null;
   wsState: import('../hooks/useRiderSocket').RiderSocketState;
   confirmSheet: { visible: boolean; title: string; message: string; variant: 'info' | 'warning' | 'danger' | 'success'; buttons: ConfirmSheetButton[] };
   setConfirmSheet: React.Dispatch<React.SetStateAction<typeof confirmSheet>>;
@@ -526,6 +536,7 @@ function RootLayoutInner({
             </View>
           )}
           <StripeKeyContext.Provider value={stripePublishableKey}>
+          <TrackBaseUrlContext.Provider value={trackBaseUrl}>
           <MaybeStripeProvider publishableKey={stripePublishableKey}>
           <Stack
             screenOptions={{
@@ -573,6 +584,7 @@ function RootLayoutInner({
             <Stack.Screen name="become-driver" />
           </Stack>
           </MaybeStripeProvider>
+          </TrackBaseUrlContext.Provider>
           </StripeKeyContext.Provider>
           <ConfirmSheet
             visible={confirmSheet.visible}

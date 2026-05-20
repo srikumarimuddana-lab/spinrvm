@@ -112,9 +112,7 @@ async def _vault_encrypt(value: str, hint: str = "") -> str:
             hint,
             exc_info=True,
         )
-        raise HTTPException(
-            status_code=503, detail="Encryption service unavailable"
-        ) from exc
+        raise HTTPException(status_code=503, detail="Encryption service unavailable") from exc
     if not _sb:
         logger.error(
             "vault_encrypt: Supabase client not initialised for %s — refusing to store plaintext",
@@ -122,17 +120,13 @@ async def _vault_encrypt(value: str, hint: str = "") -> str:
         )
         raise HTTPException(status_code=503, detail="Encryption service unavailable")
     try:
-        res = await db_supabase.run_sync(
-            lambda: _sb.rpc("encrypt_driver_pii", {"plaintext": value}).execute()
-        )
+        res = await db_supabase.run_sync(lambda: _sb.rpc("encrypt_driver_pii", {"plaintext": value}).execute())
         if not res.data:
             logger.error(
                 "vault_encrypt: RPC returned no data for %s — refusing to store plaintext",
                 hint,
             )
-            raise HTTPException(
-                status_code=503, detail="Encryption service unavailable"
-            )
+            raise HTTPException(status_code=503, detail="Encryption service unavailable")
         return str(res.data)
     except HTTPException:
         raise
@@ -142,9 +136,7 @@ async def _vault_encrypt(value: str, hint: str = "") -> str:
             hint,
             exc_info=True,
         )
-        raise HTTPException(
-            status_code=503, detail="Encryption service unavailable"
-        ) from exc
+        raise HTTPException(status_code=503, detail="Encryption service unavailable") from exc
 
 
 async def _vault_decrypt(value: str, hint: str = "") -> str:
@@ -162,9 +154,7 @@ async def _vault_decrypt(value: str, hint: str = "") -> str:
     if not _sb:
         return value
     try:
-        res = await db_supabase.run_sync(
-            lambda: _sb.rpc("decrypt_driver_pii", {"secret_id": value}).execute()
-        )
+        res = await db_supabase.run_sync(lambda: _sb.rpc("decrypt_driver_pii", {"secret_id": value}).execute())
         return str(res.data) if res.data else value
     except Exception:
         logger.error(
@@ -241,12 +231,7 @@ async def _generate_and_store_ride_snapshot(
     Requires a public ``ride-snapshots`` bucket in Supabase Storage.
     See backend/docs/STORAGE_BUCKETS.md for one-time setup.
     """
-    if (
-        pickup_lat is None
-        or pickup_lng is None
-        or dropoff_lat is None
-        or dropoff_lng is None
-    ):
+    if pickup_lat is None or pickup_lng is None or dropoff_lat is None or dropoff_lng is None:
         return
     try:
         try:
@@ -302,27 +287,21 @@ async def _generate_and_store_ride_snapshot(
 
         base = (settings.SUPABASE_URL or "").rstrip("/")
         if not base:
-            logger.error(
-                "SUPABASE_URL not configured; cannot build public snapshot URL"
-            )
+            logger.error("SUPABASE_URL not configured; cannot build public snapshot URL")
             return
         url = f"{base}/storage/v1/object/public/{bucket}/{storage_path}"
 
         # Persist the URL. Wrap in try/except so if migration 41 hasn't
         # landed yet the write fails gracefully instead of raising.
         try:
-            await db_supabase.update_one(
-                "rides", {"id": ride_id}, {"route_snapshot_url": url}
-            )
+            await db_supabase.update_one("rides", {"id": ride_id}, {"route_snapshot_url": url})
         except Exception as exc:
             logger.error(
                 f"route_snapshot_url write failed for ride {ride_id} (migration 41 missing?): {exc}",
                 exc_info=True,
             )
     except Exception as exc:
-        logger.error(
-            f"Ride snapshot pipeline failed for {ride_id}: {exc}", exc_info=True
-        )
+        logger.error(f"Ride snapshot pipeline failed for {ride_id}: {exc}", exc_info=True)
 
 
 async def _validate_ride_route(ride_id: str, breadcrumbs: list, driver_id: str) -> None:
@@ -341,13 +320,9 @@ async def _validate_ride_route(ride_id: str, breadcrumbs: list, driver_id: str) 
 
         # Store validation result on ride
         try:
-            await db_supabase.update_one(
-                "rides", {"id": ride_id}, {"route_validation": result}
-            )
+            await db_supabase.update_one("rides", {"id": ride_id}, {"route_validation": result})
         except Exception as db_exc:
-            logger.warning(
-                f"[route_validation] failed to store results on ride {ride_id}: {db_exc}"
-            )
+            logger.warning(f"[route_validation] failed to store results on ride {ride_id}: {db_exc}")
 
         if result["verdict"] in ("suspicious", "likely_spoofed"):
             logger.warning(
@@ -358,14 +333,10 @@ async def _validate_ride_route(ride_id: str, breadcrumbs: list, driver_id: str) 
                 result["deviation_pct"],
             )
     except Exception as exc:
-        logger.error(
-            f"[route_validation] failed for ride {ride_id}: {exc}", exc_info=True
-        )
+        logger.error(f"[route_validation] failed for ride {ride_id}: {exc}", exc_info=True)
 
 
-async def _require_ride_in_state(
-    ride_id: str, driver_id: str, allowed_states: tuple
-) -> Dict[str, Any]:
+async def _require_ride_in_state(ride_id: str, driver_id: str, allowed_states: tuple) -> Dict[str, Any]:
     """Load a driver's ride only if it is in one of ``allowed_states``.
 
     Raises 409 Conflict if the ride exists but is in a terminal or
@@ -421,9 +392,7 @@ async def get_driver_config(current_user: dict = Depends(get_current_user)):
     try:
         app_settings = await get_app_settings() or {}
     except Exception as e:
-        logger.error(
-            f"get_driver_config: failed to read app_settings: {e}", exc_info=True
-        )
+        logger.error(f"get_driver_config: failed to read app_settings: {e}", exc_info=True)
         app_settings = {}
 
     def _clamp(value, lo, hi, default):
@@ -437,12 +406,8 @@ async def get_driver_config(current_user: dict = Depends(get_current_user)):
     # ping. Null/empty → driver-app falls back to the bundled placeholder.
     ride_offer_sound_url = app_settings.get("ride_offer_sound_url") or None
     return {
-        "ride_offer_timeout_seconds": _clamp(
-            app_settings.get("ride_offer_timeout_seconds"), 5, 60, 15
-        ),
-        "pickup_radius_meters": _clamp(
-            app_settings.get("pickup_radius_meters"), 10, 1000, 100
-        ),
+        "ride_offer_timeout_seconds": _clamp(app_settings.get("ride_offer_timeout_seconds"), 5, 60, 15),
+        "pickup_radius_meters": _clamp(app_settings.get("pickup_radius_meters"), 10, 1000, 100),
         "ride_offer_sound_url": ride_offer_sound_url,
     }
 
@@ -496,9 +461,7 @@ class UpdateDriverProfileRequest(BaseModel):
 
 
 @api_router.put("/me")
-async def update_my_driver(
-    body: UpdateDriverProfileRequest, current_user: dict = Depends(get_current_user)
-):
+async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict = Depends(get_current_user)):
     """Update the current user's driver profile.
 
     Accepts vehicle info, personal details, and preferences. When a
@@ -537,11 +500,7 @@ async def update_my_driver(
     }
     allowed_fields = safe_fields | vehicle_fields
 
-    updates = {
-        k: v
-        for k, v in body.model_dump(exclude_none=True).items()
-        if k in allowed_fields
-    }
+    updates = {k: v for k, v in body.model_dump(exclude_none=True).items() if k in allowed_fields}
     if not updates:
         return {"success": True}
 
@@ -572,9 +531,7 @@ async def update_my_driver(
         }
         await db_supabase.insert_one("drivers", new_driver)
         # Also flip the user role to 'driver' if not already
-        await db_supabase.update_one(
-            "users", {"id": current_user["id"]}, {"role": "driver", "is_driver": True}
-        )
+        await db_supabase.update_one("users", {"id": current_user["id"]}, {"role": "driver", "is_driver": True})
         return serialize_doc(new_driver)
 
     # Check if an active driver changed vehicle/document fields → needs review
@@ -583,14 +540,10 @@ async def update_my_driver(
         updates["status"] = "needs_review"
         updates["is_online"] = False
         updates["is_available"] = False
-        logger.info(
-            f"[DRIVER] Driver {driver['id']} updated vehicle info → status set to needs_review"
-        )
+        logger.info(f"[DRIVER] Driver {driver['id']} updated vehicle info → status set to needs_review")
 
     updates["updated_at"] = datetime.now(timezone.utc).isoformat()
-    await db_supabase.update_one(
-        "drivers", {"id": driver["id"]}, await _encrypt_driver_pii(updates)
-    )
+    await db_supabase.update_one("drivers", {"id": driver["id"]}, await _encrypt_driver_pii(updates))
     # M-5: SGI insurance period audit — vehicle/document edits flip an
     # active driver to needs_review and force them offline. If they were
     # actually online before this update, that's a 1→0 transition.
@@ -616,9 +569,7 @@ async def get_demand_heatmap(current_user: dict = Depends(get_current_user)):
     service_area = None
     if driver and driver.get("service_area_id"):
         service_area = (lambda _r: _r[0] if _r else None)(
-            await db_supabase.get_rows(
-                "service_areas", {"id": driver["service_area_id"]}, limit=1
-            )
+            await db_supabase.get_rows("service_areas", {"id": driver["service_area_id"]}, limit=1)
         )
 
     enabled = bool(service_area and service_area.get("show_demand_heatmap"))
@@ -670,10 +621,7 @@ async def register_driver(
     first_name = body.get("first_name") or ""
     last_name = body.get("last_name") or ""
     full_name = (
-        f"{first_name} {last_name}".strip()
-        or current_user.get("name")
-        or current_user.get("full_name")
-        or "Driver"
+        f"{first_name} {last_name}".strip() or current_user.get("name") or current_user.get("full_name") or "Driver"
     )
     # Derive split first/last from whatever source produced full_name. Mirrors
     # the migration backfill logic so a fresh row matches what the migration
@@ -686,9 +634,7 @@ async def register_driver(
         _first_name_split = first_name
         _last_name_split = last_name
 
-    existing = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows("drivers", {"user_id": user_id}, limit=1)
-    )
+    existing = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("drivers", {"user_id": user_id}, limit=1))
 
     # Reject registration attempts that would collide with an existing
     # driver record owned by someone else — prevents the phone-level
@@ -734,9 +680,7 @@ async def register_driver(
     if existing:
         payload["updated_at"] = datetime.now(timezone.utc).isoformat()
         payload["submitted_at"] = datetime.now(timezone.utc).isoformat()
-        await db_supabase.update_one(
-            "drivers", {"id": existing["id"]}, await _encrypt_driver_pii(payload)
-        )
+        await db_supabase.update_one("drivers", {"id": existing["id"]}, await _encrypt_driver_pii(payload))
         driver = await db_supabase.get_driver_by_id(existing["id"])
         return serialize_doc(await _decrypt_driver_pii(driver))
 
@@ -806,9 +750,7 @@ class SetDestinationRequest(BaseModel):
 
 
 @api_router.post("/destination")
-async def set_destination_mode(
-    req: SetDestinationRequest, current_user: dict = Depends(get_current_user)
-):
+async def set_destination_mode(req: SetDestinationRequest, current_user: dict = Depends(get_current_user)):
     """Set driver's preferred destination. Ride matching will prioritize
     rides heading toward this destination to reduce empty miles."""
     driver = await db.find_one("drivers", {"user_id": current_user["id"]})
@@ -911,9 +853,7 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
     return {
         "total_earnings": _money_str(total_earnings),
         # payable_balance = total_earnings - pending_payouts (NOT the same as wallet.balance)
-        "payable_balance": _money_str(
-            Decimal(str(total_earnings)) - Decimal(str(pending_payouts))
-        ),
+        "payable_balance": _money_str(Decimal(str(total_earnings)) - Decimal(str(pending_payouts))),
         "pending_payouts": _money_str(pending_payouts),
         "total_paid_out": "0.00",
         "has_bank_account": bool(driver.get("bank_account")),
@@ -924,9 +864,7 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
 
 
 @api_router.get("/earnings")
-async def get_driver_earnings(
-    period: str = Query("week"), current_user: dict = Depends(get_current_user)
-):
+async def get_driver_earnings(period: str = Query("week"), current_user: dict = Depends(get_current_user)):
     """Get driver's earnings summary for a period."""
     driver = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
@@ -971,9 +909,7 @@ async def get_driver_earnings(
             "total_tips": sum(r.get("tip_amount", 0) or 0 for r in rides),
             "total_rides": len(rides),
             "total_distance_km": sum(r.get("distance_km", 0) or 0 for r in rides),
-            "total_duration_minutes": sum(
-                r.get("duration_minutes", 0) or 0 for r in rides
-            ),
+            "total_duration_minutes": sum(r.get("duration_minutes", 0) or 0 for r in rides),
         }
     except Exception as e:
         logger.error(f"Error fetching earnings: {e}")
@@ -993,10 +929,7 @@ async def get_driver_earnings(
         "total_distance_km": stats.get("total_distance_km", 0),
         "total_duration_minutes": stats.get("total_duration_minutes", 0),
         "average_per_ride": (
-            _money_str(
-                Decimal(str(stats.get("total_earnings", 0)))
-                / stats.get("total_rides", 1)
-            )
+            _money_str(Decimal(str(stats.get("total_earnings", 0))) / stats.get("total_rides", 1))
             if stats.get("total_rides", 0) > 0
             else "0.00"
         ),
@@ -1004,9 +937,7 @@ async def get_driver_earnings(
 
 
 @api_router.get("/earnings/daily")
-async def get_driver_daily_earnings(
-    days: int = Query(7), current_user: dict = Depends(get_current_user)
-):
+async def get_driver_daily_earnings(days: int = Query(7), current_user: dict = Depends(get_current_user)):
     """Get driver's daily earnings breakdown."""
     driver = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
@@ -1068,9 +999,7 @@ async def get_driver_trip_earnings(
     date restriction (capped by ``limit``).
     """
     if days is not None and days > 365:
-        raise HTTPException(
-            status_code=422, detail="Date range cannot exceed 12 months (365 days)"
-        )
+        raise HTTPException(status_code=422, detail="Date range cannot exceed 12 months (365 days)")
 
     driver = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
@@ -1113,9 +1042,7 @@ async def get_driver_trip_earnings(
                 "driver_earnings": r.get("driver_earnings", 0),
                 "tip_amount": r.get("tip_amount", 0),
                 "rider_rating": r.get("rider_rating"),
-                "completed_at": (
-                    r.get("ride_completed_at") if r.get("ride_completed_at") else None
-                ),
+                "completed_at": (r.get("ride_completed_at") if r.get("ride_completed_at") else None),
             }
             for r in rides
         ],
@@ -1125,9 +1052,7 @@ async def get_driver_trip_earnings(
 
 
 @api_router.get("/earnings/weekly")
-async def get_driver_weekly_earnings(
-    weeks: int = Query(4), current_user: dict = Depends(get_current_user)
-):
+async def get_driver_weekly_earnings(weeks: int = Query(4), current_user: dict = Depends(get_current_user)):
     """Get driver's weekly earnings breakdown."""
     driver = await db.find_one("drivers", {"user_id": current_user["id"]})
     if not driver:
@@ -1179,9 +1104,7 @@ async def get_driver_weekly_earnings(
             weekly_data[week_key]["earnings"] += s.get("total_earnings", 0) or 0
             weekly_data[week_key]["tips"] += s.get("total_tips", 0) or 0
             weekly_data[week_key]["rides"] += s.get("rides_completed", 0) or 0
-            weekly_data[week_key]["online_hours"] += round(
-                (s.get("online_minutes", 0) or 0) / 60, 1
-            )
+            weekly_data[week_key]["online_hours"] += round((s.get("online_minutes", 0) or 0) / 60, 1)
             weekly_data[week_key]["distance_km"] += s.get("total_km", 0) or 0
 
         return sorted(weekly_data.values(), key=lambda x: x["week_start"])
@@ -1235,9 +1158,7 @@ async def get_driver_weekly_earnings(
 
 
 @api_router.get("/earnings/monthly")
-async def get_driver_monthly_earnings(
-    months: int = Query(6), current_user: dict = Depends(get_current_user)
-):
+async def get_driver_monthly_earnings(months: int = Query(6), current_user: dict = Depends(get_current_user)):
     """Get driver's monthly earnings breakdown."""
     driver = await db.find_one("drivers", {"user_id": current_user["id"]})
     if not driver:
@@ -1279,9 +1200,7 @@ async def get_driver_monthly_earnings(
             monthly_data[month_key]["earnings"] += s.get("total_earnings", 0) or 0
             monthly_data[month_key]["tips"] += s.get("total_tips", 0) or 0
             monthly_data[month_key]["rides"] += s.get("rides_completed", 0) or 0
-            monthly_data[month_key]["online_hours"] += round(
-                (s.get("online_minutes", 0) or 0) / 60, 1
-            )
+            monthly_data[month_key]["online_hours"] += round((s.get("online_minutes", 0) or 0) / 60, 1)
             monthly_data[month_key]["distance_km"] += s.get("total_km", 0) or 0
 
         return sorted(monthly_data.values(), key=lambda x: x["month"])
@@ -1327,9 +1246,7 @@ async def get_driver_monthly_earnings(
 
 
 @api_router.get("/earnings/comparison")
-async def get_driver_earnings_comparison(
-    period: str = Query("week"), current_user: dict = Depends(get_current_user)
-):
+async def get_driver_earnings_comparison(period: str = Query("week"), current_user: dict = Depends(get_current_user)):
     """Compare current period earnings vs previous period."""
     driver = await db.find_one("drivers", {"user_id": current_user["id"]})
     if not driver:
@@ -1366,11 +1283,7 @@ async def get_driver_earnings_comparison(
             },
             limit=10000,
         )
-        previous_rides = [
-            r
-            for r in all_rides
-            if r.get("ride_completed_at", "") < previous_end.isoformat()
-        ]
+        previous_rides = [r for r in all_rides if r.get("ride_completed_at", "") < previous_end.isoformat()]
     except Exception as e:
         logger.error(f"Error fetching comparison: {e}")
         current_rides = []
@@ -1432,9 +1345,7 @@ async def get_driver_earnings_forecast(current_user: dict = Depends(get_current_
     # Rolling 28-day window for the daily average
     window_start = (now - timedelta(days=28)).isoformat()
     # Start of the current ISO week (Monday)
-    week_start = (now - timedelta(days=now.weekday())).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
+    week_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
 
     try:
         recent_rides = await db.get_rows(
@@ -1454,36 +1365,20 @@ async def get_driver_earnings_forecast(current_user: dict = Depends(get_current_
         return _zero
 
     try:
-        this_week_rides = [
-            r
-            for r in recent_rides
-            if (r.get("ride_completed_at") or "") >= week_start.isoformat()
-        ]
-        prev_28_rides = [
-            r
-            for r in recent_rides
-            if (r.get("ride_completed_at") or "") < week_start.isoformat()
-        ]
+        this_week_rides = [r for r in recent_rides if (r.get("ride_completed_at") or "") >= week_start.isoformat()]
+        prev_28_rides = [r for r in recent_rides if (r.get("ride_completed_at") or "") < week_start.isoformat()]
 
-        this_week_earnings = sum(
-            Decimal(str(r.get("driver_earnings") or 0)) for r in this_week_rides
-        )
-        prev_28_earnings = sum(
-            Decimal(str(r.get("driver_earnings") or 0)) for r in prev_28_rides
-        )
+        this_week_earnings = sum(Decimal(str(r.get("driver_earnings") or 0)) for r in this_week_rides)
+        prev_28_earnings = sum(Decimal(str(r.get("driver_earnings") or 0)) for r in prev_28_rides)
 
         # Daily average over the 28-day window excluding the current week
         days_in_window = 28 - now.weekday()  # days before current week in window
-        daily_avg = (
-            (prev_28_earnings / days_in_window) if days_in_window > 0 else Decimal("0")
-        )
+        daily_avg = (prev_28_earnings / days_in_window) if days_in_window > 0 else Decimal("0")
 
         # Days remaining in current week (today = partially elapsed)
         days_remaining = 6 - now.weekday()  # Mon=0 … Sun=6
         projected_additional = daily_avg * days_remaining
-        projected_total = (this_week_earnings + projected_additional).quantize(
-            Decimal("0.01")
-        )
+        projected_total = (this_week_earnings + projected_additional).quantize(Decimal("0.01"))
 
         return {
             "this_week_earnings": _money_str(this_week_earnings),
@@ -1493,9 +1388,7 @@ async def get_driver_earnings_forecast(current_user: dict = Depends(get_current_
             "this_week_trips": len(this_week_rides),
         }
     except Exception as e:
-        logger.error(
-            f"[FORECAST] computation failed driver={driver['id']}: {e}", exc_info=True
-        )
+        logger.error(f"[FORECAST] computation failed driver={driver['id']}: {e}", exc_info=True)
         return _zero
 
 
@@ -1600,18 +1493,14 @@ async def create_driver(driver: Driver, admin_user: dict = Depends(get_admin_use
         await db_supabase.get_rows("drivers", {"phone": driver.phone}, limit=1)
     )
     if existing:
-        raise HTTPException(
-            status_code=400, detail="Driver with this phone already exists"
-        )
+        raise HTTPException(status_code=400, detail="Driver with this phone already exists")
 
     await db_supabase.insert_one("drivers", driver.dict())
     return driver.dict()
 
 
 @api_router.post("/location-batch")
-async def update_location_batch(
-    batch: Union[List[dict], dict], current_user: dict = Depends(get_current_user)
-):
+async def update_location_batch(batch: Union[List[dict], dict], current_user: dict = Depends(get_current_user)):
     """Update driver location in batch (from background tracking)."""
     try:
         from ..utils.location_integrity import check_location_integrity
@@ -1635,9 +1524,7 @@ async def update_location_batch(
 
     if lat and lng:
         # GPS spoofing check
-        driver_rows = await db_supabase.get_rows(
-            "drivers", {"user_id": current_user["id"]}, limit=1
-        )
+        driver_rows = await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
         driver_id = driver_rows[0]["id"] if driver_rows else current_user["id"]
         trusted, _reason = await check_location_integrity(
             driver_id,
@@ -1656,9 +1543,7 @@ async def update_location_batch(
         # if heading:
         #    update_data['heading'] = heading
 
-        await db_supabase.update_one(
-            "drivers", {"user_id": current_user["id"]}, update_data
-        )
+        await db_supabase.update_one("drivers", {"user_id": current_user["id"]}, update_data)
         # Also sync to generic lat/lng fields if they exist to support legacy queries
         # (Though update_one might not support setting multiple top-level fields easily if we rely on $set mapping)
         # Let's trust db.drivers.update_one to handle the schema or the wrapper.
@@ -1667,9 +1552,7 @@ async def update_location_batch(
         # drops but the REST location batch keeps flowing (e.g. phone on
         # cellular switching towers).
         driver_row = (lambda _r: _r[0] if _r else None)(
-            await db_supabase.get_rows(
-                "drivers", {"user_id": current_user["id"]}, limit=1
-            )
+            await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
         )
         if driver_row and driver_row.get("is_online"):
             await mark_present(driver_row["id"])
@@ -1678,18 +1561,14 @@ async def update_location_batch(
 
 
 @api_router.post("/attest-device")
-async def attest_device(
-    device_info: dict, current_user: dict = Depends(get_current_user)
-):
+async def attest_device(device_info: dict, current_user: dict = Depends(get_current_user)):
     """Verify device integrity on go-online. Flags emulators and suspicious devices."""
     try:
         from ..utils.device_attestation import verify_device
     except ImportError:
         from utils.device_attestation import verify_device  # type: ignore
 
-    driver_rows = await db_supabase.get_rows(
-        "drivers", {"user_id": current_user["id"]}, limit=1
-    )
+    driver_rows = await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
     driver_id = driver_rows[0]["id"] if driver_rows else current_user["id"]
 
     result = await verify_device(current_user["id"], driver_id, device_info)
@@ -1721,17 +1600,13 @@ class PayoutRequest(BaseModel):
 @api_router.get("/bank-account")
 async def get_bank_account(current_user: dict = Depends(get_current_user)):
     driver = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows(
-            "drivers", {"user_id": current_user.get("id")}, limit=1
-        )
+        await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1)
     )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
 
     account = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows(
-            "bank_accounts", {"driver_id": driver["id"]}, limit=1
-        )
+        await db_supabase.get_rows("bank_accounts", {"driver_id": driver["id"]}, limit=1)
     )
     if account:
         return {"has_bank_account": True, "bank_account": serialize_doc(account)}
@@ -1748,9 +1623,7 @@ async def get_bank_account(current_user: dict = Depends(get_current_user)):
 @api_router.post("/stripe-onboard")
 async def onboard_stripe(current_user: dict = Depends(get_current_user)):
     driver = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows(
-            "drivers", {"user_id": current_user.get("id")}, limit=1
-        )
+        await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1)
     )
     user = await db_supabase.get_user_by_id(current_user.get("id"))
     if not driver or not user:
@@ -1781,9 +1654,7 @@ async def onboard_stripe(current_user: dict = Depends(get_current_user)):
                 api_key=stripe_secret,
             )
             account_id = account.id
-            await db_supabase.update_one(
-                "drivers", {"id": driver["id"]}, {"stripe_account_id": account_id}
-            )
+            await db_supabase.update_one("drivers", {"id": driver["id"]}, {"stripe_account_id": account_id})
 
         account_link = stripe.AccountLink.create(
             account=account_id,
@@ -1793,26 +1664,18 @@ async def onboard_stripe(current_user: dict = Depends(get_current_user)):
             api_key=stripe_secret,
         )
         # Mark as onboarded optimistically or handle via webhook/return_url properly in production
-        await db_supabase.update_one(
-            "drivers", {"id": driver["id"]}, {"stripe_account_onboarded": True}
-        )
+        await db_supabase.update_one("drivers", {"id": driver["id"]}, {"stripe_account_onboarded": True})
 
         return {"url": account_link.url, "mock": False}
     except Exception as e:
         logger.error(f"Stripe error: {e}")
-        raise HTTPException(
-            status_code=500, detail="An internal error occurred. Please try again."
-        ) from e
+        raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
 
 
 @api_router.post("/bank-account")
-async def save_bank_account(
-    req: BankAccountCreate, current_user: dict = Depends(get_current_user)
-):
+async def save_bank_account(req: BankAccountCreate, current_user: dict = Depends(get_current_user)):
     driver = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows(
-            "drivers", {"user_id": current_user.get("id")}, limit=1
-        )
+        await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1)
     )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
@@ -1829,9 +1692,7 @@ async def save_bank_account(
     account_data["routing_number"] = f"0{inst}{trans}"
 
     account_data["account_last4"] = acc_num[-4:] if len(acc_num) >= 4 else acc_num
-    account_data["stripe_bank_id"] = (
-        None  # Would be populated after calling Stripe's API
-    )
+    account_data["stripe_bank_id"] = None  # Would be populated after calling Stripe's API
     account_data["currency"] = "cad"
     account_data["country"] = "CA"
     account_data["is_verified"] = False
@@ -1846,9 +1707,7 @@ async def save_bank_account(
 @api_router.delete("/bank-account")
 async def delete_bank_account(current_user: dict = Depends(get_current_user)):
     driver = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows(
-            "drivers", {"user_id": current_user.get("id")}, limit=1
-        )
+        await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1)
     )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
@@ -1864,9 +1723,7 @@ async def request_payout(
     current_user: dict = Depends(get_current_user),
 ):
     driver = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows(
-            "drivers", {"user_id": current_user.get("id")}, limit=1
-        )
+        await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1)
     )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
@@ -1877,9 +1734,7 @@ async def request_payout(
 
     stripe_account_id = driver.get("stripe_account_id")
     account = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows(
-            "bank_accounts", {"driver_id": driver["id"]}, limit=1
-        )
+        await db_supabase.get_rows("bank_accounts", {"driver_id": driver["id"]}, limit=1)
     )
 
     if not stripe_account_id and not account:
@@ -1938,9 +1793,7 @@ async def get_payout_history(
     current_user: dict = Depends(get_current_user),
 ):
     driver = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows(
-            "drivers", {"user_id": current_user.get("id")}, limit=1
-        )
+        await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1)
     )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
@@ -1959,9 +1812,7 @@ async def get_payout_history(
 @api_router.get("/t4a/{year}")
 async def get_t4a_summary(year: int, current_user: dict = Depends(get_current_user)):
     driver = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows(
-            "drivers", {"user_id": current_user.get("id")}, limit=1
-        )
+        await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1)
     )
     if not driver:
         raise HTTPException(status_code=404, detail="Driver profile not found")
@@ -1974,14 +1825,9 @@ async def get_t4a_summary(year: int, current_user: dict = Depends(get_current_us
         limit=10000,
     )
 
-    total_earnings = _money_str(
-        sum(Decimal(str(r.get("driver_earnings") or 0)) for r in rides)
-    )
+    total_earnings = _money_str(sum(Decimal(str(r.get("driver_earnings") or 0)) for r in rides))
 
-    driver_name = (
-        f"{current_user.get('first_name', '')} {current_user.get('last_name', '')}".strip()
-        or None
-    )
+    driver_name = f"{current_user.get('first_name', '')} {current_user.get('last_name', '')}".strip() or None
     return {
         "year": year,
         "total_earnings": total_earnings,
@@ -2001,10 +1847,7 @@ async def download_t4a_pdf(year: int, current_user: dict = Depends(get_current_u
     from fastapi.responses import Response as _Response
 
     summary = await get_t4a_summary(year, current_user)
-    summary["driver_name"] = (
-        f"{current_user.get('first_name', '')} {current_user.get('last_name', '')}".strip()
-        or None
-    )
+    summary["driver_name"] = f"{current_user.get('first_name', '')} {current_user.get('last_name', '')}".strip() or None
     pdf_bytes = generate_t4a_pdf(summary)
     filename = f"T4A_{year}_{current_user['id'][:8]}.pdf"
     return _Response(
@@ -2015,9 +1858,7 @@ async def download_t4a_pdf(year: int, current_user: dict = Depends(get_current_u
 
 
 @api_router.get("/earnings/export")
-async def export_earnings(
-    year: int = Query(None), current_user: dict = Depends(get_current_user)
-):
+async def export_earnings(year: int = Query(None), current_user: dict = Depends(get_current_user)):
     if not year:
         year = datetime.now(timezone.utc).year
 
@@ -2053,9 +1894,7 @@ async def export_driver_data(
     user_id = current_user["id"]
     email = current_user.get("email") or current_user.get("phone", "")
     if not email:
-        raise HTTPException(
-            status_code=400, detail="No email address on file to send the export to."
-        )
+        raise HTTPException(status_code=400, detail="No email address on file to send the export to.")
 
     background_tasks.add_task(_build_and_email_data_export, user_id, email)
     return {"message": "Your data export is being prepared. Check your email."}
@@ -2074,9 +1913,7 @@ async def _build_and_email_data_export(user_id: str, email: str) -> None:
         driver_rows, user_rows, notification_prefs = await asyncio.gather(
             db_supabase.get_rows("drivers", {"user_id": user_id}, limit=1),
             db_supabase.get_rows("users", {"id": user_id}, limit=1),
-            db_supabase.get_rows(
-                "notification_preferences", {"user_id": user_id}, limit=1
-            ),
+            db_supabase.get_rows("notification_preferences", {"user_id": user_id}, limit=1),
         )
         driver = (driver_rows or [{}])[0] if driver_rows else {}
         user = (user_rows or [{}])[0] if user_rows else {}
@@ -2104,9 +1941,7 @@ async def _build_and_email_data_export(user_id: str, email: str) -> None:
                     order="created_at",
                     desc=True,
                 ),
-                db_supabase.get_rows(
-                    "driver_documents", {"driver_id": driver_id}, limit=50
-                ),
+                db_supabase.get_rows("driver_documents", {"driver_id": driver_id}, limit=50),
             )
             rides = rides or []
             payouts = payouts or []
@@ -2115,15 +1950,10 @@ async def _build_and_email_data_export(user_id: str, email: str) -> None:
         export_payload = {
             "export_generated_at": datetime.now(timezone.utc).isoformat() + "Z",
             "account": {k: v for k, v in user.items() if k not in ("password_hash",)},
-            "driver_profile": {
-                k: v for k, v in driver.items() if k not in ("password_hash",)
-            },
+            "driver_profile": {k: v for k, v in driver.items() if k not in ("password_hash",)},
             "rides": rides,
             "payouts": payouts,
-            "documents": [
-                {k: v for k, v in doc.items() if k != "document_url"}
-                for doc in documents
-            ],
+            "documents": [{k: v for k, v in doc.items() if k != "document_url"} for doc in documents],
             "notification_preferences": notification_prefs,
         }
 
@@ -2171,9 +2001,7 @@ async def get_active_ride(current_user: dict = Depends(get_current_user)):
         diag_logger.info(f"[ACTIVE] no driver row for user_id={current_user.get('id')}")
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    diag_logger.info(
-        f"[ACTIVE] lookup user_id={current_user.get('id')} driver_id={driver.get('id')}"
-    )
+    diag_logger.info(f"[ACTIVE] lookup user_id={current_user.get('id')} driver_id={driver.get('id')}")
 
     # improved query to catch any active state
     ride = (lambda _r: _r[0] if _r else None)(
@@ -2181,9 +2009,7 @@ async def get_active_ride(current_user: dict = Depends(get_current_user)):
             "rides",
             {
                 "driver_id": driver["id"],
-                "status": {
-                    "$in": list(RideStatus.active_statuses() - {RideStatus.SEARCHING})
-                },
+                "status": {"$in": list(RideStatus.active_statuses() - {RideStatus.SEARCHING})},
             },
             limit=1,
         )
@@ -2194,9 +2020,7 @@ async def get_active_ride(current_user: dict = Depends(get_current_user)):
         # status so we can see whether the $in filter missed something, or
         # the driver_id on the latest ride doesn't match.
         try:
-            recent = await db_supabase.get_rows(
-                "rides", {"driver_id": driver["id"]}, limit=5
-            )
+            recent = await db_supabase.get_rows("rides", {"driver_id": driver["id"]}, limit=5)
             recent_summary = [
                 {
                     "id": r.get("id"),
@@ -2233,9 +2057,7 @@ async def get_active_ride(current_user: dict = Depends(get_current_user)):
         rider = None
     try:
         vehicle_type = (lambda _r: _r[0] if _r else None)(
-            await db_supabase.get_rows(
-                "vehicle_types", {"id": ride["vehicle_type_id"]}, limit=1
-            )
+            await db_supabase.get_rows("vehicle_types", {"id": ride["vehicle_type_id"]}, limit=1)
         )
     except Exception as e:
         logger.error(
@@ -2250,9 +2072,7 @@ async def get_active_ride(current_user: dict = Depends(get_current_user)):
     safe_rider = None
     if rider:
         raw = serialize_doc(rider)
-        safe_rider = {
-            k: raw[k] for k in raw if k not in {"phone", "email", "stripe_customer_id"}
-        }
+        safe_rider = {k: raw[k] for k in raw if k not in {"phone", "email", "stripe_customer_id"}}
 
     return {
         "ride": serialize_doc(ride),
@@ -2390,6 +2210,44 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
         f"post_status={ride.get('status') if ride else 'ROW_GONE'}"
     )
 
+    # Capture the pickup-leg ESTIMATE shown to the rider at the moment of
+    # acceptance. This is the only piece of ride_metrics with no other home —
+    # everything else is either already on the row (planned/actual trip
+    # distance & duration) or derived at completion from driver_insurance_periods.
+    # Failure here must not block acceptance; ride_metrics is a read cache, not
+    # a regulatory artefact.
+    try:
+        pickup_lat = (ride or {}).get("pickup_lat")
+        pickup_lng = (ride or {}).get("pickup_lng")
+        driver_lat = driver.get("lat")
+        driver_lng = driver.get("lng")
+        if pickup_lat and pickup_lng and driver_lat and driver_lng:
+            pickup_km = round(
+                calculate_distance(driver_lat, driver_lng, pickup_lat, pickup_lng),
+                3,
+            )
+            # Mirror the rider-app ETA formula used at /rides/estimate so the
+            # value we store equals the value the rider was shown.
+            pickup_minutes = max(2, int(pickup_km / 30 * 60) + 1)
+            existing_metrics = (ride or {}).get("ride_metrics") or {}
+            phases = dict(existing_metrics.get("phases") or {})
+            phases["navigating_to_pickup"] = {
+                "estimated_distance_km": pickup_km,
+                "estimated_duration_minutes": pickup_minutes,
+            }
+            await db.update_one(
+                "rides",
+                {"id": ride_id},
+                {"ride_metrics": {**existing_metrics, "phases": phases}},
+            )
+    except Exception as metrics_err:
+        logger.error(
+            "accept_ride: ride_metrics pickup-leg write failed for ride %s: %s",
+            ride_id,
+            metrics_err,
+            exc_info=True,
+        )
+
     # Notify rider via both WebSocket (for the instant in-app
     # transition) AND FCM push (so the rider still gets the update
     # if the app was backgrounded when the driver accepted).
@@ -2405,9 +2263,7 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
             "Your driver has accepted the ride and is on the way.",
             data={"type": "driver_accepted", "ride_id": str(ride_id)},
         )
-    await manager.broadcast_ride_status(
-        ride_id, RideStatus.DRIVER_ACCEPTED, rider_id=(ride or {}).get("rider_id")
-    )
+    await manager.broadcast_ride_status(ride_id, RideStatus.DRIVER_ACCEPTED, rider_id=(ride or {}).get("rider_id"))
 
     return {"success": True}
 
@@ -2440,9 +2296,7 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
     )
     if declined is None:
         # Race lost — another driver already accepted; our decline is a no-op.
-        logger.info(
-            f"[DECLINE] ride {ride_id} already claimed by another driver; decline ignored"
-        )
+        logger.info(f"[DECLINE] ride {ride_id} already claimed by another driver; decline ignored")
         # SGI insurance period audit — even on a race loss the driver is no
         # longer obligated to this ride, so we must log the period transition
         # back to period 1 to avoid a gap in the commercial-insurance audit trail.
@@ -2480,9 +2334,7 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
     try:
         await _redis_set(f"spinr:offer_skip:{ride_id}:{driver['id']}", "1", ttl=300)
     except Exception as _e:
-        logger.error(
-            f"Could not set offer cooldown key for ride {ride_id}: {_e}", exc_info=True
-        )
+        logger.error(f"Could not set offer cooldown key for ride {ride_id}: {_e}", exc_info=True)
 
     # GAP FIX: Re-match to find the next available driver
     try:
@@ -2493,17 +2345,13 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
         asyncio.create_task(match_driver_to_ride(ride_id))
         logger.info(f"Re-matching ride {ride_id} after driver {driver['id']} declined")
     except Exception as e:
-        logger.error(
-            f"Could not trigger re-matching for ride {ride_id}: {e}", exc_info=True
-        )
+        logger.error(f"Could not trigger re-matching for ride {ride_id}: {e}", exc_info=True)
 
     return {"success": True}
 
 
 @api_router.post("/rides/{ride_id}/arrive")
-async def arrive_at_pickup(
-    ride_id: str, current_user: dict = Depends(get_current_user)
-):
+async def arrive_at_pickup(ride_id: str, current_user: dict = Depends(get_current_user)):
     driver = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
     )
@@ -2511,9 +2359,7 @@ async def arrive_at_pickup(
         raise HTTPException(status_code=404, detail="Driver not found")
 
     ride = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows(
-            "rides", {"id": ride_id, "driver_id": driver["id"]}, limit=1
-        )
+        await db_supabase.get_rows("rides", {"id": ride_id, "driver_id": driver["id"]}, limit=1)
     )
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
@@ -2526,9 +2372,7 @@ async def arrive_at_pickup(
     pickup_lng = ride.get("pickup_lng", 0)
 
     if driver_lat and driver_lng and pickup_lat and pickup_lng:
-        distance_to_pickup = calculate_distance(
-            driver_lat, driver_lng, pickup_lat, pickup_lng
-        )
+        distance_to_pickup = calculate_distance(driver_lat, driver_lng, pickup_lat, pickup_lng)
         if distance_to_pickup > ARRIVAL_RADIUS_KM:
             distance_m = int(distance_to_pickup * 1000)
             raise HTTPException(
@@ -2553,14 +2397,10 @@ async def arrive_at_pickup(
         },
     )
     if guard is None:
-        raise HTTPException(
-            status_code=409, detail="Ride is not in driver_accepted state"
-        )
+        raise HTTPException(status_code=409, detail="Ride is not in driver_accepted state")
 
     if ride.get("rider_id"):
-        await manager.send_personal_message(
-            {"type": "driver_arrived", "ride_id": ride_id}, f"rider_{ride['rider_id']}"
-        )
+        await manager.send_personal_message({"type": "driver_arrived", "ride_id": ride_id}, f"rider_{ride['rider_id']}")
         asyncio.create_task(
             send_push_notification(
                 ride["rider_id"],
@@ -2569,9 +2409,7 @@ async def arrive_at_pickup(
                 data={"type": "driver_arrived", "ride_id": str(ride_id)},
             )
         )
-    await manager.broadcast_ride_status(
-        ride_id, RideStatus.DRIVER_ARRIVED, rider_id=ride.get("rider_id")
-    )
+    await manager.broadcast_ride_status(ride_id, RideStatus.DRIVER_ARRIVED, rider_id=ride.get("rider_id"))
 
     return {"success": True}
 
@@ -2589,9 +2427,7 @@ async def verify_pickup_otp(
         raise HTTPException(status_code=404, detail="Driver not found")
 
     ride = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows(
-            "rides", {"id": ride_id, "driver_id": driver["id"]}, limit=1
-        )
+        await db_supabase.get_rows("rides", {"id": ride_id, "driver_id": driver["id"]}, limit=1)
     )
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
@@ -2613,17 +2449,13 @@ async def verify_pickup_otp(
         },
     )
     if guard is None:
-        raise HTTPException(
-            status_code=409, detail="Ride is not in driver_arrived state"
-        )
+        raise HTTPException(status_code=409, detail="Ride is not in driver_arrived state")
     # M-5: SGI insurance period audit — in_progress = period 3 (passenger
     # aboard, full TNC commercial coverage). Only record when transition took effect.
     await record_period_transition(driver["id"], 3, ride_id=ride_id)
 
     if ride.get("rider_id"):
-        await manager.send_personal_message(
-            {"type": "ride_started", "ride_id": ride_id}, f"rider_{ride['rider_id']}"
-        )
+        await manager.send_personal_message({"type": "ride_started", "ride_id": ride_id}, f"rider_{ride['rider_id']}")
         asyncio.create_task(
             send_push_notification(
                 ride["rider_id"],
@@ -2632,9 +2464,7 @@ async def verify_pickup_otp(
                 data={"type": "ride_started", "ride_id": str(ride_id)},
             )
         )
-    await manager.broadcast_ride_status(
-        ride_id, RideStatus.IN_PROGRESS, rider_id=ride.get("rider_id")
-    )
+    await manager.broadcast_ride_status(ride_id, RideStatus.IN_PROGRESS, rider_id=ride.get("rider_id"))
 
     return {"success": True}
 
@@ -2649,9 +2479,7 @@ async def start_ride(ride_id: str, current_user: dict = Depends(get_current_user
         raise HTTPException(status_code=404, detail="Driver not found")
 
     ride = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows(
-            "rides", {"id": ride_id, "driver_id": driver["id"]}, limit=1
-        )
+        await db_supabase.get_rows("rides", {"id": ride_id, "driver_id": driver["id"]}, limit=1)
     )
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
@@ -2668,17 +2496,13 @@ async def start_ride(ride_id: str, current_user: dict = Depends(get_current_user
         },
     )
     if guard is None:
-        raise HTTPException(
-            status_code=409, detail="Ride is not in driver_arrived state"
-        )
+        raise HTTPException(status_code=409, detail="Ride is not in driver_arrived state")
     # M-5: SGI insurance period audit — in_progress = period 3 (passenger
     # aboard, full TNC commercial coverage). Only record when transition took effect.
     await record_period_transition(driver["id"], 3, ride_id=ride_id)
 
     if ride.get("rider_id"):
-        await manager.send_personal_message(
-            {"type": "ride_started", "ride_id": ride_id}, f"rider_{ride['rider_id']}"
-        )
+        await manager.send_personal_message({"type": "ride_started", "ride_id": ride_id}, f"rider_{ride['rider_id']}")
         asyncio.create_task(
             send_push_notification(
                 ride["rider_id"],
@@ -2687,9 +2511,7 @@ async def start_ride(ride_id: str, current_user: dict = Depends(get_current_user
                 data={"type": "ride_started", "ride_id": str(ride_id)},
             )
         )
-    await manager.broadcast_ride_status(
-        ride_id, RideStatus.IN_PROGRESS, rider_id=ride.get("rider_id")
-    )
+    await manager.broadcast_ride_status(ride_id, RideStatus.IN_PROGRESS, rider_id=ride.get("rider_id"))
     return {"success": True}
 
 
@@ -2702,25 +2524,19 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         raise HTTPException(status_code=404, detail="Driver not found")
 
     ride = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows(
-            "rides", {"id": ride_id, "driver_id": driver["id"]}, limit=1
-        )
+        await db_supabase.get_rows("rides", {"id": ride_id, "driver_id": driver["id"]}, limit=1)
     )
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
     if ride.get("status") not in COMPLETE_FROM_STATES:
-        raise RideStateError(
-            f"Cannot complete ride from state '{ride.get('status')}'; ride must be in_progress"
-        )
+        raise RideStateError(f"Cannot complete ride from state '{ride.get('status')}'; ride must be in_progress")
 
     # ── Aggregate all GPS breadcrumbs for this ride ──
     # On completion we compute everything once and store it on the ride row.
     # After this the admin dashboard reads from the ride row directly — no
     # need to join against driver_location_history for historical rides.
-    planned_distance = (
-        ride.get("planned_distance_km") or ride.get("distance_km", 0) or 0
-    )
+    planned_distance = ride.get("planned_distance_km") or ride.get("distance_km", 0) or 0
     actual_distance_km = planned_distance
     phase_distances: Dict[str, float] = {}
     phase_durations: Dict[str, int] = {}
@@ -2758,9 +2574,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
                 prev = all_breadcrumbs[i - 1]
                 curr = all_breadcrumbs[i]
                 phase = curr.get("tracking_phase") or "unknown"
-                seg_km = calculate_distance(
-                    prev["lat"], prev["lng"], curr["lat"], curr["lng"]
-                )
+                seg_km = calculate_distance(prev["lat"], prev["lng"], curr["lat"], curr["lng"])
                 phase_totals[phase] = phase_totals.get(phase, 0.0) + seg_km
                 # Duration: only count if the gap is reasonable (< 5 min)
                 # to avoid one stale breadcrumb inflating a phase by hours.
@@ -2778,9 +2592,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             if actual_distance_km == 0:
                 actual_distance_km = planned_distance
 
-            pickup_to_driver_km = round(
-                phase_distances.get("navigating_to_pickup", 0.0), 2
-            )
+            pickup_to_driver_km = round(phase_distances.get("navigating_to_pickup", 0.0), 2)
 
             # Per-phase polylines for SGI / dispute tooling. Each phase is
             # downsampled to MAX_PER_PHASE points so a long trip's payload
@@ -2807,9 +2619,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
 
             # Legacy combined polyline (kept for the existing ride-detail
             # map renderer that hasn't moved to phase_polylines yet).
-            trip_points = [
-                b for b in all_breadcrumbs if b.get("tracking_phase") in phases_to_split
-            ]
+            trip_points = [b for b in all_breadcrumbs if b.get("tracking_phase") in phases_to_split]
             if trip_points:
                 MAX_POINTS = 200
                 step = max(1, len(trip_points) // MAX_POINTS)
@@ -2825,9 +2635,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
                     for p in sampled
                 ]
     except Exception as e:
-        logger.error(
-            f"Could not aggregate GPS data for ride {ride_id}: {e}", exc_info=True
-        )
+        logger.error(f"Could not aggregate GPS data for ride {ride_id}: {e}", exc_info=True)
 
     # ── Build update payload ──
     # P0-5: do NOT write payment_status here. The driver completing the
@@ -2864,10 +2672,85 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     else:
         update_fields["distance_km"] = actual_distance_km
 
+    # ── ride_metrics consolidated planned-vs-actual summary ──
+    # Read cache assembled from existing data sources at completion:
+    #   * Pickup-leg estimates: already written into ride.ride_metrics at acceptance.
+    #   * Per-phase actual durations: derived from ride timestamps (the same
+    #     transitions that drive driver_insurance_periods).
+    #   * Distances: pickup leg from phase_distances/pickup_to_driver_km; trip
+    #     leg from planned_distance_km / actual_distance_km.
+    # driver_insurance_periods remains the regulatory system of record for
+    # timing; this column is a read cache for the rider-app / admin detail UI.
+    # Failure here must not block ride completion.
     try:
-        await db_supabase.update_one(
-            "rides", {"id": ride_id, "driver_id": driver["id"]}, update_fields
+
+        def _minutes_between(start, end) -> int | None:
+            start_dt = parse_iso_utc(start) if isinstance(start, str) else start
+            end_dt = parse_iso_utc(end) if isinstance(end, str) else end
+            if not start_dt or not end_dt:
+                return None
+            secs = (end_dt - start_dt).total_seconds()
+            if secs <= 0:
+                return None
+            return max(1, int(round(secs / 60)))
+
+        nav_minutes = _minutes_between(ride.get("driver_accepted_at"), ride.get("driver_arrived_at"))
+        wait_minutes = _minutes_between(ride.get("driver_arrived_at"), ride.get("ride_started_at"))
+        trip_minutes = _minutes_between(ride.get("ride_started_at"), update_fields["ride_completed_at"])
+
+        existing_metrics = ride.get("ride_metrics") or {}
+        nav_phase = dict((existing_metrics.get("phases") or {}).get("navigating_to_pickup") or {})
+        # Actuals overwrite anything previously written; estimates are preserved.
+        nav_phase["actual_distance_km"] = round(float(pickup_to_driver_km or 0), 3)
+        if nav_minutes is not None:
+            nav_phase["actual_duration_minutes"] = nav_minutes
+
+        trip_phase: Dict[str, Any] = {
+            "estimated_distance_km": round(float(planned_distance or 0), 3),
+            "estimated_duration_minutes": int(ride.get("duration_minutes") or 0) or None,
+            "actual_distance_km": round(float(actual_distance_km or 0), 3),
+        }
+        if trip_minutes is not None:
+            trip_phase["actual_duration_minutes"] = trip_minutes
+        # Drop the estimate keys when we genuinely have no value, rather than
+        # writing 0 / None that the UI would render as "0 km" / "0 min".
+        trip_phase = {k: v for k, v in trip_phase.items() if v not in (None, 0, 0.0)}
+
+        wait_phase: Dict[str, Any] = {}
+        if wait_minutes is not None:
+            wait_phase["actual_duration_minutes"] = wait_minutes
+
+        phases: Dict[str, Any] = {"navigating_to_pickup": nav_phase, "trip_in_progress": trip_phase}
+        if wait_phase:
+            phases["arrived_at_pickup"] = wait_phase
+
+        def _sum(field: str) -> float | int | None:
+            vals = [p.get(field) for p in phases.values() if p.get(field) is not None]
+            if not vals:
+                return None
+            if all(isinstance(v, int) for v in vals):
+                return sum(vals)
+            return round(sum(float(v) for v in vals), 3)
+
+        totals = {
+            "estimated_distance_km": _sum("estimated_distance_km"),
+            "estimated_duration_minutes": _sum("estimated_duration_minutes"),
+            "actual_distance_km": _sum("actual_distance_km"),
+            "actual_duration_minutes": _sum("actual_duration_minutes"),
+        }
+        totals = {k: v for k, v in totals.items() if v is not None}
+
+        update_fields["ride_metrics"] = {"phases": phases, "totals": totals}
+    except Exception as metrics_err:
+        logger.error(
+            "complete_ride: ride_metrics assembly failed for ride %s: %s",
+            ride_id,
+            metrics_err,
+            exc_info=True,
         )
+
+    try:
+        await db_supabase.update_one("rides", {"id": ride_id, "driver_id": driver["id"]}, update_fields)
     except Exception as e:
         # Some columns may not exist yet in older deployments. Retry with only
         # the essential fields so ride completion never fails.
@@ -2882,18 +2765,14 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
                 "distance_km",
             }
             safe_updates = {k: v for k, v in update_fields.items() if k in safe_keys}
-            await db_supabase.update_one(
-                "rides", {"id": ride_id, "driver_id": driver["id"]}, safe_updates
-            )
+            await db_supabase.update_one("rides", {"id": ride_id, "driver_id": driver["id"]}, safe_updates)
         else:
             raise
 
     # Post-ride receipt notification stub
     rider = await db_supabase.get_user_by_id(ride.get("rider_id"))
     if rider and rider.get("email"):
-        logger.info(
-            f"Sending email receipt for ride {ride_id} (rider_id={rider.get('id')})"
-        )
+        logger.info(f"Sending email receipt for ride {ride_id} (rider_id={rider.get('id')})")
 
     # Fire-and-forget: render the route PNG from phase_polylines and
     # upload to Cloudinary so the admin drawer + email receipt can
@@ -2915,20 +2794,14 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
 
     # Fire-and-forget: validate GPS trace against road network.
     # Flags spoofed trips for admin review without blocking completion.
-    _breadcrumbs_for_validation = (
-        all_breadcrumbs if "all_breadcrumbs" in locals() else []
-    )
-    asyncio.create_task(
-        _validate_ride_route(ride_id, _breadcrumbs_for_validation, driver["id"])
-    )
+    _breadcrumbs_for_validation = all_breadcrumbs if "all_breadcrumbs" in locals() else []
+    asyncio.create_task(_validate_ride_route(ride_id, _breadcrumbs_for_validation, driver["id"]))
 
     # Update driver stats. Setting is_available=True is safe here because the
     # ride has just transitioned to `completed`, and the driver's row already
     # has is_online=True (a driver cannot be on an active trip while offline).
     # See update_driver_status docstring for the is_online/is_available invariant.
-    await db_supabase.set_driver_available(
-        driver["id"], available=True, total_rides_inc=1
-    )
+    await db_supabase.set_driver_available(driver["id"], available=True, total_rides_inc=1)
     # M-5: SGI insurance period audit — ride completed, driver returns to
     # period 1 (still online, no ride). No ride_id on period 1.
     await record_period_transition(driver["id"], 1)
@@ -2940,9 +2813,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             {
                 "type": "ride_completed",
                 "ride_id": ride_id,
-                "total_fare": completed_ride.get(
-                    "total_fare", ride.get("total_fare", 0)
-                ),
+                "total_fare": completed_ride.get("total_fare", ride.get("total_fare", 0)),
             },
             f"rider_{completed_ride['rider_id']}",
         )
@@ -2963,9 +2834,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     # Keep the specific ``ride_completed`` event on admin too for dashboards
     # that switch directly on the event name rather than status.
     try:
-        await manager.broadcast_to_admins(
-            {"type": "ride_completed", "ride_id": ride_id, "total_fare": total_fare}
-        )
+        await manager.broadcast_to_admins({"type": "ride_completed", "ride_id": ride_id, "total_fare": total_fare})
     except Exception as _exc:  # pragma: no cover - best effort
         logger.warning(f"complete_ride: admin broadcast failed: {_exc}")
 
@@ -3053,9 +2922,7 @@ async def cancel_ride(
     # Keep the specific ``ride_cancelled`` event on admin for dashboards
     # that switch on event name.
     try:
-        await manager.broadcast_to_admins(
-            {"type": "ride_cancelled", "ride_id": ride_id, "reason": "driver_cancelled"}
-        )
+        await manager.broadcast_to_admins({"type": "ride_cancelled", "ride_id": ride_id, "reason": "driver_cancelled"})
     except Exception as _exc:  # pragma: no cover - best effort
         logger.warning(f"driver cancel admin broadcast failed: {_exc}")
 
@@ -3105,9 +2972,7 @@ async def mark_rider_noshow(
     settings = await get_app_settings() or {}
     area = None
     if ride.get("service_area_id"):
-        area = await db_supabase.find_one(
-            "service_areas", {"id": ride["service_area_id"]}
-        )
+        area = await db_supabase.find_one("service_areas", {"id": ride["service_area_id"]})
     if area and area.get("noshow_wait_seconds") is not None:
         noshow_wait_seconds = int(area["noshow_wait_seconds"])
     else:
@@ -3138,9 +3003,7 @@ async def mark_rider_noshow(
         if payment_method == "wallet":
             rider_id = ride.get("rider_id")
             if rider_id:
-                rider_wallet = await db_supabase.find_one(
-                    "wallets", {"user_id": rider_id}
-                )
+                rider_wallet = await db_supabase.find_one("wallets", {"user_id": rider_id})
                 if rider_wallet:
                     old_balance = Decimal(str(rider_wallet.get("balance", 0)))
                     new_balance = max(old_balance - total_fee, Decimal("0"))
@@ -3161,12 +3024,8 @@ async def mark_rider_noshow(
                                 "wallet_id": rider_wallet["id"],
                                 "user_id": rider_id,
                                 "type": "noshow_fee",
-                                "amount": -float(
-                                    actual_charge.quantize(Decimal("0.01"))
-                                ),
-                                "balance_after": float(
-                                    new_balance.quantize(Decimal("0.01"))
-                                ),
+                                "amount": -float(actual_charge.quantize(Decimal("0.01"))),
+                                "balance_after": float(new_balance.quantize(Decimal("0.01"))),
                                 "reference_id": ride_id,
                                 "description": f"No-show fee for ride {ride_id[:8]}",
                                 "metadata": {"ride_id": ride_id},
@@ -3202,9 +3061,7 @@ async def mark_rider_noshow(
             },
         )
     except Exception as exc:
-        logger.warning(
-            f"[NOSHOW] extended fields write failed; retrying minimal: {exc}"
-        )
+        logger.warning(f"[NOSHOW] extended fields write failed; retrying minimal: {exc}")
         await db_supabase.update_ride(ride_id, base_update)
 
     await db_supabase.set_driver_available(driver["id"], True)
@@ -3297,9 +3154,7 @@ async def get_driver_referral_info(current_user: dict = Depends(get_current_user
     referral_code = driver.get("referral_code", f"DRIVER{driver['id'][:8].upper()}")
 
     # Find users who used this referral code
-    referred_users_cursor = db_supabase.get_rows(
-        "users", {"referral_code_used": referral_code}, limit=100
-    )
+    referred_users_cursor = db_supabase.get_rows("users", {"referral_code_used": referral_code}, limit=100)
     referred_users = (
         await referred_users_cursor.to_list(100)
         if hasattr(referred_users_cursor, "to_list")
@@ -3334,9 +3189,7 @@ async def get_driver_referral_info(current_user: dict = Depends(get_current_user
 
 
 @api_router.post("/referral/apply")
-async def apply_referral_code(
-    req: ApplyReferralCodeRequest, current_user: dict = Depends(get_current_user)
-):
+async def apply_referral_code(req: ApplyReferralCodeRequest, current_user: dict = Depends(get_current_user)):
     """Apply a referral code during driver onboarding."""
     code = req.referral_code.strip().upper()
 
@@ -3363,9 +3216,7 @@ async def apply_referral_code(
         potential_id = code.replace("DRIVER", "")
         if len(potential_id) == 8:
             ref_driver = (lambda _r: _r[0] if _r else None)(
-                await db_supabase.get_rows(
-                    "drivers", {"id": {"$regex": f".*{potential_id}.*"}}, limit=1
-                )
+                await db_supabase.get_rows("drivers", {"id": {"$regex": f".*{potential_id}.*"}}, limit=1)
             )
 
     if not ref_driver:
@@ -3397,9 +3248,7 @@ async def get_referred_drivers(
     referral_code = driver.get("referral_code", f"DRIVER{driver['id'][:8].upper()}")
 
     # Find users who used this referral code and became drivers
-    referred_users_cursor = db_supabase.get_rows(
-        "users", {"referral_code_used": referral_code}, limit=100
-    )
+    referred_users_cursor = db_supabase.get_rows("users", {"referral_code_used": referral_code}, limit=100)
     referred_users = (
         await referred_users_cursor.to_list(100)
         if hasattr(referred_users_cursor, "to_list")
@@ -3419,8 +3268,7 @@ async def get_referred_drivers(
             )
             referred_drivers.append(
                 {
-                    "name": f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
-                    or "Driver",
+                    "name": f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() or "Driver",
                     "email": user.get("email", ""),
                     "referred_at": user.get("created_at", ""),
                     "total_trips": completed_rides,
@@ -3472,26 +3320,17 @@ async def get_driver_leaderboard(
                 limit=1000,
             )
             period_rides = [
-                r
-                for r in rides
-                if isinstance(r.get("created_at", ""), str)
-                and r.get("created_at", "") >= start
+                r for r in rides if isinstance(r.get("created_at", ""), str) and r.get("created_at", "") >= start
             ]
         except Exception:
             period_rides = []
 
         total_rides = len(period_rides)
-        total_earnings = sum(
-            Decimal(str(r.get("driver_earnings") or 0)) for r in period_rides
-        )
+        total_earnings = sum(Decimal(str(r.get("driver_earnings") or 0)) for r in period_rides)
         total_tips = sum(Decimal(str(r.get("tip_amount") or 0)) for r in period_rides)
 
         user = await db.find_one("users", {"id": d.get("user_id")})
-        name = (
-            f"{user.get('first_name', '')} {user.get('last_name', '')}".strip()
-            if user
-            else "Driver"
-        )
+        name = f"{user.get('first_name', '')} {user.get('last_name', '')}".strip() if user else "Driver"
 
         rankings.append(
             {
@@ -3675,16 +3514,10 @@ async def update_driver_status(
         if driver.get("service_area_id"):
             try:
                 area_row = (lambda _r: _r[0] if _r else None)(
-                    await db_supabase.get_rows(
-                        "service_areas", {"id": driver["service_area_id"]}, limit=1
-                    )
+                    await db_supabase.get_rows("service_areas", {"id": driver["service_area_id"]}, limit=1)
                 )
                 if area_row:
-                    mandatory_reqs = [
-                        r
-                        for r in (area_row.get("required_documents") or [])
-                        if r.get("required", True)
-                    ]
+                    mandatory_reqs = [r for r in (area_row.get("required_documents") or []) if r.get("required", True)]
             except Exception:
                 mandatory_reqs = []
 
@@ -3696,18 +3529,12 @@ async def update_driver_status(
             if dkey and dkey == req_key:
                 return True
             drid = doc.get("requirement_id")
-            if drid and (
-                drid == req_id or (isinstance(drid, str) and drid.lower() == req_key)
-            ):
+            if drid and (drid == req_id or (isinstance(drid, str) and drid.lower() == req_key)):
                 return True
             dt = (doc.get("document_type") or "").lower()
             if dt and (dt == req_label or dt == req_key.replace("_", " ")):
                 return True
-            if (
-                dt
-                and req_key
-                and req_key.replace("_", "") in dt.replace(" ", "").replace("_", "")
-            ):
+            if dt and req_key and req_key.replace("_", "") in dt.replace(" ", "").replace("_", ""):
                 return True
             return False
 
@@ -3756,9 +3583,7 @@ async def update_driver_status(
             if expiry_val:
                 if isinstance(expiry_val, str):
                     try:
-                        expiry_val = datetime.fromisoformat(
-                            expiry_val.replace("Z", "+00:00")
-                        )
+                        expiry_val = datetime.fromisoformat(expiry_val.replace("Z", "+00:00"))
                     except ValueError:
                         continue
                 # Treat naive datetimes as UTC — matches _parse_expiry above
@@ -3835,9 +3660,7 @@ async def update_driver_status(
             if sub.get("expires_at"):
                 exp = parse_iso_utc(sub["expires_at"])
                 if exp is not None and exp < datetime.now(timezone.utc):
-                    await db_supabase.update_one(
-                        "driver_subscriptions", {"id": sub["id"]}, {"status": "expired"}
-                    )
+                    await db_supabase.update_one("driver_subscriptions", {"id": sub["id"]}, {"status": "expired"})
                     raise SpinrException(
                         message="Your Spinr Pass has expired. Please renew to go online.",
                         error_code=ErrorCode.PAYMENT_FAILED,
@@ -3863,13 +3686,9 @@ async def update_driver_status(
     # This is a sanity check on the payload we are about to write — never
     # gate user behaviour on the assert; if it ever trips, the bug is in the
     # logic that built _base, not in the driver's request.
-    assert not (
-        _base["is_available"] and not _base["is_online"]
-    ), "is_available implies is_online"
+    assert not (_base["is_available"] and not _base["is_online"]), "is_available implies is_online"
     status_flipped = bool(driver.get("is_online")) != bool(is_online)
-    _payload = (
-        {**_base, "last_status_changed_at": _now_iso} if status_flipped else _base
-    )
+    _payload = {**_base, "last_status_changed_at": _now_iso} if status_flipped else _base
     try:
         await db_supabase.update_one("drivers", {"id": driver_id}, _payload)
     except Exception as _col_exc:
@@ -3907,12 +3726,8 @@ async def update_driver_status(
         f"post_update_updated_at={verify.get('updated_at') if verify else 'ROW_GONE'}"
     )
     if verify is None:
-        logger.error(
-            f"[go-online] driver row disappeared immediately after update: driver_id={driver_id}"
-        )
-        raise HTTPException(
-            status_code=500, detail="Driver row missing after status update."
-        )
+        logger.error(f"[go-online] driver row disappeared immediately after update: driver_id={driver_id}")
+        raise HTTPException(status_code=500, detail="Driver row missing after status update.")
     if bool(verify.get("is_online")) != bool(is_online):
         logger.error(
             f"[go-online] silent no-op: driver_id={driver_id} "
@@ -3971,9 +3786,7 @@ async def get_subscription_plans(current_user: dict = Depends(get_current_user))
     # the driver's area, return a friendly free-ride message instead of plans.
     if driver and driver.get("service_area_id"):
         area = (lambda _r: _r[0] if _r else None)(
-            await db_supabase.get_rows(
-                "service_areas", {"id": driver["service_area_id"]}, limit=1
-            )
+            await db_supabase.get_rows("service_areas", {"id": driver["service_area_id"]}, limit=1)
         )
         if area and area.get("spinr_pass_enabled") is False:
             return {
@@ -3982,9 +3795,7 @@ async def get_subscription_plans(current_user: dict = Depends(get_current_user))
                 "message": "No subscription needed — you're riding free right now! Drive on and enjoy the open road.",
             }
 
-    plans = await db_supabase.get_rows(
-        "subscription_plans", {"is_active": True}, limit=50
-    )
+    plans = await db_supabase.get_rows("subscription_plans", {"is_active": True}, limit=50)
 
     # Filter by driver's service area if plans have area restrictions
     if driver:
@@ -4033,9 +3844,7 @@ async def get_current_subscription(current_user: dict = Depends(get_current_user
             if exp.tzinfo:
                 exp = exp.replace(tzinfo=None)
             if exp < datetime.now(timezone.utc):
-                await db_supabase.update_one(
-                    "driver_subscriptions", {"id": sub["id"]}, {"status": "expired"}
-                )
+                await db_supabase.update_one("driver_subscriptions", {"id": sub["id"]}, {"status": "expired"})
                 return {
                     "has_subscription": False,
                     "subscription": None,
@@ -4048,9 +3857,7 @@ async def get_current_subscription(current_user: dict = Depends(get_current_user
             )
 
     # Get today's ride count
-    today_start = datetime.now(timezone.utc).replace(
-        hour=0, minute=0, second=0, microsecond=0
-    )
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     today_rides = await db_supabase.count_documents(
         "rides",
         {
@@ -4061,9 +3868,7 @@ async def get_current_subscription(current_user: dict = Depends(get_current_user
     )
 
     rides_per_day = sub.get("rides_per_day", -1)
-    rides_remaining = (
-        "unlimited" if rides_per_day == -1 else max(0, rides_per_day - today_rides)
-    )
+    rides_remaining = "unlimited" if rides_per_day == -1 else max(0, rides_per_day - today_rides)
 
     return {
         "has_subscription": True,
@@ -4075,9 +3880,7 @@ async def get_current_subscription(current_user: dict = Depends(get_current_user
 
 
 @api_router.post("/subscription/subscribe")
-async def subscribe_to_plan(
-    request: Request, current_user: dict = Depends(get_current_user)
-):
+async def subscribe_to_plan(request: Request, current_user: dict = Depends(get_current_user)):
     """Subscribe driver to a plan.
 
     **With Stripe configured** (`stripe_secret_key` in app_settings):
@@ -4103,9 +3906,7 @@ async def subscribe_to_plan(
     # Block subscription if Spinr Pass is disabled for this area
     if driver.get("service_area_id"):
         area = (lambda _r: _r[0] if _r else None)(
-            await db_supabase.get_rows(
-                "service_areas", {"id": driver["service_area_id"]}, limit=1
-            )
+            await db_supabase.get_rows("service_areas", {"id": driver["service_area_id"]}, limit=1)
         )
         if area and area.get("spinr_pass_enabled") is False:
             raise HTTPException(
@@ -4114,9 +3915,7 @@ async def subscribe_to_plan(
             )
 
     plan = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows(
-            "subscription_plans", {"id": plan_id, "is_active": True}, limit=1
-        )
+        await db_supabase.get_rows("subscription_plans", {"id": plan_id, "is_active": True}, limit=1)
     )
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found or inactive")
@@ -4177,20 +3976,12 @@ async def subscribe_to_plan(
                         idempotency_key=f"sub-charge-{driver['id']}-{plan['id']}-{now.strftime('%Y%m%d')}",
                     )
                     stripe_charge_id = _charge.id
-                    payment_status = (
-                        _charge.status
-                    )  # "succeeded" | "requires_action" | …
-                    logger.info(
-                        f"Stripe charge {stripe_charge_id} status={payment_status} for driver {driver['id']}"
-                    )
+                    payment_status = _charge.status  # "succeeded" | "requires_action" | …
+                    logger.info(f"Stripe charge {stripe_charge_id} status={payment_status} for driver {driver['id']}")
                 else:
-                    logger.info(
-                        f"No Stripe customer for driver {driver['id']}, marking paid without charge"
-                    )
+                    logger.info(f"No Stripe customer for driver {driver['id']}, marking paid without charge")
             else:
-                logger.info(
-                    "Stripe not configured; marking subscription paid without charge"
-                )
+                logger.info("Stripe not configured; marking subscription paid without charge")
         except Exception as _stripe_err:
             # B-P2-1: NEVER interpolate the underlying exception into the
             # client-facing detail. Stripe error strings carry charge IDs
@@ -4200,9 +3991,7 @@ async def subscribe_to_plan(
             # side; the request_id in the response body lets support
             # correlate against the log entry. This is the canonical
             # pattern referenced by docs/runbooks/error-responses.md.
-            logger.exception(
-                f"Stripe subscription charge failed for driver {driver['id']}"
-            )
+            logger.exception(f"Stripe subscription charge failed for driver {driver['id']}")
             raise HTTPException(
                 status_code=402,
                 detail="Payment failed. Please try another payment method or contact support.",
@@ -4233,9 +4022,7 @@ async def subscribe_to_plan(
         {"subscriber_count": (plan.get("subscriber_count", 0) or 0) + 1},
     )
 
-    logger.info(
-        f"[SUBSCRIBE] Dev mode: driver {driver['id']} subscribed to {plan['name']} (${plan['price']})"
-    )
+    logger.info(f"[SUBSCRIBE] Dev mode: driver {driver['id']} subscribed to {plan['name']} (${plan['price']})")
 
     return {"success": True, "subscription": subscription, "mode": "dev"}
 
@@ -4302,9 +4089,7 @@ async def _activate_subscription(subscription_id: str, plan_id: str | None = Non
     driver_id = sub.get("driver_id")
 
     # Cancel any prior active subscription for this driver.
-    existing = await db.find_one(
-        "driver_subscriptions", {"driver_id": driver_id, "status": "active"}
-    )
+    existing = await db.find_one("driver_subscriptions", {"driver_id": driver_id, "status": "active"})
     if existing and existing["id"] != subscription_id:
         await db.update_one(
             "driver_subscriptions",
@@ -4331,16 +4116,10 @@ async def _activate_subscription(subscription_id: str, plan_id: str | None = Non
             await db.update_one(
                 "subscription_plans",
                 {"id": plan_id},
-                {
-                    "$set": {
-                        "subscriber_count": (plan.get("subscriber_count", 0) or 0) + 1
-                    }
-                },
+                {"$set": {"subscriber_count": (plan.get("subscriber_count", 0) or 0) + 1}},
             )
 
-    logger.info(
-        f"[SUBSCRIBE] Subscription {subscription_id} activated for driver {driver_id}"
-    )
+    logger.info(f"[SUBSCRIBE] Subscription {subscription_id} activated for driver {driver_id}")
 
     # Push notification to driver.
     if driver_id:
@@ -4447,17 +4226,13 @@ async def check_expiring_subscriptions():
             now = datetime.now(timezone.utc)
             window = now + timedelta(hours=24)
 
-            active_subs = await db.get_rows(
-                "driver_subscriptions", {"status": "active"}, limit=500
-            )
+            active_subs = await db.get_rows("driver_subscriptions", {"status": "active"}, limit=500)
 
             # Only enforce the offline flip when the admin has turned on
             # the subscription gate — otherwise expiry is purely advisory.
             try:
                 app_settings = await get_app_settings()
-                require_sub = bool(
-                    app_settings.get("require_driver_subscription", False)
-                )
+                require_sub = bool(app_settings.get("require_driver_subscription", False))
             except Exception as e:
                 logger.error(
                     f"[SUB-EXPIRY] get_app_settings failed, skipping enforcement this tick: {e}",
@@ -4474,9 +4249,7 @@ async def check_expiring_subscriptions():
 
                 if isinstance(expires_at, str):
                     try:
-                        expires_dt = datetime.fromisoformat(
-                            expires_at.replace("Z", "+00:00")
-                        )
+                        expires_dt = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
                         if expires_dt.tzinfo is None:
                             expires_dt = expires_dt.replace(tzinfo=timezone.utc)
                     except ValueError:
@@ -4523,9 +4296,7 @@ async def check_expiring_subscriptions():
                             },
                         )
                     except Exception as e:
-                        logger.error(
-                            f"[SUB-EXPIRY] Failed to flip driver {driver['id']} offline: {e}"
-                        )
+                        logger.error(f"[SUB-EXPIRY] Failed to flip driver {driver['id']} offline: {e}")
                         continue
                     # M-5: SGI insurance period audit — driver was online
                     # (period 1) and we just forced them offline (period 0).
@@ -4578,9 +4349,7 @@ async def check_expiring_subscriptions():
                                 },
                             )
                         except Exception as e:
-                            logger.warning(
-                                f"[SUB-EXPIRY] Push failed for driver {driver['id']}: {e}"
-                            )
+                            logger.warning(f"[SUB-EXPIRY] Push failed for driver {driver['id']}: {e}")
 
                     try:
                         await manager.broadcast_to_admins(
@@ -4607,9 +4376,7 @@ async def check_expiring_subscriptions():
                 if now < expires_dt <= window:
                     driver = await db.find_one("drivers", {"id": sub["driver_id"]})
                     if driver and driver.get("user_id"):
-                        hours_left = max(
-                            1, int((expires_dt - now).total_seconds() / 3600)
-                        )
+                        hours_left = max(1, int((expires_dt - now).total_seconds() / 3600))
                         plan_name = sub.get("plan_name", "Spinr Pass")
                         try:
                             await send_push_notification(
@@ -4623,9 +4390,7 @@ async def check_expiring_subscriptions():
                             )
                             warned_count += 1
                         except Exception as e:
-                            logger.warning(
-                                f"[SUB-EXPIRY] Push failed for driver {sub['driver_id']}: {e}"
-                            )
+                            logger.warning(f"[SUB-EXPIRY] Push failed for driver {sub['driver_id']}: {e}")
 
                     await db.update_one(
                         "driver_subscriptions",

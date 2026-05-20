@@ -49,6 +49,10 @@ async def get_public_settings():
     return {
         "google_maps_api_key": settings.get("google_maps_api_key", ""),
         "stripe_publishable_key": settings.get("stripe_publishable_key", ""),
+        # Public base URL for the "Share Trip" tracking page (admin-dashboard
+        # `/track/[token]`). Set via the admin Settings panel so the URL can
+        # be rotated without a mobile rebuild. Empty string until configured.
+        "track_base_url": settings.get("track_base_url", ""),
     }
 
 

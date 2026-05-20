@@ -277,16 +277,22 @@ export default function RideDetailsScreen() {
           </View>
         )}
 
-        {/* Trip Stats */}
+        {/* Trip Stats — actual GPS-tracked values from the API, with the
+            booking-time estimate as fallback for legacy rides that lack
+            phase_durations data. */}
         <View style={styles.statsRow}>
           <View style={styles.statCard}>
             <Ionicons name="speedometer-outline" size={22} color={colors.textDim} />
-            <Text style={styles.statVal}>{(ride.distance_km || 0).toFixed(1)} km</Text>
+            <Text style={styles.statVal}>
+              {(ride.actual_distance_km ?? ride.distance_km ?? 0).toFixed(1)} km
+            </Text>
             <Text style={styles.statLabel}>Distance</Text>
           </View>
           <View style={styles.statCard}>
             <Ionicons name="time-outline" size={22} color={colors.textDim} />
-            <Text style={styles.statVal}>{ride.duration_minutes || 0} min</Text>
+            <Text style={styles.statVal}>
+              {ride.actual_duration_minutes ?? ride.duration_minutes ?? 0} min
+            </Text>
             <Text style={styles.statLabel}>Duration</Text>
           </View>
           <View style={styles.statCard}>

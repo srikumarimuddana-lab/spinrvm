@@ -4,7 +4,28 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import { DEFAULT_CENTER, MAP_STYLE_URL, addStandardControls } from '@/lib/map/maplibre-base';
+import { DEFAULT_CENTER, addStandardControls } from '@/lib/map/maplibre-base';
+
+// Inline raster style — no remote style.json fetch, no CSP surprises.
+// Works on any mobile browser as long as OSM raster tiles are reachable
+// (which they are from every modern carrier). Falls back gracefully even
+// if the page is opened on a flaky network.
+const RASTER_STYLE = {
+  version: 8 as const,
+  sources: {
+    osm: {
+      type: 'raster' as const,
+      tiles: [
+        'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        'https://c.tile.openstreetmap.org/{z}/{x}/{y}.png',
+      ],
+      tileSize: 256,
+      attribution: '© OpenStreetMap contributors',
+    },
+  },
+  layers: [{ id: 'osm-tiles', type: 'raster' as const, source: 'osm' }],
+};
 
 interface RideInfo {
   status: string;
@@ -99,10 +120,16 @@ export default function TrackRide() {
     if (!mapContainerRef.current || mapRef.current) return;
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
-      style: MAP_STYLE_URL,
+      style: RASTER_STYLE as unknown as maplibregl.StyleSpecification,
       center: DEFAULT_CENTER,
       zoom: 11,
-      attributionControl: false,
+      attributionControl: { compact: true },
+    });
+    map.on('error', (e) => {
+      // Surface tile/style load failures so they don't fail silently in
+      // the field — the screen would otherwise just stay blank.
+      // eslint-disable-next-line no-console
+      console.warn('[track-map] map error:', e?.error?.message || e);
     });
     addStandardControls(map);
     mapRef.current = map;
@@ -197,9 +224,12 @@ export default function TrackRide() {
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
-      {/* Map fills the top of the viewport */}
-      <div className="relative flex-1 min-h-[55vh]">
-        <div ref={mapContainerRef} className="absolute inset-0" />
+      {/* Map fills the top of the viewport. Use explicit height (h-[60vh])
+          rather than flex-1 so the canvas always has dimensions on first
+          paint — flex-grow can resolve to 0 height on some mobile browsers
+          while the layout is settling, which kills MapLibre silently. */}
+      <div className="relative w-full" style={{ height: '60vh', minHeight: 320 }}>
+        <div ref={mapContainerRef} className="absolute inset-0 bg-gray-200" />
 
         {/* Status pill, top-left over the map */}
         <div

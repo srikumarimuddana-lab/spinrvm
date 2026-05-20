@@ -108,9 +108,22 @@ async def calculate_airport_fee(
     'is_pickup': bool, 'is_dropoff': bool, 'is_stop': bool}
     """
     if _all_areas is not None:
-        areas = [a for a in _all_areas if a.get("is_airport")]
+        # Filter strictly: only count an area as an airport zone when BOTH
+        # is_airport is truthy AND is_active is not False. A row that's been
+        # soft-deactivated in the admin (is_active=false) must not surcharge
+        # rides — that's the same intent as "remove this airport zone".
+        areas = [a for a in _all_areas if a.get("is_airport") and a.get("is_active", True) is not False]
     else:
-        areas = await db_supabase.get_rows("service_areas", {"is_airport": True}, limit=50)
+        # Same intent at the DB layer: exclude soft-deactivated rows. Without
+        # the is_active filter, unchecking "Active" on an airport zone in the
+        # admin UI leaves the row matching every ride — the exact failure
+        # mode reported in the "I removed the airport zone but surcharge
+        # still applies" thread.
+        areas = await db_supabase.get_rows(
+            "service_areas",
+            {"is_airport": True, "is_active": True},
+            limit=50,
+        )
     result: Dict[str, Any] = {
         "airport_fee": 0.0,
         "airport_zone_name": None,
@@ -717,8 +730,12 @@ async def calculate_all_fees(
         "area_fees", {"service_area_id": matched_area["id"], "is_active": True}, limit=50
     )
 
-    # Pre-compute airport zone check once (reuses all_areas already fetched above)
-    airport_areas = [a for a in all_areas if a.get("is_airport")]
+    # Pre-compute airport zone check once (reuses all_areas already fetched above).
+    # Mirror the strict filter from calculate_airport_fee — a soft-deactivated
+    # row (is_active=false) must not count as an airport zone, otherwise an
+    # area_fees row with fee_type='airport' would still be gated to "in_airport"
+    # against a ghost zone the admin thought they had removed.
+    airport_areas = [a for a in all_areas if a.get("is_airport") and a.get("is_active", True) is not False]
     in_airport = False
     for ap in airport_areas:
         ap_poly = get_service_area_polygon(ap)

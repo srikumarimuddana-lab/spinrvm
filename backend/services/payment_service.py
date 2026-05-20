@@ -127,6 +127,7 @@ async def settle_wallet(
     rider_id: str,
     total_charge: Decimal,
     tip_amount: Decimal,
+    fare_breakdown: Optional[list] = None,
 ) -> PaymentResult:
     """Debit rider's wallet for fare + tip."""
     wallet = await db_supabase.find_one("wallets", {"user_id": rider_id})
@@ -169,7 +170,12 @@ async def settle_wallet(
             "updated_at": datetime.now(timezone.utc).isoformat(),
         },
     )
-    fare = _round(_d(ride.get("total_fare", 0)))
+    grand_total = _round(_d(ride.get("grand_total") or ride.get("total_fare", 0) or 0))
+    ride_fare = _round(
+        _d(ride.get("base_fare") or 0)
+        + _d(ride.get("distance_fare") or 0)
+        + _d(ride.get("time_fare") or 0)
+    )
     await db_supabase.insert_one(
         "wallet_transactions",
         {
@@ -183,7 +189,8 @@ async def settle_wallet(
             "description": f"Ride payment ${_f(debit):.2f}",
             "metadata": {
                 "ride_id": ride_id,
-                "fare_amount": str(fare),
+                "fare_amount": str(grand_total),
+                "ride_fare": str(ride_fare),
                 "tip_amount": str(_round(_d(tip_amount))),
                 "driver_id": ride.get("driver_id") or "",
                 "surge_multiplier": str(ride.get("surge_multiplier") or "1.0"),
@@ -191,7 +198,8 @@ async def settle_wallet(
                 "dropoff_address": (ride.get("dropoff_address") or "")[:200],
                 "discount_amount": str(_round(_d(ride.get("discount_amount") or 0))),
                 "promo_code": ride.get("promo_code") or "",
-                "grand_total": str(_round(_d(ride.get("grand_total") or 0))),
+                "grand_total": str(grand_total),
+                "fare_breakdown": fare_breakdown or [],
             },
             "created_at": datetime.now(timezone.utc).isoformat(),
         },

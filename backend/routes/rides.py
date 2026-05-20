@@ -263,6 +263,49 @@ def _money_str(v: Decimal) -> str:
     return str(_round(_d(v)))
 
 
+def _build_fare_breakdown(ride: dict) -> list[dict]:
+    """Build a dynamic fare_breakdown list from ride fields.
+
+    Reused by get_ride and get_ride_history so every surface sees the same
+    line-item structure.
+    """
+    lines: list[dict] = []
+    ride_fare = float(
+        _d(ride.get("base_fare", 0))
+        + _d(ride.get("distance_fare", 0))
+        + _d(ride.get("time_fare", 0))
+    )
+    if ride_fare > 0:
+        dist_km = round(float(ride.get("distance_km") or 0), 1)
+        lines.append(
+            {"label": f"Ride fare ({dist_km} km)", "amount": _f(Decimal(str(ride_fare))), "type": "ride"}
+        )
+    if ride.get("airport_fee") and float(ride["airport_fee"]) > 0:
+        lines.append({"label": "Airport surcharge", "amount": ride["airport_fee"], "type": "fee"})
+    if ride.get("booking_fee") and float(ride["booking_fee"]) > 0:
+        lines.append({"label": "Booking fee", "amount": ride["booking_fee"], "type": "fee"})
+    surge = float(ride.get("surge_multiplier") or 1)
+    if surge > 1:
+        lines.append({"label": f"Surge ({surge}×)", "amount": None, "type": "modifier"})
+    for af in ride.get("area_fees_breakdown") or []:
+        afv = af.get("calculated_value", 0)
+        if float(afv) > 0:
+            lines.append({"label": af.get("name", "Fee"), "amount": afv, "type": "fee"})
+    for tax_name, tax_info in (ride.get("tax_breakdown") or {}).items():
+        if tax_info.get("amount", 0) > 0:
+            rate = tax_info.get("rate", 0)
+            lbl = f"{tax_name} ({rate}%)" if rate else tax_name
+            lines.append({"label": lbl, "amount": tax_info["amount"], "type": "tax"})
+    if ride.get("discount_amount") and float(ride["discount_amount"]) > 0:
+        promo_label = (
+            f"Promo ({ride['promo_code']})" if ride.get("promo_code") else "Promo discount"
+        )
+        lines.append({"label": promo_label, "amount": -float(ride["discount_amount"]), "type": "discount"})
+    if ride.get("tip_amount") and float(ride["tip_amount"]) > 0:
+        lines.append({"label": "Tip", "amount": ride["tip_amount"], "type": "tip"})
+    return lines
+
+
 def _is_corporate_paid(
     *,
     payment_method: Optional[str],
@@ -1608,11 +1651,17 @@ async def create_ride(
                 )
 
             server_fare = _d(fresh_ride.get("total_fare", 0))
+            ride_portion = (
+                _d(fresh_ride.get("base_fare") or 0)
+                + _d(fresh_ride.get("distance_fare") or 0)
+                + _d(fresh_ride.get("time_fare") or 0)
+            ) or server_fare
             validation = await _validate_promo_for_user(
                 code=body.promo_code,
                 user_id=current_user["id"],
-                ride_fare=server_fare,
+                ride_fare=ride_portion,
                 ride_id=ride.id,
+                grand_total=_d(fresh_ride.get("grand_total") or server_fare),
             )
             if validation.get("valid"):
                 discount = _d(validation["discount_amount"])
@@ -1833,6 +1882,9 @@ async def get_ride_history(
         if r.get("status") == RideStatus.COMPLETED
         or (r.get("status") == RideStatus.CANCELLED and r.get("driver_id"))
     ][:limit]
+
+    for r in rides:
+        r["fare_breakdown"] = _build_fare_breakdown(r)
 
     next_cursor = rides[-1]["id"] if len(rides) == limit else None
 
@@ -2092,65 +2144,7 @@ async def get_ride(
             ):
                 ride.pop(_addr_key, None)
 
-    # Build dynamic fare_breakdown for the rider UI — matches the consolidated
-    # format from build_fare_breakdown_lines (single "Ride fare" line).
-    _fb_lines = []
-    _ride_fare = float(
-        _d(ride.get("base_fare", 0))
-        + _d(ride.get("distance_fare", 0))
-        + _d(ride.get("time_fare", 0))
-    )
-    if _ride_fare > 0:
-        _dist_km = round(float(ride.get("distance_km") or 0), 1)
-        _fb_lines.append(
-            {
-                "label": f"Ride fare ({_dist_km} km)",
-                "amount": _f(Decimal(str(_ride_fare))),
-                "type": "ride",
-            }
-        )
-    if ride.get("airport_fee") and float(ride["airport_fee"]) > 0:
-        _fb_lines.append(
-            {"label": "Airport surcharge", "amount": ride["airport_fee"], "type": "fee"}
-        )
-    if ride.get("booking_fee") and float(ride["booking_fee"]) > 0:
-        _fb_lines.append(
-            {"label": "Booking fee", "amount": ride["booking_fee"], "type": "fee"}
-        )
-    _surge = float(ride.get("surge_multiplier") or 1)
-    if _surge > 1:
-        _fb_lines.append(
-            {"label": f"Surge ({_surge}×)", "amount": None, "type": "modifier"}
-        )
-    for _af in ride.get("area_fees_breakdown") or []:
-        _afv = _af.get("calculated_value", 0)
-        if float(_afv) > 0:
-            _fb_lines.append(
-                {"label": _af.get("name", "Fee"), "amount": _afv, "type": "fee"}
-            )
-    for _tax_name, _tax_info in (ride.get("tax_breakdown") or {}).items():
-        if _tax_info.get("amount", 0) > 0:
-            _rate = _tax_info.get("rate", 0)
-            _lbl = f"{_tax_name} ({_rate}%)" if _rate else _tax_name
-            _fb_lines.append(
-                {"label": _lbl, "amount": _tax_info["amount"], "type": "tax"}
-            )
-    if ride.get("discount_amount") and float(ride["discount_amount"]) > 0:
-        _promo_label = (
-            f"Promo ({ride['promo_code']})"
-            if ride.get("promo_code")
-            else "Promo discount"
-        )
-        _fb_lines.append(
-            {
-                "label": _promo_label,
-                "amount": -float(ride["discount_amount"]),
-                "type": "discount",
-            }
-        )
-    if ride.get("tip_amount") and float(ride["tip_amount"]) > 0:
-        _fb_lines.append({"label": "Tip", "amount": ride["tip_amount"], "type": "tip"})
-    ride["fare_breakdown"] = _fb_lines
+    ride["fare_breakdown"] = _build_fare_breakdown(ride)
 
     def serialize_doc(doc):
         return doc
@@ -2284,7 +2278,7 @@ async def process_payment(
         return {
             "success": True,
             "charged_amount": _money_str(
-                _d(ride.get("total_fare", 0) or 0) + _d(ride.get("tip_amount", 0) or 0)
+                _d(ride.get("grand_total") or ride.get("total_fare", 0) or 0) + _d(ride.get("tip_amount", 0) or 0)
             ),
             "already_paid": True,
         }
@@ -2301,7 +2295,7 @@ async def process_payment(
         return {
             "success": True,
             "already_paid": True,
-            "charged_amount": _money_str(_d(ride.get("total_fare", 0) or 0)),
+            "charged_amount": _money_str(_d(ride.get("grand_total") or ride.get("total_fare", 0) or 0)),
         }
 
     if tip_amount < 0:
@@ -2312,12 +2306,13 @@ async def process_payment(
     def _q(v) -> Decimal:
         return Decimal(str(v)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
-    total_charge = _q(ride.get("total_fare", 0) or 0) + _q(tip_amount)
+    total_charge = _q(ride.get("grand_total") or ride.get("total_fare", 0) or 0) + _q(tip_amount)
     payment_method = (ride.get("payment_method") or "card").lower()
 
     if payment_method == "wallet":
         result = await settle_wallet(
-            ride, ride_id, current_user["id"], total_charge, tip_amount
+            ride, ride_id, current_user["id"], total_charge, tip_amount,
+            fare_breakdown=_build_fare_breakdown(ride),
         )
     elif payment_method == "company_allowance":
         result = await settle_corporate(ride, ride_id, total_charge, tip_amount)

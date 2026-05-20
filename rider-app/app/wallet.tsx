@@ -10,7 +10,6 @@ import { useStripe } from '@stripe/stripe-react-native';
 import { StripeKeyContext } from './_layout';
 import { useWalletStore, WalletTransaction, WalletTransactionMeta } from '../store/walletStore';
 import { showToast } from '../store/toastStore';
-import { computeFareBreakdown } from '../utils/fareBreakdown';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -138,18 +137,16 @@ export default function WalletScreen() {
     const isCredit = amountNum > 0;
     const meta = item.metadata as WalletTransactionMeta | null | undefined;
     const hasRideDetails = item.type === 'ride_payment' && meta?.pickup_address;
-    const fb = computeFareBreakdown({
-      totalAmount: amountNum,
-      fareAmount: parseFloat(meta?.fare_amount || '0'),
-      tipAmount: parseFloat(meta?.tip_amount || '0'),
-      discountAmount: parseFloat(meta?.discount_amount || '0'),
-      promoCode: meta?.promo_code || '',
-      surgeMultiplier: parseFloat(meta?.surge_multiplier || '1'),
-    });
+    const fb = meta?.fare_breakdown || [];
 
-    const displayDesc = item.type === 'ride_payment'
-      ? 'Ride payment'
-      : (item.description || item.type.replace(/_/g, ' '));
+    const displayDesc = item.description || item.type.replace(/_/g, ' ');
+
+    const formatLineAmount = (line: typeof fb[number]) => {
+      if (line.amount == null) return '';
+      const val = parseFloat(String(line.amount));
+      if (line.type === 'discount') return `-$${Math.abs(val).toFixed(2)}`;
+      return `$${Math.abs(val).toFixed(2)}`;
+    };
 
     return (
       <TouchableOpacity
@@ -172,18 +169,18 @@ export default function WalletScreen() {
                 <Ionicons name="flag" size={11} color="#EF4444" />
                 <Text style={styles.txnMetaText} numberOfLines={1}>{meta!.dropoff_address}</Text>
               </View>
-              <View style={styles.txnBreakdown}>
-                <Text style={styles.txnBreakdownItem}>
-                  Fare: ${fb.hasDiscount ? fb.originalFare.toFixed(2) : fb.fareAfterDiscount.toFixed(2)}
-                </Text>
-                {fb.hasDiscount && (
-                  <Text style={styles.txnBreakdownPromo}>
-                    {fb.promoCode ? `${fb.promoCode}: ` : 'Promo: '}-${fb.discount.toFixed(2)}
-                  </Text>
-                )}
-                {fb.hasTip && <Text style={styles.txnBreakdownItem}>Tip: ${fb.tip.toFixed(2)}</Text>}
-                {fb.hasSurge && <Text style={styles.txnBreakdownItem}>Surge: {fb.surge}x</Text>}
-              </View>
+              {fb.length > 0 && (
+                <View style={styles.txnBreakdown}>
+                  {fb.map((line, i) => (
+                    <Text
+                      key={i}
+                      style={line.type === 'discount' ? styles.txnBreakdownPromo : styles.txnBreakdownItem}
+                    >
+                      {line.label}: {formatLineAmount(line)}
+                    </Text>
+                  ))}
+                </View>
+              )}
             </View>
           )}
           <Text style={styles.txnDate}>{formatDate(item.created_at)}</Text>

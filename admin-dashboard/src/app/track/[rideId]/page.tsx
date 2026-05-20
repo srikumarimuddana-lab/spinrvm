@@ -76,6 +76,9 @@ export default function TrackRide() {
   const pickupMarkerRef = useRef<maplibregl.Marker | null>(null);
   const dropoffMarkerRef = useRef<maplibregl.Marker | null>(null);
   const didFitRef = useRef(false);
+  const routeFetchedRef = useRef(false);
+  const ROUTE_SOURCE_ID = 'spinr-route';
+  const ROUTE_LAYER_ID = 'spinr-route-line';
 
   // Poll the public endpoint every 5 s while the ride is active. The endpoint
   // is the canonical source — page just renders what it sends, no client math.
@@ -181,6 +184,49 @@ export default function TrackRide() {
       } else if (driverMarkerRef.current) {
         driverMarkerRef.current.remove();
         driverMarkerRef.current = null;
+      }
+
+      // Draw a road-following route between pickup and drop-off once both
+      // endpoints are known. OSRM (public OSM routing service, no key
+      // required) returns the polyline; we render it as a layer underneath
+      // the markers so the rider sees the actual streets the driver will
+      // take, not a straight line cutting across the map.
+      if (
+        !routeFetchedRef.current
+        && ride!.pickup_lat != null && ride!.pickup_lng != null
+        && ride!.dropoff_lat != null && ride!.dropoff_lng != null
+      ) {
+        routeFetchedRef.current = true;
+        const url =
+          `https://router.project-osrm.org/route/v1/driving/` +
+          `${ride!.pickup_lng},${ride!.pickup_lat};${ride!.dropoff_lng},${ride!.dropoff_lat}` +
+          `?overview=full&geometries=geojson`;
+        fetch(url)
+          .then((r) => (r.ok ? r.json() : null))
+          .then((data) => {
+            const coords: [number, number][] | undefined =
+              data?.routes?.[0]?.geometry?.coordinates;
+            if (!coords || coords.length < 2 || !mapRef.current) return;
+            const m = mapRef.current;
+            if (m.getSource(ROUTE_SOURCE_ID)) {
+              (m.getSource(ROUTE_SOURCE_ID) as maplibregl.GeoJSONSource).setData({
+                type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: coords },
+              });
+            } else {
+              m.addSource(ROUTE_SOURCE_ID, {
+                type: 'geojson',
+                data: { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: coords } },
+              });
+              m.addLayer({
+                id: ROUTE_LAYER_ID,
+                type: 'line',
+                source: ROUTE_SOURCE_ID,
+                layout: { 'line-cap': 'round', 'line-join': 'round' },
+                paint: { 'line-color': '#111827', 'line-width': 4, 'line-opacity': 0.85 },
+              });
+            }
+          })
+          .catch(() => { /* silent fallback — markers remain visible */ });
       }
 
       // Fit once on first load so the rider sees the whole trip; afterwards

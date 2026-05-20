@@ -545,6 +545,32 @@ export default function SettingsPage() {
                         </CardContent>
                     </Card>
 
+                    {/* Share Trip tracking URL — base of the public live-tracking
+                        page that rider-app embeds in the "Share Trip" message.
+                        Recipients open ${base}/${share_token}; the URL is served
+                        runtime from app_settings so it rotates without a mobile
+                        rebuild. Should point at the admin dashboard's /track route
+                        — e.g. https://spinrvm.vercel.app/track. */}
+                    <Card className="border-border/50 lg:col-span-2">
+                        <CardHeader>
+                            <CardTitle className="text-base">Share Trip — Live Tracking URL</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-2">
+                            <Label>Tracking base URL</Label>
+                            <Input
+                                value={settings.track_base_url || ""}
+                                onChange={(e) => update("track_base_url", e.target.value)}
+                                placeholder="https://spinrvm.vercel.app/track"
+                            />
+                            <p className="text-xs text-muted-foreground">
+                                Used by the rider-app "Share Trip" message. Set this to the
+                                deployed admin dashboard's /track route. Leave blank to disable
+                                in-app sharing.
+                            </p>
+                        </CardContent>
+                    </Card>
+
                     {/* Driver-app ride-offer alert tone — uploaded via
                         a dedicated multipart endpoint that writes the URL
                         directly to settings.ride_offer_sound_url. */}

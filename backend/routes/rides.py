@@ -2456,8 +2456,11 @@ async def track_shared_ride(share_token: str):
             "dropoff_address": ride.get("dropoff_address"),
         }
 
-    # Get driver location for live tracking — only expose what safety contacts need
+    # Get driver location for live tracking — surface what a safety contact
+    # legitimately needs to see the live map (driver coords + plate to
+    # identify the car) without leaking PII (phone, email, license number).
     driver_info = None
+    eta_minutes: Optional[int] = None
     if ride.get("driver_id"):
         driver = await db_supabase.get_driver_by_id(ride["driver_id"])
         if driver:
@@ -2468,12 +2471,32 @@ async def track_shared_ride(share_token: str):
                 "vehicle_make": driver.get("vehicle_make"),
                 "vehicle_model": driver.get("vehicle_model"),
                 "vehicle_color": driver.get("vehicle_color"),
+                "vehicle_year": driver.get("vehicle_year"),
+                "license_plate": driver.get("license_plate"),
+                "rating": driver.get("rating"),
+                "photo_url": driver.get("photo_url"),
             }
+            # Cheap ETA: straight-line driver→dropoff at 30 km/h city speed.
+            # Same formula used at /rides/estimate so the number stays consistent.
+            d_lat, d_lng = driver.get("lat"), driver.get("lng")
+            tgt_lat, tgt_lng = ride.get("dropoff_lat"), ride.get("dropoff_lng")
+            if d_lat is not None and d_lng is not None and tgt_lat is not None and tgt_lng is not None:
+                try:
+                    km = calculate_distance(d_lat, d_lng, tgt_lat, tgt_lng)
+                    eta_minutes = max(1, int(km / 30 * 60) + 1)
+                except Exception:
+                    eta_minutes = None
 
     return {
         "status": ride.get("status"),
         "pickup_address": ride.get("pickup_address"),
         "dropoff_address": ride.get("dropoff_address"),
+        "pickup_lat": ride.get("pickup_lat"),
+        "pickup_lng": ride.get("pickup_lng"),
+        "dropoff_lat": ride.get("dropoff_lat"),
+        "dropoff_lng": ride.get("dropoff_lng"),
+        "ride_code": ride.get("ride_code"),
+        "eta_minutes": eta_minutes,
         "driver": driver_info,
     }
 

@@ -1,5 +1,5 @@
 # Spinr - Rideshare Application
-
+ 
 This repository contains a full-stack rideshare application built with React Native (Expo) and Python (FastAPI).
 
 ## Project Structure

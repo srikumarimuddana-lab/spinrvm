@@ -42,6 +42,12 @@ function RideInProgressScreenContent() {
   const [currentLocation, setCurrentLocation] = useState('4th Avenue North');
   const [isSharingLocation, setIsSharingLocation] = useState(false);
   const [tripRouteCoords, setTripRouteCoords] = useState<any[]>([]);
+
+  // Source-of-truth rider bill. The API computes grand_total as the sum of
+  // the fare_breakdown line items (see backend/routes/rides.py::
+  // _sum_fare_breakdown), so this screen, the end-ride confirms, and the
+  // ride-details receipt all read the same number. No client-side math.
+  const riderBill = parseFloat(((currentRide as any)?.grand_total ?? '0').toString()) || 0;
   const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean;
     title: string;
@@ -133,7 +139,7 @@ function RideInProgressScreenContent() {
       setConfirmSheet({
         visible: true,
         title: 'End ride early?',
-        message: `Full fare of $${parseFloat((currentRide as any)?.grand_total || currentRide?.total_fare || '0').toFixed(2)} applies. Your driver will continue.`,
+        message: `Full fare of $${riderBill.toFixed(2)} applies. Your driver will continue.`,
         variant: 'warning',
         buttons: [
           {
@@ -347,11 +353,17 @@ I've shared my live location with you for safety.
           </View>
         </View>
 
-        {/* Fare + Distance */}
+        {/* Fare — the rider's bill, computed exactly the same way
+            ride-details.tsx renders "You paid": sum of the server-supplied
+            fare_breakdown line items. This guarantees the in-progress and
+            ride-details pages always agree, regardless of whether
+            grand_total is on the row or how total_fare has been mutated
+            by recalc/promo paths. Falls back to grand_total / total_fare
+            scalars only when fare_breakdown is empty. */}
         <View style={styles.fareRow}>
           <View style={styles.fareItem}>
             <Ionicons name="cash-outline" size={16} color={colors.textDim} />
-            <Text style={styles.fareValue} allowFontScaling={false}>${parseFloat((currentRide as any)?.grand_total || currentRide?.total_fare || '0').toFixed(2)}</Text>
+            <Text style={styles.fareValue} allowFontScaling={false}>${riderBill.toFixed(2)}</Text>
             <Text style={styles.fareLabel}>Fare</Text>
           </View>
           <View style={styles.fareDivider} />
@@ -411,7 +423,7 @@ I've shared my live location with you for safety.
           setConfirmSheet({
             visible: true,
             title: 'End ride early?',
-            message: `You will be charged the full agreed fare of $${parseFloat((currentRide as any)?.grand_total || currentRide?.total_fare || '0').toFixed(2)}. This cannot be undone.`,
+            message: `You will be charged the full agreed fare of $${riderBill.toFixed(2)}. This cannot be undone.`,
             variant: 'warning',
             buttons: [
               {

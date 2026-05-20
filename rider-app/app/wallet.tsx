@@ -133,32 +133,11 @@ export default function WalletScreen() {
   const renderTransaction = ({ item }: { item: WalletTransaction }) => {
     const icon = TXN_ICONS[item.type] || 'swap-horizontal';
     const color = TXN_COLORS[item.type] || colors.textDim;
+    const amountNum = parseFloat(item.amount);
+    const isCredit = amountNum > 0;
     const meta = item.metadata as WalletTransactionMeta | null | undefined;
     const hasRideDetails = item.type === 'ride_payment' && meta?.pickup_address;
-    const rawFb = meta?.fare_breakdown || [];
-
-    // Cap any discount line at the ride fare portion (driver earnings) so the
-    // chips never show -$10 against a $6.58 ride. Promos only discount the
-    // ride fare — never fees or taxes.
-    const rideFarePortion = parseFloat(meta?.ride_fare || '0');
-    const fb = rawFb.map((line) => {
-      if (line.type !== 'discount' || line.amount == null) return line;
-      const raw = Math.abs(parseFloat(String(line.amount)));
-      const capped = rideFarePortion > 0 ? Math.min(raw, rideFarePortion) : raw;
-      return { ...line, amount: -capped };
-    });
-
-    // For ride payments, recompute the right-side total from the (capped)
-    // breakdown so it matches the receipt. For all other transaction types
-    // (top_up, refund, bonus, …) the stored amount IS the ledger truth.
-    const storedAmount = parseFloat(item.amount);
-    const breakdownTotal = item.type === 'ride_payment' && fb.length > 0
-      ? fb.reduce((sum, line) => line.amount != null ? sum + parseFloat(String(line.amount)) : sum, 0)
-      : null;
-    const amountNum = breakdownTotal != null
-      ? (storedAmount < 0 ? -breakdownTotal : breakdownTotal)
-      : storedAmount;
-    const isCredit = amountNum > 0;
+    const fb = meta?.fare_breakdown || [];
 
     const displayDesc = item.description || item.type.replace(/_/g, ' ');
 
@@ -427,7 +406,7 @@ function createStyles(colors: ThemeColors) {
       fontSize: 12, color: colors.textDim, flex: 1,
     },
     txnBreakdown: {
-      flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 4,
+      flexDirection: 'row', gap: 10, marginTop: 4,
     },
     txnBreakdownItem: {
       fontSize: 11, fontWeight: '600', color: colors.textDim,

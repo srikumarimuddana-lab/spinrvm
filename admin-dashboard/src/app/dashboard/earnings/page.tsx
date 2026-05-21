@@ -14,7 +14,8 @@ import {
     Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { Download, Car, CreditCard, Users, TrendingUp, TrendingDown, DollarSign, UserPlus, Clock, MapPin, X, GitCompareArrows, Wallet, CheckCircle, AlertTriangle, Percent, Receipt, UserCheck, XCircle, Ticket, Zap, Landmark, Undo2, Filter, Hourglass, Activity } from "lucide-react";
-import { getPayouts, getPayoutStats, getPayoutsOverview, type PayoutsOverview } from "@/lib/api";
+import { getPayouts, getPayoutStats, getPayoutsOverview, retryPayout, bulkRetryPayouts, type PayoutsOverview } from "@/lib/api";
+import { useToast } from "@/components/ui/use-toast";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { Legend } from "recharts";
 import { Input } from "@/components/ui/input";
@@ -1223,6 +1224,80 @@ function PayoutsTab() {
     const [period, setPeriod] = useState<EarningsPeriod>("7d");
     const [overview, setOverview] = useState<PayoutsOverview | null>(null);
     const [overviewLoading, setOverviewLoading] = useState(true);
+    const [retryingId, setRetryingId] = useState<string | null>(null);
+    const [bulkRetrying, setBulkRetrying] = useState(false);
+    const { toast } = useToast();
+
+    const refreshAll = async () => {
+        setLoading(true);
+        setOverviewLoading(true);
+        try {
+            const [p, s, o] = await Promise.all([
+                getPayouts().catch(() => []),
+                getPayoutStats().catch(() => null),
+                getPayoutsOverview({ period }).catch(() => null),
+            ]);
+            setPayouts(Array.isArray(p) ? p : []);
+            setStats(s);
+            if (o) setOverview(o);
+        } finally {
+            setLoading(false);
+            setOverviewLoading(false);
+        }
+    };
+
+    const handleRowRetry = async (id: string) => {
+        setRetryingId(id);
+        try {
+            await retryPayout(id);
+            toast({ title: "Retry queued", description: "Payout flipped back to pending — the retry loop will pick it up." });
+            await refreshAll();
+        } catch (e: any) {
+            toast({ title: "Retry failed", description: e?.message || "Unknown error", variant: "destructive" });
+        } finally {
+            setRetryingId(null);
+        }
+    };
+
+    const handleBulkRetry = async () => {
+        if (!overview) return;
+        // Use the window the operator is already looking at. since=start
+        // matches the Pass 1 daily chart so "retry everything failed in
+        // this window" reads as a single coherent action.
+        const since = overview.period.start;
+        if (!window.confirm(
+            `Retry every failed/cancelled payout since ${new Date(since).toLocaleString()}? Each will be flipped to pending and the retry loop will pick them up.`
+        )) return;
+        setBulkRetrying(true);
+        try {
+            const res = await bulkRetryPayouts({ since, max_to_retry: 200 });
+            toast({
+                title: "Bulk retry queued",
+                description: `${res.retried} queued · ${res.skipped} skipped · ${res.failed_to_initiate} errored.`,
+            });
+            await refreshAll();
+        } catch (e: any) {
+            toast({ title: "Bulk retry failed", description: e?.message || "Unknown error", variant: "destructive" });
+        } finally {
+            setBulkRetrying(false);
+        }
+    };
+
+    const handleExportCsv = () => {
+        exportToCsv("payouts", payouts, [
+            { key: "id", label: "Payout ID" },
+            { key: "driver_id", label: "Driver ID" },
+            { key: "driver_name", label: "Driver" },
+            { key: "amount", label: "Amount" },
+            { key: "status", label: "Status" },
+            { key: "bank_name", label: "Bank" },
+            { key: "account_last4", label: "Account Last 4" },
+            { key: "stripe_payout_id", label: "Stripe Payout ID" },
+            { key: "error_message", label: "Error" },
+            { key: "created_at", label: "Requested" },
+            { key: "processed_at", label: "Settled" },
+        ]);
+    };
 
     useEffect(() => {
         Promise.all([
@@ -1295,15 +1370,36 @@ function PayoutsTab() {
 
             {/* Filter + Table */}
             <Card>
-                <CardHeader className="flex flex-row items-center justify-between">
+                <CardHeader className="flex flex-row items-center justify-between gap-3 flex-wrap">
                     <CardTitle>Payout History</CardTitle>
-                    <div className="flex gap-1 bg-muted rounded-lg p-0.5">
-                        {["all", "pending", "completed", "failed"].map(s => (
-                            <button key={s} onClick={() => setStatusFilter(s)}
-                                className={`px-3 py-1 rounded-md text-xs font-medium transition ${statusFilter === s ? "bg-background shadow-sm" : "text-muted-foreground"}`}>
-                                {s.charAt(0).toUpperCase() + s.slice(1)}
-                            </button>
-                        ))}
+                    <div className="flex items-center gap-2 flex-wrap">
+                        <div className="flex gap-1 bg-muted rounded-lg p-0.5">
+                            {["all", "pending", "completed", "failed"].map(s => (
+                                <button key={s} onClick={() => setStatusFilter(s)}
+                                    className={`px-3 py-1 rounded-md text-xs font-medium transition ${statusFilter === s ? "bg-background shadow-sm" : "text-muted-foreground"}`}>
+                                    {s.charAt(0).toUpperCase() + s.slice(1)}
+                                </button>
+                            ))}
+                        </div>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleBulkRetry}
+                            disabled={bulkRetrying || !overview}
+                            title="Retry every failed/cancelled payout in the selected period"
+                        >
+                            <Undo2 className="h-3.5 w-3.5 mr-1.5" />
+                            {bulkRetrying ? "Retrying…" : "Bulk retry failed"}
+                        </Button>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleExportCsv}
+                            disabled={payouts.length === 0}
+                        >
+                            <Download className="h-3.5 w-3.5 mr-1.5" />
+                            Export CSV
+                        </Button>
                     </div>
                 </CardHeader>
                 <CardContent className="p-0">
@@ -1315,20 +1411,48 @@ function PayoutsTab() {
                                 <TableHead>Status</TableHead>
                                 <TableHead>Bank</TableHead>
                                 <TableHead>Requested</TableHead>
+                                <TableHead className="text-right">Action</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
                             {filtered.length === 0 ? (
-                                <TableRow><TableCell colSpan={5} className="text-center py-8 text-muted-foreground">No payouts found</TableCell></TableRow>
-                            ) : filtered.map((p: any) => (
-                                <TableRow key={p.id}>
-                                    <TableCell className="font-medium">{p.driver_name || "Unknown"}</TableCell>
-                                    <TableCell className="font-mono font-bold">${Number(p.amount || 0).toFixed(2)}</TableCell>
-                                    <TableCell><Badge className={statusBadge(p.status)}>{p.status}</Badge></TableCell>
-                                    <TableCell className="text-sm text-muted-foreground">{p.bank_name || "—"} {p.account_last4 ? `•••${p.account_last4}` : ""}</TableCell>
-                                    <TableCell className="text-xs text-muted-foreground">{formatDate(p.created_at)}</TableCell>
-                                </TableRow>
-                            ))}
+                                <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground">No payouts found</TableCell></TableRow>
+                            ) : filtered.map((p: any) => {
+                                const isRetryable = p.status === "failed" || p.status === "cancelled";
+                                const isRetrying = retryingId === p.id;
+                                return (
+                                    <TableRow key={p.id}>
+                                        <TableCell className="font-medium">{p.driver_name || "Unknown"}</TableCell>
+                                        <TableCell className="font-mono font-bold">${Number(p.amount || 0).toFixed(2)}</TableCell>
+                                        <TableCell>
+                                            <Badge className={statusBadge(p.status)}>{p.status}</Badge>
+                                            {p.error_message && (
+                                                <p className="text-[10px] text-red-600 dark:text-red-400 mt-0.5 truncate max-w-[200px]" title={p.error_message}>
+                                                    {p.error_message}
+                                                </p>
+                                            )}
+                                        </TableCell>
+                                        <TableCell className="text-sm text-muted-foreground">{p.bank_name || "—"} {p.account_last4 ? `•••${p.account_last4}` : ""}</TableCell>
+                                        <TableCell className="text-xs text-muted-foreground">{formatDate(p.created_at)}</TableCell>
+                                        <TableCell className="text-right">
+                                            {isRetryable ? (
+                                                <Button
+                                                    size="xs"
+                                                    variant="outline"
+                                                    className="h-7 text-[11px]"
+                                                    onClick={() => handleRowRetry(p.id)}
+                                                    disabled={isRetrying}
+                                                >
+                                                    <Undo2 className="h-3 w-3 mr-1" />
+                                                    {isRetrying ? "Retrying…" : "Retry"}
+                                                </Button>
+                                            ) : (
+                                                <span className="text-[10px] text-muted-foreground">—</span>
+                                            )}
+                                        </TableCell>
+                                    </TableRow>
+                                );
+                            })}
                         </TableBody>
                     </Table>
                 </CardContent>

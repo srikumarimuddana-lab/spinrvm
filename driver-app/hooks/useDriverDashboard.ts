@@ -21,6 +21,9 @@ import { startSensorMonitoring, stopSensorMonitoring, isMovementConsistentWithSp
 import { attestDeviceIntegrity } from '../utils/deviceIntegrity';
 
 const { height } = Dimensions.get('window');
+// Each tier doubles; last-tier jitter must be large enough to disperse a
+// thundering herd (many drivers reconnecting simultaneously after a server
+// hiccup). ±500ms at 30 s base is only 1.7% dispersal — too tight.
 const RECONNECT_DELAYS = [1000, 2000, 5000, 10000, 30000];
 const MAX_RECONNECT_ATTEMPTS = 10;
 
@@ -688,6 +691,13 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     };
 
     ws.onclose = (event) => {
+      // Guard against stale sockets: when the app foregrounds, the AppState
+      // handler resets the counter and calls connectWebSocket() before the
+      // old socket finishes CLOSING. Without this guard the old socket's
+      // onclose fires after the reset and creates a second socket, which
+      // then has onclose fire again — producing a connection-storm.
+      if (ws !== wsRef.current) return;
+
       if (isOnlineRef.current && userRef.current) {
         if (reconnectAttemptRef.current >= MAX_RECONNECT_ATTEMPTS) {
           setConnectionState('disconnected');
@@ -695,8 +705,13 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           return;
         }
         setConnectionState('reconnecting');
-        const baseDelay = RECONNECT_DELAYS[Math.min(reconnectAttemptRef.current, RECONNECT_DELAYS.length - 1)];
-        const jitter = Math.random() * 1000 - 500; // ±500 ms
+        const tier = Math.min(reconnectAttemptRef.current, RECONNECT_DELAYS.length - 1);
+        const baseDelay = RECONNECT_DELAYS[tier];
+        // Scale jitter with the base delay so at 30 s we disperse ±2 s
+        // instead of ±500 ms — avoids a thundering herd when many drivers
+        // reconnect after a server hiccup at the same time.
+        const jitterRange = Math.max(1000, baseDelay * 0.067);
+        const jitter = Math.random() * jitterRange * 2 - jitterRange;
         const delay = Math.max(500, baseDelay + jitter);
         reconnectTimeoutRef.current = setTimeout(() => {
           reconnectAttemptRef.current++;

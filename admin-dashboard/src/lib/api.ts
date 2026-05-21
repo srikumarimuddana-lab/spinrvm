@@ -525,9 +525,39 @@ export interface DriverPayoutSummary {
         created_at: string;
         processed_at: string | null;
     }>;
+    // Stripe Connect KYC + tax identity mirror (migration 92).
+    // SIN itself is never exposed here — only id_number_provided and
+    // last4. Use /reveal-sin for the one-shot retrieval.
+    kyc: {
+        details_submitted: boolean;
+        charges_enabled: boolean;
+        payouts_enabled: boolean;
+        verification_status: string | null;
+        business_type: string | null;
+        id_number_provided: boolean;
+        id_number_last4: string | null;
+        gst_hst_number: string | null;
+        requirements_due: string[];
+        requirements_past_due: string[];
+        disabled_reason: string | null;
+        tos_accepted_at: string | null;
+        last_synced_at: string | null;
+    };
 }
 export const getDriverPayoutsSummary = (id: string) =>
     request<DriverPayoutSummary>(`/api/admin/drivers/${id}/payouts-summary`);
+
+export const refreshDriverStripeKyc = (id: string) =>
+    request<{ status: string }>(`/api/admin/drivers/${id}/refresh-stripe-kyc`, { method: "POST" });
+
+export interface RevealSinResponse {
+    sin: string;
+    sin_last4: string;
+    audit_log_id: string | null;
+    warning: string;
+}
+export const revealDriverSin = (id: string) =>
+    request<RevealSinResponse>(`/api/admin/drivers/${id}/reveal-sin`, { method: "POST" });
 
 export const getDriverStats = (params?: {
     service_area_id?: string;

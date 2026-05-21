@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides } from "@/lib/api";
+import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, getDriverPayoutsSummary, retryPayout, type DriverLiveStats, type DriverPayoutSummary } from "@/lib/api";
 import { Pagination } from "@/components/ui/pagination";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatCurrency } from "@/lib/utils";
@@ -13,7 +13,7 @@ import { Sheet, SheetContent, SheetTitle, SheetDescription } from "@/components/
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Search, Users, Wifi, ShieldCheck, ShieldAlert, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, ArrowUpDown, ArrowUp, ArrowDown, Ban, Pause, Maximize2 } from "lucide-react";
+import { Search, Users, Wifi, ShieldCheck, ShieldAlert, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, ArrowUpDown, ArrowUp, ArrowDown, Ban, Pause, Maximize2, RefreshCw } from "lucide-react";
 import { DocumentReviewer } from "./_components/document-reviewer";
 import DriverStatsCards from "./_components/driver-stats-cards";
 import DriverCharts from "./_components/driver-charts";
@@ -103,6 +103,11 @@ export default function DriversPage() {
     const [ridesLoading, setRidesLoading] = useState(false);
     const [ridesLoaded, setRidesLoaded] = useState<string | null>(null);
     const [detailTab, setDetailTab] = useState<string>("overview");
+    const [liveStats, setLiveStats] = useState<DriverLiveStats | null>(null);
+    const [payoutSummary, setPayoutSummary] = useState<DriverPayoutSummary | null>(null);
+    const [payoutLoading, setPayoutLoading] = useState(false);
+    const [retryingPayoutId, setRetryingPayoutId] = useState<string | null>(null);
+
 
     const loadDriverRides = useCallback(async (driverId: string) => {
         if (ridesLoaded === driverId) return;
@@ -198,7 +203,32 @@ export default function DriversPage() {
     }, []);
     useEffect(() => { if (!selected?.id) { setDriverDocs([]); return; } setDocsLoading(true); getDriverDocuments(selected.id).then((d) => setDriverDocs(Array.isArray(d) ? d : [])).catch(() => setDriverDocs([])).finally(() => setDocsLoading(false)); }, [selected?.id]);
     useEffect(() => { setEditing(false); setEditForm({}); }, [selected?.id]);
-    useEffect(() => { if (!selected?.id) { setDriverRides([]); setRidesLoaded(null); } else { setDetailTab("overview"); } }, [selected?.id]);
+    useEffect(() => {
+        if (!selected?.id) {
+            setDriverRides([]);
+            setRidesLoaded(null);
+            setLiveStats(null);
+            setPayoutSummary(null);
+            return;
+        }
+        setDetailTab("overview");
+        // Live-stats compute Rating / Rides / Earnings / Accept Rate from
+        // the rides table on demand because three of the four denormalised
+        // columns on the drivers row are unreliable (see backend comment in
+        // routes/admin/drivers.py admin_get_driver_live_stats). Cheap query,
+        // worth the round-trip to avoid stale headers.
+        setLiveStats(null);
+        setPayoutSummary(null);
+        getDriverLiveStats(selected.id).then(setLiveStats).catch(() => {});
+        // Payout summary feeds the "pending payout" subline on the
+        // Earnings card AND the dedicated Payouts tab; fetched eagerly so
+        // the slideout header tells a complete story on open.
+        setPayoutLoading(true);
+        getDriverPayoutsSummary(selected.id)
+            .then((d) => setPayoutSummary(d))
+            .catch(() => {})
+            .finally(() => setPayoutLoading(false));
+    }, [selected?.id]);
     useEffect(() => {
         if (!previewUrl) return;
         const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setPreviewUrl(null); };
@@ -572,7 +602,15 @@ export default function DriversPage() {
                                         </div>
                                         <div>
                                             <h2 className="text-xl font-bold">{selected.first_name} {selected.last_name}</h2>
-                                            <button onClick={() => navigator.clipboard.writeText(selected.id)} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition font-mono bg-muted/50 px-2 py-0.5 rounded mt-1" title="Copy ID">{selected.id?.slice(0, 16)}...<Copy className="h-3 w-3" /></button>
+                                            <div className="flex items-center gap-2 mt-1 flex-wrap">
+                                                <button onClick={() => navigator.clipboard.writeText(selected.id)} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition font-mono bg-muted/50 px-2 py-0.5 rounded" title="Copy driver UUID">{selected.id?.slice(0, 12)}…<Copy className="h-3 w-3" /></button>
+                                                {selected.email && (
+                                                    <button onClick={() => navigator.clipboard.writeText(selected.email)} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition px-2 py-0.5 rounded hover:bg-muted/50" title={`Copy email: ${selected.email}`}>
+                                                        <Mail className="h-3 w-3" />
+                                                        <span className="truncate max-w-[220px]">{selected.email}</span>
+                                                    </button>
+                                                )}
+                                            </div>
                                             <div className="flex items-center gap-2 mt-2">
                                                 {selected.status === "active" ? <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400"><ShieldCheck className="h-3 w-3" /> Active</Badge>
                                                 : selected.status === "needs_review" ? <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"><AlertTriangle className="h-3 w-3" /> Needs Review</Badge>
@@ -600,10 +638,65 @@ export default function DriversPage() {
                                     </div>
                                 </div>
                                 <div className="grid grid-cols-4 gap-3 mt-5">
-                                    <QuickStat icon={Star} color="text-amber-500" bg="bg-amber-50 dark:bg-amber-900/20" label="Rating" value={selected.rating?.toFixed(1) || "New"} />
-                                    <QuickStat icon={Car} color="text-blue-500" bg="bg-blue-50 dark:bg-blue-900/20" label="Rides" value={(selected.total_rides || 0).toLocaleString()} />
-                                    <QuickStat icon={DollarSign} color="text-emerald-500" bg="bg-emerald-50 dark:bg-emerald-900/20" label="Earnings" value={formatCurrency(selected.total_earnings || 0)} />
-                                    <QuickStat icon={CheckCircle} color="text-violet-500" bg="bg-violet-50 dark:bg-violet-900/20" label="Accept Rate" value={selected.acceptance_rate || "\u2014"} />
+                                    {/* QuickStats prefer live-stats computed on the backend over
+                                        the denormalised drivers.* columns, which were stale or
+                                        unset for three of the four metrics. While live-stats are
+                                        in flight we show a "\u2026" placeholder so the user sees that
+                                        the value is loading instead of a stale 0. */}
+                                    <QuickStat
+                                        icon={Star} color="text-amber-500" bg="bg-amber-50 dark:bg-amber-900/20"
+                                        label="Rating"
+                                        value={
+                                            liveStats === null
+                                                ? "\u2026"
+                                                : liveStats.avg_rating != null
+                                                    ? liveStats.avg_rating.toFixed(1)
+                                                    : selected.rating != null && selected.rating > 0
+                                                        ? Number(selected.rating).toFixed(1)
+                                                        : "New"
+                                        }
+                                    />
+                                    <QuickStat
+                                        icon={Car} color="text-blue-500" bg="bg-blue-50 dark:bg-blue-900/20"
+                                        label="Rides"
+                                        value={
+                                            liveStats === null
+                                                ? "\u2026"
+                                                : (liveStats.total_rides || 0).toLocaleString()
+                                        }
+                                    />
+                                    <QuickStat
+                                        icon={DollarSign} color="text-emerald-500" bg="bg-emerald-50 dark:bg-emerald-900/20"
+                                        label="Earnings"
+                                        value={
+                                            liveStats === null
+                                                ? "\u2026"
+                                                : formatCurrency(liveStats.total_earnings || 0)
+                                        }
+                                        sub={
+                                            payoutSummary
+                                                ? payoutSummary.summary.pending_balance > 0
+                                                    ? `${formatCurrency(payoutSummary.summary.pending_balance)} pending`
+                                                    : payoutSummary.summary.pending_in_flight > 0
+                                                        ? `${formatCurrency(payoutSummary.summary.pending_in_flight)} in flight`
+                                                        : "All paid out"
+                                                : undefined
+                                        }
+                                        subTone={
+                                            payoutSummary && payoutSummary.summary.pending_balance > 0 ? "amber" : "muted"
+                                        }
+                                    />
+                                    <QuickStat
+                                        icon={CheckCircle} color="text-violet-500" bg="bg-violet-50 dark:bg-violet-900/20"
+                                        label="Accept Rate"
+                                        value={
+                                            liveStats === null
+                                                ? "\u2026"
+                                                : liveStats.acceptance_rate != null
+                                                    ? `${liveStats.acceptance_rate}%`
+                                                    : "\u2014"
+                                        }
+                                    />
                                 </div>
                             </div>
                         </div>
@@ -613,6 +706,7 @@ export default function DriversPage() {
                                 <TabsTrigger value="overview">Overview</TabsTrigger>
                                 <TabsTrigger value="documents">Documents{pendingDocsCount > 0 && <span className="ml-1.5 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 text-[10px] font-bold px-1.5 py-0.5 rounded-full" title={`${pendingDocsCount} document${pendingDocsCount === 1 ? "" : "s"} awaiting review`}>{pendingDocsCount}</span>}</TabsTrigger>
                                 <TabsTrigger value="rides">Rides{selected.total_rides > 0 && <span className="ml-1.5 bg-primary/10 text-primary text-[10px] font-bold px-1.5 py-0.5 rounded-full">{(selected.total_rides || 0).toLocaleString()}</span>}</TabsTrigger>
+                                <TabsTrigger value="payouts">Payouts{payoutSummary && payoutSummary.summary.pending_balance > 0 && <span className="ml-1.5 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 text-[10px] font-bold px-1.5 py-0.5 rounded-full" title={`${formatCurrency(payoutSummary.summary.pending_balance)} pending payout`}>!</span>}</TabsTrigger>
                                 <TabsTrigger value="verification">Actions</TabsTrigger>
                                 <TabsTrigger value="notes">Notes</TabsTrigger>
                                 <TabsTrigger value="history">History</TabsTrigger>
@@ -750,6 +844,30 @@ export default function DriversPage() {
                                         loading={ridesLoading}
                                         driverName={`${selected.first_name || ""} ${selected.last_name || ""}`.trim()}
                                         fmtDate={fmtDate}
+                                    />
+                                </TabsContent>
+
+                                {/* Payouts */}
+                                <TabsContent value="payouts" className="mt-4">
+                                    <DriverPayoutsTab
+                                        data={payoutSummary}
+                                        loading={payoutLoading}
+                                        driverName={`${selected.first_name || ""} ${selected.last_name || ""}`.trim() || selected.email || "this driver"}
+                                        retryingPayoutId={retryingPayoutId}
+                                        onRetry={async (payoutId) => {
+                                            setRetryingPayoutId(payoutId);
+                                            try {
+                                                await retryPayout(payoutId);
+                                                toast({ title: "Retry queued", description: "Payout sent back to Stripe for processing." });
+                                                // Refresh summary so the row's status flips out of "failed"
+                                                const fresh = await getDriverPayoutsSummary(selected.id);
+                                                setPayoutSummary(fresh);
+                                            } catch (e: any) {
+                                                toast({ title: "Retry failed", description: e?.message || "Unknown error", variant: "destructive" });
+                                            } finally {
+                                                setRetryingPayoutId(null);
+                                            }
+                                        }}
                                     />
                                 </TabsContent>
 
@@ -1089,6 +1207,275 @@ const DRIVER_RIDES_PAGE_SIZE = 25;
 
 type RidesSortKey = "created_at" | "rider_name" | "status" | "distance_km" | "duration_seconds" | "total_fare" | "tip_amount";
 
+const PAYOUT_STATUS_STYLE: Record<string, { bg: string; text: string; label: string }> = {
+    completed:  { bg: "bg-emerald-100 dark:bg-emerald-900/30", text: "text-emerald-700 dark:text-emerald-300", label: "Paid" },
+    pending:    { bg: "bg-amber-100 dark:bg-amber-900/30",     text: "text-amber-700 dark:text-amber-300",     label: "Pending" },
+    processing: { bg: "bg-blue-100 dark:bg-blue-900/30",       text: "text-blue-700 dark:text-blue-300",       label: "Processing" },
+    failed:     { bg: "bg-red-100 dark:bg-red-900/30",         text: "text-red-700 dark:text-red-300",         label: "Failed" },
+};
+
+function PayoutMetric({ label, value, tone, sub }: { label: string; value: string; tone?: "emerald" | "amber" | "red" | "neutral"; sub?: string }) {
+    const styles = {
+        emerald: { bg: "bg-emerald-50 dark:bg-emerald-900/10 border-emerald-200 dark:border-emerald-800", value: "text-emerald-700 dark:text-emerald-300" },
+        amber:   { bg: "bg-amber-50 dark:bg-amber-900/10 border-amber-200 dark:border-amber-800",         value: "text-amber-700 dark:text-amber-300" },
+        red:     { bg: "bg-red-50 dark:bg-red-900/10 border-red-200 dark:border-red-800",                 value: "text-red-700 dark:text-red-300" },
+        neutral: { bg: "bg-card border-border",                                                            value: "text-foreground" },
+    }[tone ?? "neutral"];
+    return (
+        <div className={`rounded-xl p-3.5 border ${styles.bg}`}>
+            <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">{label}</p>
+            <p className={`text-xl font-bold tabular-nums mt-1 ${styles.value}`}>{value}</p>
+            {sub && <p className="text-[10px] text-muted-foreground mt-0.5">{sub}</p>}
+        </div>
+    );
+}
+
+function DriverPayoutsTab({ data, loading, driverName, retryingPayoutId, onRetry }: {
+    data: DriverPayoutSummary | null;
+    loading: boolean;
+    driverName: string;
+    retryingPayoutId: string | null;
+    onRetry: (payoutId: string) => Promise<void>;
+}) {
+    const fmtDateTime = (iso?: string | null) => {
+        if (!iso) return "—";
+        try {
+            const d = new Date(iso);
+            return `${d.toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" })} · ${d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}`;
+        } catch { return iso; }
+    };
+    const fmtMoney = (n: number) => formatCurrency(n);
+
+    if (loading && !data) return (
+        <div className="space-y-4 animate-pulse">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                {Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-20 rounded-xl bg-muted" />)}
+            </div>
+            <div className="h-32 rounded-xl bg-muted" />
+            {Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-12 rounded-xl bg-muted" />)}
+        </div>
+    );
+
+    if (!data) return (
+        <div className="py-16 text-center text-muted-foreground">
+            <DollarSign className="h-10 w-10 mx-auto mb-3 opacity-30" />
+            <p className="text-sm font-medium">No payout data available</p>
+        </div>
+    );
+
+    const { summary, payment_method: pm, payouts } = data;
+
+    return (
+        <div className="space-y-5">
+            {/* Top 4 metric cards: Pending / Paid out / Lifetime / YTD */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <PayoutMetric
+                    label="Pending payout"
+                    value={fmtMoney(summary.pending_balance)}
+                    tone={summary.pending_balance > 0 ? "amber" : "neutral"}
+                    sub={summary.pending_in_flight > 0 ? `${fmtMoney(summary.pending_in_flight)} in flight` : "Owed to driver, not yet queued"}
+                />
+                <PayoutMetric
+                    label="Total paid out"
+                    value={fmtMoney(summary.total_paid_out)}
+                    tone="emerald"
+                    sub={`${payouts.filter(p => p.status === "completed").length} completed payouts`}
+                />
+                <PayoutMetric
+                    label="Lifetime earnings"
+                    value={fmtMoney(summary.lifetime_earnings)}
+                    sub={`${summary.rides_count.toLocaleString()} completed rides · ${fmtMoney(summary.lifetime_tips)} tips`}
+                />
+                <PayoutMetric
+                    label="Year to date"
+                    value={fmtMoney(summary.ytd_earnings)}
+                    sub={`${summary.active_days_30d} active days in last 30d`}
+                />
+            </div>
+
+            {/* On-hold warning if any failed payouts */}
+            {summary.on_hold > 0 && summary.last_failed_payout && (
+                <div className="rounded-xl border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/10 p-3 flex items-start gap-3">
+                    <AlertTriangle className="h-4 w-4 text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
+                    <div className="min-w-0 flex-1">
+                        <p className="text-sm font-semibold text-red-700 dark:text-red-300">{fmtMoney(summary.on_hold)} on hold from failed payouts</p>
+                        <p className="text-xs text-red-600/80 dark:text-red-400/80 mt-0.5">
+                            Most recent failure: {summary.last_failed_payout.error_message || "Unknown error"} · {fmtDateTime(summary.last_failed_payout.created_at)}
+                        </p>
+                    </div>
+                </div>
+            )}
+
+            {/* Payment method on file */}
+            <div className="rounded-xl border border-border bg-card overflow-hidden">
+                <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                        <CreditCard className="h-4 w-4 text-muted-foreground" />
+                        <h4 className="text-sm font-semibold">Payout method</h4>
+                    </div>
+                    {pm.has_bank_account ? (
+                        <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 text-[10px]">Linked</Badge>
+                    ) : (
+                        <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300 text-[10px]">No method linked</Badge>
+                    )}
+                </div>
+                <div className="px-4 py-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {pm.has_bank_account ? (
+                        <>
+                            <div>
+                                <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">Bank</p>
+                                <p className="text-sm font-medium mt-0.5">{pm.bank_name || "Stripe Connect"}</p>
+                            </div>
+                            <div>
+                                <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">Account</p>
+                                <p className="text-sm font-medium mt-0.5 font-mono">
+                                    •••• {pm.account_last4 || "****"}
+                                    {pm.account_type && <span className="text-xs text-muted-foreground ml-2 font-sans">({pm.account_type})</span>}
+                                </p>
+                            </div>
+                            {pm.account_holder_name && (
+                                <div>
+                                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">Holder</p>
+                                    <p className="text-sm font-medium mt-0.5">{pm.account_holder_name}</p>
+                                </div>
+                            )}
+                            <div>
+                                <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">Stripe Connect</p>
+                                {pm.stripe_connected ? (
+                                    <p className="text-sm font-medium mt-0.5 inline-flex items-center gap-1.5">
+                                        <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                                        Connected
+                                        {pm.stripe_account_hint && <span className="text-xs text-muted-foreground font-mono">acct…{pm.stripe_account_hint}</span>}
+                                    </p>
+                                ) : (
+                                    <p className="text-sm font-medium mt-0.5 inline-flex items-center gap-1.5 text-muted-foreground">
+                                        <span className="w-2 h-2 rounded-full bg-muted-foreground/40" />
+                                        Not connected
+                                    </p>
+                                )}
+                            </div>
+                            {pm.is_verified !== null && (
+                                <div>
+                                    <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">Verification</p>
+                                    <p className={`text-sm font-medium mt-0.5 ${pm.is_verified ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"}`}>
+                                        {pm.is_verified ? "Verified" : "Unverified"}
+                                    </p>
+                                </div>
+                            )}
+                        </>
+                    ) : (
+                        <div className="col-span-full text-sm text-muted-foreground py-2">
+                            {driverName} has not added a payout method yet. Payouts cannot be processed until a bank account or Stripe Connect account is linked.
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            {/* Last payout highlight */}
+            {summary.last_payout && (
+                <div className="rounded-xl border border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-900/10 p-3 flex items-center gap-3">
+                    <CheckCircle className="h-4 w-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                        <p className="text-xs text-emerald-700 dark:text-emerald-300">
+                            <span className="font-semibold">Last payout:</span> {fmtMoney(summary.last_payout.amount)}
+                            {summary.last_payout.bank_name && ` to ${summary.last_payout.bank_name} ••••${summary.last_payout.account_last4 || ""}`}
+                        </p>
+                        <p className="text-[10px] text-emerald-600/70 dark:text-emerald-400/70">{fmtDateTime(summary.last_payout.processed_at)}</p>
+                    </div>
+                </div>
+            )}
+
+            {/* Payout history table */}
+            <div className="rounded-xl border border-border overflow-x-auto">
+                <Table>
+                    <TableHeader>
+                        <TableRow className="bg-muted/30 hover:bg-muted/30">
+                            <TableHead className="h-9 text-[11px] uppercase tracking-wider">Date</TableHead>
+                            <TableHead className="h-9 text-[11px] uppercase tracking-wider text-right">Amount</TableHead>
+                            <TableHead className="h-9 text-[11px] uppercase tracking-wider">Status</TableHead>
+                            <TableHead className="h-9 text-[11px] uppercase tracking-wider">Destination</TableHead>
+                            <TableHead className="h-9 text-[11px] uppercase tracking-wider">Stripe Ref</TableHead>
+                            <TableHead className="h-9 text-[11px] uppercase tracking-wider text-right">Action</TableHead>
+                        </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                        {payouts.length === 0 ? (
+                            <TableRow>
+                                <TableCell colSpan={6} className="text-center text-muted-foreground py-12">
+                                    <p className="text-sm">No payouts yet.</p>
+                                    <p className="text-xs mt-1">When {driverName} requests a withdrawal it will appear here.</p>
+                                </TableCell>
+                            </TableRow>
+                        ) : payouts.map((p) => {
+                            const style = PAYOUT_STATUS_STYLE[p.status] ?? { bg: "bg-muted/30", text: "text-muted-foreground", label: p.status };
+                            const isRetrying = retryingPayoutId === p.id;
+                            return (
+                                <TableRow key={p.id} className="hover:bg-muted/20">
+                                    <TableCell className="text-xs whitespace-nowrap">
+                                        {fmtDateTime(p.processed_at || p.created_at)}
+                                    </TableCell>
+                                    <TableCell className="text-sm font-semibold text-right tabular-nums">
+                                        {fmtMoney(p.amount)}
+                                    </TableCell>
+                                    <TableCell>
+                                        <div className="flex flex-col gap-0.5">
+                                            <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold w-fit ${style.bg} ${style.text}`}>
+                                                {style.label}
+                                            </span>
+                                            {p.status === "failed" && p.error_message && (
+                                                <span className="text-[10px] text-red-600 dark:text-red-400 truncate max-w-[200px]" title={p.error_message}>{p.error_message}</span>
+                                            )}
+                                        </div>
+                                    </TableCell>
+                                    <TableCell className="text-xs">
+                                        {p.bank_name ? (
+                                            <>
+                                                <p>{p.bank_name}</p>
+                                                {p.account_last4 && <p className="text-[10px] text-muted-foreground font-mono">••••{p.account_last4}</p>}
+                                            </>
+                                        ) : "—"}
+                                    </TableCell>
+                                    <TableCell>
+                                        {p.stripe_payout_id ? (
+                                            <button
+                                                type="button"
+                                                onClick={() => navigator.clipboard.writeText(p.stripe_payout_id!)}
+                                                title={`Copy ${p.stripe_payout_id}`}
+                                                className="inline-flex items-center gap-1 text-[10px] font-mono text-muted-foreground hover:text-foreground transition-colors"
+                                            >
+                                                {p.stripe_payout_id.slice(0, 12)}…
+                                                <Copy className="h-2.5 w-2.5" />
+                                            </button>
+                                        ) : (
+                                            <span className="text-[10px] text-muted-foreground">—</span>
+                                        )}
+                                    </TableCell>
+                                    <TableCell className="text-right">
+                                        {p.status === "failed" ? (
+                                            <Button
+                                                size="xs"
+                                                variant="outline"
+                                                className="h-7 text-[11px]"
+                                                disabled={isRetrying}
+                                                onClick={() => onRetry(p.id)}
+                                            >
+                                                {isRetrying ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                                                Retry
+                                            </Button>
+                                        ) : (
+                                            <span className="text-[10px] text-muted-foreground">—</span>
+                                        )}
+                                    </TableCell>
+                                </TableRow>
+                            );
+                        })}
+                    </TableBody>
+                </Table>
+            </div>
+        </div>
+    );
+}
+
 function DriverRidesTab({ rides, loading, driverName, fmtDate }: {
     rides: any[];
     loading: boolean;
@@ -1345,8 +1732,16 @@ function DriverRidesTab({ rides, loading, driverName, fmtDate }: {
     );
 }
 
-function QuickStat({ icon: Icon, color, bg, label, value }: { icon: any; color: string; bg: string; label: string; value: string }) {
-    return <div className={`${bg} rounded-xl p-3 text-center`}><Icon className={`h-4 w-4 ${color} mx-auto mb-1`} /><p className="text-sm font-bold">{value}</p><p className="text-[10px] text-muted-foreground">{label}</p></div>;
+function QuickStat({ icon: Icon, color, bg, label, value, sub, subTone }: { icon: any; color: string; bg: string; label: string; value: string; sub?: string; subTone?: "amber" | "muted" }) {
+    const subClass = subTone === "amber" ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground";
+    return (
+        <div className={`${bg} rounded-xl p-3 text-center`}>
+            <Icon className={`h-4 w-4 ${color} mx-auto mb-1`} />
+            <p className="text-sm font-bold">{value}</p>
+            <p className="text-[10px] text-muted-foreground">{label}</p>
+            {sub && <p className={`text-[10px] mt-0.5 font-medium ${subClass}`}>{sub}</p>}
+        </div>
+    );
 }
 
 function DetailSection({ title, icon: Icon, children }: { title: string; icon: any; children: React.ReactNode }) {

@@ -624,6 +624,7 @@ export interface EarningsOverview {
         prev_end: string;
     };
     metrics: {
+        // Pass 1 — CEO row
         gbv: MetricWithDelta;
         net_revenue: MetricWithDelta;
         take_rate_pct: MetricWithDelta;
@@ -632,6 +633,21 @@ export interface EarningsOverview {
         active_drivers: MetricWithDelta;
         avg_fare: MetricWithDelta;
         spinr_pass_mrr: MetricWithDelta;
+        // Pass 2 — operational health
+        cancellation_rate_pct: MetricWithDelta;
+        cancellation_revenue: MetricWithDelta;
+        cancelled_trips: MetricWithDelta;
+        refund_amount: MetricWithDelta;
+        refund_count: MetricWithDelta;
+        promo_spend: MetricWithDelta;
+        promo_count: MetricWithDelta;
+        surge_revenue: MetricWithDelta;
+        gst_collected: MetricWithDelta;
+        pst_collected: MetricWithDelta;
+    };
+    cancellation_breakdown: {
+        current: { rider: number; driver: number; system: number };
+        previous: { rider: number; driver: number; system: number };
     };
     daily_series: Array<{
         date: string;

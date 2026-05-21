@@ -554,7 +554,17 @@ export const useDriverStore = create<DriverState>((set, get) => ({
         set({ isLoading: true, error: null });
         try {
             const res = await api.post<CompletedRideData>(`/drivers/rides/${rideId}/complete`);
-            set({ rideState: 'trip_completed', completedRide: res.data, activeRide: null });
+            // chatMessages belongs to the just-finished ride — drop it so a
+            // long shift doesn't accumulate every prior conversation in
+            // memory. Same for incomingRide which can linger from a stale
+            // offer panel.
+            set({
+                rideState: 'trip_completed',
+                completedRide: res.data,
+                activeRide: null,
+                incomingRide: null,
+                chatMessages: [],
+            });
             AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
         } catch (err: unknown) {
             recordNonFatal(err, { store: 'driverStore', action: 'completeRide' });
@@ -568,7 +578,12 @@ export const useDriverStore = create<DriverState>((set, get) => ({
         set({ isLoading: true, isCancellingRide: true, error: null });
         try {
             await api.post(`/drivers/rides/${rideId}/cancel?reason=${encodeURIComponent(reason || '')}`);
-            set({ rideState: 'idle', activeRide: null, incomingRide: null });
+            set({
+                rideState: 'idle',
+                activeRide: null,
+                incomingRide: null,
+                chatMessages: [],
+            });
             AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
         } catch (err: unknown) {
             recordNonFatal(err, { store: 'driverStore', action: 'cancelRide' });

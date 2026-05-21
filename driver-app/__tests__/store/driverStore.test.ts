@@ -133,6 +133,19 @@ describe('driverStore', () => {
       expect(state.completedRide).toEqual(mockCompletedRide);
       expect(state.activeRide).toBeNull();
     });
+
+    it('should clear chatMessages so they do not leak into the next ride', async () => {
+      useDriverStore.setState({
+        chatMessages: [
+          { id: 'm1', ride_id: 'ride-1', sender_id: 'r', sender_role: 'rider', message: 'hi', created_at: '' } as any,
+        ],
+      });
+      api.post.mockResolvedValueOnce({ data: { id: 'ride-1', status: 'completed' } });
+
+      await useDriverStore.getState().completeRide('ride-1');
+
+      expect(useDriverStore.getState().chatMessages).toEqual([]);
+    });
   });
 
   describe('cancelRide', () => {
@@ -144,6 +157,19 @@ describe('driverStore', () => {
       expect(api.post).toHaveBeenCalledWith('/drivers/rides/ride-1/cancel?reason=Rider%20not%20found');
       expect(useDriverStore.getState().rideState).toBe('idle');
       expect(useDriverStore.getState().activeRide).toBeNull();
+    });
+
+    it('should clear chatMessages on cancel', async () => {
+      useDriverStore.setState({
+        chatMessages: [
+          { id: 'm1', ride_id: 'ride-1', sender_id: 'r', sender_role: 'rider', message: 'hi', created_at: '' } as any,
+        ],
+      });
+      api.post.mockResolvedValueOnce({});
+
+      await useDriverStore.getState().cancelRide('ride-1');
+
+      expect(useDriverStore.getState().chatMessages).toEqual([]);
     });
   });
 

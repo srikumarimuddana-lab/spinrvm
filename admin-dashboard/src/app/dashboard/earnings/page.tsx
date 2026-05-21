@@ -14,11 +14,12 @@ import {
     Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { Download, Car, CreditCard, Users, TrendingUp, TrendingDown, DollarSign, UserPlus, Clock, MapPin, X, GitCompareArrows, Wallet, CheckCircle, AlertTriangle, Percent, Receipt, UserCheck, XCircle, Ticket, Zap, Landmark, Undo2, Filter, Hourglass, Activity } from "lucide-react";
-import { getPayouts, getPayoutStats, getPayoutsOverview, retryPayout, bulkRetryPayouts, type PayoutsOverview } from "@/lib/api";
+import { getPayouts, getPayoutStats, getPayoutsOverview, retryPayout, bulkRetryPayouts, closePayoutPeriod, type PayoutsOverview } from "@/lib/api";
 import { useToast } from "@/components/ui/use-toast";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { Legend } from "recharts";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
     BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip,
     ResponsiveContainer, CartesianGrid,
@@ -716,6 +717,200 @@ function PayoutsOpsQueues({ overview }: { overview: PayoutsOverview }) {
                     )}
                 </CardContent>
             </Card>
+        </div>
+    );
+}
+
+// Format a YYYY-MM string for display.
+function fmtPeriodKey(key: string): string {
+    try {
+        const [y, m] = key.split("-").map(Number);
+        return new Date(y, (m || 1) - 1, 1).toLocaleString(undefined, { month: "long", year: "numeric" });
+    } catch {
+        return key;
+    }
+}
+
+function PayoutsCompliance({ overview, onClosed }: { overview: PayoutsOverview; onClosed: () => Promise<void> | void }) {
+    const { t4a_snapshot, period_locks } = overview;
+    const { toast } = useToast();
+    const now = new Date();
+    // Default closure target: the previous calendar month — what
+    // finance typically closes once the month wraps.
+    const defaultYear = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
+    const defaultMonth = now.getMonth() === 0 ? 12 : now.getMonth(); // getMonth is 0-indexed; we want prior month 1-indexed
+    const [closeYear, setCloseYear] = useState<number>(defaultYear);
+    const [closeMonth, setCloseMonth] = useState<number>(defaultMonth);
+    const [closing, setClosing] = useState(false);
+
+    const handleClose = async () => {
+        const periodLabel = fmtPeriodKey(`${closeYear}-${String(closeMonth).padStart(2, "0")}`);
+        if (!window.confirm(
+            `Close ${periodLabel}? This writes an audit-log entry snapshotting every completed payout in that month. ` +
+            `Closure is advisory — no payouts are physically locked, but the audit row is permanent.`
+        )) return;
+        setClosing(true);
+        try {
+            const res = await closePayoutPeriod(closeYear, closeMonth);
+            toast({
+                title: `${periodLabel} closed`,
+                description: `${res.payout_count} payouts · ${fmtMoney(res.total_amount)} total`,
+            });
+            await onClosed();
+        } catch (e: any) {
+            toast({ title: "Close failed", description: e?.message || "Unknown error", variant: "destructive" });
+        } finally {
+            setClosing(false);
+        }
+    };
+
+    const totalBucketed = t4a_snapshot.drivers_with_earnings;
+
+    return (
+        <div className="space-y-4">
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+                Compliance &amp; finance
+            </h2>
+
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                {/* T4A snapshot — drivers bucketed against the CRA reporting +
+                    GST registration thresholds. The over_30k bucket is the
+                    operational lever — those drivers MUST register for GST/HST. */}
+                <Card className="border-border/50">
+                    <CardHeader className="pb-2">
+                        <CardTitle className="text-sm flex items-center gap-2">
+                            <Receipt className="h-4 w-4 text-muted-foreground" />
+                            T4A snapshot · {t4a_snapshot.tax_year}
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                            <div className="rounded-md bg-muted/30 p-2.5">
+                                <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">Drivers w/ earnings YTD</p>
+                                <p className="text-xl font-bold tabular-nums mt-0.5">{totalBucketed.toLocaleString()}</p>
+                            </div>
+                            <div className="rounded-md bg-muted/30 p-2.5">
+                                <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">YTD gross earnings</p>
+                                <p className="text-xl font-bold tabular-nums mt-0.5">{fmtMoney(t4a_snapshot.ytd_gross_earnings)}</p>
+                            </div>
+                        </div>
+                        <Table>
+                            <TableHeader>
+                                <TableRow>
+                                    <TableHead className="text-[11px] uppercase tracking-wide h-9">Bucket</TableHead>
+                                    <TableHead className="text-[11px] uppercase tracking-wide h-9 text-right">Drivers</TableHead>
+                                    <TableHead className="text-[11px] uppercase tracking-wide h-9">CRA implication</TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                <TableRow>
+                                    <TableCell className="text-xs font-mono">&lt; $500</TableCell>
+                                    <TableCell className="text-xs text-right tabular-nums">{t4a_snapshot.buckets.under_500}</TableCell>
+                                    <TableCell className="text-[11px] text-muted-foreground">Below T4A reporting threshold</TableCell>
+                                </TableRow>
+                                <TableRow>
+                                    <TableCell className="text-xs font-mono">$500 – $10k</TableCell>
+                                    <TableCell className="text-xs text-right tabular-nums">{t4a_snapshot.buckets.from_500_to_10k}</TableCell>
+                                    <TableCell className="text-[11px] text-muted-foreground">T4A required</TableCell>
+                                </TableRow>
+                                <TableRow>
+                                    <TableCell className="text-xs font-mono">$10k – $30k</TableCell>
+                                    <TableCell className="text-xs text-right tabular-nums">{t4a_snapshot.buckets.from_10k_to_30k}</TableCell>
+                                    <TableCell className="text-[11px] text-muted-foreground">T4A required · GST elective</TableCell>
+                                </TableRow>
+                                <TableRow className="bg-amber-50/50 dark:bg-amber-900/10">
+                                    <TableCell className="text-xs font-mono font-semibold">≥ $30k</TableCell>
+                                    <TableCell className="text-xs text-right tabular-nums font-bold text-amber-700 dark:text-amber-300">{t4a_snapshot.buckets.over_30k}</TableCell>
+                                    <TableCell className="text-[11px] text-amber-700 dark:text-amber-300">T4A + GST/HST registration MANDATORY</TableCell>
+                                </TableRow>
+                            </TableBody>
+                        </Table>
+                    </CardContent>
+                </Card>
+
+                {/* Period close — picks a month, writes an audit_log row.
+                    Closure is advisory at this scale, not a hard lock — the
+                    log answers "did we sign off on May 2026?" for the
+                    accountant without requiring schema changes. */}
+                <Card className="border-border/50">
+                    <CardHeader className="pb-2">
+                        <CardTitle className="text-sm flex items-center gap-2">
+                            <CheckCircle className="h-4 w-4 text-muted-foreground" />
+                            Period close
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                        <p className="text-[11px] text-muted-foreground">
+                            Writes an audit-log entry snapshotting every completed payout in the selected month — the
+                            accountant&apos;s "we signed off on this period" record. Restricted to finance + super_admin.
+                        </p>
+                        <div className="flex items-end gap-2 flex-wrap">
+                            <div>
+                                <Label htmlFor="close-month" className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold mb-1.5 block">Month</Label>
+                                <select
+                                    id="close-month"
+                                    className="h-9 text-sm rounded-md border border-input bg-background px-2"
+                                    value={closeMonth}
+                                    onChange={(e) => setCloseMonth(Number(e.target.value))}
+                                >
+                                    {Array.from({ length: 12 }).map((_, i) => (
+                                        <option key={i + 1} value={i + 1}>
+                                            {new Date(2000, i, 1).toLocaleString(undefined, { month: "long" })}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div>
+                                <Label htmlFor="close-year" className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold mb-1.5 block">Year</Label>
+                                <Input
+                                    id="close-year"
+                                    type="number"
+                                    min={2024}
+                                    max={now.getFullYear()}
+                                    value={closeYear}
+                                    onChange={(e) => setCloseYear(Number(e.target.value))}
+                                    className="h-9 w-[100px] text-sm"
+                                />
+                            </div>
+                            <Button
+                                onClick={handleClose}
+                                disabled={closing}
+                                size="sm"
+                                className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                            >
+                                <CheckCircle className="h-3.5 w-3.5 mr-1.5" />
+                                {closing ? "Closing…" : `Close ${fmtPeriodKey(`${closeYear}-${String(closeMonth).padStart(2, "0")}`)}`}
+                            </Button>
+                        </div>
+
+                        {period_locks.length > 0 && (
+                            <div className="pt-2">
+                                <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold mb-1.5">Recent closures</p>
+                                <Table>
+                                    <TableHeader>
+                                        <TableRow>
+                                            <TableHead className="text-[11px] uppercase tracking-wide h-9">Period</TableHead>
+                                            <TableHead className="text-[11px] uppercase tracking-wide h-9">Closed at</TableHead>
+                                            <TableHead className="text-[11px] uppercase tracking-wide h-9">By</TableHead>
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {period_locks.slice(0, 6).map((lock) => (
+                                            <TableRow key={`${lock.period}-${lock.closed_at}`}>
+                                                <TableCell className="text-xs font-medium">{fmtPeriodKey(lock.period)}</TableCell>
+                                                <TableCell className="text-xs text-muted-foreground">{formatDate(lock.closed_at)}</TableCell>
+                                                <TableCell className="text-xs text-muted-foreground font-mono truncate max-w-[140px]" title={lock.closed_by || ""}>
+                                                    {lock.closed_by ? lock.closed_by.slice(0, 12) + "…" : "—"}
+                                                </TableCell>
+                                            </TableRow>
+                                        ))}
+                                    </TableBody>
+                                </Table>
+                            </div>
+                        )}
+                    </CardContent>
+                </Card>
+            </div>
         </div>
     );
 }
@@ -1457,6 +1652,14 @@ function PayoutsTab() {
                     </Table>
                 </CardContent>
             </Card>
+
+            {/* Pass 4 — compliance. T4A snapshot + period close. Sits
+                below the transaction table so finance opens the page
+                lower to find these; day-to-day operators don't see
+                them on first glance. */}
+            {overview && (
+                <PayoutsCompliance overview={overview} onClosed={refreshAll} />
+            )}
         </div>
     );
 }

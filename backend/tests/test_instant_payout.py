@@ -141,17 +141,23 @@ class TestRequestInstantPayout:
                 return [_bank_account()]
             return []
 
-        captured: dict = {}
+        inserted: dict = {}
+        updates: list = []
 
         async def fake_insert(_table, payload):
-            captured.update(payload)
+            inserted.update(payload)
             return payload
+
+        async def fake_update(_table, _filters, fields):
+            updates.append(dict(fields))
+            return None
 
         req = drv.InstantPayoutRequest(amount=Decimal("100.00"))
 
         with (
             patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
             patch("backend.routes.drivers.db_supabase.insert_one", AsyncMock(side_effect=fake_insert)),
+            patch("backend.routes.drivers.db_supabase.update_one", AsyncMock(side_effect=fake_update)),
             patch("backend.routes.drivers.get_driver_balance", AsyncMock(return_value=self._balance())),
             patch(
                 "backend.settings_loader.get_app_settings",
@@ -172,12 +178,197 @@ class TestRequestInstantPayout:
             )
 
         assert result["success"] is True
-        # Fee on $100 = 1.5% = $1.50; net = $98.50
-        assert captured["amount"] == Decimal("100.00")
-        assert captured["fee"] == Decimal("1.50")
-        assert captured["net_amount"] == Decimal("98.50")
-        assert captured["payout_type"] == "instant"
-        assert captured["stripe_payout_id"] == "po_INSTANT"
+        # Initial INSERT writes the in-flight transfer; status flips to
+        # completed via UPDATE only after the payout step succeeds.
+        assert inserted["amount"] == Decimal("100.00")
+        assert inserted["fee"] == Decimal("1.50")
+        assert inserted["net_amount"] == Decimal("98.50")
+        assert inserted["payout_type"] == "instant"
+        assert inserted["status"] == "transfer_completed"
+        assert inserted["stripe_transfer_id"] == "tr_x"
+        assert inserted["stripe_payout_id"] is None
+        # The final UPDATE marks it completed with the payout id.
+        assert updates, "Expected an UPDATE after the payout step"
+        final = updates[-1]
+        assert final["status"] == "completed"
+        assert final["stripe_payout_id"] == "po_INSTANT"
+
+    def test_payout_step_failure_reverses_transfer_and_flags_row(self):
+        """Transfer succeeds, Payout fails → reversal succeeds.
+
+        Row should end in status='reversed', requires_manual_review=False.
+        """
+        from backend.routes import drivers as drv
+
+        def get_rows_side_effect(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "bank_accounts":
+                return [_bank_account()]
+            return []
+
+        inserted: dict = {}
+        updates: list = []
+
+        async def fake_insert(_table, payload):
+            inserted.update(payload)
+            return payload
+
+        async def fake_update(_table, _filters, fields):
+            updates.append(dict(fields))
+            return None
+
+        req = drv.InstantPayoutRequest(amount=Decimal("100.00"))
+
+        with (
+            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch("backend.routes.drivers.db_supabase.insert_one", AsyncMock(side_effect=fake_insert)),
+            patch("backend.routes.drivers.db_supabase.update_one", AsyncMock(side_effect=fake_update)),
+            patch("backend.routes.drivers.get_driver_balance", AsyncMock(return_value=self._balance())),
+            patch(
+                "backend.settings_loader.get_app_settings",
+                AsyncMock(return_value={"stripe_secret_key": "sk_test_abc"}),
+            ),
+            patch("backend.routes.drivers.stripe.Transfer.create", MagicMock(return_value=MagicMock(id="tr_x"))),
+            patch(
+                "backend.routes.drivers.stripe.Payout.create",
+                MagicMock(side_effect=Exception("instant payout temporarily unavailable")),
+            ),
+            patch(
+                "backend.routes.drivers.stripe.Transfer.create_reversal",
+                MagicMock(return_value=MagicMock(id="trr_ok")),
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                asyncio.run(
+                    drv.request_instant_payout(
+                        req=req,
+                        request=MagicMock(),
+                        current_user={"id": USER_ID},
+                    )
+                )
+        assert exc.value.status_code == 500
+        # Transfer-id is persisted before the payout attempt, so the row
+        # always exists by the time we hit the failure path.
+        assert inserted["stripe_transfer_id"] == "tr_x"
+        assert inserted["status"] == "transfer_completed"
+        # And the failure path flags the row.
+        assert updates, "Expected an UPDATE after the payout failure"
+        final = updates[-1]
+        assert final["status"] == "reversed"
+        assert final["requires_manual_review"] is False
+        assert "instant payout temporarily unavailable" in (final.get("failure_reason") or "")
+
+    def test_payout_and_reversal_both_fail_flags_stranded(self):
+        """Transfer succeeds, Payout fails, reversal also fails.
+
+        Row should end in status='stranded', requires_manual_review=True
+        so the ops dashboard surfaces it.
+        """
+        from backend.routes import drivers as drv
+
+        def get_rows_side_effect(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "bank_accounts":
+                return [_bank_account()]
+            return []
+
+        inserted: dict = {}
+        updates: list = []
+
+        async def fake_insert(_table, payload):
+            inserted.update(payload)
+            return payload
+
+        async def fake_update(_table, _filters, fields):
+            updates.append(dict(fields))
+            return None
+
+        req = drv.InstantPayoutRequest(amount=Decimal("100.00"))
+
+        with (
+            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch("backend.routes.drivers.db_supabase.insert_one", AsyncMock(side_effect=fake_insert)),
+            patch("backend.routes.drivers.db_supabase.update_one", AsyncMock(side_effect=fake_update)),
+            patch("backend.routes.drivers.get_driver_balance", AsyncMock(return_value=self._balance())),
+            patch(
+                "backend.settings_loader.get_app_settings",
+                AsyncMock(return_value={"stripe_secret_key": "sk_test_abc"}),
+            ),
+            patch("backend.routes.drivers.stripe.Transfer.create", MagicMock(return_value=MagicMock(id="tr_x"))),
+            patch(
+                "backend.routes.drivers.stripe.Payout.create",
+                MagicMock(side_effect=Exception("bank network down")),
+            ),
+            patch(
+                "backend.routes.drivers.stripe.Transfer.create_reversal",
+                MagicMock(side_effect=Exception("transfer already settled")),
+            ),
+        ):
+            with pytest.raises(HTTPException):
+                asyncio.run(
+                    drv.request_instant_payout(
+                        req=req,
+                        request=MagicMock(),
+                        current_user={"id": USER_ID},
+                    )
+                )
+
+        assert updates, "Expected an UPDATE after the payout failure"
+        final = updates[-1]
+        assert final["status"] == "stranded"
+        assert final["requires_manual_review"] is True
+
+    def test_transfer_failure_does_not_persist_or_reverse(self):
+        """Step-1 transfer fails. No persist, no reversal — nothing happened."""
+        from backend.routes import drivers as drv
+
+        def get_rows_side_effect(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "bank_accounts":
+                return [_bank_account()]
+            return []
+
+        insert_calls: list = []
+        reversal_calls: list = []
+
+        async def fake_insert(_table, payload):
+            insert_calls.append(payload)
+            return payload
+
+        def fake_reversal(*args, **kw):
+            reversal_calls.append((args, kw))
+            return MagicMock(id="trr_should_not_happen")
+
+        req = drv.InstantPayoutRequest(amount=Decimal("100.00"))
+
+        with (
+            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch("backend.routes.drivers.db_supabase.insert_one", AsyncMock(side_effect=fake_insert)),
+            patch("backend.routes.drivers.get_driver_balance", AsyncMock(return_value=self._balance())),
+            patch(
+                "backend.settings_loader.get_app_settings",
+                AsyncMock(return_value={"stripe_secret_key": "sk_test_abc"}),
+            ),
+            patch(
+                "backend.routes.drivers.stripe.Transfer.create",
+                MagicMock(side_effect=Exception("connect account closed")),
+            ),
+            patch("backend.routes.drivers.stripe.Transfer.create_reversal", MagicMock(side_effect=fake_reversal)),
+        ):
+            with pytest.raises(HTTPException):
+                asyncio.run(
+                    drv.request_instant_payout(
+                        req=req,
+                        request=MagicMock(),
+                        current_user={"id": USER_ID},
+                    )
+                )
+        # No money moved → no row, no reversal needed.
+        assert insert_calls == []
+        assert reversal_calls == []
 
 
 class TestInstantPayoutQuote:

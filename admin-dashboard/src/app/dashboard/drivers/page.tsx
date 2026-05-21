@@ -102,6 +102,7 @@ export default function DriversPage() {
     const [driverRides, setDriverRides] = useState<any[]>([]);
     const [ridesLoading, setRidesLoading] = useState(false);
     const [ridesLoaded, setRidesLoaded] = useState<string | null>(null);
+    const [detailTab, setDetailTab] = useState<string>("overview");
 
     const loadDriverRides = useCallback(async (driverId: string) => {
         if (ridesLoaded === driverId) return;
@@ -197,7 +198,7 @@ export default function DriversPage() {
     }, []);
     useEffect(() => { if (!selected?.id) { setDriverDocs([]); return; } setDocsLoading(true); getDriverDocuments(selected.id).then((d) => setDriverDocs(Array.isArray(d) ? d : [])).catch(() => setDriverDocs([])).finally(() => setDocsLoading(false)); }, [selected?.id]);
     useEffect(() => { setEditing(false); setEditForm({}); }, [selected?.id]);
-    useEffect(() => { if (!selected?.id) { setDriverRides([]); setRidesLoaded(null); } }, [selected?.id]);
+    useEffect(() => { if (!selected?.id) { setDriverRides([]); setRidesLoaded(null); } else { setDetailTab("overview"); } }, [selected?.id]);
     useEffect(() => {
         if (!previewUrl) return;
         const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setPreviewUrl(null); };
@@ -585,11 +586,11 @@ export default function DriversPage() {
                             </div>
                         </div>
 
-                        <Tabs defaultValue="overview" className="flex-1 overflow-hidden flex flex-col">
+                        <Tabs value={detailTab} onValueChange={(v) => { setDetailTab(v); if (v === "rides") loadDriverRides(selected.id); }} className="flex-1 overflow-hidden flex flex-col">
                             <TabsList className="mx-6 mt-4 w-fit">
                                 <TabsTrigger value="overview">Overview</TabsTrigger>
                                 <TabsTrigger value="documents">Documents{pendingDocsCount > 0 && <span className="ml-1.5 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 text-[10px] font-bold px-1.5 py-0.5 rounded-full" title={`${pendingDocsCount} document${pendingDocsCount === 1 ? "" : "s"} awaiting review`}>{pendingDocsCount}</span>}</TabsTrigger>
-                                <TabsTrigger value="rides" onClick={() => loadDriverRides(selected.id)}>Rides{selected.total_rides > 0 && <span className="ml-1.5 bg-primary/10 text-primary text-[10px] font-bold px-1.5 py-0.5 rounded-full">{(selected.total_rides || 0).toLocaleString()}</span>}</TabsTrigger>
+                                <TabsTrigger value="rides">Rides{selected.total_rides > 0 && <span className="ml-1.5 bg-primary/10 text-primary text-[10px] font-bold px-1.5 py-0.5 rounded-full">{(selected.total_rides || 0).toLocaleString()}</span>}</TabsTrigger>
                                 <TabsTrigger value="verification">Actions</TabsTrigger>
                                 <TabsTrigger value="notes">Notes</TabsTrigger>
                                 <TabsTrigger value="history">History</TabsTrigger>
@@ -820,49 +821,30 @@ export default function DriversPage() {
 
                                 {/* Actions & Verification */}
                                 <TabsContent value="verification" className="mt-4 space-y-5">
-                                    <DriverActionBar driver={selected} onActionComplete={() => { loadData(); loadDrivers(); setSelected(null); }} />
-                                    <DetailSection title="Verification Checklist" icon={CheckCircle}>
-                                        <div className="space-y-2">
-                                            {(requiredDocs.length > 0 ? requiredDocs : [
-                                                { key: "drivers_license",      label: "Driver's License",    has_expiry: true },
-                                                { key: "vehicle_insurance",    label: "Vehicle Insurance",   has_expiry: true },
-                                                { key: "vehicle_registration", label: "Vehicle Registration",has_expiry: true },
-                                                { key: "vehicle_inspection",   label: "Vehicle Inspection",  has_expiry: true },
-                                                { key: "background_check",     label: "Background Check",   has_expiry: true },
-                                            ]).map(rd => {
-                                                const matchingDocs = activeDocs.filter(d => matchesRequirement(d, rd as any));
-                                                const hasApproved = matchingDocs.some(d => d.status === "approved");
-                                                const hasPending = matchingDocs.some(d => d.status === "pending");
-                                                const pendingDoc = matchingDocs.find(d => d.status === "pending");
-                                                const expiryField = _docKeyToExpiryField(rd.key);
-                                                const expiryVal = expiryField ? selected[expiryField] : undefined;
-                                                const isExpired = expiryVal && new Date(expiryVal) < new Date();
-
-                                                let status: "approved" | "pending" | "missing" | "expired" = "missing";
-                                                if (isExpired) status = "expired";
-                                                else if (hasApproved) status = "approved";
-                                                else if (hasPending || matchingDocs.length > 0) status = "pending";
-
-                                                return (
-                                                    <VerificationRow
-                                                        key={rd.key}
-                                                        label={rd.label}
-                                                        status={status}
-                                                        hasExpiry={rd.has_expiry}
-                                                        expiryDate={expiryVal}
-                                                        pendingDocId={pendingDoc?.id}
-                                                        pendingDocUrl={pendingDoc?.document_url}
-                                                        docBusy={docBusy}
-                                                        onApprove={(docId) => openReviewDialog(docId, "approved")}
-                                                        onReject={(docId) => openReviewDialog(docId, "rejected")}
-                                                        onPreview={(url) => setPreviewUrl(url)}
-                                                    />
-                                                );
-                                            })}
-                                            <CheckItem label="Profile Photo" checked={!!selected.profile_photo_url} />
-                                            <CheckItem label="Vehicle Photo" checked={!!selected.vehicle_photo_url} />
-                                        </div>
-                                    </DetailSection>
+                                    <DriverActionBar
+                                        driver={selected}
+                                        onActionComplete={(updates) => {
+                                            if (updates && Object.keys(updates).length > 0) {
+                                                setSelected((prev: any) => prev ? { ...prev, ...updates } : prev);
+                                                setDrivers(prevList => prevList.map(d => d.id === selected.id ? { ...d, ...updates } : d));
+                                            }
+                                            loadData();
+                                            loadDrivers();
+                                        }}
+                                    />
+                                    <VerificationSummaryCard
+                                        requiredDocs={requiredDocs.length > 0 ? requiredDocs : [
+                                            { key: "drivers_license",      label: "Driver's License",    has_expiry: true },
+                                            { key: "vehicle_insurance",    label: "Vehicle Insurance",   has_expiry: true },
+                                            { key: "vehicle_registration", label: "Vehicle Registration",has_expiry: true },
+                                            { key: "vehicle_inspection",   label: "Vehicle Inspection",  has_expiry: true },
+                                            { key: "background_check",     label: "Background Check",   has_expiry: true },
+                                        ]}
+                                        activeDocs={activeDocs}
+                                        driver={selected}
+                                        docKeyToExpiryField={_docKeyToExpiryField}
+                                        onOpenDocumentsTab={() => setDetailTab("documents")}
+                                    />
                                 </TabsContent>
 
                                 {/* Notes */}
@@ -952,6 +934,97 @@ const RIDE_STATUS_STYLE: Record<string, { bg: string; text: string; label: strin
     driver_arrived:   { bg: "bg-indigo-100 dark:bg-indigo-900/30", text: "text-indigo-700 dark:text-indigo-300", label: "Arrived" },
     searching:        { bg: "bg-amber-100 dark:bg-amber-900/30",  text: "text-amber-700 dark:text-amber-300",  label: "Searching" },
 };
+
+function VerificationSummaryCard({
+    requiredDocs,
+    activeDocs,
+    driver,
+    docKeyToExpiryField,
+    onOpenDocumentsTab,
+}: {
+    requiredDocs: { id?: string; key: string; label: string; has_expiry: boolean }[];
+    activeDocs: any[];
+    driver: any;
+    docKeyToExpiryField: (key: string) => string | null;
+    onOpenDocumentsTab: () => void;
+}) {
+    const rows = requiredDocs.map(rd => {
+        const matchingDocs = activeDocs.filter(d => matchesRequirement(d, rd));
+        const hasApproved = matchingDocs.some(d => d.status === "approved");
+        const hasPending = matchingDocs.some(d => d.status === "pending");
+        const expiryField = docKeyToExpiryField(rd.key);
+        const expiryVal = expiryField ? driver[expiryField] : undefined;
+        const isExpired = expiryVal && new Date(expiryVal) < new Date();
+        let s: "approved" | "pending" | "missing" | "expired" = "missing";
+        if (isExpired) s = "expired";
+        else if (hasApproved) s = "approved";
+        else if (hasPending || matchingDocs.length > 0) s = "pending";
+        return { rd, status: s };
+    });
+
+    const approved = rows.filter(r => r.status === "approved").length;
+    const total = rows.length;
+    const pending = rows.filter(r => r.status === "pending").length;
+    const missing = rows.filter(r => r.status === "missing").length;
+    const expired = rows.filter(r => r.status === "expired").length;
+    const pct = total > 0 ? Math.round((approved / total) * 100) : 0;
+    const allClear = pending === 0 && missing === 0 && expired === 0 && total > 0;
+
+    return (
+        <div className="rounded-xl border border-border bg-card overflow-hidden">
+            <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                    <CheckCircle className={`h-4 w-4 ${allClear ? "text-emerald-500" : "text-muted-foreground"}`} />
+                    <h4 className="text-sm font-semibold tracking-tight">Verification</h4>
+                    <span className="text-xs text-muted-foreground">{approved} / {total} approved</span>
+                </div>
+                <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={onOpenDocumentsTab}>
+                    Open Documents
+                    <ExternalLink className="h-3 w-3 ml-1" />
+                </Button>
+            </div>
+            <div className="px-4 py-3 space-y-3">
+                <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                    <div
+                        className={`h-full transition-all ${allClear ? "bg-emerald-500" : pct >= 75 ? "bg-amber-500" : "bg-muted-foreground/40"}`}
+                        style={{ width: `${pct}%` }}
+                    />
+                </div>
+                <div className="flex items-center gap-3 flex-wrap text-xs">
+                    {pending > 0 && <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400"><Clock className="h-3 w-3" />{pending} pending</span>}
+                    {missing > 0 && <span className="inline-flex items-center gap-1 text-red-600 dark:text-red-400"><AlertTriangle className="h-3 w-3" />{missing} missing</span>}
+                    {expired > 0 && <span className="inline-flex items-center gap-1 text-red-600 dark:text-red-400"><AlertTriangle className="h-3 w-3" />{expired} expired</span>}
+                    {allClear && <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400"><CheckCircle className="h-3 w-3" />All required documents are approved.</span>}
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-1">
+                    {rows.map(({ rd, status }) => {
+                        const cfg = status === "approved" ? { icon: <CheckCircle className="h-3.5 w-3.5 text-emerald-500" />, text: "text-emerald-600 dark:text-emerald-400" }
+                            : status === "pending" ? { icon: <Clock className="h-3.5 w-3.5 text-amber-500" />, text: "text-amber-600 dark:text-amber-400" }
+                            : status === "expired" ? { icon: <AlertTriangle className="h-3.5 w-3.5 text-red-500" />, text: "text-red-600 dark:text-red-400" }
+                            : { icon: <div className="w-3.5 h-3.5 rounded-full border-2 border-muted-foreground/30" />, text: "text-muted-foreground" };
+                        return (
+                            <div key={rd.key} className="flex items-center gap-2 text-xs">
+                                {cfg.icon}
+                                <span className="truncate flex-1">{rd.label}</span>
+                                <span className={`text-[10px] uppercase tracking-wide font-semibold ${cfg.text}`}>{status}</span>
+                            </div>
+                        );
+                    })}
+                </div>
+                <div className="flex items-center justify-between pt-1 text-xs border-t border-border">
+                    <div className="flex items-center gap-2">
+                        <div className={`w-2 h-2 rounded-full ${driver.profile_photo_url ? "bg-emerald-500" : "bg-muted-foreground/30"}`} />
+                        <span className="text-muted-foreground">Profile photo</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <div className={`w-2 h-2 rounded-full ${driver.vehicle_photo_url ? "bg-emerald-500" : "bg-muted-foreground/30"}`} />
+                        <span className="text-muted-foreground">Vehicle photo</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
 
 function DriverRidesTab({ rides, loading, driverName, fmtDate }: {
     rides: any[];
@@ -1131,94 +1204,3 @@ function DocCard({ d, docBusy, onPreview, onReview }: { d: any; docBusy: string 
     );
 }
 
-function CheckItem({ label, checked, expired, status }: { label: string; checked?: boolean; expired?: boolean; status?: "approved" | "pending" | "missing" | "expired" }) {
-    const s = status || (expired ? "expired" : checked ? "approved" : "missing");
-    const config = {
-        approved: { bg: "bg-emerald-50 dark:bg-emerald-900/10 border-emerald-200 dark:border-emerald-800", icon: <CheckCircle className="h-4 w-4 text-emerald-500" />, text: "text-emerald-600", label: "Approved" },
-        pending:  { bg: "bg-amber-50 dark:bg-amber-900/10 border-amber-200 dark:border-amber-800", icon: <Clock className="h-4 w-4 text-amber-500" />, text: "text-amber-600", label: "Pending Review" },
-        expired:  { bg: "bg-red-50 dark:bg-red-900/10 border-red-200 dark:border-red-800", icon: <AlertTriangle className="h-4 w-4 text-red-500" />, text: "text-red-500", label: "Expired" },
-        missing:  { bg: "bg-muted/30 border-border", icon: <div className="w-4 h-4 rounded-full border-2 border-muted-foreground/30" />, text: "text-muted-foreground", label: "Missing" },
-    }[s];
-    return (
-        <div className={`flex items-center justify-between p-3 rounded-lg border ${config.bg}`}>
-            <div className="flex items-center gap-2">{config.icon}<span className="text-sm font-medium">{label}</span></div>
-            <span className={`text-xs font-medium ${config.text}`}>{config.label}</span>
-        </div>
-    );
-}
-
-function VerificationRow({ label, status, hasExpiry, expiryDate, pendingDocId, pendingDocUrl, docBusy, onApprove, onReject, onPreview }: {
-    label: string;
-    status: "approved" | "pending" | "missing" | "expired";
-    hasExpiry: boolean;
-    expiryDate?: string;
-    pendingDocId?: string;
-    pendingDocUrl?: string;
-    docBusy: string | null;
-    onApprove: (docId: string) => void;
-    onReject: (docId: string) => void;
-    onPreview: (url: string) => void;
-}) {
-    const fmtDate = (d: string) => { try { return new Date(d).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" }); } catch { return d; } };
-    const isImage = pendingDocUrl && /\.(jpg|jpeg|png|gif|webp|bmp|svg)(\?|$)/i.test(pendingDocUrl);
-
-    const statusConfig = {
-        approved: { bg: "bg-emerald-50 dark:bg-emerald-900/10 border-emerald-200 dark:border-emerald-800", icon: <CheckCircle className="h-5 w-5 text-emerald-500" />, badgeBg: "bg-emerald-100 text-emerald-700", statusLabel: "Approved" },
-        pending:  { bg: "bg-amber-50 dark:bg-amber-900/10 border-amber-200 dark:border-amber-800", icon: <Clock className="h-5 w-5 text-amber-500" />, badgeBg: "bg-amber-100 text-amber-700", statusLabel: "Pending Review" },
-        expired:  { bg: "bg-red-50 dark:bg-red-900/10 border-red-200 dark:border-red-800", icon: <AlertTriangle className="h-5 w-5 text-red-500" />, badgeBg: "bg-red-100 text-red-700", statusLabel: "Expired" },
-        missing:  { bg: "bg-muted/30 border-border", icon: <div className="w-5 h-5 rounded-full border-2 border-muted-foreground/30" />, badgeBg: "bg-muted text-muted-foreground", statusLabel: "Missing" },
-    }[status];
-
-    return (
-        <div className={`rounded-xl border p-4 ${statusConfig.bg}`}>
-            <div className="flex items-start gap-3">
-                <div className="mt-0.5 shrink-0">{statusConfig.icon}</div>
-                <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-sm font-semibold">{label}</span>
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold ${statusConfig.badgeBg}`}>{statusConfig.statusLabel}</span>
-                    </div>
-
-                    {/* Expiry info */}
-                    {hasExpiry && (
-                        <div className="mt-1">
-                            {expiryDate ? (
-                                <p className={`text-xs flex items-center gap-1 ${status === "expired" ? "text-red-500 font-medium" : "text-muted-foreground"}`}>
-                                    <CalendarRange className="h-3 w-3" />
-                                    Expires: {fmtDate(expiryDate)}
-                                    {status === "expired" && " (EXPIRED)"}
-                                </p>
-                            ) : status !== "missing" ? (
-                                <p className="text-xs text-amber-600 flex items-center gap-1"><AlertTriangle className="h-3 w-3" /> No expiry date set — set one when approving</p>
-                            ) : null}
-                        </div>
-                    )}
-
-                    {/* Pending doc preview + actions */}
-                    {status === "pending" && pendingDocId && (
-                        <div className="mt-3 flex items-center gap-2">
-                            {pendingDocUrl && (
-                                <button onClick={() => onPreview(pendingDocUrl)} className="flex items-center gap-1.5 text-xs text-primary hover:underline font-medium">
-                                    {isImage ? <ZoomIn className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                                    Preview
-                                </button>
-                            )}
-                            <div className="flex-1" />
-                            <Button variant="outline" size="xs" className="text-emerald-600 border-emerald-300 hover:bg-emerald-50" disabled={docBusy === pendingDocId} onClick={() => onApprove(pendingDocId)}>
-                                <CheckCircle className="h-3 w-3" /> Approve
-                            </Button>
-                            <Button variant="outline" size="xs" className="text-red-600 border-red-300 hover:bg-red-50" disabled={docBusy === pendingDocId} onClick={() => onReject(pendingDocId)}>
-                                <XCircle className="h-3 w-3" /> Reject
-                            </Button>
-                        </div>
-                    )}
-
-                    {/* Missing — hint */}
-                    {status === "missing" && (
-                        <p className="text-xs text-muted-foreground mt-1">Driver has not uploaded this document yet.</p>
-                    )}
-                </div>
-            </div>
-        </div>
-    );
-}

@@ -870,15 +870,45 @@ export default function DriversPage() {
                 onAfterAction={() => { reloadDriverDocs(); loadData(); loadDrivers(); }}
             />
 
-            {previewUrl && (
-                <div className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center p-8 cursor-pointer" onClick={() => setPreviewUrl(null)} role="dialog" aria-modal="true" aria-label="Document preview">
-                    <div className="relative max-w-5xl max-h-[90vh] w-full h-full flex items-center justify-center">
-                        <img src={previewUrl} alt="Document preview" className="max-w-full max-h-full object-contain rounded-lg shadow-2xl" onClick={e => e.stopPropagation()} />
-                        <button onClick={() => setPreviewUrl(null)} className="absolute top-2 right-2 bg-black/60 hover:bg-black/80 text-white rounded-full p-2 transition"><X className="h-5 w-5" /></button>
-                        <a href={previewUrl} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} className="absolute bottom-4 right-4 bg-white/90 hover:bg-white text-gray-800 rounded-lg px-3 py-1.5 text-sm font-medium flex items-center gap-1.5 transition"><ExternalLink className="h-4 w-4" /> Open original</a>
-                    </div>
-                </div>
-            )}
+            {/* Document preview — uses shadcn Dialog (Radix Portal) so it
+                stacks above the parent Sheet's modal context. Rendering this
+                as a bare fixed div outside the Sheet looked correct but its
+                clicks bubbled into the Sheet's pointer-events scope, so
+                neither the close X nor "Open original" reached their
+                handlers. */}
+            <Dialog open={!!previewUrl} onOpenChange={(open) => { if (!open) setPreviewUrl(null); }}>
+                <DialogContent
+                    className="!max-w-[95vw] sm:!max-w-5xl !p-0 bg-transparent border-none shadow-none"
+                    showCloseButton={false}
+                >
+                    <DialogTitle className="sr-only">Document preview</DialogTitle>
+                    {previewUrl && (
+                        <div className="relative flex items-center justify-center">
+                            <img
+                                src={previewUrl}
+                                alt="Document preview"
+                                className="max-w-full max-h-[85vh] object-contain rounded-lg shadow-2xl bg-black/40"
+                            />
+                            <button
+                                type="button"
+                                onClick={() => setPreviewUrl(null)}
+                                className="absolute top-2 right-2 bg-black/70 hover:bg-black text-white rounded-full p-2 transition"
+                                aria-label="Close preview"
+                            >
+                                <X className="h-5 w-5" />
+                            </button>
+                            <a
+                                href={previewUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="absolute bottom-4 right-4 bg-white/95 hover:bg-white text-gray-900 rounded-lg px-3 py-1.5 text-sm font-medium flex items-center gap-1.5 transition shadow"
+                            >
+                                <ExternalLink className="h-4 w-4" /> Open original
+                            </a>
+                        </div>
+                    )}
+                </DialogContent>
+            </Dialog>
 
             <Dialog open={!!reviewingDoc} onOpenChange={open => { if (!open) setReviewingDoc(null); }}>
                 <DialogContent className="sm:max-w-md">

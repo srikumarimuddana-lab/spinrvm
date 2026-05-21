@@ -119,6 +119,9 @@ function PaymentConfirmScreenContent() {
       const corpId = useCorporate && selectedCorporateId ? selectedCorporateId : null;
       const pmId = selectedPayment === 'card' ? (selectedCardId ?? undefined) : undefined;
       const ride = await createRide(selectedPayment, corpId, pmId);
+      if ((ride as any).promo_error) {
+        showToast('Promo not applied', (ride as any).promo_error, 'warning');
+      }
       Analytics.rideRequested({
         vehicle_type: selectedVehicle?.name ?? 'unknown',
         estimated_fare: totalFare,

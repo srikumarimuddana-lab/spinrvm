@@ -283,11 +283,21 @@ def recalculate_fare_for_distance(
         _d(ride.get("base_fare", 0)) + new_distance_fare + _d(ride.get("time_fare", 0))
     )
 
+    area_fees_total = _d(ride.get("area_fees_total", 0))
+    if area_fees_total == 0:
+        for af in (ride.get("area_fees_breakdown") or []):
+            if isinstance(af, dict):
+                area_fees_total += _d(af.get("calculated_value", 0))
+    tax_amount = _d(ride.get("tax_amount", 0))
+    discount = _d(ride.get("discount_amount", 0))
+    new_grand_total = _round(new_total_fare + area_fees_total + tax_amount - discount)
+
     return {
         "distance_km": round(actual_distance_km, 2),
         "distance_fare": _f(new_distance_fare),
         "total_fare": _f(new_total_fare),
         "driver_earnings": _f(new_driver_earnings),
+        "grand_total": _f(new_grand_total),
     }
 
 

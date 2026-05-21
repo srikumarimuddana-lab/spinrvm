@@ -2809,18 +2809,20 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     completed_ride = await db_supabase.get_ride(ride_id)
 
     if completed_ride and completed_ride.get("rider_id"):
+        rider_bill = completed_ride.get("grand_total") or completed_ride.get("total_fare", ride.get("total_fare", 0))
         await manager.send_personal_message(
             {
                 "type": "ride_completed",
                 "ride_id": ride_id,
                 "total_fare": completed_ride.get("total_fare", ride.get("total_fare", 0)),
+                "grand_total": rider_bill,
             },
             f"rider_{completed_ride['rider_id']}",
         )
         await send_push_notification(
             completed_ride["rider_id"],
             "Ride Completed! ✅",
-            f"Your ride has finished. Total fare: ${completed_ride.get('total_fare', ride.get('total_fare', 0))}",
+            f"Your ride has finished. Total fare: ${rider_bill}",
             data={"type": "ride_completed", "ride_id": str(ride_id)},
         )
 

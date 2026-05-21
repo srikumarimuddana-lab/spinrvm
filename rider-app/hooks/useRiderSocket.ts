@@ -115,6 +115,7 @@ export function useRiderSocket() {
         if (rideId) {
           applyRideStatusFromWS(rideId, RideStatus.COMPLETED, {
             total_fare: data.total_fare,
+            grand_total: data.grand_total,
           });
           fetchRide(rideId);
         }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers } from "@/lib/api";
+import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides } from "@/lib/api";
 import { Pagination } from "@/components/ui/pagination";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatCurrency } from "@/lib/utils";
@@ -76,6 +76,23 @@ export default function DriversPage() {
     const [startDate, setStartDate] = useState("");
     const [endDate, setEndDate] = useState("");
     const [serviceAreas, setServiceAreas] = useState<{ id: string; name: string }[]>([]);
+    const [driverRides, setDriverRides] = useState<any[]>([]);
+    const [ridesLoading, setRidesLoading] = useState(false);
+    const [ridesLoaded, setRidesLoaded] = useState<string | null>(null);
+
+    const loadDriverRides = useCallback(async (driverId: string) => {
+        if (ridesLoaded === driverId) return;
+        setRidesLoading(true);
+        try {
+            const res = await getDriverRides(driverId);
+            setDriverRides(res?.rides || []);
+            setRidesLoaded(driverId);
+        } catch {
+            setDriverRides([]);
+        } finally {
+            setRidesLoading(false);
+        }
+    }, [ridesLoaded]);
 
     const loadData = useCallback(() => {
         setLoading(true);
@@ -157,6 +174,7 @@ export default function DriversPage() {
     }, []);
     useEffect(() => { if (!selected?.id) { setDriverDocs([]); return; } setDocsLoading(true); getDriverDocuments(selected.id).then((d) => setDriverDocs(Array.isArray(d) ? d : [])).catch(() => setDriverDocs([])).finally(() => setDocsLoading(false)); }, [selected?.id]);
     useEffect(() => { setEditing(false); setEditForm({}); }, [selected?.id]);
+    useEffect(() => { if (!selected?.id) { setDriverRides([]); setRidesLoaded(null); } }, [selected?.id]);
     useEffect(() => {
         if (!previewUrl) return;
         const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setPreviewUrl(null); };
@@ -558,6 +576,7 @@ export default function DriversPage() {
                             <TabsList className="mx-6 mt-4 w-fit">
                                 <TabsTrigger value="overview">Overview</TabsTrigger>
                                 <TabsTrigger value="documents">Documents{activeDocs.length > 0 && <span className="ml-1.5 bg-primary/10 text-primary text-[10px] font-bold px-1.5 py-0.5 rounded-full">{activeDocs.length}</span>}</TabsTrigger>
+                                <TabsTrigger value="rides" onClick={() => loadDriverRides(selected.id)}>Rides{selected.total_rides > 0 && <span className="ml-1.5 bg-primary/10 text-primary text-[10px] font-bold px-1.5 py-0.5 rounded-full">{(selected.total_rides || 0).toLocaleString()}</span>}</TabsTrigger>
                                 <TabsTrigger value="verification">Actions</TabsTrigger>
                                 <TabsTrigger value="notes">Notes</TabsTrigger>
                                 <TabsTrigger value="history">History</TabsTrigger>
@@ -576,9 +595,9 @@ export default function DriversPage() {
                                                 <div><label className="text-[11px] text-muted-foreground mb-1 block">Service Area</label><Select value={ef("service_area_id") || "none"} onValueChange={v => setEf("service_area_id", v === "none" ? "" : v)}><SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">Not assigned</SelectItem>{allServiceAreas.map(a => <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>)}</SelectContent></Select></div>
                                             </div>
                                         ) : (
-                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                                <DetailField icon={Mail} label="Email" value={selected.email || "\u2014"} />
-                                                <DetailField icon={Phone} label="Phone" value={selected.phone || "\u2014"} />
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                                                <CopyableField icon={Mail} label="Email" value={selected.email} />
+                                                <CopyableField icon={Phone} label="Phone" value={selected.phone} />
                                                 <DetailField icon={MapPin} label="City" value={selected.city || "\u2014"} />
                                                 <DetailField icon={MapPin} label="Service Area" value={serviceAreas.find(a => a.id === selected.service_area_id)?.name || selected.service_area_id?.slice(0, 8) || "Not assigned"} />
                                             </div>
@@ -644,26 +663,58 @@ export default function DriversPage() {
                                                 </div>
                                             );
                                         })() : (
-                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                                <DetailField icon={Car} label="Vehicle Type" value={vehicleTypes.find(v => v.id === selected.vehicle_type_id)?.name || (selected.vehicle_type_id ? selected.vehicle_type_id.slice(0, 8) : "Not assigned")} />
-                                                <DetailField icon={Car} label="Vehicle" value={`${selected.vehicle_color || ""} ${selected.vehicle_make || ""} ${selected.vehicle_model || ""}`.trim() || "\u2014"} />
-                                                <DetailField icon={CalendarRange} label="Year" value={selected.vehicle_year || "\u2014"} />
-                                                <DetailField icon={FileText} label="License Plate" value={selected.license_plate || "\u2014"} mono />
-                                                <DetailField icon={FileText} label="VIN" value={selected.vehicle_vin || "\u2014"} mono />
-                                            </div>
+                                            <>
+                                                <div className="grid grid-cols-2 gap-2.5">
+                                                    <DetailField icon={Car} label="Vehicle Type" value={vehicleTypes.find(v => v.id === selected.vehicle_type_id)?.name || (selected.vehicle_type_id ? selected.vehicle_type_id.slice(0, 8) : "Not assigned")} />
+                                                    <DetailField icon={CalendarRange} label="Year" value={selected.vehicle_year ? String(selected.vehicle_year) : "\u2014"} />
+                                                    <DetailField icon={Car} label="Make" value={selected.vehicle_make || "\u2014"} />
+                                                    <DetailField icon={Car} label="Model" value={selected.vehicle_model || "\u2014"} />
+                                                    <DetailField icon={Car} label="Color" value={selected.vehicle_color || "\u2014"} />
+                                                    <DetailField icon={FileText} label="License Plate" value={selected.license_plate || "\u2014"} mono />
+                                                </div>
+                                                <div className="mt-2.5">
+                                                    <DetailField icon={FileText} label="VIN" value={selected.vehicle_vin || "\u2014"} mono />
+                                                </div>
+                                            </>
                                         )}
                                     </DetailSection>
                                     <DetailSection title="Spinr Pass" icon={CreditCard}>
                                         {selected.subscription_status === "active" ? (
-                                            <div className="flex items-center gap-3 bg-violet-50 dark:bg-violet-900/20 rounded-xl p-4 border border-violet-200 dark:border-violet-800"><div className="w-10 h-10 rounded-xl bg-violet-100 dark:bg-violet-900/30 flex items-center justify-center"><CreditCard className="h-5 w-5 text-violet-600 dark:text-violet-400" /></div><div><p className="text-sm font-semibold text-violet-700 dark:text-violet-300">{selected.subscription_plan || "Active Plan"}</p><p className="text-xs text-violet-600/70 dark:text-violet-400/70">Subscription active</p></div></div>
+                                            <div className="flex items-center gap-3">
+                                                <div className="w-9 h-9 rounded-xl bg-violet-100 dark:bg-violet-900/30 flex items-center justify-center shrink-0">
+                                                    <CreditCard className="h-4 w-4 text-violet-600 dark:text-violet-400" />
+                                                </div>
+                                                <div className="flex-1 min-w-0">
+                                                    <p className="text-sm font-semibold text-violet-700 dark:text-violet-300">{selected.subscription_plan || "Active Plan"}</p>
+                                                    <p className="text-xs text-violet-600/70 dark:text-violet-400/70 mt-0.5">Subscription active</p>
+                                                </div>
+                                                <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300 text-[10px] font-bold uppercase tracking-wide shrink-0">
+                                                    Active
+                                                </span>
+                                            </div>
                                         ) : (
-                                            <div className="flex items-center gap-3 bg-muted/30 rounded-xl p-4"><div className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center"><CreditCard className="h-5 w-5 text-muted-foreground" /></div><div><p className="text-sm font-medium text-muted-foreground">No active subscription</p></div></div>
+                                            <div className="flex items-center gap-3">
+                                                <div className="w-9 h-9 rounded-xl bg-muted flex items-center justify-center shrink-0">
+                                                    <CreditCard className="h-4 w-4 text-muted-foreground" />
+                                                </div>
+                                                <p className="text-sm text-muted-foreground">No active subscription</p>
+                                            </div>
                                         )}
                                     </DetailSection>
-                                    <div className="bg-muted/30 rounded-xl p-4 space-y-2">
-                                        <div className="flex items-center justify-between text-sm"><span className="text-muted-foreground">Joined</span><span className="font-medium">{fmtDate(selected.created_at)}</span></div>
-                                        <div className="flex items-center justify-between text-sm"><span className="text-muted-foreground">Last updated</span><span className="font-medium">{fmtDate(selected.updated_at)}</span></div>
+                                    <div className="grid grid-cols-2 gap-2.5">
+                                        <DetailField icon={CalendarRange} label="Joined" value={fmtDate(selected.created_at)} />
+                                        <DetailField icon={Clock} label="Last Updated" value={fmtDate(selected.updated_at)} />
                                     </div>
+                                </TabsContent>
+
+                                {/* Rides */}
+                                <TabsContent value="rides" className="mt-4">
+                                    <DriverRidesTab
+                                        rides={driverRides}
+                                        loading={ridesLoading}
+                                        driverName={`${selected.first_name || ""} ${selected.last_name || ""}`.trim()}
+                                        fmtDate={fmtDate}
+                                    />
                                 </TabsContent>
 
                                 {/* Documents */}
@@ -903,16 +954,145 @@ export default function DriversPage() {
     );
 }
 
+const RIDE_STATUS_STYLE: Record<string, { bg: string; text: string; label: string }> = {
+    completed:        { bg: "bg-emerald-100 dark:bg-emerald-900/30", text: "text-emerald-700 dark:text-emerald-300", label: "Completed" },
+    in_progress:      { bg: "bg-blue-100 dark:bg-blue-900/30",   text: "text-blue-700 dark:text-blue-300",   label: "In Progress" },
+    cancelled:        { bg: "bg-red-100 dark:bg-red-900/30",     text: "text-red-700 dark:text-red-300",     label: "Cancelled" },
+    driver_assigned:  { bg: "bg-violet-100 dark:bg-violet-900/30", text: "text-violet-700 dark:text-violet-300", label: "Assigned" },
+    driver_accepted:  { bg: "bg-violet-100 dark:bg-violet-900/30", text: "text-violet-700 dark:text-violet-300", label: "Accepted" },
+    driver_arrived:   { bg: "bg-indigo-100 dark:bg-indigo-900/30", text: "text-indigo-700 dark:text-indigo-300", label: "Arrived" },
+    searching:        { bg: "bg-amber-100 dark:bg-amber-900/30",  text: "text-amber-700 dark:text-amber-300",  label: "Searching" },
+};
+
+function DriverRidesTab({ rides, loading, driverName, fmtDate }: {
+    rides: any[];
+    loading: boolean;
+    driverName: string;
+    fmtDate: (d: string) => string;
+}) {
+    const fmtDuration = (s?: number) => {
+        if (!s) return "—";
+        const m = Math.round(s / 60);
+        return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${m % 60}m`;
+    };
+
+    if (loading) return (
+        <div className="space-y-2.5 animate-pulse">
+            {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="h-16 rounded-xl bg-muted" />
+            ))}
+        </div>
+    );
+
+    if (rides.length === 0) return (
+        <div className="py-16 text-center text-muted-foreground">
+            <Car className="h-10 w-10 mx-auto mb-3 opacity-30" />
+            <p className="text-sm font-medium">No rides yet</p>
+            <p className="text-xs mt-1">{driverName} has not completed any trips.</p>
+        </div>
+    );
+
+    return (
+        <div className="rounded-xl border border-border overflow-hidden">
+            <div className="grid grid-cols-[1fr_100px_90px_80px_90px_80px] gap-3 px-4 py-2.5 bg-muted/30 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <div>Route</div>
+                <div>Date</div>
+                <div>Status</div>
+                <div>Fare</div>
+                <div>Distance</div>
+                <div>Duration</div>
+            </div>
+            {rides.map((r) => {
+                const style = RIDE_STATUS_STYLE[r.status] ?? { bg: "bg-muted/30", text: "text-muted-foreground", label: r.status };
+                const fareAmt = r.fare_amount ?? r.total_fare ?? r.base_fare;
+                return (
+                    <div key={r.id} className="grid grid-cols-[1fr_100px_90px_80px_90px_80px] gap-3 items-start px-4 py-3 border-t border-border hover:bg-muted/20 transition-colors">
+                        <div className="min-w-0 space-y-0.5">
+                            <p className="text-xs font-medium truncate text-foreground" title={r.pickup_address}>{r.pickup_address || "—"}</p>
+                            <p className="text-xs text-muted-foreground truncate" title={r.dropoff_address}>{r.dropoff_address ? `→ ${r.dropoff_address}` : ""}</p>
+                        </div>
+                        <div className="text-xs text-muted-foreground tabular-nums">{r.created_at ? fmtDate(r.created_at) : "—"}</div>
+                        <div>
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold ${style.bg} ${style.text}`}>
+                                {style.label}
+                            </span>
+                        </div>
+                        <div className="text-sm font-semibold tabular-nums">
+                            {fareAmt != null ? `$${Number(fareAmt).toFixed(2)}` : "—"}
+                        </div>
+                        <div className="text-xs text-muted-foreground tabular-nums">
+                            {r.distance_km != null ? `${Number(r.distance_km).toFixed(1)} km` : "—"}
+                        </div>
+                        <div className="text-xs text-muted-foreground tabular-nums">
+                            {fmtDuration(r.duration_seconds)}
+                        </div>
+                    </div>
+                );
+            })}
+        </div>
+    );
+}
+
 function QuickStat({ icon: Icon, color, bg, label, value }: { icon: any; color: string; bg: string; label: string; value: string }) {
     return <div className={`${bg} rounded-xl p-3 text-center`}><Icon className={`h-4 w-4 ${color} mx-auto mb-1`} /><p className="text-sm font-bold">{value}</p><p className="text-[10px] text-muted-foreground">{label}</p></div>;
 }
 
 function DetailSection({ title, icon: Icon, children }: { title: string; icon: any; children: React.ReactNode }) {
-    return <div><div className="flex items-center gap-2 mb-3"><Icon className="h-4 w-4 text-muted-foreground" /><h4 className="text-sm font-semibold">{title}</h4></div><div className="bg-muted/20 rounded-xl p-4 border border-border/50">{children}</div></div>;
+    return (
+        <div>
+            <div className="flex items-center gap-2 mb-2.5">
+                <div className="w-6 h-6 rounded-md bg-muted/60 flex items-center justify-center shrink-0">
+                    <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+                </div>
+                <h4 className="text-sm font-semibold tracking-tight">{title}</h4>
+            </div>
+            <div className="bg-muted/10 rounded-xl p-3.5 border border-border/60">
+                {children}
+            </div>
+        </div>
+    );
 }
 
 function DetailField({ icon: Icon, label, value, mono }: { icon: any; label: string; value: string; mono?: boolean }) {
-    return <div className="flex items-center gap-2.5"><Icon className="h-4 w-4 text-muted-foreground shrink-0" /><div className="min-w-0"><p className="text-[11px] text-muted-foreground">{label}</p><p className={`text-sm font-medium truncate ${mono ? "font-mono tracking-wider" : ""}`}>{value}</p></div></div>;
+    return (
+        <div className="bg-background border border-border/60 rounded-lg px-3 py-2.5 flex items-center gap-3 min-w-0">
+            <div className="shrink-0 w-7 h-7 rounded-md bg-muted/50 flex items-center justify-center">
+                <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+            </div>
+            <div className="min-w-0">
+                <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide leading-none">{label}</p>
+                <p className={`text-sm font-medium truncate leading-tight mt-1 ${mono ? "font-mono tracking-wide text-xs" : ""}`}>{value}</p>
+            </div>
+        </div>
+    );
+}
+
+function CopyableField({ icon: Icon, label, value }: { icon: any; label: string; value?: string }) {
+    const { toast } = useToast();
+    const display = value || "—";
+    const canCopy = !!value;
+    const copy = () => {
+        if (!canCopy) return;
+        navigator.clipboard.writeText(value!);
+        toast({ description: `${label} copied`, duration: 1500 });
+    };
+    return (
+        <button
+            type="button"
+            onClick={copy}
+            disabled={!canCopy}
+            className="text-left bg-background border border-border/60 rounded-lg px-3 py-2.5 flex items-center gap-3 min-w-0 w-full hover:bg-muted/30 transition-colors group disabled:cursor-default disabled:opacity-70 disabled:hover:bg-transparent"
+        >
+            <div className="shrink-0 w-7 h-7 rounded-md bg-muted/50 flex items-center justify-center">
+                <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+            </div>
+            <div className="min-w-0 flex-1">
+                <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide leading-none">{label}</p>
+                <p className="text-sm font-medium truncate leading-tight mt-1">{display}</p>
+            </div>
+            {canCopy && <Copy className="h-3.5 w-3.5 text-muted-foreground/30 group-hover:text-muted-foreground shrink-0 transition-colors" />}
+        </button>
+    );
 }
 
 function EditField({ label, value, onChange, type = "text" }: { label: string; value: string; onChange: (v: string) => void; type?: string }) {

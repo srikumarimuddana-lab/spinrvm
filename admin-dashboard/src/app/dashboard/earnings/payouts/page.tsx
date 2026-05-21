@@ -154,14 +154,18 @@ export default function PayoutsPage() {
     const load = useCallback(async () => {
         setLoading(true);
         try {
-            const [p, s] = await Promise.all([
+            // Promise.all rejects on the first failure — if stats or list
+            // 404s/502s, we'd lose the other call's data too. Use allSettled
+            // so a backend hiccup on one endpoint doesn't blank the entire
+            // page (the earnings tab uses the same defensive pattern).
+            const [pRes, sRes] = await Promise.allSettled([
                 getPayouts(statusFilter === "all" ? undefined : statusFilter),
                 getPayoutStats(),
             ]);
+            const p = pRes.status === "fulfilled" ? pRes.value : [];
+            const s = sRes.status === "fulfilled" ? sRes.value : null;
             setPayouts(Array.isArray(p) ? p : []);
             setStats(s ?? null);
-        } catch {
-            // non-fatal
         } finally {
             setLoading(false);
         }

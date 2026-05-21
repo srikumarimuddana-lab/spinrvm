@@ -102,6 +102,87 @@ class TestFilterAndRankDrivers:
         out = filter_and_rank_drivers(self._ride(), drivers, "round_robin", 4.0, 10.0)
         assert len(out) == 1
 
+    # ── Destination filter (P2) ──────────────────────────────────────
+    # Drivers in destination_mode only see offers whose dropoff brings them
+    # closer to their preferred destination. Non-destination-mode drivers
+    # are unaffected.
+
+    def _ride_with_dropoff(self, dropoff_lat, dropoff_lng):
+        return {
+            "pickup_lat": 52.0,
+            "pickup_lng": -106.0,
+            "dropoff_lat": dropoff_lat,
+            "dropoff_lng": dropoff_lng,
+        }
+
+    def test_destination_mode_off_ignores_dropoff_direction(self):
+        # Driver going AWAY from preferred destination is still eligible
+        # when destination_mode is off (which is the default).
+        drivers = [self._driver("d1")]
+        # ride drops far from any preferred destination
+        ride = self._ride_with_dropoff(53.0, -106.0)
+        out = filter_and_rank_drivers(ride, drivers, "nearest", 4.0, 10000.0)
+        assert len(out) == 1
+
+    def test_destination_mode_accepts_ride_that_brings_driver_closer(self):
+        # Driver at (52.0, -106.0), destination at (52.5, -106.0). Ride
+        # drops at (52.3, -106.0) — clearly closer to destination than
+        # driver's current position. Should be included.
+        drivers = [
+            {
+                "id": "d1",
+                "user_id": "u1",
+                "lat": 52.0,
+                "lng": -106.0,
+                "rating": 5.0,
+                "destination_mode": True,
+                "destination_lat": 52.5,
+                "destination_lng": -106.0,
+            }
+        ]
+        ride = self._ride_with_dropoff(52.3, -106.0)
+        out = filter_and_rank_drivers(ride, drivers, "nearest", 4.0, 10000.0)
+        assert len(out) == 1
+
+    def test_destination_mode_rejects_ride_in_wrong_direction(self):
+        # Driver at (52.0, -106.0), destination NORTH at (52.5, -106.0).
+        # Ride drops SOUTH at (51.5, -106.0) — takes the driver further
+        # from their destination. Should be filtered out.
+        drivers = [
+            {
+                "id": "d1",
+                "user_id": "u1",
+                "lat": 52.0,
+                "lng": -106.0,
+                "rating": 5.0,
+                "destination_mode": True,
+                "destination_lat": 52.5,
+                "destination_lng": -106.0,
+            }
+        ]
+        ride = self._ride_with_dropoff(51.5, -106.0)
+        out = filter_and_rank_drivers(ride, drivers, "nearest", 4.0, 10000.0)
+        assert out == []
+
+    def test_destination_mode_fails_open_when_coords_missing(self):
+        # destination_mode flag on but no stored coords — don't make the
+        # driver invisible; let them see all offers (defensive default).
+        drivers = [
+            {
+                "id": "d1",
+                "user_id": "u1",
+                "lat": 52.0,
+                "lng": -106.0,
+                "rating": 5.0,
+                "destination_mode": True,
+                "destination_lat": None,
+                "destination_lng": None,
+            }
+        ]
+        ride = self._ride_with_dropoff(53.0, -106.0)
+        out = filter_and_rank_drivers(ride, drivers, "nearest", 4.0, 10000.0)
+        assert len(out) == 1
+
 
 class TestSelectDriverByAlgorithm:
     def test_empty_returns_none(self):

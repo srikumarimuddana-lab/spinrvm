@@ -133,6 +133,40 @@ describe('driverStore', () => {
       expect(state.completedRide).toEqual(mockCompletedRide);
       expect(state.activeRide).toBeNull();
     });
+
+    it('should clear chatMessages so they do not leak into the next ride', async () => {
+      useDriverStore.setState({
+        chatMessages: [
+          { id: 'm1', ride_id: 'ride-1', sender_id: 'r', sender_role: 'rider', message: 'hi', created_at: '' } as any,
+        ],
+      });
+      api.post.mockResolvedValueOnce({ data: { id: 'ride-1', status: 'completed' } });
+
+      await useDriverStore.getState().completeRide('ride-1');
+
+      expect(useDriverStore.getState().chatMessages).toEqual([]);
+    });
+
+    it('should treat 409 as already-completed when no active ride remains', async () => {
+      // Simulates network drop: backend wrote "completed" but response was lost.
+      // Driver retaps → 409 state-conflict. fetchActiveRide returns no ride,
+      // confirming the completion went through — should land in trip_completed
+      // with no error rather than showing "Failed to complete ride".
+      const conflictError = Object.assign(new Error('Conflict'), {
+        isAxiosError: true,
+        response: { status: 409, data: { detail: 'Ride is not in in_progress state' } },
+      });
+      api.post.mockRejectedValueOnce(conflictError);
+      // fetchActiveRide called with no active ride
+      api.get.mockResolvedValueOnce({ data: null });
+
+      await useDriverStore.getState().completeRide('ride-1');
+
+      const state = useDriverStore.getState();
+      expect(state.rideState).toBe('trip_completed');
+      expect(state.error).toBeNull();
+      expect(state.chatMessages).toEqual([]);
+    });
   });
 
   describe('cancelRide', () => {
@@ -144,6 +178,19 @@ describe('driverStore', () => {
       expect(api.post).toHaveBeenCalledWith('/drivers/rides/ride-1/cancel?reason=Rider%20not%20found');
       expect(useDriverStore.getState().rideState).toBe('idle');
       expect(useDriverStore.getState().activeRide).toBeNull();
+    });
+
+    it('should clear chatMessages on cancel', async () => {
+      useDriverStore.setState({
+        chatMessages: [
+          { id: 'm1', ride_id: 'ride-1', sender_id: 'r', sender_role: 'rider', message: 'hi', created_at: '' } as any,
+        ],
+      });
+      api.post.mockResolvedValueOnce({});
+
+      await useDriverStore.getState().cancelRide('ride-1');
+
+      expect(useDriverStore.getState().chatMessages).toEqual([]);
     });
   });
 

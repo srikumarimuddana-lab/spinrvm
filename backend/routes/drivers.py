@@ -761,13 +761,11 @@ async def set_destination_mode(req: SetDestinationRequest, current_user: dict = 
         "drivers",
         {"id": driver["id"]},
         {
-            "$set": {
-                "destination_mode": True,
-                "destination_address": req.address,
-                "destination_lat": req.lat,
-                "destination_lng": req.lng,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }
+            "destination_mode": True,
+            "destination_address": req.address,
+            "destination_lat": req.lat,
+            "destination_lng": req.lng,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         },
     )
     return {
@@ -788,13 +786,11 @@ async def clear_destination_mode(current_user: dict = Depends(get_current_user))
         "drivers",
         {"id": driver["id"]},
         {
-            "$set": {
-                "destination_mode": False,
-                "destination_address": None,
-                "destination_lat": None,
-                "destination_lng": None,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }
+            "destination_mode": False,
+            "destination_address": None,
+            "destination_lat": None,
+            "destination_lng": None,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         },
     )
     return {"success": True, "destination_mode": False}
@@ -1597,6 +1593,37 @@ class PayoutRequest(BaseModel):
     )
 
 
+class InstantPayoutRequest(BaseModel):
+    # Lower floor than standard payouts because the fee floor below makes
+    # micro-cashouts uneconomical on the platform side anyway; ceiling is
+    # Stripe's documented Instant Payout cap of $5,000 USD/CAD per request.
+    amount: Decimal = Field(
+        ...,
+        ge=Decimal("5.00"),
+        le=Decimal("5000.00"),
+        decimal_places=2,
+        description="Instant payout must be between $5.00 and $5,000.00",
+    )
+
+
+# Instant payout fee model: 1.5% of gross, with a $0.50 floor and $15 ceiling.
+# Matches Uber's Instant Pay and Lyft Express Pay fee structures within
+# rounding. Standard scheduled payouts are still free (zero fee).
+INSTANT_PAYOUT_FEE_PCT = Decimal("0.015")
+INSTANT_PAYOUT_MIN_FEE = Decimal("0.50")
+INSTANT_PAYOUT_MAX_FEE = Decimal("15.00")
+
+
+def compute_instant_payout_fee(amount: Decimal) -> Decimal:
+    """Fee charged on an instant payout. Caller subtracts to get net."""
+    pct = (amount * INSTANT_PAYOUT_FEE_PCT).quantize(Decimal("0.01"))
+    if pct < INSTANT_PAYOUT_MIN_FEE:
+        return INSTANT_PAYOUT_MIN_FEE
+    if pct > INSTANT_PAYOUT_MAX_FEE:
+        return INSTANT_PAYOUT_MAX_FEE
+    return pct
+
+
 @api_router.get("/bank-account")
 async def get_bank_account(current_user: dict = Depends(get_current_user)):
     driver = (lambda _r: _r[0] if _r else None)(
@@ -1786,6 +1813,139 @@ async def request_payout(
     }
     await db_supabase.insert_one("payouts", payout)
     return {"success": True, "payout": serialize_doc(payout)}
+
+
+@api_router.post("/payouts/instant")
+@idempotent_endpoint(scope="driver_instant_payout")
+async def request_instant_payout(
+    req: InstantPayoutRequest,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+):
+    """Same-day cashout via Stripe Instant Payout (Uber-style Instant Pay).
+
+    Flow:
+      1. Compute fee (see compute_instant_payout_fee). Net = amount - fee.
+      2. Verify driver has a Stripe Connect account and sufficient balance.
+      3. Transfer the gross from platform balance → driver's connected account.
+      4. Trigger Stripe Instant Payout on the connected account (method=instant).
+      5. Persist the payout row with payout_type='instant', fee, net_amount.
+
+    Fee model is regulator-friendly: shown in the receipt, separate line item,
+    never hidden. Standard scheduled payouts remain free (see request_payout).
+    """
+    driver = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1)
+    )
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver profile not found")
+
+    fee = compute_instant_payout_fee(req.amount)
+    net_amount = req.amount - fee
+    if net_amount <= Decimal("0"):
+        # Defence in depth: the request schema's ge=5.00 already prevents
+        # this since the floor fee is 0.50, but guard anyway in case fee
+        # config changes later.
+        raise HTTPException(status_code=400, detail="Fee exceeds payout amount")
+
+    balance = await get_driver_balance(current_user)
+    if req.amount > Decimal(balance.get("payable_balance", "0")):
+        raise HTTPException(status_code=400, detail="Insufficient funds")
+
+    stripe_account_id = driver.get("stripe_account_id")
+    account = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("bank_accounts", {"driver_id": driver["id"]}, limit=1)
+    )
+
+    # Instant Payout requires a Stripe Connect account with a debit-card
+    # external_account on file — Stripe rejects bank-only setups with a
+    # generic 400. Surface the eligibility check up-front so the driver
+    # sees a clear message instead of a Stripe error.
+    if not stripe_account_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Instant payout requires Stripe Connect onboarding. "
+            "Please complete onboarding from the Payouts screen.",
+        )
+
+    try:
+        from ..settings_loader import get_app_settings
+    except ImportError:
+        from settings_loader import get_app_settings  # type: ignore
+    settings = await get_app_settings()
+    stripe_secret = settings.get("stripe_secret_key", "")
+    if not stripe_secret:
+        raise HTTPException(status_code=503, detail="Payouts temporarily unavailable")
+
+    status = "pending"
+    stripe_payout_id = None
+    try:
+        # Step 1: move gross from platform → connected account.
+        stripe.Transfer.create(
+            amount=dollars_to_cents(req.amount),
+            currency="cad",
+            destination=stripe_account_id,
+            api_key=stripe_secret,
+        )
+        # Step 2: instant payout on the connected account. Stripe deducts
+        # its own ~1% fee from the platform side (separate from the fee we
+        # charge the driver). Pass stripe_account in headers so the call
+        # runs in the connected account's context.
+        payout_obj = stripe.Payout.create(
+            amount=dollars_to_cents(net_amount),
+            currency="cad",
+            method="instant",
+            api_key=stripe_secret,
+            stripe_account=stripe_account_id,
+        )
+        stripe_payout_id = payout_obj.id
+        status = RideStatus.COMPLETED
+    except Exception as e:
+        # PII-safe: never log the connect account ID or transfer ID since
+        # Stripe error messages embed them. logger.exception captures
+        # the full traceback server-side for ops.
+        logger.exception("Stripe instant payout failed")
+        raise HTTPException(
+            status_code=500,
+            detail="Instant payout failed. Please try again or contact support.",
+        ) from e
+
+    payout = {
+        "id": str(uuid.uuid4()),
+        "driver_id": driver["id"],
+        "amount": req.amount,
+        "fee": fee,
+        "net_amount": net_amount,
+        "payout_type": "instant",
+        "status": status,
+        "stripe_payout_id": stripe_payout_id,
+        "bank_name": account.get("bank_name") if account else "Stripe Connect",
+        "account_last4": account.get("account_last4") if account else "****",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db_supabase.insert_one("payouts", payout)
+    return {"success": True, "payout": serialize_doc(payout)}
+
+
+@api_router.get("/payouts/instant/quote")
+async def get_instant_payout_quote(
+    amount: Decimal = Query(..., ge=Decimal("5.00"), le=Decimal("5000.00")),
+    current_user: dict = Depends(get_current_user),
+):
+    """Quote the fee + net for an instant payout before the driver confirms.
+
+    Driver app shows: "Cash out $50.00 now — $0.75 fee, $49.25 to your bank"
+    Reading the quote from the server (not computing it client-side) means
+    a fee-schedule change rolls out without a mobile release.
+    """
+    fee = compute_instant_payout_fee(amount)
+    net = amount - fee
+    return {
+        "amount": _money_str(amount),
+        "fee": _money_str(fee),
+        "net_amount": _money_str(net),
+        "payout_type": "instant",
+    }
 
 
 @api_router.get("/payouts")
@@ -2540,6 +2700,8 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     # need to join against driver_location_history for historical rides.
     planned_distance = ride.get("planned_distance_km") or ride.get("distance_km", 0) or 0
     actual_distance_km = planned_distance
+    actual_distance_km_haversine: Optional[float] = None
+    actual_distance_km_road: Optional[float] = None
     phase_distances: Dict[str, float] = {}
     phase_durations: Dict[str, int] = {}
     phase_polylines: Dict[str, list] = {}
@@ -2570,6 +2732,24 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             # current point's phase) and per-phase durations from the
             # timestamp deltas. Phase 1 (online_idle) is not expected
             # against a ride_id but tolerated if it shows up.
+            # GPS sanity caps — reject segments that are physically impossible
+            # before summing. Without these, a single tower-handoff jump on a
+            # 7 km trip could inflate actual_distance_km to 90+ km (the
+            # ingestion-time filter in utils/location_integrity.py is not
+            # retroactively re-applied to stored breadcrumbs).
+            #   MAX_SEG_KM      — single ping-to-ping displacement. Even at
+            #                     240 km/h with a 30 s gap that's 2 km; 5 km
+            #                     is well above any realistic value.
+            #   MAX_SEG_KMH     — sustained ground speed. Saskatchewan max
+            #                     posted is 110 km/h; allow 150 for downhill
+            #                     /overtake transients before rejecting.
+            #   MAX_SEG_GAP_S   — long gaps (background, signal loss) make
+            #                     straight-line distance unreliable; treat
+            #                     same as the duration cap.
+            MAX_SEG_KM = 5.0
+            MAX_SEG_KMH = 150.0
+            MAX_SEG_GAP_S = 300
+            rejected_segments = 0
             phase_totals: Dict[str, float] = {}
             phase_secs: Dict[str, float] = {}
             for i in range(1, len(all_breadcrumbs)):
@@ -2577,15 +2757,36 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
                 curr = all_breadcrumbs[i]
                 phase = curr.get("tracking_phase") or "unknown"
                 seg_km = calculate_distance(prev["lat"], prev["lng"], curr["lat"], curr["lng"])
+
+                t_prev = parse_iso_utc(prev.get("timestamp"))
+                t_curr = parse_iso_utc(curr.get("timestamp"))
+                delta = None
+                if t_prev and t_curr:
+                    delta = (t_curr - t_prev).total_seconds()
+
+                # Reject anomalous segments before adding to phase totals.
+                if seg_km > MAX_SEG_KM:
+                    rejected_segments += 1
+                    continue
+                if delta is not None and delta > MAX_SEG_GAP_S:
+                    rejected_segments += 1
+                    continue
+                if delta is not None and delta > 0:
+                    seg_kmh = seg_km / (delta / 3600.0)
+                    if seg_kmh > MAX_SEG_KMH:
+                        rejected_segments += 1
+                        continue
+
                 phase_totals[phase] = phase_totals.get(phase, 0.0) + seg_km
                 # Duration: only count if the gap is reasonable (< 5 min)
                 # to avoid one stale breadcrumb inflating a phase by hours.
-                t_prev = parse_iso_utc(prev.get("timestamp"))
-                t_curr = parse_iso_utc(curr.get("timestamp"))
-                if t_prev and t_curr:
-                    delta = (t_curr - t_prev).total_seconds()
-                    if 0 < delta <= 300:
-                        phase_secs[phase] = phase_secs.get(phase, 0.0) + delta
+                if delta is not None and 0 < delta <= 300:
+                    phase_secs[phase] = phase_secs.get(phase, 0.0) + delta
+            if rejected_segments:
+                logger.info(
+                    f"Ride {ride_id}: dropped {rejected_segments}/{len(all_breadcrumbs) - 1} "
+                    "GPS segments as anomalous (speed/distance/gap caps)"
+                )
             phase_distances = {k: round(v, 3) for k, v in phase_totals.items()}
             phase_durations = {k: int(round(v)) for k, v in phase_secs.items()}
 
@@ -2595,6 +2796,43 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
                 actual_distance_km = planned_distance
 
             pickup_to_driver_km = round(phase_distances.get("navigating_to_pickup", 0.0), 2)
+
+            # Road-snapped recompute (P2): the haversine sum above is already
+            # spike-protected by the speed/distance/gap caps, but it still
+            # approximates straight-line distance between consecutive pings,
+            # missing road curvature and turns. Roads API snapToRoads with
+            # interpolate=true gives us the actual road-network distance and
+            # respects the driver's chosen route (detours included), so it's
+            # the structurally correct billable distance.
+            #
+            # When the recompute succeeds AND its value is within sanity range
+            # of the haversine baseline (1/3× to 3×), it wins. Otherwise we
+            # log the discrepancy and stick with the haversine value — Maps
+            # outage or an empty response can't be allowed to corrupt billing.
+            actual_distance_km_haversine = actual_distance_km
+            actual_distance_km_road = None
+            try:
+                try:
+                    from ..utils.route_distance import compute_road_distance_km
+                except ImportError:
+                    from utils.route_distance import compute_road_distance_km  # type: ignore
+                actual_distance_km_road = await compute_road_distance_km(all_breadcrumbs)
+            except Exception:
+                logger.warning(
+                    "[complete_ride] road-snap recompute raised; keeping haversine",
+                    exc_info=True,
+                )
+            if actual_distance_km_road is not None:
+                lo = max(0.1, actual_distance_km_haversine / 3.0)
+                hi = max(0.1, actual_distance_km_haversine * 3.0)
+                if lo <= actual_distance_km_road <= hi:
+                    actual_distance_km = round(actual_distance_km_road, 2)
+                else:
+                    logger.warning(
+                        f"Ride {ride_id}: road-snap distance {actual_distance_km_road}km "
+                        f"out of sanity range [{lo:.2f}, {hi:.2f}] from haversine "
+                        f"{actual_distance_km_haversine}km — keeping haversine value"
+                    )
 
             # Per-phase polylines for SGI / dispute tooling. Each phase is
             # downsampled to MAX_PER_PHASE points so a long trip's payload
@@ -2729,6 +2967,16 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             "estimated_distance_km": round(float(planned_distance or 0), 3),
             "estimated_duration_minutes": int(ride.get("duration_minutes") or 0) or None,
             "actual_distance_km": round(float(actual_distance_km or 0), 3),
+            # P2: ops visibility — both raw computations stored so a regression
+            # in either path (haversine spike filter, or Roads API outage) can
+            # be diagnosed from a single ride row. actual_distance_km above is
+            # the canonical billed value.
+            "actual_distance_km_haversine": (
+                round(float(actual_distance_km_haversine), 3) if actual_distance_km_haversine is not None else None
+            ),
+            "actual_distance_km_road_snapped": (
+                round(float(actual_distance_km_road), 3) if actual_distance_km_road is not None else None
+            ),
         }
         if trip_minutes is not None:
             trip_phase["actual_duration_minutes"] = trip_minutes

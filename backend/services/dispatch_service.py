@@ -53,6 +53,40 @@ def _is_dispatchable_driver(driver: Dict[str, Any]) -> bool:
     return True
 
 
+def _ride_brings_driver_closer_to_destination(driver: Dict[str, Any], ride: Dict[str, Any]) -> bool:
+    """
+    For destination-mode drivers, gate offers so we only forward rides
+    whose dropoff brings the driver closer to their preferred destination.
+
+    A driver who tapped "Heading home" doesn't want to take a fare that
+    sends them in the opposite direction — Uber and Lyft both gate this
+    with the same closer-to-destination check. Drivers who aren't in
+    destination mode return True so the gate is a no-op for them.
+
+    Threshold: the dropoff must be at least 5% closer to the destination
+    than the driver's current position is. The 5% buffer absorbs short
+    cross-traffic rides that technically reduce great-circle distance
+    by a few meters but don't actually progress the driver home.
+    """
+    if not driver.get("destination_mode"):
+        return True
+    dest_lat = driver.get("destination_lat")
+    dest_lng = driver.get("destination_lng")
+    if dest_lat is None or dest_lng is None:
+        # destination_mode flag set but no coords stored — fail open so
+        # the driver still gets offers rather than going invisible.
+        return True
+    dropoff_lat = ride.get("dropoff_lat")
+    dropoff_lng = ride.get("dropoff_lng")
+    if dropoff_lat is None or dropoff_lng is None:
+        return True
+    driver_to_dest = calculate_distance(driver["lat"], driver["lng"], dest_lat, dest_lng)
+    dropoff_to_dest = calculate_distance(dropoff_lat, dropoff_lng, dest_lat, dest_lng)
+    if driver_to_dest <= 0:
+        return True
+    return dropoff_to_dest <= driver_to_dest * 0.95
+
+
 def filter_and_rank_drivers(
     ride: Dict[str, Any],
     candidate_drivers: List[Dict[str, Any]],
@@ -86,6 +120,11 @@ def filter_and_rank_drivers(
         # only match drivers whose vehicle has an approved wheelchair lift/ramp.
         if wav_required and not d.get("is_wav"):
             continue
+        # P2 destination filter: drivers in destination_mode only see offers
+        # whose dropoff brings them closer to their preferred destination.
+        # No-op when destination_mode is False or coords are missing.
+        if not _ride_brings_driver_closer_to_destination(d, ride):
+            continue
         dist_km = calculate_distance(pickup_lat, pickup_lng, d["lat"], d["lng"])
         if dist_km <= search_radius_km:
             result.append((d, dist_km))
@@ -111,20 +150,14 @@ def select_driver_by_algorithm(
         return None
 
     if algorithm == "rating_based":
-        ranked = sorted(
-            drivers_with_distance, key=lambda x: x[0].get("rating", 5.0), reverse=True
-        )
+        ranked = sorted(drivers_with_distance, key=lambda x: x[0].get("rating", 5.0), reverse=True)
         return ranked[0][0]
 
     if algorithm == "round_robin":
         if last_assigned_driver_id is None:
             return drivers_with_distance[0][0]
         last_idx = next(
-            (
-                i
-                for i, (d, _) in enumerate(drivers_with_distance)
-                if d["id"] == last_assigned_driver_id
-            ),
+            (i for i, (d, _) in enumerate(drivers_with_distance) if d["id"] == last_assigned_driver_id),
             -1,
         )
         next_idx = (last_idx + 1) % len(drivers_with_distance)
@@ -169,9 +202,7 @@ class DispatchService:
 
         area_settings: Dict[str, Any] = {}
         if ride.get("service_area_id"):
-            area = await self.db.find_one(
-                "service_areas", {"id": ride["service_area_id"]}
-            )
+            area = await self.db.find_one("service_areas", {"id": ride["service_area_id"]})
             if area:
                 area_settings = area
 
@@ -179,18 +210,14 @@ class DispatchService:
             "driver_matching_algorithm", "nearest"
         )
         min_rating = float(
-            area_settings.get("min_driver_rating")
-            or app_settings.get("min_driver_rating", DEFAULT_MIN_RATING)
+            area_settings.get("min_driver_rating") or app_settings.get("min_driver_rating", DEFAULT_MIN_RATING)
         )
         search_radius_km = float(
-            area_settings.get("search_radius_km")
-            or app_settings.get("search_radius_km", DEFAULT_SEARCH_RADIUS_KM)
+            area_settings.get("search_radius_km") or app_settings.get("search_radius_km", DEFAULT_SEARCH_RADIUS_KM)
         )
         return algorithm, min_rating, search_radius_km
 
-    async def find_candidate_drivers(
-        self, ride: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
+    async def find_candidate_drivers(self, ride: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Online + available + verified + *present* drivers for this ride.
 
         is_verified + status='active' gate unverified / suspended / needs_review

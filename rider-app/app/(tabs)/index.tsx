@@ -307,6 +307,8 @@ export default function HomeScreen() {
               longitudeDelta: 0.0421,
             }}
             showsUserLocation={true}
+            showsMyLocationButton={false}
+            toolbarEnabled={false}
             userInterfaceStyle={isDark ? 'dark' : 'light'}
             onRegionChangeComplete={setRegion}
           >
@@ -414,11 +416,14 @@ export default function HomeScreen() {
           handleIndicatorStyle={styles.sheetHandle}
           enablePanDownToClose={false}
           enableDynamicSizing={false}
-          overDragResistanceFactor={10}
+          enableOverDrag={false}
+          overDragResistanceFactor={20}
         >
           <BottomSheetScrollView
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
+            bounces={false}
+            overScrollMode="never"
             contentContainerStyle={styles.bottomSheetContent}
           >
             <BottomSheetContent

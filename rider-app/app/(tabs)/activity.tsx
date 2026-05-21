@@ -225,8 +225,11 @@ export default function ActivityScreen() {
     const discountLine = fb.find(l => l.type === 'discount');
     const grandTotal = parseFloat(String(ride.grand_total ?? ride.total_fare ?? 0)) || 0;
     const tip = tipLine ? Math.abs(parseFloat(String(tipLine.amount ?? 0))) : 0;
-    const total = (grandTotal + tip).toFixed(2);
     const discount = discountLine ? Math.abs(parseFloat(String(discountLine.amount ?? 0))) : 0;
+    // grand_total from the backend already includes tip (via _sum_fare_breakdown),
+    // so don't add tip again. Only add it if fare_breakdown has no tip line
+    // (legacy rides where grand_total came from the DB column without tip).
+    const total = (fb.length > 0 ? grandTotal : grandTotal + tip).toFixed(2);
     return (
       <TouchableOpacity
         style={styles.rideCard}

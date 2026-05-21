@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getEarnings, getEarningsOverview, getServiceAreas, getSubscriptionStats, type EarningsOverview, type EarningsPeriod, type MetricWithDelta } from "@/lib/api";
+import { getEarnings, getEarningsOverview, getEarningsRides, getServiceAreas, getSubscriptionStats, type EarningsOverview, type EarningsPeriod, type EarningsRide, type MetricWithDelta } from "@/lib/api";
 import {
     Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -13,11 +13,13 @@ import { Button } from "@/components/ui/button";
 import {
     Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
-import { Download, Car, CreditCard, Users, TrendingUp, TrendingDown, DollarSign, UserPlus, Clock, MapPin, X, GitCompareArrows, Wallet, CheckCircle, AlertTriangle, Percent, Receipt, UserCheck, XCircle, Ticket, Zap, Landmark, Undo2, Filter } from "lucide-react";
-import { getPayouts, getPayoutStats } from "@/lib/api";
+import { Download, Car, CreditCard, Users, TrendingUp, TrendingDown, DollarSign, UserPlus, Clock, MapPin, X, GitCompareArrows, Wallet, CheckCircle, AlertTriangle, Percent, Receipt, UserCheck, XCircle, Ticket, Zap, Landmark, Undo2, Filter, Hourglass, Activity } from "lucide-react";
+import { getPayouts, getPayoutStats, getPayoutsOverview, retryPayout, bulkRetryPayouts, closePayoutPeriod, type PayoutsOverview } from "@/lib/api";
+import { useToast } from "@/components/ui/use-toast";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { Legend } from "recharts";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
     BarChart, Bar, LineChart, Line, XAxis, YAxis, Tooltip,
     ResponsiveContainer, CartesianGrid,
@@ -145,6 +147,7 @@ function CeoMetricsHeader({
     serviceAreaId,
     onServiceAreaChange,
     serviceAreas,
+    onChartDayClick,
 }: {
     overview: EarningsOverview | null;
     loading: boolean;
@@ -153,6 +156,10 @@ function CeoMetricsHeader({
     serviceAreaId: string;
     onServiceAreaChange: (id: string) => void;
     serviceAreas: Array<{ id: string; name?: string }>;
+    /** Click handler for the daily GBV chart. recharts onClick passes
+     *  the activeLabel (the date key from daily_series) so the parent
+     *  can drill the transaction table down to that single day. */
+    onChartDayClick?: (day: string) => void;
 }) {
     const m = overview?.metrics;
     const cx = overview?.cancellation_breakdown;
@@ -229,7 +236,16 @@ function CeoMetricsHeader({
                         <div className="h-56 w-full bg-muted/30 rounded animate-pulse" />
                     ) : (
                         <ResponsiveContainer width="100%" height={224}>
-                            <LineChart data={overview.daily_series} margin={{ top: 10, right: 16, left: -8, bottom: 0 }}>
+                            <LineChart
+                                data={overview.daily_series}
+                                margin={{ top: 10, right: 16, left: -8, bottom: 0 }}
+                                onClick={(state: any) => {
+                                    // recharts passes the whole click state; activeLabel
+                                    // is the date string from our daily_series rows.
+                                    if (onChartDayClick && state?.activeLabel) onChartDayClick(state.activeLabel);
+                                }}
+                                style={{ cursor: onChartDayClick ? "pointer" : undefined }}
+                            >
                                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
                                 <XAxis
                                     dataKey="date"
@@ -338,9 +354,614 @@ function CancellationMixBar({ rider, driver, system }: { rider: number; driver: 
     );
 }
 
+// Helpers for time formatting in the payouts header. "1.5 h" reads
+// better than "1 h 30 m" at small font sizes, so use decimal hours
+// unless the value drops below an hour.
+function fmtHours(n: number) {
+    if (n <= 0) return "—";
+    if (n < 1) return `${Math.round(n * 60)} min`;
+    if (n < 24) return `${n.toFixed(1)} h`;
+    return `${(n / 24).toFixed(1)} d`;
+}
+
+function PayoutsCeoHeader({
+    overview,
+    loading,
+    period,
+    onPeriodChange,
+    serviceAreaId,
+    onServiceAreaChange,
+    serviceAreas,
+}: {
+    overview: PayoutsOverview | null;
+    loading: boolean;
+    period: EarningsPeriod;
+    onPeriodChange: (p: EarningsPeriod) => void;
+    serviceAreaId: string;
+    onServiceAreaChange: (id: string) => void;
+    serviceAreas: Array<{ id: string; name?: string }>;
+}) {
+    const m = overview?.metrics;
+    return (
+        <div className="space-y-4">
+            <div className="flex items-end justify-between gap-3 flex-wrap">
+                <div>
+                    <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+                        Payout flow
+                    </h2>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                        {overview ? overview.period.label : "Loading…"} · compared to prior {overview?.period.days ?? "—"} days
+                    </p>
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                    {/* Service-area filter — scopes every payout metric +
+                        the daily chart + the operational queues. Independent
+                        from the earnings tab's area filter on purpose: the
+                        operator may want to look at payouts fleet-wide while
+                        looking at earnings for one area. */}
+                    <div className="flex items-center gap-1.5">
+                        <Filter className="h-3.5 w-3.5 text-muted-foreground" />
+                        <Select value={serviceAreaId} onValueChange={onServiceAreaChange}>
+                            <SelectTrigger className="h-8 text-xs w-[180px]">
+                                <SelectValue placeholder="All service areas" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="all" className="text-xs">All service areas</SelectItem>
+                                {serviceAreas.map((a) => (
+                                    <SelectItem key={a.id} value={a.id} className="text-xs">
+                                        {a.name || a.id.slice(0, 8)}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                    </div>
+                    <div className="inline-flex rounded-lg border border-border bg-card p-0.5">
+                        {PERIOD_OPTIONS.map((opt) => (
+                            <button
+                                key={opt.value}
+                                type="button"
+                                onClick={() => onPeriodChange(opt.value)}
+                                className={`px-3 py-1 text-xs font-semibold rounded transition-colors ${
+                                    period === opt.value
+                                        ? "bg-primary text-primary-foreground"
+                                        : "text-muted-foreground hover:text-foreground"
+                                }`}
+                            >
+                                {opt.label}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                {/* Outstanding payable — the dominant working-capital
+                    number for a 0% commission marketplace. Amber accent
+                    because high outstanding is operational debt to drivers,
+                    not a positive metric. Snapshot value (not period-windowed). */}
+                <MetricCard
+                    icon={Hourglass}
+                    label="Outstanding to drivers"
+                    metric={m?.outstanding_payable}
+                    format={fmtMoney}
+                    accent="text-amber-600 dark:text-amber-400"
+                    loading={loading}
+                />
+                <MetricCard
+                    icon={CheckCircle}
+                    label="Paid out"
+                    metric={m?.total_paid_out}
+                    format={fmtMoney}
+                    accent="text-emerald-600 dark:text-emerald-400"
+                    loading={loading}
+                />
+                <MetricCard
+                    icon={Clock}
+                    label="Pending in flight"
+                    metric={m?.pending_in_flight}
+                    format={fmtMoney}
+                    loading={loading}
+                />
+                <MetricCard
+                    icon={AlertTriangle}
+                    label="Failed"
+                    metric={m?.failed_amount}
+                    format={fmtMoney}
+                    accent="text-red-600 dark:text-red-400"
+                    loading={loading}
+                />
+                <MetricCard
+                    icon={Activity}
+                    label="Success rate"
+                    metric={m?.success_rate_pct}
+                    format={fmtPct}
+                    accent="text-emerald-600 dark:text-emerald-400"
+                    loading={loading}
+                />
+                <MetricCard
+                    icon={Clock}
+                    label="Median time to payout"
+                    metric={m?.median_time_to_payout_hours}
+                    format={fmtHours}
+                    loading={loading}
+                />
+                <MetricCard
+                    icon={DollarSign}
+                    label="Avg payout"
+                    metric={m?.avg_payout_amount}
+                    format={fmtMoney}
+                    loading={loading}
+                />
+                <MetricCard
+                    icon={Wallet}
+                    label="Payouts"
+                    metric={m?.payouts_count}
+                    format={fmtCount}
+                    loading={loading}
+                />
+            </div>
+
+            {/* Daily payout volume — stacked bars by status. Failed
+                stacks on top in red so a spike in failures is visible
+                even when paid_out dominates the y-axis. */}
+            <Card className="border-border/50">
+                <CardHeader className="pb-2">
+                    <CardTitle className="text-sm">Daily payout volume</CardTitle>
+                </CardHeader>
+                <CardContent>
+                    {loading || !overview ? (
+                        <div className="h-56 w-full bg-muted/30 rounded animate-pulse" />
+                    ) : (
+                        <ResponsiveContainer width="100%" height={224}>
+                            <BarChart data={overview.daily_series} margin={{ top: 10, right: 16, left: -8, bottom: 0 }}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+                                <XAxis
+                                    dataKey="date"
+                                    tickFormatter={(d) => {
+                                        try {
+                                            return new Date(d).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+                                        } catch { return d; }
+                                    }}
+                                    tick={{ fontSize: 11 }}
+                                    stroke="hsl(var(--muted-foreground))"
+                                />
+                                <YAxis
+                                    tick={{ fontSize: 11 }}
+                                    stroke="hsl(var(--muted-foreground))"
+                                    tickFormatter={(v) => `$${Math.round(v).toLocaleString()}`}
+                                />
+                                <Tooltip
+                                    contentStyle={tooltipStyle}
+                                    formatter={(value, name) => {
+                                        const n = Number(value ?? 0);
+                                        const label =
+                                            name === "paid_out" ? "Paid out"
+                                            : name === "pending" ? "Pending"
+                                            : name === "failed" ? "Failed"
+                                            : String(name);
+                                        return [fmtMoney(n), label] as [string, string];
+                                    }}
+                                    labelFormatter={(d) => {
+                                        try {
+                                            return new Date(d as string).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+                                        } catch { return d as string; }
+                                    }}
+                                />
+                                <Bar dataKey="paid_out" stackId="a" fill="hsl(142 71% 45%)" />
+                                <Bar dataKey="pending" stackId="a" fill="hsl(38 92% 50%)" />
+                                <Bar dataKey="failed" stackId="a" fill="hsl(0 84% 60%)" />
+                            </BarChart>
+                        </ResponsiveContainer>
+                    )}
+                </CardContent>
+            </Card>
+
+            {/* Pass 2 — operational queues. Sits below the chart so the
+                CEO header reads first, then the operator drills down
+                into "what's actually broken". */}
+            {overview && <PayoutsOpsQueues overview={overview} />}
+        </div>
+    );
+}
+
+function PayoutsOpsQueues({ overview }: { overview: PayoutsOverview }) {
+    const { failure_reasons, stuck_over_48h, blocked_drivers, top_drivers, at_risk_drivers } = overview;
+    const hasAnyHealth = stuck_over_48h.count > 0 || blocked_drivers.count > 0 || failure_reasons.length > 0;
+
+    return (
+        <div className="space-y-4">
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+                Operational queues
+            </h2>
+
+            {/* Health-summary row. Stuck + Blocked are "right now"
+                counters that need intervention; rendered as alert-toned
+                cards so a non-zero value reads as a thing to address. */}
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                <Card className={`border-border/50 ${stuck_over_48h.count > 0 ? "border-amber-300 dark:border-amber-800" : ""}`}>
+                    <CardContent className="p-4">
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">
+                                <Hourglass className="h-3.5 w-3.5" />
+                                Stuck &gt; 48h
+                            </div>
+                            <span className="text-[10px] text-muted-foreground">manual review</span>
+                        </div>
+                        <p className={`text-2xl font-bold tabular-nums mt-1.5 ${stuck_over_48h.count > 0 ? "text-amber-600 dark:text-amber-400" : ""}`}>
+                            {stuck_over_48h.count}
+                        </p>
+                        <p className="text-[11px] text-muted-foreground mt-1">{fmtMoney(stuck_over_48h.amount)} held up</p>
+                    </CardContent>
+                </Card>
+                <Card className={`border-border/50 ${blocked_drivers.count > 0 ? "border-red-300 dark:border-red-800" : ""}`}>
+                    <CardContent className="p-4">
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">
+                                <XCircle className="h-3.5 w-3.5" />
+                                Blocked by Stripe
+                            </div>
+                            <span className="text-[10px] text-muted-foreground">payouts_enabled=false</span>
+                        </div>
+                        <p className={`text-2xl font-bold tabular-nums mt-1.5 ${blocked_drivers.count > 0 ? "text-red-600 dark:text-red-400" : ""}`}>
+                            {blocked_drivers.count}
+                        </p>
+                        <p className="text-[11px] text-muted-foreground mt-1">{fmtMoney(blocked_drivers.outstanding_balance)} undeliverable</p>
+                    </CardContent>
+                </Card>
+                <Card className="border-border/50">
+                    <CardContent className="p-4">
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">
+                                <AlertTriangle className="h-3.5 w-3.5" />
+                                Failure buckets
+                            </div>
+                            <span className="text-[10px] text-muted-foreground">top reasons</span>
+                        </div>
+                        <p className="text-2xl font-bold tabular-nums mt-1.5">{failure_reasons.length}</p>
+                        <p className="text-[11px] text-muted-foreground mt-1">distinct error groups in window</p>
+                    </CardContent>
+                </Card>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                {/* Failure reasons table. Sorted by count desc on the
+                    backend; truncates long error strings (already
+                    bucketed there) and shows count + amount. */}
+                <Card className="border-border/50">
+                    <CardHeader className="pb-2">
+                        <CardTitle className="text-sm flex items-center gap-2">
+                            <AlertTriangle className="h-4 w-4 text-red-500" />
+                            Why payouts are failing
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent className="p-0">
+                        {failure_reasons.length === 0 ? (
+                            <div className="px-6 py-10 text-center text-muted-foreground text-xs">
+                                No failed payouts in this window. {hasAnyHealth ? "" : "Looking good."}
+                            </div>
+                        ) : (
+                            <Table>
+                                <TableHeader>
+                                    <TableRow>
+                                        <TableHead className="text-[11px] uppercase tracking-wide h-9">Reason</TableHead>
+                                        <TableHead className="text-[11px] uppercase tracking-wide h-9 text-right">Count</TableHead>
+                                        <TableHead className="text-[11px] uppercase tracking-wide h-9 text-right">Amount</TableHead>
+                                    </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                    {failure_reasons.map((r) => (
+                                        <TableRow key={r.reason}>
+                                            <TableCell className="text-xs font-mono truncate max-w-[280px]" title={r.reason}>{r.reason}</TableCell>
+                                            <TableCell className="text-xs text-right tabular-nums font-semibold">{r.count}</TableCell>
+                                            <TableCell className="text-xs text-right tabular-nums">{fmtMoney(r.amount)}</TableCell>
+                                        </TableRow>
+                                    ))}
+                                </TableBody>
+                            </Table>
+                        )}
+                    </CardContent>
+                </Card>
+
+                {/* At-risk drivers — multi-failure list. Sorted by failure
+                    count desc on backend. Click navigates to the driver's
+                    Payouts tab in the existing slideout via the drivers
+                    page's id param. */}
+                <Card className="border-border/50">
+                    <CardHeader className="pb-2">
+                        <CardTitle className="text-sm flex items-center gap-2">
+                            <UserCheck className="h-4 w-4 text-amber-500" />
+                            At-risk drivers
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent className="p-0">
+                        {at_risk_drivers.length === 0 ? (
+                            <div className="px-6 py-10 text-center text-muted-foreground text-xs">
+                                No drivers with multiple failures in this window.
+                            </div>
+                        ) : (
+                            <Table>
+                                <TableHeader>
+                                    <TableRow>
+                                        <TableHead className="text-[11px] uppercase tracking-wide h-9">Driver</TableHead>
+                                        <TableHead className="text-[11px] uppercase tracking-wide h-9 text-right">Failures</TableHead>
+                                        <TableHead className="text-[11px] uppercase tracking-wide h-9">Last reason</TableHead>
+                                    </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                    {at_risk_drivers.map((d) => (
+                                        <TableRow key={d.driver_id}>
+                                            <TableCell className="text-xs">
+                                                <a
+                                                    href={`/dashboard/drivers?id=${d.driver_id}`}
+                                                    className="hover:underline font-medium truncate block max-w-[160px]"
+                                                    title={d.name}
+                                                >
+                                                    {d.name}
+                                                </a>
+                                            </TableCell>
+                                            <TableCell className="text-xs text-right tabular-nums font-semibold text-red-600 dark:text-red-400">
+                                                {d.failure_count}
+                                            </TableCell>
+                                            <TableCell className="text-xs text-muted-foreground font-mono truncate max-w-[220px]" title={d.last_reason ?? ""}>
+                                                {d.last_reason ? (d.last_reason.length > 40 ? d.last_reason.slice(0, 40) + "…" : d.last_reason) : "—"}
+                                            </TableCell>
+                                        </TableRow>
+                                    ))}
+                                </TableBody>
+                            </Table>
+                        )}
+                    </CardContent>
+                </Card>
+            </div>
+
+            {/* Top earning drivers in window — for relationship-management
+                and "who do we owe the most this week" context. */}
+            <Card className="border-border/50">
+                <CardHeader className="pb-2">
+                    <CardTitle className="text-sm flex items-center gap-2">
+                        <TrendingUp className="h-4 w-4 text-emerald-500" />
+                        Top drivers by payout volume
+                    </CardTitle>
+                </CardHeader>
+                <CardContent className="p-0">
+                    {top_drivers.length === 0 ? (
+                        <div className="px-6 py-10 text-center text-muted-foreground text-xs">
+                            No completed payouts in this window.
+                        </div>
+                    ) : (
+                        <Table>
+                            <TableHeader>
+                                <TableRow>
+                                    <TableHead className="text-[11px] uppercase tracking-wide h-9">#</TableHead>
+                                    <TableHead className="text-[11px] uppercase tracking-wide h-9">Driver</TableHead>
+                                    <TableHead className="text-[11px] uppercase tracking-wide h-9 text-right">Payouts</TableHead>
+                                    <TableHead className="text-[11px] uppercase tracking-wide h-9 text-right">Total</TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {top_drivers.map((d, i) => (
+                                    <TableRow key={d.driver_id}>
+                                        <TableCell className="text-xs text-muted-foreground font-mono">{i + 1}</TableCell>
+                                        <TableCell className="text-xs">
+                                            <a
+                                                href={`/dashboard/drivers?id=${d.driver_id}`}
+                                                className="hover:underline font-medium truncate block max-w-[220px]"
+                                                title={d.name}
+                                            >
+                                                {d.name}
+                                            </a>
+                                        </TableCell>
+                                        <TableCell className="text-xs text-right tabular-nums">{d.payout_count}</TableCell>
+                                        <TableCell className="text-sm text-right tabular-nums font-semibold">{fmtMoney(d.amount)}</TableCell>
+                                    </TableRow>
+                                ))}
+                            </TableBody>
+                        </Table>
+                    )}
+                </CardContent>
+            </Card>
+        </div>
+    );
+}
+
+// Format a YYYY-MM string for display.
+function fmtPeriodKey(key: string): string {
+    try {
+        const [y, m] = key.split("-").map(Number);
+        return new Date(y, (m || 1) - 1, 1).toLocaleString(undefined, { month: "long", year: "numeric" });
+    } catch {
+        return key;
+    }
+}
+
+function PayoutsCompliance({ overview, onClosed }: { overview: PayoutsOverview; onClosed: () => Promise<void> | void }) {
+    const { t4a_snapshot, period_locks } = overview;
+    const { toast } = useToast();
+    const now = new Date();
+    // Default closure target: the previous calendar month — what
+    // finance typically closes once the month wraps.
+    const defaultYear = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
+    const defaultMonth = now.getMonth() === 0 ? 12 : now.getMonth(); // getMonth is 0-indexed; we want prior month 1-indexed
+    const [closeYear, setCloseYear] = useState<number>(defaultYear);
+    const [closeMonth, setCloseMonth] = useState<number>(defaultMonth);
+    const [closing, setClosing] = useState(false);
+
+    const handleClose = async () => {
+        const periodLabel = fmtPeriodKey(`${closeYear}-${String(closeMonth).padStart(2, "0")}`);
+        if (!window.confirm(
+            `Close ${periodLabel}? This writes an audit-log entry snapshotting every completed payout in that month. ` +
+            `Closure is advisory — no payouts are physically locked, but the audit row is permanent.`
+        )) return;
+        setClosing(true);
+        try {
+            const res = await closePayoutPeriod(closeYear, closeMonth);
+            toast({
+                title: `${periodLabel} closed`,
+                description: `${res.payout_count} payouts · ${fmtMoney(res.total_amount)} total`,
+            });
+            await onClosed();
+        } catch (e: any) {
+            toast({ title: "Close failed", description: e?.message || "Unknown error", variant: "destructive" });
+        } finally {
+            setClosing(false);
+        }
+    };
+
+    const totalBucketed = t4a_snapshot.drivers_with_earnings;
+
+    return (
+        <div className="space-y-4">
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+                Compliance &amp; finance
+            </h2>
+
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                {/* T4A snapshot — drivers bucketed against the CRA reporting +
+                    GST registration thresholds. The over_30k bucket is the
+                    operational lever — those drivers MUST register for GST/HST. */}
+                <Card className="border-border/50">
+                    <CardHeader className="pb-2">
+                        <CardTitle className="text-sm flex items-center gap-2">
+                            <Receipt className="h-4 w-4 text-muted-foreground" />
+                            T4A snapshot · {t4a_snapshot.tax_year}
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                            <div className="rounded-md bg-muted/30 p-2.5">
+                                <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">Drivers w/ earnings YTD</p>
+                                <p className="text-xl font-bold tabular-nums mt-0.5">{totalBucketed.toLocaleString()}</p>
+                            </div>
+                            <div className="rounded-md bg-muted/30 p-2.5">
+                                <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">YTD gross earnings</p>
+                                <p className="text-xl font-bold tabular-nums mt-0.5">{fmtMoney(t4a_snapshot.ytd_gross_earnings)}</p>
+                            </div>
+                        </div>
+                        <Table>
+                            <TableHeader>
+                                <TableRow>
+                                    <TableHead className="text-[11px] uppercase tracking-wide h-9">Bucket</TableHead>
+                                    <TableHead className="text-[11px] uppercase tracking-wide h-9 text-right">Drivers</TableHead>
+                                    <TableHead className="text-[11px] uppercase tracking-wide h-9">CRA implication</TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                <TableRow>
+                                    <TableCell className="text-xs font-mono">&lt; $500</TableCell>
+                                    <TableCell className="text-xs text-right tabular-nums">{t4a_snapshot.buckets.under_500}</TableCell>
+                                    <TableCell className="text-[11px] text-muted-foreground">Below T4A reporting threshold</TableCell>
+                                </TableRow>
+                                <TableRow>
+                                    <TableCell className="text-xs font-mono">$500 – $10k</TableCell>
+                                    <TableCell className="text-xs text-right tabular-nums">{t4a_snapshot.buckets.from_500_to_10k}</TableCell>
+                                    <TableCell className="text-[11px] text-muted-foreground">T4A required</TableCell>
+                                </TableRow>
+                                <TableRow>
+                                    <TableCell className="text-xs font-mono">$10k – $30k</TableCell>
+                                    <TableCell className="text-xs text-right tabular-nums">{t4a_snapshot.buckets.from_10k_to_30k}</TableCell>
+                                    <TableCell className="text-[11px] text-muted-foreground">T4A required · GST elective</TableCell>
+                                </TableRow>
+                                <TableRow className="bg-amber-50/50 dark:bg-amber-900/10">
+                                    <TableCell className="text-xs font-mono font-semibold">≥ $30k</TableCell>
+                                    <TableCell className="text-xs text-right tabular-nums font-bold text-amber-700 dark:text-amber-300">{t4a_snapshot.buckets.over_30k}</TableCell>
+                                    <TableCell className="text-[11px] text-amber-700 dark:text-amber-300">T4A + GST/HST registration MANDATORY</TableCell>
+                                </TableRow>
+                            </TableBody>
+                        </Table>
+                    </CardContent>
+                </Card>
+
+                {/* Period close — picks a month, writes an audit_log row.
+                    Closure is advisory at this scale, not a hard lock — the
+                    log answers "did we sign off on May 2026?" for the
+                    accountant without requiring schema changes. */}
+                <Card className="border-border/50">
+                    <CardHeader className="pb-2">
+                        <CardTitle className="text-sm flex items-center gap-2">
+                            <CheckCircle className="h-4 w-4 text-muted-foreground" />
+                            Period close
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                        <p className="text-[11px] text-muted-foreground">
+                            Writes an audit-log entry snapshotting every completed payout in the selected month — the
+                            accountant&apos;s "we signed off on this period" record. Restricted to finance + super_admin.
+                        </p>
+                        <div className="flex items-end gap-2 flex-wrap">
+                            <div>
+                                <Label htmlFor="close-month" className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold mb-1.5 block">Month</Label>
+                                <select
+                                    id="close-month"
+                                    className="h-9 text-sm rounded-md border border-input bg-background px-2"
+                                    value={closeMonth}
+                                    onChange={(e) => setCloseMonth(Number(e.target.value))}
+                                >
+                                    {Array.from({ length: 12 }).map((_, i) => (
+                                        <option key={i + 1} value={i + 1}>
+                                            {new Date(2000, i, 1).toLocaleString(undefined, { month: "long" })}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div>
+                                <Label htmlFor="close-year" className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold mb-1.5 block">Year</Label>
+                                <Input
+                                    id="close-year"
+                                    type="number"
+                                    min={2024}
+                                    max={now.getFullYear()}
+                                    value={closeYear}
+                                    onChange={(e) => setCloseYear(Number(e.target.value))}
+                                    className="h-9 w-[100px] text-sm"
+                                />
+                            </div>
+                            <Button
+                                onClick={handleClose}
+                                disabled={closing}
+                                size="sm"
+                                className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                            >
+                                <CheckCircle className="h-3.5 w-3.5 mr-1.5" />
+                                {closing ? "Closing…" : `Close ${fmtPeriodKey(`${closeYear}-${String(closeMonth).padStart(2, "0")}`)}`}
+                            </Button>
+                        </div>
+
+                        {period_locks.length > 0 && (
+                            <div className="pt-2">
+                                <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold mb-1.5">Recent closures</p>
+                                <Table>
+                                    <TableHeader>
+                                        <TableRow>
+                                            <TableHead className="text-[11px] uppercase tracking-wide h-9">Period</TableHead>
+                                            <TableHead className="text-[11px] uppercase tracking-wide h-9">Closed at</TableHead>
+                                            <TableHead className="text-[11px] uppercase tracking-wide h-9">By</TableHead>
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {period_locks.slice(0, 6).map((lock) => (
+                                            <TableRow key={`${lock.period}-${lock.closed_at}`}>
+                                                <TableCell className="text-xs font-medium">{fmtPeriodKey(lock.period)}</TableCell>
+                                                <TableCell className="text-xs text-muted-foreground">{formatDate(lock.closed_at)}</TableCell>
+                                                <TableCell className="text-xs text-muted-foreground font-mono truncate max-w-[140px]" title={lock.closed_by || ""}>
+                                                    {lock.closed_by ? lock.closed_by.slice(0, 12) + "…" : "—"}
+                                                </TableCell>
+                                            </TableRow>
+                                        ))}
+                                    </TableBody>
+                                </Table>
+                            </div>
+                        )}
+                    </CardContent>
+                </Card>
+            </div>
+        </div>
+    );
+}
+
 function RideEarningsTab() {
-    const [earnings, setEarnings] = useState<any[]>([]);
-    const [loading, setLoading] = useState(true);
+    const [rides, setRides] = useState<EarningsRide[]>([]);
+    const [ridesLoading, setRidesLoading] = useState(true);
+    const [ridesTotal, setRidesTotal] = useState(0);
     const [dateFrom, setDateFrom] = useState("");
     const [dateTo, setDateTo] = useState("");
     const [period, setPeriod] = useState<EarningsPeriod>("7d");
@@ -348,19 +969,6 @@ function RideEarningsTab() {
     const [serviceAreas, setServiceAreas] = useState<Array<{ id: string; name?: string }>>([]);
     const [overview, setOverview] = useState<EarningsOverview | null>(null);
     const [overviewLoading, setOverviewLoading] = useState(true);
-
-    useEffect(() => {
-        getEarnings()
-            .then((data) => {
-                if (Array.isArray(data)) { setEarnings(data); }
-                else if (data && typeof data === "object") {
-                    const arr = (data as any).earnings || (data as any).rides || (data as any).data;
-                    setEarnings(Array.isArray(arr) ? arr : []);
-                } else { setEarnings([]); }
-            })
-            .catch((e) => console.error('[Earnings] load failed:', e))
-            .finally(() => setLoading(false));
-    }, []);
 
     useEffect(() => {
         // Service-areas list is small (≤ ~20 rows) and only used to populate
@@ -379,43 +987,87 @@ function RideEarningsTab() {
             .finally(() => setOverviewLoading(false));
     }, [period, serviceAreaId]);
 
-    const filtered = earnings.filter((e) => {
-        if (!dateFrom && !dateTo) return true;
-        const d = e.date ? new Date(e.date).toISOString().split("T")[0] : "";
-        if (dateFrom && d < dateFrom) return false;
-        if (dateTo && d > dateTo) return false;
-        return true;
-    });
+    useEffect(() => {
+        // Transaction table — driven by the date range + area filter.
+        // No default period: when both inputs are empty the backend
+        // returns last 30d (matches what an operator expects on first
+        // open). Re-fetches on every change so the table is always in
+        // sync with the filters above it.
+        setRidesLoading(true);
+        getEarningsRides({
+            start_date: dateFrom || undefined,
+            end_date: dateTo || undefined,
+            service_area_id: serviceAreaId !== "all" ? serviceAreaId : undefined,
+            limit: 500,
+        })
+            .then((res) => {
+                setRides(res.rides || []);
+                setRidesTotal(res.total ?? (res.rides?.length ?? 0));
+            })
+            .catch((e) => console.error('[EarningsRides] load failed:', e))
+            .finally(() => setRidesLoading(false));
+    }, [dateFrom, dateTo, serviceAreaId]);
 
-    const totals = filtered.reduce(
-        (acc, e) => ({
-            totalFare: acc.totalFare + (e.total_fare || 0),
-            driverEarnings: acc.driverEarnings + (e.driver_earnings || 0),
-            adminEarnings: acc.adminEarnings + (e.admin_earnings || 0),
-            tips: acc.tips + (e.tip_amount || 0),
+    // Chart drill-down: clicking a day in the daily GBV chart filters
+    // the transaction table to that single day. activeLabel from
+    // recharts is the date string from daily_series — pass it straight
+    // through into both date inputs.
+    const onChartDayClick = (day: string) => {
+        if (!day) return;
+        setDateFrom(day);
+        setDateTo(day);
+    };
+    const drillDownActive = !!(dateFrom && dateTo && dateFrom === dateTo);
+    const clearDrillDown = () => { setDateFrom(""); setDateTo(""); };
+
+    const totals = rides.reduce(
+        (acc, r) => ({
+            totalFare: acc.totalFare + (r.total_fare || 0),
+            driverEarnings: acc.driverEarnings + (r.driver_earnings || 0),
+            adminEarnings: acc.adminEarnings + (r.admin_earnings || 0),
+            tips: acc.tips + (r.tip_amount || 0),
         }),
         { totalFare: 0, driverEarnings: 0, adminEarnings: 0, tips: 0 }
     );
 
     return (
         <div className="space-y-6">
-            <div className="flex items-center justify-end gap-2">
-                <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-36 text-xs" />
-                <span className="text-muted-foreground text-sm">to</span>
-                <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-36 text-xs" />
-                <Button variant="outline" onClick={() => exportToCsv("earnings", filtered, [
-                    { key: "ride_id", label: "Ride ID" }, { key: "status", label: "Status" },
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2 flex-wrap">
+                    <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-36 text-xs" />
+                    <span className="text-muted-foreground text-sm">to</span>
+                    <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-36 text-xs" />
+                    {drillDownActive && (
+                        <button
+                            type="button"
+                            onClick={clearDrillDown}
+                            className="inline-flex items-center gap-1 px-2 py-1 text-[11px] rounded-md bg-primary/10 text-primary hover:bg-primary/15 transition-colors"
+                            title="Clear chart drill-down"
+                        >
+                            Drilling into {new Date(dateFrom).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                            <X className="h-3 w-3" />
+                        </button>
+                    )}
+                </div>
+                <Button variant="outline" onClick={() => exportToCsv("earnings", rides, [
+                    { key: "ride_code", label: "Ride Code" }, { key: "ride_id", label: "Ride ID" },
+                    { key: "completed_at", label: "Completed At" }, { key: "status", label: "Status" },
+                    { key: "driver_name", label: "Driver" }, { key: "rider_name", label: "Rider" },
                     { key: "total_fare", label: "Total Fare" }, { key: "driver_earnings", label: "Driver Earnings" },
                     { key: "admin_earnings", label: "Platform Revenue" }, { key: "tip_amount", label: "Tip" },
-                    { key: "stripe_transaction_id", label: "Stripe Transaction ID" }, { key: "date", label: "Date" },
-                ])} disabled={filtered.length === 0}>
+                    { key: "tax_amount", label: "Tax" }, { key: "discount_amount", label: "Discount" },
+                    { key: "surge_multiplier", label: "Surge" }, { key: "stripe_charge_id", label: "Stripe Charge ID" },
+                    { key: "service_area_id", label: "Service Area ID" },
+                ])} disabled={rides.length === 0}>
                     <Download className="mr-2 h-4 w-4" /> Export CSV
                 </Button>
             </div>
 
             {/* CEO row — period-over-period deltas, driven by the new
                 /admin/earnings/overview endpoint. Replaces the prior 4-card
-                static totals (which had no comparison and no time series). */}
+                static totals (which had no comparison and no time series).
+                The daily GBV chart is click-to-drill-down: clicking a day
+                filters the transaction table below to that day's rides. */}
             <CeoMetricsHeader
                 overview={overview}
                 loading={overviewLoading}
@@ -424,6 +1076,7 @@ function RideEarningsTab() {
                 serviceAreaId={serviceAreaId}
                 onServiceAreaChange={setServiceAreaId}
                 serviceAreas={serviceAreas}
+                onChartDayClick={onChartDayClick}
             />
 
             {/* Transaction-level totals from the date-filtered ride feed
@@ -442,8 +1095,21 @@ function RideEarningsTab() {
             </div>
 
             <Card className="border-border/50">
+                <CardHeader className="pb-2 flex flex-row items-center justify-between gap-2">
+                    <CardTitle className="text-sm">
+                        Transactions
+                        <span className="text-xs font-normal text-muted-foreground ml-2">
+                            {ridesTotal > rides.length ? `${rides.length} of ${ridesTotal}` : `${rides.length} ride${rides.length === 1 ? "" : "s"}`}
+                        </span>
+                    </CardTitle>
+                    {ridesTotal > rides.length && (
+                        <span className="text-[11px] text-muted-foreground">
+                            Showing newest {rides.length}. Narrow the date range or export to see more.
+                        </span>
+                    )}
+                </CardHeader>
                 <CardContent className="p-0">
-                    {loading ? (
+                    {ridesLoading ? (
                         <div className="flex items-center justify-center p-12">
                             <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
                         </div>
@@ -451,25 +1117,58 @@ function RideEarningsTab() {
                         <Table>
                             <TableHeader>
                                 <TableRow>
-                                    <TableHead>Ride ID</TableHead><TableHead>Status</TableHead>
-                                    <TableHead>Total Fare</TableHead><TableHead>Driver</TableHead>
-                                    <TableHead>Platform</TableHead><TableHead>Tip</TableHead><TableHead>Date</TableHead>
+                                    <TableHead className="text-[11px] uppercase tracking-wide">Completed</TableHead>
+                                    <TableHead className="text-[11px] uppercase tracking-wide">Ride</TableHead>
+                                    <TableHead className="text-[11px] uppercase tracking-wide">Driver</TableHead>
+                                    <TableHead className="text-[11px] uppercase tracking-wide">Rider</TableHead>
+                                    <TableHead className="text-[11px] uppercase tracking-wide text-right">Fare</TableHead>
+                                    <TableHead className="text-[11px] uppercase tracking-wide text-right">Driver</TableHead>
+                                    <TableHead className="text-[11px] uppercase tracking-wide text-right">Platform</TableHead>
+                                    <TableHead className="text-[11px] uppercase tracking-wide text-right">Tip</TableHead>
+                                    <TableHead className="text-[11px] uppercase tracking-wide">Stripe</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {filtered.length === 0 ? (
-                                    <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground py-12">No earnings data yet.</TableCell></TableRow>
-                                ) : filtered.map((e) => (
-                                    <TableRow key={e.ride_id}>
-                                        <TableCell className="font-mono text-xs">{e.ride_id?.slice(0, 8)}...</TableCell>
-                                        <TableCell><Badge variant="secondary" className={statusColor(e.status)}>{e.status?.replace(/_/g, " ")}</Badge></TableCell>
-                                        <TableCell>{formatCurrency(e.total_fare || 0)}</TableCell>
-                                        <TableCell className="text-emerald-500">{formatCurrency(e.driver_earnings || 0)}</TableCell>
-                                        <TableCell className="text-violet-500">{formatCurrency(e.admin_earnings || 0)}</TableCell>
-                                        <TableCell className="text-amber-500">{formatCurrency(e.tip_amount || 0)}</TableCell>
-                                        <TableCell className="text-xs text-muted-foreground">{formatDate(e.date)}</TableCell>
-                                    </TableRow>
-                                ))}
+                                {rides.length === 0 ? (
+                                    <TableRow><TableCell colSpan={9} className="text-center text-muted-foreground py-12">No rides in this date range.</TableCell></TableRow>
+                                ) : rides.map((r) => {
+                                    const code = r.ride_code ? r.ride_code.toLowerCase() : `#${r.ride_id.slice(0, 8)}`;
+                                    return (
+                                        <TableRow key={r.ride_id}>
+                                            <TableCell className="text-xs whitespace-nowrap">{formatDate(r.completed_at || r.created_at)}</TableCell>
+                                            <TableCell>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => navigator.clipboard.writeText(r.ride_code || r.ride_id)}
+                                                    className="inline-flex items-center gap-1 text-[11px] font-mono text-muted-foreground hover:text-foreground"
+                                                    title={`Copy ${r.ride_code || r.ride_id}`}
+                                                >
+                                                    {code}
+                                                </button>
+                                            </TableCell>
+                                            <TableCell className="text-xs truncate max-w-[140px]" title={r.driver_name || ""}>{r.driver_name || "—"}</TableCell>
+                                            <TableCell className="text-xs truncate max-w-[140px]" title={r.rider_name || ""}>{r.rider_name || "—"}</TableCell>
+                                            <TableCell className="text-sm font-medium text-right tabular-nums">{formatCurrency(r.total_fare || 0)}</TableCell>
+                                            <TableCell className="text-sm text-right tabular-nums text-emerald-500">{formatCurrency(r.driver_earnings || 0)}</TableCell>
+                                            <TableCell className="text-sm text-right tabular-nums text-violet-500">{formatCurrency(r.admin_earnings || 0)}</TableCell>
+                                            <TableCell className="text-sm text-right tabular-nums text-amber-500">{r.tip_amount > 0 ? formatCurrency(r.tip_amount) : <span className="text-muted-foreground">—</span>}</TableCell>
+                                            <TableCell>
+                                                {r.stripe_charge_id ? (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => navigator.clipboard.writeText(r.stripe_charge_id!)}
+                                                        className="inline-flex items-center gap-1 text-[10px] font-mono text-muted-foreground hover:text-foreground"
+                                                        title={`Copy ${r.stripe_charge_id}`}
+                                                    >
+                                                        {r.stripe_charge_id.slice(0, 12)}…
+                                                    </button>
+                                                ) : (
+                                                    <span className="text-[10px] text-muted-foreground">—</span>
+                                                )}
+                                            </TableCell>
+                                        </TableRow>
+                                    );
+                                })}
                             </TableBody>
                         </Table>
                     )}
@@ -839,6 +1538,97 @@ function PayoutsTab() {
     const [stats, setStats] = useState<any>(null);
     const [loading, setLoading] = useState(true);
     const [statusFilter, setStatusFilter] = useState("all");
+    const [period, setPeriod] = useState<EarningsPeriod>("7d");
+    // Independent from the earnings tab's area filter — operators may
+    // want to view payouts fleet-wide while looking at earnings for
+    // one area, so each tab tracks its own selection.
+    const [serviceAreaId, setServiceAreaId] = useState<string>("all");
+    const [serviceAreas, setServiceAreas] = useState<Array<{ id: string; name?: string }>>([]);
+    const [overview, setOverview] = useState<PayoutsOverview | null>(null);
+    const [overviewLoading, setOverviewLoading] = useState(true);
+    const [retryingId, setRetryingId] = useState<string | null>(null);
+    const [bulkRetrying, setBulkRetrying] = useState(false);
+    const { toast } = useToast();
+
+    useEffect(() => {
+        // Service areas list is small and only feeds the dropdown —
+        // fetch once on mount, no need to refetch per period change.
+        getServiceAreas().then((rows) => setServiceAreas(Array.isArray(rows) ? rows : [])).catch(() => {});
+    }, []);
+
+    const refreshAll = async () => {
+        setLoading(true);
+        setOverviewLoading(true);
+        try {
+            const [p, s, o] = await Promise.all([
+                getPayouts().catch(() => []),
+                getPayoutStats().catch(() => null),
+                getPayoutsOverview({
+                    period,
+                    service_area_id: serviceAreaId !== "all" ? serviceAreaId : undefined,
+                }).catch(() => null),
+            ]);
+            setPayouts(Array.isArray(p) ? p : []);
+            setStats(s);
+            if (o) setOverview(o);
+        } finally {
+            setLoading(false);
+            setOverviewLoading(false);
+        }
+    };
+
+    const handleRowRetry = async (id: string) => {
+        setRetryingId(id);
+        try {
+            await retryPayout(id);
+            toast({ title: "Retry queued", description: "Payout flipped back to pending — the retry loop will pick it up." });
+            await refreshAll();
+        } catch (e: any) {
+            toast({ title: "Retry failed", description: e?.message || "Unknown error", variant: "destructive" });
+        } finally {
+            setRetryingId(null);
+        }
+    };
+
+    const handleBulkRetry = async () => {
+        if (!overview) return;
+        // Use the window the operator is already looking at. since=start
+        // matches the Pass 1 daily chart so "retry everything failed in
+        // this window" reads as a single coherent action.
+        const since = overview.period.start;
+        if (!window.confirm(
+            `Retry every failed/cancelled payout since ${new Date(since).toLocaleString()}? Each will be flipped to pending and the retry loop will pick them up.`
+        )) return;
+        setBulkRetrying(true);
+        try {
+            const res = await bulkRetryPayouts({ since, max_to_retry: 200 });
+            toast({
+                title: "Bulk retry queued",
+                description: `${res.retried} queued · ${res.skipped} skipped · ${res.failed_to_initiate} errored.`,
+            });
+            await refreshAll();
+        } catch (e: any) {
+            toast({ title: "Bulk retry failed", description: e?.message || "Unknown error", variant: "destructive" });
+        } finally {
+            setBulkRetrying(false);
+        }
+    };
+
+    const handleExportCsv = () => {
+        exportToCsv("payouts", payouts, [
+            { key: "id", label: "Payout ID" },
+            { key: "driver_id", label: "Driver ID" },
+            { key: "driver_name", label: "Driver" },
+            { key: "amount", label: "Amount" },
+            { key: "status", label: "Status" },
+            { key: "bank_name", label: "Bank" },
+            { key: "account_last4", label: "Account Last 4" },
+            { key: "stripe_payout_id", label: "Stripe Payout ID" },
+            { key: "error_message", label: "Error" },
+            { key: "created_at", label: "Requested" },
+            { key: "processed_at", label: "Settled" },
+        ]);
+    };
 
     useEffect(() => {
         Promise.all([
@@ -850,6 +1640,17 @@ function PayoutsTab() {
         }).finally(() => setLoading(false));
     }, []);
 
+    useEffect(() => {
+        setOverviewLoading(true);
+        getPayoutsOverview({
+            period,
+            service_area_id: serviceAreaId !== "all" ? serviceAreaId : undefined,
+        })
+            .then(setOverview)
+            .catch((e) => console.error('[PayoutsOverview] load failed:', e))
+            .finally(() => setOverviewLoading(false));
+    }, [period, serviceAreaId]);
+
     const filtered = statusFilter === "all" ? payouts : payouts.filter(p => p.status === statusFilter);
 
     const statusBadge = (s: string) => {
@@ -859,12 +1660,30 @@ function PayoutsTab() {
         return "bg-zinc-500/15 text-zinc-600";
     };
 
-    if (loading) return <div className="flex justify-center p-12"><div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" /></div>;
-
     return (
         <div className="space-y-6">
-            {/* Stats */}
-            {stats && (
+            {/* Pass 1 — CEO header. Sits above the legacy stat cards
+                so the page opens to "is payout flow healthy?" instead
+                of a static transaction log. Skeleton-loads independently
+                so it doesn't block the rest of the page. */}
+            <PayoutsCeoHeader
+                overview={overview}
+                loading={overviewLoading}
+                period={period}
+                onPeriodChange={setPeriod}
+                serviceAreaId={serviceAreaId}
+                onServiceAreaChange={setServiceAreaId}
+                serviceAreas={serviceAreas}
+            />
+
+            {/* Legacy stats — kept for backward compatibility while the
+                Pass 1 header takes over the headline role. Will retire
+                once Pass 2 lands. */}
+            {loading ? (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 animate-pulse">
+                    {[0, 1, 2, 3].map((i) => <div key={i} className="h-20 rounded-xl bg-muted" />)}
+                </div>
+            ) : stats && (
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                     <Card><CardContent className="pt-4">
                         <div className="flex items-center gap-2 text-sm text-muted-foreground"><CheckCircle className="h-4 w-4 text-green-500" /> Total Paid</div>
@@ -888,15 +1707,36 @@ function PayoutsTab() {
 
             {/* Filter + Table */}
             <Card>
-                <CardHeader className="flex flex-row items-center justify-between">
+                <CardHeader className="flex flex-row items-center justify-between gap-3 flex-wrap">
                     <CardTitle>Payout History</CardTitle>
-                    <div className="flex gap-1 bg-muted rounded-lg p-0.5">
-                        {["all", "pending", "completed", "failed"].map(s => (
-                            <button key={s} onClick={() => setStatusFilter(s)}
-                                className={`px-3 py-1 rounded-md text-xs font-medium transition ${statusFilter === s ? "bg-background shadow-sm" : "text-muted-foreground"}`}>
-                                {s.charAt(0).toUpperCase() + s.slice(1)}
-                            </button>
-                        ))}
+                    <div className="flex items-center gap-2 flex-wrap">
+                        <div className="flex gap-1 bg-muted rounded-lg p-0.5">
+                            {["all", "pending", "completed", "failed"].map(s => (
+                                <button key={s} onClick={() => setStatusFilter(s)}
+                                    className={`px-3 py-1 rounded-md text-xs font-medium transition ${statusFilter === s ? "bg-background shadow-sm" : "text-muted-foreground"}`}>
+                                    {s.charAt(0).toUpperCase() + s.slice(1)}
+                                </button>
+                            ))}
+                        </div>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleBulkRetry}
+                            disabled={bulkRetrying || !overview}
+                            title="Retry every failed/cancelled payout in the selected period"
+                        >
+                            <Undo2 className="h-3.5 w-3.5 mr-1.5" />
+                            {bulkRetrying ? "Retrying…" : "Bulk retry failed"}
+                        </Button>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={handleExportCsv}
+                            disabled={payouts.length === 0}
+                        >
+                            <Download className="h-3.5 w-3.5 mr-1.5" />
+                            Export CSV
+                        </Button>
                     </div>
                 </CardHeader>
                 <CardContent className="p-0">
@@ -908,24 +1748,60 @@ function PayoutsTab() {
                                 <TableHead>Status</TableHead>
                                 <TableHead>Bank</TableHead>
                                 <TableHead>Requested</TableHead>
+                                <TableHead className="text-right">Action</TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
                             {filtered.length === 0 ? (
-                                <TableRow><TableCell colSpan={5} className="text-center py-8 text-muted-foreground">No payouts found</TableCell></TableRow>
-                            ) : filtered.map((p: any) => (
-                                <TableRow key={p.id}>
-                                    <TableCell className="font-medium">{p.driver_name || "Unknown"}</TableCell>
-                                    <TableCell className="font-mono font-bold">${Number(p.amount || 0).toFixed(2)}</TableCell>
-                                    <TableCell><Badge className={statusBadge(p.status)}>{p.status}</Badge></TableCell>
-                                    <TableCell className="text-sm text-muted-foreground">{p.bank_name || "—"} {p.account_last4 ? `•••${p.account_last4}` : ""}</TableCell>
-                                    <TableCell className="text-xs text-muted-foreground">{formatDate(p.created_at)}</TableCell>
-                                </TableRow>
-                            ))}
+                                <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground">No payouts found</TableCell></TableRow>
+                            ) : filtered.map((p: any) => {
+                                const isRetryable = p.status === "failed" || p.status === "cancelled";
+                                const isRetrying = retryingId === p.id;
+                                return (
+                                    <TableRow key={p.id}>
+                                        <TableCell className="font-medium">{p.driver_name || "Unknown"}</TableCell>
+                                        <TableCell className="font-mono font-bold">${Number(p.amount || 0).toFixed(2)}</TableCell>
+                                        <TableCell>
+                                            <Badge className={statusBadge(p.status)}>{p.status}</Badge>
+                                            {p.error_message && (
+                                                <p className="text-[10px] text-red-600 dark:text-red-400 mt-0.5 truncate max-w-[200px]" title={p.error_message}>
+                                                    {p.error_message}
+                                                </p>
+                                            )}
+                                        </TableCell>
+                                        <TableCell className="text-sm text-muted-foreground">{p.bank_name || "—"} {p.account_last4 ? `•••${p.account_last4}` : ""}</TableCell>
+                                        <TableCell className="text-xs text-muted-foreground">{formatDate(p.created_at)}</TableCell>
+                                        <TableCell className="text-right">
+                                            {isRetryable ? (
+                                                <Button
+                                                    size="xs"
+                                                    variant="outline"
+                                                    className="h-7 text-[11px]"
+                                                    onClick={() => handleRowRetry(p.id)}
+                                                    disabled={isRetrying}
+                                                >
+                                                    <Undo2 className="h-3 w-3 mr-1" />
+                                                    {isRetrying ? "Retrying…" : "Retry"}
+                                                </Button>
+                                            ) : (
+                                                <span className="text-[10px] text-muted-foreground">—</span>
+                                            )}
+                                        </TableCell>
+                                    </TableRow>
+                                );
+                            })}
                         </TableBody>
                     </Table>
                 </CardContent>
             </Card>
+
+            {/* Pass 4 — compliance. T4A snapshot + period close. Sits
+                below the transaction table so finance opens the page
+                lower to find these; day-to-day operators don't see
+                them on first glance. */}
+            {overview && (
+                <PayoutsCompliance overview={overview} onClosed={refreshAll} />
+            )}
         </div>
     );
 }

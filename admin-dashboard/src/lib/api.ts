@@ -604,6 +604,51 @@ export const updateDriver = (id: string, data: Record<string, any>) =>
 /* ── Earnings ─────────────────────────────── */
 export const getEarnings = () => request<any[]>("/api/admin/earnings");
 
+export interface EarningsRide {
+    ride_id: string;
+    ride_code: string | null;
+    status: string;
+    total_fare: number;
+    driver_earnings: number;
+    admin_earnings: number;
+    tip_amount: number;
+    tax_amount: number;
+    discount_amount: number;
+    surge_multiplier: number;
+    stripe_charge_id: string | null;
+    driver_id: string | null;
+    driver_name: string | null;
+    rider_id: string | null;
+    rider_name: string | null;
+    service_area_id: string | null;
+    completed_at: string | null;
+    created_at: string | null;
+}
+
+export interface EarningsRidesResponse {
+    rides: EarningsRide[];
+    total: number;
+    offset: number;
+    limit: number;
+}
+
+export const getEarningsRides = (params?: {
+    start_date?: string;
+    end_date?: string;
+    service_area_id?: string;
+    limit?: number;
+    offset?: number;
+}) => {
+    const sp = new URLSearchParams();
+    if (params?.start_date) sp.set("start_date", params.start_date);
+    if (params?.end_date) sp.set("end_date", params.end_date);
+    if (params?.service_area_id) sp.set("service_area_id", params.service_area_id);
+    if (params?.limit != null) sp.set("limit", String(params.limit));
+    if (params?.offset != null) sp.set("offset", String(params.offset));
+    const qs = sp.toString();
+    return request<EarningsRidesResponse>(`/api/admin/earnings/rides${qs ? `?${qs}` : ""}`);
+};
+
 export type EarningsPeriod = "7d" | "30d" | "mtd" | "ytd";
 
 export interface MetricWithDelta {
@@ -1841,6 +1886,77 @@ export const getPayoutById = (id: string) =>
 export const getPayoutStats = () =>
     request<any>("/api/admin/payouts/stats");
 
+export interface PayoutsOverview {
+    period: {
+        key: EarningsPeriod;
+        label: string;
+        days: number;
+        start: string;
+        end: string;
+        prev_start: string;
+        prev_end: string;
+    };
+    metrics: {
+        outstanding_payable: MetricWithDelta;
+        total_paid_out: MetricWithDelta;
+        pending_in_flight: MetricWithDelta;
+        failed_amount: MetricWithDelta;
+        success_rate_pct: MetricWithDelta;
+        median_time_to_payout_hours: MetricWithDelta;
+        avg_payout_amount: MetricWithDelta;
+        payouts_count: MetricWithDelta;
+    };
+    daily_series: Array<{
+        date: string;
+        paid_out: number;
+        pending: number;
+        failed: number;
+    }>;
+    // Pass 2 — operational queues. None carry PoP because they're
+    // "right now" lists rather than period totals.
+    failure_reasons: Array<{ reason: string; count: number; amount: number }>;
+    stuck_over_48h: { count: number; amount: number };
+    blocked_drivers: { count: number; outstanding_balance: number };
+    top_drivers: Array<{ driver_id: string; name: string; amount: number; payout_count: number }>;
+    at_risk_drivers: Array<{ driver_id: string; name: string; failure_count: number; last_reason: string | null }>;
+    // Pass 4 — compliance.
+    t4a_snapshot: {
+        tax_year: number;
+        drivers_with_earnings: number;
+        buckets: {
+            under_500: number;
+            from_500_to_10k: number;
+            from_10k_to_30k: number;
+            over_30k: number;
+        };
+        ytd_gross_earnings: number;
+    };
+    period_locks: Array<{
+        period: string;
+        closed_at: string;
+        closed_by: string | null;
+        actor_role: string | null;
+    }>;
+}
+
+export interface ClosePayoutPeriodResponse {
+    period: string;
+    payout_count: number;
+    total_amount: number;
+    audit_log_id: string | null;
+}
+export const closePayoutPeriod = (year: number, month: number) =>
+    request<ClosePayoutPeriodResponse>(`/api/admin/payouts/close-period`, {
+        method: "POST",
+        body: JSON.stringify({ year, month }),
+    });
+
+export const getPayoutsOverview = (params: { period: EarningsPeriod; service_area_id?: string }) => {
+    const sp = new URLSearchParams({ period: params.period });
+    if (params.service_area_id) sp.set("service_area_id", params.service_area_id);
+    return request<PayoutsOverview>(`/api/admin/payouts/overview?${sp.toString()}`);
+};
+
 /* ── Disputes (resolve) ─────────────────── */
 export const resolveDispute = (id: string, data: { resolution: string; refund_amount?: number; admin_note?: string }) =>
     request<any>(`/api/admin/disputes/${id}/resolve`, { method: "PUT", body: JSON.stringify(data) });
@@ -2108,3 +2224,21 @@ export const getPendingDocuments = (params?: { limit?: number; cursor?: string; 
 /* ── Payout retry (A-P4-2) ──────────────── */
 export const retryPayout = (id: string) =>
     request<any>(`/api/admin/payouts/${id}/retry`, { method: "POST" });
+
+export interface BulkRetryPayoutsRequest {
+    payout_ids?: string[];
+    since?: string;
+    service_area_id?: string;
+    max_to_retry?: number;
+}
+export interface BulkRetryPayoutsResponse {
+    retried: number;
+    skipped: number;
+    failed_to_initiate: number;
+    details: Array<{ payout_id: string; status: string; reason?: string }>;
+}
+export const bulkRetryPayouts = (body: BulkRetryPayoutsRequest) =>
+    request<BulkRetryPayoutsResponse>(`/api/admin/payouts/bulk-retry`, {
+        method: "POST",
+        body: JSON.stringify(body),
+    });

@@ -604,6 +604,51 @@ export const updateDriver = (id: string, data: Record<string, any>) =>
 /* ── Earnings ─────────────────────────────── */
 export const getEarnings = () => request<any[]>("/api/admin/earnings");
 
+export interface EarningsRide {
+    ride_id: string;
+    ride_code: string | null;
+    status: string;
+    total_fare: number;
+    driver_earnings: number;
+    admin_earnings: number;
+    tip_amount: number;
+    tax_amount: number;
+    discount_amount: number;
+    surge_multiplier: number;
+    stripe_charge_id: string | null;
+    driver_id: string | null;
+    driver_name: string | null;
+    rider_id: string | null;
+    rider_name: string | null;
+    service_area_id: string | null;
+    completed_at: string | null;
+    created_at: string | null;
+}
+
+export interface EarningsRidesResponse {
+    rides: EarningsRide[];
+    total: number;
+    offset: number;
+    limit: number;
+}
+
+export const getEarningsRides = (params?: {
+    start_date?: string;
+    end_date?: string;
+    service_area_id?: string;
+    limit?: number;
+    offset?: number;
+}) => {
+    const sp = new URLSearchParams();
+    if (params?.start_date) sp.set("start_date", params.start_date);
+    if (params?.end_date) sp.set("end_date", params.end_date);
+    if (params?.service_area_id) sp.set("service_area_id", params.service_area_id);
+    if (params?.limit != null) sp.set("limit", String(params.limit));
+    if (params?.offset != null) sp.set("offset", String(params.offset));
+    const qs = sp.toString();
+    return request<EarningsRidesResponse>(`/api/admin/earnings/rides${qs ? `?${qs}` : ""}`);
+};
+
 export type EarningsPeriod = "7d" | "30d" | "mtd" | "ytd";
 
 export interface MetricWithDelta {

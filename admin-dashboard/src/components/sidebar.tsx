@@ -13,7 +13,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { useState, useEffect } from "react";
 import { useAuthStore } from "@/store/authStore";
-import { logoutAllAdmin } from "@/lib/api";
+import { logoutAllAdmin, getApprovalQueue, getExpiringDocs } from "@/lib/api";
 import { useTheme } from "next-themes";
 
 interface NavItem {
@@ -111,10 +111,48 @@ export function Sidebar() {
     const userModules = user?.modules || [];
     const isSuperAdmin = user?.role === 'super_admin' || user?.role === 'admin';
 
+    // Live counts for sidebar badges. Fetched once on mount + every 60s
+    // so the admin sees an up-to-date backlog without reloading. Only
+    // fetched when the user has the drivers module — saves a needless
+    // API call for staff that can't access those pages anyway.
+    const [approvalsCount, setApprovalsCount] = useState<number | null>(null);
+    const [expiringCount, setExpiringCount] = useState<number | null>(null);
+
     useEffect(() => {
         const sc = localStorage.getItem('spinr-sidebar-collapsed');
         if (sc === 'true') setCollapsed(true);
     }, []);
+
+    useEffect(() => {
+        const canSee = isSuperAdmin || userModules.includes("drivers");
+        if (!canSee) return;
+        let cancelled = false;
+        const load = async () => {
+            try {
+                // Approval queue endpoint returns stats.total_pending even
+                // on a limit=1 request, so we keep the JSON small.
+                const res = await getApprovalQueue({ limit: 1 });
+                if (!cancelled) setApprovalsCount(res?.stats?.total_pending ?? 0);
+            } catch {}
+            try {
+                // Expiring docs has no separate stats counter — count the
+                // items in the default 30-day window.
+                const res = await getExpiringDocs({ window_days: 30 });
+                if (!cancelled) setExpiringCount(res?.items?.length ?? 0);
+            } catch {}
+        };
+        load();
+        const t = setInterval(load, 60_000);
+        return () => { cancelled = true; clearInterval(t); };
+    }, [isSuperAdmin, userModules]);
+
+    // Map href → numeric badge count. Centralised so we only update one
+    // dict when adding a new badge later.
+    const badgeFor = (href: string): number | null => {
+        if (href === "/dashboard/drivers/queue") return approvalsCount;
+        if (href === "/dashboard/drivers/expiring") return expiringCount;
+        return null;
+    };
 
     const toggleTheme = () => {
         setTheme(theme === 'dark' ? 'light' : 'dark');
@@ -222,14 +260,19 @@ export function Sidebar() {
                                                 collapsed ? (
                                                     childItems.map(child => {
                                                         const childActive = pathname === child.href || pathname.startsWith(child.href);
+                                                        const childBadge = badgeFor(child.href);
                                                         return (
                                                             <Link
                                                                 key={child.href}
                                                                 href={child.href}
                                                                 onClick={() => setMobileOpen(false)}
-                                                                title={`${item.label} → ${child.label}`}
+                                                                title={
+                                                                    childBadge && childBadge > 0
+                                                                        ? `${item.label} → ${child.label} (${childBadge} pending)`
+                                                                        : `${item.label} → ${child.label}`
+                                                                }
                                                                 className={cn(
-                                                                    "flex items-center rounded-lg text-[13px] font-medium transition-colors",
+                                                                    "relative flex items-center rounded-lg text-[13px] font-medium transition-colors",
                                                                     "justify-center p-2.5 my-0.5",
                                                                     childActive
                                                                         ? "bg-primary/10 text-primary"
@@ -237,6 +280,12 @@ export function Sidebar() {
                                                                 )}
                                                             >
                                                                 <child.icon className="shrink-0 h-[18px] w-[18px]" />
+                                                                {/* Collapsed badge: indicator dot in
+                                                                    the top-right corner. Tooltip
+                                                                    above carries the actual count. */}
+                                                                {childBadge != null && childBadge > 0 && (
+                                                                    <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-amber-500 ring-2 ring-sidebar" />
+                                                                )}
                                                             </Link>
                                                         );
                                                     })
@@ -244,6 +293,7 @@ export function Sidebar() {
                                                     <div className="ml-[18px] pl-3 border-l border-sidebar-border/50 my-0.5">
                                                         {childItems.map(child => {
                                                             const childActive = pathname === child.href || pathname.startsWith(child.href);
+                                                            const childBadge = badgeFor(child.href);
                                                             return (
                                                                 <Link
                                                                     key={child.href}
@@ -257,7 +307,16 @@ export function Sidebar() {
                                                                     )}
                                                                 >
                                                                     <child.icon className="shrink-0 h-3.5 w-3.5" />
-                                                                    {child.label}
+                                                                    <span className="flex-1">{child.label}</span>
+                                                                    {/* Expanded badge: amber pill
+                                                                        with the count. Only shown
+                                                                        when > 0 so a clean queue
+                                                                        doesn't visually nag. */}
+                                                                    {childBadge != null && childBadge > 0 && (
+                                                                        <span className="ml-auto bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 text-[10px] font-bold px-1.5 py-0.5 rounded-full tabular-nums">
+                                                                            {childBadge > 99 ? "99+" : childBadge}
+                                                                        </span>
+                                                                    )}
                                                                 </Link>
                                                             );
                                                         })}

@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { View, Text, StyleSheet, Platform, Linking, Animated, TouchableOpacity, ActivityIndicator, AppState } from 'react-native';
-import CustomAlert from '@shared/components/CustomAlert';
 import MapView, { Marker, Polyline, Heatmap, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import { Ionicons } from '@expo/vector-icons';
@@ -17,8 +16,8 @@ import {
 import { useDriverDashboard } from '../../../hooks/useDriverDashboard';
 import { CarMarker } from '../../../components/CarMarker';
 import { SOSButton } from '@shared/components/SOSButton';
-import { OfflineBanner } from '@shared/components/OfflineBanner';
 import { useLanguageStore } from '../../../store/languageStore';
+import { showToast } from '../../../hooks/useToast';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -93,10 +92,8 @@ function DriverDashboard() {
     pulseAnim,
     slideUpAnim,
     fadeAnim,
-    dashAlert,
-    showDashAlert,
-    closeDashAlert,
     wsError,
+    wsLatency,
     refreshLocation,
   } = useDriverDashboard();
 
@@ -309,7 +306,8 @@ function DriverDashboard() {
   useEffect(() => {
     const { error } = useDriverStore.getState();
     if (error) {
-      showDashAlert('Error', error, 'danger', [{ text: 'OK', style: 'default', onPress: clearError }]);
+      showToast('error', 'Error', error);
+      clearError();
     }
   }, [useDriverStore.getState().error]);
 
@@ -509,9 +507,6 @@ function DriverDashboard() {
 
   return (
     <View style={styles.container} collapsable={false}>
-      {/* Offline indicator — slides in from the top when network drops */}
-      <OfflineBanner />
-
       {/* WS server error banner — non-blocking, clears on next good message */}
       {wsError && (
         <View style={styles.wsErrorBanner}>
@@ -698,7 +693,7 @@ function DriverDashboard() {
       </View>
 
       {/* Top Bar */}
-      <DriverTopBar driverData={driverData ?? undefined} user={user ?? undefined} isOnline={isOnline} connectionState={connectionState} surgeMultiplier={surgeMultiplier} />
+      <DriverTopBar driverData={driverData ?? undefined} user={user ?? undefined} isOnline={isOnline} connectionState={connectionState} surgeMultiplier={surgeMultiplier} wsLatency={wsLatency} />
 
       {/* SOS Button — visible during active ride */}
       {(rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup' || rideState === 'trip_in_progress') && activeRide?.ride?.id && (
@@ -768,14 +763,6 @@ function DriverDashboard() {
           onRateRider={rateRider}
         />
       )}
-      <CustomAlert
-        visible={dashAlert.visible}
-        title={dashAlert.title}
-        message={dashAlert.message}
-        variant={dashAlert.variant}
-        buttons={dashAlert.buttons || [{ text: 'OK', style: 'default' }]}
-        onClose={closeDashAlert}
-      />
     </View>
   );
 }

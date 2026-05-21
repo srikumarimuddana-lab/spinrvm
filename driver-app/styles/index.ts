@@ -1,3 +1,1 @@
-// Export all driver dashboard styles
-
-export { COLORS } from './colors';
+// Driver app styles (colors.ts removed — use useTheme() instead)

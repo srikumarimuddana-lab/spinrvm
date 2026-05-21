@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Image, Modal, Platform, StatusBar } from 'react-native';
-import CustomAlert, { AlertButton } from '@shared/components/CustomAlert';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Image, Modal, Platform, StatusBar, Alert } from 'react-native';
+import { showToast } from '../hooks/useToast';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
@@ -62,15 +62,6 @@ export default function DocumentsScreen() {
     const [documents, setDocuments] = useState<DriverDocument[]>([]);
     const [uploading, setUploading] = useState<string | null>(null);
     const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-    const [alert, setAlert] = useState<{
-        visible: boolean; title: string; message?: string;
-        variant: 'info' | 'success' | 'danger' | 'warning';
-        buttons?: AlertButton[];
-    }>({ visible: false, title: '', variant: 'info' });
-
-    const showAlert = (title: string, message: string, variant: 'success' | 'danger' | 'warning' | 'info' = 'info', buttons?: AlertButton[]) => {
-        setAlert({ visible: true, title, message, variant, buttons });
-    };
 
     const loadData = async () => {
         try {
@@ -81,7 +72,7 @@ export default function DocumentsScreen() {
             setRequirements(reqRes.data as Requirement[]);
             setDocuments(docRes.data as DriverDocument[]);
         } catch (err: any) {
-            showAlert('Error', `Failed to load documents: ${err.message}`, 'danger');
+            showToast('error', 'Error', `Failed to load documents: ${err.message}`);
         } finally {
             setLoading(false);
         }
@@ -192,7 +183,7 @@ export default function DocumentsScreen() {
             await loadData();
             await fetchDriverProfile();
 
-            showAlert('Uploaded', 'Document submitted for review.', 'success');
+            showToast('success', 'Uploaded', 'Document submitted for review.');
         } catch (err: any) {
             // Unpack the error safely — axios errors have `response.data.detail`,
             // fetch errors have `message`, anything else falls back to String().
@@ -202,7 +193,7 @@ export default function DocumentsScreen() {
                 err?.message ||
                 (typeof err === 'string' ? err : JSON.stringify(err)) ||
                 'Something went wrong';
-            showAlert('Upload Failed', String(detail), 'danger');
+            showToast('error', 'Upload Failed', String(detail));
         } finally {
             setUploading(null);
         }
@@ -213,13 +204,13 @@ export default function DocumentsScreen() {
             if (useCamera) {
                 const { status } = await ImagePicker.requestCameraPermissionsAsync();
                 if (status !== 'granted') {
-                    showAlert('Permission needed', 'Camera permission is required to take photos.', 'warning');
+                    showToast('info', 'Permission needed', 'Camera permission is required to take photos.');
                     return;
                 }
             } else {
                 const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
                 if (status !== 'granted') {
-                    showAlert('Permission needed', 'Gallery permission is required to upload photos.', 'warning');
+                    showToast('info', 'Permission needed', 'Gallery permission is required to upload photos.');
                     return;
                 }
             }
@@ -247,7 +238,7 @@ export default function DocumentsScreen() {
                 await processUpload(asset.uri, name, mimeType, reqId, side);
             }
         } catch (e) {
-            showAlert('Error', 'Failed to pick image', 'danger');
+            showToast('error', 'Error', 'Failed to pick image');
         }
     };
 
@@ -264,26 +255,17 @@ export default function DocumentsScreen() {
             await processUpload(asset.uri, asset.name, asset.mimeType || getMimeFromUri(asset.uri, asset.name), reqId, side);
 
         } catch (err: any) {
-            showAlert('Upload Failed', err.message, 'danger');
+            showToast('error', 'Upload Failed', err.message);
         }
     };
 
     const handleUpload = async (reqId: string, side: 'front' | 'back') => {
-        if (Platform.OS === 'ios') {
-            showAlert('Upload Document', 'Choose a source', 'info', [
-                { text: 'Camera', style: 'default', onPress: () => pickImage(reqId, side, true) },
-                { text: 'Gallery', style: 'default', onPress: () => pickImage(reqId, side, false) },
-                { text: 'File', style: 'default', onPress: () => pickFile(reqId, side) },
-                { text: 'Cancel', style: 'cancel' },
-            ]);
-        } else {
-            showAlert('Upload Document', 'Choose a source', 'info', [
-                { text: 'Camera', style: 'default', onPress: () => pickImage(reqId, side, true) },
-                { text: 'Gallery', style: 'default', onPress: () => pickImage(reqId, side, false) },
-                { text: 'File', style: 'default', onPress: () => pickFile(reqId, side) },
-                { text: 'Cancel', style: 'cancel' },
-            ]);
-        }
+        Alert.alert('Upload Document', 'Choose a source', [
+            { text: 'Camera', onPress: () => pickImage(reqId, side, true) },
+            { text: 'Gallery', onPress: () => pickImage(reqId, side, false) },
+            { text: 'File', onPress: () => pickFile(reqId, side) },
+            { text: 'Cancel', style: 'cancel' },
+        ]);
     };
 
     const getDocStatus = (reqId: string, side: 'front' | 'back' = 'front') => {
@@ -619,14 +601,6 @@ export default function DocumentsScreen() {
                 </View>
             </Modal>
 
-            <CustomAlert
-                visible={alert.visible}
-                title={alert.title}
-                message={alert.message}
-                variant={alert.variant}
-                buttons={alert.buttons || [{ text: 'OK', style: 'default' }]}
-                onClose={() => setAlert(a => ({ ...a, visible: false }))}
-            />
         </View>
     );
 }

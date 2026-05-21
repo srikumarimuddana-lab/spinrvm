@@ -107,6 +107,7 @@
         "statusOffline": "HORS LIGNE",
         "reconnecting": "Reconnexion…",
         "connectionLost": "Connexion perdue",
+        "noInternet": "Pas de connexion Internet",
         "findingRides": "Recherche de courses...",
         "completeProfile": "Complétez votre profil",
         "finishProfile": "Terminer le profil",

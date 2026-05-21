@@ -12,6 +12,7 @@ import {
   ActivityIndicator,
   ScrollView,
   Animated,
+  Alert,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -19,7 +20,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { useAuthStore, type User } from '@shared/store/authStore';
 import api from '@shared/api/client';
-import CustomAlert from '@shared/components/CustomAlert';
+import { showToast } from '../hooks/useToast';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -44,15 +45,6 @@ export default function ProfileSetupScreen() {
   const [city, setCity] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-
-  // Alert state
-  const [alertState, setAlertState] = useState<{
-    visible: boolean;
-    title: string;
-    message: string;
-    variant: 'info' | 'warning' | 'danger' | 'success';
-    buttons?: { text: string; style: 'default' | 'cancel' | 'destructive'; onPress?: () => void }[];
-  }>({ visible: false, title: '', message: '', variant: 'info' });
 
   const handleGenderMale = useCallback(() => {
     setGender('Male');
@@ -154,12 +146,10 @@ export default function ProfileSetupScreen() {
   }, []);
 
   const handleChangeNumber = () => {
-    setAlertState({
-      visible: true,
-      title: 'Change phone number?',
-      message: 'This will sign you out and return to the login screen. Any progress here will be lost.',
-      variant: 'warning',
-      buttons: [
+    Alert.alert(
+      'Change phone number?',
+      'This will sign you out and return to the login screen. Any progress here will be lost.',
+      [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Sign Out',
@@ -170,7 +160,7 @@ export default function ProfileSetupScreen() {
           },
         },
       ],
-    });
+    );
   };
 
   const validateEmail = (email: string): boolean => {
@@ -185,12 +175,7 @@ export default function ProfileSetupScreen() {
 
   const handleSubmit = async () => {
     if (!isFormValid) {
-      setAlertState({
-        visible: true,
-        title: 'Missing Info',
-        message: 'Please complete all required fields.',
-        variant: 'warning',
-      });
+      showToast('error', 'Missing Info', 'Please complete all required fields.');
       return;
     }
 
@@ -220,12 +205,7 @@ export default function ProfileSetupScreen() {
       }
       router.replace('/driver' as any);
     } catch (err: any) {
-      setAlertState({
-        visible: true,
-        title: 'Error',
-        message: err.message || 'Failed to create profile. Please try again.',
-        variant: 'danger',
-      });
+      showToast('error', 'Error', err.message || 'Failed to create profile. Please try again.');
     } finally {
       setIsSubmitting(false);
     }
@@ -501,14 +481,6 @@ export default function ProfileSetupScreen() {
 
       </ScrollView>
 
-      <CustomAlert
-        visible={alertState.visible}
-        title={alertState.title}
-        message={alertState.message}
-        variant={alertState.variant}
-        buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
-        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
-      />
     </KeyboardAvoidingView>
   );
 }

@@ -1,8 +1,7 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { View, Text, TouchableOpacity, Animated, StyleSheet } from 'react-native';
-import SpinrConfig from '@shared/config/spinr.config';
-
-const COLORS = SpinrConfig.theme.colors;
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
 interface DriverData {
     is_online?: boolean;
@@ -32,17 +31,19 @@ export const IdlePanel: React.FC<IdlePanelProps> = ({
     onToggleOnline,
     pulseAnim,
 }) => {
+    const { colors } = useTheme();
+    const styles = useMemo(() => createStyles(colors), [colors]);
     const renderStatsRow = () => (
         <View style={styles.statsGrid}>
-            <View style={styles.statBox}>
+            <View style={styles.statBox} accessibilityRole="text" accessibilityLabel={`Acceptance rate ${driverData?.acceptance_rate || '100'} percent`}>
                 <Text style={styles.statValue}>{driverData?.acceptance_rate || '100'}%</Text>
                 <Text style={styles.statLabel}>Acceptance</Text>
             </View>
-            <View style={styles.statBox}>
+            <View style={styles.statBox} accessibilityRole="text" accessibilityLabel={`Earnings $${(earnings?.total_earnings || 0).toFixed(2)}`}>
                 <Text style={styles.statValue}>${(earnings?.total_earnings || 0).toFixed(2)}</Text>
                 <Text style={styles.statLabel}>Earnings</Text>
             </View>
-            <View style={styles.statBox}>
+            <View style={styles.statBox} accessibilityRole="text" accessibilityLabel={`${driverData?.total_rides || '0'} rides`}>
                 <Text style={styles.statValue}>{driverData?.total_rides || '0'}</Text>
                 <Text style={styles.statLabel}>Rides</Text>
             </View>
@@ -59,11 +60,14 @@ export const IdlePanel: React.FC<IdlePanelProps> = ({
                 onPress={onToggleOnline}
                 activeOpacity={driverData?.is_verified ? 0.8 : 1}
                 disabled={!driverData?.is_verified}
+                accessibilityRole="switch"
+                accessibilityLabel={!driverData?.is_verified ? 'Account Not Verified' : (isOnline ? "You're Online" : "You're Offline")}
+                accessibilityState={{ checked: isOnline, disabled: !driverData?.is_verified }}
             >
                 <Animated.View style={[styles.pulseIndicator, { transform: [{ scale: pulseAnim }] }]}>
                     <View style={[
                         styles.statusDot,
-                        !driverData?.is_verified ? { backgroundColor: COLORS.orange } : (isOnline ? { backgroundColor: COLORS.success } : { backgroundColor: COLORS.danger })
+                        !driverData?.is_verified ? { backgroundColor: colors.orange } : (isOnline ? { backgroundColor: colors.success } : { backgroundColor: colors.error })
                     ]} />
                 </Animated.View>
                 <View style={styles.toggleText}>
@@ -93,13 +97,14 @@ export const IdlePanel: React.FC<IdlePanelProps> = ({
     );
 };
 
-const styles = StyleSheet.create({
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
     idlePanel: {
         position: 'absolute',
         bottom: 0,
         left: 0,
         right: 0,
-        backgroundColor: COLORS.primary,
+        backgroundColor: colors.background,
         borderTopLeftRadius: 24,
         borderTopRightRadius: 24,
         paddingTop: 20,
@@ -109,7 +114,7 @@ const styles = StyleSheet.create({
     onlineToggle: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: COLORS.surface,
+        backgroundColor: colors.surface,
         borderRadius: 16,
         padding: 16,
         marginBottom: 20,
@@ -118,10 +123,10 @@ const styles = StyleSheet.create({
         opacity: 0.7,
     },
     onlineActive: {
-        backgroundColor: '#E8F5E9',
+        backgroundColor: colors.successBg,
     },
     onlineInactive: {
-        backgroundColor: COLORS.surface,
+        backgroundColor: colors.surface,
     },
     pulseIndicator: {
         marginRight: 12,
@@ -137,26 +142,26 @@ const styles = StyleSheet.create({
     toggleLabel: {
         fontSize: 16,
         fontWeight: '600',
-        color: COLORS.text,
+        color: colors.text,
     },
     toggleSub: {
         fontSize: 12,
-        color: COLORS.textDim,
+        color: colors.textDim,
         marginTop: 2,
     },
     toggleSwitch: {
         width: 50,
         height: 30,
         borderRadius: 15,
-        backgroundColor: '#E0E0E0',
+        backgroundColor: colors.border,
         justifyContent: 'center',
         paddingHorizontal: 2,
     },
     toggleSwitchDisabled: {
-        backgroundColor: '#E0E0E0',
+        backgroundColor: colors.border,
     },
     toggleSwitchOn: {
-        backgroundColor: COLORS.success,
+        backgroundColor: colors.success,
     },
     toggleKnob: {
         width: 26,
@@ -170,7 +175,7 @@ const styles = StyleSheet.create({
         elevation: 2,
     },
     toggleKnobDisabled: {
-        backgroundColor: '#BDBDBD',
+        backgroundColor: colors.textDim,
     },
     toggleKnobOn: {
         alignSelf: 'flex-end',
@@ -181,7 +186,7 @@ const styles = StyleSheet.create({
     },
     statBox: {
         flex: 1,
-        backgroundColor: COLORS.surface,
+        backgroundColor: colors.surface,
         borderRadius: 12,
         padding: 16,
         marginHorizontal: 4,
@@ -190,13 +195,14 @@ const styles = StyleSheet.create({
     statValue: {
         fontSize: 20,
         fontWeight: '700',
-        color: COLORS.text,
+        color: colors.text,
     },
     statLabel: {
         fontSize: 12,
-        color: COLORS.textDim,
+        color: colors.textDim,
         marginTop: 4,
     },
-});
+  });
+}
 
 export default IdlePanel;

@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useMemo } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Animated, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -6,26 +6,14 @@ import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
-import SpinrConfig from '@shared/config/spinr.config';
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 import { useAuthStore, DriverOnboardingStatus } from '@shared/store/authStore';
 import { useLanguageStore } from '../../store/languageStore';
 
-// expo-notifications push APIs were removed from Expo Go in SDK 53.
-// Lazy-require so the module doesn't crash on import in Expo Go.
 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 const Notifications: typeof import('expo-notifications') | null =
   (!isExpoGo && Platform.OS !== 'web') ? require('expo-notifications') : null;
-
-const COLORS = {
-  primary: SpinrConfig.theme.colors.background,
-  accent: SpinrConfig.theme.colors.primary,
-  accentDark: SpinrConfig.theme.colors.primaryDark,
-  success: SpinrConfig.theme.colors.success,
-  surface: SpinrConfig.theme.colors.surface,
-  text: SpinrConfig.theme.colors.text,
-  textDim: SpinrConfig.theme.colors.textDim,
-  orange: '#FF9500',
-};
 
 interface DriverData {
   acceptance_rate?: string;
@@ -98,7 +86,9 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
   earnings,
   onToggleOnline,
 }) => {
+  const { colors } = useTheme();
   const { t } = useLanguageStore();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const STATE_BANNERS = getStateBanners(t, driverData);
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -188,7 +178,7 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
                 <Ionicons 
                   name={banner.icon as keyof typeof Ionicons.glyphMap} 
                   size={24} 
-                  color={banner.tone === 'danger' ? '#DC2626' : banner.tone === 'warning' ? '#D97706' : COLORS.accent} 
+                  color={banner.tone === 'danger' ? colors.error : banner.tone === 'warning' ? colors.warning : colors.primary} 
                 />
               </View>
               <View style={styles.actionCardContent}>
@@ -206,6 +196,8 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
                 }
               }}
               activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel={banner.button}
             >
               <Text allowFontScaling={false} style={styles.actionCardButtonText}>{banner.button}</Text>
               <Ionicons name="arrow-forward" size={16} color="#FFF" />
@@ -217,12 +209,12 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
         {/* Status Indicator Pill */}
         <View style={styles.statusPillWrapper}>
             {isOnline ? (
-                <View style={styles.statusPillOnline}>
-                    <Ionicons name="pulse" size={14} color="#059669" />
+                <View style={styles.statusPillOnline} accessibilityRole="text" accessibilityLabel={t('dashboard.findingRides')}>
+                    <Ionicons name="pulse" size={14} color={colors.success} />
                     <Text allowFontScaling={false} style={styles.statusPillTextOnline}>{t('dashboard.findingRides')}</Text>
                 </View>
             ) : (
-                <View style={styles.statusPillOffline}>
+                <View style={styles.statusPillOffline} accessibilityRole="text" accessibilityLabel={t('home.offline')}>
                     <View style={styles.offlineDot} />
                     <Text allowFontScaling={false} style={styles.statusPillTextOffline}>{t('home.offline')}</Text>
                 </View>
@@ -239,6 +231,9 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
           disabled={!canGoOnline}
           onPress={onToggleOnline}
           style={styles.goButtonOuterContainer}
+          accessibilityRole="button"
+          accessibilityLabel={isOnline ? t('home.stop') : t('home.go')}
+          accessibilityState={{ disabled: !canGoOnline }}
         >
           <Animated.View style={[
             styles.goButtonShadow, 
@@ -248,9 +243,9 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
           ]}>
             <LinearGradient
               colors={
-                !canGoOnline 
-                  ? ['#E5E7EB', '#D1D5DB'] 
-                  : (isOnline ? ['#059669', '#10B981'] : [COLORS.accent, COLORS.accentDark])
+                !canGoOnline
+                  ? ['#E5E7EB', '#D1D5DB']
+                  : (isOnline ? ['#059669', '#10B981'] : [colors.primary, colors.primaryDark])
               }
               style={styles.goButtonInner}
             >
@@ -266,182 +261,182 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
   );
 };
 
-const styles = StyleSheet.create({
-  idlePanelContainer: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-  },
-  hudArea: {
-    width: '100%',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    marginBottom: 20,
-  },
-  // Action Card
-  actionCardContainer: {
-    width: '100%',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 24,
-    padding: 20,
-    marginBottom: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.12,
-    shadowRadius: 20,
-    elevation: 8,
-  },
-  actionCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  actionCardIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: 'rgba(0, 212, 170, 0.1)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 16,
-  },
-  actionCardIconWarning: {
-    backgroundColor: 'rgba(217, 119, 6, 0.1)',
-  },
-  actionCardIconDanger: {
-    backgroundColor: 'rgba(220, 38, 38, 0.1)',
-  },
-  actionCardContent: {
-    flex: 1,
-  },
-  actionCardTitle: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: COLORS.text,
-    marginBottom: 4,
-  },
-  actionCardSubtitle: {
-    fontSize: 13,
-    color: COLORS.textDim,
-    lineHeight: 18,
-  },
-  actionCardButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: COLORS.accent,
-    borderRadius: 14,
-    paddingVertical: 14,
-    gap: 8,
-  },
-  actionCardButtonWarning: {
-    backgroundColor: '#D97706',
-  },
-  actionCardButtonDanger: {
-    backgroundColor: '#DC2626',
-  },
-  actionCardButtonText: {
-    color: '#FFF',
-    fontSize: 15,
-    fontWeight: '700',
-  },
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    idlePanelContainer: {
+      position: 'absolute',
+      bottom: 0,
+      left: 0,
+      right: 0,
+      alignItems: 'center',
+      justifyContent: 'flex-end',
+    },
+    hudArea: {
+      width: '100%',
+      alignItems: 'center',
+      paddingHorizontal: 20,
+      marginBottom: 20,
+    },
+    actionCardContainer: {
+      width: '100%',
+      backgroundColor: colors.surface,
+      borderRadius: 24,
+      padding: 20,
+      marginBottom: 20,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 8 },
+      shadowOpacity: 0.12,
+      shadowRadius: 20,
+      elevation: 8,
+    },
+    actionCard: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginBottom: 16,
+    },
+    actionCardIcon: {
+      width: 48,
+      height: 48,
+      borderRadius: 24,
+      backgroundColor: colors.infoBg,
+      justifyContent: 'center',
+      alignItems: 'center',
+      marginRight: 16,
+    },
+    actionCardIconWarning: {
+      backgroundColor: colors.warningBg,
+    },
+    actionCardIconDanger: {
+      backgroundColor: colors.dangerBg,
+    },
+    actionCardContent: {
+      flex: 1,
+    },
+    actionCardTitle: {
+      fontSize: 18,
+      fontWeight: '800',
+      color: colors.text,
+      marginBottom: 4,
+    },
+    actionCardSubtitle: {
+      fontSize: 13,
+      color: colors.textDim,
+      lineHeight: 18,
+    },
+    actionCardButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.primary,
+      borderRadius: 14,
+      paddingVertical: 14,
+      gap: 8,
+    },
+    actionCardButtonWarning: {
+      backgroundColor: colors.warning,
+    },
+    actionCardButtonDanger: {
+      backgroundColor: colors.error,
+    },
+    actionCardButtonText: {
+      color: '#FFF',
+      fontSize: 15,
+      fontWeight: '700',
+    },
 
-  // Status Pill
-  statusPillWrapper: {
+    statusPillWrapper: {
       shadowColor: '#000',
       shadowOffset: { width: 0, height: 2 },
       shadowOpacity: 0.1,
       shadowRadius: 4,
       elevation: 3,
-  },
-  statusPillOnline: {
+    },
+    statusPillOnline: {
       flexDirection: 'row',
       alignItems: 'center',
-      backgroundColor: '#ECFDF5',
+      backgroundColor: colors.successBg,
       paddingHorizontal: 16,
       paddingVertical: 8,
       borderRadius: 20,
       borderWidth: 1,
-      borderColor: '#A7F3D0',
+      borderColor: colors.success,
       gap: 6,
-  },
-  statusPillOffline: {
+    },
+    statusPillOffline: {
       flexDirection: 'row',
       alignItems: 'center',
-      backgroundColor: '#F3F4F6',
+      backgroundColor: colors.surfaceLight,
       paddingHorizontal: 16,
       paddingVertical: 8,
       borderRadius: 20,
       borderWidth: 1,
-      borderColor: '#E5E7EB',
+      borderColor: colors.border,
       gap: 6,
-  },
-  offlineDot: {
+    },
+    offlineDot: {
       width: 8,
       height: 8,
       borderRadius: 4,
-      backgroundColor: '#9CA3AF',
-  },
-  statusPillTextOnline: {
+      backgroundColor: colors.textDim,
+    },
+    statusPillTextOnline: {
       fontSize: 13,
       fontWeight: '700',
-      color: '#065F46',
-  },
-  statusPillTextOffline: {
+      color: colors.success,
+    },
+    statusPillTextOffline: {
       fontSize: 13,
       fontWeight: '600',
-      color: '#6B7280',
-  },
-  // GO Button Area
-  goButtonArea: {
-    alignItems: 'center',
-  },
-  goButtonOuterContainer: {
-    width: 100,
-    height: 100,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  goButtonShadow: {
-    width: 84,
-    height: 84,
-    borderRadius: 42,
-    backgroundColor: '#fff',
-    shadowColor: COLORS.accent,
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.4,
-    shadowRadius: 16,
-    elevation: 10,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 6,
-  },
-  goButtonShadowOnline: {
-    shadowColor: '#10B981',
-  },
-  goButtonShadowDisabled: {
-    shadowColor: '#000',
-    shadowOpacity: 0.15,
-  },
-  goButtonInner: {
-    width: '100%',
-    height: '100%',
-    borderRadius: 36,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  goButtonText: {
-    fontSize: 24,
-    fontWeight: '900',
-    color: '#fff',
-    letterSpacing: 1,
-  },
-  goButtonTextDisabled: {
-    color: '#9CA3AF',
-  },
-});
+      color: colors.textSecondary,
+    },
+
+    goButtonArea: {
+      alignItems: 'center',
+    },
+    goButtonOuterContainer: {
+      width: 100,
+      height: 100,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    goButtonShadow: {
+      width: 84,
+      height: 84,
+      borderRadius: 42,
+      backgroundColor: colors.surface,
+      shadowColor: colors.primary,
+      shadowOffset: { width: 0, height: 8 },
+      shadowOpacity: 0.4,
+      shadowRadius: 16,
+      elevation: 10,
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: 6,
+    },
+    goButtonShadowOnline: {
+      shadowColor: colors.success,
+    },
+    goButtonShadowDisabled: {
+      shadowColor: '#000',
+      shadowOpacity: 0.15,
+    },
+    goButtonInner: {
+      width: '100%',
+      height: '100%',
+      borderRadius: 36,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    goButtonText: {
+      fontSize: 24,
+      fontWeight: '900',
+      color: '#fff',
+      letterSpacing: 1,
+    },
+    goButtonTextDisabled: {
+      color: colors.textDim,
+    },
+  });
+}
 
 export default DriverIdlePanel;

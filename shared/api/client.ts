@@ -132,6 +132,38 @@ export function setRefreshCallback(fn: RefreshFn): void {
   _refreshCallback = fn;
 }
 
+// ── Proactive token refresh ──
+// Called before critical actions (AppState resume, WS connect, periodic timer)
+// to ensure the access token has enough remaining lifetime. Avoids the
+// 401 → refresh → retry delay that surfaces as a 1-2s stutter on actions
+// like "Arrived at Pickup" after the app was backgrounded.
+const TOKEN_REFRESH_BUFFER_MS = 2 * 60 * 1000; // refresh when <2 min remaining
+
+export async function ensureFreshToken(): Promise<void> {
+  if (!_refreshCallback) return;
+
+  const { useAuthStore } = require('../store/authStore');
+  const { tokenExpiresAt, token } = useAuthStore.getState();
+
+  if (!token || !tokenExpiresAt) return;
+  if (Date.now() < tokenExpiresAt - TOKEN_REFRESH_BUFFER_MS) return;
+
+  // Reuse in-flight refresh from the 401 handler (or vice-versa).
+  if (_refreshPromise) {
+    try { await _refreshPromise; } catch {}
+    return;
+  }
+
+  try {
+    _refreshPromise = _refreshCallback();
+    await _refreshPromise;
+  } catch {
+    // Proactive refresh failed — the reactive 401 handler will catch it.
+  } finally {
+    _refreshPromise = null;
+  }
+}
+
 // ── Phase 4 (P1-9): outgoing W3C traceparent header ─────────────────
 // Callers that have started a trace span (e.g. screen-level RUM) can
 // register the active trace ID here; the request methods forward it as
@@ -555,21 +587,27 @@ const handleApiError = async (response: Response, method: string, url: string, r
         return retried as never;
       }
 
-      // First caller: start the refresh and notify all subscribers on completion.
-      _refreshPromise = _refreshCallback().finally(() => {
+      // First caller: start the refresh. Clear the dedup sentinel BEFORE
+      // notifying subscribers so that any subscriber whose retryFn() triggers
+      // yet another 401 sees _refreshPromise === null and starts a fresh
+      // refresh cycle instead of queueing behind a completed promise.
+      _refreshPromise = _refreshCallback();
+      let refreshed = false;
+      try {
+        refreshed = await _refreshPromise;
+      } finally {
         _refreshPromise = null;
-      });
-      const refreshed = await _refreshPromise;
+      }
       if (refreshed) {
         const newToken = _inMemoryToken ?? '';
         _onRefreshed(newToken);
-        return retryFn() as Promise<never>; // retry with the new token now in _inMemoryToken
+        return retryFn() as Promise<never>;
       }
       // Refresh returned false (transient failure) — flush subscribers with
       // empty token so they fall through to throw their own 401 errors.
       _onRefreshed('');
     } catch {
-      // refresh threw — flush subscribers and fall through to throw the original 401
+      _refreshPromise = null;
       _onRefreshed('');
     }
   }
@@ -706,7 +744,7 @@ const client = {
       headers,
     });
 
-    if (!response.ok) await handleApiError(response, 'GET', url, () => client.get(url, config));
+    if (!response.ok) return await handleApiError(response, 'GET', url, () => client.get(url, config));
 
     const data = await response.json();
     return { data, status: response.status };
@@ -734,7 +772,7 @@ const client = {
       body: body ? JSON.stringify(body) : undefined,
     });
 
-    if (!response.ok) await handleApiError(response, 'POST', url, () => client.post(url, body, config));
+    if (!response.ok) return await handleApiError(response, 'POST', url, () => client.post(url, body, config));
 
     const data = await response.json();
     return { data, status: response.status };
@@ -767,7 +805,7 @@ const client = {
       body: body === undefined || body === null ? undefined : (isFormData ? body : JSON.stringify(body)),
     });
 
-    if (!response.ok) await handleApiError(response, 'PUT', url, () => client.put(url, body, config));
+    if (!response.ok) return await handleApiError(response, 'PUT', url, () => client.put(url, body, config));
 
     const data = await response.json();
     return { data, status: response.status };
@@ -795,7 +833,7 @@ const client = {
       body: body ? JSON.stringify(body) : undefined,
     });
 
-    if (!response.ok) await handleApiError(response, 'PATCH', url, () => client.patch(url, body, config));
+    if (!response.ok) return await handleApiError(response, 'PATCH', url, () => client.patch(url, body, config));
 
     const data = await response.json();
     return { data, status: response.status };
@@ -822,7 +860,7 @@ const client = {
       headers,
     });
 
-    if (!response.ok) await handleApiError(response, 'DELETE', url, () => client.delete(url, config));
+    if (!response.ok) return await handleApiError(response, 'DELETE', url, () => client.delete(url, config));
 
     const data = await response.json().catch(() => ({} as T));
     return { data, status: response.status };

@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Animated } from 'react-native';
+import { Alert, Animated } from 'react-native';
 import * as Location from 'expo-location';
 import { Platform, Vibration, Linking, AppState } from 'react-native';
+import { showToast } from './useToast';
 
 export type ConnectionState = 'connected' | 'reconnecting' | 'disconnected';
 import { router } from 'expo-router';
@@ -21,6 +22,16 @@ import { attestDeviceIntegrity } from '../utils/deviceIntegrity';
 
 const { height } = Dimensions.get('window');
 const RECONNECT_DELAYS = [1000, 2000, 5000, 10000, 30000];
+const MAX_RECONNECT_ATTEMPTS = 10;
+
+const LOCATION_CONFIGS: Record<string, { timeInterval: number; distanceInterval: number; accuracy: Location.Accuracy }> = {
+  idle:                  { timeInterval: 10_000, distanceInterval: 30, accuracy: Location.Accuracy.Balanced },
+  ride_offered:          { timeInterval: 10_000, distanceInterval: 30, accuracy: Location.Accuracy.Balanced },
+  navigating_to_pickup:  { timeInterval: 4_000,  distanceInterval: 10, accuracy: Location.Accuracy.High },
+  arrived_at_pickup:     { timeInterval: 8_000,  distanceInterval: 20, accuracy: Location.Accuracy.Balanced },
+  trip_in_progress:      { timeInterval: 3_000,  distanceInterval: 8,  accuracy: Location.Accuracy.High },
+  trip_completed:        { timeInterval: 10_000, distanceInterval: 30, accuracy: Location.Accuracy.Balanced },
+};
 
 /**
  * Coerce a value into a finite latitude/longitude or return null.
@@ -45,20 +56,7 @@ interface UseDriverDashboardReturn {
   otpInput: string;
   setOtpInput: (value: string) => void;
   wsError: string | null;
-
-  // Alert state
-  dashAlert: {
-    visible: boolean; title: string; message?: string;
-    variant: 'info' | 'success' | 'danger' | 'warning';
-    buttons?: Array<{ text: string; style?: 'default'|'cancel'|'destructive'; onPress?: () => void }>;
-  };
-  showDashAlert: (
-    title: string,
-    message: string,
-    variant?: 'info'|'success'|'danger'|'warning',
-    buttons?: Array<{ text: string; style?: 'default'|'cancel'|'destructive'; onPress?: () => void }>
-  ) => void;
-  closeDashAlert: () => void;
+  wsLatency: number | null;
 
   // Actions
   toggleOnline: () => Promise<void>;
@@ -107,22 +105,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   const [location, setLocation] = useState<Location.LocationObject | null>(null);
   const [otpInput, setOtpInput] = useState('');
   const [wsError, setWsError] = useState<string | null>(null);
-
-  // Alert state (replaces Alert.alert() so consumers can render <CustomAlert>)
-  const [dashAlert, setDashAlert] = useState<{
-    visible: boolean; title: string; message?: string;
-    variant: 'info' | 'success' | 'danger' | 'warning';
-    buttons?: Array<{ text: string; style?: 'default'|'cancel'|'destructive'; onPress?: () => void }>;
-  }>({ visible: false, title: '', variant: 'info' });
-
-  const showDashAlert = (
-    title: string,
-    message: string,
-    variant: 'info'|'success'|'danger'|'warning' = 'info',
-    buttons?: Array<{ text: string; style?: 'default'|'cancel'|'destructive'; onPress?: () => void }>
-  ) => setDashAlert({ visible: true, title, message, variant, buttons });
-
-  const closeDashAlert = () => setDashAlert(a => ({ ...a, visible: false }));
+  const [wsLatency, setWsLatency] = useState<number | null>(null);
 
   // Refs
   const mapRef = useRef<any>(null);
@@ -133,8 +116,12 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   const reconnectAttemptRef = useRef(0);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const locationBufferRef = useRef<any[]>([]);
+  const wsBatchRef = useRef<any[]>([]);
+  const lastWsFlushRef = useRef<number>(Date.now());
   const locationRetryCountRef = useRef(0);
   const MAX_LOCATION_RETRIES = 3;
+  const lastServerMsgRef = useRef<number>(Date.now());
+  const pongSentAtRef = useRef<number>(0);
   // Refs used inside WebSocket callbacks to avoid stale closure values.
   // Also used to stabilize the connectWebSocket useCallback — if we closed
   // over `user` / `handleWSMessage` directly, any store state change would
@@ -351,7 +338,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     return () => clearInterval(interval);
   }, [isOnline, uploadLocationBatch]);
 
-  // Location subscription
+  // Location subscription — frequency adapts to ride state
   useEffect(() => {
     if (!isOnline) {
       if (locationSubRef.current) {
@@ -360,12 +347,17 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       }
       return;
     }
+    const config = LOCATION_CONFIGS[rideState] ?? LOCATION_CONFIGS.idle;
     (async () => {
+      if (locationSubRef.current) {
+        try { locationSubRef.current.remove(); } catch {}
+        locationSubRef.current = null;
+      }
       const sub = await Location.watchPositionAsync(
         {
-          accuracy: Location.Accuracy.High,
-          timeInterval: 5000,
-          distanceInterval: 10,
+          accuracy: config.accuracy,
+          timeInterval: config.timeInterval,
+          distanceInterval: config.distanceInterval,
         },
         (loc) => {
           const integrity = checkLocationIntegrity(loc);
@@ -397,7 +389,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           };
 
           const payload = {
-            type: 'driver_location',
             lat: loc.coords.latitude,
             lng: loc.coords.longitude,
             speed: loc.coords.speed ?? null,
@@ -407,16 +398,23 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
             mocked: loc.mocked ?? false,
             ride_id: rideId,
             tracking_phase: phaseMap[currentRideState] || 'online_idle',
+            timestamp: new Date().toISOString(),
           };
 
-          if (wsRef.current?.readyState === WebSocket.OPEN) {
-            wsRef.current.send(JSON.stringify(payload));
+          wsBatchRef.current.push(payload);
+          const sinceLastFlush = Date.now() - lastWsFlushRef.current;
+          if (wsBatchRef.current.length >= 3 || sinceLastFlush > 10_000) {
+            if (wsRef.current?.readyState === WebSocket.OPEN) {
+              wsRef.current.send(JSON.stringify({
+                type: 'driver_location_batch',
+                points: wsBatchRef.current,
+              }));
+              wsBatchRef.current = [];
+              lastWsFlushRef.current = Date.now();
+            }
           }
 
-          locationBufferRef.current.push({
-            ...payload,
-            timestamp: new Date().toISOString(),
-          });
+          locationBufferRef.current.push(payload);
 
           if (locationBufferRef.current.length > 500) {
             locationBufferRef.current = locationBufferRef.current.slice(-500);
@@ -427,12 +425,19 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     })();
 
     return () => {
+      if (wsBatchRef.current.length > 0 && wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({
+          type: 'driver_location_batch',
+          points: wsBatchRef.current,
+        }));
+        wsBatchRef.current = [];
+      }
       if (locationSubRef.current) {
         try { locationSubRef.current.remove(); } catch (e) { console.log('[Location] subscription remove error (cleanup):', e); }
         locationSubRef.current = null;
       }
     };
-  }, [isOnline, uploadLocationBatch]);
+  }, [isOnline, rideState, uploadLocationBatch]);
 
   // ─── WebSocket Message Handler ───────────────────────────────────
   const handleWSMessage = useCallback((data: any) => {
@@ -477,15 +482,15 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         // fetchActiveRide() found no driver_assigned row. Now it's explicit.
         offerSound.stop();
         resetRideState();
-        showDashAlert('Offer expired', 'Looking for the next ride…', 'info');
+        showToast('info', 'Offer expired', 'Looking for the next ride...');
         break;
       case 'ride_cancelled':
-        showDashAlert(
+        showToast(
+          'error',
           'Ride Cancelled',
           data.is_auto
             ? 'No driver was available — the ride was automatically cancelled.'
-            : 'The rider has cancelled this ride.',
-          'warning'
+            : 'The rider has cancelled this ride.'
         );
         resetRideState();
         break;
@@ -493,7 +498,11 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       // G20: Reply to server heartbeat so the backend doesn't mark
       // this connection as dead after HEARTBEAT_TIMEOUT (10s).
       case 'ping':
+        if (pongSentAtRef.current > 0) {
+          setWsLatency(Date.now() - pongSentAtRef.current);
+        }
         if (wsRef.current?.readyState === WebSocket.OPEN) {
+          pongSentAtRef.current = Date.now();
           wsRef.current.send(JSON.stringify({ type: 'pong' }));
         }
         break;
@@ -524,11 +533,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           const riderName = typeof data.rider_name === 'string' && data.rider_name
             ? data.rider_name
             : 'Your rider';
-          showDashAlert(
-            'You got a tip! 💸',
-            `${riderName} tipped you $${amount.toFixed(2)}.`,
-            'success',
-          );
+          showToast('success', 'You got a tip!', `${riderName} tipped you $${amount.toFixed(2)}.`);
           // Pull the fresh totals so the earnings chip updates on screen.
           fetchEarnings('today');
         }
@@ -577,7 +582,16 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   // handleWSMessage] and recreated on unrelated store changes — the mount
   // effect saw a "new" connectWebSocket, closed the socket, and reconnected,
   // leaving the banner stuck on "Reconnecting…".
-  const connectWebSocket = useCallback(() => {
+  const connectWebSocket = useCallback(async () => {
+    // Ensure the access token is fresh before opening the socket. Without
+    // this, a driver returning from a long background period opens a WS
+    // with an expired token — the server rejects auth and the socket
+    // immediately closes, burning a reconnect cycle.
+    try {
+      const { ensureFreshToken } = require('@shared/api/client');
+      await ensureFreshToken();
+    } catch {}
+
     const currentUser = userRef.current;
     if (!isOnlineRef.current || !currentUser) return;
 
@@ -626,6 +640,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
+        lastServerMsgRef.current = Date.now();
         if (data.type === 'error') {
           setWsError(data.message || 'Connection error');
           return;
@@ -674,6 +689,11 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
 
     ws.onclose = (event) => {
       if (isOnlineRef.current && userRef.current) {
+        if (reconnectAttemptRef.current >= MAX_RECONNECT_ATTEMPTS) {
+          setConnectionState('disconnected');
+          setWsError('Unable to connect to server. Pull down to retry or toggle offline/online.');
+          return;
+        }
         setConnectionState('reconnecting');
         const baseDelay = RECONNECT_DELAYS[Math.min(reconnectAttemptRef.current, RECONNECT_DELAYS.length - 1)];
         const jitter = Math.random() * 1000 - 500; // ±500 ms
@@ -745,13 +765,16 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       if (nextState === 'active') {
         cancelBackgroundClose();
         if (!isOnlineRef.current || !userRef.current) return;
+        // Reset circuit breaker on foreground resume — the user is actively
+        // present and may have regained connectivity.
+        reconnectAttemptRef.current = 0;
+        setWsError(null);
         const ws = wsRef.current;
         if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
           if (reconnectTimeoutRef.current) {
             clearTimeout(reconnectTimeoutRef.current);
             reconnectTimeoutRef.current = null;
           }
-          reconnectAttemptRef.current = 0;
           connectWebSocket();
         }
       } else if (nextState === 'background') {
@@ -778,36 +801,41 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ─── Client-side heartbeat watchdog ──────────────────────────────
+  // Server sends ping every 30s. If we receive no message for 45s the
+  // network likely dropped silently — force-close to trigger reconnect.
+  useEffect(() => {
+    if (connectionState !== 'connected') return;
+    const id = setInterval(() => {
+      if (Date.now() - lastServerMsgRef.current > 45_000) {
+        wsRef.current?.close(4001, 'heartbeat_timeout');
+      }
+    }, 15_000);
+    return () => clearInterval(id);
+  }, [connectionState]);
+
   // ─── Toggle Online/Offline ───────────────────────────────────────
   const toggleOnline = async () => {
     try {
       if (!driverData?.vehicle_make || !driverData?.license_plate) {
-        showDashAlert(
+        Alert.alert(
           "Profile Incomplete",
           "You must provide vehicle details before going online.",
-          'warning',
           [
-            {
-              text: "Add Vehicle Info",
-              onPress: () => router.push('/vehicle-info' as any)
-            },
-            { text: "Cancel", style: "cancel" }
+            { text: "Add Vehicle Info", onPress: () => router.push('/vehicle-info' as any) },
+            { text: "Cancel", style: "cancel" },
           ]
         );
         return;
       }
 
       if (!driverData?.is_verified) {
-        showDashAlert(
+        Alert.alert(
           "Account Not Verified",
           "Your account is not verified yet. Please complete your profile and wait for admin approval before going online.",
-          'warning',
           [
-            {
-              text: "Check Status",
-              onPress: () => router.push('/driver/profile' as any)
-            },
-            { text: "OK", style: "default" }
+            { text: "Check Status", onPress: () => router.push('/driver/profile' as any) },
+            { text: "OK", style: "default" },
           ]
         );
         return;
@@ -822,21 +850,16 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
 
         // 402 = no subscription
         if (err.response?.status === 402) {
-          showDashAlert(
+          Alert.alert(
             "Spinr Pass Required",
             err.response?.data?.detail || "You need an active subscription to go online.",
-            'warning',
             [
               { text: "Subscribe", onPress: () => router.push('/driver/subscription' as any) },
               { text: "Cancel", style: "cancel" },
             ]
           );
         } else {
-          showDashAlert(
-            "Cannot Go Online",
-            err.response?.data?.detail || "Failed to update status. Please try again.",
-            'danger'
-          );
+          showToast('error', "Cannot Go Online", err.response?.data?.detail || "Failed to update status. Please try again.");
         }
         return;
       }
@@ -851,11 +874,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         startSensorMonitoring();
         const bgStarted = await startBackgroundLocation();
         if (!bgStarted) {
-          showDashAlert(
-            "Background location needed",
-            "You're online, but background location is required to keep getting ride offers while the app is minimized. Enable 'Allow all the time' in Settings.",
-            'warning'
-          );
+          showToast('error', "Background location needed", "Enable 'Allow all the time' in Settings to keep getting ride offers while minimized.");
         }
       } else {
         stopSensorMonitoring();
@@ -864,7 +883,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       }
     } catch (e) {
       console.error('[toggleOnline] Unexpected error:', e);
-      showDashAlert("Error", "Something went wrong toggling your status. Please try again.", 'danger');
+      showToast('error', "Error", "Something went wrong toggling your status. Please try again.");
     }
   };
 
@@ -967,23 +986,21 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           offer_expires_at: data.offer_expires_at,
         });
       } else if (data?.type === 'ride_cancelled') {
-        showDashAlert('Ride Cancelled', 'The rider has cancelled this ride.', 'warning');
+        showToast('error', 'Ride Cancelled', 'The rider has cancelled this ride.');
         resetRideState();
       } else if (data?.type === 'subscription_expiring') {
-        showDashAlert(
+        Alert.alert(
           'Spinr Pass Expiring',
           'Your Spinr Pass expires soon — renew to keep earning',
-          'warning',
           [
             { text: 'Renew Now', onPress: () => router.push('/driver/subscription' as any) },
             { text: 'Later', style: 'cancel' },
           ]
         );
       } else if (data?.type === 'document_expiry_warning') {
-        showDashAlert(
+        Alert.alert(
           'Document Expiring',
           'A document is expiring — tap to update it',
-          'warning',
           [
             { text: 'Update Now', onPress: () => router.push('/driver/documents' as any) },
             { text: 'Later', style: 'cancel' },
@@ -1008,11 +1025,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     otpInput,
     setOtpInput,
     wsError,
-
-    // Alert state
-    dashAlert,
-    showDashAlert,
-    closeDashAlert,
+    wsLatency,
 
     // Actions
     toggleOnline,

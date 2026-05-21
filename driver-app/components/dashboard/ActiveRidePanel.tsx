@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useMemo } from 'react';
 import {
   View,
   Text,
@@ -8,17 +8,16 @@ import {
   Animated,
   Linking,
   Platform,
+  Alert,
   BackHandler,
   KeyboardAvoidingView,
   ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import SpinrConfig from '@shared/config/spinr.config';
-import CustomAlert from '@shared/components/CustomAlert';
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 import { useLanguageStore } from '../../store/languageStore';
-
-const ACCENT = SpinrConfig.theme.colors.primary;
 
 interface Rider {
   first_name?: string;
@@ -101,14 +100,11 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
 }) => {
   // All hooks MUST be before any early return to avoid React ordering issues
   const insets = useSafeAreaInsets();
+  const { colors } = useTheme();
   const { t } = useLanguageStore();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const [waitSeconds, setWaitSeconds] = useState(0);
   const waitTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const [alertVisible, setAlertVisible] = useState(false);
-  const [alertCfg, setAlertCfg] = useState({
-    title: '', message: '', variant: 'info' as 'info' | 'warning' | 'danger' | 'success',
-    buttons: [] as Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>,
-  });
 
   // Live distance tracking during trip
   const [liveDistanceKm, setLiveDistanceKm] = useState(0);
@@ -196,13 +192,11 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
     Linking.openURL(url).catch(() => Linking.openURL(googleUrl));
   };
 
-  const showAlert = (
+  const showConfirm = (
     title: string, message: string,
-    variant: 'info' | 'warning' | 'danger' | 'success',
-    buttons: typeof alertCfg.buttons
+    buttons: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>,
   ) => {
-    setAlertCfg({ title, message, variant, buttons });
-    setAlertVisible(true);
+    Alert.alert(title, message, buttons);
   };
 
   // ── Status config ───────────────────────────────────────────
@@ -219,17 +213,17 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
     navigating_to_pickup: {
       icon: 'navigate-circle' as const,
       label: `${t('activeRide.enRouteToPickup')}${etaSuffix}`,
-      color: ACCENT,
+      color: colors.primary,
     },
     arrived_at_pickup: {
       icon: 'time' as const,
       label: `${t('activeRide.waiting')} · ${formatWait(waitSeconds)}`,
-      color: '#F59E0B',
+      color: colors.warning,
     },
     trip_in_progress: {
       icon: 'car-sport' as const,
       label: `${t('activeRide.tripInProgress')}${etaSuffix}`,
-      color: '#22C55E',
+      color: colors.success,
     },
   };
   const status = statusMap[rideState];
@@ -244,7 +238,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
       >
         <ScrollView keyboardShouldPersistTaps="handled">
       {/* ── Status pill (floating) ──────────────────────────── */}
-      <View style={styles.statusPill}>
+      <View style={styles.statusPill} accessibilityRole="text" accessibilityLabel={`${status.label}, earnings $${earnings.toFixed(2)}`}>
         <View style={[styles.statusIconBg, { backgroundColor: `${status.color}15` }]}>
           <Ionicons name={status.icon} size={16} color={status.color} />
         </View>
@@ -283,26 +277,26 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
         {/* ── Rider info ─────────────────────────────────── */}
         <View style={styles.riderRow}>
           <View style={styles.riderAvatar}>
-            <Ionicons name="person" size={20} color="#999" />
+            <Ionicons name="person" size={20} color={colors.textDim} />
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.riderName}>{riderName}</Text>
             {rider?.rating ? (
               <View style={styles.ratingRow}>
-                <Ionicons name="star" size={11} color="#F59E0B" />
+                <Ionicons name="star" size={11} color={colors.warning} />
                 <Text style={styles.ratingText}>{Number(rider.rating).toFixed(1)}</Text>
               </View>
             ) : null}
           </View>
-          <TouchableOpacity style={styles.chatBtn}>
-            <Ionicons name="chatbubble-ellipses" size={18} color={ACCENT} />
+          <TouchableOpacity style={styles.chatBtn} accessibilityRole="button" accessibilityLabel={`Message ${riderName}`}>
+            <Ionicons name="chatbubble-ellipses" size={18} color={colors.primary} />
           </TouchableOpacity>
         </View>
 
         {/* ── Route addresses ────────────────────────────── */}
         <View style={styles.routeCard}>
           <View style={styles.routeRow}>
-            <View style={[styles.dot, { backgroundColor: ACCENT }]} />
+            <View style={[styles.dot, { backgroundColor: colors.primary }]} />
             <View style={{ flex: 1 }}>
               <Text allowFontScaling={false} style={styles.routeLabel}>{t('rideOffer.pickup')}</Text>
               <Text style={styles.routeAddress} numberOfLines={2}>{ride.pickup_address}</Text>
@@ -312,7 +306,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
             <View style={styles.routeLine} />
           </View>
           <View style={styles.routeRow}>
-            <View style={[styles.dot, { backgroundColor: '#22C55E' }]} />
+            <View style={[styles.dot, { backgroundColor: colors.success }]} />
             <View style={{ flex: 1 }}>
               <Text allowFontScaling={false} style={styles.routeLabel}>{t('rideOffer.dropoff')}</Text>
               <Text style={styles.routeAddress} numberOfLines={2}>{ride.dropoff_address}</Text>
@@ -324,7 +318,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
         {rideState === 'arrived_at_pickup' ? (
           <View style={styles.otpCard}>
             <View style={styles.otpHeader}>
-              <Ionicons name="shield-checkmark" size={18} color={ACCENT} />
+              <Ionicons name="shield-checkmark" size={18} color={colors.primary} />
               <Text allowFontScaling={false} style={styles.otpTitle}>{t('activeRide.verifyRiderPin')}</Text>
             </View>
             <Text allowFontScaling={false} style={styles.otpSub}>Ask rider for their 4-digit code</Text>
@@ -343,6 +337,8 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
                   disabled={key === null}
                   activeOpacity={0.6}
                   hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityRole="button"
+                  accessibilityLabel={key === 'del' ? 'Delete' : key !== null ? `${key}` : undefined}
                   onPress={() => {
                     if (key === 'del') setOtpInput(otpInput.slice(0, -1));
                     else if (key !== null && otpInput.length < 4) {
@@ -352,13 +348,13 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
                     }
                   }}
                 >
-                  {key === 'del' ? <Ionicons name="backspace-outline" size={20} color="#333" />
+                  {key === 'del' ? <Ionicons name="backspace-outline" size={20} color={colors.text} />
                     : key !== null ? <Text allowFontScaling={false} style={styles.kpText}>{key}</Text>
                     : null}
                 </TouchableOpacity>
               ))}
             </View>
-            <TouchableOpacity style={styles.skipBtn} onPress={onStartRide} disabled={isLoading}>
+            <TouchableOpacity style={styles.skipBtn} onPress={onStartRide} disabled={isLoading} accessibilityRole="button" accessibilityLabel={t('activeRide.startWithoutPin')}>
               <Text style={styles.skipText}>{t('activeRide.startWithoutPin')}</Text>
             </TouchableOpacity>
           </View>
@@ -368,8 +364,10 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
         {rideState === 'navigating_to_pickup' ? (
           <View style={styles.actions}>
             <TouchableOpacity
-              style={[styles.actionPrimary, { backgroundColor: ACCENT }]}
+              style={[styles.actionPrimary, { backgroundColor: colors.primary }]}
               onPress={() => openMapsNavigation(ride.pickup_lat, ride.pickup_lng, 'Pickup')}
+              accessibilityRole="button"
+              accessibilityLabel={t('activeRide.navigateToPickup')}
             >
               <Ionicons name="navigate" size={20} color="#fff" />
               <Text allowFontScaling={false} style={styles.actionPrimaryText}>{t('activeRide.navigateToPickup')}</Text>
@@ -381,11 +379,13 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
                   style={[styles.actionSecondary, !atPickup && styles.actionSecondaryDisabled]}
                   onPress={onArriveAtPickup}
                   disabled={isLoading || !atPickup}
+                  accessibilityRole="button"
+                  accessibilityLabel={t('activeRide.arrivedAtPickup')}
                 >
-                  {isLoading ? <ActivityIndicator color={ACCENT} /> : (
+                  {isLoading ? <ActivityIndicator color={colors.primary} /> : (
                     <>
-                      <Ionicons name="flag" size={18} color={ACCENT} />
-                      <Text allowFontScaling={false} style={[styles.actionSecondaryText, { color: ACCENT }]}>
+                      <Ionicons name="flag" size={18} color={colors.primary} />
+                      <Text allowFontScaling={false} style={[styles.actionSecondaryText, { color: colors.primary }]}>
                         {distanceToPickup !== null && distanceToPickup !== undefined && distanceToPickup > 150 ? `${distanceToPickup}m` : t('activeRide.arrivedAtPickup')}
                       </Text>
                     </>
@@ -399,24 +399,27 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
         {rideState === 'trip_in_progress' ? (
           <View style={styles.actions}>
             <TouchableOpacity
-              style={[styles.actionPrimary, { backgroundColor: '#3B82F6' }]}
+              style={[styles.actionPrimary, { backgroundColor: colors.info }]}
               onPress={() => openMapsNavigation(ride.dropoff_lat, ride.dropoff_lng, 'Dropoff')}
+              accessibilityRole="button"
+              accessibilityLabel={t('activeRide.navigateToDropoff')}
             >
               <Ionicons name="navigate" size={20} color="#fff" />
               <Text allowFontScaling={false} style={styles.actionPrimaryText}>{t('activeRide.navigateToDropoff')}</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.actionPrimary, { backgroundColor: '#22C55E' }]}
-              onPress={() => showAlert(
+              style={[styles.actionPrimary, { backgroundColor: colors.success }]}
+              onPress={() => showConfirm(
                 t('activeRide.completeTrip'),
                 `${t('activeRide.endTripConfirm')} $${(ride.total_fare ?? 0).toFixed(2)}.`,
-                'success',
                 [
                   { text: t('common.notYet'), style: 'cancel' },
                   { text: t('activeRide.complete'), onPress: onCompleteRide },
                 ],
               )}
               disabled={isLoading}
+              accessibilityRole="button"
+              accessibilityLabel={t('activeRide.completeTrip')}
             >
               {isLoading ? <ActivityIndicator color="#fff" /> : (
                 <>
@@ -433,10 +436,11 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
           <TouchableOpacity
             style={[styles.cancelBtn, isLoading && { opacity: 0.4 }]}
             disabled={isLoading}
-            onPress={() => showAlert(
+            accessibilityRole="button"
+            accessibilityLabel={t('activeRide.cancelRide')}
+            onPress={() => showConfirm(
               t('activeRide.cancelRide'),
               t('activeRide.cancelRideWarning'),
-              'warning',
               [
                 { text: t('activeRide.keepRide'), style: 'cancel' },
                 { text: t('activeRide.yesCancel'), style: 'destructive', onPress: onCancelRide },
@@ -450,204 +454,190 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
         </ScrollView>
       </KeyboardAvoidingView>
 
-      <CustomAlert
-        visible={alertVisible}
-        title={alertCfg.title}
-        message={alertCfg.message}
-        variant={alertCfg.variant}
-        buttons={alertCfg.buttons.length > 0 ? alertCfg.buttons : [{ text: 'OK', style: 'default' }]}
-        onClose={() => setAlertVisible(false)}
-      />
     </Animated.View>
   );
 };
 
-const styles = StyleSheet.create({
-  container: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    zIndex: 100,
-  },
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: {
+      position: 'absolute',
+      bottom: 0,
+      left: 0,
+      right: 0,
+      zIndex: 100,
+    },
 
-  // Status pill
-  statusPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 20,
-    marginHorizontal: 16,
-    marginBottom: 8,
-    gap: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 6,
-  },
-  statusIconBg: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  statusText: { fontSize: 13, fontWeight: '700' },
-  statusFare: { fontSize: 18, fontWeight: '900', color: '#22C55E' },
+    statusPill: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.surface,
+      paddingHorizontal: 14,
+      paddingVertical: 10,
+      borderRadius: 20,
+      marginHorizontal: 16,
+      marginBottom: 8,
+      gap: 8,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.1,
+      shadowRadius: 8,
+      elevation: 6,
+    },
+    statusIconBg: {
+      width: 30,
+      height: 30,
+      borderRadius: 15,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    statusText: { fontSize: 13, fontWeight: '700' },
+    statusFare: { fontSize: 18, fontWeight: '900', color: colors.success },
 
-  // Sheet
-  sheet: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: -3 },
-    shadowOpacity: 0.08,
-    shadowRadius: 10,
-    elevation: 10,
-  },
+    sheet: {
+      backgroundColor: colors.surface,
+      borderTopLeftRadius: 24,
+      borderTopRightRadius: 24,
+      paddingHorizontal: 16,
+      paddingTop: 16,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: -3 },
+      shadowOpacity: 0.08,
+      shadowRadius: 10,
+      elevation: 10,
+    },
 
-  // Trip info row
-  tripInfoRow: {
-    flexDirection: 'row',
-    backgroundColor: '#F8F9FA',
-    borderRadius: 14,
-    paddingVertical: 14,
-    paddingHorizontal: 10,
-    marginBottom: 14,
-    alignItems: 'center',
-  },
-  tripInfoItem: { flex: 1, alignItems: 'center' },
-  tripInfoValue: { fontSize: 17, fontWeight: '800', color: '#1A1A1A', marginBottom: 2 },
-  tripInfoLabel: { fontSize: 10, fontWeight: '600', color: '#999', letterSpacing: 0.3 },
-  tripInfoDivider: { width: 1, height: 28, backgroundColor: '#E5E5E5' },
+    tripInfoRow: {
+      flexDirection: 'row',
+      backgroundColor: colors.surfaceLight,
+      borderRadius: 14,
+      paddingVertical: 14,
+      paddingHorizontal: 10,
+      marginBottom: 14,
+      alignItems: 'center',
+    },
+    tripInfoItem: { flex: 1, alignItems: 'center' },
+    tripInfoValue: { fontSize: 17, fontWeight: '800', color: colors.text, marginBottom: 2 },
+    tripInfoLabel: { fontSize: 10, fontWeight: '600', color: colors.textDim, letterSpacing: 0.3 },
+    tripInfoDivider: { width: 1, height: 28, backgroundColor: colors.border },
 
-  // Rider row
-  riderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 14,
-    gap: 12,
-  },
-  riderAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#F0F0F0',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  riderName: { fontSize: 15, fontWeight: '700', color: '#1A1A1A' },
-  ratingRow: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 2 },
-  ratingText: { fontSize: 12, fontWeight: '600', color: '#999' },
-  chatBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    borderWidth: 1.5,
-    borderColor: '#F0F0F0',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
+    riderRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginBottom: 14,
+      gap: 12,
+    },
+    riderAvatar: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      backgroundColor: colors.surfaceLight,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    riderName: { fontSize: 15, fontWeight: '700', color: colors.text },
+    ratingRow: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 2 },
+    ratingText: { fontSize: 12, fontWeight: '600', color: colors.textDim },
+    chatBtn: {
+      width: 38,
+      height: 38,
+      borderRadius: 19,
+      borderWidth: 1.5,
+      borderColor: colors.border,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
 
-  // Route card
-  routeCard: {
-    backgroundColor: '#F8F9FA',
-    borderRadius: 14,
-    padding: 14,
-    marginBottom: 14,
-  },
-  routeRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
-  dot: { width: 10, height: 10, borderRadius: 5, marginTop: 4 },
-  routeLabel: { fontSize: 9, fontWeight: '800', color: '#999', letterSpacing: 0.8, marginBottom: 2 },
-  routeAddress: { fontSize: 13, fontWeight: '600', color: '#1A1A1A', lineHeight: 18 },
-  routeLineContainer: { paddingLeft: 4, marginVertical: 4 },
-  routeLine: { width: 2, height: 16, backgroundColor: '#DDD', marginLeft: 3 },
+    routeCard: {
+      backgroundColor: colors.surfaceLight,
+      borderRadius: 14,
+      padding: 14,
+      marginBottom: 14,
+    },
+    routeRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+    dot: { width: 10, height: 10, borderRadius: 5, marginTop: 4 },
+    routeLabel: { fontSize: 9, fontWeight: '800', color: colors.textDim, letterSpacing: 0.8, marginBottom: 2 },
+    routeAddress: { fontSize: 13, fontWeight: '600', color: colors.text, lineHeight: 18 },
+    routeLineContainer: { paddingLeft: 4, marginVertical: 4 },
+    routeLine: { width: 2, height: 16, backgroundColor: colors.border, marginLeft: 3 },
 
-  // OTP
-  otpCard: {
-    backgroundColor: '#F8F9FA',
-    borderRadius: 14,
-    padding: 16,
-    marginBottom: 14,
-    alignItems: 'center',
-  },
-  otpHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
-  otpTitle: { fontSize: 14, fontWeight: '700', color: '#1A1A1A' },
-  otpSub: { fontSize: 12, color: '#999', marginBottom: 14 },
-  otpBoxRow: { flexDirection: 'row', gap: 8, marginBottom: 14, justifyContent: 'center' },
-  otpBox: {
-    width: '18%',
-    maxWidth: 56,
-    aspectRatio: 0.85,
-    borderRadius: 14,
-    backgroundColor: '#fff',
-    borderWidth: 2,
-    borderColor: '#E5E5E5',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  otpBoxFilled: { borderColor: ACCENT, backgroundColor: `${ACCENT}08` },
-  otpDigit: { fontSize: 32, fontWeight: '800', color: '#1A1A1A' },
-  keypad: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'center',
-    gap: 8,
-    width: '100%',
-    marginBottom: 8,
-  },
-  kpBtn: {
-    width: '28%',
-    aspectRatio: 1.4,
-    minWidth: 64,
-    minHeight: 64,
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 1.5,
-    borderColor: '#F0F0F0',
-  },
-  kpText: { fontSize: 26, fontWeight: '700', color: '#1A1A1A' },
-  skipBtn: { display: 'none' as any },
-  skipText: { fontSize: 12, color: '#999', fontWeight: '600' },
+    otpCard: {
+      backgroundColor: colors.surfaceLight,
+      borderRadius: 14,
+      padding: 16,
+      marginBottom: 14,
+      alignItems: 'center',
+    },
+    otpHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
+    otpTitle: { fontSize: 14, fontWeight: '700', color: colors.text },
+    otpSub: { fontSize: 12, color: colors.textDim, marginBottom: 14 },
+    otpBoxRow: { flexDirection: 'row', gap: 8, marginBottom: 14, justifyContent: 'center' },
+    otpBox: {
+      width: '18%',
+      maxWidth: 56,
+      aspectRatio: 0.85,
+      borderRadius: 14,
+      backgroundColor: colors.surface,
+      borderWidth: 2,
+      borderColor: colors.border,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    otpBoxFilled: { borderColor: colors.primary, backgroundColor: `${colors.primary}08` },
+    otpDigit: { fontSize: 32, fontWeight: '800', color: colors.text },
+    keypad: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      justifyContent: 'center',
+      gap: 8,
+      width: '100%',
+      marginBottom: 8,
+    },
+    kpBtn: {
+      width: '28%',
+      aspectRatio: 1.4,
+      minWidth: 64,
+      minHeight: 64,
+      backgroundColor: colors.surface,
+      borderRadius: 12,
+      justifyContent: 'center',
+      alignItems: 'center',
+      borderWidth: 1.5,
+      borderColor: colors.border,
+    },
+    kpText: { fontSize: 26, fontWeight: '700', color: colors.text },
+    skipBtn: { display: 'none' as any },
+    skipText: { fontSize: 12, color: colors.textDim, fontWeight: '600' },
 
-  // Actions
-  actions: { gap: 8 },
-  actionPrimary: {
-    flexDirection: 'row',
-    height: 50,
-    borderRadius: 14,
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 8,
-  },
-  actionPrimaryText: { fontSize: 15, fontWeight: '700', color: '#fff' },
-  actionSecondary: {
-    flexDirection: 'row',
-    height: 50,
-    borderRadius: 14,
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: '#F8F9FA',
-    borderWidth: 1.5,
-    borderColor: '#F0F0F0',
-  },
-  actionSecondaryText: { fontSize: 15, fontWeight: '700' },
-  actionSecondaryDisabled: {
-    opacity: 0.45,
-  },
+    actions: { gap: 8 },
+    actionPrimary: {
+      flexDirection: 'row',
+      height: 50,
+      borderRadius: 14,
+      justifyContent: 'center',
+      alignItems: 'center',
+      gap: 8,
+    },
+    actionPrimaryText: { fontSize: 15, fontWeight: '700', color: '#fff' },
+    actionSecondary: {
+      flexDirection: 'row',
+      height: 50,
+      borderRadius: 14,
+      justifyContent: 'center',
+      alignItems: 'center',
+      gap: 8,
+      backgroundColor: colors.surfaceLight,
+      borderWidth: 1.5,
+      borderColor: colors.border,
+    },
+    actionSecondaryText: { fontSize: 15, fontWeight: '700' },
+    actionSecondaryDisabled: {
+      opacity: 0.45,
+    },
 
-  // Cancel
-  cancelBtn: { paddingVertical: 12, alignItems: 'center', marginTop: 4 },
-  cancelText: { fontSize: 13, fontWeight: '600', color: '#EF4444' },
-});
+    cancelBtn: { paddingVertical: 12, alignItems: 'center', marginTop: 4 },
+    cancelText: { fontSize: 13, fontWeight: '600', color: colors.error },
+  });
+}
 
 export default ActiveRidePanel;

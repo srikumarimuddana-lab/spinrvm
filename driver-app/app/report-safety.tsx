@@ -15,7 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import api from '@shared/api/client';
-import CustomAlert, { AlertButton } from '@shared/components/CustomAlert';
+import { showToast } from '../hooks/useToast';
 import { useLocationStore } from '@shared/store/locationStore';
 import useDriverStore from '../store/driverStore';
 
@@ -43,26 +43,17 @@ export default function ReportSafetyScreen() {
     const [category, setCategory] = useState<SafetyCategory | null>(null);
     const [issue, setIssue] = useState('');
     const [submitting, setSubmitting] = useState(false);
-    const [alert, setAlert] = useState<{
-        visible: boolean; title: string; message?: string;
-        variant: 'info' | 'success' | 'danger' | 'warning';
-        buttons?: AlertButton[];
-    }>({ visible: false, title: '', variant: 'info' });
-
-    const showAlert = (title: string, message: string, variant: 'success' | 'danger' | 'warning' | 'info' = 'info', buttons?: AlertButton[]) => {
-        setAlert({ visible: true, title, message, variant, buttons });
-    };
 
     const location = useLocationStore(state => state.currentLocation);
     const activeRide = useDriverStore(state => state.activeRide);
 
     const handleSubmit = async () => {
         if (!category) {
-            showAlert('Category Required', 'Please select a category for your safety report.', 'warning');
+            showToast('info', 'Category Required', 'Please select a category for your safety report.');
             return;
         }
         if (!issue.trim()) {
-            showAlert('Description Required', 'Please describe the safety issue before submitting.', 'warning');
+            showToast('info', 'Description Required', 'Please describe the safety issue before submitting.');
             return;
         }
 
@@ -87,14 +78,10 @@ export default function ReportSafetyScreen() {
 
         try {
             await api.post('/safety/report', reportData);
-            showAlert(
-                'Report Submitted',
-                'Your safety report has been submitted. Our trust and safety team will review it promptly.',
-                'success',
-                [{ text: 'OK', style: 'default', onPress: () => router.back() }],
-            );
+            showToast('success', 'Report Submitted', 'Your safety report has been submitted. Our trust and safety team will review it promptly.');
+            router.back();
         } catch (e) {
-            showAlert('Error', 'Failed to submit report. Please try again.', 'danger');
+            showToast('error', 'Error', 'Failed to submit report. Please try again.');
             setSubmitting(false);
         }
     };
@@ -183,14 +170,6 @@ export default function ReportSafetyScreen() {
                 </ScrollView>
             </KeyboardAvoidingView>
 
-            <CustomAlert
-                visible={alert.visible}
-                title={alert.title}
-                message={alert.message}
-                variant={alert.variant}
-                buttons={alert.buttons || [{ text: 'OK', style: 'default' }]}
-                onClose={() => setAlert(a => ({ ...a, visible: false }))}
-            />
         </View>
     );
 }

@@ -1,11 +1,11 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, Share, BackHandler } from 'react-native';
-import CustomAlert, { AlertButton } from '@shared/components/CustomAlert';
+import React, { useState, useEffect, useMemo } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, TextInput, Share, Alert, BackHandler } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import SpinrConfig from '@shared/config/spinr.config';
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 import { useLanguageStore } from '../../store/languageStore';
 
 const n = (v: number | string | null | undefined): number => {
@@ -14,18 +14,6 @@ const n = (v: number | string | null | undefined): number => {
   return Number.isFinite(parsed) ? Math.round(parsed * 100) / 100 : 0;
 };
 const money = (v: number | string | null | undefined): string => n(v).toFixed(2);
-
-const COLORS = {
-  primary: SpinrConfig.theme.colors.background,
-  accent: SpinrConfig.theme.colors.primary,
-  accentDim: SpinrConfig.theme.colors.primaryDark,
-  surface: SpinrConfig.theme.colors.surface,
-  surfaceLight: SpinrConfig.theme.colors.surfaceLight,
-  text: SpinrConfig.theme.colors.text,
-  textDim: SpinrConfig.theme.colors.textDim,
-  border: SpinrConfig.theme.colors.border,
-  gold: '#FFD700',
-};
 
 interface CompletedRide {
   id?: string;
@@ -54,6 +42,8 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
   onDone,
   onRateRider,
 }) => {
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const insets = useSafeAreaInsets();
   const { t } = useLanguageStore();
   const router = useRouter();
@@ -61,15 +51,6 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
   const [comment, setComment] = useState('');
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [alert, setAlert] = useState<{
-    visible: boolean; title: string; message?: string;
-    variant: 'info' | 'success' | 'danger' | 'warning';
-    buttons?: AlertButton[];
-  }>({ visible: false, title: '', variant: 'info' });
-
-  const showAlert = (title: string, message: string, variant: 'success' | 'danger' | 'warning' | 'info' = 'info', buttons?: AlertButton[]) => {
-    setAlert({ visible: true, title, message, variant, buttons });
-  };
 
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => true);
@@ -99,11 +80,11 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
 
   return (
     <View style={styles.completedOverlay}>
-      <LinearGradient colors={[COLORS.surface, COLORS.primary]} style={[styles.completedPanel, { paddingBottom: Math.max(insets.bottom, 16) + 16 }]}>
+      <LinearGradient colors={[colors.surface, colors.background]} style={[styles.completedPanel, { paddingBottom: Math.max(insets.bottom, 16) + 16 }]}>
         <View style={styles.completedIcon}>
-          <Ionicons name="checkmark-circle" size={60} color={COLORS.accent} />
+          <Ionicons name="checkmark-circle" size={60} color={colors.primary} />
         </View>
-        <Text style={styles.completedTitle}>{t('tripCompleted.title')}</Text>
+        <Text style={styles.completedTitle} accessibilityRole="header">{t('tripCompleted.title')}</Text>
 
         {/* Fare breakdown */}
         <View style={styles.fareBreakdown}>
@@ -131,11 +112,11 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
         {/* Trip stats */}
         <View style={styles.tripStats}>
           <View style={styles.tripStat}>
-            <Ionicons name="speedometer" size={18} color={COLORS.textDim} />
+            <Ionicons name="speedometer" size={18} color={colors.textDim} />
             <Text style={styles.tripStatValue}>{n(completedRide?.distance_km).toFixed(1)} km</Text>
           </View>
           <View style={styles.tripStat}>
-            <Ionicons name="time" size={18} color={COLORS.textDim} />
+            <Ionicons name="time" size={18} color={colors.textDim} />
             <Text style={styles.tripStatValue}>{n(completedRide?.duration_minutes)} min</Text>
           </View>
         </View>
@@ -143,6 +124,8 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
         {/* Share Receipt */}
         <TouchableOpacity
           style={styles.shareReceiptBtn}
+          accessibilityRole="button"
+          accessibilityLabel={t('tripCompleted.shareReceipt')}
           onPress={async () => {
             const date = completedRide.ride_completed_at
               ? new Date(completedRide.ride_completed_at).toLocaleString('en-CA', {
@@ -181,19 +164,19 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
             try {
               await Share.share({ title: 'Spinr Trip Receipt', message: receipt });
             } catch {
-              showAlert('Receipt', receipt, 'info');
+              Alert.alert('Receipt', receipt);
             }
           }}
           activeOpacity={0.7}
         >
-          <Ionicons name="receipt-outline" size={16} color={COLORS.accent} />
+          <Ionicons name="receipt-outline" size={16} color={colors.primary} />
           <Text style={styles.shareReceiptText}>{t('tripCompleted.shareReceipt')}</Text>
         </TouchableOpacity>
 
         {/* Rate your rider */}
         {!submitted && (
           <View style={styles.ratingSection}>
-            <Text allowFontScaling={false} style={styles.ratingLabel}>{t('tripCompleted.howWasRider')}</Text>
+            <Text allowFontScaling={false} style={styles.ratingLabel} accessibilityRole="text">{t('tripCompleted.howWasRider')}</Text>
             <View style={styles.starsRow}>
               {[1, 2, 3, 4, 5].map((star) => (
                 <TouchableOpacity
@@ -201,11 +184,14 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
                   onPress={() => setRating(star)}
                   activeOpacity={0.7}
                   hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                  accessibilityRole="adjustable"
+                  accessibilityLabel={`Rate ${star} star${star > 1 ? 's' : ''}`}
+                  accessibilityState={{ selected: star <= rating }}
                 >
                   <Ionicons
                     name={star <= rating ? 'star' : 'star-outline'}
                     size={36}
-                    color={star <= rating ? COLORS.gold : COLORS.border}
+                    color={star <= rating ? colors.gold : colors.border}
                   />
                 </TouchableOpacity>
               ))}
@@ -214,13 +200,14 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
               <TextInput
                 style={[styles.commentInput, { minHeight: undefined, maxHeight: undefined, flex: 1 }]}
                 placeholder={t('tripCompleted.anyComments')}
-                placeholderTextColor={COLORS.textDim}
+                placeholderTextColor={colors.textDim}
                 value={comment}
                 onChangeText={setComment}
                 multiline
                 numberOfLines={3}
                 maxLength={200}
                 textAlignVertical="top"
+                accessibilityLabel={t('tripCompleted.anyComments')}
               />
             )}
           </View>
@@ -232,6 +219,8 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
             style={styles.messageRiderBtn}
             onPress={() => router.push(`/driver/chat?rideId=${completedRide.id}` as any)}
             activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Message Rider"
           >
             <Ionicons name="chatbubble-ellipses-outline" size={16} color="#3B82F6" />
             <Text style={styles.messageRiderText}>Message Rider</Text>
@@ -242,186 +231,182 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
           style={[styles.doneBtn, submitting && { opacity: 0.6 }]}
           onPress={handleSubmit}
           disabled={submitting}
+          accessibilityRole="button"
+          accessibilityLabel={submitting ? t('tripCompleted.submitting') : rating > 0 ? t('tripCompleted.rateDone') : t('tripCompleted.skipRating')}
+          accessibilityState={{ disabled: submitting }}
         >
-          <LinearGradient colors={[COLORS.accent, COLORS.accentDim]} style={styles.actionGradient}>
+          <LinearGradient colors={[colors.primary, colors.primaryDark]} style={styles.actionGradient}>
             <Text allowFontScaling={false} style={styles.actionBtnText}>
               {submitting ? t('tripCompleted.submitting') : rating > 0 ? t('tripCompleted.rateDone') : t('tripCompleted.skipRating')}
             </Text>
           </LinearGradient>
         </TouchableOpacity>
-        <CustomAlert
-          visible={alert.visible}
-          title={alert.title}
-          message={alert.message}
-          variant={alert.variant}
-          buttons={alert.buttons || [{ text: 'OK', style: 'default' }]}
-          onClose={() => setAlert(a => ({ ...a, visible: false }))}
-        />
       </LinearGradient>
     </View>
   );
 };
 
-const styles = StyleSheet.create({
-  completedOverlay: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    justifyContent: 'flex-end',
-  },
-  completedPanel: {
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    padding: 20,
-    alignItems: 'center',
-  },
-  completedIcon: {
-    marginBottom: 16,
-  },
-  completedTitle: {
-    fontSize: 24,
-    fontWeight: '800',
-    color: COLORS.text,
-    marginBottom: 24,
-  },
-  fareBreakdown: {
-    width: '100%',
-    backgroundColor: COLORS.surfaceLight,
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 16,
-  },
-  fareRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-  },
-  fareItemLabel: {
-    color: COLORS.textDim,
-    fontSize: 14,
-  },
-  fareItemValue: {
-    color: COLORS.text,
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  fareDivider: {
-    height: 1,
-    backgroundColor: COLORS.border,
-    marginVertical: 12,
-  },
-  fareEarningsLabel: {
-    color: COLORS.accent,
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  fareEarningsValue: {
-    color: COLORS.accent,
-    fontSize: 20,
-    fontWeight: '800',
-  },
-  tripStats: {
-    flexDirection: 'row',
-    gap: 24,
-    marginBottom: 20,
-  },
-  tripStat: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: COLORS.surfaceLight,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 12,
-  },
-  tripStatValue: {
-    color: COLORS.text,
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  // Rating section
-  ratingSection: {
-    width: '100%',
-    alignItems: 'center',
-    marginBottom: 20,
-    backgroundColor: COLORS.surfaceLight,
-    borderRadius: 16,
-    padding: 16,
-  },
-  ratingLabel: {
-    color: COLORS.text,
-    fontSize: 15,
-    fontWeight: '600',
-    marginBottom: 12,
-  },
-  starsRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 4,
-  },
-  commentInput: {
-    width: '100%',
-    marginTop: 12,
-    backgroundColor: COLORS.primary,
-    borderRadius: 12,
-    padding: 12,
-    color: COLORS.text,
-    fontSize: 14,
-    minHeight: 60,
-    maxHeight: 100,
-    borderWidth: 1,
-    borderColor: COLORS.border,
-  },
-  shareReceiptBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 10,
-    marginBottom: 16,
-    backgroundColor: COLORS.surfaceLight,
-    borderRadius: 12,
-    width: '100%',
-  },
-  shareReceiptText: {
-    color: COLORS.accent,
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  messageRiderBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 10,
-    marginBottom: 12,
-    backgroundColor: '#EFF6FF',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#DBEAFE',
-    width: '100%',
-  },
-  messageRiderText: {
-    color: '#3B82F6',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  doneBtn: {
-    borderRadius: 16,
-    overflow: 'hidden',
-    width: '100%',
-  },
-  actionGradient: {
-    paddingVertical: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  actionBtnText: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#fff',
-  },
-});
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    completedOverlay: {
+      position: 'absolute',
+      bottom: 0,
+      left: 0,
+      right: 0,
+      justifyContent: 'flex-end',
+    },
+    completedPanel: {
+      borderTopLeftRadius: 28,
+      borderTopRightRadius: 28,
+      padding: 20,
+      alignItems: 'center',
+    },
+    completedIcon: {
+      marginBottom: 16,
+    },
+    completedTitle: {
+      fontSize: 24,
+      fontWeight: '800',
+      color: colors.text,
+      marginBottom: 24,
+    },
+    fareBreakdown: {
+      width: '100%',
+      backgroundColor: colors.surfaceLight,
+      borderRadius: 16,
+      padding: 16,
+      marginBottom: 16,
+    },
+    fareRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      marginBottom: 8,
+    },
+    fareItemLabel: {
+      color: colors.textDim,
+      fontSize: 14,
+    },
+    fareItemValue: {
+      color: colors.text,
+      fontSize: 14,
+      fontWeight: '600',
+    },
+    fareDivider: {
+      height: 1,
+      backgroundColor: colors.border,
+      marginVertical: 12,
+    },
+    fareEarningsLabel: {
+      color: colors.primary,
+      fontSize: 16,
+      fontWeight: '700',
+    },
+    fareEarningsValue: {
+      color: colors.primary,
+      fontSize: 20,
+      fontWeight: '800',
+    },
+    tripStats: {
+      flexDirection: 'row',
+      gap: 24,
+      marginBottom: 20,
+    },
+    tripStat: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+      backgroundColor: colors.surfaceLight,
+      paddingHorizontal: 16,
+      paddingVertical: 10,
+      borderRadius: 12,
+    },
+    tripStatValue: {
+      color: colors.text,
+      fontSize: 14,
+      fontWeight: '600',
+    },
+    ratingSection: {
+      width: '100%',
+      alignItems: 'center',
+      marginBottom: 20,
+      backgroundColor: colors.surfaceLight,
+      borderRadius: 16,
+      padding: 16,
+    },
+    ratingLabel: {
+      color: colors.text,
+      fontSize: 15,
+      fontWeight: '600',
+      marginBottom: 12,
+    },
+    starsRow: {
+      flexDirection: 'row',
+      gap: 8,
+      marginBottom: 4,
+    },
+    commentInput: {
+      width: '100%',
+      marginTop: 12,
+      backgroundColor: colors.background,
+      borderRadius: 12,
+      padding: 12,
+      color: colors.text,
+      fontSize: 14,
+      minHeight: 60,
+      maxHeight: 100,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    shareReceiptBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 6,
+      paddingVertical: 10,
+      marginBottom: 16,
+      backgroundColor: colors.surfaceLight,
+      borderRadius: 12,
+      width: '100%',
+    },
+    shareReceiptText: {
+      color: colors.primary,
+      fontSize: 14,
+      fontWeight: '600',
+    },
+    messageRiderBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 6,
+      paddingVertical: 10,
+      marginBottom: 12,
+      backgroundColor: colors.infoBg,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: colors.info,
+      width: '100%',
+    },
+    messageRiderText: {
+      color: colors.info,
+      fontSize: 14,
+      fontWeight: '600',
+    },
+    doneBtn: {
+      borderRadius: 16,
+      overflow: 'hidden',
+      width: '100%',
+    },
+    actionGradient: {
+      paddingVertical: 16,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    actionBtnText: {
+      fontSize: 16,
+      fontWeight: '700',
+      color: '#fff',
+    },
+  });
+}
 
 export default TripCompletedPanel;

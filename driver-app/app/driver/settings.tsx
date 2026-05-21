@@ -9,6 +9,9 @@ import {
     Modal,
     Pressable,
     ActivityIndicator,
+    Alert,
+    TextInput,
+    Linking,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -24,7 +27,7 @@ import {
     useDriverMe,
     useUpdateDriverMe,
 } from '@shared/hooks/queries';
-import CustomAlert from '@shared/components/CustomAlert';
+import { showToast } from '../../hooks/useToast';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -38,16 +41,9 @@ export default function SettingsScreen() {
 
     const [showLanguageModal, setShowLanguageModal] = useState(false);
 
-    // Custom alert states
-    const [showDeleteStep1, setShowDeleteStep1] = useState(false);
     const [showDeleteStep2, setShowDeleteStep2] = useState(false);
     const [deleteInput, setDeleteInput] = useState('');
-    const [showEmergencyAlert, setShowEmergencyAlert] = useState(false);
     const [exportingData, setExportingData] = useState(false);
-    const [feedbackAlert, setFeedbackAlert] = useState<{
-        visible: boolean; title: string; message?: string;
-        variant: 'info' | 'success' | 'danger' | 'warning';
-    }>({ visible: false, title: '', variant: 'info' });
 
     useEffect(() => {
         loadLanguage();
@@ -95,12 +91,7 @@ export default function SettingsScreen() {
         updatePreferences.mutate({ [key]: value }, {
             onError: () => {
                 revert();
-                setFeedbackAlert({
-                    visible: true,
-                    title: 'Preference not saved',
-                    message: 'Could not reach the server. Your setting has been reverted — please try again.',
-                    variant: 'danger',
-                });
+                showToast('error', 'Preference not saved', 'Could not reach the server. Your setting has been reverted — please try again.');
             },
         });
     };
@@ -117,42 +108,28 @@ export default function SettingsScreen() {
         setExportingData(true);
         try {
             await api.post('/drivers/me/export-data');
-            setFeedbackAlert({
-                visible: true,
-                title: 'Export Requested',
-                message: 'Your data export is on its way — check your email.',
-                variant: 'success',
-            });
+            showToast('success', 'Export Requested', 'Your data export is on its way — check your email.');
         } catch {
-            setFeedbackAlert({
-                visible: true,
-                title: 'Error',
-                message: 'Failed to request data export. Please try again.',
-                variant: 'danger',
-            });
+            showToast('error', 'Error', 'Failed to request data export. Please try again.');
         } finally {
             setExportingData(false);
         }
     };
 
     const handleDeleteAccount = () => {
-        setShowDeleteStep1(true);
-    };
-
-    const handleDeleteStep2 = () => {
-        setShowDeleteStep1(false);
-        setDeleteInput('');
-        setShowDeleteStep2(true);
+        Alert.alert(
+            'Delete Account',
+            'Your account will be scheduled for deletion with a 30-day recovery window.\n\nYou can reactivate by contacting support within 30 days; after that, all your data, earnings history, and ride records are permanently deleted.',
+            [
+                { text: 'Cancel', style: 'cancel' },
+                { text: 'Yes, Continue', style: 'destructive', onPress: () => { setDeleteInput(''); setShowDeleteStep2(true); } },
+            ]
+        );
     };
 
     const executeDelete = async () => {
         if (deleteInput.trim().toUpperCase() !== 'DELETE') {
-            setFeedbackAlert({
-                visible: true,
-                title: 'Not Confirmed',
-                message: 'You must type DELETE to confirm account deletion.',
-                variant: 'warning',
-            });
+            showToast('info', 'Not Confirmed', 'You must type DELETE to confirm account deletion.');
             return;
         }
         try {
@@ -167,12 +144,7 @@ export default function SettingsScreen() {
             router.replace('/login' as any);
         } catch (err: any) {
             setShowDeleteStep2(false);
-            setFeedbackAlert({
-                visible: true,
-                title: 'Error',
-                message: err.message || 'Failed to delete account. Please contact support.',
-                variant: 'danger',
-            });
+            showToast('error', 'Error', err.message || 'Failed to delete account. Please contact support.');
         }
     };
 
@@ -300,12 +272,7 @@ export default function SettingsScreen() {
                                 updateDriverMe.mutate({ is_wav: value }, {
                                     onError: () => {
                                         setIsWav(!value);
-                                        setFeedbackAlert({
-                                            visible: true,
-                                            title: 'Could not save',
-                                            message: 'WAV setting could not be updated. Please try again.',
-                                            variant: 'danger',
-                                        });
+                                        showToast('error', 'Could not save', 'WAV setting could not be updated. Please try again.');
                                     },
                                 });
                             },
@@ -374,7 +341,7 @@ export default function SettingsScreen() {
                     <View style={styles.card}>
                         <TouchableOpacity
                             style={styles.actionRow}
-                            onPress={() => setShowEmergencyAlert(true)}
+                            onPress={() => Alert.alert('Emergency Services', 'Call 911 for immediate emergency assistance.', [{ text: 'Cancel', style: 'cancel' }, { text: 'Call 911', style: 'destructive', onPress: () => Linking.openURL('tel:911') }])}
                         >
                             <View style={[styles.settingIcon, { backgroundColor: 'rgba(239,68,68,0.1)' }]}>
                                 <Ionicons name="call" size={18} color="#EF4444" />
@@ -482,58 +449,37 @@ export default function SettingsScreen() {
                 </Pressable>
             </Modal>
 
-            {/* Custom Alert Modals */}
-            <CustomAlert
-                visible={showDeleteStep1}
-                title="Delete Account"
-                message={'Your account will be scheduled for deletion with a 30-day recovery window.\n\nYou can reactivate by contacting support within 30 days; after that, all your data, earnings history, and ride records are permanently deleted.'}
-                variant="danger"
-                icon="trash-outline"
-                buttons={[
-                    { text: 'Cancel', style: 'cancel' },
-                    { text: 'Yes, Continue', style: 'destructive', onPress: handleDeleteStep2 },
-                ]}
-                onClose={() => setShowDeleteStep1(false)}
-            />
-
-            <CustomAlert
+            {/* Delete confirmation step 2 — needs text input */}
+            <Modal
                 visible={showDeleteStep2}
-                title="Confirm Deletion"
-                message='Type "DELETE" below to permanently delete your account.'
-                variant="danger"
-                icon="alert-circle"
-                showInput
-                inputPlaceholder="Type DELETE"
-                inputValue={deleteInput}
-                onInputChange={setDeleteInput}
-                buttons={[
-                    { text: 'Cancel', style: 'cancel' },
-                    { text: 'Delete Forever', style: 'destructive', onPress: executeDelete },
-                ]}
-                onClose={() => setShowDeleteStep2(false)}
-            />
-
-            <CustomAlert
-                visible={showEmergencyAlert}
-                title="Emergency Services"
-                message="Call 911 for immediate emergency assistance."
-                variant="danger"
-                icon="call"
-                buttons={[
-                    { text: 'Cancel', style: 'cancel' },
-                    { text: 'Call 911', style: 'destructive' },
-                ]}
-                onClose={() => setShowEmergencyAlert(false)}
-            />
-
-            <CustomAlert
-                visible={feedbackAlert.visible}
-                title={feedbackAlert.title}
-                message={feedbackAlert.message}
-                variant={feedbackAlert.variant}
-                buttons={[{ text: 'OK', style: 'default' }]}
-                onClose={() => setFeedbackAlert(prev => ({ ...prev, visible: false }))}
-            />
+                transparent
+                animationType="fade"
+                onRequestClose={() => setShowDeleteStep2(false)}
+            >
+                <Pressable style={styles.deleteOverlay} onPress={() => setShowDeleteStep2(false)}>
+                    <Pressable style={styles.deleteModal} onPress={e => e.stopPropagation()}>
+                        <Ionicons name="alert-circle" size={40} color={colors.error} style={{ marginBottom: 12 }} />
+                        <Text style={styles.deleteModalTitle}>Confirm Deletion</Text>
+                        <Text style={styles.deleteModalMsg}>Type "DELETE" below to permanently delete your account.</Text>
+                        <TextInput
+                            style={styles.deleteInput}
+                            placeholder="Type DELETE"
+                            placeholderTextColor={colors.textDim}
+                            value={deleteInput}
+                            onChangeText={setDeleteInput}
+                            autoCapitalize="characters"
+                        />
+                        <View style={{ flexDirection: 'row', gap: 12, marginTop: 16 }}>
+                            <TouchableOpacity style={[styles.deleteModalBtn, { backgroundColor: colors.surface }]} onPress={() => setShowDeleteStep2(false)}>
+                                <Text style={[styles.deleteModalBtnText, { color: colors.text }]}>Cancel</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity style={[styles.deleteModalBtn, { backgroundColor: colors.error }]} onPress={executeDelete}>
+                                <Text style={[styles.deleteModalBtnText, { color: '#fff' }]}>Delete Forever</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </Pressable>
+                </Pressable>
+            </Modal>
         </View>
     );
 }
@@ -717,6 +663,53 @@ function createStyles(colors: ThemeColors) {
             fontSize: 13,
             color: colors.textDim,
             marginTop: 2,
+        },
+        deleteOverlay: {
+            flex: 1,
+            backgroundColor: 'rgba(0,0,0,0.5)',
+            justifyContent: 'center',
+            alignItems: 'center' as const,
+            padding: 24,
+        },
+        deleteModal: {
+            backgroundColor: colors.surface,
+            borderRadius: 20,
+            padding: 24,
+            width: '100%',
+            alignItems: 'center' as const,
+        },
+        deleteModalTitle: {
+            fontSize: 18,
+            fontWeight: '700' as const,
+            color: colors.text,
+            marginBottom: 8,
+        },
+        deleteModalMsg: {
+            fontSize: 14,
+            color: colors.textDim,
+            textAlign: 'center' as const,
+            marginBottom: 16,
+        },
+        deleteInput: {
+            width: '100%',
+            backgroundColor: colors.background,
+            borderRadius: 12,
+            padding: 14,
+            fontSize: 16,
+            color: colors.text,
+            borderWidth: 1,
+            borderColor: colors.border,
+            textAlign: 'center' as const,
+        },
+        deleteModalBtn: {
+            flex: 1,
+            paddingVertical: 14,
+            borderRadius: 12,
+            alignItems: 'center' as const,
+        },
+        deleteModalBtnText: {
+            fontSize: 15,
+            fontWeight: '600' as const,
         },
     });
 }

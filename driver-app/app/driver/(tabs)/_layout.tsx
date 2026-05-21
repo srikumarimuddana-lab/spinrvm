@@ -51,21 +51,24 @@ export default function DriverTabsLayout() {
         }}
       />
       <Tabs.Screen
+        name="activity"
+        options={{
+          title: 'Activity',
+          tabBarIcon: ({ color }) => (
+            <Ionicons name="stats-chart" size={24} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="rides"
         options={{
-          title: 'Rides',
-          tabBarIcon: ({ color }) => (
-            <Ionicons name="list" size={24} color={color} />
-          ),
+          href: null,
         }}
       />
       <Tabs.Screen
         name="earnings"
         options={{
-          title: 'Earnings',
-          tabBarIcon: ({ color }) => (
-            <Ionicons name="wallet" size={24} color={color} />
-          ),
+          href: null,
         }}
       />
       <Tabs.Screen

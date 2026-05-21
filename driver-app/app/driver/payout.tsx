@@ -11,7 +11,7 @@ import {
     Linking,
     KeyboardAvoidingView,
 } from 'react-native';
-import CustomAlert, { AlertButton } from '@shared/components/CustomAlert';
+import { showToast } from '../../hooks/useToast';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -55,15 +55,6 @@ function PayoutScreen() {
     const [showGstForm, setShowGstForm] = useState(false);
     const [stripeAccountStatus, setStripeAccountStatus] = useState<string | null>(null);
     const [initialLoading, setInitialLoading] = useState(true);
-    const [alert, setAlert] = useState<{
-        visible: boolean; title: string; message?: string;
-        variant: 'info' | 'success' | 'danger' | 'warning';
-        buttons?: AlertButton[];
-    }>({ visible: false, title: '', variant: 'info' });
-
-    const showAlert = (title: string, message: string, variant: 'success' | 'danger' | 'warning' | 'info' = 'info', buttons?: AlertButton[]) => {
-        setAlert({ visible: true, title, message, variant, buttons });
-    };
 
     useEffect(() => {
         loadData();
@@ -105,7 +96,7 @@ function PayoutScreen() {
 
     useEffect(() => {
         if (error) {
-            showAlert('Error', error, 'danger');
+            showToast('error', 'Error', error);
             clearError();
         }
     }, [error]);
@@ -117,16 +108,16 @@ function PayoutScreen() {
             const { url, mock } = res.data;
 
             if (mock) {
-                showAlert(
+                showToast(
+                    'info',
                     'Demo Mode',
                     'Stripe is not configured yet. In production, you will be redirected to Stripe to complete identity verification and add your bank account.',
-                    'info',
                 );
             } else if (url) {
                 await Linking.openURL(url);
             }
         } catch (err: any) {
-            showAlert('Error', err.response?.data?.detail || 'Failed to start Stripe onboarding', 'danger');
+            showToast('error', 'Error', err.response?.data?.detail || 'Failed to start Stripe onboarding');
         } finally {
             setStripeOnboarding(false);
         }
@@ -136,38 +127,38 @@ function PayoutScreen() {
         // Validate GST/BN format: 9 digits or 15 chars (9-digit BN + RT0001)
         const cleaned = gstNumber.replace(/\s/g, '');
         if (cleaned && !/^\d{9}(RT\d{4})?$/.test(cleaned)) {
-            showAlert('Invalid Format', 'Enter your 9-digit Business Number (BN) or full GST number (e.g., 123456789RT0001)', 'warning');
+            showToast('info', 'Invalid Format', 'Enter your 9-digit Business Number (BN) or full GST number (e.g., 123456789RT0001)');
             return;
         }
 
         try {
             await updateDriverMe.mutateAsync({ gst_number: cleaned || null });
             setShowGstForm(false);
-            showAlert('Saved', 'GST/BN number updated successfully', 'success');
+            showToast('success', 'Saved', 'GST/BN number updated successfully');
         } catch (err: any) {
-            showAlert('Error', err.response?.data?.detail || 'Failed to save GST number', 'danger');
+            showToast('error', 'Error', err.response?.data?.detail || 'Failed to save GST number');
         }
     };
 
     const handleRequestPayout = async () => {
         const amount = parseFloat(payoutAmount);
         if (isNaN(amount) || amount <= 0) {
-            showAlert('Error', 'Please enter a valid amount', 'danger');
+            showToast('error', 'Error', 'Please enter a valid amount');
             return;
         }
         if (amount < 10) {
-            showAlert('Error', 'Minimum payout amount is $10', 'danger');
+            showToast('error', 'Error', 'Minimum payout amount is $10');
             return;
         }
         if (driverBalance && amount > parseFloat(driverBalance.payable_balance)) {
-            showAlert('Error', `Insufficient balance. Available: $${parseFloat(driverBalance.payable_balance).toFixed(2)}`, 'danger');
+            showToast('error', 'Error', `Insufficient balance. Available: $${parseFloat(driverBalance.payable_balance).toFixed(2)}`);
             return;
         }
 
         const result = await requestPayout(amount);
         if (result.success) {
             setPayoutAmount('');
-            showAlert('Success', 'Payout request submitted. Funds will arrive in 2-3 business days.', 'success');
+            showToast('success', 'Success', 'Payout request submitted. Funds will arrive in 2-3 business days.');
         }
     };
 
@@ -182,16 +173,16 @@ function PayoutScreen() {
             if (url) {
                 await Linking.openURL(url);
             } else if (res.data?.total_earnings != null) {
-                showAlert(
+                showToast(
+                    'info',
                     `T4A Summary — ${res.data.year}`,
                     `Total earnings: $${Number(res.data.total_earnings).toFixed(2)}\nTotal trips: ${res.data.total_trips}\nNet earnings: $${Number(res.data.net_earnings).toFixed(2)}\n\nA downloadable PDF will be available once tax documents are finalized.`,
-                    'info',
                 );
             } else {
-                showAlert('Unavailable', 'T4A document is not yet available. Please try again later.', 'warning');
+                showToast('info', 'Unavailable', 'T4A document is not yet available. Please try again later.');
             }
         } catch (err: any) {
-            showAlert('Error', err.response?.data?.detail || 'Failed to generate T4A download link.', 'danger');
+            showToast('error', 'Error', err.response?.data?.detail || 'Failed to generate T4A download link.');
         } finally {
             setDownloadingT4A(false);
         }
@@ -211,10 +202,10 @@ function PayoutScreen() {
                 const encoded = encodeURIComponent(res.data.data);
                 await Linking.openURL(`data:text/csv;charset=utf-8,${encoded}`);
             } else {
-                showAlert('Unavailable', 'Earnings CSV is not yet available. Please try again later.', 'warning');
+                showToast('info', 'Unavailable', 'Earnings CSV is not yet available. Please try again later.');
             }
         } catch (err: any) {
-            showAlert('Error', err.response?.data?.detail || 'Failed to generate earnings CSV download link.', 'danger');
+            showToast('error', 'Error', err.response?.data?.detail || 'Failed to generate earnings CSV download link.');
         } finally {
             setDownloadingCSV(false);
         }
@@ -527,14 +518,6 @@ function PayoutScreen() {
             </ScrollView>
             </KeyboardAvoidingView>
 
-            <CustomAlert
-                visible={alert.visible}
-                title={alert.title}
-                message={alert.message}
-                variant={alert.variant}
-                buttons={alert.buttons || [{ text: 'OK', style: 'default' }]}
-                onClose={() => setAlert(a => ({ ...a, visible: false }))}
-            />
         </View>
     );
 }

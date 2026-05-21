@@ -664,6 +664,84 @@ class TestCompleteRide:
 
         assert result is not None
 
+    def test_gps_spike_is_rejected_from_actual_distance(self):
+        """A single tower-handoff teleport must not inflate actual_distance_km.
+
+        Regression for the 7 km → 94 km bug: complete_ride summed raw haversine
+        between consecutive pings with no speed/distance sanity caps, so one
+        bad point could add tens of km. With the filter, the spike segment is
+        skipped and only the legitimate 7 km path is summed.
+        """
+        from backend.routes import drivers as drv
+
+        ride = _ride("in_progress")
+        completed = _ride("completed")
+
+        # Build a breadcrumb trail: 8 points marching ~1 km north from
+        # (52.10, -106.70), each 30 s apart so the time-gap filter doesn't
+        # fire. Then inject one bogus spike ~55 km east at the midpoint.
+        def _ts(seconds: int) -> str:
+            return datetime(2026, 5, 21, 12, 0, seconds, tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
+
+        crumbs = [
+            {
+                "lat": 52.10 + i * 0.009,
+                "lng": -106.70,
+                "timestamp": _ts(i * 30),
+                "tracking_phase": "trip_in_progress",
+            }
+            for i in range(8)
+        ]
+        # Spike at index 4 — 0.5° (~55 km) east of where we should be.
+        crumbs.insert(
+            4,
+            {
+                "lat": 52.10 + 4 * 0.009,
+                "lng": -106.20,
+                "timestamp": _ts(4 * 30 + 15),
+                "tracking_phase": "trip_in_progress",
+            },
+        )
+
+        captured: dict = {}
+
+        async def fake_update_one(table, _filters, fields, **kw):
+            if table == "rides":
+                captured.update(fields)
+            return completed
+
+        def get_rows_side_effect(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "rides":
+                return [ride]
+            if table == "driver_location_history":
+                return crumbs
+            return []
+
+        with (
+            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch("backend.routes.drivers.db_supabase.update_one", AsyncMock(side_effect=fake_update_one)),
+            patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=completed)),
+            patch("backend.routes.drivers.db_supabase.get_user_by_id", AsyncMock(return_value=None)),
+            patch("backend.routes.drivers.record_period_transition", AsyncMock()),
+            patch("backend.routes.drivers.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.drivers.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.drivers.manager.broadcast_to_admins", AsyncMock()),
+            patch("backend.routes.drivers.send_push_notification", AsyncMock()),
+            patch("backend.routes.drivers._generate_and_store_ride_snapshot", AsyncMock()),
+        ):
+            asyncio.run(drv.complete_ride(ride_id=RIDE_ID, current_user={"id": USER_ID}))
+
+        # Legitimate path is ~7 km. Without the filter both spike legs
+        # (~55 km in + ~55 km out) would land in actual_distance_km, pushing
+        # it well over 100. Allow generous slack for haversine + planned
+        # fallback.
+        assert captured.get("actual_distance_km") is not None
+        assert captured["actual_distance_km"] < 15, (
+            f"GPS spike leaked into actual_distance_km: {captured['actual_distance_km']}"
+        )
+
     def test_rejects_non_in_progress_state(self):
         from backend.routes import drivers as drv
         from backend.utils.error_handling import RideStateError

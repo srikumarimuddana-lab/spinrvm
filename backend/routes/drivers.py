@@ -2660,8 +2660,26 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         "gps_points_count": gps_points_count,
     }
 
-    # Recalculate fare if actual distance differs materially from estimate
-    if actual_distance_km > 0 and abs(actual_distance_km - planned_distance) > 0.1:
+    # Check fare lock setting — when enabled, rider pays the booking-time
+    # estimate regardless of actual distance/time (SK regulatory requirement).
+    _fare_lock = False
+    try:
+        try:
+            from ..settings_loader import get_app_settings as _gas
+        except ImportError:
+            from settings_loader import get_app_settings as _gas  # type: ignore
+        _fl_settings = await _gas()
+        _fare_lock = (_fl_settings or {}).get("fare_lock_enabled", False)
+    except Exception:
+        pass
+
+    if _fare_lock:
+        update_fields["distance_km"] = actual_distance_km
+        logger.info(
+            f"Ride {ride_id}: fare_lock active — keeping booking-time fare. "
+            f"planned={planned_distance}km actual={actual_distance_km}km"
+        )
+    elif actual_distance_km > 0 and abs(actual_distance_km - planned_distance) > 0.1:
         fare_adj = recalculate_fare_for_distance(ride, actual_distance_km)
         if fare_adj:
             update_fields.update(fare_adj)

@@ -624,6 +624,33 @@ export default function SettingsPage() {
                             )}
                         </CardContent>
                     </Card>
+
+                    {/* Fare Lock — SK regulatory requirement: the price shown
+                        to the rider at booking time is the price charged,
+                        regardless of actual distance/time deviation. */}
+                    <Card className="border-border/50 lg:col-span-2">
+                        <CardHeader>
+                            <CardTitle className="text-base">Fare Lock (SK Regulation)</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-4">
+                            <div className="flex items-center justify-between">
+                                <div className="space-y-0.5">
+                                    <Label htmlFor="fare_lock_enabled">Lock fare at booking time</Label>
+                                    <p className="text-xs text-muted-foreground">
+                                        When enabled, the fare shown to the rider before the ride is the final charge —
+                                        no recalculation at completion regardless of distance or time deviation.
+                                        Required under Saskatchewan ride-share regulations.
+                                    </p>
+                                </div>
+                                <Switch
+                                    id="fare_lock_enabled"
+                                    checked={settings.fare_lock_enabled ?? false}
+                                    onCheckedChange={(v) => update("fare_lock_enabled", v)}
+                                />
+                            </div>
+                        </CardContent>
+                    </Card>
                 </div>
             )}
 

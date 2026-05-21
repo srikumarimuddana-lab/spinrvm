@@ -1060,7 +1060,17 @@ async def admin_get_ride_invoice(ride_id: str):
     ride = await db_supabase.get_ride_details_enriched(ride_id)
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
-    return {
+
+    snapshot = ride.get("fare_breakdown_snapshot")
+    fare_locked = False
+    if snapshot and isinstance(snapshot, dict) and snapshot.get("lines"):
+        try:
+            settings = await get_app_settings()
+            fare_locked = settings.get("fare_lock_enabled", False) if settings else False
+        except Exception:
+            fare_locked = False
+
+    invoice_data: dict = {
         "ride_id": ride.get("id"),
         "status": ride.get("status"),
         "created_at": ride.get("created_at"),
@@ -1087,10 +1097,16 @@ async def admin_get_ride_invoice(ride_id: str):
         "driver_vehicle": ride.get("driver_vehicle", ""),
         "driver_license_plate": ride.get("driver_license_plate", ""),
         "actual_distance_km": ride.get("actual_distance_km"),
-        # GPS coordinates are omitted (F-42/PIPEDA data minimisation).
-        # The route map image is served separately via /rides/{id}/route-map.png,
-        # which keeps raw coordinates server-side and returns only a PNG.
+        "fare_locked": fare_locked,
     }
+
+    if fare_locked and snapshot:
+        invoice_data["fare_breakdown"] = snapshot["lines"]
+        invoice_data["grand_total"] = snapshot.get("grand_total")
+    else:
+        invoice_data["grand_total"] = ride.get("grand_total") or ride.get("total_fare", 0)
+
+    return invoice_data
 
 
 @router.get("/rides/{ride_id}/route-map.png")

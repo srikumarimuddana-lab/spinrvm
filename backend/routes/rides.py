@@ -1694,6 +1694,28 @@ async def create_ride(
             )
             fresh_ride["promo_error"] = "Promo could not be applied"
 
+    # ── Fare breakdown snapshot ──
+    # Frozen receipt: the exact line items shown to the rider at booking.
+    # Only stores lines + grand_total — all component fields (base_fare,
+    # tax_breakdown, promo_code, etc.) already live on the ride row.
+    # When fare_lock_enabled, GET /rides/{id} serves this instead of
+    # recomputing from (potentially recalculated) ride fields.
+    snapshot_lines = _build_fare_breakdown(fresh_ride)
+    fare_snapshot = {
+        "lines": snapshot_lines,
+        "grand_total": _sum_fare_breakdown(snapshot_lines),
+        "locked_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        await db_supabase.update_one(
+            "rides",
+            {"id": ride.id},
+            {"fare_breakdown_snapshot": fare_snapshot},
+        )
+        fresh_ride["fare_breakdown_snapshot"] = fare_snapshot
+    except Exception as snap_err:
+        logger.warning(f"create_ride: fare snapshot save failed: {snap_err}")
+
     # Let admin live-monitoring see the request before dispatch starts —
     # previously the dashboard only observed a ride once a driver accepted,
     # which made it impossible to watch an unassigned ride sit in queue.
@@ -1863,12 +1885,27 @@ async def get_ride_history(
         if r.get("status") == RideStatus.COMPLETED or (r.get("status") == RideStatus.CANCELLED and r.get("driver_id"))
     ][:limit]
 
+    try:
+        _settings = await get_app_settings()
+        _fare_locked = _settings.get("fare_lock_enabled", False) if _settings else False
+    except Exception:
+        _fare_locked = False
+
     for r in rides:
-        r["fare_breakdown"] = _build_fare_breakdown(r)
-        # API is the single source of truth: grand_total on the response is
-        # the sum of the fare_breakdown the client renders. Guarantees the
-        # in-progress / end-ride / receipt screens never disagree on the bill.
-        r["grand_total"] = _sum_fare_breakdown(r["fare_breakdown"])
+        snap = r.get("fare_breakdown_snapshot")
+        if _fare_locked and snap and isinstance(snap, dict) and snap.get("lines"):
+            lines = list(snap["lines"])
+            ride_tip = float(_d(r.get("tip_amount") or 0))
+            has_tip_line = any(ln.get("type") == "tip" for ln in lines)
+            if ride_tip > 0 and not has_tip_line:
+                lines.append({"label": "Tip", "amount": _f(_d(ride_tip)), "type": "tip"})
+            r["fare_breakdown"] = lines
+            r["grand_total"] = _sum_fare_breakdown(lines)
+            r["fare_locked"] = True
+        else:
+            r["fare_breakdown"] = _build_fare_breakdown(r)
+            r["grand_total"] = _sum_fare_breakdown(r["fare_breakdown"])
+            r["fare_locked"] = False
         r["actual_duration_minutes"] = _actual_duration_minutes(r)
 
     next_cursor = rides[-1]["id"] if len(rides) == limit else None
@@ -2103,11 +2140,31 @@ async def get_ride(
             ):
                 ride.pop(_addr_key, None)
 
-    ride["fare_breakdown"] = _build_fare_breakdown(ride)
-    # API is the single source of truth: grand_total on the response is the
-    # sum of the fare_breakdown the client renders. Guarantees the
-    # in-progress / end-ride / receipt screens never disagree on the bill.
-    ride["grand_total"] = _sum_fare_breakdown(ride["fare_breakdown"])
+    # When a fare snapshot exists and fare_lock is enabled, the snapshot
+    # IS the bill — use it verbatim instead of recomputing from ride fields
+    # that may have been adjusted at completion.
+    snapshot = ride.get("fare_breakdown_snapshot")
+    fare_locked = False
+    if snapshot and isinstance(snapshot, dict) and snapshot.get("lines"):
+        try:
+            settings = await get_app_settings()
+            fare_locked = settings.get("fare_lock_enabled", False) if settings else False
+        except Exception:
+            fare_locked = False
+    if fare_locked and snapshot:
+        lines = list(snapshot["lines"])
+        # Ensure tip is reflected even for snapshots that pre-date the tip update
+        ride_tip = float(_d(ride.get("tip_amount") or 0))
+        has_tip_line = any(ln.get("type") == "tip" for ln in lines)
+        if ride_tip > 0 and not has_tip_line:
+            lines.append({"label": "Tip", "amount": _f(_d(ride_tip)), "type": "tip"})
+        ride["fare_breakdown"] = lines
+        ride["grand_total"] = _sum_fare_breakdown(lines)
+        ride["fare_locked"] = True
+    else:
+        ride["fare_breakdown"] = _build_fare_breakdown(ride)
+        ride["grand_total"] = _sum_fare_breakdown(ride["fare_breakdown"])
+        ride["fare_locked"] = False
     ride["actual_duration_minutes"] = _actual_duration_minutes(ride)
 
     def serialize_doc(doc):
@@ -2150,10 +2207,19 @@ async def add_tip(
     new_tip = _round(existing_tip + tip_amount)
     new_driver_earnings = _round(existing_earnings + tip_amount)
 
-    await db_supabase.update_ride(
-        ride_id,
-        {"tip_amount": _f(new_tip), "driver_earnings": _f(new_driver_earnings)},
-    )
+    update_payload = {"tip_amount": _f(new_tip), "driver_earnings": _f(new_driver_earnings)}
+
+    # Update fare_breakdown_snapshot to include the tip so invoices and
+    # ride details reflect the final charged amount.
+    snapshot = ride.get("fare_breakdown_snapshot")
+    if snapshot and isinstance(snapshot, dict) and snapshot.get("lines") is not None:
+        updated_lines = [ln for ln in snapshot["lines"] if ln.get("type") != "tip"]
+        updated_lines.append({"label": "Tip", "amount": _f(new_tip), "type": "tip"})
+        snapshot["lines"] = updated_lines
+        snapshot["grand_total"] = _sum_fare_breakdown(updated_lines)
+        update_payload["fare_breakdown_snapshot"] = snapshot
+
+    await db_supabase.update_ride(ride_id, update_payload)
 
     # Notify the assigned driver so the tip shows up immediately instead
     # of only after the next earnings refresh. Best-effort — the tip has
@@ -2269,6 +2335,29 @@ async def process_payment(
     total_charge = _q(ride.get("grand_total") or ride.get("total_fare", 0) or 0) + _q(tip_amount)
     payment_method = (ride.get("payment_method") or "card").lower()
 
+    # Persist tip and update snapshot before charging so the receipt
+    # and all downstream surfaces reflect the final total.
+    if tip_amount > 0:
+        tip_d = _round(_d(tip_amount))
+        existing_earnings = _d(ride.get("driver_earnings") or 0)
+        tip_update: dict = {
+            "tip_amount": _f(tip_d),
+            "driver_earnings": _f(_round(existing_earnings + tip_d)),
+        }
+        snapshot = ride.get("fare_breakdown_snapshot")
+        if snapshot and isinstance(snapshot, dict) and snapshot.get("lines") is not None:
+            updated_lines = [ln for ln in snapshot["lines"] if ln.get("type") != "tip"]
+            updated_lines.append({"label": "Tip", "amount": _f(tip_d), "type": "tip"})
+            snapshot["lines"] = updated_lines
+            snapshot["grand_total"] = _sum_fare_breakdown(updated_lines)
+            tip_update["fare_breakdown_snapshot"] = snapshot
+        await db_supabase.update_ride(ride_id, tip_update)
+        ride["tip_amount"] = _f(tip_d)
+        ride["driver_earnings"] = tip_update["driver_earnings"]
+
+    _snap = ride.get("fare_breakdown_snapshot")
+    _snap_lines = (_snap.get("lines") if isinstance(_snap, dict) else None) if _snap else None
+
     if payment_method == "wallet":
         result = await settle_wallet(
             ride,
@@ -2276,7 +2365,7 @@ async def process_payment(
             current_user["id"],
             total_charge,
             tip_amount,
-            fare_breakdown=_build_fare_breakdown(ride),
+            fare_breakdown=_snap_lines or _build_fare_breakdown(ride),
         )
     elif payment_method == "company_allowance":
         result = await settle_corporate(ride, ride_id, total_charge, tip_amount)
@@ -3511,6 +3600,32 @@ async def get_ride_receipt(ride_id: str, current_user: dict = Depends(get_curren
             await db_supabase.get_rows("corporate_accounts", {"id": ride["corporate_account_id"]}, limit=1)
         )
 
+    # Resolve fare display: snapshot (when fare_lock is active) or dynamic rebuild.
+    snapshot = ride.get("fare_breakdown_snapshot")
+    fare_locked = False
+    if snapshot and isinstance(snapshot, dict) and snapshot.get("lines"):
+        try:
+            settings = await get_app_settings()
+            fare_locked = settings.get("fare_lock_enabled", False) if settings else False
+        except Exception:
+            fare_locked = False
+
+    if fare_locked and snapshot:
+        fare_lines = list(snapshot["lines"])
+        ride_tip = float(_d(ride.get("tip_amount") or 0))
+        has_tip_line = any(ln.get("type") == "tip" for ln in fare_lines)
+        if ride_tip > 0 and not has_tip_line:
+            fare_lines.append({"label": "Tip", "amount": _f(_d(ride_tip)), "type": "tip"})
+        receipt_grand_total = _sum_fare_breakdown(fare_lines)
+    else:
+        fare_lines = _build_fare_breakdown(ride)
+        receipt_grand_total = ride.get("grand_total") or (
+            (ride.get("total_fare", 0) or 0)
+            + (ride.get("area_fees_total", 0) or 0)
+            + (ride.get("tax_amount", 0) or 0)
+            + (ride.get("tip_amount", 0) or 0)
+        )
+
     receipt_data = {
         "ride_id": ride_id,
         "ride_code": ride.get("ride_code"),
@@ -3531,10 +3646,6 @@ async def get_ride_receipt(ride_id: str, current_user: dict = Depends(get_curren
             if ride.get("status") == RideStatus.CANCELLED
             else 0
         ),
-        # Itemised charges so the rider receipt and the support audit can
-        # reconcile to the cent. tax_breakdown / area_fees_breakdown were
-        # added in migration 46; they may be missing on legacy rides, in
-        # which case clients should fall back to the scalar totals.
         "surge_multiplier": ride.get("surge_multiplier", 1.0),
         "area_fees_total": ride.get("area_fees_total", 0),
         "area_fees_breakdown": ride.get("area_fees_breakdown", []),
@@ -3542,13 +3653,9 @@ async def get_ride_receipt(ride_id: str, current_user: dict = Depends(get_curren
         "tax_breakdown": ride.get("tax_breakdown", {}),
         "tip_amount": ride.get("tip_amount", 0),
         "total_charged": ride.get("total_fare", 0),
-        "grand_total": ride.get("grand_total")
-        or (
-            (ride.get("total_fare", 0) or 0)
-            + (ride.get("area_fees_total", 0) or 0)
-            + (ride.get("tax_amount", 0) or 0)
-            + (ride.get("tip_amount", 0) or 0)
-        ),
+        "grand_total": receipt_grand_total,
+        "fare_breakdown": fare_lines,
+        "fare_locked": fare_locked,
         "payment_method": (
             "Corporate Account"
             if corporate_account

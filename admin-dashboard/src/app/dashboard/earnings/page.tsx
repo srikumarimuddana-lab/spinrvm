@@ -13,8 +13,8 @@ import { Button } from "@/components/ui/button";
 import {
     Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
-import { Download, Car, CreditCard, Users, TrendingUp, TrendingDown, DollarSign, UserPlus, Clock, MapPin, X, GitCompareArrows, Wallet, CheckCircle, AlertTriangle, Percent, Receipt, UserCheck, XCircle, Ticket, Zap, Landmark, Undo2, Filter } from "lucide-react";
-import { getPayouts, getPayoutStats } from "@/lib/api";
+import { Download, Car, CreditCard, Users, TrendingUp, TrendingDown, DollarSign, UserPlus, Clock, MapPin, X, GitCompareArrows, Wallet, CheckCircle, AlertTriangle, Percent, Receipt, UserCheck, XCircle, Ticket, Zap, Landmark, Undo2, Filter, Hourglass, Activity } from "lucide-react";
+import { getPayouts, getPayoutStats, getPayoutsOverview, type PayoutsOverview } from "@/lib/api";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { Legend } from "recharts";
 import { Input } from "@/components/ui/input";
@@ -334,6 +334,182 @@ function CancellationMixBar({ rider, driver, system }: { rider: number; driver: 
             <div className="bg-amber-500" style={{ width: pct(rider) }} title={`${rider} rider-cancelled`} />
             <div className="bg-red-500" style={{ width: pct(driver) }} title={`${driver} driver-cancelled`} />
             <div className="bg-muted-foreground/60" style={{ width: pct(system) }} title={`${system} system / no-driver-found`} />
+        </div>
+    );
+}
+
+// Helpers for time formatting in the payouts header. "1.5 h" reads
+// better than "1 h 30 m" at small font sizes, so use decimal hours
+// unless the value drops below an hour.
+function fmtHours(n: number) {
+    if (n <= 0) return "—";
+    if (n < 1) return `${Math.round(n * 60)} min`;
+    if (n < 24) return `${n.toFixed(1)} h`;
+    return `${(n / 24).toFixed(1)} d`;
+}
+
+function PayoutsCeoHeader({
+    overview,
+    loading,
+    period,
+    onPeriodChange,
+}: {
+    overview: PayoutsOverview | null;
+    loading: boolean;
+    period: EarningsPeriod;
+    onPeriodChange: (p: EarningsPeriod) => void;
+}) {
+    const m = overview?.metrics;
+    return (
+        <div className="space-y-4">
+            <div className="flex items-end justify-between gap-3 flex-wrap">
+                <div>
+                    <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+                        Payout flow
+                    </h2>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                        {overview ? overview.period.label : "Loading…"} · compared to prior {overview?.period.days ?? "—"} days
+                    </p>
+                </div>
+                <div className="inline-flex rounded-lg border border-border bg-card p-0.5">
+                    {PERIOD_OPTIONS.map((opt) => (
+                        <button
+                            key={opt.value}
+                            type="button"
+                            onClick={() => onPeriodChange(opt.value)}
+                            className={`px-3 py-1 text-xs font-semibold rounded transition-colors ${
+                                period === opt.value
+                                    ? "bg-primary text-primary-foreground"
+                                    : "text-muted-foreground hover:text-foreground"
+                            }`}
+                        >
+                            {opt.label}
+                        </button>
+                    ))}
+                </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                {/* Outstanding payable — the dominant working-capital
+                    number for a 0% commission marketplace. Amber accent
+                    because high outstanding is operational debt to drivers,
+                    not a positive metric. Snapshot value (not period-windowed). */}
+                <MetricCard
+                    icon={Hourglass}
+                    label="Outstanding to drivers"
+                    metric={m?.outstanding_payable}
+                    format={fmtMoney}
+                    accent="text-amber-600 dark:text-amber-400"
+                    loading={loading}
+                />
+                <MetricCard
+                    icon={CheckCircle}
+                    label="Paid out"
+                    metric={m?.total_paid_out}
+                    format={fmtMoney}
+                    accent="text-emerald-600 dark:text-emerald-400"
+                    loading={loading}
+                />
+                <MetricCard
+                    icon={Clock}
+                    label="Pending in flight"
+                    metric={m?.pending_in_flight}
+                    format={fmtMoney}
+                    loading={loading}
+                />
+                <MetricCard
+                    icon={AlertTriangle}
+                    label="Failed"
+                    metric={m?.failed_amount}
+                    format={fmtMoney}
+                    accent="text-red-600 dark:text-red-400"
+                    loading={loading}
+                />
+                <MetricCard
+                    icon={Activity}
+                    label="Success rate"
+                    metric={m?.success_rate_pct}
+                    format={fmtPct}
+                    accent="text-emerald-600 dark:text-emerald-400"
+                    loading={loading}
+                />
+                <MetricCard
+                    icon={Clock}
+                    label="Median time to payout"
+                    metric={m?.median_time_to_payout_hours}
+                    format={fmtHours}
+                    loading={loading}
+                />
+                <MetricCard
+                    icon={DollarSign}
+                    label="Avg payout"
+                    metric={m?.avg_payout_amount}
+                    format={fmtMoney}
+                    loading={loading}
+                />
+                <MetricCard
+                    icon={Wallet}
+                    label="Payouts"
+                    metric={m?.payouts_count}
+                    format={fmtCount}
+                    loading={loading}
+                />
+            </div>
+
+            {/* Daily payout volume — stacked bars by status. Failed
+                stacks on top in red so a spike in failures is visible
+                even when paid_out dominates the y-axis. */}
+            <Card className="border-border/50">
+                <CardHeader className="pb-2">
+                    <CardTitle className="text-sm">Daily payout volume</CardTitle>
+                </CardHeader>
+                <CardContent>
+                    {loading || !overview ? (
+                        <div className="h-56 w-full bg-muted/30 rounded animate-pulse" />
+                    ) : (
+                        <ResponsiveContainer width="100%" height={224}>
+                            <BarChart data={overview.daily_series} margin={{ top: 10, right: 16, left: -8, bottom: 0 }}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+                                <XAxis
+                                    dataKey="date"
+                                    tickFormatter={(d) => {
+                                        try {
+                                            return new Date(d).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+                                        } catch { return d; }
+                                    }}
+                                    tick={{ fontSize: 11 }}
+                                    stroke="hsl(var(--muted-foreground))"
+                                />
+                                <YAxis
+                                    tick={{ fontSize: 11 }}
+                                    stroke="hsl(var(--muted-foreground))"
+                                    tickFormatter={(v) => `$${Math.round(v).toLocaleString()}`}
+                                />
+                                <Tooltip
+                                    contentStyle={tooltipStyle}
+                                    formatter={(value, name) => {
+                                        const n = Number(value ?? 0);
+                                        const label =
+                                            name === "paid_out" ? "Paid out"
+                                            : name === "pending" ? "Pending"
+                                            : name === "failed" ? "Failed"
+                                            : String(name);
+                                        return [fmtMoney(n), label] as [string, string];
+                                    }}
+                                    labelFormatter={(d) => {
+                                        try {
+                                            return new Date(d as string).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+                                        } catch { return d as string; }
+                                    }}
+                                />
+                                <Bar dataKey="paid_out" stackId="a" fill="hsl(142 71% 45%)" />
+                                <Bar dataKey="pending" stackId="a" fill="hsl(38 92% 50%)" />
+                                <Bar dataKey="failed" stackId="a" fill="hsl(0 84% 60%)" />
+                            </BarChart>
+                        </ResponsiveContainer>
+                    )}
+                </CardContent>
+            </Card>
         </div>
     );
 }
@@ -839,6 +1015,9 @@ function PayoutsTab() {
     const [stats, setStats] = useState<any>(null);
     const [loading, setLoading] = useState(true);
     const [statusFilter, setStatusFilter] = useState("all");
+    const [period, setPeriod] = useState<EarningsPeriod>("7d");
+    const [overview, setOverview] = useState<PayoutsOverview | null>(null);
+    const [overviewLoading, setOverviewLoading] = useState(true);
 
     useEffect(() => {
         Promise.all([
@@ -850,6 +1029,14 @@ function PayoutsTab() {
         }).finally(() => setLoading(false));
     }, []);
 
+    useEffect(() => {
+        setOverviewLoading(true);
+        getPayoutsOverview({ period })
+            .then(setOverview)
+            .catch((e) => console.error('[PayoutsOverview] load failed:', e))
+            .finally(() => setOverviewLoading(false));
+    }, [period]);
+
     const filtered = statusFilter === "all" ? payouts : payouts.filter(p => p.status === statusFilter);
 
     const statusBadge = (s: string) => {
@@ -859,12 +1046,27 @@ function PayoutsTab() {
         return "bg-zinc-500/15 text-zinc-600";
     };
 
-    if (loading) return <div className="flex justify-center p-12"><div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" /></div>;
-
     return (
         <div className="space-y-6">
-            {/* Stats */}
-            {stats && (
+            {/* Pass 1 — CEO header. Sits above the legacy stat cards
+                so the page opens to "is payout flow healthy?" instead
+                of a static transaction log. Skeleton-loads independently
+                so it doesn't block the rest of the page. */}
+            <PayoutsCeoHeader
+                overview={overview}
+                loading={overviewLoading}
+                period={period}
+                onPeriodChange={setPeriod}
+            />
+
+            {/* Legacy stats — kept for backward compatibility while the
+                Pass 1 header takes over the headline role. Will retire
+                once Pass 2 lands. */}
+            {loading ? (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 animate-pulse">
+                    {[0, 1, 2, 3].map((i) => <div key={i} className="h-20 rounded-xl bg-muted" />)}
+                </div>
+            ) : stats && (
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                     <Card><CardContent className="pt-4">
                         <div className="flex items-center gap-2 text-sm text-muted-foreground"><CheckCircle className="h-4 w-4 text-green-500" /> Total Paid</div>

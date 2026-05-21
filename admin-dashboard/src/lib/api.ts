@@ -1841,6 +1841,40 @@ export const getPayoutById = (id: string) =>
 export const getPayoutStats = () =>
     request<any>("/api/admin/payouts/stats");
 
+export interface PayoutsOverview {
+    period: {
+        key: EarningsPeriod;
+        label: string;
+        days: number;
+        start: string;
+        end: string;
+        prev_start: string;
+        prev_end: string;
+    };
+    metrics: {
+        outstanding_payable: MetricWithDelta;
+        total_paid_out: MetricWithDelta;
+        pending_in_flight: MetricWithDelta;
+        failed_amount: MetricWithDelta;
+        success_rate_pct: MetricWithDelta;
+        median_time_to_payout_hours: MetricWithDelta;
+        avg_payout_amount: MetricWithDelta;
+        payouts_count: MetricWithDelta;
+    };
+    daily_series: Array<{
+        date: string;
+        paid_out: number;
+        pending: number;
+        failed: number;
+    }>;
+}
+
+export const getPayoutsOverview = (params: { period: EarningsPeriod; service_area_id?: string }) => {
+    const sp = new URLSearchParams({ period: params.period });
+    if (params.service_area_id) sp.set("service_area_id", params.service_area_id);
+    return request<PayoutsOverview>(`/api/admin/payouts/overview?${sp.toString()}`);
+};
+
 /* ── Disputes (resolve) ─────────────────── */
 export const resolveDispute = (id: string, data: { resolution: string; refund_amount?: number; admin_note?: string }) =>
     request<any>(`/api/admin/disputes/${id}/resolve`, { method: "PUT", body: JSON.stringify(data) });

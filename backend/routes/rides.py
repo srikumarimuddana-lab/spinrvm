@@ -1678,13 +1678,21 @@ async def create_ride(
                 fresh_ride["promo_code"] = validation["code"]
                 fresh_ride["promo_application_id"] = application_id
                 fresh_ride["grand_total"] = discounted_grand
-        except HTTPException:
-            pass  # promo invalid/expired — ride still created without discount
+        except HTTPException as he:
+            logger.warning(
+                "create_ride: promo '%s' rejected for rider %s on ride %s: %s",
+                body.promo_code,
+                current_user["id"],
+                ride.id,
+                he.detail,
+            )
+            fresh_ride["promo_error"] = he.detail if isinstance(he.detail, str) else str(he.detail)
         except Exception as e:
             logger.error(
                 f"create_ride: promo application failed for code={body.promo_code}: {e}",
                 exc_info=True,
             )
+            fresh_ride["promo_error"] = "Promo could not be applied"
 
     # Let admin live-monitoring see the request before dispatch starts —
     # previously the dashboard only observed a ride once a driver accepted,
@@ -3434,6 +3442,7 @@ async def rider_complete_ride(
 
     completed_ride = await db_supabase.get_ride(ride_id)
     total_fare = (completed_ride or {}).get("total_fare", ride.get("total_fare", 0))
+    rider_bill = (completed_ride or {}).get("grand_total") or total_fare
 
     if driver_user_id:
         await manager.send_personal_message(
@@ -3441,7 +3450,7 @@ async def rider_complete_ride(
             f"driver_{driver_user_id}",
         )
     await manager.send_personal_message(
-        {"type": "ride_completed", "ride_id": ride_id, "total_fare": total_fare},
+        {"type": "ride_completed", "ride_id": ride_id, "total_fare": total_fare, "grand_total": rider_bill},
         f"rider_{current_user['id']}",
     )
     await manager.broadcast_ride_status(

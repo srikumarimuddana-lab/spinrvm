@@ -2149,3 +2149,21 @@ export const getPendingDocuments = (params?: { limit?: number; cursor?: string; 
 /* ── Payout retry (A-P4-2) ──────────────── */
 export const retryPayout = (id: string) =>
     request<any>(`/api/admin/payouts/${id}/retry`, { method: "POST" });
+
+export interface BulkRetryPayoutsRequest {
+    payout_ids?: string[];
+    since?: string;
+    service_area_id?: string;
+    max_to_retry?: number;
+}
+export interface BulkRetryPayoutsResponse {
+    retried: number;
+    skipped: number;
+    failed_to_initiate: number;
+    details: Array<{ payout_id: string; status: string; reason?: string }>;
+}
+export const bulkRetryPayouts = (body: BulkRetryPayoutsRequest) =>
+    request<BulkRetryPayoutsResponse>(`/api/admin/payouts/bulk-retry`, {
+        method: "POST",
+        body: JSON.stringify(body),
+    });

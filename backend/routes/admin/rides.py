@@ -1259,6 +1259,106 @@ async def admin_get_earnings(period: str = Query("month")):
     }
 
 
+# ---------- Transaction-level earnings rows ----------
+
+
+@router.get("/earnings/rides")
+async def admin_get_earnings_rides(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    service_area_id: Optional[str] = None,
+    limit: int = Query(100, ge=1, le=10000),
+    offset: int = Query(0, ge=0),
+):
+    """Per-ride money breakdown for finance reconciliation.
+
+    Backs the date-filterable + CSV-exportable transaction table on
+    the Rides Earnings tab. Different shape from /earnings (period
+    aggregates) and /earnings/overview (PoP deltas + chart) — this
+    endpoint returns the individual ride rows finance needs to tie
+    out against Stripe charges and the bank ledger.
+
+    Default window: last 30 days when no start/end is supplied.
+    """
+    now = datetime.now(timezone.utc)
+    if not end_date:
+        end_iso = now.isoformat()
+    else:
+        end_iso = end_date if "T" in end_date else f"{end_date}T23:59:59+00:00"
+    if not start_date:
+        start_iso = (now - timedelta(days=30)).isoformat()
+    else:
+        start_iso = start_date if "T" in start_date else f"{start_date}T00:00:00+00:00"
+
+    filters: Dict[str, Any] = {
+        "status": "completed",
+        "ride_completed_at": {"$gte": start_iso, "$lte": end_iso},
+    }
+    if service_area_id:
+        filters["service_area_id"] = service_area_id
+
+    # Over-fetch by `limit + offset` and slice — Supabase helper doesn't
+    # expose OFFSET natively. Bounded by the 10k limit cap so the worst
+    # case is one full-table scan, which is fine for the finance use case
+    # (monthly closeout is the realistic upper bound).
+    fetch_size = limit + offset
+    rides = await db_supabase.get_rows(
+        "rides",
+        filters,
+        order="ride_completed_at",
+        desc=True,
+        limit=fetch_size,
+    )
+    page = rides[offset : offset + limit]
+
+    # Batch-fetch driver + rider names. The reconciliation flow often
+    # needs to attach a human name to a Stripe statement line, so this
+    # is more than just cosmetic enrichment.
+    driver_ids = list({r.get("driver_id") for r in page if r.get("driver_id")})
+    rider_ids = list({r.get("rider_id") for r in page if r.get("rider_id")})
+    drivers_map, users_map = await _batch_fetch_drivers_and_users(rider_ids, driver_ids)
+
+    def _driver_name(did: Optional[str]) -> Optional[str]:
+        if not did:
+            return None
+        d = drivers_map.get(did) or {}
+        u = users_map.get(d.get("user_id")) if d.get("user_id") else None
+        return _user_display_name(u) or d.get("name")
+
+    enriched = []
+    for r in page:
+        rider = users_map.get(r.get("rider_id")) if r.get("rider_id") else None
+        enriched.append(
+            {
+                "ride_id": r.get("id"),
+                "ride_code": r.get("ride_code"),
+                "status": r.get("status"),
+                "total_fare": float(Decimal(str(r.get("total_fare") or 0))),
+                "driver_earnings": float(Decimal(str(r.get("driver_earnings") or 0))),
+                "admin_earnings": float(Decimal(str(r.get("admin_earnings") or 0))),
+                "tip_amount": float(Decimal(str(r.get("tip_amount") or 0))),
+                "tax_amount": float(Decimal(str(r.get("tax_amount") or 0))),
+                "discount_amount": float(Decimal(str(r.get("discount_amount") or 0))),
+                "surge_multiplier": float(Decimal(str(r.get("surge_multiplier") or 1))),
+                "stripe_charge_id": r.get("stripe_charge_id"),
+                "driver_id": r.get("driver_id"),
+                "driver_name": _driver_name(r.get("driver_id")),
+                "rider_id": r.get("rider_id"),
+                "rider_name": _user_display_name(rider) if rider else None,
+                "service_area_id": r.get("service_area_id"),
+                "completed_at": r.get("ride_completed_at"),
+                "created_at": r.get("created_at"),
+            }
+        )
+
+    return {
+        "rides": enriched,
+        "total": len(rides),
+        "offset": offset,
+        "limit": limit,
+    }
+
+
 # ---------- CEO-grade earnings overview ----------
 
 

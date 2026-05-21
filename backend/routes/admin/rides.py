@@ -2172,6 +2172,126 @@ async def admin_retry_payout(payout_id: str, admin: dict = Depends(get_admin_use
     return {"success": True, "payout_id": payout_id, "status": "pending"}
 
 
+class BulkRetryPayoutsRequest(BaseModel):
+    """Body for POST /payouts/bulk-retry.
+
+    Either pass an explicit list of payout_ids (admin curated), or pass
+    a since timestamp and we'll retry every failed/cancelled payout in
+    the matching window. The two paths are mutually exclusive — passing
+    both returns 400 to avoid ambiguity about which one took effect.
+    """
+
+    payout_ids: Optional[list[str]] = None
+    since: Optional[str] = None  # ISO timestamp; defaults to 7d ago when only `since` mode is implied
+    service_area_id: Optional[str] = None
+    max_to_retry: int = Field(50, ge=1, le=500)
+
+
+@router.post("/payouts/bulk-retry")
+async def admin_bulk_retry_payouts(
+    body: BulkRetryPayoutsRequest,
+    admin: dict = Depends(get_admin_user),
+):
+    """Retry many failed/cancelled payouts at once.
+
+    Selection modes (exactly one):
+      • payout_ids[]   — explicit list (max_to_retry still capped)
+      • since (+area)  — every failed/cancelled payout since the
+                         timestamp, optionally narrowed to one
+                         service area. Useful for "retry everything
+                         from this morning after Stripe came back up"
+
+    Per-payout updates are sequential so the audit log keeps a clear
+    trail. Each row carries retry_requested_by + retry_requested_at
+    just like the single-retry endpoint. The payment-retry background
+    loop picks them up on its next tick.
+
+    Restricted to finance + super_admin, same as the single retry.
+    """
+    allowed_roles = {"finance", "super_admin"}
+    if admin.get("role") not in allowed_roles:
+        raise HTTPException(status_code=403, detail="role_required:finance")
+
+    if body.payout_ids and body.since:
+        raise HTTPException(
+            status_code=400,
+            detail="Pass either payout_ids[] OR since (and optional service_area_id), not both.",
+        )
+
+    # Build the candidate set.
+    candidates: list[Dict[str, Any]] = []
+    if body.payout_ids:
+        # Explicit list. Look each one up individually so a missing or
+        # ineligible id is reported in the result rather than failing
+        # the whole batch.
+        for pid in body.payout_ids[: body.max_to_retry]:
+            row = await db.find_one("payouts", {"id": pid})
+            if row:
+                candidates.append(row)
+            else:
+                candidates.append({"id": pid, "_missing": True})
+    else:
+        since_iso = body.since or (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        filters: Dict[str, Any] = {
+            "status": {"$in": ["failed", "cancelled"]},
+            "created_at": {"$gte": since_iso},
+        }
+        rows = await db.get_rows("payouts", filters, limit=body.max_to_retry, order="created_at", desc=False)
+        # Service-area filter — payouts have no service_area_id, so we
+        # have to resolve via drivers. Cheap because the area-bounded
+        # driver list is small.
+        if body.service_area_id:
+            area_drivers = await db.get_rows("drivers", {"service_area_id": body.service_area_id}, limit=5000)
+            scope = {d["id"] for d in area_drivers if d.get("id")}
+            rows = [r for r in rows if r.get("driver_id") in scope]
+        candidates = rows[: body.max_to_retry]
+
+    retried = 0
+    skipped = 0
+    failed_to_initiate = 0
+    details: list[Dict[str, Any]] = []
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    for row in candidates:
+        pid = row.get("id")
+        if row.get("_missing"):
+            failed_to_initiate += 1
+            details.append({"payout_id": pid, "status": "not_found"})
+            continue
+        cur_status = row.get("status")
+        if cur_status not in ("failed", "cancelled"):
+            skipped += 1
+            details.append({"payout_id": pid, "status": "skipped", "reason": f"current_status={cur_status}"})
+            continue
+        try:
+            await db.update_one(
+                "payouts",
+                {"id": pid},
+                {
+                    "status": "pending",
+                    "retry_requested_by": admin.get("id"),
+                    "retry_requested_at": now_iso,
+                },
+            )
+            retried += 1
+            details.append({"payout_id": pid, "status": "queued"})
+        except Exception:
+            logger.error(f"bulk-retry: failed to flip {pid} to pending", exc_info=True)
+            failed_to_initiate += 1
+            details.append({"payout_id": pid, "status": "error"})
+
+    logger.info(
+        f"Bulk retry by admin {admin.get('id')}: retried={retried} "
+        f"skipped={skipped} failed_to_initiate={failed_to_initiate}"
+    )
+    return {
+        "retried": retried,
+        "skipped": skipped,
+        "failed_to_initiate": failed_to_initiate,
+        "details": details,
+    }
+
+
 @router.get("/payouts/stats")
 async def admin_get_payout_stats():
     """Get payout stats: total paid, pending, failed."""

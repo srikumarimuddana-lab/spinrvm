@@ -645,6 +645,227 @@ async def admin_get_approval_queue(
     }
 
 
+# Legacy expiry columns on `drivers` — mirrors document_expiry.py so the
+# admin queue and the background warner agree on which docs to track.
+_EXPIRY_FIELDS: Dict[str, str] = {
+    "license_expiry_date": "Driver's License",
+    "insurance_expiry_date": "Insurance",
+    "vehicle_inspection_expiry_date": "Vehicle Inspection",
+    "background_check_expiry_date": "Background Check",
+    "work_eligibility_expiry_date": "Work Eligibility",
+}
+
+
+@router.get("/drivers/expiring")
+async def admin_get_expiring_documents(
+    window_days: int = Query(30, ge=1, le=90),
+    service_area_id: Optional[str] = None,
+):
+    """Drivers with at least one document expiring inside `window_days`.
+
+    Returns one row per (driver, expiring document) so the ops table can
+    list each renewal-needed item individually with its own Nudge button.
+    Ride volume for the last 30 days is included so ops can prioritize
+    high-value drivers. `last_nudged_at` reflects the most recent renewal
+    push (manual or automatic) sent to the driver — single field on
+    `drivers` shared across all doc types, matching what
+    `document_expiry.py` already maintains.
+    """
+    now = datetime.now(timezone.utc)
+    window_end = now + timedelta(days=window_days)
+
+    filters: Dict[str, Any] = {"status": {"$in": ["active", "needs_review"]}}
+    if service_area_id:
+        filters["service_area_id"] = service_area_id
+    drivers = await db_supabase.get_rows("drivers", filters, limit=5000)
+
+    expiring_rows: List[Dict[str, Any]] = []
+    affected_driver_ids: set = set()
+    for d in drivers:
+        for field, label in _EXPIRY_FIELDS.items():
+            val = d.get(field)
+            if not val:
+                continue
+            exp_dt = parse_iso_utc(val)
+            if exp_dt is None:
+                continue
+            if now <= exp_dt <= window_end:
+                affected_driver_ids.add(d["id"])
+                expiring_rows.append(
+                    {
+                        "driver_row": d,
+                        "doc_field": field,
+                        "doc_type": field.replace("_expiry_date", ""),
+                        "doc_label": label,
+                        "expiry_date": val,
+                        "days_remaining": max(0, (exp_dt - now).days),
+                    }
+                )
+
+    if not expiring_rows:
+        return {"items": []}
+
+    user_ids = list({d["driver_row"].get("user_id") for d in expiring_rows if d["driver_row"].get("user_id")})
+    users_list = (
+        await db_supabase.get_rows("users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)) if user_ids else []
+    )
+    users_map = {u["id"]: u for u in users_list if u.get("id")}
+
+    area_ids = list(
+        {d["driver_row"].get("service_area_id") for d in expiring_rows if d["driver_row"].get("service_area_id")}
+    )
+    areas_list = (
+        await db_supabase.get_rows("service_areas", {"id": {"$in": area_ids}}, limit=max(len(area_ids), 1))
+        if area_ids
+        else []
+    )
+    areas_map = {a["id"]: a.get("name") for a in areas_list if a.get("id")}
+
+    rides_30d_ago = (now - timedelta(days=30)).isoformat()
+    rides = (
+        await db_supabase.get_rows(
+            "rides",
+            {
+                "driver_id": {"$in": list(affected_driver_ids)},
+                "status": "completed",
+                "completed_at": {"$gte": rides_30d_ago},
+            },
+            limit=10000,
+        )
+        if affected_driver_ids
+        else []
+    )
+    rides_by_driver: Dict[str, int] = {}
+    for r in rides:
+        did = r.get("driver_id")
+        if did:
+            rides_by_driver[did] = rides_by_driver.get(did, 0) + 1
+
+    items: List[Dict[str, Any]] = []
+    for row in expiring_rows:
+        d = row["driver_row"]
+        u = users_map.get(d.get("user_id"))
+        items.append(
+            {
+                "driver_id": d["id"],
+                "user_id": d.get("user_id"),
+                "name": _user_display_name(u) or d.get("name") or "",
+                "first_name": (u or {}).get("first_name") or "",
+                "last_name": (u or {}).get("last_name") or "",
+                "email": (u or {}).get("email"),
+                "phone": (u or {}).get("phone") or d.get("phone"),
+                "profile_photo_url": d.get("profile_photo_url"),
+                "status": d.get("status"),
+                "service_area_id": d.get("service_area_id"),
+                "service_area_name": areas_map.get(d.get("service_area_id")),
+                "doc_type": row["doc_type"],
+                "doc_label": row["doc_label"],
+                "doc_field": row["doc_field"],
+                "expiry_date": row["expiry_date"],
+                "days_remaining": row["days_remaining"],
+                "rides_last_30d": rides_by_driver.get(d["id"], 0),
+                "last_nudged_at": d.get("doc_expiry_warned_at"),
+            }
+        )
+
+    items.sort(key=lambda r: r["days_remaining"])
+    return {"items": items}
+
+
+class DriverNudgeExpiryRequest(BaseModel):
+    doc_type: str  # e.g. "license", "insurance" — matches _EXPIRY_FIELDS prefix
+    doc_label: Optional[str] = None
+    custom_message: Optional[str] = None
+
+
+@router.post("/drivers/{driver_id}/nudge-expiry")
+async def admin_nudge_driver_expiry(
+    driver_id: str,
+    body: DriverNudgeExpiryRequest,
+    admin: dict = Depends(get_admin_user),
+):
+    """Send a manual renewal-reminder push to a driver.
+
+    The automated warner in `utils/document_expiry.py` already pushes on
+    a schedule; this endpoint lets ops nudge a specific high-value driver
+    earlier without waiting for the next cron tick. Updates
+    `doc_expiry_warned_at` so the automatic loop's 24h throttle doesn't
+    re-fire and double-notify. Audit-logs every nudge.
+    """
+    drv = await db_supabase.get_driver_by_id(driver_id)
+    if not drv:
+        raise HTTPException(status_code=404, detail="Driver not found")
+    user_id = drv.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="Driver has no linked user account")
+
+    field = f"{body.doc_type}_expiry_date"
+    doc_label = body.doc_label or _EXPIRY_FIELDS.get(field) or body.doc_type.replace("_", " ").title()
+
+    expiry_iso = drv.get(field)
+    days_text = ""
+    if expiry_iso:
+        exp_dt = parse_iso_utc(expiry_iso)
+        if exp_dt:
+            days_left = max(0, (exp_dt - datetime.now(timezone.utc)).days)
+            days_text = f" in {days_left} day{'s' if days_left != 1 else ''}" if days_left > 0 else " today"
+
+    title = f"Renew your {doc_label}"
+    body_text = body.custom_message or (
+        f"Your {doc_label} expires{days_text}. Please upload a current copy to keep driving."
+    )
+
+    try:
+        await send_push_notification(
+            user_id,
+            title,
+            body_text,
+            data={
+                "type": "document_expiry_nudge",
+                "driver_id": driver_id,
+                "doc_type": body.doc_type,
+            },
+        )
+    except Exception as exc:
+        logger.error(
+            "Expiry nudge push failed for driver %s doc %s",
+            driver_id,
+            body.doc_type,
+            exc_info=True,
+        )
+        raise HTTPException(status_code=502, detail="Notification service unavailable") from exc
+
+    try:
+        await db_supabase.update_one(
+            "drivers",
+            {"id": driver_id},
+            {"doc_expiry_warned_at": datetime.now(timezone.utc).isoformat()},
+        )
+    except Exception:
+        logger.warning(
+            "Could not update doc_expiry_warned_at for driver %s after nudge",
+            driver_id,
+            exc_info=True,
+        )
+
+    await log_admin_action(
+        admin,
+        "driver_expiry_nudge",
+        "drivers",
+        driver_id,
+        {"doc_type": body.doc_type, "doc_label": doc_label, "has_custom_message": bool(body.custom_message)},
+    )
+    await _log_driver_activity(
+        driver_id,
+        "expiry_nudge_sent",
+        f"Renewal reminder sent: {doc_label}",
+        body.custom_message or "",
+        {"doc_type": body.doc_type, "doc_label": doc_label},
+    )
+
+    return {"ok": True}
+
+
 @router.put("/drivers/{driver_id}")
 async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: dict = Depends(get_admin_user)):
     """Update driver details from admin dashboard."""

@@ -36,6 +36,29 @@ const STATUS_TABS = [
 
 const PAGE_SIZE = 50;
 
+// Match a driver_documents row to a service-area requirement using
+// one consistent priority everywhere:
+//   1. requirement_key — canonical slug stored since migration 28
+//   2. requirement_id — UUID, or the slug treated as a legacy id
+//   3. document_type exact match (label or de-snaked key)
+//   4. fuzzy: slugified document_type contains slugified key
+// Previously this logic lived in 4 different places with slight drift,
+// which caused expiry summaries and "requires-expiry" detection to
+// silently miss docs that only carried a requirement_key.
+function matchesRequirement(
+    d: any,
+    req: { id?: string; key: string; label?: string },
+): boolean {
+    if (d.requirement_key) return d.requirement_key === req.key;
+    if (d.requirement_id) return d.requirement_id === req.id || d.requirement_id === req.key;
+    const dt = (d.document_type || "").toLowerCase();
+    const label = (req.label || "").toLowerCase();
+    const keySpaced = req.key.toLowerCase().replace(/_/g, " ");
+    if (dt === label || dt === keySpaced) return true;
+    const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "_");
+    return slug(dt).includes(slug(req.key));
+}
+
 export default function DriversPage() {
     const { allowed } = useRequireModule("drivers");
     const { toast } = useToast();
@@ -209,16 +232,10 @@ export default function DriversPage() {
     };
 
     const openReviewDialog = (docId: string, action: "approved" | "rejected") => {
-        // Find the doc to check if its requirement has expiry
         const doc = activeDocs.find(d => d.id === docId);
-        const docType = doc?.document_type || doc?.requirement_id || "";
-        // Check if the matching required doc has has_expiry
-        const matchedReq = requiredDocs.find(rd =>
-            docType.toLowerCase().replace(/[^a-z0-9]/g, "_").includes(rd.key.replace(/[^a-z0-9]/g, "_")) ||
-            docType.toLowerCase() === rd.label.toLowerCase() ||
-            doc?.requirement_id === rd.key
-        );
-        setReviewingDoc({ id: docId, action, docType: matchedReq?.label || docType, requiresExpiry: matchedReq?.has_expiry || false });
+        const matchedReq = doc ? requiredDocs.find(rd => matchesRequirement(doc, rd)) : undefined;
+        const docType = matchedReq?.label || doc?.document_type || doc?.requirement_id || "";
+        setReviewingDoc({ id: docId, action, docType, requiresExpiry: matchedReq?.has_expiry || false });
         setReviewExpiry(""); setReviewReason("");
     };
     const confirmReview = async () => { if (!reviewingDoc) return; await handleReviewDoc(reviewingDoc.id, reviewingDoc.action, reviewReason || undefined, reviewExpiry || undefined); setReviewingDoc(null); };
@@ -307,6 +324,7 @@ export default function DriversPage() {
 
     const selectedAreaName = serviceAreaId ? serviceAreas.find(a => a.id === serviceAreaId)?.name || "Selected Area" : "All Areas";
     const activeDocs = driverDocs.filter(d => d.status !== "superseded");
+    const pendingDocsCount = activeDocs.filter(d => d.status === "pending").length;
     const selectedDriverArea = selected ? allServiceAreas.find(a => a.id === selected.service_area_id) : null;
     const requiredDocs: { id?: string; key: string; label: string; has_expiry: boolean }[] = selectedDriverArea?.required_documents || [];
 
@@ -324,18 +342,13 @@ export default function DriversPage() {
     // Get expiry for a required document — prefers the expiry stored on the actual
     // document record (from the API), falls back to the legacy top-level field on
     // the driver row (set during onboarding or admin approval before docs flow existed).
+    // Prefers an approved doc when multiple matches exist so we surface the
+    // authoritative date and not a pending re-upload that hasn't been verified.
     function _getDocExpiry(rdId: string | undefined, rdKey: string, rdLabel: string): string | undefined {
-        const matchDoc = activeDocs.find(d => {
-            if (d.requirement_id) return d.requirement_id === rdId || d.requirement_id === rdKey;
-            const dt = (d.document_type || "").toLowerCase();
-            const label = rdLabel.toLowerCase();
-            const key = rdKey.toLowerCase().replace(/_/g, " ");
-            return dt === label || dt === key || dt.replace(/[^a-z0-9]/g, "_").includes(rdKey.replace(/[^a-z0-9]/g, "_"));
-        });
-        // doc record expiry (set when admin approves with an expiry date)
+        const matches = activeDocs.filter(d => matchesRequirement(d, { id: rdId, key: rdKey, label: rdLabel }));
+        const matchDoc = matches.find(d => d.status === "approved") || matches[0];
         const docExpiry = matchDoc?.expiry_date || matchDoc?.expires_at;
         if (docExpiry) return docExpiry;
-        // Legacy fallback: driver row top-level expiry field
         const legacyField = _docKeyToExpiryField(rdKey);
         return legacyField ? selected?.[legacyField] : undefined;
     }
@@ -575,7 +588,7 @@ export default function DriversPage() {
                         <Tabs defaultValue="overview" className="flex-1 overflow-hidden flex flex-col">
                             <TabsList className="mx-6 mt-4 w-fit">
                                 <TabsTrigger value="overview">Overview</TabsTrigger>
-                                <TabsTrigger value="documents">Documents{activeDocs.length > 0 && <span className="ml-1.5 bg-primary/10 text-primary text-[10px] font-bold px-1.5 py-0.5 rounded-full">{activeDocs.length}</span>}</TabsTrigger>
+                                <TabsTrigger value="documents">Documents{pendingDocsCount > 0 && <span className="ml-1.5 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 text-[10px] font-bold px-1.5 py-0.5 rounded-full" title={`${pendingDocsCount} document${pendingDocsCount === 1 ? "" : "s"} awaiting review`}>{pendingDocsCount}</span>}</TabsTrigger>
                                 <TabsTrigger value="rides" onClick={() => loadDriverRides(selected.id)}>Rides{selected.total_rides > 0 && <span className="ml-1.5 bg-primary/10 text-primary text-[10px] font-bold px-1.5 py-0.5 rounded-full">{(selected.total_rides || 0).toLocaleString()}</span>}</TabsTrigger>
                                 <TabsTrigger value="verification">Actions</TabsTrigger>
                                 <TabsTrigger value="notes">Notes</TabsTrigger>
@@ -754,25 +767,21 @@ export default function DriversPage() {
                                     : requiredDocs.length > 0 ? (
                                         <div className="space-y-6">
                                             {requiredDocs.map(reqDoc => {
-                                                const matchingDocs = activeDocs.filter(d => {
-                                                    // 1. Best: match by requirement_key (raw string key stored since fix)
-                                                    if (d.requirement_key) return d.requirement_key === reqDoc.key;
-                                                    // 2. Match by requirement_id (UUID or legacy string key)
-                                                    if (d.requirement_id) return d.requirement_id === reqDoc.id || d.requirement_id === reqDoc.key;
-                                                    // 3. Match document_type against the label or key
-                                                    const dt = (d.document_type || "").toLowerCase();
-                                                    const label = reqDoc.label.toLowerCase();
-                                                    const key = reqDoc.key.toLowerCase().replace(/_/g, " ");
-                                                    if (dt === label || dt === key) return true;
-                                                    // 4. Fuzzy fallback: key slug appears inside document_type
-                                                    return dt.replace(/[^a-z0-9]/g, "_").includes(reqDoc.key.replace(/[^a-z0-9]/g, "_"));
-                                                });
+                                                const matchingDocs = activeDocs.filter(d => matchesRequirement(d, reqDoc));
+                                                const counts = {
+                                                    pending: matchingDocs.filter(d => d.status === "pending").length,
+                                                    approved: matchingDocs.filter(d => d.status === "approved").length,
+                                                    rejected: matchingDocs.filter(d => d.status === "rejected").length,
+                                                };
                                                 return (
                                                     <div key={reqDoc.key}>
-                                                        <div className="flex items-center gap-2 mb-3">
+                                                        <div className="flex items-center gap-2 mb-3 flex-wrap">
                                                             <FileText className="h-4 w-4 text-muted-foreground" /><h4 className="text-sm font-semibold">{reqDoc.label}</h4>
                                                             {reqDoc.has_expiry && <Badge variant="outline" className="text-[10px]">Requires Expiry</Badge>}
-                                                            {matchingDocs.length > 0 ? <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px]">{matchingDocs.length} uploaded</Badge> : <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 text-[10px]">Missing</Badge>}
+                                                            {matchingDocs.length === 0 && <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 text-[10px]">Missing</Badge>}
+                                                            {counts.pending > 0 && <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 text-[10px]">{counts.pending} pending</Badge>}
+                                                            {counts.approved > 0 && counts.pending === 0 && <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px]">Approved</Badge>}
+                                                            {counts.rejected > 0 && counts.pending === 0 && counts.approved === 0 && <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 text-[10px]">Re-upload needed</Badge>}
                                                         </div>
                                                         {matchingDocs.length > 0 ? <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">{matchingDocs.map(d=><DocCard key={d.id} d={d} docBusy={docBusy} onPreview={setPreviewUrl} onReview={openReviewDialog} />)}</div>
                                                         : <div className="bg-muted/20 border border-dashed rounded-xl p-6 text-center text-muted-foreground"><Image className="h-8 w-8 mx-auto mb-2 opacity-20" /><p className="text-sm">No {reqDoc.label} uploaded yet</p></div>}
@@ -782,15 +791,7 @@ export default function DriversPage() {
                                             {/* Other Documents: any active docs not matched by any required doc */}
                                             {(() => {
                                                 const matchedIds = new Set(requiredDocs.flatMap(reqDoc =>
-                                                    activeDocs.filter(d => {
-                                                        if (d.requirement_key) return d.requirement_key === reqDoc.key;
-                                                        if (d.requirement_id) return d.requirement_id === reqDoc.id || d.requirement_id === reqDoc.key;
-                                                        const dt = (d.document_type || "").toLowerCase();
-                                                        const label = reqDoc.label.toLowerCase();
-                                                        const key = reqDoc.key.toLowerCase().replace(/_/g, " ");
-                                                        if (dt === label || dt === key) return true;
-                                                        return dt.replace(/[^a-z0-9]/g, "_").includes(reqDoc.key.replace(/[^a-z0-9]/g, "_"));
-                                                    }).map(d => d.id)
+                                                    activeDocs.filter(d => matchesRequirement(d, reqDoc)).map(d => d.id)
                                                 ));
                                                 const unmatched = activeDocs.filter(d => !matchedIds.has(d.id));
                                                 if (unmatched.length === 0) return null;
@@ -829,19 +830,7 @@ export default function DriversPage() {
                                                 { key: "vehicle_inspection",   label: "Vehicle Inspection",  has_expiry: true },
                                                 { key: "background_check",     label: "Background Check",   has_expiry: true },
                                             ]).map(rd => {
-                                                const matchingDocs = activeDocs.filter(d => {
-                                                    // 1. Best: match by requirement_key (slug stored since migration 28)
-                                                    if (d.requirement_key) return d.requirement_key === rd.key;
-                                                    // 2. Match by requirement_id (UUID or legacy string key)
-                                                    if (d.requirement_id) return d.requirement_id === (rd as any).id || d.requirement_id === rd.key;
-                                                    // 3. Match document_type against the label or key
-                                                    const dt = (d.document_type || "").toLowerCase();
-                                                    const label = rd.label.toLowerCase();
-                                                    const key = rd.key.toLowerCase().replace(/_/g, " ");
-                                                    if (dt === label || dt === key) return true;
-                                                    // 4. Fuzzy fallback: key slug appears inside document_type
-                                                    return dt.replace(/[^a-z0-9]/g, "_").includes(rd.key.replace(/[^a-z0-9]/g, "_"));
-                                                });
+                                                const matchingDocs = activeDocs.filter(d => matchesRequirement(d, rd as any));
                                                 const hasApproved = matchingDocs.some(d => d.status === "approved");
                                                 const hasPending = matchingDocs.some(d => d.status === "pending");
                                                 const pendingDoc = matchingDocs.find(d => d.status === "pending");

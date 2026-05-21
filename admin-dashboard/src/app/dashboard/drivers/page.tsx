@@ -340,18 +340,40 @@ export default function DriversPage() {
         return null;
     }
 
-    // Get expiry for a required document — prefers the expiry stored on the actual
-    // document record (from the API), falls back to the legacy top-level field on
-    // the driver row (set during onboarding or admin approval before docs flow existed).
-    // Prefers an approved doc when multiple matches exist so we surface the
-    // authoritative date and not a pending re-upload that hasn't been verified.
-    function _getDocExpiry(rdId: string | undefined, rdKey: string, rdLabel: string): string | undefined {
+    // Summarise a required document's state for the per-doc expiry cards.
+    // Resolves the matching driver_documents row(s), picks the highest-
+    // priority status (approved > pending > rejected > missing), and falls
+    // back to the legacy drivers.*_expiry_date column when the doc row has
+    // no expiry of its own (older approvals stored the date only on the
+    // drivers row).
+    function _getDocSummary(rdId: string | undefined, rdKey: string, rdLabel: string): {
+        expiry?: string;
+        docStatus: "approved" | "pending" | "rejected" | "missing";
+        expiryIsLegacy: boolean;
+    } {
         const matches = activeDocs.filter(d => matchesRequirement(d, { id: rdId, key: rdKey, label: rdLabel }));
-        const matchDoc = matches.find(d => d.status === "approved") || matches[0];
-        const docExpiry = matchDoc?.expiry_date || matchDoc?.expires_at;
-        if (docExpiry) return docExpiry;
         const legacyField = _docKeyToExpiryField(rdKey);
-        return legacyField ? selected?.[legacyField] : undefined;
+        const legacyExpiry: string | undefined = legacyField ? selected?.[legacyField] : undefined;
+
+        const approved = matches.find(d => d.status === "approved");
+        if (approved) {
+            const docExpiry = approved.expiry_date || approved.expires_at;
+            if (docExpiry) return { expiry: docExpiry, docStatus: "approved", expiryIsLegacy: false };
+            return { expiry: legacyExpiry, docStatus: "approved", expiryIsLegacy: !!legacyExpiry };
+        }
+        const pending = matches.find(d => d.status === "pending");
+        if (pending) return { expiry: undefined, docStatus: "pending", expiryIsLegacy: false };
+        const rejected = matches.find(d => d.status === "rejected");
+        if (rejected) return { expiry: undefined, docStatus: "rejected", expiryIsLegacy: false };
+        // No driver_documents row at all — but onboarding may have stamped
+        // a legacy expiry on the drivers row, in which case treat the
+        // requirement as approved from that path.
+        if (legacyExpiry) return { expiry: legacyExpiry, docStatus: "approved", expiryIsLegacy: true };
+        return { expiry: undefined, docStatus: "missing", expiryIsLegacy: false };
+    }
+
+    function _getDocExpiry(rdId: string | undefined, rdKey: string, rdLabel: string): string | undefined {
+        return _getDocSummary(rdId, rdKey, rdLabel).expiry;
     }
 
     if (!allowed) return null;
@@ -754,14 +776,14 @@ export default function DriversPage() {
                                             <DocExpirySummaryCard
                                                 key={rd.key}
                                                 label={rd.label}
-                                                expiry={_getDocExpiry(rd.id, rd.key, rd.label)}
+                                                summary={_getDocSummary(rd.id, rd.key, rd.label)}
                                             />
                                         )) : (<>
-                                            <DocExpirySummaryCard label="Driver's License"    expiry={_getDocExpiry(undefined, "drivers_license",      "Driver's License")} />
-                                            <DocExpirySummaryCard label="Vehicle Insurance"   expiry={_getDocExpiry(undefined, "vehicle_insurance",    "Vehicle Insurance")} />
-                                            <DocExpirySummaryCard label="Vehicle Registration" expiry={_getDocExpiry(undefined, "vehicle_registration", "Vehicle Registration")} />
-                                            <DocExpirySummaryCard label="Vehicle Inspection"  expiry={_getDocExpiry(undefined, "vehicle_inspection",  "Vehicle Inspection")} />
-                                            <DocExpirySummaryCard label="Background Check"    expiry={_getDocExpiry(undefined, "background_check",    "Background Check")} />
+                                            <DocExpirySummaryCard label="Driver's License"     summary={_getDocSummary(undefined, "drivers_license",      "Driver's License")} />
+                                            <DocExpirySummaryCard label="Vehicle Insurance"    summary={_getDocSummary(undefined, "vehicle_insurance",    "Vehicle Insurance")} />
+                                            <DocExpirySummaryCard label="Vehicle Registration" summary={_getDocSummary(undefined, "vehicle_registration", "Vehicle Registration")} />
+                                            <DocExpirySummaryCard label="Vehicle Inspection"   summary={_getDocSummary(undefined, "vehicle_inspection",  "Vehicle Inspection")} />
+                                            <DocExpirySummaryCard label="Background Check"     summary={_getDocSummary(undefined, "background_check",    "Background Check")} />
                                         </>)}
                                     </div>
                                     {docsLoading ? <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">{[1,2,3,4].map(i=><div key={i} className="h-48 bg-muted rounded-xl animate-pulse" />)}</div>
@@ -774,14 +796,21 @@ export default function DriversPage() {
                                                     approved: matchingDocs.filter(d => d.status === "approved").length,
                                                     rejected: matchingDocs.filter(d => d.status === "rejected").length,
                                                 };
+                                                // Surface the expiry gap directly in the section header
+                                                // when the requirement needs an expiry but the approved
+                                                // doc has none on file — the previous "Requires Expiry"
+                                                // pill was static and read as a warning even after a
+                                                // valid approval, confusing reviewers.
+                                                const summary = _getDocSummary(reqDoc.id, reqDoc.key, reqDoc.label);
+                                                const expiryMissing = reqDoc.has_expiry && summary.docStatus === "approved" && !summary.expiry;
                                                 return (
                                                     <div key={reqDoc.key}>
                                                         <div className="flex items-center gap-2 mb-3 flex-wrap">
                                                             <FileText className="h-4 w-4 text-muted-foreground" /><h4 className="text-sm font-semibold">{reqDoc.label}</h4>
-                                                            {reqDoc.has_expiry && <Badge variant="outline" className="text-[10px]">Requires Expiry</Badge>}
                                                             {matchingDocs.length === 0 && <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 text-[10px]">Missing</Badge>}
                                                             {counts.pending > 0 && <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 text-[10px]">{counts.pending} pending</Badge>}
-                                                            {counts.approved > 0 && counts.pending === 0 && <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px]">Approved</Badge>}
+                                                            {counts.approved > 0 && counts.pending === 0 && !expiryMissing && <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px]">Approved</Badge>}
+                                                            {expiryMissing && counts.pending === 0 && <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 text-[10px]">Approved · expiry not recorded</Badge>}
                                                             {counts.rejected > 0 && counts.pending === 0 && counts.approved === 0 && <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 text-[10px]">Re-upload needed</Badge>}
                                                         </div>
                                                         {matchingDocs.length > 0 ? <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">{matchingDocs.map(d=><DocCard key={d.id} d={d} docBusy={docBusy} onPreview={setPreviewUrl} onReview={openReviewDialog} />)}</div>
@@ -1276,15 +1305,25 @@ function DriverRidesTab({ rides, loading, driverName, fmtDate }: {
                                         {totalFare != null ? `$${Number(totalFare).toFixed(2)}` : "—"}
                                     </TableCell>
                                     <TableCell>
-                                        <button
-                                            type="button"
-                                            onClick={() => navigator.clipboard.writeText(r.id)}
-                                            title={`Copy ride ID: ${r.id}`}
-                                            className="inline-flex items-center gap-1 text-[10px] font-mono text-muted-foreground hover:text-foreground transition-colors"
-                                        >
-                                            {String(r.id).slice(0, 8)}
-                                            <Copy className="h-2.5 w-2.5" />
-                                        </button>
+                                        {(() => {
+                                            // Prefer the human-readable ride_code (SPR-XXXXXX,
+                                            // canonical short identifier — see migration 40).
+                                            // Fall back to a UUID prefix only for rides predating
+                                            // the backfill, which shouldn't happen in practice.
+                                            const code = r.ride_code ? String(r.ride_code).toLowerCase() : `#${String(r.id).slice(0, 8)}`;
+                                            const copyTarget = r.ride_code || r.id;
+                                            return (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => navigator.clipboard.writeText(copyTarget)}
+                                                    title={`Click to copy ${copyTarget}\nFull ID: ${r.id}`}
+                                                    className="inline-flex items-center gap-1 text-[10px] font-mono text-muted-foreground hover:text-foreground transition-colors"
+                                                >
+                                                    {code}
+                                                    <Copy className="h-2.5 w-2.5" />
+                                                </button>
+                                            );
+                                        })()}
                                     </TableCell>
                                 </TableRow>
                             );
@@ -1372,15 +1411,75 @@ function EditField({ label, value, onChange, type = "text" }: { label: string; v
     return <div><label className="text-[11px] text-muted-foreground mb-1 block">{label}</label><Input type={type} value={value} onChange={e => onChange(e.target.value)} className="h-9 text-sm" /></div>;
 }
 
-function DocExpirySummaryCard({ label, expiry }: { label: string; expiry?: string }) {
-    const isExpired = expiry && new Date(expiry) < new Date();
+type DocSummary = {
+    expiry?: string;
+    docStatus: "approved" | "pending" | "rejected" | "missing";
+    expiryIsLegacy: boolean;
+};
+
+function DocExpirySummaryCard({ label, summary }: { label: string; summary: DocSummary }) {
+    const { expiry, docStatus } = summary;
+    const fmt = (d: string) => { try { return new Date(d).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" }); } catch { return d; } };
+    const isExpired = expiry ? new Date(expiry) < new Date() : false;
     const daysUntil = expiry ? Math.ceil((new Date(expiry).getTime() - Date.now()) / 86400000) : null;
     const isExpiringSoon = daysUntil !== null && daysUntil > 0 && daysUntil <= 30;
-    const fmt = (d: string) => { try { return new Date(d).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" }); } catch { return d; } };
+
+    // Pick palette + copy from the highest-priority signal: status first,
+    // then expiry health. Crucially, an approved doc that's missing an
+    // expiry is treated as amber ("Expiry not recorded") instead of being
+    // greyed-out like an upload that was never made — those are very
+    // different operational states.
+    let palette: "neutral" | "emerald" | "amber" | "red";
+    let primary: string;
+    let secondary: string | null = null;
+
+    if (docStatus === "missing") {
+        palette = "neutral";
+        primary = "Not uploaded";
+        secondary = "Driver has not provided this document yet";
+    } else if (docStatus === "rejected") {
+        palette = "red";
+        primary = "Re-upload needed";
+        secondary = "Previous upload was rejected";
+    } else if (docStatus === "pending") {
+        palette = "amber";
+        primary = "Pending review";
+        secondary = "Waiting for admin approval";
+    } else if (docStatus === "approved" && !expiry) {
+        // Approved but no expiry on file. Often a legacy approval predating
+        // the per-doc expiry column; re-approve to record one.
+        palette = "amber";
+        primary = "Approved";
+        secondary = "Expiry not recorded — re-approve to set";
+    } else if (isExpired) {
+        palette = "red";
+        primary = "Expired";
+        secondary = `Expired ${fmt(expiry!)}`;
+    } else if (isExpiringSoon) {
+        palette = "amber";
+        primary = fmt(expiry!);
+        secondary = `${daysUntil} day${daysUntil !== 1 ? "s" : ""} remaining`;
+    } else {
+        palette = "emerald";
+        primary = fmt(expiry!);
+        secondary = daysUntil !== null ? `${daysUntil} days remaining` : null;
+    }
+
+    const styles = {
+        neutral: { bg: "bg-muted/30 border-border", dot: "bg-gray-300", primary: "text-muted-foreground", secondary: "text-muted-foreground" },
+        emerald: { bg: "bg-emerald-50 dark:bg-emerald-900/10 border-emerald-200 dark:border-emerald-800", dot: "bg-emerald-500", primary: "text-emerald-700 dark:text-emerald-300", secondary: "text-emerald-600/70 dark:text-emerald-400/70" },
+        amber:   { bg: "bg-amber-50 dark:bg-amber-900/10 border-amber-200 dark:border-amber-800",       dot: "bg-amber-500",   primary: "text-amber-700 dark:text-amber-300",   secondary: "text-amber-600/80 dark:text-amber-400/80" },
+        red:     { bg: "bg-red-50 dark:bg-red-900/10 border-red-200 dark:border-red-800",               dot: "bg-red-500",     primary: "text-red-700 dark:text-red-300",       secondary: "text-red-600/80 dark:text-red-400/80" },
+    }[palette];
+
     return (
-        <div className={`rounded-xl p-3 border ${!expiry ? "bg-muted/30 border-border" : isExpired ? "bg-red-50 dark:bg-red-900/10 border-red-200 dark:border-red-800" : isExpiringSoon ? "bg-amber-50 dark:bg-amber-900/10 border-amber-200 dark:border-amber-800" : "bg-emerald-50 dark:bg-emerald-900/10 border-emerald-200 dark:border-emerald-800"}`}>
-            <div className="flex items-center gap-2 mb-1"><div className={`w-2 h-2 rounded-full ${!expiry ? "bg-gray-300" : isExpired ? "bg-red-500" : isExpiringSoon ? "bg-amber-500" : "bg-emerald-500"}`} /><p className="text-xs font-medium text-muted-foreground">{label}</p></div>
-            {expiry ? (<><p className={`text-sm font-bold ${isExpired ? "text-red-600" : isExpiringSoon ? "text-amber-600" : "text-emerald-600"}`}>{isExpired ? "EXPIRED" : fmt(expiry)}</p>{!isExpired && daysUntil !== null && <p className={`text-[10px] mt-0.5 ${isExpiringSoon ? "text-amber-500" : "text-muted-foreground"}`}>{daysUntil} day{daysUntil !== 1 ? "s" : ""} remaining</p>}</>) : <p className="text-sm font-medium text-muted-foreground">Not set</p>}
+        <div className={`rounded-xl p-3 border ${styles.bg}`}>
+            <div className="flex items-center gap-2 mb-1">
+                <div className={`w-2 h-2 rounded-full ${styles.dot}`} />
+                <p className="text-xs font-medium text-muted-foreground">{label}</p>
+            </div>
+            <p className={`text-sm font-bold ${styles.primary}`}>{primary}</p>
+            {secondary && <p className={`text-[10px] mt-0.5 ${styles.secondary}`}>{secondary}</p>}
         </div>
     );
 }

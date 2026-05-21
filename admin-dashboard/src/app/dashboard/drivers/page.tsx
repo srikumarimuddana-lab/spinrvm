@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, getDriverPayoutsSummary, retryPayout, type DriverLiveStats, type DriverPayoutSummary } from "@/lib/api";
+import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, getDriverPayoutsSummary, retryPayout, refreshDriverStripeKyc, revealDriverSin, type DriverLiveStats, type DriverPayoutSummary } from "@/lib/api";
 import { Pagination } from "@/components/ui/pagination";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatCurrency } from "@/lib/utils";
@@ -13,7 +13,7 @@ import { Sheet, SheetContent, SheetTitle, SheetDescription } from "@/components/
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Search, Users, Wifi, ShieldCheck, ShieldAlert, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, ArrowUpDown, ArrowUp, ArrowDown, Ban, Pause, Maximize2, RefreshCw } from "lucide-react";
+import { Search, Users, Wifi, ShieldCheck, ShieldAlert, Shield, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, ArrowUpDown, ArrowUp, ArrowDown, Ban, Pause, Maximize2, RefreshCw } from "lucide-react";
 import { DocumentReviewer } from "./_components/document-reviewer";
 import DriverStatsCards from "./_components/driver-stats-cards";
 import DriverCharts from "./_components/driver-charts";
@@ -107,6 +107,24 @@ export default function DriversPage() {
     const [payoutSummary, setPayoutSummary] = useState<DriverPayoutSummary | null>(null);
     const [payoutLoading, setPayoutLoading] = useState(false);
     const [retryingPayoutId, setRetryingPayoutId] = useState<string | null>(null);
+    const [refreshingKyc, setRefreshingKyc] = useState(false);
+    // The revealed SIN is held briefly in memory then cleared. Never
+    // logged, never persisted, never written to any other state path.
+    const [revealedSin, setRevealedSin] = useState<{ sin: string; expiresAt: number } | null>(null);
+
+    // Auto-clear the revealed SIN after 30 seconds so it doesn't linger
+    // on screen if the admin walks away from the desk.
+    useEffect(() => {
+        if (!revealedSin) return;
+        const ms = revealedSin.expiresAt - Date.now();
+        if (ms <= 0) { setRevealedSin(null); return; }
+        const t = setTimeout(() => setRevealedSin(null), ms);
+        return () => clearTimeout(t);
+    }, [revealedSin]);
+
+    // Clear any revealed SIN when the slideout changes driver — under no
+    // circumstance should it persist across selections.
+    useEffect(() => { setRevealedSin(null); }, [selected?.id]);
 
 
     const loadDriverRides = useCallback(async (driverId: string) => {
@@ -854,18 +872,44 @@ export default function DriversPage() {
                                         loading={payoutLoading}
                                         driverName={`${selected.first_name || ""} ${selected.last_name || ""}`.trim() || selected.email || "this driver"}
                                         retryingPayoutId={retryingPayoutId}
+                                        refreshingKyc={refreshingKyc}
+                                        revealedSin={revealedSin}
                                         onRetry={async (payoutId) => {
                                             setRetryingPayoutId(payoutId);
                                             try {
                                                 await retryPayout(payoutId);
                                                 toast({ title: "Retry queued", description: "Payout sent back to Stripe for processing." });
-                                                // Refresh summary so the row's status flips out of "failed"
                                                 const fresh = await getDriverPayoutsSummary(selected.id);
                                                 setPayoutSummary(fresh);
                                             } catch (e: any) {
                                                 toast({ title: "Retry failed", description: e?.message || "Unknown error", variant: "destructive" });
                                             } finally {
                                                 setRetryingPayoutId(null);
+                                            }
+                                        }}
+                                        onRefreshKyc={async () => {
+                                            setRefreshingKyc(true);
+                                            try {
+                                                await refreshDriverStripeKyc(selected.id);
+                                                const fresh = await getDriverPayoutsSummary(selected.id);
+                                                setPayoutSummary(fresh);
+                                                toast({ title: "Synced from Stripe" });
+                                            } catch (e: any) {
+                                                toast({ title: "Refresh failed", description: e?.message || "Unknown error", variant: "destructive" });
+                                            } finally {
+                                                setRefreshingKyc(false);
+                                            }
+                                        }}
+                                        onRevealSin={async () => {
+                                            // Confirm before triggering — every reveal writes an
+                                            // audit_log row and admins should not click it idly.
+                                            if (!window.confirm("Reveal SIN from Stripe?\n\nThis call is recorded in the audit log with your admin ID and a timestamp. The value will be shown for 30 seconds then hidden.")) return;
+                                            try {
+                                                const res = await revealDriverSin(selected.id);
+                                                setRevealedSin({ sin: res.sin, expiresAt: Date.now() + 30_000 });
+                                                toast({ title: "SIN revealed", description: "Auto-hides in 30 seconds. Reveal logged." });
+                                            } catch (e: any) {
+                                                toast({ title: "Reveal failed", description: e?.message || "Unknown error", variant: "destructive" });
                                             }
                                         }}
                                     />
@@ -1230,12 +1274,16 @@ function PayoutMetric({ label, value, tone, sub }: { label: string; value: strin
     );
 }
 
-function DriverPayoutsTab({ data, loading, driverName, retryingPayoutId, onRetry }: {
+function DriverPayoutsTab({ data, loading, driverName, retryingPayoutId, onRetry, onRefreshKyc, onRevealSin, refreshingKyc, revealedSin }: {
     data: DriverPayoutSummary | null;
     loading: boolean;
     driverName: string;
     retryingPayoutId: string | null;
     onRetry: (payoutId: string) => Promise<void>;
+    onRefreshKyc: () => Promise<void>;
+    onRevealSin: () => Promise<void>;
+    refreshingKyc: boolean;
+    revealedSin: { sin: string; expiresAt: number } | null;
 }) {
     const fmtDateTime = (iso?: string | null) => {
         if (!iso) return "—";
@@ -1367,6 +1415,135 @@ function DriverPayoutsTab({ data, loading, driverName, retryingPayoutId, onRetry
                         <div className="col-span-full text-sm text-muted-foreground py-2">
                             {driverName} has not added a payout method yet. Payouts cannot be processed until a bank account or Stripe Connect account is linked.
                         </div>
+                    )}
+                </div>
+            </div>
+
+            {/* Tax & Identity (Stripe Connect KYC mirror) */}
+            <div className="rounded-xl border border-border bg-card overflow-hidden">
+                <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                        <Shield className="h-4 w-4 text-muted-foreground" />
+                        <h4 className="text-sm font-semibold">Tax &amp; Identity</h4>
+                        {data.kyc.payouts_enabled ? (
+                            <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 text-[10px]">Verified</Badge>
+                        ) : data.kyc.details_submitted ? (
+                            <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 text-[10px]">Pending Stripe review</Badge>
+                        ) : data.kyc.requirements_due.length > 0 || data.kyc.requirements_past_due.length > 0 ? (
+                            <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300 text-[10px]">Action required</Badge>
+                        ) : (
+                            <Badge variant="outline" className="text-[10px]">Not started</Badge>
+                        )}
+                    </div>
+                    <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 text-xs"
+                        disabled={refreshingKyc}
+                        onClick={onRefreshKyc}
+                        title="Pull latest from Stripe"
+                    >
+                        {refreshingKyc ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <RefreshCw className="h-3 w-3 mr-1" />}
+                        Refresh
+                    </Button>
+                </div>
+                <div className="px-4 py-3 space-y-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                            <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">SIN (held by Stripe)</p>
+                            {data.kyc.id_number_provided ? (
+                                <div className="flex items-center gap-2 mt-0.5">
+                                    {revealedSin ? (
+                                        <p className="text-sm font-medium font-mono">{revealedSin.sin}</p>
+                                    ) : (
+                                        <p className="text-sm font-medium font-mono">•••-•••-{data.kyc.id_number_last4 || "•••"}</p>
+                                    )}
+                                    <Button
+                                        size="xs"
+                                        variant="outline"
+                                        className="h-6 text-[10px] px-2"
+                                        onClick={onRevealSin}
+                                        disabled={!!revealedSin}
+                                        title="One-shot reveal from Stripe. Every reveal writes an audit log entry."
+                                    >
+                                        {revealedSin ? <CheckCircle className="h-3 w-3 mr-1" /> : <Eye className="h-3 w-3 mr-1" />}
+                                        {revealedSin ? "Shown" : "Reveal"}
+                                    </Button>
+                                </div>
+                            ) : (
+                                <p className="text-sm text-muted-foreground mt-0.5">Not provided yet</p>
+                            )}
+                        </div>
+                        <div>
+                            <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">GST/HST number</p>
+                            {data.kyc.gst_hst_number ? (
+                                <div className="flex items-center gap-2 mt-0.5">
+                                    <p className="text-sm font-medium font-mono">{data.kyc.gst_hst_number}</p>
+                                    <button
+                                        type="button"
+                                        onClick={() => navigator.clipboard.writeText(data.kyc.gst_hst_number!)}
+                                        className="text-muted-foreground hover:text-foreground"
+                                        title="Copy GST/HST number"
+                                    >
+                                        <Copy className="h-3 w-3" />
+                                    </button>
+                                </div>
+                            ) : (
+                                <p className="text-sm text-muted-foreground mt-0.5">Not registered</p>
+                            )}
+                        </div>
+                        <div>
+                            <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">Onboarding</p>
+                            <p className="text-sm font-medium mt-0.5">
+                                {data.kyc.details_submitted ? "Submitted to Stripe" : "Incomplete"}
+                            </p>
+                        </div>
+                        <div>
+                            <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">Stripe ToS</p>
+                            <p className="text-sm font-medium mt-0.5">
+                                {data.kyc.tos_accepted_at ? fmtDateTime(data.kyc.tos_accepted_at) : "Not accepted"}
+                            </p>
+                        </div>
+                    </div>
+
+                    {(data.kyc.requirements_due.length > 0 || data.kyc.requirements_past_due.length > 0) && (
+                        <div className="rounded-md border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/10 p-2.5">
+                            <p className="text-[11px] font-semibold text-amber-700 dark:text-amber-300 mb-1">
+                                {data.kyc.requirements_past_due.length > 0 && `${data.kyc.requirements_past_due.length} past due · `}
+                                {data.kyc.requirements_due.length} item{data.kyc.requirements_due.length === 1 ? "" : "s"} needed from driver
+                            </p>
+                            <ul className="text-[11px] text-amber-700/80 dark:text-amber-300/80 space-y-0.5">
+                                {[...data.kyc.requirements_past_due, ...data.kyc.requirements_due].slice(0, 6).map((req) => (
+                                    <li key={req} className="font-mono">{req}</li>
+                                ))}
+                                {data.kyc.requirements_due.length + data.kyc.requirements_past_due.length > 6 && (
+                                    <li className="text-amber-700/60 dark:text-amber-300/60 italic">…and {data.kyc.requirements_due.length + data.kyc.requirements_past_due.length - 6} more</li>
+                                )}
+                            </ul>
+                        </div>
+                    )}
+
+                    {data.kyc.disabled_reason && (
+                        <div className="rounded-md border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/10 p-2.5">
+                            <p className="text-[11px] font-semibold text-red-700 dark:text-red-300">
+                                Payouts disabled: <span className="font-mono">{data.kyc.disabled_reason}</span>
+                            </p>
+                        </div>
+                    )}
+
+                    {revealedSin && (
+                        <div className="rounded-md border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/10 p-2.5">
+                            <p className="text-[11px] text-amber-700 dark:text-amber-300">
+                                <AlertTriangle className="h-3 w-3 inline mr-1" />
+                                SIN revealed at {new Date(revealedSin.expiresAt - 30000).toLocaleTimeString()}.
+                                Auto-hides in {Math.max(0, Math.ceil((revealedSin.expiresAt - Date.now()) / 1000))}s.
+                                Never paste this anywhere — audit log captured the reveal.
+                            </p>
+                        </div>
+                    )}
+
+                    {data.kyc.last_synced_at && (
+                        <p className="text-[10px] text-muted-foreground">Last synced: {fmtDateTime(data.kyc.last_synced_at)}</p>
                     )}
                 </div>
             </div>

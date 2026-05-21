@@ -1,23 +1,26 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { driverAction, overrideDriverStatus } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/use-toast";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import {
     ShieldCheck, ShieldAlert, Ban, AlertTriangle,
-    Pause, Play, CheckCircle, Loader2, ShieldOff,
+    Pause, Play, CheckCircle, Loader2, ShieldOff, ChevronDown,
 } from "lucide-react";
 
 type DriverStatus = "pending" | "active" | "needs_review" | "suspended" | "banned";
 
 interface DriverActionBarProps {
     driver: any;
-    onActionComplete: () => void;
+    // When set, parent merges these fields into its `selected` so the
+    // slideout stays open and reflects the new status immediately
+    // instead of being torn down on every action.
+    onActionComplete: (updates?: Record<string, any>) => void;
 }
 
 function getDriverStatus(driver: any): DriverStatus {
@@ -34,22 +37,105 @@ const STATUS_CONFIG: Record<DriverStatus, { label: string; color: string; bg: st
     banned: { label: "Banned", color: "text-red-800 dark:text-red-400", bg: "bg-red-100 dark:bg-red-900/20 border-red-300 dark:border-red-800", icon: Ban, description: "Driver is permanently banned from the platform." },
 };
 
-// Actions that require an AlertDialog pre-confirmation before the reason dialog.
 const DESTRUCTIVE_ACTIONS = new Set(["ban", "suspend", "override_banned", "override_suspended"]);
+
+// Per-action reason categories. The category and (when present) duration
+// are encoded as a structured prefix in the free-text reason sent to the
+// backend so they flow into the audit log + the driver-facing push
+// without requiring a backend schema change.
+const REASON_CATEGORIES: Record<string, { value: string; label: string; template: string }[]> = {
+    suspend: [
+        { value: "documentation", label: "Documentation lapse",   template: "Required documents are missing or expired. Please re-upload to restore access." },
+        { value: "vehicle",       label: "Vehicle non-compliance", template: "Vehicle does not meet platform requirements. Please update your vehicle profile or contact support." },
+        { value: "safety",        label: "Safety concern",         template: "A safety concern was raised about a recent trip. We're reviewing the incident." },
+        { value: "behavior",      label: "Driver behavior",        template: "Recent driver behavior is under review. Please contact support for details." },
+        { value: "complaint",     label: "Customer complaint",     template: "A customer complaint is under investigation." },
+        { value: "other",         label: "Other (write your own)", template: "" },
+    ],
+    ban: [
+        { value: "safety",        label: "Serious safety incident", template: "Serious safety incident — account permanently disabled." },
+        { value: "fraud",         label: "Fraud or abuse",          template: "Fraud or abuse detected — account permanently disabled." },
+        { value: "background",    label: "Failed background check", template: "Background check criteria not met." },
+        { value: "repeated",      label: "Repeated violations",     template: "Repeated policy violations — account permanently disabled." },
+        { value: "other",         label: "Other (write your own)",  template: "" },
+    ],
+    reject: [
+        { value: "documents",     label: "Insufficient documents",  template: "Application incomplete — required documents missing or invalid." },
+        { value: "eligibility",   label: "Did not meet eligibility", template: "Application did not meet driver eligibility requirements." },
+        { value: "background",    label: "Failed background check", template: "Background check criteria not met." },
+        { value: "other",         label: "Other (write your own)",  template: "" },
+    ],
+};
+
+const SUSPEND_DURATIONS: { value: string; label: string; days: number | null }[] = [
+    { value: "1d",  label: "1 day",     days: 1   },
+    { value: "3d",  label: "3 days",    days: 3   },
+    { value: "7d",  label: "7 days",    days: 7   },
+    { value: "14d", label: "14 days",   days: 14  },
+    { value: "30d", label: "30 days",   days: 30  },
+    { value: "indef", label: "Indefinite (manual review)", days: null },
+];
+
+const baseAction = (action: string): string => {
+    if (action.startsWith("override_")) return action.replace("override_", "override-");
+    return action;
+};
+
+// Optimistic local update for the action — mirrors what the backend
+// writes so the parent slideout can reflect the new status without
+// re-fetching. Backend is the source of truth; this just removes the
+// "screen blanks out then reloads" flash after every action.
+function computeOptimisticUpdates(action: string, reason: string): Record<string, any> {
+    const now = new Date().toISOString();
+    if (action === "approve") return { status: "active", is_verified: true, verified_at: now, rejection_reason: null };
+    if (action === "reject")  return { status: "pending", rejection_reason: reason || null };
+    if (action === "suspend") return { status: "suspended", suspension_reason: reason || null, suspended_at: now, is_online: false, is_available: false };
+    if (action === "ban")     return { status: "banned", ban_reason: reason || null, is_online: false, is_available: false };
+    if (action === "unban")   return { status: "active", ban_reason: null };
+    if (action === "reactivate") return { status: "active", suspension_reason: null };
+    if (action.startsWith("override_")) {
+        const target = action.replace("override_", "");
+        return { status: target };
+    }
+    return {};
+}
 
 export default function DriverActionBar({ driver, onActionComplete }: DriverActionBarProps) {
     const { toast } = useToast();
     const [actionDialog, setActionDialog] = useState<{ action: string; title: string; description: string; requiresReason: boolean; buttonLabel: string; buttonClass: string } | null>(null);
     const [pendingDestructiveAction, setPendingDestructiveAction] = useState<{ action: string; title: string; description: string; requiresReason: boolean; buttonLabel: string; buttonClass: string; alertTitle: string; alertDescription: string } | null>(null);
     const [reason, setReason] = useState("");
+    const [category, setCategory] = useState("");
+    const [duration, setDuration] = useState("7d");
     const [loading, setLoading] = useState(false);
+    const [showOverride, setShowOverride] = useState(false);
 
     const status = getDriverStatus(driver);
     const config = STATUS_CONFIG[status];
     const Icon = config.icon;
 
+    // Which reason categories to surface for this action — keyed by the
+    // underlying lifecycle action (suspend / ban / reject). Approve and
+    // reactivate don't surface categories because they don't need them.
+    const categories = useMemo(() => {
+        if (!actionDialog) return [];
+        const a = baseAction(actionDialog.action);
+        if (a === "suspend" || a === "override-suspended") return REASON_CATEGORIES.suspend;
+        if (a === "ban" || a === "override-banned") return REASON_CATEGORIES.ban;
+        if (a === "reject") return REASON_CATEGORIES.reject;
+        return [];
+    }, [actionDialog]);
+
+    const showDuration = useMemo(() => {
+        if (!actionDialog) return false;
+        const a = baseAction(actionDialog.action);
+        return a === "suspend" || a === "override-suspended";
+    }, [actionDialog]);
+
     const openAction = (action: string, title: string, description: string, requiresReason: boolean, buttonLabel: string, buttonClass: string) => {
         setReason("");
+        setCategory("");
+        setDuration("7d");
         if (DESTRUCTIVE_ACTIONS.has(action)) {
             const isBan = action === "ban" || action === "override_banned";
             setPendingDestructiveAction({
@@ -71,22 +157,49 @@ export default function DriverActionBar({ driver, onActionComplete }: DriverActi
         setActionDialog(actionDetails);
     };
 
+    const onCategoryChange = (v: string) => {
+        setCategory(v);
+        const tmpl = categories.find(c => c.value === v)?.template;
+        if (tmpl && !reason.trim()) setReason(tmpl);
+    };
+
+    // Build the structured reason string sent to the backend. The category
+    // and suspension duration get encoded as a single-line prefix so the
+    // audit log + the driver-facing push both carry the context, even
+    // though the backend schema still only has a free-text `reason` field.
+    const buildReason = (): string => {
+        const parts: string[] = [];
+        const cat = categories.find(c => c.value === category);
+        if (cat && cat.value !== "other") parts.push(cat.label);
+        if (showDuration) {
+            const dur = SUSPEND_DURATIONS.find(d => d.value === duration);
+            if (dur) parts.push(dur.label);
+        }
+        const prefix = parts.length ? `[${parts.join(" · ")}] ` : "";
+        return `${prefix}${reason.trim()}`.trim();
+    };
+
+    const reasonProvided = reason.trim().length > 0;
+    const canSubmit = !actionDialog?.requiresReason || reasonProvided;
+
     const executeAction = async () => {
         if (!actionDialog) return;
-        if (actionDialog.requiresReason && !reason.trim()) return;
+        if (actionDialog.requiresReason && !reasonProvided) return;
+        const builtReason = buildReason();
         setLoading(true);
         try {
             if (actionDialog.action.startsWith("override_")) {
                 const targetStatus = actionDialog.action.replace("override_", "");
-                await overrideDriverStatus(driver.id, targetStatus, reason.trim() || undefined);
+                await overrideDriverStatus(driver.id, targetStatus, builtReason || undefined);
             } else {
-                const result = await driverAction(driver.id, actionDialog.action, reason.trim() || undefined);
+                const result = await driverAction(driver.id, actionDialog.action, builtReason || undefined);
                 if (result?.audit_log_id) {
                     toast({ title: "Action recorded", description: `Ref: ${result.audit_log_id}` });
                 }
             }
+            const updates = computeOptimisticUpdates(actionDialog.action, builtReason);
             setActionDialog(null);
-            onActionComplete();
+            onActionComplete(updates);
         } catch (e: any) {
             toast({ title: "Action failed", description: e?.message, variant: "destructive" });
         } finally {
@@ -105,7 +218,6 @@ export default function DriverActionBar({ driver, onActionComplete }: DriverActi
                     <div className="flex-1 min-w-0">
                         <h4 className={`text-sm font-bold ${config.color}`}>{config.label}</h4>
                         <p className={`text-xs mt-0.5 ${config.color} opacity-70`}>{config.description}</p>
-                        {/* Show reason if suspended/banned */}
                         {status === "suspended" && driver.suspension_reason && (
                             <p className="text-xs mt-2 bg-orange-100 dark:bg-orange-900/30 rounded-lg px-2.5 py-1.5 text-orange-700 dark:text-orange-400">
                                 <AlertTriangle className="h-3 w-3 inline mr-1" />Reason: {driver.suspension_reason}
@@ -181,37 +293,52 @@ export default function DriverActionBar({ driver, onActionComplete }: DriverActi
                     )}
                 </div>
 
-                {/* Manual Status Override */}
-                <div className="flex items-center gap-2 mt-3 pt-3 border-t border-dashed">
-                    <span className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider shrink-0">Move to:</span>
-                    <Select value="" onValueChange={(v) => {
-                        if (v && v !== status) {
-                            openAction(
-                                `override_${v}`,
-                                `Move to ${v.charAt(0).toUpperCase() + v.slice(1)}`,
-                                `Manually override this driver's status to "${v}". This is an admin override — use with caution.`,
-                                v === "rejected" || v === "suspended" || v === "banned",
-                                `Set ${v.charAt(0).toUpperCase() + v.slice(1)}`,
-                                v === "active" ? "bg-emerald-600 hover:bg-emerald-700 text-white"
-                                    : v === "banned" ? "bg-red-700 hover:bg-red-800 text-white"
-                                    : v === "suspended" ? "bg-orange-600 hover:bg-orange-700 text-white"
-                                    : "bg-primary hover:bg-primary/90 text-white"
-                            );
-                        }
-                    }}>
-                        <SelectTrigger className="h-7 text-[11px] w-[140px]"><SelectValue placeholder="Override status..." /></SelectTrigger>
-                        <SelectContent>
-                            {([
-                            { value: "pending", label: "Pending" },
-                            { value: "active", label: "Active" },
-                            { value: "needs_review", label: "Needs Review" },
-                            { value: "suspended", label: "Suspended" },
-                            { value: "banned", label: "Banned" },
-                        ] as const)
-                            .filter(s => s.value !== status)
-                            .map(s => <SelectItem key={s.value} value={s.value} className="text-xs">{s.label}</SelectItem>)}
-                        </SelectContent>
-                    </Select>
+                {/* Admin Override — collapsed by default. Lets a senior admin
+                    force-set the status outside the normal workflow. Hidden
+                    behind a disclosure to stop reviewers from grabbing it as
+                    the default path. */}
+                <div className="mt-3 pt-3 border-t border-dashed">
+                    <button
+                        type="button"
+                        onClick={() => setShowOverride(s => !s)}
+                        className="flex items-center gap-1 text-[10px] text-muted-foreground font-semibold uppercase tracking-wider hover:text-foreground transition-colors"
+                    >
+                        <ChevronDown className={`h-3 w-3 transition-transform ${showOverride ? "" : "-rotate-90"}`} />
+                        Admin Override
+                    </button>
+                    {showOverride && (
+                        <div className="flex items-center gap-2 mt-2">
+                            <span className="text-[11px] text-muted-foreground shrink-0">Force status to:</span>
+                            <Select value="" onValueChange={(v) => {
+                                if (v && v !== status) {
+                                    openAction(
+                                        `override_${v}`,
+                                        `Move to ${v.charAt(0).toUpperCase() + v.slice(1)}`,
+                                        `Manually override this driver's status to "${v}". This bypasses the normal workflow — only use for incident response.`,
+                                        v === "suspended" || v === "banned",
+                                        `Set ${v.charAt(0).toUpperCase() + v.slice(1)}`,
+                                        v === "active" ? "bg-emerald-600 hover:bg-emerald-700 text-white"
+                                            : v === "banned" ? "bg-red-700 hover:bg-red-800 text-white"
+                                            : v === "suspended" ? "bg-orange-600 hover:bg-orange-700 text-white"
+                                            : "bg-primary hover:bg-primary/90 text-white"
+                                    );
+                                }
+                            }}>
+                                <SelectTrigger className="h-7 text-[11px] w-[160px]"><SelectValue placeholder="Pick status…" /></SelectTrigger>
+                                <SelectContent>
+                                    {([
+                                    { value: "pending", label: "Pending" },
+                                    { value: "active", label: "Active" },
+                                    { value: "needs_review", label: "Needs Review" },
+                                    { value: "suspended", label: "Suspended" },
+                                    { value: "banned", label: "Banned" },
+                                ] as const)
+                                    .filter(s => s.value !== status)
+                                    .map(s => <SelectItem key={s.value} value={s.value} className="text-xs">{s.label}</SelectItem>)}
+                                </SelectContent>
+                            </Select>
+                        </div>
+                    )}
                 </div>
             </div>
 
@@ -234,47 +361,64 @@ export default function DriverActionBar({ driver, onActionComplete }: DriverActi
                 </AlertDialogContent>
             </AlertDialog>
 
-            {/* Action Confirmation Dialog (reason collection) */}
+            {/* Action Confirmation Dialog (reason + category + duration) */}
             <Dialog open={!!actionDialog} onOpenChange={open => { if (!open) setActionDialog(null); }}>
-                <DialogContent className="sm:max-w-md">
+                <DialogContent className="sm:max-w-lg">
                     <DialogHeader>
                         <DialogTitle>{actionDialog?.title}</DialogTitle>
                         <DialogDescription>{actionDialog?.description}</DialogDescription>
                     </DialogHeader>
-                    <div className="space-y-3 py-2">
-                        {actionDialog?.requiresReason && (
+                    <div className="space-y-3 py-1">
+                        {categories.length > 0 && (
                             <div>
-                                <label className="text-sm font-medium mb-1.5 block">
-                                    Reason <span className="text-red-500">*</span>
-                                </label>
-                                <Input
-                                    value={reason}
-                                    onChange={e => setReason(e.target.value)}
-                                    placeholder="Provide a reason for this action..."
-                                    className="w-full"
-                                />
-                                {actionDialog.requiresReason && !reason.trim() && (
-                                    <p className="text-xs text-red-500 mt-1">Reason is required</p>
-                                )}
+                                <label htmlFor="action-category" className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1.5 block">Category</label>
+                                <Select value={category} onValueChange={onCategoryChange}>
+                                    <SelectTrigger id="action-category" className="h-9 text-sm">
+                                        <SelectValue placeholder="Pick a category — fills a starter reason" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {categories.map(c => <SelectItem key={c.value} value={c.value} className="text-sm">{c.label}</SelectItem>)}
+                                    </SelectContent>
+                                </Select>
                             </div>
                         )}
-                        {!actionDialog?.requiresReason && (
+
+                        {showDuration && (
                             <div>
-                                <label className="text-sm font-medium mb-1.5 block">Reason (optional)</label>
-                                <Input
-                                    value={reason}
-                                    onChange={e => setReason(e.target.value)}
-                                    placeholder="Optional note..."
-                                    className="w-full"
-                                />
+                                <label htmlFor="action-duration" className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1.5 block">Duration</label>
+                                <Select value={duration} onValueChange={setDuration}>
+                                    <SelectTrigger id="action-duration" className="h-9 text-sm"><SelectValue /></SelectTrigger>
+                                    <SelectContent>
+                                        {SUSPEND_DURATIONS.map(d => <SelectItem key={d.value} value={d.value} className="text-sm">{d.label}</SelectItem>)}
+                                    </SelectContent>
+                                </Select>
+                                <p className="text-[11px] text-muted-foreground mt-1">
+                                    Duration is recorded in the audit log + the message sent to the driver. Reactivation is still a manual step.
+                                </p>
                             </div>
                         )}
+
+                        <div>
+                            <label htmlFor="action-reason" className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1.5 block">
+                                Reason {actionDialog?.requiresReason ? <span className="text-red-500 normal-case">*</span> : <span className="text-muted-foreground normal-case font-normal">(optional)</span>}
+                            </label>
+                            <Textarea
+                                id="action-reason"
+                                value={reason}
+                                onChange={e => setReason(e.target.value)}
+                                placeholder={actionDialog?.requiresReason ? "Explain the action — visible in the audit log and the message sent to the driver." : "Optional note for the audit log."}
+                                className="text-sm min-h-[88px]"
+                            />
+                            {actionDialog?.requiresReason && !reasonProvided && (
+                                <p className="text-[11px] text-red-500 mt-1">A reason is required for this action.</p>
+                            )}
+                        </div>
                     </div>
                     <DialogFooter>
                         <Button variant="outline" onClick={() => setActionDialog(null)} disabled={loading}>Cancel</Button>
                         <Button
                             onClick={executeAction}
-                            disabled={loading || (actionDialog?.requiresReason && !reason.trim()) as boolean}
+                            disabled={loading || !canSubmit}
                             className={actionDialog?.buttonClass || ""}
                         >
                             {loading ? <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> : null}

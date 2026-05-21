@@ -761,13 +761,11 @@ async def set_destination_mode(req: SetDestinationRequest, current_user: dict = 
         "drivers",
         {"id": driver["id"]},
         {
-            "$set": {
-                "destination_mode": True,
-                "destination_address": req.address,
-                "destination_lat": req.lat,
-                "destination_lng": req.lng,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }
+            "destination_mode": True,
+            "destination_address": req.address,
+            "destination_lat": req.lat,
+            "destination_lng": req.lng,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         },
     )
     return {
@@ -788,13 +786,11 @@ async def clear_destination_mode(current_user: dict = Depends(get_current_user))
         "drivers",
         {"id": driver["id"]},
         {
-            "$set": {
-                "destination_mode": False,
-                "destination_address": None,
-                "destination_lat": None,
-                "destination_lng": None,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }
+            "destination_mode": False,
+            "destination_address": None,
+            "destination_lat": None,
+            "destination_lng": None,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         },
     )
     return {"success": True, "destination_mode": False}

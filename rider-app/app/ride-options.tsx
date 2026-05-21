@@ -351,8 +351,13 @@ function RideOptionsScreenContent() {
     if (!code) return;
     const match = availablePromos.find(
       (p: any) => p.code?.toUpperCase() === code
-    );
+    ) as any;
     if (match) {
+      if (match.eligible === false) {
+        showToast('Not eligible', match.ineligible_reason || 'This promo cannot be applied to this ride', 'warning');
+        setPromoError(match.ineligible_reason || 'Minimum fare not met');
+        return;
+      }
       applyPromo(match);
       setPromoInput('');
       setPromoError('');
@@ -880,6 +885,7 @@ function RideOptionsScreenContent() {
             <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 340 }}>
               {availablePromos.map((promo: any) => {
                 const isSelected = appliedPromo?.promo_id === promo.promo_id || appliedPromo?.code === promo.code;
+                const isIneligible = promo.eligible === false;
                 const discountLabel = promo.free_ride
                   ? 'Free ride'
                   : promo.discount_type === 'percentage'
@@ -888,27 +894,39 @@ function RideOptionsScreenContent() {
                 return (
                   <TouchableOpacity
                     key={promo.promo_id || promo.code}
-                    style={[styles.promoRow, isSelected && styles.promoRowSelected]}
-                    onPress={() => { applyPromo(promo); setShowPromoSheet(false); }}
+                    style={[styles.promoRow, isSelected && styles.promoRowSelected, isIneligible && { opacity: 0.45 }]}
+                    onPress={() => {
+                      if (isIneligible) {
+                        showToast('Not eligible', promo.ineligible_reason || 'This promo cannot be applied to this ride', 'warning');
+                        return;
+                      }
+                      applyPromo(promo);
+                      setShowPromoSheet(false);
+                    }}
                     activeOpacity={0.75}
                   >
-                    <View style={[styles.promoRowIcon, { backgroundColor: isSelected ? '#D1FAE5' : '#F0FDF4' }]}>
-                      <Ionicons name="pricetag" size={18} color={isSelected ? '#059669' : '#10B981'} />
+                    <View style={[styles.promoRowIcon, { backgroundColor: isSelected ? '#D1FAE5' : isIneligible ? '#F3F4F6' : '#F0FDF4' }]}>
+                      <Ionicons name="pricetag" size={18} color={isSelected ? '#059669' : isIneligible ? '#9CA3AF' : '#10B981'} />
                     </View>
                     <View style={{ flex: 1 }}>
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                        <Text style={styles.promoRowCode}>{promo.code}</Text>
-                        <View style={styles.promoSavingPill}>
-                          <Text style={styles.promoSavingPillText}>{discountLabel}</Text>
+                        <Text style={[styles.promoRowCode, isIneligible && { color: '#9CA3AF' }]}>{promo.code}</Text>
+                        <View style={[styles.promoSavingPill, isIneligible && { backgroundColor: '#F3F4F6' }]}>
+                          <Text style={[styles.promoSavingPillText, isIneligible && { color: '#9CA3AF' }]}>{discountLabel}</Text>
                         </View>
                       </View>
                       {promo.description ? (
                         <Text style={styles.promoRowDesc}>{promo.description}</Text>
                       ) : null}
+                      {isIneligible && promo.min_ride_fare > 0 && (
+                        <Text style={{ fontSize: 11, color: '#EF4444', marginTop: 2 }}>Min. fare ${Number(promo.min_ride_fare).toFixed(2)}</Text>
+                      )}
                     </View>
                     {isSelected
                       ? <Ionicons name="checkmark-circle" size={22} color="#059669" />
-                      : <Ionicons name="chevron-forward" size={16} color={colors.border} />}
+                      : isIneligible
+                        ? <Ionicons name="lock-closed" size={16} color="#9CA3AF" />
+                        : <Ionicons name="chevron-forward" size={16} color={colors.border} />}
                   </TouchableOpacity>
                 );
               })}

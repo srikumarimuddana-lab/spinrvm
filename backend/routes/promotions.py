@@ -476,9 +476,10 @@ async def get_available_promos(
 
             # Min fare — compare against ride portion (base+dist+time) when
             # available; fall back to ride_fare (grand_total) for older clients.
+            # Instead of hiding, mark as ineligible so the rider sees the promo
+            # but can't apply it (avoids confusion).
             _min_check_fare = ride_portion if ride_portion is not None else ride_fare
-            if p.get("min_ride_fare", 0) > 0 and _min_check_fare < p["min_ride_fare"]:
-                continue  # noqa: E701
+            _below_min_fare = p.get("min_ride_fare", 0) > 0 and _min_check_fare < p["min_ride_fare"]
 
             # Private coupon
             assigned = p.get("assigned_user_ids", [])
@@ -542,8 +543,7 @@ async def get_available_promos(
                 cap_basis = effective_ride if effective_ride > 0 else ride_fare
                 discount = min(discount_value, cap_basis) if cap_basis > 0 else discount_value
 
-            available.append(
-                {
+            entry: dict = {
                     "promo_id": p["id"],
                     "code": p.get("code"),
                     "free_ride": free_ride_flag,
@@ -554,14 +554,19 @@ async def get_available_promos(
                     "description": p.get("description", ""),
                     "expiry_date": p.get("expiry_date"),
                     "min_ride_fare": p.get("min_ride_fare", 0),
-                }
-            )
+            }
+            if _below_min_fare:
+                entry["eligible"] = False
+                entry["ineligible_reason"] = f"Minimum ride fare of ${p['min_ride_fare']:.2f} required"
+            else:
+                entry["eligible"] = True
+            available.append(entry)
         except Exception as promo_err:
             logger.error(f"[PROMOS] Skipping promo {p.get('id')} due to error: {promo_err}")
             continue
 
-    # Sort by biggest discount first
-    available.sort(key=lambda x: x["discount_amount"], reverse=True)
+    # Eligible first, then by biggest discount
+    available.sort(key=lambda x: (not x.get("eligible", True), -x["discount_amount"]))
     return available
 
 

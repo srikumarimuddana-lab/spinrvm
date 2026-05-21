@@ -1452,6 +1452,105 @@ export const updateDispute = (id: string, data: any) =>
         body: JSON.stringify(data),
     });
 
+/* ── Safety Queue ───────────────────────────── */
+export type SafetyStatus = "open" | "in_progress" | "resolved" | "closed" | "duplicate";
+export type SafetySeverity = "sev1" | "sev2" | "sev3";
+export type SafetyRole = "rider" | "driver" | "system";
+
+export interface SafetyIncident {
+    id: string;
+    reported_by_user_id: string | null;
+    role: SafetyRole;
+    category: string;
+    description: string;
+    status: SafetyStatus;
+    severity: SafetySeverity | null;
+    ride_id: string | null;
+    latitude: number | null;
+    longitude: number | null;
+    location_accuracy: number | null;
+    assigned_to_admin_id: string | null;
+    resolved_at: string | null;
+    resolved_by: string | null;
+    resolution_notes: string | null;
+    reported_at: string;
+    created_at: string;
+    updated_at: string;
+    reporter_name?: string | null;
+}
+
+export interface SafetyIncidentListResponse {
+    items: SafetyIncident[];
+    total: number;
+    offset: number;
+    limit: number;
+    open_count: number | null;
+}
+
+export interface SafetyIncidentDetail {
+    incident: SafetyIncident;
+    reporter: {
+        id: string | null;
+        name: string | null;
+        email: string | null;
+        phone: string | null;
+        role: string | null;
+    } | null;
+    ride: {
+        id: string | null;
+        ride_code: string | null;
+        status: string | null;
+        rider_id: string | null;
+        driver_id: string | null;
+        pickup_address: string | null;
+        dropoff_address: string | null;
+        total_fare: number | null;
+        started_at: string | null;
+        completed_at: string | null;
+    } | null;
+}
+
+export const getSafetyIncidents = (params?: {
+    status?: SafetyStatus;
+    severity?: SafetySeverity;
+    role?: SafetyRole;
+    category?: string;
+    ride_id?: string;
+    search?: string;
+    limit?: number;
+    offset?: number;
+}) => {
+    const sp = new URLSearchParams();
+    if (params?.status) sp.set("status", params.status);
+    if (params?.severity) sp.set("severity", params.severity);
+    if (params?.role) sp.set("role", params.role);
+    if (params?.category) sp.set("category", params.category);
+    if (params?.ride_id) sp.set("ride_id", params.ride_id);
+    if (params?.search) sp.set("search", params.search);
+    if (params?.limit != null) sp.set("limit", String(params.limit));
+    if (params?.offset != null) sp.set("offset", String(params.offset));
+    const qs = sp.toString();
+    return request<SafetyIncidentListResponse>(`/api/admin/safety/incidents${qs ? `?${qs}` : ""}`);
+};
+
+export const getSafetyIncident = (id: string) =>
+    request<SafetyIncidentDetail>(`/api/admin/safety/incidents/${id}`);
+
+export const updateSafetyIncident = (
+    id: string,
+    body: Partial<{
+        status: SafetyStatus;
+        severity: SafetySeverity;
+        assigned_to_admin_id: string;
+        resolution_notes: string;
+    }>,
+) =>
+    request<{ updated: boolean; incident: SafetyIncident }>(
+        `/api/admin/safety/incidents/${id}`,
+        { method: "PATCH", body: JSON.stringify(body) },
+    );
+
+
 /* ── Support Tickets ────────────────────────── */
 export const getTickets = (opts: {
     limit?: number;

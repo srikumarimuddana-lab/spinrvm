@@ -2046,6 +2046,72 @@ async def admin_get_payouts_overview(
         key=lambda x: -x["failure_count"],
     )[:10]
 
+    # ── Pass 4: T4A snapshot ─────────────────────────────────────────────
+    # CRA T4A threshold for self-employed contractor reporting in Canada
+    # is $500 to the same payee in a tax year. The GST/HST mandatory
+    # registration threshold is $30,000 — that's the more operationally
+    # interesting line because it's when a driver MUST register their
+    # GST account. Bucket per driver against both numbers.
+    year_start = datetime(now.year, 1, 1, tzinfo=timezone.utc).isoformat()
+    ytd_completed = [
+        r
+        for r in all_completed_rides
+        if _in_scope(r) and (r.get("ride_completed_at") or r.get("updated_at") or "") >= year_start
+    ]
+    ytd_earnings_by_driver: Dict[str, Decimal] = {}
+    for r in ytd_completed:
+        did = r.get("driver_id")
+        if not did:
+            continue
+        ytd_earnings_by_driver[did] = ytd_earnings_by_driver.get(did, Decimal("0")) + Decimal(
+            str(r.get("driver_earnings") or 0)
+        )
+
+    t4a_buckets = {
+        "under_500": 0,  # below T4A reporting threshold (CRA $500)
+        "from_500_to_10k": 0,  # T4A required, GST registration not required
+        "from_10k_to_30k": 0,  # T4A required, GST elective
+        "over_30k": 0,  # T4A required, GST registration MANDATORY
+    }
+    for amt in ytd_earnings_by_driver.values():
+        if amt < Decimal("500"):
+            t4a_buckets["under_500"] += 1
+        elif amt < Decimal("10000"):
+            t4a_buckets["from_500_to_10k"] += 1
+        elif amt < Decimal("30000"):
+            t4a_buckets["from_10k_to_30k"] += 1
+        else:
+            t4a_buckets["over_30k"] += 1
+
+    # Period locks — derived from audit_log entries written by
+    # admin_close_payout_period. Surface the most recent N so the UI
+    # can show "May 2026 closed by alice@... on Jun 3" without a
+    # separate fetch.
+    period_locks: list[Dict[str, Any]] = []
+    try:
+        lock_rows = await db_supabase.get_rows(
+            "audit_logs",
+            {"action": "payouts_period_closed"},
+            order="created_at",
+            desc=True,
+            limit=24,
+        )
+        for lr in lock_rows:
+            md = lr.get("details") or {}
+            period_key = md.get("period")
+            if not period_key:
+                continue
+            period_locks.append(
+                {
+                    "period": period_key,
+                    "closed_at": lr.get("created_at"),
+                    "closed_by": lr.get("actor_id"),
+                    "actor_role": lr.get("actor_role"),
+                }
+            )
+    except Exception:
+        logger.error("payouts overview: period_locks query failed", exc_info=True)
+
     return {
         "period": {
             "key": period,
@@ -2074,6 +2140,16 @@ async def admin_get_payouts_overview(
         "blocked_drivers": blocked_drivers,
         "top_drivers": top_drivers,
         "at_risk_drivers": at_risk_drivers,
+        # Pass 4 — compliance.
+        "t4a_snapshot": {
+            "tax_year": now.year,
+            "drivers_with_earnings": len(ytd_earnings_by_driver),
+            "buckets": t4a_buckets,
+            # Sum of YTD driver_earnings — the gross-side of the T4A
+            # generation pipeline, not what's been paid out.
+            "ytd_gross_earnings": round(float(sum(ytd_earnings_by_driver.values(), Decimal("0"))), 2),
+        },
+        "period_locks": period_locks,
     }
 
 
@@ -2289,6 +2365,98 @@ async def admin_bulk_retry_payouts(
         "skipped": skipped,
         "failed_to_initiate": failed_to_initiate,
         "details": details,
+    }
+
+
+class ClosePayoutPeriodRequest(BaseModel):
+    """Body for POST /payouts/close-period.
+
+    Closes a calendar month (e.g. 2026-05) for accounting purposes:
+      • An audit_log row is written with action='payouts_period_closed'
+        and details={period, range_start, range_end, payout_ids[]}.
+      • The /payouts/overview response surfaces the lock so the UI can
+        show "May 2026 closed by alice@…on Jun 3".
+
+    Closure is advisory — we don't add a `locked` column to the payouts
+    table (avoids needing a migration for one extra column). If a
+    second close is requested for the same period a new audit_log row
+    is written; period_locks shows the most recent one.
+    """
+
+    year: int = Field(ge=2024, le=2100)
+    month: int = Field(ge=1, le=12)
+
+
+@router.post("/payouts/close-period")
+async def admin_close_payout_period(
+    body: ClosePayoutPeriodRequest,
+    admin: dict = Depends(get_admin_user),
+):
+    """Lock a calendar month for accounting purposes.
+
+    Writes an audit_log entry that the /payouts/overview response
+    surfaces under period_locks. Snapshots the list of completed
+    payout ids in the window so a future reviewer can confirm the
+    closure included exactly the right rows.
+    """
+    allowed_roles = {"finance", "super_admin"}
+    if admin.get("role") not in allowed_roles:
+        raise HTTPException(status_code=403, detail="role_required:finance")
+
+    # Build month bounds in UTC. Using exclusive end so the half-open
+    # interval matches how Python's calendar arithmetic generally works
+    # (e.g. May = [2026-05-01, 2026-06-01)).
+    range_start = datetime(body.year, body.month, 1, tzinfo=timezone.utc)
+    if body.month == 12:
+        range_end = datetime(body.year + 1, 1, 1, tzinfo=timezone.utc)
+    else:
+        range_end = datetime(body.year, body.month + 1, 1, tzinfo=timezone.utc)
+    period_key = f"{body.year:04d}-{body.month:02d}"
+
+    # Snapshot the completed payout id list for the audit row. Bounded
+    # at 5000 — beyond that we'd want a separate snapshot table, but
+    # for Spinr-scale fleets this is plenty.
+    rows = await db_supabase.get_rows(
+        "payouts",
+        {
+            "status": "completed",
+            "processed_at": {"$gte": range_start.isoformat(), "$lt": range_end.isoformat()},
+        },
+        limit=5000,
+    )
+    payout_ids = [r.get("id") for r in rows if r.get("id")]
+    total_amount = round(
+        float(sum((Decimal(str(r.get("amount") or 0)) for r in rows), Decimal("0"))),
+        2,
+    )
+
+    audit_id = await log_admin_action(
+        admin,
+        "payouts_period_closed",
+        "payouts",
+        period_key,
+        {
+            "period": period_key,
+            "range_start": range_start.isoformat(),
+            "range_end": range_end.isoformat(),
+            "payout_count": len(payout_ids),
+            "total_amount": total_amount,
+            # First 50 ids inline; the count is the authoritative number.
+            # If we ever need the full list later we'd add a separate
+            # period_close_snapshot table, but inline is fine for audit.
+            "payout_ids": payout_ids[:50],
+        },
+    )
+
+    logger.info(
+        f"Payout period {period_key} closed by admin {admin.get('id')} — "
+        f"{len(payout_ids)} payouts, total ${total_amount}"
+    )
+    return {
+        "period": period_key,
+        "payout_count": len(payout_ids),
+        "total_amount": total_amount,
+        "audit_log_id": audit_id,
     }
 
 

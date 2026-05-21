@@ -70,9 +70,7 @@ WS_MAX_MESSAGE_SIZE = 64 * 1024  # 64 KB max message payload
 _ADMIN_ROLES = {"admin", "super_admin", "operations", "support", "finance", "custom"}
 
 
-async def _handle_driver_ws_disconnect(
-    connection_key: str | None, user: dict | None
-) -> None:
+async def _handle_driver_ws_disconnect(connection_key: str | None, user: dict | None) -> None:
     """Narrow post-disconnect hook: surface "socket dropped" to admins.
 
     Intent (``drivers.is_online``) and reachability (Redis presence) are now
@@ -132,9 +130,7 @@ async def _handle_driver_ws_disconnect(
                     },
                 )
             except Exception as _log_exc:
-                logger.warning(
-                    f"[WS] activity log insert failed for {driver_id}: {_log_exc}"
-                )
+                logger.warning(f"[WS] activity log insert failed for {driver_id}: {_log_exc}")
 
             await manager.broadcast_to_admins(
                 {
@@ -230,9 +226,7 @@ async def heartbeat_task(
                         f"(stored={stored_version} > claim={claim_token_version}); closing"
                     )
                     try:
-                        await websocket.send_json(
-                            {"type": "session_revoked", "reason": "token_revoked"}
-                        )
+                        await websocket.send_json({"type": "session_revoked", "reason": "token_revoked"})
                     except Exception:  # noqa: S110 — socket may already be dead
                         pass
                     try:
@@ -249,9 +243,7 @@ async def heartbeat_task(
                     }
                 )
             except Exception:
-                logger.info(
-                    f"Heartbeat send failed for {connection_key} — connection likely dead"
-                )
+                logger.info(f"Heartbeat send failed for {connection_key} — connection likely dead")
                 break
             # Pong-staleness check is opt-in via conn_state; legacy/test
             # callers that pass conn_state=None skip this branch and rely
@@ -296,18 +288,14 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
         try:
             auth_msg = await asyncio.wait_for(websocket.receive_json(), timeout=30.0)
         except asyncio.TimeoutError:
-            logger.warning(
-                "[WS] Auth timeout — no message received within 30s, closing connection"
-            )
+            logger.warning("[WS] Auth timeout — no message received within 30s, closing connection")
             await websocket.close(code=1008)  # 1008 = Policy Violation
             return
         except Exception:
             await websocket.close(code=1011)
             return
         if not auth_msg or auth_msg.get("type") != "auth" or not auth_msg.get("token"):
-            await websocket.send_json(
-                {"type": "error", "message": "authentication_required"}
-            )
+            await websocket.send_json({"type": "error", "message": "authentication_required"})
             await websocket.close()
             return
 
@@ -332,15 +320,11 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
             elif client_type == "rider":
                 expected_aud = settings.FIREBASE_RIDER_APP_ID or ""
             if not expected_aud:
-                await websocket.send_json(
-                    {"type": "error", "message": "firebase_audience_not_configured"}
-                )
+                await websocket.send_json({"type": "error", "message": "firebase_audience_not_configured"})
                 await websocket.close()
                 return
             if payload.get("aud") != expected_aud:
-                await websocket.send_json(
-                    {"type": "error", "message": "ERR_TOKEN_AUDIENCE"}
-                )
+                await websocket.send_json({"type": "error", "message": "ERR_TOKEN_AUDIENCE"})
                 await websocket.close()
                 return
 
@@ -388,9 +372,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                 user = None
 
         if not user:
-            await websocket.send_json(
-                {"type": "error", "message": "invalid_token_or_user_not_found"}
-            )
+            await websocket.send_json({"type": "error", "message": "invalid_token_or_user_not_found"})
             await websocket.close()
             return
 
@@ -427,17 +409,13 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                 await db_supabase.get_rows("drivers", {"user_id": user["id"]}, limit=1)
             )
             if not driver_profile:
-                await websocket.send_json(
-                    {"type": "error", "message": "user_is_not_a_driver"}
-                )
+                await websocket.send_json({"type": "error", "message": "user_is_not_a_driver"})
                 await websocket.close()
                 return
             current_driver_id = driver_profile["id"]
         elif client_type == "admin":
             if user.get("role") not in _ADMIN_ROLES:
-                await websocket.send_json(
-                    {"type": "error", "message": "admin_access_required"}
-                )
+                await websocket.send_json({"type": "error", "message": "admin_access_required"})
                 await websocket.close()
                 return
 
@@ -495,9 +473,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
 
             # Message size guard
             if len(raw) > WS_MAX_MESSAGE_SIZE:
-                await websocket.send_json(
-                    {"type": "error", "message": "message_too_large"}
-                )
+                await websocket.send_json({"type": "error", "message": "message_too_large"})
                 continue
 
             import json as _json
@@ -608,9 +584,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                         "in_progress": "trip_in_progress",
                     }
                     tracking_phase = (
-                        status_map.get(active_ride.get("status", ""), "online_idle")
-                        if active_ride
-                        else "online_idle"
+                        status_map.get(active_ride.get("status", ""), "online_idle") if active_ride else "online_idle"
                     )
 
                     breadcrumb = {
@@ -621,10 +595,11 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                         "lng": lng,
                         "speed": data.get("speed"),
                         "heading": data.get("heading"),
+                        "accuracy": data.get("accuracy"),
+                        "altitude": data.get("altitude"),
                         "tracking_phase": tracking_phase,
                         "timestamp": datetime.now(timezone.utc),
                     }
-                    # 'accuracy' and 'altitude' columns seem missing in Supabase schema, so omitted for now.
 
                     await db_supabase.insert_one("driver_location_history", breadcrumb)
 
@@ -634,9 +609,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                     if now_mono - _maps_key_fetched_at > _MAPS_KEY_CACHE_TTL:
                         try:
                             _app_cfg = await get_app_settings()
-                            _maps_key_cache = (_app_cfg or {}).get(
-                                "google_maps_api_key"
-                            ) or ""
+                            _maps_key_cache = (_app_cfg or {}).get("google_maps_api_key") or ""
                         except Exception:
                             logger.debug(
                                 "Maps API key refresh failed; retaining stale key",
@@ -761,9 +734,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                                 "heading": pt.get("heading"),
                                 "accuracy": pt.get("accuracy"),
                                 "altitude": pt.get("altitude"),
-                                "tracking_phase": pt.get(
-                                    "tracking_phase", "online_idle"
-                                ),
+                                "tracking_phase": pt.get("tracking_phase", "online_idle"),
                                 "timestamp": (
                                     datetime.fromisoformat(pt["timestamp"])
                                     if pt.get("timestamp")
@@ -778,9 +749,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                             manager.update_driver_location(driver_id, last["lat"], last["lng"])
                             await db_supabase.update_driver_location(driver_id, last["lat"], last["lng"])
                             await mark_present(driver_id)
-                    await websocket.send_json(
-                        {"type": "location_batch_ack", "count": len(docs)}
-                    )
+                    await websocket.send_json({"type": "location_batch_ack", "count": len(docs)})
 
             elif data.get("type") == "ride_status_update":
                 ride_id = data.get("ride_id")
@@ -828,9 +797,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                         # Calculate distance
                         from ..geo_utils import calculate_distance
 
-                        dist = calculate_distance(
-                            lat, lng, driver["lat"], driver["lng"]
-                        )
+                        dist = calculate_distance(lat, lng, driver["lat"], driver["lng"])
                         if dist <= radius:
                             nearby.append(
                                 {
@@ -841,9 +808,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                                 }
                             )
 
-                    await websocket.send_json(
-                        {"type": "nearby_drivers", "drivers": nearby}
-                    )
+                    await websocket.send_json({"type": "nearby_drivers", "drivers": nearby})
 
             elif data.get("type") == "chat_message":
                 ride_id = data.get("ride_id")
@@ -856,9 +821,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                         if sender == "driver":
                             target = f"rider_{ride['rider_id']}"
                         elif sender == "rider" and ride.get("driver_id"):
-                            driver = await db_supabase.get_driver_by_id(
-                                ride["driver_id"]
-                            )
+                            driver = await db_supabase.get_driver_by_id(ride["driver_id"])
                             if driver and driver.get("user_id"):
                                 target = f"driver_{driver['user_id']}"
 
@@ -880,10 +843,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                             msg_data["type"] = "chat_message"
                             await manager.send_personal_message(msg_data, target)
 
-            elif (
-                data.get("type") in ("get_drivers_snapshot", "get_rides_snapshot")
-                and client_type == "admin"
-            ):
+            elif data.get("type") in ("get_drivers_snapshot", "get_rides_snapshot") and client_type == "admin":
                 try:
                     from ..routes.admin.monitoring import (
                         fetch_monitoring_drivers,
@@ -897,21 +857,13 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                 try:
                     if data["type"] == "get_drivers_snapshot":
                         drivers = await fetch_monitoring_drivers()
-                        await websocket.send_json(
-                            {"type": "drivers_snapshot", "drivers": drivers}
-                        )
+                        await websocket.send_json({"type": "drivers_snapshot", "drivers": drivers})
                     else:
                         rides = await fetch_monitoring_rides()
-                        await websocket.send_json(
-                            {"type": "rides_snapshot", "rides": rides}
-                        )
+                        await websocket.send_json({"type": "rides_snapshot", "rides": rides})
                 except Exception as _snap_exc:
-                    logger.warning(
-                        f"[WS] snapshot fetch failed for {connection_key}: {_snap_exc}"
-                    )
-                    await websocket.send_json(
-                        {"type": "error", "message": "snapshot_failed"}
-                    )
+                    logger.warning(f"[WS] snapshot fetch failed for {connection_key}: {_snap_exc}")
+                    await websocket.send_json({"type": "error", "message": "snapshot_failed"})
 
             else:
                 logger.warning(f"Unknown WS message type: {data.get('type')}")
@@ -930,10 +882,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
             f"code={getattr(_wsd, 'code', None)} reason={getattr(_wsd, 'reason', None)} "
             f"current_driver_id={current_driver_id}"
         )
-        if (
-            connection_key
-            and manager.active_connections.get(connection_key) is websocket
-        ):
+        if connection_key and manager.active_connections.get(connection_key) is websocket:
             # Remove ourselves from the manager dict FIRST. _handle_driver_ws_offline's
             # "newer WS present" check looks at whether the key is still populated
             # after we leave — with manager.disconnect happening after, the check
@@ -948,10 +897,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
             f"[GO-ONLINE] WS branch=Exception connection_key={connection_key} "
             f"current_driver_id={current_driver_id} err={e}"
         )
-        if (
-            connection_key
-            and manager.active_connections.get(connection_key) is websocket
-        ):
+        if connection_key and manager.active_connections.get(connection_key) is websocket:
             manager.disconnect(connection_key)
             if current_driver_id:
                 await clear_presence(current_driver_id)

@@ -355,11 +355,17 @@ function PayoutsCeoHeader({
     loading,
     period,
     onPeriodChange,
+    serviceAreaId,
+    onServiceAreaChange,
+    serviceAreas,
 }: {
     overview: PayoutsOverview | null;
     loading: boolean;
     period: EarningsPeriod;
     onPeriodChange: (p: EarningsPeriod) => void;
+    serviceAreaId: string;
+    onServiceAreaChange: (id: string) => void;
+    serviceAreas: Array<{ id: string; name?: string }>;
 }) {
     const m = overview?.metrics;
     return (
@@ -373,21 +379,44 @@ function PayoutsCeoHeader({
                         {overview ? overview.period.label : "Loading…"} · compared to prior {overview?.period.days ?? "—"} days
                     </p>
                 </div>
-                <div className="inline-flex rounded-lg border border-border bg-card p-0.5">
-                    {PERIOD_OPTIONS.map((opt) => (
-                        <button
-                            key={opt.value}
-                            type="button"
-                            onClick={() => onPeriodChange(opt.value)}
-                            className={`px-3 py-1 text-xs font-semibold rounded transition-colors ${
-                                period === opt.value
-                                    ? "bg-primary text-primary-foreground"
-                                    : "text-muted-foreground hover:text-foreground"
-                            }`}
-                        >
-                            {opt.label}
-                        </button>
-                    ))}
+                <div className="flex items-center gap-2 flex-wrap">
+                    {/* Service-area filter — scopes every payout metric +
+                        the daily chart + the operational queues. Independent
+                        from the earnings tab's area filter on purpose: the
+                        operator may want to look at payouts fleet-wide while
+                        looking at earnings for one area. */}
+                    <div className="flex items-center gap-1.5">
+                        <Filter className="h-3.5 w-3.5 text-muted-foreground" />
+                        <Select value={serviceAreaId} onValueChange={onServiceAreaChange}>
+                            <SelectTrigger className="h-8 text-xs w-[180px]">
+                                <SelectValue placeholder="All service areas" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="all" className="text-xs">All service areas</SelectItem>
+                                {serviceAreas.map((a) => (
+                                    <SelectItem key={a.id} value={a.id} className="text-xs">
+                                        {a.name || a.id.slice(0, 8)}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                    </div>
+                    <div className="inline-flex rounded-lg border border-border bg-card p-0.5">
+                        {PERIOD_OPTIONS.map((opt) => (
+                            <button
+                                key={opt.value}
+                                type="button"
+                                onClick={() => onPeriodChange(opt.value)}
+                                className={`px-3 py-1 text-xs font-semibold rounded transition-colors ${
+                                    period === opt.value
+                                        ? "bg-primary text-primary-foreground"
+                                        : "text-muted-foreground hover:text-foreground"
+                                }`}
+                            >
+                                {opt.label}
+                            </button>
+                        ))}
+                    </div>
                 </div>
             </div>
 
@@ -1417,11 +1446,22 @@ function PayoutsTab() {
     const [loading, setLoading] = useState(true);
     const [statusFilter, setStatusFilter] = useState("all");
     const [period, setPeriod] = useState<EarningsPeriod>("7d");
+    // Independent from the earnings tab's area filter — operators may
+    // want to view payouts fleet-wide while looking at earnings for
+    // one area, so each tab tracks its own selection.
+    const [serviceAreaId, setServiceAreaId] = useState<string>("all");
+    const [serviceAreas, setServiceAreas] = useState<Array<{ id: string; name?: string }>>([]);
     const [overview, setOverview] = useState<PayoutsOverview | null>(null);
     const [overviewLoading, setOverviewLoading] = useState(true);
     const [retryingId, setRetryingId] = useState<string | null>(null);
     const [bulkRetrying, setBulkRetrying] = useState(false);
     const { toast } = useToast();
+
+    useEffect(() => {
+        // Service areas list is small and only feeds the dropdown —
+        // fetch once on mount, no need to refetch per period change.
+        getServiceAreas().then((rows) => setServiceAreas(Array.isArray(rows) ? rows : [])).catch(() => {});
+    }, []);
 
     const refreshAll = async () => {
         setLoading(true);
@@ -1430,7 +1470,10 @@ function PayoutsTab() {
             const [p, s, o] = await Promise.all([
                 getPayouts().catch(() => []),
                 getPayoutStats().catch(() => null),
-                getPayoutsOverview({ period }).catch(() => null),
+                getPayoutsOverview({
+                    period,
+                    service_area_id: serviceAreaId !== "all" ? serviceAreaId : undefined,
+                }).catch(() => null),
             ]);
             setPayouts(Array.isArray(p) ? p : []);
             setStats(s);
@@ -1506,11 +1549,14 @@ function PayoutsTab() {
 
     useEffect(() => {
         setOverviewLoading(true);
-        getPayoutsOverview({ period })
+        getPayoutsOverview({
+            period,
+            service_area_id: serviceAreaId !== "all" ? serviceAreaId : undefined,
+        })
             .then(setOverview)
             .catch((e) => console.error('[PayoutsOverview] load failed:', e))
             .finally(() => setOverviewLoading(false));
-    }, [period]);
+    }, [period, serviceAreaId]);
 
     const filtered = statusFilter === "all" ? payouts : payouts.filter(p => p.status === statusFilter);
 
@@ -1532,6 +1578,9 @@ function PayoutsTab() {
                 loading={overviewLoading}
                 period={period}
                 onPeriodChange={setPeriod}
+                serviceAreaId={serviceAreaId}
+                onServiceAreaChange={setServiceAreaId}
+                serviceAreas={serviceAreas}
             />
 
             {/* Legacy stats — kept for backward compatibility while the

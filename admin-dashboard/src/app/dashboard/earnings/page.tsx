@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getEarnings, getEarningsOverview, getServiceAreas, getSubscriptionStats, type EarningsOverview, type EarningsPeriod, type MetricWithDelta } from "@/lib/api";
+import { getEarnings, getEarningsOverview, getEarningsRides, getServiceAreas, getSubscriptionStats, type EarningsOverview, type EarningsPeriod, type EarningsRide, type MetricWithDelta } from "@/lib/api";
 import {
     Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -147,6 +147,7 @@ function CeoMetricsHeader({
     serviceAreaId,
     onServiceAreaChange,
     serviceAreas,
+    onChartDayClick,
 }: {
     overview: EarningsOverview | null;
     loading: boolean;
@@ -155,6 +156,10 @@ function CeoMetricsHeader({
     serviceAreaId: string;
     onServiceAreaChange: (id: string) => void;
     serviceAreas: Array<{ id: string; name?: string }>;
+    /** Click handler for the daily GBV chart. recharts onClick passes
+     *  the activeLabel (the date key from daily_series) so the parent
+     *  can drill the transaction table down to that single day. */
+    onChartDayClick?: (day: string) => void;
 }) {
     const m = overview?.metrics;
     const cx = overview?.cancellation_breakdown;
@@ -231,7 +236,16 @@ function CeoMetricsHeader({
                         <div className="h-56 w-full bg-muted/30 rounded animate-pulse" />
                     ) : (
                         <ResponsiveContainer width="100%" height={224}>
-                            <LineChart data={overview.daily_series} margin={{ top: 10, right: 16, left: -8, bottom: 0 }}>
+                            <LineChart
+                                data={overview.daily_series}
+                                margin={{ top: 10, right: 16, left: -8, bottom: 0 }}
+                                onClick={(state: any) => {
+                                    // recharts passes the whole click state; activeLabel
+                                    // is the date string from our daily_series rows.
+                                    if (onChartDayClick && state?.activeLabel) onChartDayClick(state.activeLabel);
+                                }}
+                                style={{ cursor: onChartDayClick ? "pointer" : undefined }}
+                            >
                                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
                                 <XAxis
                                     dataKey="date"
@@ -945,8 +959,9 @@ function PayoutsCompliance({ overview, onClosed }: { overview: PayoutsOverview; 
 }
 
 function RideEarningsTab() {
-    const [earnings, setEarnings] = useState<any[]>([]);
-    const [loading, setLoading] = useState(true);
+    const [rides, setRides] = useState<EarningsRide[]>([]);
+    const [ridesLoading, setRidesLoading] = useState(true);
+    const [ridesTotal, setRidesTotal] = useState(0);
     const [dateFrom, setDateFrom] = useState("");
     const [dateTo, setDateTo] = useState("");
     const [period, setPeriod] = useState<EarningsPeriod>("7d");
@@ -954,19 +969,6 @@ function RideEarningsTab() {
     const [serviceAreas, setServiceAreas] = useState<Array<{ id: string; name?: string }>>([]);
     const [overview, setOverview] = useState<EarningsOverview | null>(null);
     const [overviewLoading, setOverviewLoading] = useState(true);
-
-    useEffect(() => {
-        getEarnings()
-            .then((data) => {
-                if (Array.isArray(data)) { setEarnings(data); }
-                else if (data && typeof data === "object") {
-                    const arr = (data as any).earnings || (data as any).rides || (data as any).data;
-                    setEarnings(Array.isArray(arr) ? arr : []);
-                } else { setEarnings([]); }
-            })
-            .catch((e) => console.error('[Earnings] load failed:', e))
-            .finally(() => setLoading(false));
-    }, []);
 
     useEffect(() => {
         // Service-areas list is small (≤ ~20 rows) and only used to populate
@@ -985,43 +987,87 @@ function RideEarningsTab() {
             .finally(() => setOverviewLoading(false));
     }, [period, serviceAreaId]);
 
-    const filtered = earnings.filter((e) => {
-        if (!dateFrom && !dateTo) return true;
-        const d = e.date ? new Date(e.date).toISOString().split("T")[0] : "";
-        if (dateFrom && d < dateFrom) return false;
-        if (dateTo && d > dateTo) return false;
-        return true;
-    });
+    useEffect(() => {
+        // Transaction table — driven by the date range + area filter.
+        // No default period: when both inputs are empty the backend
+        // returns last 30d (matches what an operator expects on first
+        // open). Re-fetches on every change so the table is always in
+        // sync with the filters above it.
+        setRidesLoading(true);
+        getEarningsRides({
+            start_date: dateFrom || undefined,
+            end_date: dateTo || undefined,
+            service_area_id: serviceAreaId !== "all" ? serviceAreaId : undefined,
+            limit: 500,
+        })
+            .then((res) => {
+                setRides(res.rides || []);
+                setRidesTotal(res.total ?? (res.rides?.length ?? 0));
+            })
+            .catch((e) => console.error('[EarningsRides] load failed:', e))
+            .finally(() => setRidesLoading(false));
+    }, [dateFrom, dateTo, serviceAreaId]);
 
-    const totals = filtered.reduce(
-        (acc, e) => ({
-            totalFare: acc.totalFare + (e.total_fare || 0),
-            driverEarnings: acc.driverEarnings + (e.driver_earnings || 0),
-            adminEarnings: acc.adminEarnings + (e.admin_earnings || 0),
-            tips: acc.tips + (e.tip_amount || 0),
+    // Chart drill-down: clicking a day in the daily GBV chart filters
+    // the transaction table to that single day. activeLabel from
+    // recharts is the date string from daily_series — pass it straight
+    // through into both date inputs.
+    const onChartDayClick = (day: string) => {
+        if (!day) return;
+        setDateFrom(day);
+        setDateTo(day);
+    };
+    const drillDownActive = !!(dateFrom && dateTo && dateFrom === dateTo);
+    const clearDrillDown = () => { setDateFrom(""); setDateTo(""); };
+
+    const totals = rides.reduce(
+        (acc, r) => ({
+            totalFare: acc.totalFare + (r.total_fare || 0),
+            driverEarnings: acc.driverEarnings + (r.driver_earnings || 0),
+            adminEarnings: acc.adminEarnings + (r.admin_earnings || 0),
+            tips: acc.tips + (r.tip_amount || 0),
         }),
         { totalFare: 0, driverEarnings: 0, adminEarnings: 0, tips: 0 }
     );
 
     return (
         <div className="space-y-6">
-            <div className="flex items-center justify-end gap-2">
-                <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-36 text-xs" />
-                <span className="text-muted-foreground text-sm">to</span>
-                <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-36 text-xs" />
-                <Button variant="outline" onClick={() => exportToCsv("earnings", filtered, [
-                    { key: "ride_id", label: "Ride ID" }, { key: "status", label: "Status" },
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2 flex-wrap">
+                    <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-36 text-xs" />
+                    <span className="text-muted-foreground text-sm">to</span>
+                    <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-36 text-xs" />
+                    {drillDownActive && (
+                        <button
+                            type="button"
+                            onClick={clearDrillDown}
+                            className="inline-flex items-center gap-1 px-2 py-1 text-[11px] rounded-md bg-primary/10 text-primary hover:bg-primary/15 transition-colors"
+                            title="Clear chart drill-down"
+                        >
+                            Drilling into {new Date(dateFrom).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                            <X className="h-3 w-3" />
+                        </button>
+                    )}
+                </div>
+                <Button variant="outline" onClick={() => exportToCsv("earnings", rides, [
+                    { key: "ride_code", label: "Ride Code" }, { key: "ride_id", label: "Ride ID" },
+                    { key: "completed_at", label: "Completed At" }, { key: "status", label: "Status" },
+                    { key: "driver_name", label: "Driver" }, { key: "rider_name", label: "Rider" },
                     { key: "total_fare", label: "Total Fare" }, { key: "driver_earnings", label: "Driver Earnings" },
                     { key: "admin_earnings", label: "Platform Revenue" }, { key: "tip_amount", label: "Tip" },
-                    { key: "stripe_transaction_id", label: "Stripe Transaction ID" }, { key: "date", label: "Date" },
-                ])} disabled={filtered.length === 0}>
+                    { key: "tax_amount", label: "Tax" }, { key: "discount_amount", label: "Discount" },
+                    { key: "surge_multiplier", label: "Surge" }, { key: "stripe_charge_id", label: "Stripe Charge ID" },
+                    { key: "service_area_id", label: "Service Area ID" },
+                ])} disabled={rides.length === 0}>
                     <Download className="mr-2 h-4 w-4" /> Export CSV
                 </Button>
             </div>
 
             {/* CEO row — period-over-period deltas, driven by the new
                 /admin/earnings/overview endpoint. Replaces the prior 4-card
-                static totals (which had no comparison and no time series). */}
+                static totals (which had no comparison and no time series).
+                The daily GBV chart is click-to-drill-down: clicking a day
+                filters the transaction table below to that day's rides. */}
             <CeoMetricsHeader
                 overview={overview}
                 loading={overviewLoading}
@@ -1030,6 +1076,7 @@ function RideEarningsTab() {
                 serviceAreaId={serviceAreaId}
                 onServiceAreaChange={setServiceAreaId}
                 serviceAreas={serviceAreas}
+                onChartDayClick={onChartDayClick}
             />
 
             {/* Transaction-level totals from the date-filtered ride feed
@@ -1048,8 +1095,21 @@ function RideEarningsTab() {
             </div>
 
             <Card className="border-border/50">
+                <CardHeader className="pb-2 flex flex-row items-center justify-between gap-2">
+                    <CardTitle className="text-sm">
+                        Transactions
+                        <span className="text-xs font-normal text-muted-foreground ml-2">
+                            {ridesTotal > rides.length ? `${rides.length} of ${ridesTotal}` : `${rides.length} ride${rides.length === 1 ? "" : "s"}`}
+                        </span>
+                    </CardTitle>
+                    {ridesTotal > rides.length && (
+                        <span className="text-[11px] text-muted-foreground">
+                            Showing newest {rides.length}. Narrow the date range or export to see more.
+                        </span>
+                    )}
+                </CardHeader>
                 <CardContent className="p-0">
-                    {loading ? (
+                    {ridesLoading ? (
                         <div className="flex items-center justify-center p-12">
                             <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
                         </div>
@@ -1057,25 +1117,58 @@ function RideEarningsTab() {
                         <Table>
                             <TableHeader>
                                 <TableRow>
-                                    <TableHead>Ride ID</TableHead><TableHead>Status</TableHead>
-                                    <TableHead>Total Fare</TableHead><TableHead>Driver</TableHead>
-                                    <TableHead>Platform</TableHead><TableHead>Tip</TableHead><TableHead>Date</TableHead>
+                                    <TableHead className="text-[11px] uppercase tracking-wide">Completed</TableHead>
+                                    <TableHead className="text-[11px] uppercase tracking-wide">Ride</TableHead>
+                                    <TableHead className="text-[11px] uppercase tracking-wide">Driver</TableHead>
+                                    <TableHead className="text-[11px] uppercase tracking-wide">Rider</TableHead>
+                                    <TableHead className="text-[11px] uppercase tracking-wide text-right">Fare</TableHead>
+                                    <TableHead className="text-[11px] uppercase tracking-wide text-right">Driver</TableHead>
+                                    <TableHead className="text-[11px] uppercase tracking-wide text-right">Platform</TableHead>
+                                    <TableHead className="text-[11px] uppercase tracking-wide text-right">Tip</TableHead>
+                                    <TableHead className="text-[11px] uppercase tracking-wide">Stripe</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {filtered.length === 0 ? (
-                                    <TableRow><TableCell colSpan={7} className="text-center text-muted-foreground py-12">No earnings data yet.</TableCell></TableRow>
-                                ) : filtered.map((e) => (
-                                    <TableRow key={e.ride_id}>
-                                        <TableCell className="font-mono text-xs">{e.ride_id?.slice(0, 8)}...</TableCell>
-                                        <TableCell><Badge variant="secondary" className={statusColor(e.status)}>{e.status?.replace(/_/g, " ")}</Badge></TableCell>
-                                        <TableCell>{formatCurrency(e.total_fare || 0)}</TableCell>
-                                        <TableCell className="text-emerald-500">{formatCurrency(e.driver_earnings || 0)}</TableCell>
-                                        <TableCell className="text-violet-500">{formatCurrency(e.admin_earnings || 0)}</TableCell>
-                                        <TableCell className="text-amber-500">{formatCurrency(e.tip_amount || 0)}</TableCell>
-                                        <TableCell className="text-xs text-muted-foreground">{formatDate(e.date)}</TableCell>
-                                    </TableRow>
-                                ))}
+                                {rides.length === 0 ? (
+                                    <TableRow><TableCell colSpan={9} className="text-center text-muted-foreground py-12">No rides in this date range.</TableCell></TableRow>
+                                ) : rides.map((r) => {
+                                    const code = r.ride_code ? r.ride_code.toLowerCase() : `#${r.ride_id.slice(0, 8)}`;
+                                    return (
+                                        <TableRow key={r.ride_id}>
+                                            <TableCell className="text-xs whitespace-nowrap">{formatDate(r.completed_at || r.created_at)}</TableCell>
+                                            <TableCell>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => navigator.clipboard.writeText(r.ride_code || r.ride_id)}
+                                                    className="inline-flex items-center gap-1 text-[11px] font-mono text-muted-foreground hover:text-foreground"
+                                                    title={`Copy ${r.ride_code || r.ride_id}`}
+                                                >
+                                                    {code}
+                                                </button>
+                                            </TableCell>
+                                            <TableCell className="text-xs truncate max-w-[140px]" title={r.driver_name || ""}>{r.driver_name || "—"}</TableCell>
+                                            <TableCell className="text-xs truncate max-w-[140px]" title={r.rider_name || ""}>{r.rider_name || "—"}</TableCell>
+                                            <TableCell className="text-sm font-medium text-right tabular-nums">{formatCurrency(r.total_fare || 0)}</TableCell>
+                                            <TableCell className="text-sm text-right tabular-nums text-emerald-500">{formatCurrency(r.driver_earnings || 0)}</TableCell>
+                                            <TableCell className="text-sm text-right tabular-nums text-violet-500">{formatCurrency(r.admin_earnings || 0)}</TableCell>
+                                            <TableCell className="text-sm text-right tabular-nums text-amber-500">{r.tip_amount > 0 ? formatCurrency(r.tip_amount) : <span className="text-muted-foreground">—</span>}</TableCell>
+                                            <TableCell>
+                                                {r.stripe_charge_id ? (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => navigator.clipboard.writeText(r.stripe_charge_id!)}
+                                                        className="inline-flex items-center gap-1 text-[10px] font-mono text-muted-foreground hover:text-foreground"
+                                                        title={`Copy ${r.stripe_charge_id}`}
+                                                    >
+                                                        {r.stripe_charge_id.slice(0, 12)}…
+                                                    </button>
+                                                ) : (
+                                                    <span className="text-[10px] text-muted-foreground">—</span>
+                                                )}
+                                            </TableCell>
+                                        </TableRow>
+                                    );
+                                })}
                             </TableBody>
                         </Table>
                     )}

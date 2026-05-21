@@ -1874,7 +1874,37 @@ export interface PayoutsOverview {
     blocked_drivers: { count: number; outstanding_balance: number };
     top_drivers: Array<{ driver_id: string; name: string; amount: number; payout_count: number }>;
     at_risk_drivers: Array<{ driver_id: string; name: string; failure_count: number; last_reason: string | null }>;
+    // Pass 4 — compliance.
+    t4a_snapshot: {
+        tax_year: number;
+        drivers_with_earnings: number;
+        buckets: {
+            under_500: number;
+            from_500_to_10k: number;
+            from_10k_to_30k: number;
+            over_30k: number;
+        };
+        ytd_gross_earnings: number;
+    };
+    period_locks: Array<{
+        period: string;
+        closed_at: string;
+        closed_by: string | null;
+        actor_role: string | null;
+    }>;
 }
+
+export interface ClosePayoutPeriodResponse {
+    period: string;
+    payout_count: number;
+    total_amount: number;
+    audit_log_id: string | null;
+}
+export const closePayoutPeriod = (year: number, month: number) =>
+    request<ClosePayoutPeriodResponse>(`/api/admin/payouts/close-period`, {
+        method: "POST",
+        body: JSON.stringify({ year, month }),
+    });
 
 export const getPayoutsOverview = (params: { period: EarningsPeriod; service_area_id?: string }) => {
     const sp = new URLSearchParams({ period: params.period });

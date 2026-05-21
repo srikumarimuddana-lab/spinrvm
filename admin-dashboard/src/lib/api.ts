@@ -468,6 +468,67 @@ export const adminSearchUsers = (opts: {
 export const getDriverRides = (id: string) =>
     request<any>(`/api/admin/drivers/${id}/rides`);
 
+export interface DriverLiveStats {
+    total_rides: number;
+    total_earnings: number;
+    avg_rating: number | null;
+    acceptance_rate: number | null;
+    cancelled_by_driver: number;
+    total_assigned: number;
+}
+export const getDriverLiveStats = (id: string) =>
+    request<DriverLiveStats>(`/api/admin/drivers/${id}/live-stats`);
+
+export interface DriverPayoutSummary {
+    summary: {
+        lifetime_earnings: number;
+        lifetime_tips: number;
+        ytd_earnings: number;
+        total_paid_out: number;
+        pending_in_flight: number;
+        pending_balance: number;
+        on_hold: number;
+        rides_count: number;
+        active_days_30d: number;
+        last_payout: {
+            id: string;
+            amount: number;
+            processed_at: string | null;
+            bank_name: string | null;
+            account_last4: string | null;
+        } | null;
+        last_failed_payout: {
+            id: string;
+            amount: number;
+            error_message: string | null;
+            created_at: string;
+        } | null;
+    };
+    payment_method: {
+        has_bank_account: boolean;
+        bank_name: string | null;
+        account_last4: string | null;
+        account_holder_name: string | null;
+        account_type: string | null;
+        is_verified: boolean | null;
+        stripe_connected: boolean;
+        stripe_account_hint: string | null;
+    };
+    payouts: Array<{
+        id: string;
+        amount: number;
+        status: "pending" | "processing" | "completed" | "failed" | string;
+        stripe_payout_id: string | null;
+        bank_name: string | null;
+        account_last4: string | null;
+        error_message: string | null;
+        created_at: string;
+        processed_at: string | null;
+    }>;
+}
+export const getDriverPayoutsSummary = (id: string) =>
+    request<DriverPayoutSummary>(`/api/admin/drivers/${id}/payouts-summary`);
+
 export const getDriverStats = (params?: {
     service_area_id?: string;
     start_date?: string;

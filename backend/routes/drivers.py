@@ -1815,6 +1815,31 @@ async def request_payout(
     return {"success": True, "payout": serialize_doc(payout)}
 
 
+async def _attempt_transfer_reversal(transfer_id: str, stripe_secret: str, payout_id: str) -> bool:
+    """Best-effort compensating reversal of a Stripe Transfer.
+
+    Called when the payout step of an instant payout fails after the
+    transfer step has already moved money to the connect account. Uses an
+    idempotency key tied to the payout row so a retry of this same payout
+    never issues a second reversal. Returns True iff Stripe accepted the
+    reversal — the caller writes "reversed" vs "stranded" accordingly.
+    """
+    try:
+        stripe.Transfer.create_reversal(
+            transfer_id,
+            api_key=stripe_secret,
+            idempotency_key=f"instant-payout-reversal-{payout_id}",
+        )
+        return True
+    except Exception:
+        # logger.exception captures the underlying Stripe error (transfer
+        # state, amount mismatch, etc.) without leaking the transfer id
+        # back to the client. The payout row will be flagged for manual
+        # review so ops can chase it down.
+        logger.exception("Transfer reversal failed for stranded instant payout")
+        return False
+
+
 @api_router.post("/payouts/instant")
 @idempotent_endpoint(scope="driver_instant_payout")
 async def request_instant_payout(
@@ -1824,15 +1849,26 @@ async def request_instant_payout(
 ):
     """Same-day cashout via Stripe Instant Payout (Uber-style Instant Pay).
 
-    Flow:
-      1. Compute fee (see compute_instant_payout_fee). Net = amount - fee.
-      2. Verify driver has a Stripe Connect account and sufficient balance.
-      3. Transfer the gross from platform balance → driver's connected account.
-      4. Trigger Stripe Instant Payout on the connected account (method=instant).
-      5. Persist the payout row with payout_type='instant', fee, net_amount.
+    Money-safety contract:
+      Instant payout is two Stripe calls — Transfer (platform → connect),
+      then Payout(method=instant). If the second fails after the first
+      succeeds, money is stranded in the connect account. To keep the
+      books consistent:
+        1. Generate the payout_id BEFORE the first Stripe call so every
+           Stripe call carries a per-payout idempotency key — a retry on
+           the same payout row never double-transfers or double-pays-out.
+        2. INSERT the payout row immediately after the transfer succeeds
+           with status='transfer_completed' and stripe_transfer_id set;
+           a crash between transfer and payout still leaves a recoverable
+           DB record.
+        3. If the payout step fails, attempt Transfer.create_reversal().
+           On reversal success → row status='reversed'. On reversal
+           failure → status='stranded' and requires_manual_review=true so
+           the ops dashboard surfaces it.
 
-    Fee model is regulator-friendly: shown in the receipt, separate line item,
-    never hidden. Standard scheduled payouts remain free (see request_payout).
+    Fee model is regulator-friendly: shown in the receipt, separate line
+    item, never hidden. Standard scheduled payouts remain free (see
+    request_payout).
     """
     driver = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("drivers", {"user_id": current_user.get("id")}, limit=1)
@@ -1877,53 +1913,125 @@ async def request_instant_payout(
     if not stripe_secret:
         raise HTTPException(status_code=503, detail="Payouts temporarily unavailable")
 
-    status = "pending"
-    stripe_payout_id = None
+    # Pre-allocate the payout_id so every Stripe call carries a stable
+    # per-payout idempotency key. A retry of the same row never causes a
+    # second transfer or a second payout.
+    payout_id = str(uuid.uuid4())
+
+    # ── Step 1: Transfer platform → connect account ───────────────────
     try:
-        # Step 1: move gross from platform → connected account.
-        stripe.Transfer.create(
+        transfer = stripe.Transfer.create(
             amount=dollars_to_cents(req.amount),
             currency="cad",
             destination=stripe_account_id,
             api_key=stripe_secret,
+            idempotency_key=f"instant-payout-transfer-{payout_id}",
         )
-        # Step 2: instant payout on the connected account. Stripe deducts
-        # its own ~1% fee from the platform side (separate from the fee we
-        # charge the driver). Pass stripe_account in headers so the call
-        # runs in the connected account's context.
+        stripe_transfer_id = transfer.id
+    except Exception as e:
+        # Transfer never landed — nothing to reverse, nothing to persist.
+        logger.exception("Stripe transfer step failed for instant payout")
+        raise HTTPException(
+            status_code=500,
+            detail="Instant payout failed. Please try again or contact support.",
+        ) from e
+
+    # ── Persist the row IMMEDIATELY so a crash before the payout step
+    #    still leaves a recoverable record of the in-flight transfer. ──
+    now_iso = datetime.now(timezone.utc).isoformat()
+    payout = {
+        "id": payout_id,
+        "driver_id": driver["id"],
+        "amount": req.amount,
+        "fee": fee,
+        "net_amount": net_amount,
+        "payout_type": "instant",
+        "status": "transfer_completed",
+        "stripe_transfer_id": stripe_transfer_id,
+        "stripe_payout_id": None,
+        "bank_name": account.get("bank_name") if account else "Stripe Connect",
+        "account_last4": account.get("account_last4") if account else "****",
+        "created_at": now_iso,
+    }
+    try:
+        await db_supabase.insert_one("payouts", payout)
+    except Exception as persist_exc:
+        # Transfer succeeded but we couldn't record it. Reverse the transfer
+        # so the books match, then fail loudly. If the reversal also fails
+        # there's no DB row to flag — log + alert ops.
+        logger.exception("Failed to persist instant payout row after transfer succeeded")
+        reversal_ok = await _attempt_transfer_reversal(stripe_transfer_id, stripe_secret, payout_id)
+        if not reversal_ok:
+            logger.error(
+                "STRANDED instant payout — DB persist failed AND reversal failed. payout_id=%s driver_id=%s amount=%s",
+                payout_id,
+                driver["id"],
+                req.amount,
+            )
+        raise HTTPException(
+            status_code=500,
+            detail="Instant payout failed. Please try again or contact support.",
+        ) from persist_exc
+
+    # ── Step 2: Payout on connect account ─────────────────────────────
+    try:
+        # Stripe deducts its own ~1% fee from the platform side (separate
+        # from the fee we charge the driver). Pass stripe_account so the
+        # call runs in the connected account's context.
         payout_obj = stripe.Payout.create(
             amount=dollars_to_cents(net_amount),
             currency="cad",
             method="instant",
             api_key=stripe_secret,
             stripe_account=stripe_account_id,
+            idempotency_key=f"instant-payout-{payout_id}",
         )
         stripe_payout_id = payout_obj.id
-        status = RideStatus.COMPLETED
-    except Exception as e:
-        # PII-safe: never log the connect account ID or transfer ID since
-        # Stripe error messages embed them. logger.exception captures
-        # the full traceback server-side for ops.
-        logger.exception("Stripe instant payout failed")
+    except Exception as payout_exc:
+        # Payout failed; reverse the transfer to keep funds on the platform
+        # side. The row stays in DB either way — flagged for manual review
+        # when reversal also fails so stranded money is visible to ops.
+        logger.exception("Stripe payout step failed; attempting transfer reversal")
+        reversal_ok = await _attempt_transfer_reversal(stripe_transfer_id, stripe_secret, payout_id)
+        new_status = "reversed" if reversal_ok else "stranded"
+        try:
+            await db_supabase.update_one(
+                "payouts",
+                {"id": payout_id},
+                {
+                    "status": new_status,
+                    "failure_reason": str(payout_exc)[:500],
+                    "requires_manual_review": not reversal_ok,
+                },
+            )
+        except Exception:
+            # The row exists with status=transfer_completed; we couldn't
+            # update it to reflect the failure. Log loudly — the partial
+            # state is still recoverable from Stripe.
+            logger.exception("Failed to flag instant payout row after payout failure")
         raise HTTPException(
             status_code=500,
             detail="Instant payout failed. Please try again or contact support.",
-        ) from e
+        ) from payout_exc
 
-    payout = {
-        "id": str(uuid.uuid4()),
-        "driver_id": driver["id"],
-        "amount": req.amount,
-        "fee": fee,
-        "net_amount": net_amount,
-        "payout_type": "instant",
-        "status": status,
-        "stripe_payout_id": stripe_payout_id,
-        "bank_name": account.get("bank_name") if account else "Stripe Connect",
-        "account_last4": account.get("account_last4") if account else "****",
-        "created_at": datetime.now(timezone.utc).isoformat(),
-    }
-    await db_supabase.insert_one("payouts", payout)
+    # ── Step 3: Mark row as completed ─────────────────────────────────
+    try:
+        await db_supabase.update_one(
+            "payouts",
+            {"id": payout_id},
+            {"status": RideStatus.COMPLETED, "stripe_payout_id": stripe_payout_id},
+        )
+    except Exception:
+        # Money landed in the driver's bank but we couldn't flip the row
+        # to "completed". The row stays as "transfer_completed" — a
+        # follow-up reconciliation job will fix the status. Don't unwind
+        # the payout (the driver has the money).
+        logger.exception(
+            "Failed to mark instant payout completed (money already disbursed)",
+        )
+
+    payout["status"] = RideStatus.COMPLETED
+    payout["stripe_payout_id"] = stripe_payout_id
     return {"success": True, "payout": serialize_doc(payout)}
 
 

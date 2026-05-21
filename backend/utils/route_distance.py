@@ -57,11 +57,23 @@ def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
 
 
 def _downsample(points: list[dict], max_count: int) -> list[dict]:
+    """Evenly downsample to at most max_count points, always including the last.
+
+    Reserves one slot for the trailing dropoff point so the total never
+    exceeds max_count. Earlier versions built max_count points and then
+    appended the last one, producing max_count+1 — long trips would send
+    101 points to Roads API (which caps at 100) and silently fall back to
+    the haversine result, defeating the road-snap recompute for exactly
+    the trips most likely to need it.
+    """
     if len(points) <= max_count:
         return points
-    step = len(points) / max_count
-    sampled = [points[int(i * step)] for i in range(max_count)]
-    # Always include the last point so the polyline ends at the dropoff
+    if max_count < 2:
+        return [points[-1]]
+    # Pick max_count - 1 evenly spaced points across the input, then always
+    # append the actual last point. End-to-end length is at most max_count.
+    step = len(points) / (max_count - 1)
+    sampled = [points[int(i * step)] for i in range(max_count - 1)]
     if sampled[-1] is not points[-1]:
         sampled.append(points[-1])
     return sampled

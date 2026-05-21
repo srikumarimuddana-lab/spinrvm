@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides } from "@/lib/api";
+import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, type DriverLiveStats } from "@/lib/api";
 import { Pagination } from "@/components/ui/pagination";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatCurrency } from "@/lib/utils";
@@ -103,6 +103,7 @@ export default function DriversPage() {
     const [ridesLoading, setRidesLoading] = useState(false);
     const [ridesLoaded, setRidesLoaded] = useState<string | null>(null);
     const [detailTab, setDetailTab] = useState<string>("overview");
+    const [liveStats, setLiveStats] = useState<DriverLiveStats | null>(null);
 
     const loadDriverRides = useCallback(async (driverId: string) => {
         if (ridesLoaded === driverId) return;
@@ -198,7 +199,22 @@ export default function DriversPage() {
     }, []);
     useEffect(() => { if (!selected?.id) { setDriverDocs([]); return; } setDocsLoading(true); getDriverDocuments(selected.id).then((d) => setDriverDocs(Array.isArray(d) ? d : [])).catch(() => setDriverDocs([])).finally(() => setDocsLoading(false)); }, [selected?.id]);
     useEffect(() => { setEditing(false); setEditForm({}); }, [selected?.id]);
-    useEffect(() => { if (!selected?.id) { setDriverRides([]); setRidesLoaded(null); } else { setDetailTab("overview"); } }, [selected?.id]);
+    useEffect(() => {
+        if (!selected?.id) {
+            setDriverRides([]);
+            setRidesLoaded(null);
+            setLiveStats(null);
+            return;
+        }
+        setDetailTab("overview");
+        // Live-stats compute Rating / Rides / Earnings / Accept Rate from
+        // the rides table on demand because three of the four denormalised
+        // columns on the drivers row are unreliable (see backend comment in
+        // routes/admin/drivers.py admin_get_driver_live_stats). Cheap query,
+        // worth the round-trip to avoid stale headers.
+        setLiveStats(null);
+        getDriverLiveStats(selected.id).then(setLiveStats).catch(() => {});
+    }, [selected?.id]);
     useEffect(() => {
         if (!previewUrl) return;
         const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setPreviewUrl(null); };
@@ -600,10 +616,53 @@ export default function DriversPage() {
                                     </div>
                                 </div>
                                 <div className="grid grid-cols-4 gap-3 mt-5">
-                                    <QuickStat icon={Star} color="text-amber-500" bg="bg-amber-50 dark:bg-amber-900/20" label="Rating" value={selected.rating?.toFixed(1) || "New"} />
-                                    <QuickStat icon={Car} color="text-blue-500" bg="bg-blue-50 dark:bg-blue-900/20" label="Rides" value={(selected.total_rides || 0).toLocaleString()} />
-                                    <QuickStat icon={DollarSign} color="text-emerald-500" bg="bg-emerald-50 dark:bg-emerald-900/20" label="Earnings" value={formatCurrency(selected.total_earnings || 0)} />
-                                    <QuickStat icon={CheckCircle} color="text-violet-500" bg="bg-violet-50 dark:bg-violet-900/20" label="Accept Rate" value={selected.acceptance_rate || "\u2014"} />
+                                    {/* QuickStats prefer live-stats computed on the backend over
+                                        the denormalised drivers.* columns, which were stale or
+                                        unset for three of the four metrics. While live-stats are
+                                        in flight we show a "\u2026" placeholder so the user sees that
+                                        the value is loading instead of a stale 0. */}
+                                    <QuickStat
+                                        icon={Star} color="text-amber-500" bg="bg-amber-50 dark:bg-amber-900/20"
+                                        label="Rating"
+                                        value={
+                                            liveStats === null
+                                                ? "\u2026"
+                                                : liveStats.avg_rating != null
+                                                    ? liveStats.avg_rating.toFixed(1)
+                                                    : selected.rating != null && selected.rating > 0
+                                                        ? Number(selected.rating).toFixed(1)
+                                                        : "New"
+                                        }
+                                    />
+                                    <QuickStat
+                                        icon={Car} color="text-blue-500" bg="bg-blue-50 dark:bg-blue-900/20"
+                                        label="Rides"
+                                        value={
+                                            liveStats === null
+                                                ? "\u2026"
+                                                : (liveStats.total_rides || 0).toLocaleString()
+                                        }
+                                    />
+                                    <QuickStat
+                                        icon={DollarSign} color="text-emerald-500" bg="bg-emerald-50 dark:bg-emerald-900/20"
+                                        label="Earnings"
+                                        value={
+                                            liveStats === null
+                                                ? "\u2026"
+                                                : formatCurrency(liveStats.total_earnings || 0)
+                                        }
+                                    />
+                                    <QuickStat
+                                        icon={CheckCircle} color="text-violet-500" bg="bg-violet-50 dark:bg-violet-900/20"
+                                        label="Accept Rate"
+                                        value={
+                                            liveStats === null
+                                                ? "\u2026"
+                                                : liveStats.acceptance_rate != null
+                                                    ? `${liveStats.acceptance_rate}%`
+                                                    : "\u2014"
+                                        }
+                                    />
                                 </div>
                             </div>
                         </div>

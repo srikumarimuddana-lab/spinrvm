@@ -468,6 +468,17 @@ export const adminSearchUsers = (opts: {
 export const getDriverRides = (id: string) =>
     request<any>(`/api/admin/drivers/${id}/rides`);
 
+export interface DriverLiveStats {
+    total_rides: number;
+    total_earnings: number;
+    avg_rating: number | null;
+    acceptance_rate: number | null;
+    cancelled_by_driver: number;
+    total_assigned: number;
+}
+export const getDriverLiveStats = (id: string) =>
+    request<DriverLiveStats>(`/api/admin/drivers/${id}/live-stats`);
+
 export const getDriverStats = (params?: {
     service_area_id?: string;
     start_date?: string;

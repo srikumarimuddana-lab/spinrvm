@@ -1288,6 +1288,63 @@ async def admin_get_driver_rides(
     return {"rides": enriched, "total": len(rides), "offset": offset, "limit": limit}
 
 
+@router.get("/drivers/{driver_id}/live-stats")
+async def admin_get_driver_live_stats(driver_id: str):
+    """Live aggregate stats for the admin slideout's QuickStat header.
+
+    The four header cards (Rating / Rides / Earnings / Accept Rate) used to
+    read denormalised columns straight off the drivers row, three of which
+    were not actually being maintained in production:
+      - drivers.total_rides         IS incremented on ride completion ✓
+      - drivers.rating              IS updated via rolling average when a
+                                    rider calls rate_driver — but the
+                                    rating flow has a known P0 crash so
+                                    most rows are stuck at the seed value
+      - drivers.total_earnings      is never written by any code path
+      - drivers.acceptance_rate     is not a column at all
+
+    Computing on demand from the rides table here is cheap (one filter
+    scan per driver, bounded by an O(few-hundred) rides per driver for
+    the active fleet) and removes the staleness without requiring a
+    background-loop rollup or denorm trigger.
+    """
+    rides = await db_supabase.get_rows(
+        "rides",
+        {"driver_id": driver_id},
+        limit=5000,
+    )
+
+    completed = [r for r in rides if r.get("status") == "completed"]
+    total_assigned = len(rides)
+    completed_count = len(completed)
+
+    # driver_earnings is the post-platform-fee amount the driver actually
+    # gets — same field the rider receipt + driver payout summary uses.
+    total_earnings = float(sum(Decimal(str(r.get("driver_earnings") or 0)) for r in completed))
+
+    rated = [r for r in completed if (r.get("rider_rating") or 0) > 0]
+    avg_rating = round(sum(float(r["rider_rating"]) for r in rated) / len(rated), 2) if rated else None
+
+    # Acceptance rate: same formula as routes/admin/analytics.py uses for
+    # the rankings page (completed / total_assigned). Approximate — a true
+    # rate would compare against offers sent, not assigned rides — but
+    # it's the same definition operators already see elsewhere.
+    acceptance_rate = round((completed_count / total_assigned) * 100, 1) if total_assigned > 0 else None
+
+    cancelled_by_driver = sum(
+        1 for r in rides if r.get("status") == "cancelled" and "driver" in (r.get("cancellation_reason") or "").lower()
+    )
+
+    return {
+        "total_rides": completed_count,
+        "total_earnings": total_earnings,
+        "avg_rating": avg_rating,
+        "acceptance_rate": acceptance_rate,
+        "cancelled_by_driver": cancelled_by_driver,
+        "total_assigned": total_assigned,
+    }
+
+
 @router.get("/drivers/{driver_id}/daily-stats")
 async def admin_get_driver_daily_stats(
     driver_id: str,

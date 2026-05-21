@@ -1573,7 +1573,13 @@ async def admin_reveal_driver_sin(driver_id: str, admin: dict = Depends(get_admi
     Each successful reveal generates an audit_log row that ops + the
     privacy officer can review.
     """
-    if (admin.get("role") or "").lower() not in {"super_admin", "admin"}:
+    # Hard-gated to super_admin only. Regular admins (role="admin") see
+    # only the last-4 from the cache columns — that's enough to confirm
+    # SIN is on file at Stripe but doesn't expose the regulated value.
+    # Every successful reveal already writes an audit_log row, but the
+    # additional role check is defence-in-depth: even if an admin token
+    # is somehow leaked, the reveal path stays closed.
+    if (admin.get("role") or "").lower() != "super_admin":
         raise HTTPException(status_code=403, detail="reveal_sin requires super_admin role")
 
     driver = await db_supabase.get_driver_by_id(driver_id)

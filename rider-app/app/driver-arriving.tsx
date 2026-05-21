@@ -49,7 +49,7 @@ function DriverArrivingScreenContent() {
   } = useRideStore();
   const mapRef = useRef<MapView>(null);
   const bottomSheetRef = useRef<any>(null);
-  const snapPoints = useMemo(() => ['40%', '65%', '90%'], []);
+  const snapPoints = useMemo(() => ['40%', '65%'], []);
   const resumeKey = useAppResumeKey();
 
   const [mapEtaMinutes, setMapEtaMinutes] = useState<number | null>(null);
@@ -311,8 +311,11 @@ function DriverArrivingScreenContent() {
         snapPoints={snapPoints}
         backgroundStyle={styles.sheet}
         handleIndicatorStyle={styles.sheetHandle}
+        enableOverDrag={false}
       >
         <BottomSheetScrollView
+          bounces={false}
+          overScrollMode="never"
           contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) + 8 }}>
 
           {/* ── SEARCHING STATE ── */}

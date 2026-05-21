@@ -67,7 +67,7 @@ function RideInProgressScreenContent() {
 
   // Responsive snap points: fewer / higher stops on landscape phones and tablets
   const snapPoints = React.useMemo(
-    () => (isLandscape ? ['50%', '90%'] : ['30%', '50%', '85%']),
+    () => (isLandscape ? ['50%', '70%'] : ['30%', '50%', '70%']),
     [isLandscape]
   );
 
@@ -626,11 +626,12 @@ I've shared my live location with you for safety.
           index={1}
           snapPoints={snapPoints}
           enablePanDownToClose={false}
+          enableOverDrag={false}
           backgroundStyle={styles.bottomSheetBackground}
           handleIndicatorStyle={styles.sheetHandleIndicator}
         >
           {/* @ts-ignore - gorhom/bottom-sheet v4 has a known children typing bug with React 18 */}
-          <BottomSheetScrollView contentContainerStyle={styles.bottomSheetContent}>
+          <BottomSheetScrollView bounces={false} overScrollMode="never" contentContainerStyle={styles.bottomSheetContent}>
             {panelContent}
           </BottomSheetScrollView>
         </BottomSheet>

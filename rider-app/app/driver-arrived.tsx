@@ -38,7 +38,7 @@ function DriverArrivedScreenContent() {
   const { currentRide, currentDriver, fetchRide, cancelRide, clearRide, triggerEmergency, wsConnected } = useRideStore();
   const mapRef = React.useRef<MapView>(null);
   const bottomSheetRef = React.useRef<any>(null);
-  const snapPoints = useMemo(() => ['42%', '70%', '92%'], []);
+  const snapPoints = useMemo(() => ['42%', '70%'], []);
   const resumeKey = useAppResumeKey();
   const [routeCoords, setRouteCoords] = React.useState<any[]>([]);
   const [confirmSheet, setConfirmSheet] = useState<{
@@ -258,8 +258,9 @@ function DriverArrivedScreenContent() {
         snapPoints={snapPoints}
         backgroundStyle={styles.sheetBg}
         handleIndicatorStyle={styles.sheetHandle}
+        enableOverDrag={false}
       >
-        <BottomSheetScrollView contentContainerStyle={styles.sheetContent}>
+        <BottomSheetScrollView bounces={false} overScrollMode="never" contentContainerStyle={styles.sheetContent}>
 
           {/* OTP Card */}
           <View style={styles.otpCard}>

@@ -476,12 +476,14 @@ function RideOptionsScreenContent() {
         snapPoints={snapPoints}
         backgroundStyle={styles.sheetBackground}
         handleIndicatorStyle={styles.sheetIndicator}
-        overDragResistanceFactor={10}
+        enableOverDrag={false}
         enablePanDownToClose={false}
       >
         <BottomSheetScrollView
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
+          bounces={false}
+          overScrollMode="never"
         >
 
           {/* Section header */}

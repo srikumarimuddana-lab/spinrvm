@@ -38,14 +38,10 @@ def _user_display_name(user: Optional[Dict]) -> str:
     return f"{fn} {ln}".strip() or user.get("email") or user.get("phone") or ""
 
 
-async def _batch_fetch_drivers_and_users(
-    rider_ids: List[str], driver_ids: List[str]
-) -> tuple:
+async def _batch_fetch_drivers_and_users(rider_ids: List[str], driver_ids: List[str]) -> tuple:
     """Batch-fetch drivers and users in 2-3 queries instead of N+1 loops."""
     drivers_list = (
-        await db_supabase.get_rows(
-            "drivers", {"id": {"$in": driver_ids}}, limit=max(len(driver_ids), 1)
-        )
+        await db_supabase.get_rows("drivers", {"id": {"$in": driver_ids}}, limit=max(len(driver_ids), 1))
         if driver_ids
         else []
     )
@@ -58,9 +54,7 @@ async def _batch_fetch_drivers_and_users(
         }
     )
     users_list = (
-        await db_supabase.get_rows(
-            "users", {"id": {"$in": all_user_ids}}, limit=max(len(all_user_ids), 1)
-        )
+        await db_supabase.get_rows("users", {"id": {"$in": all_user_ids}}, limit=max(len(all_user_ids), 1))
         if all_user_ids
         else []
     )
@@ -169,9 +163,7 @@ async def admin_get_drivers(
                     {"last_name": {"$regex": re.escape(term), "$options": "i"}},
                 ]
             }
-            matching_users = await db_supabase.get_rows(
-                "users", user_filters, limit=100
-            )
+            matching_users = await db_supabase.get_rows("users", user_filters, limit=100)
             matching_uids = [u["id"] for u in matching_users if u.get("id")]
 
             # Match driver rows by phone/plate directly OR by user_id from user search above.
@@ -183,9 +175,7 @@ async def admin_get_drivers(
             if matching_uids:
                 filters["$or"].append({"user_id": {"$in": matching_uids}})
 
-    drivers = await db_supabase.get_rows(
-        "drivers", filters, order="created_at", desc=True, limit=limit, offset=offset
-    )
+    drivers = await db_supabase.get_rows("drivers", filters, order="created_at", desc=True, limit=limit, offset=offset)
 
     # Defensive dedup — keep the earliest-created row per (user_id, phone).
     seen_user_ids: set = set()
@@ -206,11 +196,7 @@ async def admin_get_drivers(
 
     user_ids = list({d.get("user_id") for d in deduped if d.get("user_id")})
     users_list = (
-        await db_supabase.get_rows(
-            "users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)
-        )
-        if user_ids
-        else []
+        await db_supabase.get_rows("users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)) if user_ids else []
     )
     users_map = {u["id"]: u for u in users_list if u.get("id")}
     out = []
@@ -283,30 +269,20 @@ async def admin_get_driver_stats(
     driver_filters: Dict[str, Any] = {}
     if service_area_id:
         driver_filters["service_area_id"] = service_area_id
-    all_drivers = await db_supabase.get_rows(
-        "drivers", driver_filters, order="created_at", desc=True, limit=5000
-    )
+    all_drivers = await db_supabase.get_rows("drivers", driver_filters, order="created_at", desc=True, limit=5000)
 
     # Enrich with user info (batch)
     user_ids = list({d.get("user_id") for d in all_drivers if d.get("user_id")})
     users_list = (
-        await db_supabase.get_rows(
-            "users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)
-        )
-        if user_ids
-        else []
+        await db_supabase.get_rows("users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)) if user_ids else []
     )
     users_map: Dict[str, Any] = {u["id"]: u for u in users_list if u.get("id")}
 
     # Auto-detect needs_review: active drivers with expired docs or pending re-uploads.
     # Capped at 500 for the inline needs_review flag; full paginated list via
     # GET /documents/pending (A-P4-4).
-    all_docs = await db_supabase.get_rows(
-        "driver_documents", {"status": "pending"}, limit=500
-    )
-    pending_doc_driver_ids = {
-        d.get("driver_id") for d in all_docs if d.get("driver_id")
-    }
+    all_docs = await db_supabase.get_rows("driver_documents", {"status": "pending"}, limit=500)
+    pending_doc_driver_ids = {d.get("driver_id") for d in all_docs if d.get("driver_id")}
 
     now_iso = datetime.now(timezone.utc).isoformat()
     expiry_fields = [
@@ -348,19 +324,13 @@ async def admin_get_driver_stats(
     online = sum(1 for d in enriched_drivers if d.get("is_online"))
     active_count = sum(1 for d in enriched_drivers if d.get("status") == "active")
     pending_count = sum(1 for d in enriched_drivers if d.get("status") == "pending")
-    needs_review_count = sum(
-        1 for d in enriched_drivers if d.get("status") == "needs_review"
-    )
+    needs_review_count = sum(1 for d in enriched_drivers if d.get("status") == "needs_review")
     suspended_count = sum(1 for d in enriched_drivers if d.get("status") == "suspended")
     banned_count = sum(1 for d in enriched_drivers if d.get("status") == "banned")
     total_rides_sum = sum(int(d.get("total_rides") or 0) for d in enriched_drivers)
-    total_earnings_sum = float(
-        sum(Decimal(str(d.get("total_earnings") or 0)) for d in enriched_drivers)
-    )
+    total_earnings_sum = float(sum(Decimal(str(d.get("total_earnings") or 0)) for d in enriched_drivers))
     avg_rating = 0.0
-    rated = [
-        d for d in enriched_drivers if d.get("rating") and float(d.get("rating", 0)) > 0
-    ]
+    rated = [d for d in enriched_drivers if d.get("rating") and float(d.get("rating", 0)) > 0]
     if rated:
         avg_rating = round(sum(float(d["rating"]) for d in rated) / len(rated), 2)
 
@@ -388,8 +358,7 @@ async def admin_get_driver_stats(
             area_stats[aid]["unverified"] += 1
         area_stats[aid]["total_rides"] += int(d.get("total_rides") or 0)
         area_stats[aid]["total_earnings"] = float(
-            Decimal(str(area_stats[aid]["total_earnings"]))
-            + Decimal(str(d.get("total_earnings") or 0))
+            Decimal(str(area_stats[aid]["total_earnings"])) + Decimal(str(d.get("total_earnings") or 0))
         )
 
     # ── Daily charts (within date range) ──
@@ -410,16 +379,10 @@ async def admin_get_driver_stats(
     # Rides + earnings per day (for drivers matching the service_area filter)
     driver_ids_set = {d["id"] for d in enriched_drivers}
     ride_filters: Dict[str, Any] = {"created_at": {"$gte": range_start.isoformat()}}
-    all_rides = await db_supabase.get_rows(
-        "rides", ride_filters, order="created_at", desc=True, limit=5000
-    )
+    all_rides = await db_supabase.get_rows("rides", ride_filters, order="created_at", desc=True, limit=5000)
 
     # Filter rides to only those belonging to our driver set
-    relevant_rides = (
-        [r for r in all_rides if r.get("driver_id") in driver_ids_set]
-        if service_area_id
-        else all_rides
-    )
+    relevant_rides = [r for r in all_rides if r.get("driver_id") in driver_ids_set] if service_area_id else all_rides
 
     daily_rides: Dict[str, int] = defaultdict(int)
     daily_earnings: Dict[str, float] = defaultdict(float)
@@ -432,8 +395,7 @@ async def admin_get_driver_stats(
             daily_rides[day_key] += 1
             if r.get("status") == "completed":
                 daily_earnings[day_key] = float(
-                    Decimal(str(daily_earnings[day_key]))
-                    + Decimal(str(r.get("driver_earnings") or 0))
+                    Decimal(str(daily_earnings[day_key])) + Decimal(str(r.get("driver_earnings") or 0))
                 )
 
     # Build chart arrays
@@ -486,16 +448,426 @@ async def admin_get_driver_stats(
             "daily_earnings": earnings_chart,
         },
         "drivers": enriched_drivers,
-        "service_areas": [
-            {"id": a["id"], "name": a.get("name", "Unknown")} for a in service_areas
-        ],
+        "service_areas": [{"id": a["id"], "name": a.get("name", "Unknown")} for a in service_areas],
     }
 
 
-@router.put("/drivers/{driver_id}")
-async def admin_update_driver(
-    driver_id: str, updates: Dict[str, Any], admin: dict = Depends(get_admin_user)
+@router.get("/drivers/approval-queue")
+async def admin_get_approval_queue(
+    limit: int = Query(50, ge=1, le=200),
+    service_area_id: Optional[str] = None,
 ):
+    """Per-driver rollup of pending applications, oldest-first.
+
+    Surfaces drivers that need ops attention right now:
+    - drivers.status == "pending" (new applicants)
+    - drivers with any driver_documents.status == "pending" (re-uploads
+      from suspended/needs_review drivers)
+
+    Each item carries time-in-queue, pending/missing doc counts, and the
+    service area + vehicle type names so the queue page doesn't need
+    extra round-trips. The header `stats` block exposes SLA signals
+    (median wait, oldest, count over 24h) computed over the full result
+    set — not the trimmed window — so the dashboard reflects reality even
+    when the table is paginated.
+
+    queue_started_at: status_changed at unavailable on `drivers`, so we
+    fall back to drivers.created_at for new applicants, or the earliest
+    pending-doc upload_at for re-uploaders. This matches what ops cares
+    about: "how long has this been waiting on us?"
+    """
+    now = datetime.now(timezone.utc)
+
+    pending_drivers = await db_supabase.get_rows(
+        "drivers",
+        {"status": "pending", **({"service_area_id": service_area_id} if service_area_id else {})},
+        order="created_at",
+        limit=1000,
+    )
+
+    pending_docs = await db_supabase.get_rows(
+        "driver_documents",
+        {"status": "pending"},
+        order="uploaded_at",
+        limit=1000,
+    )
+
+    earliest_pending_doc_by_driver: Dict[str, str] = {}
+    pending_doc_count_by_driver: Dict[str, int] = {}
+    for d in pending_docs:
+        did = d.get("driver_id")
+        if not did:
+            continue
+        pending_doc_count_by_driver[did] = pending_doc_count_by_driver.get(did, 0) + 1
+        ts = d.get("uploaded_at") or d.get("created_at")
+        if ts and (did not in earliest_pending_doc_by_driver or ts < earliest_pending_doc_by_driver[did]):
+            earliest_pending_doc_by_driver[did] = ts
+
+    driver_map: Dict[str, Dict[str, Any]] = {d["id"]: d for d in pending_drivers if d.get("id")}
+    extra_driver_ids = [did for did in pending_doc_count_by_driver if did not in driver_map]
+    if extra_driver_ids:
+        extra_filters: Dict[str, Any] = {"id": {"$in": extra_driver_ids}}
+        if service_area_id:
+            extra_filters["service_area_id"] = service_area_id
+        extra_drivers = await db_supabase.get_rows("drivers", extra_filters, limit=len(extra_driver_ids))
+        for d in extra_drivers:
+            if d.get("id"):
+                driver_map[d["id"]] = d
+
+    if not driver_map:
+        return {
+            "stats": {"total_pending": 0, "oldest_in_queue_hours": 0.0, "median_wait_hours": 0.0, "over_24h_count": 0},
+            "items": [],
+        }
+
+    user_ids = list({d.get("user_id") for d in driver_map.values() if d.get("user_id")})
+    users_list = (
+        await db_supabase.get_rows("users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)) if user_ids else []
+    )
+    users_map = {u["id"]: u for u in users_list if u.get("id")}
+
+    area_ids = list({d.get("service_area_id") for d in driver_map.values() if d.get("service_area_id")})
+    areas_list = (
+        await db_supabase.get_rows("service_areas", {"id": {"$in": area_ids}}, limit=max(len(area_ids), 1))
+        if area_ids
+        else []
+    )
+    areas_map = {a["id"]: a for a in areas_list if a.get("id")}
+
+    vtype_ids = list({d.get("vehicle_type_id") for d in driver_map.values() if d.get("vehicle_type_id")})
+    vtypes_list = (
+        await db_supabase.get_rows("vehicle_types", {"id": {"$in": vtype_ids}}, limit=max(len(vtype_ids), 1))
+        if vtype_ids
+        else []
+    )
+    vtypes_map = {v["id"]: v.get("name") for v in vtypes_list if v.get("id")}
+
+    all_docs = (
+        await db_supabase.get_rows(
+            "driver_documents",
+            {"driver_id": {"$in": list(driver_map.keys())}, "status": {"$in": ["approved", "pending"]}},
+            limit=max(len(driver_map) * 10, 100),
+        )
+        if driver_map
+        else []
+    )
+    docs_by_driver: Dict[str, List[Dict[str, Any]]] = {}
+    for d in all_docs:
+        docs_by_driver.setdefault(d.get("driver_id"), []).append(d)
+
+    def _missing_count(driver_row: Dict[str, Any]) -> int:
+        area = areas_map.get(driver_row.get("service_area_id"))
+        if not area:
+            return 0
+        reqs = area.get("required_documents") or []
+        if not isinstance(reqs, list) or not reqs:
+            return 0
+        driver_docs = docs_by_driver.get(driver_row["id"], [])
+        approved_keys = set()
+        for dd in driver_docs:
+            if dd.get("status") != "approved":
+                continue
+            k = (
+                dd.get("requirement_key")
+                or dd.get("requirement_id")
+                or (dd.get("document_type") or "").lower().replace(" ", "_")
+            )
+            if k:
+                approved_keys.add(k)
+        missing = 0
+        for r in reqs:
+            if not isinstance(r, dict):
+                continue
+            key = (r.get("key") or r.get("id") or "").lower()
+            if key and key not in approved_keys:
+                missing += 1
+        return missing
+
+    items: List[Dict[str, Any]] = []
+    for did, drow in driver_map.items():
+        u = users_map.get(drow.get("user_id"))
+        if drow.get("status") == "pending":
+            queue_started_at = drow.get("created_at")
+        else:
+            queue_started_at = earliest_pending_doc_by_driver.get(did) or drow.get("created_at")
+
+        time_in_queue_seconds = 0
+        if queue_started_at:
+            qdt = parse_iso_utc(queue_started_at)
+            if qdt is not None:
+                time_in_queue_seconds = max(0, int((now - qdt).total_seconds()))
+
+        items.append(
+            {
+                "driver_id": did,
+                "user_id": drow.get("user_id"),
+                "first_name": (u or {}).get("first_name") or "",
+                "last_name": (u or {}).get("last_name") or "",
+                "name": _user_display_name(u) or drow.get("name") or "",
+                "email": (u or {}).get("email"),
+                "phone": (u or {}).get("phone") or drow.get("phone"),
+                "profile_photo_url": drow.get("profile_photo_url"),
+                "status": drow.get("status", "pending"),
+                "created_at": drow.get("created_at"),
+                "queue_started_at": queue_started_at,
+                "time_in_queue_seconds": time_in_queue_seconds,
+                "pending_docs_count": pending_doc_count_by_driver.get(did, 0),
+                "missing_docs_count": _missing_count(drow),
+                "service_area_id": drow.get("service_area_id"),
+                "service_area_name": (areas_map.get(drow.get("service_area_id")) or {}).get("name"),
+                "vehicle_type_id": drow.get("vehicle_type_id"),
+                "vehicle_type_name": vtypes_map.get(drow.get("vehicle_type_id")),
+            }
+        )
+
+    items.sort(key=lambda r: r["time_in_queue_seconds"], reverse=True)
+
+    waits = [it["time_in_queue_seconds"] for it in items]
+    total = len(items)
+    over_24h = sum(1 for w in waits if w >= 86400)
+    oldest_hours = round(max(waits) / 3600, 1) if waits else 0.0
+    if waits:
+        sorted_waits = sorted(waits)
+        mid = total // 2
+        median_seconds = sorted_waits[mid] if total % 2 == 1 else (sorted_waits[mid - 1] + sorted_waits[mid]) / 2
+        median_hours = round(median_seconds / 3600, 1)
+    else:
+        median_hours = 0.0
+
+    return {
+        "stats": {
+            "total_pending": total,
+            "oldest_in_queue_hours": oldest_hours,
+            "median_wait_hours": median_hours,
+            "over_24h_count": over_24h,
+        },
+        "items": items[:limit],
+    }
+
+
+# Legacy expiry columns on `drivers` — mirrors document_expiry.py so the
+# admin queue and the background warner agree on which docs to track.
+_EXPIRY_FIELDS: Dict[str, str] = {
+    "license_expiry_date": "Driver's License",
+    "insurance_expiry_date": "Insurance",
+    "vehicle_inspection_expiry_date": "Vehicle Inspection",
+    "background_check_expiry_date": "Background Check",
+    "work_eligibility_expiry_date": "Work Eligibility",
+}
+
+
+@router.get("/drivers/expiring")
+async def admin_get_expiring_documents(
+    window_days: int = Query(30, ge=1, le=90),
+    service_area_id: Optional[str] = None,
+):
+    """Drivers with at least one document expiring inside `window_days`.
+
+    Returns one row per (driver, expiring document) so the ops table can
+    list each renewal-needed item individually with its own Nudge button.
+    Ride volume for the last 30 days is included so ops can prioritize
+    high-value drivers. `last_nudged_at` reflects the most recent renewal
+    push (manual or automatic) sent to the driver — single field on
+    `drivers` shared across all doc types, matching what
+    `document_expiry.py` already maintains.
+    """
+    now = datetime.now(timezone.utc)
+    window_end = now + timedelta(days=window_days)
+
+    filters: Dict[str, Any] = {"status": {"$in": ["active", "needs_review"]}}
+    if service_area_id:
+        filters["service_area_id"] = service_area_id
+    drivers = await db_supabase.get_rows("drivers", filters, limit=5000)
+
+    expiring_rows: List[Dict[str, Any]] = []
+    affected_driver_ids: set = set()
+    for d in drivers:
+        for field, label in _EXPIRY_FIELDS.items():
+            val = d.get(field)
+            if not val:
+                continue
+            exp_dt = parse_iso_utc(val)
+            if exp_dt is None:
+                continue
+            if now <= exp_dt <= window_end:
+                affected_driver_ids.add(d["id"])
+                expiring_rows.append(
+                    {
+                        "driver_row": d,
+                        "doc_field": field,
+                        "doc_type": field.replace("_expiry_date", ""),
+                        "doc_label": label,
+                        "expiry_date": val,
+                        "days_remaining": max(0, (exp_dt - now).days),
+                    }
+                )
+
+    if not expiring_rows:
+        return {"items": []}
+
+    user_ids = list({d["driver_row"].get("user_id") for d in expiring_rows if d["driver_row"].get("user_id")})
+    users_list = (
+        await db_supabase.get_rows("users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)) if user_ids else []
+    )
+    users_map = {u["id"]: u for u in users_list if u.get("id")}
+
+    area_ids = list(
+        {d["driver_row"].get("service_area_id") for d in expiring_rows if d["driver_row"].get("service_area_id")}
+    )
+    areas_list = (
+        await db_supabase.get_rows("service_areas", {"id": {"$in": area_ids}}, limit=max(len(area_ids), 1))
+        if area_ids
+        else []
+    )
+    areas_map = {a["id"]: a.get("name") for a in areas_list if a.get("id")}
+
+    rides_30d_ago = (now - timedelta(days=30)).isoformat()
+    rides = (
+        await db_supabase.get_rows(
+            "rides",
+            {
+                "driver_id": {"$in": list(affected_driver_ids)},
+                "status": "completed",
+                "completed_at": {"$gte": rides_30d_ago},
+            },
+            limit=10000,
+        )
+        if affected_driver_ids
+        else []
+    )
+    rides_by_driver: Dict[str, int] = {}
+    for r in rides:
+        did = r.get("driver_id")
+        if did:
+            rides_by_driver[did] = rides_by_driver.get(did, 0) + 1
+
+    items: List[Dict[str, Any]] = []
+    for row in expiring_rows:
+        d = row["driver_row"]
+        u = users_map.get(d.get("user_id"))
+        items.append(
+            {
+                "driver_id": d["id"],
+                "user_id": d.get("user_id"),
+                "name": _user_display_name(u) or d.get("name") or "",
+                "first_name": (u or {}).get("first_name") or "",
+                "last_name": (u or {}).get("last_name") or "",
+                "email": (u or {}).get("email"),
+                "phone": (u or {}).get("phone") or d.get("phone"),
+                "profile_photo_url": d.get("profile_photo_url"),
+                "status": d.get("status"),
+                "service_area_id": d.get("service_area_id"),
+                "service_area_name": areas_map.get(d.get("service_area_id")),
+                "doc_type": row["doc_type"],
+                "doc_label": row["doc_label"],
+                "doc_field": row["doc_field"],
+                "expiry_date": row["expiry_date"],
+                "days_remaining": row["days_remaining"],
+                "rides_last_30d": rides_by_driver.get(d["id"], 0),
+                "last_nudged_at": d.get("doc_expiry_warned_at"),
+            }
+        )
+
+    items.sort(key=lambda r: r["days_remaining"])
+    return {"items": items}
+
+
+class DriverNudgeExpiryRequest(BaseModel):
+    doc_type: str  # e.g. "license", "insurance" — matches _EXPIRY_FIELDS prefix
+    doc_label: Optional[str] = None
+    custom_message: Optional[str] = None
+
+
+@router.post("/drivers/{driver_id}/nudge-expiry")
+async def admin_nudge_driver_expiry(
+    driver_id: str,
+    body: DriverNudgeExpiryRequest,
+    admin: dict = Depends(get_admin_user),
+):
+    """Send a manual renewal-reminder push to a driver.
+
+    The automated warner in `utils/document_expiry.py` already pushes on
+    a schedule; this endpoint lets ops nudge a specific high-value driver
+    earlier without waiting for the next cron tick. Updates
+    `doc_expiry_warned_at` so the automatic loop's 24h throttle doesn't
+    re-fire and double-notify. Audit-logs every nudge.
+    """
+    drv = await db_supabase.get_driver_by_id(driver_id)
+    if not drv:
+        raise HTTPException(status_code=404, detail="Driver not found")
+    user_id = drv.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="Driver has no linked user account")
+
+    field = f"{body.doc_type}_expiry_date"
+    doc_label = body.doc_label or _EXPIRY_FIELDS.get(field) or body.doc_type.replace("_", " ").title()
+
+    expiry_iso = drv.get(field)
+    days_text = ""
+    if expiry_iso:
+        exp_dt = parse_iso_utc(expiry_iso)
+        if exp_dt:
+            days_left = max(0, (exp_dt - datetime.now(timezone.utc)).days)
+            days_text = f" in {days_left} day{'s' if days_left != 1 else ''}" if days_left > 0 else " today"
+
+    title = f"Renew your {doc_label}"
+    body_text = body.custom_message or (
+        f"Your {doc_label} expires{days_text}. Please upload a current copy to keep driving."
+    )
+
+    try:
+        await send_push_notification(
+            user_id,
+            title,
+            body_text,
+            data={
+                "type": "document_expiry_nudge",
+                "driver_id": driver_id,
+                "doc_type": body.doc_type,
+            },
+        )
+    except Exception as exc:
+        logger.error(
+            "Expiry nudge push failed for driver %s doc %s",
+            driver_id,
+            body.doc_type,
+            exc_info=True,
+        )
+        raise HTTPException(status_code=502, detail="Notification service unavailable") from exc
+
+    try:
+        await db_supabase.update_one(
+            "drivers",
+            {"id": driver_id},
+            {"doc_expiry_warned_at": datetime.now(timezone.utc).isoformat()},
+        )
+    except Exception:
+        logger.warning(
+            "Could not update doc_expiry_warned_at for driver %s after nudge",
+            driver_id,
+            exc_info=True,
+        )
+
+    await log_admin_action(
+        admin,
+        "driver_expiry_nudge",
+        "drivers",
+        driver_id,
+        {"doc_type": body.doc_type, "doc_label": doc_label, "has_custom_message": bool(body.custom_message)},
+    )
+    await _log_driver_activity(
+        driver_id,
+        "expiry_nudge_sent",
+        f"Renewal reminder sent: {doc_label}",
+        body.custom_message or "",
+        {"doc_type": body.doc_type, "doc_label": doc_label},
+    )
+
+    return {"ok": True}
+
+
+@router.put("/drivers/{driver_id}")
+async def admin_update_driver(driver_id: str, updates: Dict[str, Any], admin: dict = Depends(get_admin_user)):
     """Update driver details from admin dashboard."""
     allowed = {
         "first_name",
@@ -548,9 +920,7 @@ async def admin_update_driver(
 
 
 @router.post("/drivers/{driver_id}/verify")
-async def admin_verify_driver(
-    driver_id: str, req: DriverVerifyRequest, admin: dict = Depends(get_admin_user)
-):
+async def admin_verify_driver(driver_id: str, req: DriverVerifyRequest, admin: dict = Depends(get_admin_user)):
     """Verify or unverify a driver.
 
     NOTE: the Supabase `drivers` table in production was created from
@@ -601,16 +971,12 @@ async def admin_verify_driver(
     except Exception as e:
         logger.warning(f"[ADMIN] Push notification failed for driver {driver_id}: {e}")
 
-    await log_admin_action(
-        admin, "driver_verified", "drivers", driver_id, {"verified": req.verified}
-    )
+    await log_admin_action(admin, "driver_verified", "drivers", driver_id, {"verified": req.verified})
     return {"message": f"Driver {'verified' if req.verified else 'unverified'}"}
 
 
 @router.post("/drivers/{driver_id}/action")
-async def admin_driver_action(
-    driver_id: str, req: DriverActionRequest, admin: dict = Depends(get_admin_user)
-):
+async def admin_driver_action(driver_id: str, req: DriverActionRequest, admin: dict = Depends(get_admin_user)):
     """Perform a lifecycle action on a driver.
 
     Actions: approve, reject, suspend, ban, unban, reactivate.
@@ -635,9 +1001,7 @@ async def admin_driver_action(
     elif req.action == "suspend":
         # Suspend: temporarily disable, store reason
         if not req.reason:
-            raise HTTPException(
-                status_code=400, detail="Reason is required when suspending"
-            )
+            raise HTTPException(status_code=400, detail="Reason is required when suspending")
         updates["status"] = "suspended"
         updates["suspension_reason"] = req.reason
         updates["suspended_at"] = now
@@ -647,9 +1011,7 @@ async def admin_driver_action(
     elif req.action == "ban":
         # Ban: permanently block, store reason
         if not req.reason:
-            raise HTTPException(
-                status_code=400, detail="Reason is required when banning"
-            )
+            raise HTTPException(status_code=400, detail="Reason is required when banning")
         updates["status"] = "banned"
         updates["is_verified"] = False
         updates["ban_reason"] = req.reason
@@ -680,9 +1042,7 @@ async def admin_driver_action(
         await db_supabase.update_one("drivers", {"id": driver_id}, updates)
     except Exception as e:
         logger.error(f"Failed driver action {req.action} on {driver_id}: {e}")
-        raise HTTPException(
-            status_code=500, detail="An internal error occurred. Please try again."
-        ) from e
+        raise HTTPException(status_code=500, detail="An internal error occurred. Please try again.") from e
 
     logger.info(f"[ADMIN] Driver {driver_id} action={req.action} reason={req.reason}")
 
@@ -761,9 +1121,7 @@ async def admin_driver_action(
                 },
             )
         except Exception as e:
-            logger.warning(
-                f"[ADMIN] Push notification failed for driver action {req.action}: {e}"
-            )
+            logger.warning(f"[ADMIN] Push notification failed for driver action {req.action}: {e}")
 
     return {
         "message": f"Driver {req.action}d successfully",
@@ -806,9 +1164,7 @@ async def admin_override_driver_status(
             updates["ban_reason"] = req.reason
 
     await db_supabase.update_one("drivers", {"id": driver_id}, updates)
-    logger.info(
-        f"[ADMIN] Driver {driver_id} status overridden to {req.status} reason={req.reason}"
-    )
+    logger.info(f"[ADMIN] Driver {driver_id} status overridden to {req.status} reason={req.reason}")
     await _log_driver_activity(
         driver_id,
         "status_override",
@@ -903,9 +1259,7 @@ async def admin_get_driver_rides(
     offset: int = Query(0, ge=0),
 ):
     """Get rides for a driver with pagination (max 500 per page)."""
-    rides = await db_supabase.get_rows(
-        "rides", {"driver_id": driver_id}, order="created_at", desc=True, limit=limit
-    )
+    rides = await db_supabase.get_rows("rides", {"driver_id": driver_id}, order="created_at", desc=True, limit=limit)
     # Apply offset in-process (Supabase helper doesn't expose OFFSET natively)
     page = rides[offset : offset + limit]
     return {"rides": page, "total": len(rides), "offset": offset, "limit": limit}
@@ -921,9 +1275,7 @@ async def admin_get_driver_daily_stats(
     if not end_date:
         end_date = datetime.now(timezone.utc).date().isoformat()
     if not start_date:
-        start_date = (
-            datetime.now(timezone.utc).date() - timedelta(days=30)
-        ).isoformat()
+        start_date = (datetime.now(timezone.utc).date() - timedelta(days=30)).isoformat()
 
     stats = await db_supabase.get_rows(
         "driver_daily_stats",

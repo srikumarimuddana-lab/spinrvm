@@ -13,7 +13,8 @@ import { Sheet, SheetContent, SheetTitle, SheetDescription } from "@/components/
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Search, Users, Wifi, ShieldCheck, ShieldAlert, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, ArrowUpDown, ArrowUp, ArrowDown, Ban, Pause } from "lucide-react";
+import { Search, Users, Wifi, ShieldCheck, ShieldAlert, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, ArrowUpDown, ArrowUp, ArrowDown, Ban, Pause, Maximize2 } from "lucide-react";
+import { DocumentReviewer } from "./_components/document-reviewer";
 import DriverStatsCards from "./_components/driver-stats-cards";
 import DriverCharts from "./_components/driver-charts";
 import AreaStatsTable from "./_components/area-stats-table";
@@ -57,6 +58,7 @@ export default function DriversPage() {
     const [reviewExpiry, setReviewExpiry] = useState("");
     const [reviewReason, setReviewReason] = useState("");
     const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+    const [openReviewerForDriver, setOpenReviewerForDriver] = useState<{ id: string; name: string } | null>(null);
     const [editing, setEditing] = useState(false);
     const [editForm, setEditForm] = useState<Record<string, any>>({});
     const [saving, setSaving] = useState(false);
@@ -666,6 +668,20 @@ export default function DriversPage() {
 
                                 {/* Documents */}
                                 <TabsContent value="documents" className="mt-4 space-y-6">
+                                    <div className="flex items-center justify-between gap-2 -mt-1">
+                                        <p className="text-xs text-muted-foreground">
+                                            Review docs inline below, or open the full-screen reviewer for keyboard-driven triage.
+                                        </p>
+                                        <Button
+                                            size="sm"
+                                            variant="outline"
+                                            className="h-8"
+                                            onClick={() => setOpenReviewerForDriver({ id: selected.id, name: selected.name || selected.email || selected.id })}
+                                        >
+                                            <Maximize2 className="h-3.5 w-3.5 mr-1.5" />
+                                            Open in Reviewer
+                                        </Button>
+                                    </div>
                                     <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                                         {docsLoading ? (
                                             <>{[1,2,3,4,5].map(i => <div key={i} className="h-24 bg-muted rounded-xl animate-pulse" />)}</>
@@ -823,6 +839,14 @@ export default function DriversPage() {
                     </>)}
                 </SheetContent>
             </Sheet>
+
+            <DocumentReviewer
+                open={!!openReviewerForDriver}
+                driverId={openReviewerForDriver?.id || null}
+                driverName={openReviewerForDriver?.name}
+                onClose={() => setOpenReviewerForDriver(null)}
+                onAfterAction={() => { reloadDriverDocs(); loadData(); loadDrivers(); }}
+            />
 
             {previewUrl && (
                 <div className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center p-8 cursor-pointer" onClick={() => setPreviewUrl(null)} role="dialog" aria-modal="true" aria-label="Document preview">

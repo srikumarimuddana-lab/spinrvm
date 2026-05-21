@@ -2538,6 +2538,8 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     # need to join against driver_location_history for historical rides.
     planned_distance = ride.get("planned_distance_km") or ride.get("distance_km", 0) or 0
     actual_distance_km = planned_distance
+    actual_distance_km_haversine: Optional[float] = None
+    actual_distance_km_road: Optional[float] = None
     phase_distances: Dict[str, float] = {}
     phase_durations: Dict[str, int] = {}
     phase_polylines: Dict[str, list] = {}
@@ -2632,6 +2634,43 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
                 actual_distance_km = planned_distance
 
             pickup_to_driver_km = round(phase_distances.get("navigating_to_pickup", 0.0), 2)
+
+            # Road-snapped recompute (P2): the haversine sum above is already
+            # spike-protected by the speed/distance/gap caps, but it still
+            # approximates straight-line distance between consecutive pings,
+            # missing road curvature and turns. Roads API snapToRoads with
+            # interpolate=true gives us the actual road-network distance and
+            # respects the driver's chosen route (detours included), so it's
+            # the structurally correct billable distance.
+            #
+            # When the recompute succeeds AND its value is within sanity range
+            # of the haversine baseline (1/3× to 3×), it wins. Otherwise we
+            # log the discrepancy and stick with the haversine value — Maps
+            # outage or an empty response can't be allowed to corrupt billing.
+            actual_distance_km_haversine = actual_distance_km
+            actual_distance_km_road = None
+            try:
+                try:
+                    from ..utils.route_distance import compute_road_distance_km
+                except ImportError:
+                    from utils.route_distance import compute_road_distance_km  # type: ignore
+                actual_distance_km_road = await compute_road_distance_km(all_breadcrumbs)
+            except Exception:
+                logger.warning(
+                    "[complete_ride] road-snap recompute raised; keeping haversine",
+                    exc_info=True,
+                )
+            if actual_distance_km_road is not None:
+                lo = max(0.1, actual_distance_km_haversine / 3.0)
+                hi = max(0.1, actual_distance_km_haversine * 3.0)
+                if lo <= actual_distance_km_road <= hi:
+                    actual_distance_km = round(actual_distance_km_road, 2)
+                else:
+                    logger.warning(
+                        f"Ride {ride_id}: road-snap distance {actual_distance_km_road}km "
+                        f"out of sanity range [{lo:.2f}, {hi:.2f}] from haversine "
+                        f"{actual_distance_km_haversine}km — keeping haversine value"
+                    )
 
             # Per-phase polylines for SGI / dispute tooling. Each phase is
             # downsampled to MAX_PER_PHASE points so a long trip's payload
@@ -2766,6 +2805,16 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             "estimated_distance_km": round(float(planned_distance or 0), 3),
             "estimated_duration_minutes": int(ride.get("duration_minutes") or 0) or None,
             "actual_distance_km": round(float(actual_distance_km or 0), 3),
+            # P2: ops visibility — both raw computations stored so a regression
+            # in either path (haversine spike filter, or Roads API outage) can
+            # be diagnosed from a single ride row. actual_distance_km above is
+            # the canonical billed value.
+            "actual_distance_km_haversine": (
+                round(float(actual_distance_km_haversine), 3) if actual_distance_km_haversine is not None else None
+            ),
+            "actual_distance_km_road_snapped": (
+                round(float(actual_distance_km_road), 3) if actual_distance_km_road is not None else None
+            ),
         }
         if trip_minutes is not None:
             trip_phase["actual_duration_minutes"] = trip_minutes

@@ -21,6 +21,11 @@ interface NavItem {
     label: string;
     icon: any;
     module: string;
+    /** Sub-navigation rendered indented under the parent. The current
+     *  pattern: parent route is still its own page (e.g. /drivers shows
+     *  the list); children are deeper triage views. Active highlight on
+     *  the parent uses startsWith() so any child path keeps it lit. */
+    children?: NavItem[];
 }
 
 interface NavGroup {
@@ -40,9 +45,16 @@ const NAV_GROUPS: NavGroup[] = [
         items: [
             { href: "/dashboard/monitoring", label: "Live Monitoring", icon: LayoutDashboard, module: "rides" },
             { href: "/dashboard/rides", label: "Rides", icon: Car, module: "rides" },
-            { href: "/dashboard/drivers", label: "Drivers", icon: Car, module: "drivers" },
-            { href: "/dashboard/drivers/queue", label: "Approvals", icon: Inbox, module: "drivers" },
-            { href: "/dashboard/drivers/expiring", label: "Expiring Docs", icon: Clock, module: "drivers" },
+            {
+                href: "/dashboard/drivers",
+                label: "Drivers",
+                icon: Car,
+                module: "drivers",
+                children: [
+                    { href: "/dashboard/drivers/queue", label: "Approvals", icon: Inbox, module: "drivers" },
+                    { href: "/dashboard/drivers/expiring", label: "Expiring Docs", icon: Clock, module: "drivers" },
+                ],
+            },
             { href: "/dashboard/users", label: "Users", icon: Users, module: "users" },
             { href: "/dashboard/heatmap", label: "Heat Map", icon: Flame, module: "heatmap" },
             { href: "/dashboard/analytics", label: "Analytics", icon: LayoutDashboard, module: "dashboard" },
@@ -180,20 +192,79 @@ export function Sidebar() {
                                 {visibleItems.map((item) => {
                                     const active = pathname === item.href ||
                                         (item.href !== "/dashboard" && pathname.startsWith(item.href));
+                                    // Filter children the same way we filtered the parent group
+                                    // — admin/super_admin always see them; other staff only see
+                                    // children whose module they hold.
+                                    const childItems = (item.children || []).filter(child =>
+                                        isSuperAdmin || userModules.includes(child.module)
+                                    );
                                     return (
-                                        <Link key={item.href} href={item.href} onClick={() => setMobileOpen(false)}
-                                            title={collapsed ? item.label : undefined}
-                                            className={cn(
-                                                "flex items-center rounded-lg text-[13px] font-medium transition-colors",
-                                                collapsed ? "justify-center p-2.5 my-0.5" : "gap-2.5 px-2.5 py-[7px] my-[1px]",
-                                                active
-                                                    ? "bg-primary/10 text-primary"
-                                                    : "text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                                        <div key={item.href}>
+                                            <Link href={item.href} onClick={() => setMobileOpen(false)}
+                                                title={collapsed ? item.label : undefined}
+                                                className={cn(
+                                                    "flex items-center rounded-lg text-[13px] font-medium transition-colors",
+                                                    collapsed ? "justify-center p-2.5 my-0.5" : "gap-2.5 px-2.5 py-[7px] my-[1px]",
+                                                    active
+                                                        ? "bg-primary/10 text-primary"
+                                                        : "text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                                                )}
+                                            >
+                                                <item.icon className={cn("shrink-0", collapsed ? "h-[18px] w-[18px]" : "h-4 w-4")} />
+                                                {!collapsed && item.label}
+                                            </Link>
+                                            {/* Children. In expanded mode they're indented under
+                                                the parent with a guide line. In collapsed mode
+                                                we flatten them as sibling icons since there's
+                                                no horizontal room to nest visually — tooltip
+                                                still names them. */}
+                                            {childItems.length > 0 && (
+                                                collapsed ? (
+                                                    childItems.map(child => {
+                                                        const childActive = pathname === child.href || pathname.startsWith(child.href);
+                                                        return (
+                                                            <Link
+                                                                key={child.href}
+                                                                href={child.href}
+                                                                onClick={() => setMobileOpen(false)}
+                                                                title={`${item.label} → ${child.label}`}
+                                                                className={cn(
+                                                                    "flex items-center rounded-lg text-[13px] font-medium transition-colors",
+                                                                    "justify-center p-2.5 my-0.5",
+                                                                    childActive
+                                                                        ? "bg-primary/10 text-primary"
+                                                                        : "text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                                                                )}
+                                                            >
+                                                                <child.icon className="shrink-0 h-[18px] w-[18px]" />
+                                                            </Link>
+                                                        );
+                                                    })
+                                                ) : (
+                                                    <div className="ml-[18px] pl-3 border-l border-sidebar-border/50 my-0.5">
+                                                        {childItems.map(child => {
+                                                            const childActive = pathname === child.href || pathname.startsWith(child.href);
+                                                            return (
+                                                                <Link
+                                                                    key={child.href}
+                                                                    href={child.href}
+                                                                    onClick={() => setMobileOpen(false)}
+                                                                    className={cn(
+                                                                        "flex items-center gap-2 rounded-lg text-[12px] font-medium transition-colors px-2.5 py-[6px] my-[1px]",
+                                                                        childActive
+                                                                            ? "bg-primary/10 text-primary"
+                                                                            : "text-sidebar-foreground/50 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                                                                    )}
+                                                                >
+                                                                    <child.icon className="shrink-0 h-3.5 w-3.5" />
+                                                                    {child.label}
+                                                                </Link>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                )
                                             )}
-                                        >
-                                            <item.icon className={cn("shrink-0", collapsed ? "h-[18px] w-[18px]" : "h-4 w-4")} />
-                                            {!collapsed && item.label}
-                                        </Link>
+                                        </div>
                                     );
                                 })}
                             </div>

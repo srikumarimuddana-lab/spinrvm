@@ -45,6 +45,9 @@ _CREDENTIAL_FIELDS = frozenset(
         "stripe_webhook_secret",
         "twilio_auth_token",
         "google_maps_api_key",
+        # SendGrid API key is a credential too — without masking it would
+        # otherwise round-trip in plaintext on every settings GET.
+        "sendgrid_api_key",
     }
 )
 
@@ -64,9 +67,24 @@ def _mask_credentials(settings: Dict[str, Any]) -> Dict[str, Any]:
 
 
 class SettingsUpdateRequest(BaseModel):
-    """Strict schema for admin settings updates. Rejects unknown fields."""
+    """Schema for admin settings updates.
 
-    model_config = ConfigDict(extra="forbid")
+    The frontend ships the full settings object on every save (it doesn't
+    track which fields the user actually changed). That object includes
+    DB-managed columns like ``id``, ``created_at``, ``updated_at`` and any
+    fields persisted by older migrations that aren't on this Pydantic
+    model. With ``extra="forbid"`` any one of them caused a 422 and the
+    whole save failed — operators reported it as "I can't save the
+    tracking URL" but track_base_url itself was innocent.
+
+    Now ``extra="ignore"``: unknown keys are silently dropped at
+    validation. Persistence is still constrained to schema-defined fields
+    because admin_update_settings calls ``model_dump(exclude_none=True)``,
+    which never includes keys outside the model. So unknowns can't be
+    smuggled into the DB through this endpoint.
+    """
+
+    model_config = ConfigDict(extra="ignore")
 
     google_maps_api_key: Optional[str] = None
     stripe_publishable_key: Optional[str] = None
@@ -75,6 +93,23 @@ class SettingsUpdateRequest(BaseModel):
     twilio_account_sid: Optional[str] = None
     twilio_auth_token: Optional[str] = None
     twilio_from_number: Optional[str] = None
+    # Twilio Proxy is what masks rider↔driver phone numbers during a ride;
+    # SID lives in app_settings so it rotates without a redeploy.
+    twilio_proxy_service_sid: Optional[str] = None
+    # SendGrid powers transactional email (receipts, T4A links, support).
+    # api_key is a credential (masked on GET); from_email is plain.
+    sendgrid_api_key: Optional[str] = None
+    sendgrid_from_email: Optional[str] = None
+    # Company info shown on rider receipts + driver T4A slips + the
+    # admin dashboard footer. Edited via the Settings page → Company tab.
+    company_name: Optional[str] = None
+    company_address: Optional[str] = None
+    company_phone: Optional[str] = None
+    company_email: Optional[str] = None
+    company_website: Optional[str] = None
+    # Locks the rider's quoted fare at booking time so the receipt can't
+    # drift if Maps changes the route mid-trip. Toggle on the Settings page.
+    fare_lock_enabled: Optional[bool] = None
     driver_matching_algorithm: Optional[str] = None
     min_driver_rating: Optional[float] = Field(default=None, ge=1.0, le=5.0)
     search_radius_km: Optional[float] = Field(default=None, ge=1, le=100)
@@ -137,6 +172,19 @@ async def admin_update_settings(settings: SettingsUpdateRequest, admin: dict = D
 
     # Only persist fields the caller actually set (None = leave unchanged).
     update_fields = settings.model_dump(exclude_none=True)
+
+    # Mask-roundtrip guard. _mask_credentials returns `v[:8] + "*****"` on
+    # GET so the admin UI never sees the plaintext secret. The frontend
+    # ships the full settings object back on save without distinguishing
+    # masked from edited values, so without this filter a save would
+    # overwrite the real credential with its masked preview. Drop any
+    # credential field whose incoming value looks like a mask preview —
+    # the user has to use the per-field reveal+edit flow to actually
+    # change a credential.
+    for field in _CREDENTIAL_FIELDS:
+        v = update_fields.get(field)
+        if isinstance(v, str) and v.endswith("*****"):
+            update_fields.pop(field, None)
 
     payload = {
         "id": "app_settings",

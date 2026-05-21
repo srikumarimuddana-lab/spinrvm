@@ -1764,6 +1764,12 @@ async def create_ride(
             {"status": (updated_ride.get("status") if updated_ride else RideStatus.SEARCHING)},
         )
     )
+
+    # Carry forward transient fields that don't live in the DB but the
+    # client needs (promo_error is set when promo validation fails).
+    if fresh_ride.get("promo_error") and updated_ride:
+        updated_ride["promo_error"] = fresh_ride["promo_error"]
+
     return serialize_doc(updated_ride)
 
 

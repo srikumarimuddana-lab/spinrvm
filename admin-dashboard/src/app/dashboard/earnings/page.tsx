@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getEarnings, getSubscriptionStats } from "@/lib/api";
+import { getEarnings, getEarningsOverview, getSubscriptionStats, type EarningsOverview, type EarningsPeriod, type MetricWithDelta } from "@/lib/api";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatCurrency, formatDate, statusColor } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import {
     Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
-import { Download, Car, CreditCard, Users, TrendingUp, DollarSign, UserPlus, Clock, MapPin, X, GitCompareArrows, Wallet, CheckCircle, AlertTriangle } from "lucide-react";
+import { Download, Car, CreditCard, Users, TrendingUp, TrendingDown, DollarSign, UserPlus, Clock, MapPin, X, GitCompareArrows, Wallet, CheckCircle, AlertTriangle, Percent, Receipt, UserCheck } from "lucide-react";
 import { getPayouts, getPayoutStats } from "@/lib/api";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { Legend } from "recharts";
@@ -66,11 +66,186 @@ export default function EarningsPage() {
 
 // ─── Ride Earnings Tab (existing) ───
 
+const PERIOD_OPTIONS: Array<{ value: EarningsPeriod; label: string }> = [
+    { value: "7d", label: "7d" },
+    { value: "30d", label: "30d" },
+    { value: "mtd", label: "MTD" },
+    { value: "ytd", label: "YTD" },
+];
+
+// Format helpers for the CEO header. Money + count + percent each render
+// differently so the row reads at a glance instead of every number looking
+// like a dollar amount.
+const fmtMoney = (n: number) => formatCurrency(n);
+const fmtCount = (n: number) => n.toLocaleString();
+const fmtPct = (n: number) => `${n.toFixed(2)}%`;
+
+function DeltaChip({ pct }: { pct: number | null }) {
+    if (pct === null) return <span className="text-[11px] text-muted-foreground">—</span>;
+    if (pct === 0) return <span className="text-[11px] text-muted-foreground">±0.0%</span>;
+    const up = pct > 0;
+    const Icon = up ? TrendingUp : TrendingDown;
+    const color = up
+        ? "text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-900/20"
+        : "text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20";
+    return (
+        <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold ${color}`}>
+            <Icon className="h-3 w-3" />
+            {up ? "+" : ""}{pct.toFixed(1)}%
+        </span>
+    );
+}
+
+function MetricCard({
+    icon: Icon,
+    label,
+    metric,
+    format,
+    accent,
+    loading,
+}: {
+    icon: any;
+    label: string;
+    metric: MetricWithDelta | undefined;
+    format: (n: number) => string;
+    accent?: string;
+    loading: boolean;
+}) {
+    return (
+        <Card className="border-border/50">
+            <CardContent className="p-4">
+                <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">
+                    <Icon className="h-3.5 w-3.5" />
+                    <span className="truncate">{label}</span>
+                </div>
+                {loading || !metric ? (
+                    <div className="mt-2 h-7 w-24 bg-muted rounded animate-pulse" />
+                ) : (
+                    <>
+                        <p className={`text-2xl font-bold tabular-nums mt-1.5 ${accent || ""}`}>{format(metric.current)}</p>
+                        <div className="flex items-center gap-1.5 mt-1">
+                            <DeltaChip pct={metric.delta_pct} />
+                            <span className="text-[10px] text-muted-foreground">vs {format(metric.previous)}</span>
+                        </div>
+                    </>
+                )}
+            </CardContent>
+        </Card>
+    );
+}
+
+function CeoMetricsHeader({
+    overview,
+    loading,
+    period,
+    onPeriodChange,
+}: {
+    overview: EarningsOverview | null;
+    loading: boolean;
+    period: EarningsPeriod;
+    onPeriodChange: (p: EarningsPeriod) => void;
+}) {
+    const m = overview?.metrics;
+    return (
+        <div className="space-y-4">
+            <div className="flex items-end justify-between gap-3 flex-wrap">
+                <div>
+                    <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+                        Business overview
+                    </h2>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                        {overview ? overview.period.label : "Loading…"} · all metrics compared to the prior {overview?.period.days ?? "—"} days
+                    </p>
+                </div>
+                <div className="inline-flex rounded-lg border border-border bg-card p-0.5">
+                    {PERIOD_OPTIONS.map((opt) => (
+                        <button
+                            key={opt.value}
+                            type="button"
+                            onClick={() => onPeriodChange(opt.value)}
+                            className={`px-3 py-1 text-xs font-semibold rounded transition-colors ${
+                                period === opt.value
+                                    ? "bg-primary text-primary-foreground"
+                                    : "text-muted-foreground hover:text-foreground"
+                            }`}
+                        >
+                            {opt.label}
+                        </button>
+                    ))}
+                </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                <MetricCard icon={DollarSign} label="GBV"               metric={m?.gbv}             format={fmtMoney} loading={loading} />
+                <MetricCard icon={Wallet}     label="Net Revenue"       metric={m?.net_revenue}     format={fmtMoney} accent="text-emerald-600 dark:text-emerald-400" loading={loading} />
+                <MetricCard icon={Percent}    label="Take Rate"         metric={m?.take_rate_pct}   format={fmtPct}   loading={loading} />
+                <MetricCard icon={CreditCard} label="Spinr Pass MRR"    metric={m?.spinr_pass_mrr}  format={fmtMoney} accent="text-violet-600 dark:text-violet-400" loading={loading} />
+                <MetricCard icon={Car}        label="Completed Trips"   metric={m?.completed_trips} format={fmtCount} loading={loading} />
+                <MetricCard icon={Receipt}    label="Avg Fare"          metric={m?.avg_fare}        format={fmtMoney} loading={loading} />
+                <MetricCard icon={UserCheck}  label="Active Drivers"    metric={m?.active_drivers}  format={fmtCount} loading={loading} />
+                <MetricCard icon={Users}      label="Active Riders"     metric={m?.active_riders}   format={fmtCount} loading={loading} />
+            </div>
+
+            {/* Daily GBV trend line — single chart so the header tells a
+                story instead of just being a wall of numbers. */}
+            <Card className="border-border/50">
+                <CardHeader className="pb-2">
+                    <CardTitle className="text-sm">Daily GBV trend</CardTitle>
+                </CardHeader>
+                <CardContent>
+                    {loading || !overview ? (
+                        <div className="h-56 w-full bg-muted/30 rounded animate-pulse" />
+                    ) : (
+                        <ResponsiveContainer width="100%" height={224}>
+                            <LineChart data={overview.daily_series} margin={{ top: 10, right: 16, left: -8, bottom: 0 }}>
+                                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+                                <XAxis
+                                    dataKey="date"
+                                    tickFormatter={(d) => {
+                                        try {
+                                            return new Date(d).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+                                        } catch { return d; }
+                                    }}
+                                    tick={{ fontSize: 11 }}
+                                    stroke="hsl(var(--muted-foreground))"
+                                />
+                                <YAxis
+                                    tick={{ fontSize: 11 }}
+                                    stroke="hsl(var(--muted-foreground))"
+                                    tickFormatter={(v) => `$${Math.round(v).toLocaleString()}`}
+                                />
+                                <Tooltip
+                                    contentStyle={tooltipStyle}
+                                    formatter={(value, name) => {
+                                        const n = Number(value ?? 0);
+                                        if (name === "trips") return [fmtCount(n), "Trips"] as [string, string];
+                                        return [fmtMoney(n), name === "gbv" ? "GBV" : "Net Revenue"] as [string, string];
+                                    }}
+                                    labelFormatter={(d) => {
+                                        try {
+                                            return new Date(d as string).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+                                        } catch { return d as string; }
+                                    }}
+                                />
+                                <Line type="monotone" dataKey="gbv" stroke="hsl(var(--primary))" strokeWidth={2} dot={false} />
+                                <Line type="monotone" dataKey="net_revenue" stroke="hsl(var(--chart-2, 215 80% 60%))" strokeWidth={2} dot={false} strokeDasharray="4 4" />
+                            </LineChart>
+                        </ResponsiveContainer>
+                    )}
+                </CardContent>
+            </Card>
+        </div>
+    );
+}
+
 function RideEarningsTab() {
     const [earnings, setEarnings] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [dateFrom, setDateFrom] = useState("");
     const [dateTo, setDateTo] = useState("");
+    const [period, setPeriod] = useState<EarningsPeriod>("7d");
+    const [overview, setOverview] = useState<EarningsOverview | null>(null);
+    const [overviewLoading, setOverviewLoading] = useState(true);
 
     useEffect(() => {
         getEarnings()
@@ -84,6 +259,14 @@ function RideEarningsTab() {
             .catch((e) => console.error('[Earnings] load failed:', e))
             .finally(() => setLoading(false));
     }, []);
+
+    useEffect(() => {
+        setOverviewLoading(true);
+        getEarningsOverview({ period })
+            .then(setOverview)
+            .catch((e) => console.error('[EarningsOverview] load failed:', e))
+            .finally(() => setOverviewLoading(false));
+    }, [period]);
 
     const filtered = earnings.filter((e) => {
         if (!dateFrom && !dateTo) return true;
@@ -119,8 +302,22 @@ function RideEarningsTab() {
                 </Button>
             </div>
 
+            {/* CEO row — period-over-period deltas, driven by the new
+                /admin/earnings/overview endpoint. Replaces the prior 4-card
+                static totals (which had no comparison and no time series). */}
+            <CeoMetricsHeader
+                overview={overview}
+                loading={overviewLoading}
+                period={period}
+                onPeriodChange={setPeriod}
+            />
+
+            {/* Transaction-level totals from the date-filtered ride feed
+                below. Kept separate from the CEO row so the operator can
+                still answer "what did this exact custom date range pay?"
+                without the period selector overriding it. */}
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                <Card className="border-border/50"><CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Total Fares</CardTitle></CardHeader>
+                <Card className="border-border/50"><CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Total Fares (custom range)</CardTitle></CardHeader>
                     <CardContent><p className="text-2xl font-bold">{formatCurrency(totals.totalFare)}</p></CardContent></Card>
                 <Card className="border-border/50"><CardHeader className="pb-2"><CardTitle className="text-sm text-muted-foreground">Driver Earnings</CardTitle></CardHeader>
                     <CardContent><p className="text-2xl font-bold text-emerald-500">{formatCurrency(totals.driverEarnings)}</p></CardContent></Card>

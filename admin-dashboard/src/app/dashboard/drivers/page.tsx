@@ -23,6 +23,7 @@ import DriverNotes from "./_components/driver-notes";
 import DriverTimeline from "./_components/driver-timeline";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { useToast } from "@/components/ui/use-toast";
+import { useAuthStore } from "@/store/authStore";
 
 const STATUS_TABS = [
     { value: "all", label: "All", icon: Users },
@@ -62,6 +63,11 @@ function matchesRequirement(
 export default function DriversPage() {
     const { allowed } = useRequireModule("drivers");
     const { toast } = useToast();
+    // SIN reveal is gated to super_admin only — matches the backend
+    // check in admin_reveal_driver_sin. Plain `admin` users see only
+    // the last-4 from the cache columns.
+    const currentUserRole = useAuthStore((s) => s.user?.role);
+    const canRevealSin = (currentUserRole || "").toLowerCase() === "super_admin";
     const [data, setData] = useState<any>(null);
     const [drivers, setDrivers] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
@@ -874,6 +880,7 @@ export default function DriversPage() {
                                         retryingPayoutId={retryingPayoutId}
                                         refreshingKyc={refreshingKyc}
                                         revealedSin={revealedSin}
+                                        canRevealSin={canRevealSin}
                                         onRetry={async (payoutId) => {
                                             setRetryingPayoutId(payoutId);
                                             try {
@@ -1274,7 +1281,7 @@ function PayoutMetric({ label, value, tone, sub }: { label: string; value: strin
     );
 }
 
-function DriverPayoutsTab({ data, loading, driverName, retryingPayoutId, onRetry, onRefreshKyc, onRevealSin, refreshingKyc, revealedSin }: {
+function DriverPayoutsTab({ data, loading, driverName, retryingPayoutId, onRetry, onRefreshKyc, onRevealSin, refreshingKyc, revealedSin, canRevealSin }: {
     data: DriverPayoutSummary | null;
     loading: boolean;
     driverName: string;
@@ -1284,6 +1291,7 @@ function DriverPayoutsTab({ data, loading, driverName, retryingPayoutId, onRetry
     onRevealSin: () => Promise<void>;
     refreshingKyc: boolean;
     revealedSin: { sin: string; expiresAt: number } | null;
+    canRevealSin: boolean;
 }) {
     const fmtDateTime = (iso?: string | null) => {
         if (!iso) return "—";
@@ -1458,17 +1466,23 @@ function DriverPayoutsTab({ data, loading, driverName, retryingPayoutId, onRetry
                                     ) : (
                                         <p className="text-sm font-medium font-mono">•••-•••-{data.kyc.id_number_last4 || "•••"}</p>
                                     )}
-                                    <Button
-                                        size="xs"
-                                        variant="outline"
-                                        className="h-6 text-[10px] px-2"
-                                        onClick={onRevealSin}
-                                        disabled={!!revealedSin}
-                                        title="One-shot reveal from Stripe. Every reveal writes an audit log entry."
-                                    >
-                                        {revealedSin ? <CheckCircle className="h-3 w-3 mr-1" /> : <Eye className="h-3 w-3 mr-1" />}
-                                        {revealedSin ? "Shown" : "Reveal"}
-                                    </Button>
+                                    {canRevealSin ? (
+                                        <Button
+                                            size="xs"
+                                            variant="outline"
+                                            className="h-6 text-[10px] px-2"
+                                            onClick={onRevealSin}
+                                            disabled={!!revealedSin}
+                                            title="One-shot reveal from Stripe. Every reveal writes an audit log entry."
+                                        >
+                                            {revealedSin ? <CheckCircle className="h-3 w-3 mr-1" /> : <Eye className="h-3 w-3 mr-1" />}
+                                            {revealedSin ? "Shown" : "Reveal"}
+                                        </Button>
+                                    ) : (
+                                        <span className="text-[10px] text-muted-foreground italic" title="Only super admins can retrieve the full SIN. Contact a super admin if you need this for tax filing.">
+                                            super_admin only
+                                        </span>
+                                    )}
                                 </div>
                             ) : (
                                 <p className="text-sm text-muted-foreground mt-0.5">Not provided yet</p>

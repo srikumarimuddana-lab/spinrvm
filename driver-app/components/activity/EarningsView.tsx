@@ -6,12 +6,10 @@ import {
   TouchableOpacity,
   ScrollView,
   ActivityIndicator,
-  FlatList,
 } from 'react-native';
 import SafeRefreshControl from '../SafeRefreshControl';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import api from '@shared/api/client';
 import { useDriverStore } from '../../store/driverStore';
@@ -59,13 +57,13 @@ export default function EarningsView() {
     weeklyEarnings,
     monthlyEarnings,
     earningsComparison,
-    tripEarnings,
+    rideHistory,
     fetchEarnings,
     fetchDailyEarnings,
     fetchWeeklyEarnings,
     fetchMonthlyEarnings,
     fetchEarningsComparison,
-    fetchTripEarnings,
+    fetchRideHistory,
     fetchDriverBalance,
   } = useDriverStore();
 
@@ -93,20 +91,21 @@ export default function EarningsView() {
     setLoading(true);
     setFetchError(null);
     try {
-      await Promise.all([
+      const results = await Promise.allSettled([
         fetchEarnings(period),
         fetchDailyEarnings(period === 'today' ? 1 : period === 'week' ? 7 : period === 'month' ? 30 : 30),
         fetchWeeklyEarnings(4),
         fetchMonthlyEarnings(6),
         fetchEarningsComparison(period === 'month' ? 'month' : 'week'),
-        fetchTripEarnings(),
+        fetchRideHistory(50, 0),
         fetchDriverBalance(),
       ]);
+      const anyFailed = results.some((r) => r.status === 'rejected');
+      if (anyFailed) setFetchError('Some data could not load. Pull down to retry.');
     } catch {
-      setFetchError('Could not load earnings. Pull down to retry.');
-    } finally {
-      setLoading(false);
+      setFetchError('Could not load data. Pull down to retry.');
     }
+    setLoading(false);
   }, [period]);
 
   useEffect(() => {
@@ -118,6 +117,8 @@ export default function EarningsView() {
     await loadData();
     setRefreshing(false);
   };
+
+  const recentRides = rideHistory.slice(0, 20);
 
   const barChartData = (dailyEarnings ?? []).map((d) => ({
     label: safeLocaleDateString(d.date, { weekday: 'narrow' }),
@@ -141,29 +142,32 @@ export default function EarningsView() {
   const compPct = Number(earningsComparison?.change_pct?.earnings ?? 0);
   const compLabel = earningsComparison?.period === 'month' ? 'last month' : 'last week';
 
+  const totalEarnings = parseMoney(earnings?.total_earnings);
+  const totalTips = parseMoney(earnings?.total_tips);
+  const fareEarnings = Math.max(totalEarnings - totalTips, 0);
+
   return (
-    <View style={styles.container}>
-      <View style={styles.filterWrapper}>
-        <FlatList
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          data={['today', 'week', 'month', 'all'] as Period[]}
-          contentContainerStyle={styles.filterListContent}
-          keyExtractor={(item) => item}
-          removeClippedSubviews={true}
-          renderItem={({ item }) => (
-            <TouchableOpacity
-              style={[styles.filterPill, period === item && styles.filterPillActive]}
-              onPress={() => setPeriod(item)}
-              activeOpacity={0.7}
-            >
-              <Text style={[styles.filterPillText, period === item && styles.filterPillTextActive]}>
-                {item === 'all' ? t('earnings.allTime') : item === 'today' ? t('earnings.today') : item === 'week' ? t('earnings.thisWeek') : t('earnings.thisMonth')}
-              </Text>
-            </TouchableOpacity>
-          )}
-        />
-      </View>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) + 24 }}
+      showsVerticalScrollIndicator={false}
+      refreshControl={<SafeRefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
+    >
+      {/* Period Filter Pills */}
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterWrapper} contentContainerStyle={styles.filterListContent}>
+        {(['today', 'week', 'month', 'all'] as Period[]).map((item) => (
+          <TouchableOpacity
+            key={item}
+            style={[styles.filterPill, period === item && styles.filterPillActive]}
+            onPress={() => setPeriod(item)}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.filterPillText, period === item && styles.filterPillTextActive]}>
+              {item === 'all' ? t('earnings.allTime') : item === 'today' ? t('earnings.today') : item === 'week' ? t('earnings.thisWeek') : t('earnings.thisMonth')}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
 
       {fetchError && (
         <View style={styles.errorBanner} accessibilityRole="alert" accessibilityLiveRegion="polite" accessibilityLabel={fetchError}>
@@ -172,48 +176,30 @@ export default function EarningsView() {
         </View>
       )}
 
-      <ScrollView
-        style={styles.content}
-        contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) + 24 }}
-        showsVerticalScrollIndicator={false}
-        refreshControl={<SafeRefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
-      >
-        <LinearGradient colors={[colors.primary, colors.primaryDark]} style={styles.heroCard}>
-          <Text style={styles.heroLabel}>{t('earnings.totalEarnings')}</Text>
-          <Text style={styles.heroAmount}>${loading ? '--' : toMoney(earnings?.total_earnings)}</Text>
-          {parseMoney(earnings?.total_tips) > 0 && (
-            <View style={styles.tipsBadge}>
-              <Ionicons name="gift" size={14} color={colors.gold} style={{ marginRight: 2 }} />
-              <Text style={styles.tipsText}>+${toMoney(earnings?.total_tips)} tips included</Text>
+      {/* Earnings + Tips Breakdown */}
+      <View style={styles.breakdownCard}>
+          <View style={styles.breakdownRow}>
+            <View style={styles.breakdownItem}>
+              <Ionicons name="cash-outline" size={20} color={colors.primary} />
+              <Text style={styles.breakdownLabel}>Fare Earnings</Text>
+              <Text style={styles.breakdownValue}>${loading ? '--' : toMoney(fareEarnings)}</Text>
             </View>
-          )}
-        </LinearGradient>
-
-        {forecast && (
-          <View style={styles.forecastCard}>
-            <View style={styles.forecastHeader}>
-              <Ionicons name="trending-up" size={16} color="#10B981" />
-              <Text style={styles.forecastTitle}>This Week's Projection</Text>
+            <View style={styles.breakdownDivider} />
+            <View style={styles.breakdownItem}>
+              <Ionicons name="gift-outline" size={20} color={colors.gold} />
+              <Text style={styles.breakdownLabel}>Tips</Text>
+              <Text style={[styles.breakdownValue, { color: colors.gold }]}>${loading ? '--' : toMoney(totalTips)}</Text>
             </View>
-            <View style={styles.forecastBody}>
-              <View style={styles.forecastStat}>
-                <Text style={styles.forecastAmount}>${toMoney(forecast.this_week_earnings)}</Text>
-                <Text style={styles.forecastLabel}>Earned so far</Text>
-              </View>
-              <View style={styles.forecastDivider} />
-              <View style={styles.forecastStat}>
-                <Text style={[styles.forecastAmount, { color: '#10B981' }]}>${toMoney(forecast.projected_weekly_total)}</Text>
-                <Text style={styles.forecastLabel}>Projected total</Text>
-              </View>
-              <View style={styles.forecastDivider} />
-              <View style={styles.forecastStat}>
-                <Text style={styles.forecastAmount}>{forecast.days_remaining_this_week}</Text>
-                <Text style={styles.forecastLabel}>Days left</Text>
-              </View>
+            <View style={styles.breakdownDivider} />
+            <View style={styles.breakdownItem}>
+              <Ionicons name="wallet" size={20} color={colors.success} />
+              <Text style={styles.breakdownLabel}>Total</Text>
+              <Text style={[styles.breakdownValue, { color: colors.success }]}>${loading ? '--' : toMoney(totalEarnings)}</Text>
             </View>
           </View>
-        )}
+        </View>
 
+        {/* Stats Grid */}
         <View style={styles.statsGrid}>
           <View style={styles.statCard}>
             <View style={[styles.statIconWrapper, { backgroundColor: 'rgba(239, 68, 68, 0.1)' }]}>
@@ -255,6 +241,123 @@ export default function EarningsView() {
           </View>
         </View>
 
+        {/* Recent Trips List — uses rideHistory (same data source as Rides tab) */}
+        <View style={styles.tripsSection}>
+          <Text style={styles.sectionTitle}>Recent Trips</Text>
+          {loading ? (
+            <ActivityIndicator color={colors.primary} style={{ marginTop: 40 }} />
+          ) : recentRides.length === 0 ? (
+            <View style={styles.emptyStateContainer}>
+              <View style={styles.emptyIconCircle}>
+                <Ionicons name="wallet-outline" size={48} color={colors.primary} />
+              </View>
+              <Text style={styles.emptyStateTitle}>No trips to show</Text>
+              <Text style={styles.emptyStateDesc}>Complete rides to start seeing your earnings breakdown here.</Text>
+            </View>
+          ) : (
+            recentRides.map((ride) => {
+              const isCompleted = ride.status === 'completed';
+              const isCancelled = ride.status === 'cancelled';
+              let statusColor = '#F59E0B';
+              let statusBg = 'rgba(245, 158, 11, 0.1)';
+              let statusLabel = 'Scheduled';
+              let statusIcon: string = 'time';
+              if (isCompleted) {
+                statusColor = '#10B981';
+                statusBg = 'rgba(16, 185, 129, 0.1)';
+                statusLabel = 'Completed';
+                statusIcon = 'checkmark-circle';
+              } else if (isCancelled) {
+                statusColor = '#EF4444';
+                statusBg = 'rgba(239, 68, 68, 0.1)';
+                statusLabel = 'Cancelled';
+                statusIcon = 'close-circle';
+              }
+              const date = ride.ride_completed_at || (ride as any).cancelled_at || ride.created_at;
+              const fareAmount = (ride as any).driver_earnings || ride.total_fare || 0;
+              const tipAmount = parseMoney((ride as any).tip_amount);
+              return (
+                <TouchableOpacity
+                  key={ride.id}
+                  style={styles.rideCard}
+                  activeOpacity={0.8}
+                  onPress={() => router.push(`/driver/ride-detail?id=${ride.id}` as any)}
+                >
+                  <View style={styles.cardHeader}>
+                    <View style={[styles.statusBadge, { backgroundColor: statusBg }]}>
+                      <Ionicons name={statusIcon as any} size={14} color={statusColor} />
+                      <Text style={[styles.statusText, { color: statusColor }]}>{statusLabel}</Text>
+                    </View>
+                    <View style={{ alignItems: 'flex-end' }}>
+                      <Text style={styles.dateText}>
+                        {date ? new Date(date).toLocaleDateString('en', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}
+                      </Text>
+                      <Text style={styles.bookingIdText}>
+                        {ride.ride_code ? String(ride.ride_code) : `ID: #${String(ride.id).substring(0, 8).toUpperCase()}`}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.routeContainer}>
+                    <View style={styles.timelineIndicators}>
+                      <View style={[styles.dot, { backgroundColor: colors.primary }]} />
+                      <View style={styles.timelineLine} />
+                      <View style={[styles.dot, { backgroundColor: '#EF4444' }]} />
+                    </View>
+                    <View style={styles.routeDetails}>
+                      <View style={styles.routePoint}>
+                        <Text style={styles.routeLabel}>PICKUP</Text>
+                        <Text style={styles.routeAddress} numberOfLines={1}>
+                          {ride.pickup_address || 'Unknown Pickup Location'}
+                        </Text>
+                      </View>
+                      <View style={styles.routePointSpacer} />
+                      <View style={styles.routePoint}>
+                        <Text style={styles.routeLabel}>DROP-OFF</Text>
+                        <Text style={styles.routeAddress} numberOfLines={1}>
+                          {ride.dropoff_address || 'Unknown Dropoff Location'}
+                        </Text>
+                      </View>
+                    </View>
+                  </View>
+
+                  <View style={styles.cardFooter}>
+                    <View style={styles.tripMetaRow}>
+                      {ride.distance_km && (
+                        <View style={styles.metaBadge}>
+                          <Ionicons name="map-outline" size={14} color={colors.textDim} />
+                          <Text style={styles.metaText}>{ride.distance_km.toFixed(1)} km</Text>
+                        </View>
+                      )}
+                      {ride.duration_minutes && (
+                        <View style={styles.metaBadge}>
+                          <Ionicons name="time-outline" size={14} color={colors.textDim} />
+                          <Text style={styles.metaText}>{ride.duration_minutes} min</Text>
+                        </View>
+                      )}
+                    </View>
+                    <View style={styles.fareContainer}>
+                      {isCompleted ? (
+                        <>
+                          <Text style={styles.fareLabel}>Earned</Text>
+                          <Text style={styles.fareText}>${toMoney(fareAmount)}</Text>
+                          {tipAmount > 0 && (
+                            <Text style={styles.tipAmountText}>+ ${toMoney(tipAmount)} tip</Text>
+                          )}
+                        </>
+                      ) : isCancelled ? (
+                        <Text style={[styles.fareText, { color: colors.textDim, fontSize: 16 }]}>$0.00</Text>
+                      ) : (
+                        <Text style={styles.fareText}>Est. ${toMoney(fareAmount)}</Text>
+                      )}
+                    </View>
+                  </View>
+                </TouchableOpacity>
+              );
+            })
+          )}
+        </View>
+
         {!loading && earningsComparison && compPct !== 0 && (
           <View style={styles.comparisonBanner}>
             <Ionicons
@@ -265,6 +368,31 @@ export default function EarningsView() {
             <Text style={[styles.comparisonText, { color: compPct > 0 ? colors.success : colors.danger }]}>
               {compPct > 0 ? '+' : ''}{compPct.toFixed(1)}% from {compLabel}
             </Text>
+          </View>
+        )}
+
+        {forecast && (
+          <View style={styles.forecastCard}>
+            <View style={styles.forecastHeader}>
+              <Ionicons name="trending-up" size={16} color="#10B981" />
+              <Text style={styles.forecastTitle}>This Week's Projection</Text>
+            </View>
+            <View style={styles.forecastBody}>
+              <View style={styles.forecastStat}>
+                <Text style={styles.forecastAmount}>${toMoney(forecast.this_week_earnings)}</Text>
+                <Text style={styles.forecastLabel}>Earned so far</Text>
+              </View>
+              <View style={styles.forecastDivider} />
+              <View style={styles.forecastStat}>
+                <Text style={[styles.forecastAmount, { color: '#10B981' }]}>${toMoney(forecast.projected_weekly_total)}</Text>
+                <Text style={styles.forecastLabel}>Projected total</Text>
+              </View>
+              <View style={styles.forecastDivider} />
+              <View style={styles.forecastStat}>
+                <Text style={styles.forecastAmount}>{forecast.days_remaining_this_week}</Text>
+                <Text style={styles.forecastLabel}>Days left</Text>
+              </View>
+            </View>
           </View>
         )}
 
@@ -299,98 +427,7 @@ export default function EarningsView() {
             </View>
           </View>
         )}
-
-        <View style={styles.tripsSection}>
-          <Text style={styles.sectionTitle}>Recent Trips</Text>
-          {loading ? (
-            <ActivityIndicator color={colors.primary} style={{ marginTop: 40 }} />
-          ) : tripEarnings.length === 0 ? (
-            <View style={styles.emptyStateContainer}>
-              <View style={styles.emptyIconCircle}>
-                <Ionicons name="wallet-outline" size={48} color={colors.primary} />
-              </View>
-              <Text style={styles.emptyStateTitle}>No trips to show</Text>
-              <Text style={styles.emptyStateDesc}>Complete rides to start seeing your earnings breakdown here.</Text>
-            </View>
-          ) : (
-            (tripEarnings ?? []).map((trip) => (
-              <TouchableOpacity
-                key={trip.ride_id}
-                style={styles.rideCard}
-                activeOpacity={0.8}
-                onPress={() => router.push(`/driver/ride-detail?id=${trip.ride_id}` as any)}
-              >
-                <View style={styles.cardHeader}>
-                  <View style={[styles.statusBadge, { backgroundColor: 'rgba(16, 185, 129, 0.1)' }]}>
-                    <Ionicons name="checkmark-circle" size={14} color={colors.success} />
-                    <Text style={[styles.statusText, { color: colors.success }]}>Completed</Text>
-                  </View>
-                  <View style={{ alignItems: 'flex-end' }}>
-                    <Text style={styles.dateText}>
-                      {trip.completed_at
-                        ? new Date(trip.completed_at).toLocaleDateString('en', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-                        : ''}
-                    </Text>
-                    <Text style={styles.bookingIdText}>
-                      {trip.ride_code ? trip.ride_code : `ID: #${String(trip.ride_id).substring(0, 8).toUpperCase()}`}
-                    </Text>
-                  </View>
-                </View>
-
-                <View style={styles.routeContainer}>
-                  <View style={styles.timelineIndicators}>
-                    <View style={[styles.dot, { backgroundColor: colors.primary }]} />
-                    <View style={styles.timelineLine} />
-                    <View style={[styles.dot, { backgroundColor: '#EF4444' }]} />
-                  </View>
-                  <View style={styles.routeDetails}>
-                    <View style={styles.routePoint}>
-                      <Text style={styles.routeLabel}>PICKUP</Text>
-                      <Text style={styles.routeAddress} numberOfLines={1}>
-                        {trip.pickup_address || 'Unknown Pickup Location'}
-                      </Text>
-                    </View>
-                    <View style={styles.routePointSpacer} />
-                    <View style={styles.routePoint}>
-                      <Text style={styles.routeLabel}>DROP-OFF</Text>
-                      <Text style={styles.routeAddress} numberOfLines={1}>
-                        {trip.dropoff_address || 'Unknown Dropoff Location'}
-                      </Text>
-                    </View>
-                  </View>
-                </View>
-
-                <View style={styles.cardFooter}>
-                  <View style={styles.tripMetaRow}>
-                    <View style={styles.metaBadge}>
-                      <Ionicons name="map-outline" size={14} color={colors.textDim} />
-                      <Text style={styles.metaText}>{parseMoney(trip.distance_km).toFixed(1)} km</Text>
-                    </View>
-                    <View style={styles.metaBadge}>
-                      <Ionicons name="time-outline" size={14} color={colors.textDim} />
-                      <Text style={styles.metaText}>{trip.duration_minutes} min</Text>
-                    </View>
-                    {trip.rider_rating !== null && (
-                      <View style={styles.metaBadge}>
-                        <Ionicons name="star" size={14} color={colors.gold} />
-                        <Text style={styles.metaText}>{trip.rider_rating}</Text>
-                      </View>
-                    )}
-                  </View>
-                  <View style={styles.fareContainer}>
-                    <Text style={styles.fareLabel}>Earned</Text>
-                    <Text style={styles.fareText}>${toMoney(trip.driver_earnings)}</Text>
-                    {parseMoney(trip.tip_amount) > 0 && (
-                      <Text style={styles.tipAmountText}>+ ${toMoney(trip.tip_amount)} tip</Text>
-                    )}
-                  </View>
-                </View>
-              </TouchableOpacity>
-            ))
-          )}
-        </View>
-      </ScrollView>
-    </View>
+    </ScrollView>
   );
 }
 
@@ -399,40 +436,41 @@ function createStyles(colors: ThemeColors) {
     container: {
       flex: 1,
     },
-    heroCard: {
+    breakdownCard: {
       marginHorizontal: 16,
-      marginTop: 8,
+      marginTop: 12,
       marginBottom: 16,
+      backgroundColor: colors.surface,
       borderRadius: 20,
-      padding: 20,
-      alignItems: 'center',
+      padding: 16,
+      borderWidth: 1,
+      borderColor: colors.border,
     },
-    heroLabel: {
-      color: 'rgba(255,255,255,0.8)',
-      fontSize: 12,
-      fontWeight: '700',
-      letterSpacing: 1.5,
-      marginBottom: 8,
-    },
-    heroAmount: {
-      color: '#fff',
-      fontSize: 48,
-      fontWeight: '900',
-      letterSpacing: -1,
-    },
-    tipsBadge: {
+    breakdownRow: {
       flexDirection: 'row',
       alignItems: 'center',
-      backgroundColor: 'rgba(0,0,0,0.15)',
-      paddingHorizontal: 12,
-      paddingVertical: 6,
-      borderRadius: 20,
-      marginTop: 10,
+      justifyContent: 'space-around',
     },
-    tipsText: {
-      color: colors.gold,
-      fontSize: 13,
-      fontWeight: '700',
+    breakdownItem: {
+      flex: 1,
+      alignItems: 'center',
+      gap: 4,
+    },
+    breakdownLabel: {
+      color: colors.textDim,
+      fontSize: 11,
+      fontWeight: '600',
+      letterSpacing: 0.3,
+    },
+    breakdownValue: {
+      color: colors.text,
+      fontSize: 20,
+      fontWeight: '900',
+    },
+    breakdownDivider: {
+      width: 1,
+      height: 44,
+      backgroundColor: colors.border,
     },
     filterWrapper: {
       marginTop: 12,
@@ -462,9 +500,6 @@ function createStyles(colors: ThemeColors) {
     filterPillTextActive: {
       color: '#fff',
       fontWeight: '700',
-    },
-    content: {
-      flex: 1,
     },
     errorBanner: {
       flexDirection: 'row',

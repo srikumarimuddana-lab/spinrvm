@@ -128,6 +128,11 @@ class SettingsUpdateRequest(BaseModel):
     # admin domain so safety contacts can open ${base}/${share_token}.
     # Empty string disables the in-app share link until configured.
     track_base_url: Optional[str] = None
+    # Comma-separated email addresses notified when a safety_incidents
+    # row opens (rider SOS, driver safety report, auto check-in
+    # escalation). Edited via Settings → Safety. Blank disables outbound
+    # email; WS broadcast + DB row still fire.
+    safety_alert_emails: Optional[str] = None
 
 
 @router.get("/settings")

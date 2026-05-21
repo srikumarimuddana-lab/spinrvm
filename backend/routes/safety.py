@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 try:
     from .. import db_supabase
     from ..dependencies import get_current_user
+    from ..features import notify_safety_team
 except ImportError:
     import db_supabase
     from dependencies import get_current_user
@@ -83,13 +84,25 @@ async def submit_safety_report(
             f"[SAFETY] Failed to persist incident user_id={user_id} category={body.category}: {exc}",
             exc_info=True,
         )
-        raise HTTPException(
-            status_code=503, detail="Unable to record report. Please try again."
-        ) from exc
+        raise HTTPException(status_code=503, detail="Unable to record report. Please try again.") from exc
 
     logger.info(
         f"[SAFETY] Incident {incident_id} reported by {user_role} {user_id} "
         f"category={body.category} ride_id={incident['ride_id']}"
     )
+
+    # Notify the safety team — WS broadcast to admin dashboard + email
+    # to the configured distribution list + CRITICAL log line for
+    # on-call paging. Best-effort: failures are logged but don't 5xx
+    # the user (their report is already persisted, that's the
+    # important part).
+    try:
+        notify_result = await notify_safety_team(incident)
+        logger.info(f"[SAFETY] Incident {incident_id} notify_safety_team result={notify_result}")
+    except Exception:
+        logger.error(
+            f"[SAFETY] notify_safety_team unexpected failure for incident {incident_id}",
+            exc_info=True,
+        )
 
     return {"success": True, "incident_id": incident_id}

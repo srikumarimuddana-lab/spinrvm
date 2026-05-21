@@ -16,6 +16,7 @@ try:
     from ..features import (
         calculate_airport_fee,
         calculate_all_fees,
+        notify_safety_team,
         send_push_notification,
     )
     from ..geo_utils import (
@@ -3137,6 +3138,25 @@ async def trigger_emergency(
     except Exception as _exc:  # pragma: no cover - best effort
         logger.error(f"emergency_alert admin broadcast failed: {_exc}", exc_info=True)
     logger.critical(f"EMERGENCY ALERT TRIGGERED for ride {ride_id} by user {current_user['id']}")
+
+    # Email the safety distribution list + write the CRITICAL log line.
+    # The rider SOS row lives in the legacy `emergencies` table — its
+    # shape uses `message` instead of safety_incidents' `description`
+    # and has no `category` — bridge the field names here so the email
+    # body renders correctly without touching the legacy DB layout.
+    try:
+        await notify_safety_team(
+            {
+                **incident,
+                "category": "sos_button",
+                "description": incident.get("message") or "",
+            }
+        )
+    except Exception:  # pragma: no cover — best effort, never block the SMS path below
+        logger.error(
+            f"notify_safety_team failed for rider SOS ride={ride_id} incident={incident['id']}",
+            exc_info=True,
+        )
 
     # Notify emergency contacts via SMS (Twilio when configured, console log in dev)
     contacts_notified = 0

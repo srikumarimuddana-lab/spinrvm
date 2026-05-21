@@ -231,6 +231,43 @@ export default function SettingsPage() {
                         </CardContent>
                     </Card>
 
+                    {/* Safety — distribution list for SOS / safety-incident
+                        alert emails. Empty disables outbound email cleanly;
+                        WS broadcast + critical log line still fire so
+                        on-call paging via log aggregators keeps working. */}
+                    <Card className="border-border/50 lg:col-span-2">
+                        <CardHeader>
+                            <CardTitle className="text-base">Safety alerts</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-3">
+                            <p className="text-xs text-muted-foreground">
+                                These addresses receive a transactional email whenever a safety
+                                incident opens — rider SOS, driver-app safety report, or the
+                                auto check-in escalation. Comma-separated. Leave blank to disable
+                                email alerts (admin dashboard WS notification + critical log line
+                                still fire so log-aggregator paging keeps working).
+                            </p>
+                            <div className="space-y-2">
+                                <Label htmlFor="safety-emails">Alert recipients</Label>
+                                <Textarea
+                                    id="safety-emails"
+                                    value={settings.safety_alert_emails || ""}
+                                    onChange={(e) =>
+                                        update("safety_alert_emails", e.target.value)
+                                    }
+                                    placeholder="safety@spinr.ca, oncall@spinr.ca"
+                                    rows={2}
+                                />
+                                <p className="text-[11px] text-muted-foreground">
+                                    Recipients with read access to the safety queue in the admin
+                                    dashboard. Email body contains the reporter, ride id, and (when
+                                    available) the location — same data the dashboard surfaces.
+                                </p>
+                            </div>
+                        </CardContent>
+                    </Card>
+
                     {/* Telephony / Twilio */}
                     <Card className="border-border/50">
                         <CardHeader>

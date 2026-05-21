@@ -34,13 +34,12 @@ except ImportError:
 
 try:
     from ..db import db as _supabase_db
-    from ..features import send_push_notification
+    from ..features import notify_safety_team, send_push_notification
     from ..socket_manager import manager as _ws_manager
     from .audit_logger import log_admin_action as _log_audit
 except ImportError:
     from db import db as _supabase_db  # type: ignore
     from features import send_push_notification  # type: ignore
-    from socket_manager import manager as _ws_manager  # type: ignore
     from utils.audit_logger import log_admin_action as _log_audit  # type: ignore
 
 try:
@@ -183,21 +182,17 @@ async def _escalate(ride: dict, now: datetime) -> None:
         await redis_set(_escalated_key(ride_id), "1", ttl=4 * 3600)
         logger.error(f"[SAFETY_CHECKIN] No response from rider {rider_id} on ride {ride_id}; safety incident opened.")
 
-        # Broadcast to admin WS connections so the safety dashboard lights up
-        # without requiring a page refresh.
+        # Notify the safety team — admin WS broadcast + email to the
+        # configured distribution list + CRITICAL log line for on-call
+        # paging. Replaces the inline broadcast_to_admins call that
+        # only covered WS and left email/log paging unwired.
         try:
-            await _ws_manager.broadcast_to_admins(
-                {
-                    "type": "safety_incident_opened",
-                    "incident_id": incident["id"],
-                    "ride_id": ride_id,
-                    "rider_id": rider_id,
-                    "reason": "safety_checkin_no_response",
-                    "created_at": incident["created_at"],
-                }
+            await notify_safety_team(incident)
+        except Exception as _notify_exc:
+            logger.error(
+                f"[SAFETY_CHECKIN] notify_safety_team failed for incident {incident['id']}: {_notify_exc}",
+                exc_info=True,
             )
-        except Exception as _ws_exc:
-            logger.error(f"[SAFETY_CHECKIN] Admin WS broadcast failed for incident {incident['id']}: {_ws_exc}")
 
         # Write audit log entry for the automated escalation.
         try:

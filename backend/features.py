@@ -1310,6 +1310,120 @@ async def send_email(*, to: str, subject: str, body: str) -> bool:
     return False
 
 
+async def notify_safety_team(incident: dict) -> dict:
+    """Fan out a safety_incidents row to the configured alert channels.
+
+    Three side effects, each best-effort and isolated so one channel
+    failing doesn't suppress the others:
+      1. Admin WS broadcast — wakes the safety queue UI in real time.
+      2. Email to settings.safety_alert_emails (comma-separated).
+         Skipped if blank so this can ship before ops finalises the
+         distribution list.
+      3. Critical log line so on-call alerting on log levels (Sentry,
+         Better Stack, Logtail) can fire even when email is unconfigured.
+
+    Returns a dict {ws, email_sent, email_attempted} the caller can
+    log for ops visibility. Caller is responsible for already having
+    inserted the safety_incidents row — this helper only notifies.
+    """
+    incident_id = incident.get("id")
+    category = incident.get("category") or "unknown"
+    ride_id = incident.get("ride_id")
+    role = incident.get("role") or "rider"
+    reported_by = incident.get("reported_by_user_id")
+
+    # Log at CRITICAL — on-call paging via log-aggregator alert rules
+    # works even before SendGrid is configured. Never include the raw
+    # description here (may contain rider PII / addresses).
+    logger.critical(
+        f"[SAFETY] Incident opened id={incident_id} category={category} role={role} ride_id={ride_id or '-'}"
+    )
+
+    ws_ok = False
+    try:
+        try:
+            from .socket_manager import manager as _ws_manager
+        except ImportError:
+            from socket_manager import manager as _ws_manager  # type: ignore
+        await _ws_manager.broadcast_to_admins(
+            {
+                "type": "safety_incident_opened",
+                "incident_id": incident_id,
+                "ride_id": ride_id,
+                "category": category,
+                "role": role,
+                "reported_by_user_id": reported_by,
+                "created_at": incident.get("created_at"),
+            }
+        )
+        ws_ok = True
+    except Exception:
+        logger.error(
+            f"[SAFETY] Admin WS broadcast failed for incident {incident_id}",
+            exc_info=True,
+        )
+
+    # Email fan-out. Each recipient gets its own send_email call so
+    # one bad address doesn't poison the rest.
+    email_attempted = 0
+    email_sent = 0
+    try:
+        try:
+            from .settings_loader import get_app_settings
+        except ImportError:
+            from settings_loader import get_app_settings  # type: ignore
+        settings = await get_app_settings()
+        raw = (settings.get("safety_alert_emails") or "").strip()
+        recipients = [addr.strip() for addr in raw.split(",") if addr.strip() and "@" in addr]
+        if recipients:
+            # PII in the email body is fine — this is going to the
+            # safety team, which has read access to the incident anyway.
+            # Avoid putting the rider's location in the SUBJECT (subject
+            # lines hit a wider audit trail via SMTP intermediaries).
+            subject = f"[Spinr Safety] {category} · {role} · ref {incident_id[:8] if incident_id else '?'}"
+            body_lines = [
+                "A new safety incident was opened in Spinr admin.",
+                "",
+                f"Category:  {category}",
+                f"Role:      {role}",
+                f"Reporter:  {reported_by or '(system)'}",
+                f"Ride ID:   {ride_id or '(none)'}",
+                f"Created:   {incident.get('created_at') or '(now)'}",
+                "",
+                f"Description: {incident.get('description') or '(no description)'}",
+            ]
+            if incident.get("latitude") and incident.get("longitude"):
+                body_lines.append(f"Location:  {incident['latitude']:.5f}, {incident['longitude']:.5f}")
+            body_lines += [
+                "",
+                "Open the safety queue in the admin dashboard to triage.",
+                "This message is auto-generated; do not reply.",
+            ]
+            body = "\n".join(body_lines)
+            for addr in recipients:
+                email_attempted += 1
+                try:
+                    ok = await send_email(to=addr, subject=subject, body=body)
+                    if ok:
+                        email_sent += 1
+                except Exception:
+                    logger.error(
+                        f"[SAFETY] send_email failed for incident {incident_id} to {addr}",
+                        exc_info=True,
+                    )
+        else:
+            logger.warning(
+                f"[SAFETY] No safety_alert_emails configured — email step skipped for incident {incident_id}"
+            )
+    except Exception:
+        logger.error(
+            f"[SAFETY] notify_safety_team email fan-out failed for incident {incident_id}",
+            exc_info=True,
+        )
+
+    return {"ws": ws_ok, "email_sent": email_sent, "email_attempted": email_attempted}
+
+
 @admin_support_router.post("/notifications/send")
 async def admin_send_notification(req: SendNotificationRequest):
     """Send a push notification to a specific user (admin)."""

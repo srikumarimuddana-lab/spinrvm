@@ -16,6 +16,7 @@ try:
     from ..features import (
         calculate_airport_fee,
         calculate_all_fees,
+        notify_safety_team,
         send_push_notification,
     )
     from ..geo_utils import (
@@ -3115,28 +3116,51 @@ async def trigger_emergency(
     if not (is_rider or is_driver):
         raise HTTPException(status_code=403, detail="Not authorized to trigger emergency for this ride")
 
+    # Consolidated onto safety_incidents (migration 94). The legacy
+    # `emergencies` table was never read by anything (no UI surfaced
+    # it, no migration even created it), so this is a clean cutover
+    # rather than a parallel write. After this, the rider SOS path
+    # lives in the same admin Safety queue as the driver report and
+    # the auto check-in escalation.
+    now_iso = datetime.now(timezone.utc).isoformat()
     incident = {
         "id": str(uuid.uuid4()),
         "ride_id": ride_id,
         "reported_by_user_id": current_user["id"],
         "role": "rider" if is_rider else "driver",
-        "message": body.message,
+        "category": "sos_button",
+        "description": body.message or "Emergency assistance requested",
         "status": "open",
         "latitude": body.latitude,
         "longitude": body.longitude,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "reported_at": now_iso,
+        "created_at": now_iso,
     }
 
-    await db_supabase.insert_one("emergencies", incident)
+    await db_supabase.insert_one("safety_incidents", incident)
 
-    # Notify admin dashboard via Websocket — broadcast across every
-    # replica's admin connections. The previous ``admin_notifications``
-    # client_id pointed at no real socket, so alerts silently disappeared.
+    # Notify admin dashboard via WebSocket. Keep the existing
+    # emergency_alert event firing for backward compatibility with any
+    # listener wired to that name; notify_safety_team below also emits
+    # safety_incident_opened which the safety queue UI listens for.
     try:
         await manager.broadcast_to_admins({"type": "emergency_alert", "incident": incident})
     except Exception as _exc:  # pragma: no cover - best effort
         logger.error(f"emergency_alert admin broadcast failed: {_exc}", exc_info=True)
     logger.critical(f"EMERGENCY ALERT TRIGGERED for ride {ride_id} by user {current_user['id']}")
+
+    # Email the safety distribution list + CRITICAL log line.
+    # No field-name bridging needed now that the incident row uses the
+    # safety_incidents schema directly (was previously bridging from
+    # the legacy `emergencies` shape which used `message` instead of
+    # `description` and had no `category`).
+    try:
+        await notify_safety_team(incident)
+    except Exception:  # pragma: no cover — best effort, never block the SMS path below
+        logger.error(
+            f"notify_safety_team failed for rider SOS ride={ride_id} incident={incident['id']}",
+            exc_info=True,
+        )
 
     # Notify emergency contacts via SMS (Twilio when configured, console log in dev)
     contacts_notified = 0

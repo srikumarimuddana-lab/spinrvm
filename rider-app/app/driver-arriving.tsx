@@ -1,4 +1,5 @@
-import React, { useEffect, useState, useMemo, useRef } from 'react';
+import React, { useContext, useEffect, useState, useMemo, useRef } from 'react';
+import { TrackBaseUrlContext } from './_layout';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View,
@@ -42,6 +43,10 @@ function DriverArrivingScreenContent() {
   const styles = useMemo(() => createStyles(colors, sf, insets), [colors, sf, insets]);
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
+  // Public tracking URL base is served at runtime by GET /settings →
+  // app_settings.track_base_url. Same source as ride-in-progress.tsx so
+  // ops can rotate the share domain without a mobile rebuild.
+  const trackBaseUrl = useContext(TrackBaseUrlContext);
   const {
     currentRide, currentDriver, fetchRide, triggerEmergency,
     isLoading, error, driverEtaSeconds, cancelRide, clearRide,
@@ -218,7 +223,19 @@ function DriverArrivingScreenContent() {
   };
 
   const handleShareTrip = async () => {
-    const info = `🚗 SPINR RIDE\n\n👤 Driver: ${currentDriver?.name || 'Searching...'}\n🚙 ${currentDriver?.vehicle_color || ''} ${currentDriver?.vehicle_make || ''} ${currentDriver?.vehicle_model || ''}\n📋 Plate: ${currentDriver?.license_plate || 'Pending'}\n\n📍 From: ${currentRide?.pickup_address || ''}\n📍 To: ${currentRide?.dropoff_address || ''}\n⏱️ ETA: ${etaLabel || 'Calculating'}\n\nTrack: https://spinr-track.app/${rideId || 'demo'}`;
+    // Fail loud if ops hasn't configured a tracking URL yet — silently
+    // sending recipients to a hardcoded spinr-track.app would mislead
+    // them when the admin has moved tracking to a different domain.
+    if (!trackBaseUrl) {
+      showToast(
+        'Tracking Not Configured',
+        'Live trip tracking is not set up yet. Please contact support.',
+        'warning',
+      );
+      return;
+    }
+    const trackLink = `${trackBaseUrl}/${rideId || 'demo'}`;
+    const info = `🚗 SPINR RIDE\n\n👤 Driver: ${currentDriver?.name || 'Searching...'}\n🚙 ${currentDriver?.vehicle_color || ''} ${currentDriver?.vehicle_make || ''} ${currentDriver?.vehicle_model || ''}\n📋 Plate: ${currentDriver?.license_plate || 'Pending'}\n\n📍 From: ${currentRide?.pickup_address || ''}\n📍 To: ${currentRide?.dropoff_address || ''}\n⏱️ ETA: ${etaLabel || 'Calculating'}\n\nTrack: ${trackLink}`;
     try { await Share.share({ message: info.trim(), title: 'My Spinr Ride' }); } catch {}
   };
 

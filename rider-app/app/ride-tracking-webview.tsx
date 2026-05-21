@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Share, Platform,
 } from 'react-native';
@@ -9,6 +9,7 @@ import { WebView } from 'react-native-webview';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
+import { TrackBaseUrlContext } from './_layout';
 
 export default function RideTrackingWebviewScreen() {
   const { trackingUrl, rideId } = useLocalSearchParams<{ trackingUrl?: string; rideId?: string }>();
@@ -16,6 +17,8 @@ export default function RideTrackingWebviewScreen() {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const webViewRef = useRef<WebView>(null);
+
+  const trackBaseUrl = useContext(TrackBaseUrlContext);
 
   const [resolvedUrl, setResolvedUrl] = useState<string | null>(trackingUrl ?? null);
   const [loading, setLoading] = useState(!trackingUrl);
@@ -26,14 +29,23 @@ export default function RideTrackingWebviewScreen() {
     if (!trackingUrl && rideId) {
       fetchTrackingUrl(rideId);
     }
-  }, [rideId, trackingUrl]);
+  }, [rideId, trackingUrl, trackBaseUrl]);
 
   const fetchTrackingUrl = async (id: string) => {
+    // Public tracking URL base is served by GET /settings → app_settings.track_base_url
+    // so ops can rotate the domain without a mobile rebuild. Fail loud if it
+    // isn't configured rather than fall back to a hardcoded spinr-track.app
+    // that the admin may have intentionally moved away from.
+    if (!trackBaseUrl) {
+      setError('Live trip tracking is not set up yet. Please contact support.');
+      setLoading(false);
+      return;
+    }
     try {
       setLoading(true);
       const res = await api.get<{ share_token?: string }>(`/rides/${id}/share`);
       const token = res.data?.share_token ?? id;
-      setResolvedUrl(`https://spinr-track.app/${token}`);
+      setResolvedUrl(`${trackBaseUrl}/${token}`);
     } catch {
       setError('Could not generate tracking link. Please try again.');
     } finally {

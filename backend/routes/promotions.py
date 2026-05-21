@@ -156,17 +156,22 @@ async def _validate_promo_for_user(
                 detail="You have already used this promo code the maximum number of times",
             )
 
-    # 4. Minimum ride fare — check against grand_total when available (R-P2-33)
+    # 4. Minimum ride fare — check against ride portion (base+dist+time),
+    #    matching what /promo/available uses so a promo that is shown to the
+    #    rider is never rejected at booking. Fees and taxes are excluded.
     min_fare = promo.get("min_ride_fare", 0)
     if min_fare > 0:
+        effective_fare = ride_fare
         if ride_id:
             ride_rows = await db_supabase.get_rows("rides", {"id": ride_id, "rider_id": user_id}, limit=1)
             if not ride_rows:
                 raise HTTPException(status_code=404, detail="Ride not found")
-            effective_fare = Decimal(str(ride_rows[0].get("total_fare") or "0"))
-        else:
-            # grand_total includes fees; a better basis for min-fare checks than ride portion alone
-            effective_fare = grand_total if grand_total is not None else ride_fare
+            r = ride_rows[0]
+            effective_fare = (
+                Decimal(str(r.get("base_fare") or 0))
+                + Decimal(str(r.get("distance_fare") or 0))
+                + Decimal(str(r.get("time_fare") or 0))
+            )
         if effective_fare < min_fare:
             raise HTTPException(
                 status_code=400,
@@ -469,8 +474,10 @@ async def get_available_promos(
                 if user_uses >= max_per_user:
                     continue  # noqa: E701
 
-            # Min fare
-            if p.get("min_ride_fare", 0) > 0 and ride_fare < p["min_ride_fare"]:
+            # Min fare — compare against ride portion (base+dist+time) when
+            # available; fall back to ride_fare (grand_total) for older clients.
+            _min_check_fare = ride_portion if ride_portion is not None else ride_fare
+            if p.get("min_ride_fare", 0) > 0 and _min_check_fare < p["min_ride_fare"]:
                 continue  # noqa: E701
 
             # Private coupon

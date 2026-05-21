@@ -620,11 +620,24 @@ export const updateSurge = (areaId: string, data: any) =>
 export const getDriverDocuments = (driverId: string) =>
     request<any[]>(`/api/admin/documents/drivers/${driverId}`);
 
+export type RejectTemplate =
+    | "blurry_image"
+    | "wrong_document_type"
+    | "expired"
+    | "information_unclear"
+    | "other";
+
+export interface ReviewDocumentOptions {
+    notify?: boolean;
+    notifyTemplate?: RejectTemplate;
+}
+
 export const reviewDocument = (
     docId: string,
     status: string,
     reason?: string,
     expiryDate?: string,
+    options?: ReviewDocumentOptions,
 ) =>
     request<any>(`/api/admin/documents/${docId}/review`, {
         method: "POST",
@@ -632,7 +645,96 @@ export const reviewDocument = (
             status,
             rejection_reason: reason,
             expiry_date: expiryDate,
+            ...(options?.notify !== undefined ? { notify: options.notify } : {}),
+            ...(options?.notifyTemplate ? { notify_template: options.notifyTemplate } : {}),
         }),
+    });
+
+export interface ApprovalQueueItem {
+    driver_id: string;
+    user_id: string | null;
+    first_name: string;
+    last_name: string;
+    name: string;
+    email: string | null;
+    phone: string | null;
+    profile_photo_url: string | null;
+    status: string;
+    created_at: string | null;
+    queue_started_at: string | null;
+    time_in_queue_seconds: number;
+    pending_docs_count: number;
+    missing_docs_count: number;
+    service_area_id: string | null;
+    service_area_name: string | null;
+    vehicle_type_id: string | null;
+    vehicle_type_name: string | null;
+}
+
+export interface ApprovalQueueResponse {
+    stats: {
+        total_pending: number;
+        oldest_in_queue_hours: number;
+        median_wait_hours: number;
+        over_24h_count: number;
+    };
+    items: ApprovalQueueItem[];
+}
+
+export const getApprovalQueue = (params?: {
+    limit?: number;
+    service_area_id?: string;
+}) => {
+    const q = new URLSearchParams();
+    if (params?.limit) q.set("limit", String(params.limit));
+    if (params?.service_area_id) q.set("service_area_id", params.service_area_id);
+    const qs = q.toString();
+    return request<ApprovalQueueResponse>(
+        `/api/admin/drivers/approval-queue${qs ? `?${qs}` : ""}`,
+    );
+};
+
+export interface ExpiringDocItem {
+    driver_id: string;
+    user_id: string | null;
+    name: string;
+    first_name: string;
+    last_name: string;
+    email: string | null;
+    phone: string | null;
+    profile_photo_url: string | null;
+    status: string | null;
+    service_area_id: string | null;
+    service_area_name: string | null;
+    doc_type: string;
+    doc_label: string;
+    doc_field: string;
+    expiry_date: string;
+    days_remaining: number;
+    rides_last_30d: number;
+    last_nudged_at: string | null;
+}
+
+export const getExpiringDocs = (params?: {
+    window_days?: 7 | 14 | 30 | number;
+    service_area_id?: string;
+}) => {
+    const q = new URLSearchParams();
+    if (params?.window_days) q.set("window_days", String(params.window_days));
+    if (params?.service_area_id) q.set("service_area_id", params.service_area_id);
+    const qs = q.toString();
+    return request<{ items: ExpiringDocItem[] }>(
+        `/api/admin/drivers/expiring${qs ? `?${qs}` : ""}`,
+    );
+};
+
+export const nudgeDriverExpiry = (
+    driverId: string,
+    body: { doc_type: string; doc_label?: string; custom_message?: string },
+) =>
+    request<{ ok: boolean }>(`/api/admin/drivers/${driverId}/nudge-expiry`, {
+        method: "POST",
+        body: JSON.stringify(body),
     });
 
 /* ── Corporate Accounts ─────────────────────── */

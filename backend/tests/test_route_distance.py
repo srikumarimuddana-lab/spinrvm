@@ -215,7 +215,8 @@ class TestComputeRoadDistanceKm:
             asyncio.run(rd.compute_road_distance_km(crumbs))
 
         assert sent_path, "API was not called"
-        # _MAX_POINTS_PER_REQUEST = 100. With the +1 last-point append the
-        # cap is 101. Anything within that ceiling is acceptable.
+        # Hard cap: Roads API rejects > 100 points. The downsampler must
+        # reserve a slot for the appended trailing point so the total never
+        # exceeds _MAX_POINTS_PER_REQUEST.
         sent_count = len(sent_path[0].split("|"))
-        assert sent_count <= 101, f"Sent {sent_count} points, expected <=101"
+        assert sent_count <= 100, f"Sent {sent_count} points, expected <=100"

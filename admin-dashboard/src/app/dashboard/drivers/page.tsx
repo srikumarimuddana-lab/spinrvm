@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers } from "@/lib/api";
+import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides } from "@/lib/api";
 import { Pagination } from "@/components/ui/pagination";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatCurrency } from "@/lib/utils";
@@ -76,6 +76,23 @@ export default function DriversPage() {
     const [startDate, setStartDate] = useState("");
     const [endDate, setEndDate] = useState("");
     const [serviceAreas, setServiceAreas] = useState<{ id: string; name: string }[]>([]);
+    const [driverRides, setDriverRides] = useState<any[]>([]);
+    const [ridesLoading, setRidesLoading] = useState(false);
+    const [ridesLoaded, setRidesLoaded] = useState<string | null>(null);
+
+    const loadDriverRides = useCallback(async (driverId: string) => {
+        if (ridesLoaded === driverId) return;
+        setRidesLoading(true);
+        try {
+            const res = await getDriverRides(driverId);
+            setDriverRides(res?.rides || []);
+            setRidesLoaded(driverId);
+        } catch {
+            setDriverRides([]);
+        } finally {
+            setRidesLoading(false);
+        }
+    }, [ridesLoaded]);
 
     const loadData = useCallback(() => {
         setLoading(true);
@@ -157,6 +174,7 @@ export default function DriversPage() {
     }, []);
     useEffect(() => { if (!selected?.id) { setDriverDocs([]); return; } setDocsLoading(true); getDriverDocuments(selected.id).then((d) => setDriverDocs(Array.isArray(d) ? d : [])).catch(() => setDriverDocs([])).finally(() => setDocsLoading(false)); }, [selected?.id]);
     useEffect(() => { setEditing(false); setEditForm({}); }, [selected?.id]);
+    useEffect(() => { if (!selected?.id) { setDriverRides([]); setRidesLoaded(null); } }, [selected?.id]);
     useEffect(() => {
         if (!previewUrl) return;
         const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setPreviewUrl(null); };
@@ -558,6 +576,7 @@ export default function DriversPage() {
                             <TabsList className="mx-6 mt-4 w-fit">
                                 <TabsTrigger value="overview">Overview</TabsTrigger>
                                 <TabsTrigger value="documents">Documents{activeDocs.length > 0 && <span className="ml-1.5 bg-primary/10 text-primary text-[10px] font-bold px-1.5 py-0.5 rounded-full">{activeDocs.length}</span>}</TabsTrigger>
+                                <TabsTrigger value="rides" onClick={() => loadDriverRides(selected.id)}>Rides{selected.total_rides > 0 && <span className="ml-1.5 bg-primary/10 text-primary text-[10px] font-bold px-1.5 py-0.5 rounded-full">{(selected.total_rides || 0).toLocaleString()}</span>}</TabsTrigger>
                                 <TabsTrigger value="verification">Actions</TabsTrigger>
                                 <TabsTrigger value="notes">Notes</TabsTrigger>
                                 <TabsTrigger value="history">History</TabsTrigger>
@@ -686,6 +705,16 @@ export default function DriversPage() {
                                         <DetailField icon={CalendarRange} label="Joined" value={fmtDate(selected.created_at)} />
                                         <DetailField icon={Clock} label="Last Updated" value={fmtDate(selected.updated_at)} />
                                     </div>
+                                </TabsContent>
+
+                                {/* Rides */}
+                                <TabsContent value="rides" className="mt-4">
+                                    <DriverRidesTab
+                                        rides={driverRides}
+                                        loading={ridesLoading}
+                                        driverName={`${selected.first_name || ""} ${selected.last_name || ""}`.trim()}
+                                        fmtDate={fmtDate}
+                                    />
                                 </TabsContent>
 
                                 {/* Documents */}
@@ -921,6 +950,85 @@ export default function DriversPage() {
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+        </div>
+    );
+}
+
+const RIDE_STATUS_STYLE: Record<string, { bg: string; text: string; label: string }> = {
+    completed:        { bg: "bg-emerald-100 dark:bg-emerald-900/30", text: "text-emerald-700 dark:text-emerald-300", label: "Completed" },
+    in_progress:      { bg: "bg-blue-100 dark:bg-blue-900/30",   text: "text-blue-700 dark:text-blue-300",   label: "In Progress" },
+    cancelled:        { bg: "bg-red-100 dark:bg-red-900/30",     text: "text-red-700 dark:text-red-300",     label: "Cancelled" },
+    driver_assigned:  { bg: "bg-violet-100 dark:bg-violet-900/30", text: "text-violet-700 dark:text-violet-300", label: "Assigned" },
+    driver_accepted:  { bg: "bg-violet-100 dark:bg-violet-900/30", text: "text-violet-700 dark:text-violet-300", label: "Accepted" },
+    driver_arrived:   { bg: "bg-indigo-100 dark:bg-indigo-900/30", text: "text-indigo-700 dark:text-indigo-300", label: "Arrived" },
+    searching:        { bg: "bg-amber-100 dark:bg-amber-900/30",  text: "text-amber-700 dark:text-amber-300",  label: "Searching" },
+};
+
+function DriverRidesTab({ rides, loading, driverName, fmtDate }: {
+    rides: any[];
+    loading: boolean;
+    driverName: string;
+    fmtDate: (d: string) => string;
+}) {
+    const fmtDuration = (s?: number) => {
+        if (!s) return "—";
+        const m = Math.round(s / 60);
+        return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${m % 60}m`;
+    };
+
+    if (loading) return (
+        <div className="space-y-2.5 animate-pulse">
+            {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="h-16 rounded-xl bg-muted" />
+            ))}
+        </div>
+    );
+
+    if (rides.length === 0) return (
+        <div className="py-16 text-center text-muted-foreground">
+            <Car className="h-10 w-10 mx-auto mb-3 opacity-30" />
+            <p className="text-sm font-medium">No rides yet</p>
+            <p className="text-xs mt-1">{driverName} has not completed any trips.</p>
+        </div>
+    );
+
+    return (
+        <div className="rounded-xl border border-border overflow-hidden">
+            <div className="grid grid-cols-[1fr_100px_90px_80px_90px_80px] gap-3 px-4 py-2.5 bg-muted/30 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                <div>Route</div>
+                <div>Date</div>
+                <div>Status</div>
+                <div>Fare</div>
+                <div>Distance</div>
+                <div>Duration</div>
+            </div>
+            {rides.map((r) => {
+                const style = RIDE_STATUS_STYLE[r.status] ?? { bg: "bg-muted/30", text: "text-muted-foreground", label: r.status };
+                const fareAmt = r.fare_amount ?? r.total_fare ?? r.base_fare;
+                return (
+                    <div key={r.id} className="grid grid-cols-[1fr_100px_90px_80px_90px_80px] gap-3 items-start px-4 py-3 border-t border-border hover:bg-muted/20 transition-colors">
+                        <div className="min-w-0 space-y-0.5">
+                            <p className="text-xs font-medium truncate text-foreground" title={r.pickup_address}>{r.pickup_address || "—"}</p>
+                            <p className="text-xs text-muted-foreground truncate" title={r.dropoff_address}>{r.dropoff_address ? `→ ${r.dropoff_address}` : ""}</p>
+                        </div>
+                        <div className="text-xs text-muted-foreground tabular-nums">{r.created_at ? fmtDate(r.created_at) : "—"}</div>
+                        <div>
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold ${style.bg} ${style.text}`}>
+                                {style.label}
+                            </span>
+                        </div>
+                        <div className="text-sm font-semibold tabular-nums">
+                            {fareAmt != null ? `$${Number(fareAmt).toFixed(2)}` : "—"}
+                        </div>
+                        <div className="text-xs text-muted-foreground tabular-nums">
+                            {r.distance_km != null ? `${Number(r.distance_km).toFixed(1)} km` : "—"}
+                        </div>
+                        <div className="text-xs text-muted-foreground tabular-nums">
+                            {fmtDuration(r.duration_seconds)}
+                        </div>
+                    </div>
+                );
+            })}
         </div>
     );
 }

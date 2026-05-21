@@ -372,9 +372,10 @@ export const useRideStore = create<RideState>((set, get) => ({
       const response = await api.get<Promo[]>(`/promo/available?ride_fare=${fare}${portionParam}${coords}`);
       const promos = response.data || [];
       set({ availablePromos: promos });
-      // Auto-apply best promo (first one, already sorted by biggest discount)
+      // Auto-apply best eligible promo (sorted: eligible first, then by discount)
       if (promos.length > 0 && !get().appliedPromo) {
-        set({ appliedPromo: promos[0] });
+        const best = promos.find((p: any) => p.eligible !== false);
+        if (best) set({ appliedPromo: best });
       }
     } catch (error) {
       console.log('Error fetching promos:', error);

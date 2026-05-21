@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides } from "@/lib/api";
 import { Pagination } from "@/components/ui/pagination";
 import { exportToCsv } from "@/lib/export-csv";
@@ -1056,22 +1056,103 @@ function VerificationSummaryCard({
     );
 }
 
+const DRIVER_RIDES_PAGE_SIZE = 25;
+
+type RidesSortKey = "created_at" | "rider_name" | "status" | "distance_km" | "duration_seconds" | "total_fare" | "tip_amount";
+
 function DriverRidesTab({ rides, loading, driverName, fmtDate }: {
     rides: any[];
     loading: boolean;
     driverName: string;
     fmtDate: (d: string) => string;
 }) {
+    const [statusFilter, setStatusFilter] = useState<string>("all");
+    const [search, setSearch] = useState("");
+    const [sortKey, setSortKey] = useState<RidesSortKey>("created_at");
+    const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+    const [page, setPage] = useState(0);
+
+    useEffect(() => { setPage(0); }, [statusFilter, search, sortKey, sortDir]);
+
     const fmtDuration = (s?: number) => {
         if (!s) return "—";
         const m = Math.round(s / 60);
         return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${m % 60}m`;
     };
 
+    const riderDisplay = (r: any) => {
+        const name = (r.rider_name || "").trim();
+        if (name) return name;
+        if (r.rider_id) return `Rider ${String(r.rider_id).slice(0, 6)}`;
+        return "Unknown rider";
+    };
+
+    const statusCounts = useMemo(() => {
+        const c: Record<string, number> = { all: rides.length };
+        for (const r of rides) {
+            const s = r.status || "unknown";
+            c[s] = (c[s] || 0) + 1;
+        }
+        return c;
+    }, [rides]);
+
+    const statusOptions = useMemo(() => {
+        const seen = new Set<string>();
+        for (const r of rides) seen.add(r.status || "unknown");
+        return [
+            { value: "all", label: "All statuses" },
+            ...Array.from(seen).sort().map(s => ({
+                value: s,
+                label: RIDE_STATUS_STYLE[s]?.label || s,
+            })),
+        ];
+    }, [rides]);
+
+    const processed = useMemo(() => {
+        const q = search.trim().toLowerCase();
+        let out = rides;
+        if (statusFilter !== "all") out = out.filter(r => r.status === statusFilter);
+        if (q) out = out.filter(r => {
+            const haystack = `${riderDisplay(r)} ${r.id || ""} ${r.pickup_address || ""} ${r.dropoff_address || ""}`.toLowerCase();
+            return haystack.includes(q);
+        });
+        const sorted = [...out].sort((a, b) => {
+            let av: any, bv: any;
+            if (sortKey === "rider_name") { av = riderDisplay(a).toLowerCase(); bv = riderDisplay(b).toLowerCase(); }
+            else if (sortKey === "status") { av = a.status || ""; bv = b.status || ""; }
+            else if (sortKey === "total_fare") { av = Number(a.total_fare ?? a.fare_amount ?? a.base_fare ?? 0); bv = Number(b.total_fare ?? b.fare_amount ?? b.base_fare ?? 0); }
+            else if (sortKey === "tip_amount") { av = Number(a.tip_amount ?? 0); bv = Number(b.tip_amount ?? 0); }
+            else if (sortKey === "distance_km") { av = Number(a.distance_km ?? 0); bv = Number(b.distance_km ?? 0); }
+            else if (sortKey === "duration_seconds") { av = Number(a.duration_seconds ?? 0); bv = Number(b.duration_seconds ?? 0); }
+            else { av = a.created_at || ""; bv = b.created_at || ""; }
+            if (av < bv) return sortDir === "asc" ? -1 : 1;
+            if (av > bv) return sortDir === "asc" ? 1 : -1;
+            return 0;
+        });
+        return sorted;
+    }, [rides, statusFilter, search, sortKey, sortDir]);
+
+    const paged = processed.slice(page * DRIVER_RIDES_PAGE_SIZE, (page + 1) * DRIVER_RIDES_PAGE_SIZE);
+    const hasNextPage = processed.length > (page + 1) * DRIVER_RIDES_PAGE_SIZE;
+
+    const handleSort = (k: RidesSortKey) => {
+        if (sortKey === k) setSortDir(d => d === "asc" ? "desc" : "asc");
+        else {
+            setSortKey(k);
+            setSortDir(k === "rider_name" ? "asc" : "desc");
+        }
+    };
+
+    const SortIcon = ({ col }: { col: RidesSortKey }) => {
+        if (sortKey !== col) return <ArrowUpDown className="h-3 w-3 opacity-30 inline ml-1" />;
+        return sortDir === "asc" ? <ArrowUp className="h-3 w-3 inline ml-1" /> : <ArrowDown className="h-3 w-3 inline ml-1" />;
+    };
+
     if (loading) return (
         <div className="space-y-2.5 animate-pulse">
-            {Array.from({ length: 6 }).map((_, i) => (
-                <div key={i} className="h-16 rounded-xl bg-muted" />
+            <div className="h-9 w-full rounded-lg bg-muted" />
+            {Array.from({ length: 8 }).map((_, i) => (
+                <div key={i} className="h-12 rounded-lg bg-muted" />
             ))}
         </div>
     );
@@ -1085,103 +1166,142 @@ function DriverRidesTab({ rides, loading, driverName, fmtDate }: {
     );
 
     return (
-        <div className="space-y-2">
-            {rides.map((r) => <DriverRideRow key={r.id} ride={r} fmtDate={fmtDate} fmtDuration={fmtDuration} />)}
-        </div>
-    );
-}
-
-function DriverRideRow({ ride: r, fmtDate, fmtDuration }: { ride: any; fmtDate: (d: string) => string; fmtDuration: (s?: number) => string }) {
-    const style = RIDE_STATUS_STYLE[r.status] ?? { bg: "bg-muted/30", text: "text-muted-foreground", label: r.status };
-    const totalFare = r.total_fare ?? r.fare_amount ?? r.base_fare;
-    const tip = r.tip_amount;
-    const hasTip = tip != null && Number(tip) > 0;
-    const baseFare = hasTip && totalFare != null ? Number(totalFare) - Number(tip) : null;
-    const dt = r.created_at ? new Date(r.created_at) : null;
-    const initials = (() => {
-        const name = (r.rider_name || "").trim();
-        if (!name) return "?";
-        const parts = name.split(/\s+/);
-        return (parts[0][0] + (parts[1]?.[0] || "")).toUpperCase();
-    })();
-    const copyRideId = (e: React.MouseEvent) => {
-        e.stopPropagation();
-        navigator.clipboard.writeText(r.id);
-    };
-
-    return (
-        <div className="rounded-xl border border-border bg-card overflow-hidden hover:border-border/80 transition-colors">
-            <div className="px-4 py-3">
-                <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-center gap-2.5 min-w-0">
-                        <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center text-xs font-semibold text-muted-foreground shrink-0">
-                            {initials}
-                        </div>
-                        <div className="min-w-0">
-                            <p className="text-sm font-semibold truncate">{r.rider_name || "Unknown rider"}</p>
-                            <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                                <button onClick={copyRideId} title="Copy ride ID" className="inline-flex items-center gap-1 font-mono hover:text-foreground transition-colors">
-                                    #{r.id.slice(0, 8)}
-                                    <Copy className="h-2.5 w-2.5" />
-                                </button>
-                                {dt && (
-                                    <>
-                                        <span>·</span>
-                                        <span className="tabular-nums">{fmtDate(r.created_at)}</span>
-                                        <span className="text-muted-foreground/60">
-                                            {dt.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
-                                        </span>
-                                    </>
-                                )}
-                            </div>
-                        </div>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold ${style.bg} ${style.text}`}>
-                            {style.label}
-                        </span>
-                        <div className="text-right">
-                            <p className="text-sm font-bold tabular-nums">
-                                {totalFare != null ? `$${Number(totalFare).toFixed(2)}` : "—"}
-                            </p>
-                            {hasTip && (
-                                <p className="text-[10px] text-emerald-600 dark:text-emerald-400 tabular-nums leading-none mt-0.5">
-                                    incl. ${Number(tip).toFixed(2)} tip
-                                </p>
-                            )}
-                        </div>
-                    </div>
+        <div className="space-y-3">
+            <div className="flex items-center gap-2 flex-wrap">
+                <div className="flex items-center gap-1.5">
+                    <Search className="h-4 w-4 text-muted-foreground" />
+                    <Input
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                        placeholder="Search rider, ride id, address"
+                        className="h-8 text-xs w-[260px]"
+                    />
                 </div>
-
-                <div className="mt-3 pl-10 space-y-1">
-                    <div className="flex items-start gap-2">
-                        <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 mt-1.5 shrink-0" />
-                        <p className="text-xs text-foreground truncate" title={r.pickup_address}>{r.pickup_address || "—"}</p>
-                    </div>
-                    <div className="flex items-start gap-2">
-                        <div className="w-1.5 h-1.5 rounded-full bg-red-500 mt-1.5 shrink-0" />
-                        <p className="text-xs text-muted-foreground truncate" title={r.dropoff_address}>{r.dropoff_address || "—"}</p>
-                    </div>
-                </div>
-
-                <div className="mt-2 pl-10 flex items-center gap-3 text-[11px] text-muted-foreground tabular-nums">
-                    {r.distance_km != null && <span>{Number(r.distance_km).toFixed(1)} km</span>}
-                    {r.distance_km != null && r.duration_seconds && <span>·</span>}
-                    {r.duration_seconds && <span>{fmtDuration(r.duration_seconds)}</span>}
-                    {(r.surge_multiplier != null && Number(r.surge_multiplier) > 1) && (
-                        <>
-                            <span>·</span>
-                            <span className="text-amber-600 dark:text-amber-400 font-medium">{Number(r.surge_multiplier).toFixed(2)}× surge</span>
-                        </>
-                    )}
-                    {baseFare != null && (
-                        <>
-                            <span className="ml-auto">Base ${baseFare.toFixed(2)}</span>
-                            <span>+ Tip ${Number(tip).toFixed(2)}</span>
-                        </>
-                    )}
-                </div>
+                <Select value={statusFilter} onValueChange={setStatusFilter}>
+                    <SelectTrigger className="h-8 text-xs w-[170px]">
+                        <SelectValue placeholder="Status" />
+                    </SelectTrigger>
+                    <SelectContent>
+                        {statusOptions.map((opt: { value: string; label: string }) => (
+                            <SelectItem key={opt.value} value={opt.value} className="text-xs">
+                                {opt.label}{opt.value !== "all" && statusCounts[opt.value] != null ? ` · ${statusCounts[opt.value]}` : opt.value === "all" ? ` · ${statusCounts.all}` : ""}
+                            </SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
+                <span className="ml-auto text-xs text-muted-foreground tabular-nums">
+                    {processed.length} of {rides.length}
+                </span>
             </div>
+
+            <div className="rounded-xl border border-border overflow-x-auto">
+                <Table>
+                    <TableHeader>
+                        <TableRow className="bg-muted/30 hover:bg-muted/30">
+                            <TableHead className="h-9 text-[11px] uppercase tracking-wider cursor-pointer select-none" onClick={() => handleSort("created_at")}>
+                                Date<SortIcon col="created_at" />
+                            </TableHead>
+                            <TableHead className="h-9 text-[11px] uppercase tracking-wider cursor-pointer select-none" onClick={() => handleSort("rider_name")}>
+                                Rider<SortIcon col="rider_name" />
+                            </TableHead>
+                            <TableHead className="h-9 text-[11px] uppercase tracking-wider">Driver</TableHead>
+                            <TableHead className="h-9 text-[11px] uppercase tracking-wider">Route</TableHead>
+                            <TableHead className="h-9 text-[11px] uppercase tracking-wider cursor-pointer select-none" onClick={() => handleSort("status")}>
+                                Status<SortIcon col="status" />
+                            </TableHead>
+                            <TableHead className="h-9 text-[11px] uppercase tracking-wider text-right cursor-pointer select-none" onClick={() => handleSort("distance_km")}>
+                                Distance<SortIcon col="distance_km" />
+                            </TableHead>
+                            <TableHead className="h-9 text-[11px] uppercase tracking-wider text-right cursor-pointer select-none" onClick={() => handleSort("duration_seconds")}>
+                                Duration<SortIcon col="duration_seconds" />
+                            </TableHead>
+                            <TableHead className="h-9 text-[11px] uppercase tracking-wider text-right cursor-pointer select-none" onClick={() => handleSort("tip_amount")}>
+                                Tip<SortIcon col="tip_amount" />
+                            </TableHead>
+                            <TableHead className="h-9 text-[11px] uppercase tracking-wider text-right cursor-pointer select-none" onClick={() => handleSort("total_fare")}>
+                                Fare<SortIcon col="total_fare" />
+                            </TableHead>
+                            <TableHead className="h-9 text-[11px] uppercase tracking-wider">Ride</TableHead>
+                        </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                        {paged.length === 0 ? (
+                            <TableRow>
+                                <TableCell colSpan={10} className="text-center text-muted-foreground py-12">
+                                    <p className="text-sm">No rides match this filter.</p>
+                                </TableCell>
+                            </TableRow>
+                        ) : paged.map((r: any) => {
+                            const style = RIDE_STATUS_STYLE[r.status] ?? { bg: "bg-muted/30", text: "text-muted-foreground", label: r.status };
+                            const totalFare = r.total_fare ?? r.fare_amount ?? r.base_fare;
+                            const tip = r.tip_amount;
+                            const hasTip = tip != null && Number(tip) > 0;
+                            const dt = r.created_at ? new Date(r.created_at) : null;
+                            const rider = riderDisplay(r);
+                            return (
+                                <TableRow key={r.id} className="hover:bg-muted/20">
+                                    <TableCell className="text-xs tabular-nums whitespace-nowrap">
+                                        {dt ? (
+                                            <>
+                                                <div>{fmtDate(r.created_at)}</div>
+                                                <div className="text-[10px] text-muted-foreground">{dt.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</div>
+                                            </>
+                                        ) : "—"}
+                                    </TableCell>
+                                    <TableCell className="text-xs">
+                                        <span className="font-medium truncate block max-w-[150px]" title={rider}>{rider}</span>
+                                    </TableCell>
+                                    <TableCell className="text-xs text-muted-foreground truncate max-w-[150px]" title={driverName}>{driverName}</TableCell>
+                                    <TableCell className="text-xs">
+                                        <div className="max-w-[220px]">
+                                            <p className="truncate text-foreground" title={r.pickup_address}>{r.pickup_address || "—"}</p>
+                                            <p className="truncate text-muted-foreground text-[10px]" title={r.dropoff_address}>{r.dropoff_address ? `→ ${r.dropoff_address}` : ""}</p>
+                                        </div>
+                                    </TableCell>
+                                    <TableCell>
+                                        <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold ${style.bg} ${style.text}`}>
+                                            {style.label}
+                                        </span>
+                                    </TableCell>
+                                    <TableCell className="text-xs text-right tabular-nums">
+                                        {r.distance_km != null ? `${Number(r.distance_km).toFixed(1)} km` : "—"}
+                                    </TableCell>
+                                    <TableCell className="text-xs text-right tabular-nums">
+                                        {fmtDuration(r.duration_seconds)}
+                                    </TableCell>
+                                    <TableCell className="text-xs text-right tabular-nums">
+                                        {hasTip ? <span className="text-emerald-600 dark:text-emerald-400 font-medium">${Number(tip).toFixed(2)}</span> : <span className="text-muted-foreground">—</span>}
+                                    </TableCell>
+                                    <TableCell className="text-sm text-right font-semibold tabular-nums">
+                                        {totalFare != null ? `$${Number(totalFare).toFixed(2)}` : "—"}
+                                    </TableCell>
+                                    <TableCell>
+                                        <button
+                                            type="button"
+                                            onClick={() => navigator.clipboard.writeText(r.id)}
+                                            title={`Copy ride ID: ${r.id}`}
+                                            className="inline-flex items-center gap-1 text-[10px] font-mono text-muted-foreground hover:text-foreground transition-colors"
+                                        >
+                                            {String(r.id).slice(0, 8)}
+                                            <Copy className="h-2.5 w-2.5" />
+                                        </button>
+                                    </TableCell>
+                                </TableRow>
+                            );
+                        })}
+                    </TableBody>
+                </Table>
+            </div>
+
+            {processed.length > DRIVER_RIDES_PAGE_SIZE && (
+                <Pagination
+                    page={page}
+                    pageSize={DRIVER_RIDES_PAGE_SIZE}
+                    hasNextPage={hasNextPage}
+                    totalCount={processed.length}
+                    onPageChange={setPage}
+                />
+            )}
         </div>
     );
 }

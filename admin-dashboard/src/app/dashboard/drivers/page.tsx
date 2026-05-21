@@ -1055,42 +1055,103 @@ function DriverRidesTab({ rides, loading, driverName, fmtDate }: {
     );
 
     return (
-        <div className="rounded-xl border border-border overflow-hidden">
-            <div className="grid grid-cols-[1fr_100px_90px_80px_90px_80px] gap-3 px-4 py-2.5 bg-muted/30 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                <div>Route</div>
-                <div>Date</div>
-                <div>Status</div>
-                <div>Fare</div>
-                <div>Distance</div>
-                <div>Duration</div>
-            </div>
-            {rides.map((r) => {
-                const style = RIDE_STATUS_STYLE[r.status] ?? { bg: "bg-muted/30", text: "text-muted-foreground", label: r.status };
-                const fareAmt = r.fare_amount ?? r.total_fare ?? r.base_fare;
-                return (
-                    <div key={r.id} className="grid grid-cols-[1fr_100px_90px_80px_90px_80px] gap-3 items-start px-4 py-3 border-t border-border hover:bg-muted/20 transition-colors">
-                        <div className="min-w-0 space-y-0.5">
-                            <p className="text-xs font-medium truncate text-foreground" title={r.pickup_address}>{r.pickup_address || "—"}</p>
-                            <p className="text-xs text-muted-foreground truncate" title={r.dropoff_address}>{r.dropoff_address ? `→ ${r.dropoff_address}` : ""}</p>
+        <div className="space-y-2">
+            {rides.map((r) => <DriverRideRow key={r.id} ride={r} fmtDate={fmtDate} fmtDuration={fmtDuration} />)}
+        </div>
+    );
+}
+
+function DriverRideRow({ ride: r, fmtDate, fmtDuration }: { ride: any; fmtDate: (d: string) => string; fmtDuration: (s?: number) => string }) {
+    const style = RIDE_STATUS_STYLE[r.status] ?? { bg: "bg-muted/30", text: "text-muted-foreground", label: r.status };
+    const totalFare = r.total_fare ?? r.fare_amount ?? r.base_fare;
+    const tip = r.tip_amount;
+    const hasTip = tip != null && Number(tip) > 0;
+    const baseFare = hasTip && totalFare != null ? Number(totalFare) - Number(tip) : null;
+    const dt = r.created_at ? new Date(r.created_at) : null;
+    const initials = (() => {
+        const name = (r.rider_name || "").trim();
+        if (!name) return "?";
+        const parts = name.split(/\s+/);
+        return (parts[0][0] + (parts[1]?.[0] || "")).toUpperCase();
+    })();
+    const copyRideId = (e: React.MouseEvent) => {
+        e.stopPropagation();
+        navigator.clipboard.writeText(r.id);
+    };
+
+    return (
+        <div className="rounded-xl border border-border bg-card overflow-hidden hover:border-border/80 transition-colors">
+            <div className="px-4 py-3">
+                <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center text-xs font-semibold text-muted-foreground shrink-0">
+                            {initials}
                         </div>
-                        <div className="text-xs text-muted-foreground tabular-nums">{r.created_at ? fmtDate(r.created_at) : "—"}</div>
-                        <div>
-                            <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold ${style.bg} ${style.text}`}>
-                                {style.label}
-                            </span>
-                        </div>
-                        <div className="text-sm font-semibold tabular-nums">
-                            {fareAmt != null ? `$${Number(fareAmt).toFixed(2)}` : "—"}
-                        </div>
-                        <div className="text-xs text-muted-foreground tabular-nums">
-                            {r.distance_km != null ? `${Number(r.distance_km).toFixed(1)} km` : "—"}
-                        </div>
-                        <div className="text-xs text-muted-foreground tabular-nums">
-                            {fmtDuration(r.duration_seconds)}
+                        <div className="min-w-0">
+                            <p className="text-sm font-semibold truncate">{r.rider_name || "Unknown rider"}</p>
+                            <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                                <button onClick={copyRideId} title="Copy ride ID" className="inline-flex items-center gap-1 font-mono hover:text-foreground transition-colors">
+                                    #{r.id.slice(0, 8)}
+                                    <Copy className="h-2.5 w-2.5" />
+                                </button>
+                                {dt && (
+                                    <>
+                                        <span>·</span>
+                                        <span className="tabular-nums">{fmtDate(r.created_at)}</span>
+                                        <span className="text-muted-foreground/60">
+                                            {dt.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}
+                                        </span>
+                                    </>
+                                )}
+                            </div>
                         </div>
                     </div>
-                );
-            })}
+                    <div className="flex items-center gap-2 shrink-0">
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold ${style.bg} ${style.text}`}>
+                            {style.label}
+                        </span>
+                        <div className="text-right">
+                            <p className="text-sm font-bold tabular-nums">
+                                {totalFare != null ? `$${Number(totalFare).toFixed(2)}` : "—"}
+                            </p>
+                            {hasTip && (
+                                <p className="text-[10px] text-emerald-600 dark:text-emerald-400 tabular-nums leading-none mt-0.5">
+                                    incl. ${Number(tip).toFixed(2)} tip
+                                </p>
+                            )}
+                        </div>
+                    </div>
+                </div>
+
+                <div className="mt-3 pl-10 space-y-1">
+                    <div className="flex items-start gap-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 mt-1.5 shrink-0" />
+                        <p className="text-xs text-foreground truncate" title={r.pickup_address}>{r.pickup_address || "—"}</p>
+                    </div>
+                    <div className="flex items-start gap-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-red-500 mt-1.5 shrink-0" />
+                        <p className="text-xs text-muted-foreground truncate" title={r.dropoff_address}>{r.dropoff_address || "—"}</p>
+                    </div>
+                </div>
+
+                <div className="mt-2 pl-10 flex items-center gap-3 text-[11px] text-muted-foreground tabular-nums">
+                    {r.distance_km != null && <span>{Number(r.distance_km).toFixed(1)} km</span>}
+                    {r.distance_km != null && r.duration_seconds && <span>·</span>}
+                    {r.duration_seconds && <span>{fmtDuration(r.duration_seconds)}</span>}
+                    {(r.surge_multiplier != null && Number(r.surge_multiplier) > 1) && (
+                        <>
+                            <span>·</span>
+                            <span className="text-amber-600 dark:text-amber-400 font-medium">{Number(r.surge_multiplier).toFixed(2)}× surge</span>
+                        </>
+                    )}
+                    {baseFare != null && (
+                        <>
+                            <span className="ml-auto">Base ${baseFare.toFixed(2)}</span>
+                            <span>+ Tip ${Number(tip).toFixed(2)}</span>
+                        </>
+                    )}
+                </div>
+            </div>
         </div>
     );
 }

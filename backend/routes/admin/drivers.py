@@ -1258,11 +1258,34 @@ async def admin_get_driver_rides(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ):
-    """Get rides for a driver with pagination (max 500 per page)."""
-    rides = await db_supabase.get_rows("rides", {"driver_id": driver_id}, order="created_at", desc=True, limit=limit)
-    # Apply offset in-process (Supabase helper doesn't expose OFFSET natively)
+    """Get rides for a driver, enriched with rider_name for the admin slideout.
+
+    The Supabase helper doesn't expose OFFSET natively, so we over-fetch
+    `offset + limit` rows and slice in-process. Cheap on the row counts
+    we expect per driver; if a single driver ever exceeds 500 rides we
+    should switch to a cursor-based scheme keyed by created_at.
+    """
+    fetch_size = offset + limit
+    rides = await db_supabase.get_rows(
+        "rides",
+        {"driver_id": driver_id},
+        order="created_at",
+        desc=True,
+        limit=fetch_size,
+    )
     page = rides[offset : offset + limit]
-    return {"rides": page, "total": len(rides), "offset": offset, "limit": limit}
+
+    # Enrich with rider_name so the admin sees who the trip was with —
+    # batch-fetched in one query rather than N lookups.
+    rider_ids = list({r.get("rider_id") for r in page if r.get("rider_id")})
+    _drivers_map, users_map = await _batch_fetch_drivers_and_users(rider_ids, [])
+
+    enriched = []
+    for r in page:
+        rider = users_map.get(r.get("rider_id"))
+        enriched.append({**r, "rider_name": _user_display_name(rider)})
+
+    return {"rides": enriched, "total": len(rides), "offset": offset, "limit": limit}
 
 
 @router.get("/drivers/{driver_id}/daily-stats")

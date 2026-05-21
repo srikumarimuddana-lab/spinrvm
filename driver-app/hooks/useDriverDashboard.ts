@@ -15,7 +15,12 @@ import { useDriverConfig } from '@shared/hooks/queries';
 import { API_URL } from '@shared/config';
 import { onForegroundMessage } from '@shared/services/firebase';
 import { Dimensions } from 'react-native';
-import { startBackgroundLocation, stopBackgroundLocation } from '../utils/backgroundLocation';
+import {
+  startBackgroundLocation,
+  stopBackgroundLocation,
+  startGeofenceRecovery,
+  stopGeofenceRecovery,
+} from '../utils/backgroundLocation';
 import { checkLocationIntegrity, resetLocationIntegrity } from '../utils/locationIntegrity';
 import { startSensorMonitoring, stopSensorMonitoring, isMovementConsistentWithSpeed } from '../utils/sensorIntegrity';
 import { attestDeviceIntegrity } from '../utils/deviceIntegrity';
@@ -890,10 +895,25 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         const bgStarted = await startBackgroundLocation();
         if (!bgStarted) {
           showToast('error', "Background location needed", "Enable 'Allow all the time' in Settings to keep getting ride offers while minimized.");
+        } else {
+          // Arm the killed-app geofence around the current position. If the
+          // user force-swipes Spinr, the OS still wakes the process when
+          // they cross the boundary and the geofence task re-arms tracking
+          // — without this, the driver is invisible to dispatch until they
+          // manually relaunch the app. Non-fatal: if location isn't ready
+          // yet we just skip; the next significant movement won't re-arm,
+          // but the foreground service is still running.
+          const loc = locationRef.current;
+          if (loc) {
+            await startGeofenceRecovery(loc.coords.latitude, loc.coords.longitude).catch((e) => {
+              console.warn('[toggleOnline] geofence arm failed:', e);
+            });
+          }
         }
       } else {
         stopSensorMonitoring();
         await stopBackgroundLocation();
+        await stopGeofenceRecovery().catch(() => {});
         resetLocationIntegrity();
       }
     } catch (e) {

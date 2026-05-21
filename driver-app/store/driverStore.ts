@@ -567,6 +567,23 @@ export const useDriverStore = create<DriverState>((set, get) => ({
             });
             AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
         } catch (err: unknown) {
+            // 409 means the ride is already in a terminal state (completed or
+            // cancelled). This happens when the network drops between the
+            // successful backend write and the client receiving the 200 —
+            // the driver retaps "Complete" and gets a state-conflict error.
+            // Instead of showing a red error, check whether there is still
+            // an active ride. If not, the completion went through and we
+            // treat it as success by syncing state from the server.
+            const status = isAxiosError(err) ? err.response?.status : undefined;
+            if (status === 409) {
+                await get().fetchActiveRide();
+                if (!get().activeRide) {
+                    // Ride is gone server-side — completion already happened.
+                    set({ rideState: 'trip_completed', activeRide: null, incomingRide: null, chatMessages: [] });
+                    AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
+                    return;
+                }
+            }
             recordNonFatal(err, { store: 'driverStore', action: 'completeRide' });
             set({ error: isAxiosError(err) ? (err.response?.data?.detail || 'Failed to complete ride') : 'Failed to complete ride' });
         } finally {

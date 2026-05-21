@@ -146,6 +146,27 @@ describe('driverStore', () => {
 
       expect(useDriverStore.getState().chatMessages).toEqual([]);
     });
+
+    it('should treat 409 as already-completed when no active ride remains', async () => {
+      // Simulates network drop: backend wrote "completed" but response was lost.
+      // Driver retaps → 409 state-conflict. fetchActiveRide returns no ride,
+      // confirming the completion went through — should land in trip_completed
+      // with no error rather than showing "Failed to complete ride".
+      const conflictError = Object.assign(new Error('Conflict'), {
+        isAxiosError: true,
+        response: { status: 409, data: { detail: 'Ride is not in in_progress state' } },
+      });
+      api.post.mockRejectedValueOnce(conflictError);
+      // fetchActiveRide called with no active ride
+      api.get.mockResolvedValueOnce({ data: null });
+
+      await useDriverStore.getState().completeRide('ride-1');
+
+      const state = useDriverStore.getState();
+      expect(state.rideState).toBe('trip_completed');
+      expect(state.error).toBeNull();
+      expect(state.chatMessages).toEqual([]);
+    });
   });
 
   describe('cancelRide', () => {

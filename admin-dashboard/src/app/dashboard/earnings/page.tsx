@@ -1,7 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getEarnings, getEarningsOverview, getSubscriptionStats, type EarningsOverview, type EarningsPeriod, type MetricWithDelta } from "@/lib/api";
+import { getEarnings, getEarningsOverview, getServiceAreas, getSubscriptionStats, type EarningsOverview, type EarningsPeriod, type MetricWithDelta } from "@/lib/api";
+import {
+    Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatCurrency, formatDate, statusColor } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import {
     Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
-import { Download, Car, CreditCard, Users, TrendingUp, TrendingDown, DollarSign, UserPlus, Clock, MapPin, X, GitCompareArrows, Wallet, CheckCircle, AlertTriangle, Percent, Receipt, UserCheck } from "lucide-react";
+import { Download, Car, CreditCard, Users, TrendingUp, TrendingDown, DollarSign, UserPlus, Clock, MapPin, X, GitCompareArrows, Wallet, CheckCircle, AlertTriangle, Percent, Receipt, UserCheck, XCircle, Ticket, Zap, Landmark, Undo2, Filter } from "lucide-react";
 import { getPayouts, getPayoutStats } from "@/lib/api";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { Legend } from "recharts";
@@ -139,13 +142,20 @@ function CeoMetricsHeader({
     loading,
     period,
     onPeriodChange,
+    serviceAreaId,
+    onServiceAreaChange,
+    serviceAreas,
 }: {
     overview: EarningsOverview | null;
     loading: boolean;
     period: EarningsPeriod;
     onPeriodChange: (p: EarningsPeriod) => void;
+    serviceAreaId: string;
+    onServiceAreaChange: (id: string) => void;
+    serviceAreas: Array<{ id: string; name?: string }>;
 }) {
     const m = overview?.metrics;
+    const cx = overview?.cancellation_breakdown;
     return (
         <div className="space-y-4">
             <div className="flex items-end justify-between gap-3 flex-wrap">
@@ -157,21 +167,43 @@ function CeoMetricsHeader({
                         {overview ? overview.period.label : "Loading…"} · all metrics compared to the prior {overview?.period.days ?? "—"} days
                     </p>
                 </div>
-                <div className="inline-flex rounded-lg border border-border bg-card p-0.5">
-                    {PERIOD_OPTIONS.map((opt) => (
-                        <button
-                            key={opt.value}
-                            type="button"
-                            onClick={() => onPeriodChange(opt.value)}
-                            className={`px-3 py-1 text-xs font-semibold rounded transition-colors ${
-                                period === opt.value
-                                    ? "bg-primary text-primary-foreground"
-                                    : "text-muted-foreground hover:text-foreground"
-                            }`}
-                        >
-                            {opt.label}
-                        </button>
-                    ))}
+                <div className="flex items-center gap-2 flex-wrap">
+                    {/* Service-area filter — scopes every metric + the
+                        daily-GBV chart to a single area. "All areas" is the
+                        default since CEO-level "is the business healthy"
+                        questions don't usually want to pre-filter. */}
+                    <div className="flex items-center gap-1.5">
+                        <Filter className="h-3.5 w-3.5 text-muted-foreground" />
+                        <Select value={serviceAreaId} onValueChange={onServiceAreaChange}>
+                            <SelectTrigger className="h-8 text-xs w-[180px]">
+                                <SelectValue placeholder="All service areas" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="all" className="text-xs">All service areas</SelectItem>
+                                {serviceAreas.map((a) => (
+                                    <SelectItem key={a.id} value={a.id} className="text-xs">
+                                        {a.name || a.id.slice(0, 8)}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                    </div>
+                    <div className="inline-flex rounded-lg border border-border bg-card p-0.5">
+                        {PERIOD_OPTIONS.map((opt) => (
+                            <button
+                                key={opt.value}
+                                type="button"
+                                onClick={() => onPeriodChange(opt.value)}
+                                className={`px-3 py-1 text-xs font-semibold rounded transition-colors ${
+                                    period === opt.value
+                                        ? "bg-primary text-primary-foreground"
+                                        : "text-muted-foreground hover:text-foreground"
+                                }`}
+                            >
+                                {opt.label}
+                            </button>
+                        ))}
+                    </div>
                 </div>
             </div>
 
@@ -234,6 +266,74 @@ function CeoMetricsHeader({
                     )}
                 </CardContent>
             </Card>
+
+            {/* Pass 2 — operational health.
+                Sits below the CEO header. Cancellation rate / refunds /
+                promo / surge / GST + PST collected each carry their own
+                PoP delta so the operator can answer "what's leaking?"
+                in the same screen. */}
+            <div>
+                <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-3">
+                    Operational health
+                </h2>
+                <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                    <MetricCard icon={XCircle}  label="Cancellation Rate"   metric={m?.cancellation_rate_pct} format={fmtPct}   loading={loading} />
+                    <MetricCard icon={Undo2}    label="Refunds"             metric={m?.refund_amount}        format={fmtMoney} accent="text-red-600 dark:text-red-400" loading={loading} />
+                    <MetricCard icon={Ticket}   label="Promo Spend"         metric={m?.promo_spend}          format={fmtMoney} accent="text-red-600 dark:text-red-400" loading={loading} />
+                    <MetricCard icon={Zap}      label="Surge Revenue"       metric={m?.surge_revenue}        format={fmtMoney} accent="text-amber-600 dark:text-amber-400" loading={loading} />
+                    <MetricCard icon={Landmark} label="GST Collected"       metric={m?.gst_collected}        format={fmtMoney} loading={loading} />
+                    <MetricCard icon={Landmark} label="PST Collected"       metric={m?.pst_collected}        format={fmtMoney} loading={loading} />
+                    <MetricCard icon={CreditCard} label="Cancellation Fees" metric={m?.cancellation_revenue} format={fmtMoney} loading={loading} />
+                    <MetricCard icon={XCircle}  label="Cancelled Trips"     metric={m?.cancelled_trips}      format={fmtCount} loading={loading} />
+                </div>
+
+                {/* Rider / driver / system cancellation mix — bar split
+                    inside a single card so the cancellation_rate KPI
+                    above has context (which side is leaking). */}
+                {cx && (
+                    <Card className="border-border/50 mt-3">
+                        <CardHeader className="pb-2">
+                            <CardTitle className="text-sm">Cancellation mix</CardTitle>
+                        </CardHeader>
+                        <CardContent>
+                            <CancellationMixBar
+                                rider={cx.current.rider}
+                                driver={cx.current.driver}
+                                system={cx.current.system}
+                            />
+                            <div className="flex items-center gap-4 mt-2 text-[11px] text-muted-foreground">
+                                <span className="inline-flex items-center gap-1.5">
+                                    <span className="w-2 h-2 rounded-full bg-amber-500" />
+                                    Rider {cx.current.rider}
+                                </span>
+                                <span className="inline-flex items-center gap-1.5">
+                                    <span className="w-2 h-2 rounded-full bg-red-500" />
+                                    Driver {cx.current.driver}
+                                </span>
+                                <span className="inline-flex items-center gap-1.5">
+                                    <span className="w-2 h-2 rounded-full bg-muted-foreground/60" />
+                                    System / no-driver {cx.current.system}
+                                </span>
+                            </div>
+                        </CardContent>
+                    </Card>
+                )}
+            </div>
+        </div>
+    );
+}
+
+function CancellationMixBar({ rider, driver, system }: { rider: number; driver: number; system: number }) {
+    const total = rider + driver + system;
+    if (total === 0) {
+        return <p className="text-xs text-muted-foreground">No cancellations in this window.</p>;
+    }
+    const pct = (n: number) => `${(n / total) * 100}%`;
+    return (
+        <div className="flex h-3 w-full rounded-md overflow-hidden bg-muted">
+            <div className="bg-amber-500" style={{ width: pct(rider) }} title={`${rider} rider-cancelled`} />
+            <div className="bg-red-500" style={{ width: pct(driver) }} title={`${driver} driver-cancelled`} />
+            <div className="bg-muted-foreground/60" style={{ width: pct(system) }} title={`${system} system / no-driver-found`} />
         </div>
     );
 }
@@ -244,6 +344,8 @@ function RideEarningsTab() {
     const [dateFrom, setDateFrom] = useState("");
     const [dateTo, setDateTo] = useState("");
     const [period, setPeriod] = useState<EarningsPeriod>("7d");
+    const [serviceAreaId, setServiceAreaId] = useState<string>("all");
+    const [serviceAreas, setServiceAreas] = useState<Array<{ id: string; name?: string }>>([]);
     const [overview, setOverview] = useState<EarningsOverview | null>(null);
     const [overviewLoading, setOverviewLoading] = useState(true);
 
@@ -261,12 +363,21 @@ function RideEarningsTab() {
     }, []);
 
     useEffect(() => {
+        // Service-areas list is small (≤ ~20 rows) and only used to populate
+        // the filter dropdown — fetch once, no need to re-fetch on period change.
+        getServiceAreas().then((rows) => setServiceAreas(Array.isArray(rows) ? rows : [])).catch(() => {});
+    }, []);
+
+    useEffect(() => {
         setOverviewLoading(true);
-        getEarningsOverview({ period })
+        getEarningsOverview({
+            period,
+            service_area_id: serviceAreaId !== "all" ? serviceAreaId : undefined,
+        })
             .then(setOverview)
             .catch((e) => console.error('[EarningsOverview] load failed:', e))
             .finally(() => setOverviewLoading(false));
-    }, [period]);
+    }, [period, serviceAreaId]);
 
     const filtered = earnings.filter((e) => {
         if (!dateFrom && !dateTo) return true;
@@ -310,6 +421,9 @@ function RideEarningsTab() {
                 loading={overviewLoading}
                 period={period}
                 onPeriodChange={setPeriod}
+                serviceAreaId={serviceAreaId}
+                onServiceAreaChange={setServiceAreaId}
+                serviceAreas={serviceAreas}
             />
 
             {/* Transaction-level totals from the date-filtered ride feed

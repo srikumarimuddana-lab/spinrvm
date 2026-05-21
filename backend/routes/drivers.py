@@ -2568,6 +2568,24 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             # current point's phase) and per-phase durations from the
             # timestamp deltas. Phase 1 (online_idle) is not expected
             # against a ride_id but tolerated if it shows up.
+            # GPS sanity caps — reject segments that are physically impossible
+            # before summing. Without these, a single tower-handoff jump on a
+            # 7 km trip could inflate actual_distance_km to 90+ km (the
+            # ingestion-time filter in utils/location_integrity.py is not
+            # retroactively re-applied to stored breadcrumbs).
+            #   MAX_SEG_KM      — single ping-to-ping displacement. Even at
+            #                     240 km/h with a 30 s gap that's 2 km; 5 km
+            #                     is well above any realistic value.
+            #   MAX_SEG_KMH     — sustained ground speed. Saskatchewan max
+            #                     posted is 110 km/h; allow 150 for downhill
+            #                     /overtake transients before rejecting.
+            #   MAX_SEG_GAP_S   — long gaps (background, signal loss) make
+            #                     straight-line distance unreliable; treat
+            #                     same as the duration cap.
+            MAX_SEG_KM = 5.0
+            MAX_SEG_KMH = 150.0
+            MAX_SEG_GAP_S = 300
+            rejected_segments = 0
             phase_totals: Dict[str, float] = {}
             phase_secs: Dict[str, float] = {}
             for i in range(1, len(all_breadcrumbs)):
@@ -2575,15 +2593,36 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
                 curr = all_breadcrumbs[i]
                 phase = curr.get("tracking_phase") or "unknown"
                 seg_km = calculate_distance(prev["lat"], prev["lng"], curr["lat"], curr["lng"])
+
+                t_prev = parse_iso_utc(prev.get("timestamp"))
+                t_curr = parse_iso_utc(curr.get("timestamp"))
+                delta = None
+                if t_prev and t_curr:
+                    delta = (t_curr - t_prev).total_seconds()
+
+                # Reject anomalous segments before adding to phase totals.
+                if seg_km > MAX_SEG_KM:
+                    rejected_segments += 1
+                    continue
+                if delta is not None and delta > MAX_SEG_GAP_S:
+                    rejected_segments += 1
+                    continue
+                if delta is not None and delta > 0:
+                    seg_kmh = seg_km / (delta / 3600.0)
+                    if seg_kmh > MAX_SEG_KMH:
+                        rejected_segments += 1
+                        continue
+
                 phase_totals[phase] = phase_totals.get(phase, 0.0) + seg_km
                 # Duration: only count if the gap is reasonable (< 5 min)
                 # to avoid one stale breadcrumb inflating a phase by hours.
-                t_prev = parse_iso_utc(prev.get("timestamp"))
-                t_curr = parse_iso_utc(curr.get("timestamp"))
-                if t_prev and t_curr:
-                    delta = (t_curr - t_prev).total_seconds()
-                    if 0 < delta <= 300:
-                        phase_secs[phase] = phase_secs.get(phase, 0.0) + delta
+                if delta is not None and 0 < delta <= 300:
+                    phase_secs[phase] = phase_secs.get(phase, 0.0) + delta
+            if rejected_segments:
+                logger.info(
+                    f"Ride {ride_id}: dropped {rejected_segments}/{len(all_breadcrumbs) - 1} "
+                    "GPS segments as anomalous (speed/distance/gap caps)"
+                )
             phase_distances = {k: round(v, 3) for k, v in phase_totals.items()}
             phase_durations = {k: int(round(v)) for k, v in phase_secs.items()}
 

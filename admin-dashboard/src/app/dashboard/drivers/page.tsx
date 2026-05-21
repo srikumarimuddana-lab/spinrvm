@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides } from "@/lib/api";
 import { Pagination } from "@/components/ui/pagination";
 import { exportToCsv } from "@/lib/export-csv";
@@ -35,6 +35,29 @@ const STATUS_TABS = [
 ];
 
 const PAGE_SIZE = 50;
+
+// Match a driver_documents row to a service-area requirement using
+// one consistent priority everywhere:
+//   1. requirement_key — canonical slug stored since migration 28
+//   2. requirement_id — UUID, or the slug treated as a legacy id
+//   3. document_type exact match (label or de-snaked key)
+//   4. fuzzy: slugified document_type contains slugified key
+// Previously this logic lived in 4 different places with slight drift,
+// which caused expiry summaries and "requires-expiry" detection to
+// silently miss docs that only carried a requirement_key.
+function matchesRequirement(
+    d: any,
+    req: { id?: string; key: string; label?: string },
+): boolean {
+    if (d.requirement_key) return d.requirement_key === req.key;
+    if (d.requirement_id) return d.requirement_id === req.id || d.requirement_id === req.key;
+    const dt = (d.document_type || "").toLowerCase();
+    const label = (req.label || "").toLowerCase();
+    const keySpaced = req.key.toLowerCase().replace(/_/g, " ");
+    if (dt === label || dt === keySpaced) return true;
+    const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "_");
+    return slug(dt).includes(slug(req.key));
+}
 
 export default function DriversPage() {
     const { allowed } = useRequireModule("drivers");
@@ -79,6 +102,7 @@ export default function DriversPage() {
     const [driverRides, setDriverRides] = useState<any[]>([]);
     const [ridesLoading, setRidesLoading] = useState(false);
     const [ridesLoaded, setRidesLoaded] = useState<string | null>(null);
+    const [detailTab, setDetailTab] = useState<string>("overview");
 
     const loadDriverRides = useCallback(async (driverId: string) => {
         if (ridesLoaded === driverId) return;
@@ -174,7 +198,7 @@ export default function DriversPage() {
     }, []);
     useEffect(() => { if (!selected?.id) { setDriverDocs([]); return; } setDocsLoading(true); getDriverDocuments(selected.id).then((d) => setDriverDocs(Array.isArray(d) ? d : [])).catch(() => setDriverDocs([])).finally(() => setDocsLoading(false)); }, [selected?.id]);
     useEffect(() => { setEditing(false); setEditForm({}); }, [selected?.id]);
-    useEffect(() => { if (!selected?.id) { setDriverRides([]); setRidesLoaded(null); } }, [selected?.id]);
+    useEffect(() => { if (!selected?.id) { setDriverRides([]); setRidesLoaded(null); } else { setDetailTab("overview"); } }, [selected?.id]);
     useEffect(() => {
         if (!previewUrl) return;
         const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setPreviewUrl(null); };
@@ -209,16 +233,10 @@ export default function DriversPage() {
     };
 
     const openReviewDialog = (docId: string, action: "approved" | "rejected") => {
-        // Find the doc to check if its requirement has expiry
         const doc = activeDocs.find(d => d.id === docId);
-        const docType = doc?.document_type || doc?.requirement_id || "";
-        // Check if the matching required doc has has_expiry
-        const matchedReq = requiredDocs.find(rd =>
-            docType.toLowerCase().replace(/[^a-z0-9]/g, "_").includes(rd.key.replace(/[^a-z0-9]/g, "_")) ||
-            docType.toLowerCase() === rd.label.toLowerCase() ||
-            doc?.requirement_id === rd.key
-        );
-        setReviewingDoc({ id: docId, action, docType: matchedReq?.label || docType, requiresExpiry: matchedReq?.has_expiry || false });
+        const matchedReq = doc ? requiredDocs.find(rd => matchesRequirement(doc, rd)) : undefined;
+        const docType = matchedReq?.label || doc?.document_type || doc?.requirement_id || "";
+        setReviewingDoc({ id: docId, action, docType, requiresExpiry: matchedReq?.has_expiry || false });
         setReviewExpiry(""); setReviewReason("");
     };
     const confirmReview = async () => { if (!reviewingDoc) return; await handleReviewDoc(reviewingDoc.id, reviewingDoc.action, reviewReason || undefined, reviewExpiry || undefined); setReviewingDoc(null); };
@@ -307,6 +325,7 @@ export default function DriversPage() {
 
     const selectedAreaName = serviceAreaId ? serviceAreas.find(a => a.id === serviceAreaId)?.name || "Selected Area" : "All Areas";
     const activeDocs = driverDocs.filter(d => d.status !== "superseded");
+    const pendingDocsCount = activeDocs.filter(d => d.status === "pending").length;
     const selectedDriverArea = selected ? allServiceAreas.find(a => a.id === selected.service_area_id) : null;
     const requiredDocs: { id?: string; key: string; label: string; has_expiry: boolean }[] = selectedDriverArea?.required_documents || [];
 
@@ -321,23 +340,40 @@ export default function DriversPage() {
         return null;
     }
 
-    // Get expiry for a required document — prefers the expiry stored on the actual
-    // document record (from the API), falls back to the legacy top-level field on
-    // the driver row (set during onboarding or admin approval before docs flow existed).
-    function _getDocExpiry(rdId: string | undefined, rdKey: string, rdLabel: string): string | undefined {
-        const matchDoc = activeDocs.find(d => {
-            if (d.requirement_id) return d.requirement_id === rdId || d.requirement_id === rdKey;
-            const dt = (d.document_type || "").toLowerCase();
-            const label = rdLabel.toLowerCase();
-            const key = rdKey.toLowerCase().replace(/_/g, " ");
-            return dt === label || dt === key || dt.replace(/[^a-z0-9]/g, "_").includes(rdKey.replace(/[^a-z0-9]/g, "_"));
-        });
-        // doc record expiry (set when admin approves with an expiry date)
-        const docExpiry = matchDoc?.expiry_date || matchDoc?.expires_at;
-        if (docExpiry) return docExpiry;
-        // Legacy fallback: driver row top-level expiry field
+    // Summarise a required document's state for the per-doc expiry cards.
+    // Resolves the matching driver_documents row(s), picks the highest-
+    // priority status (approved > pending > rejected > missing), and falls
+    // back to the legacy drivers.*_expiry_date column when the doc row has
+    // no expiry of its own (older approvals stored the date only on the
+    // drivers row).
+    function _getDocSummary(rdId: string | undefined, rdKey: string, rdLabel: string): {
+        expiry?: string;
+        docStatus: "approved" | "pending" | "rejected" | "missing";
+        expiryIsLegacy: boolean;
+    } {
+        const matches = activeDocs.filter(d => matchesRequirement(d, { id: rdId, key: rdKey, label: rdLabel }));
         const legacyField = _docKeyToExpiryField(rdKey);
-        return legacyField ? selected?.[legacyField] : undefined;
+        const legacyExpiry: string | undefined = legacyField ? selected?.[legacyField] : undefined;
+
+        const approved = matches.find(d => d.status === "approved");
+        if (approved) {
+            const docExpiry = approved.expiry_date || approved.expires_at;
+            if (docExpiry) return { expiry: docExpiry, docStatus: "approved", expiryIsLegacy: false };
+            return { expiry: legacyExpiry, docStatus: "approved", expiryIsLegacy: !!legacyExpiry };
+        }
+        const pending = matches.find(d => d.status === "pending");
+        if (pending) return { expiry: undefined, docStatus: "pending", expiryIsLegacy: false };
+        const rejected = matches.find(d => d.status === "rejected");
+        if (rejected) return { expiry: undefined, docStatus: "rejected", expiryIsLegacy: false };
+        // No driver_documents row at all — but onboarding may have stamped
+        // a legacy expiry on the drivers row, in which case treat the
+        // requirement as approved from that path.
+        if (legacyExpiry) return { expiry: legacyExpiry, docStatus: "approved", expiryIsLegacy: true };
+        return { expiry: undefined, docStatus: "missing", expiryIsLegacy: false };
+    }
+
+    function _getDocExpiry(rdId: string | undefined, rdKey: string, rdLabel: string): string | undefined {
+        return _getDocSummary(rdId, rdKey, rdLabel).expiry;
     }
 
     if (!allowed) return null;
@@ -572,11 +608,11 @@ export default function DriversPage() {
                             </div>
                         </div>
 
-                        <Tabs defaultValue="overview" className="flex-1 overflow-hidden flex flex-col">
+                        <Tabs value={detailTab} onValueChange={(v) => { setDetailTab(v); if (v === "rides") loadDriverRides(selected.id); }} className="flex-1 overflow-hidden flex flex-col">
                             <TabsList className="mx-6 mt-4 w-fit">
                                 <TabsTrigger value="overview">Overview</TabsTrigger>
-                                <TabsTrigger value="documents">Documents{activeDocs.length > 0 && <span className="ml-1.5 bg-primary/10 text-primary text-[10px] font-bold px-1.5 py-0.5 rounded-full">{activeDocs.length}</span>}</TabsTrigger>
-                                <TabsTrigger value="rides" onClick={() => loadDriverRides(selected.id)}>Rides{selected.total_rides > 0 && <span className="ml-1.5 bg-primary/10 text-primary text-[10px] font-bold px-1.5 py-0.5 rounded-full">{(selected.total_rides || 0).toLocaleString()}</span>}</TabsTrigger>
+                                <TabsTrigger value="documents">Documents{pendingDocsCount > 0 && <span className="ml-1.5 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 text-[10px] font-bold px-1.5 py-0.5 rounded-full" title={`${pendingDocsCount} document${pendingDocsCount === 1 ? "" : "s"} awaiting review`}>{pendingDocsCount}</span>}</TabsTrigger>
+                                <TabsTrigger value="rides">Rides{selected.total_rides > 0 && <span className="ml-1.5 bg-primary/10 text-primary text-[10px] font-bold px-1.5 py-0.5 rounded-full">{(selected.total_rides || 0).toLocaleString()}</span>}</TabsTrigger>
                                 <TabsTrigger value="verification">Actions</TabsTrigger>
                                 <TabsTrigger value="notes">Notes</TabsTrigger>
                                 <TabsTrigger value="history">History</TabsTrigger>
@@ -740,39 +776,42 @@ export default function DriversPage() {
                                             <DocExpirySummaryCard
                                                 key={rd.key}
                                                 label={rd.label}
-                                                expiry={_getDocExpiry(rd.id, rd.key, rd.label)}
+                                                summary={_getDocSummary(rd.id, rd.key, rd.label)}
                                             />
                                         )) : (<>
-                                            <DocExpirySummaryCard label="Driver's License"    expiry={_getDocExpiry(undefined, "drivers_license",      "Driver's License")} />
-                                            <DocExpirySummaryCard label="Vehicle Insurance"   expiry={_getDocExpiry(undefined, "vehicle_insurance",    "Vehicle Insurance")} />
-                                            <DocExpirySummaryCard label="Vehicle Registration" expiry={_getDocExpiry(undefined, "vehicle_registration", "Vehicle Registration")} />
-                                            <DocExpirySummaryCard label="Vehicle Inspection"  expiry={_getDocExpiry(undefined, "vehicle_inspection",  "Vehicle Inspection")} />
-                                            <DocExpirySummaryCard label="Background Check"    expiry={_getDocExpiry(undefined, "background_check",    "Background Check")} />
+                                            <DocExpirySummaryCard label="Driver's License"     summary={_getDocSummary(undefined, "drivers_license",      "Driver's License")} />
+                                            <DocExpirySummaryCard label="Vehicle Insurance"    summary={_getDocSummary(undefined, "vehicle_insurance",    "Vehicle Insurance")} />
+                                            <DocExpirySummaryCard label="Vehicle Registration" summary={_getDocSummary(undefined, "vehicle_registration", "Vehicle Registration")} />
+                                            <DocExpirySummaryCard label="Vehicle Inspection"   summary={_getDocSummary(undefined, "vehicle_inspection",  "Vehicle Inspection")} />
+                                            <DocExpirySummaryCard label="Background Check"     summary={_getDocSummary(undefined, "background_check",    "Background Check")} />
                                         </>)}
                                     </div>
                                     {docsLoading ? <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">{[1,2,3,4].map(i=><div key={i} className="h-48 bg-muted rounded-xl animate-pulse" />)}</div>
                                     : requiredDocs.length > 0 ? (
                                         <div className="space-y-6">
                                             {requiredDocs.map(reqDoc => {
-                                                const matchingDocs = activeDocs.filter(d => {
-                                                    // 1. Best: match by requirement_key (raw string key stored since fix)
-                                                    if (d.requirement_key) return d.requirement_key === reqDoc.key;
-                                                    // 2. Match by requirement_id (UUID or legacy string key)
-                                                    if (d.requirement_id) return d.requirement_id === reqDoc.id || d.requirement_id === reqDoc.key;
-                                                    // 3. Match document_type against the label or key
-                                                    const dt = (d.document_type || "").toLowerCase();
-                                                    const label = reqDoc.label.toLowerCase();
-                                                    const key = reqDoc.key.toLowerCase().replace(/_/g, " ");
-                                                    if (dt === label || dt === key) return true;
-                                                    // 4. Fuzzy fallback: key slug appears inside document_type
-                                                    return dt.replace(/[^a-z0-9]/g, "_").includes(reqDoc.key.replace(/[^a-z0-9]/g, "_"));
-                                                });
+                                                const matchingDocs = activeDocs.filter(d => matchesRequirement(d, reqDoc));
+                                                const counts = {
+                                                    pending: matchingDocs.filter(d => d.status === "pending").length,
+                                                    approved: matchingDocs.filter(d => d.status === "approved").length,
+                                                    rejected: matchingDocs.filter(d => d.status === "rejected").length,
+                                                };
+                                                // Surface the expiry gap directly in the section header
+                                                // when the requirement needs an expiry but the approved
+                                                // doc has none on file — the previous "Requires Expiry"
+                                                // pill was static and read as a warning even after a
+                                                // valid approval, confusing reviewers.
+                                                const summary = _getDocSummary(reqDoc.id, reqDoc.key, reqDoc.label);
+                                                const expiryMissing = reqDoc.has_expiry && summary.docStatus === "approved" && !summary.expiry;
                                                 return (
                                                     <div key={reqDoc.key}>
-                                                        <div className="flex items-center gap-2 mb-3">
+                                                        <div className="flex items-center gap-2 mb-3 flex-wrap">
                                                             <FileText className="h-4 w-4 text-muted-foreground" /><h4 className="text-sm font-semibold">{reqDoc.label}</h4>
-                                                            {reqDoc.has_expiry && <Badge variant="outline" className="text-[10px]">Requires Expiry</Badge>}
-                                                            {matchingDocs.length > 0 ? <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px]">{matchingDocs.length} uploaded</Badge> : <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 text-[10px]">Missing</Badge>}
+                                                            {matchingDocs.length === 0 && <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 text-[10px]">Missing</Badge>}
+                                                            {counts.pending > 0 && <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 text-[10px]">{counts.pending} pending</Badge>}
+                                                            {counts.approved > 0 && counts.pending === 0 && !expiryMissing && <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 text-[10px]">Approved</Badge>}
+                                                            {expiryMissing && counts.pending === 0 && <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 text-[10px]">Approved · expiry not recorded</Badge>}
+                                                            {counts.rejected > 0 && counts.pending === 0 && counts.approved === 0 && <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 text-[10px]">Re-upload needed</Badge>}
                                                         </div>
                                                         {matchingDocs.length > 0 ? <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">{matchingDocs.map(d=><DocCard key={d.id} d={d} docBusy={docBusy} onPreview={setPreviewUrl} onReview={openReviewDialog} />)}</div>
                                                         : <div className="bg-muted/20 border border-dashed rounded-xl p-6 text-center text-muted-foreground"><Image className="h-8 w-8 mx-auto mb-2 opacity-20" /><p className="text-sm">No {reqDoc.label} uploaded yet</p></div>}
@@ -782,15 +821,7 @@ export default function DriversPage() {
                                             {/* Other Documents: any active docs not matched by any required doc */}
                                             {(() => {
                                                 const matchedIds = new Set(requiredDocs.flatMap(reqDoc =>
-                                                    activeDocs.filter(d => {
-                                                        if (d.requirement_key) return d.requirement_key === reqDoc.key;
-                                                        if (d.requirement_id) return d.requirement_id === reqDoc.id || d.requirement_id === reqDoc.key;
-                                                        const dt = (d.document_type || "").toLowerCase();
-                                                        const label = reqDoc.label.toLowerCase();
-                                                        const key = reqDoc.key.toLowerCase().replace(/_/g, " ");
-                                                        if (dt === label || dt === key) return true;
-                                                        return dt.replace(/[^a-z0-9]/g, "_").includes(reqDoc.key.replace(/[^a-z0-9]/g, "_"));
-                                                    }).map(d => d.id)
+                                                    activeDocs.filter(d => matchesRequirement(d, reqDoc)).map(d => d.id)
                                                 ));
                                                 const unmatched = activeDocs.filter(d => !matchedIds.has(d.id));
                                                 if (unmatched.length === 0) return null;
@@ -819,61 +850,30 @@ export default function DriversPage() {
 
                                 {/* Actions & Verification */}
                                 <TabsContent value="verification" className="mt-4 space-y-5">
-                                    <DriverActionBar driver={selected} onActionComplete={() => { loadData(); loadDrivers(); setSelected(null); }} />
-                                    <DetailSection title="Verification Checklist" icon={CheckCircle}>
-                                        <div className="space-y-2">
-                                            {(requiredDocs.length > 0 ? requiredDocs : [
-                                                { key: "drivers_license",      label: "Driver's License",    has_expiry: true },
-                                                { key: "vehicle_insurance",    label: "Vehicle Insurance",   has_expiry: true },
-                                                { key: "vehicle_registration", label: "Vehicle Registration",has_expiry: true },
-                                                { key: "vehicle_inspection",   label: "Vehicle Inspection",  has_expiry: true },
-                                                { key: "background_check",     label: "Background Check",   has_expiry: true },
-                                            ]).map(rd => {
-                                                const matchingDocs = activeDocs.filter(d => {
-                                                    // 1. Best: match by requirement_key (slug stored since migration 28)
-                                                    if (d.requirement_key) return d.requirement_key === rd.key;
-                                                    // 2. Match by requirement_id (UUID or legacy string key)
-                                                    if (d.requirement_id) return d.requirement_id === (rd as any).id || d.requirement_id === rd.key;
-                                                    // 3. Match document_type against the label or key
-                                                    const dt = (d.document_type || "").toLowerCase();
-                                                    const label = rd.label.toLowerCase();
-                                                    const key = rd.key.toLowerCase().replace(/_/g, " ");
-                                                    if (dt === label || dt === key) return true;
-                                                    // 4. Fuzzy fallback: key slug appears inside document_type
-                                                    return dt.replace(/[^a-z0-9]/g, "_").includes(rd.key.replace(/[^a-z0-9]/g, "_"));
-                                                });
-                                                const hasApproved = matchingDocs.some(d => d.status === "approved");
-                                                const hasPending = matchingDocs.some(d => d.status === "pending");
-                                                const pendingDoc = matchingDocs.find(d => d.status === "pending");
-                                                const expiryField = _docKeyToExpiryField(rd.key);
-                                                const expiryVal = expiryField ? selected[expiryField] : undefined;
-                                                const isExpired = expiryVal && new Date(expiryVal) < new Date();
-
-                                                let status: "approved" | "pending" | "missing" | "expired" = "missing";
-                                                if (isExpired) status = "expired";
-                                                else if (hasApproved) status = "approved";
-                                                else if (hasPending || matchingDocs.length > 0) status = "pending";
-
-                                                return (
-                                                    <VerificationRow
-                                                        key={rd.key}
-                                                        label={rd.label}
-                                                        status={status}
-                                                        hasExpiry={rd.has_expiry}
-                                                        expiryDate={expiryVal}
-                                                        pendingDocId={pendingDoc?.id}
-                                                        pendingDocUrl={pendingDoc?.document_url}
-                                                        docBusy={docBusy}
-                                                        onApprove={(docId) => openReviewDialog(docId, "approved")}
-                                                        onReject={(docId) => openReviewDialog(docId, "rejected")}
-                                                        onPreview={(url) => setPreviewUrl(url)}
-                                                    />
-                                                );
-                                            })}
-                                            <CheckItem label="Profile Photo" checked={!!selected.profile_photo_url} />
-                                            <CheckItem label="Vehicle Photo" checked={!!selected.vehicle_photo_url} />
-                                        </div>
-                                    </DetailSection>
+                                    <DriverActionBar
+                                        driver={selected}
+                                        onActionComplete={(updates) => {
+                                            if (updates && Object.keys(updates).length > 0) {
+                                                setSelected((prev: any) => prev ? { ...prev, ...updates } : prev);
+                                                setDrivers(prevList => prevList.map(d => d.id === selected.id ? { ...d, ...updates } : d));
+                                            }
+                                            loadData();
+                                            loadDrivers();
+                                        }}
+                                    />
+                                    <VerificationSummaryCard
+                                        requiredDocs={requiredDocs.length > 0 ? requiredDocs : [
+                                            { key: "drivers_license",      label: "Driver's License",    has_expiry: true },
+                                            { key: "vehicle_insurance",    label: "Vehicle Insurance",   has_expiry: true },
+                                            { key: "vehicle_registration", label: "Vehicle Registration",has_expiry: true },
+                                            { key: "vehicle_inspection",   label: "Vehicle Inspection",  has_expiry: true },
+                                            { key: "background_check",     label: "Background Check",   has_expiry: true },
+                                        ]}
+                                        activeDocs={activeDocs}
+                                        driver={selected}
+                                        docKeyToExpiryField={_docKeyToExpiryField}
+                                        onOpenDocumentsTab={() => setDetailTab("documents")}
+                                    />
                                 </TabsContent>
 
                                 {/* Notes */}
@@ -899,15 +899,45 @@ export default function DriversPage() {
                 onAfterAction={() => { reloadDriverDocs(); loadData(); loadDrivers(); }}
             />
 
-            {previewUrl && (
-                <div className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center p-8 cursor-pointer" onClick={() => setPreviewUrl(null)} role="dialog" aria-modal="true" aria-label="Document preview">
-                    <div className="relative max-w-5xl max-h-[90vh] w-full h-full flex items-center justify-center">
-                        <img src={previewUrl} alt="Document preview" className="max-w-full max-h-full object-contain rounded-lg shadow-2xl" onClick={e => e.stopPropagation()} />
-                        <button onClick={() => setPreviewUrl(null)} className="absolute top-2 right-2 bg-black/60 hover:bg-black/80 text-white rounded-full p-2 transition"><X className="h-5 w-5" /></button>
-                        <a href={previewUrl} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()} className="absolute bottom-4 right-4 bg-white/90 hover:bg-white text-gray-800 rounded-lg px-3 py-1.5 text-sm font-medium flex items-center gap-1.5 transition"><ExternalLink className="h-4 w-4" /> Open original</a>
-                    </div>
-                </div>
-            )}
+            {/* Document preview — uses shadcn Dialog (Radix Portal) so it
+                stacks above the parent Sheet's modal context. Rendering this
+                as a bare fixed div outside the Sheet looked correct but its
+                clicks bubbled into the Sheet's pointer-events scope, so
+                neither the close X nor "Open original" reached their
+                handlers. */}
+            <Dialog open={!!previewUrl} onOpenChange={(open) => { if (!open) setPreviewUrl(null); }}>
+                <DialogContent
+                    className="!max-w-[95vw] sm:!max-w-5xl !p-0 bg-transparent border-none shadow-none"
+                    showCloseButton={false}
+                >
+                    <DialogTitle className="sr-only">Document preview</DialogTitle>
+                    {previewUrl && (
+                        <div className="relative flex items-center justify-center">
+                            <img
+                                src={previewUrl}
+                                alt="Document preview"
+                                className="max-w-full max-h-[85vh] object-contain rounded-lg shadow-2xl bg-black/40"
+                            />
+                            <button
+                                type="button"
+                                onClick={() => setPreviewUrl(null)}
+                                className="absolute top-2 right-2 bg-black/70 hover:bg-black text-white rounded-full p-2 transition"
+                                aria-label="Close preview"
+                            >
+                                <X className="h-5 w-5" />
+                            </button>
+                            <a
+                                href={previewUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="absolute bottom-4 right-4 bg-white/95 hover:bg-white text-gray-900 rounded-lg px-3 py-1.5 text-sm font-medium flex items-center gap-1.5 transition shadow"
+                            >
+                                <ExternalLink className="h-4 w-4" /> Open original
+                            </a>
+                        </div>
+                    )}
+                </DialogContent>
+            </Dialog>
 
             <Dialog open={!!reviewingDoc} onOpenChange={open => { if (!open) setReviewingDoc(null); }}>
                 <DialogContent className="sm:max-w-md">
@@ -964,22 +994,194 @@ const RIDE_STATUS_STYLE: Record<string, { bg: string; text: string; label: strin
     searching:        { bg: "bg-amber-100 dark:bg-amber-900/30",  text: "text-amber-700 dark:text-amber-300",  label: "Searching" },
 };
 
+function VerificationSummaryCard({
+    requiredDocs,
+    activeDocs,
+    driver,
+    docKeyToExpiryField,
+    onOpenDocumentsTab,
+}: {
+    requiredDocs: { id?: string; key: string; label: string; has_expiry: boolean }[];
+    activeDocs: any[];
+    driver: any;
+    docKeyToExpiryField: (key: string) => string | null;
+    onOpenDocumentsTab: () => void;
+}) {
+    const rows = requiredDocs.map(rd => {
+        const matchingDocs = activeDocs.filter(d => matchesRequirement(d, rd));
+        const hasApproved = matchingDocs.some(d => d.status === "approved");
+        const hasPending = matchingDocs.some(d => d.status === "pending");
+        const expiryField = docKeyToExpiryField(rd.key);
+        const expiryVal = expiryField ? driver[expiryField] : undefined;
+        const isExpired = expiryVal && new Date(expiryVal) < new Date();
+        let s: "approved" | "pending" | "missing" | "expired" = "missing";
+        if (isExpired) s = "expired";
+        else if (hasApproved) s = "approved";
+        else if (hasPending || matchingDocs.length > 0) s = "pending";
+        return { rd, status: s };
+    });
+
+    const approved = rows.filter(r => r.status === "approved").length;
+    const total = rows.length;
+    const pending = rows.filter(r => r.status === "pending").length;
+    const missing = rows.filter(r => r.status === "missing").length;
+    const expired = rows.filter(r => r.status === "expired").length;
+    const pct = total > 0 ? Math.round((approved / total) * 100) : 0;
+    const allClear = pending === 0 && missing === 0 && expired === 0 && total > 0;
+
+    return (
+        <div className="rounded-xl border border-border bg-card overflow-hidden">
+            <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                    <CheckCircle className={`h-4 w-4 ${allClear ? "text-emerald-500" : "text-muted-foreground"}`} />
+                    <h4 className="text-sm font-semibold tracking-tight">Verification</h4>
+                    <span className="text-xs text-muted-foreground">{approved} / {total} approved</span>
+                </div>
+                <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={onOpenDocumentsTab}>
+                    Open Documents
+                    <ExternalLink className="h-3 w-3 ml-1" />
+                </Button>
+            </div>
+            <div className="px-4 py-3 space-y-3">
+                <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                    <div
+                        className={`h-full transition-all ${allClear ? "bg-emerald-500" : pct >= 75 ? "bg-amber-500" : "bg-muted-foreground/40"}`}
+                        style={{ width: `${pct}%` }}
+                    />
+                </div>
+                <div className="flex items-center gap-3 flex-wrap text-xs">
+                    {pending > 0 && <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400"><Clock className="h-3 w-3" />{pending} pending</span>}
+                    {missing > 0 && <span className="inline-flex items-center gap-1 text-red-600 dark:text-red-400"><AlertTriangle className="h-3 w-3" />{missing} missing</span>}
+                    {expired > 0 && <span className="inline-flex items-center gap-1 text-red-600 dark:text-red-400"><AlertTriangle className="h-3 w-3" />{expired} expired</span>}
+                    {allClear && <span className="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400"><CheckCircle className="h-3 w-3" />All required documents are approved.</span>}
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-1">
+                    {rows.map(({ rd, status }) => {
+                        const cfg = status === "approved" ? { icon: <CheckCircle className="h-3.5 w-3.5 text-emerald-500" />, text: "text-emerald-600 dark:text-emerald-400" }
+                            : status === "pending" ? { icon: <Clock className="h-3.5 w-3.5 text-amber-500" />, text: "text-amber-600 dark:text-amber-400" }
+                            : status === "expired" ? { icon: <AlertTriangle className="h-3.5 w-3.5 text-red-500" />, text: "text-red-600 dark:text-red-400" }
+                            : { icon: <div className="w-3.5 h-3.5 rounded-full border-2 border-muted-foreground/30" />, text: "text-muted-foreground" };
+                        return (
+                            <div key={rd.key} className="flex items-center gap-2 text-xs">
+                                {cfg.icon}
+                                <span className="truncate flex-1">{rd.label}</span>
+                                <span className={`text-[10px] uppercase tracking-wide font-semibold ${cfg.text}`}>{status}</span>
+                            </div>
+                        );
+                    })}
+                </div>
+                <div className="flex items-center justify-between pt-1 text-xs border-t border-border">
+                    <div className="flex items-center gap-2">
+                        <div className={`w-2 h-2 rounded-full ${driver.profile_photo_url ? "bg-emerald-500" : "bg-muted-foreground/30"}`} />
+                        <span className="text-muted-foreground">Profile photo</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <div className={`w-2 h-2 rounded-full ${driver.vehicle_photo_url ? "bg-emerald-500" : "bg-muted-foreground/30"}`} />
+                        <span className="text-muted-foreground">Vehicle photo</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+const DRIVER_RIDES_PAGE_SIZE = 25;
+
+type RidesSortKey = "created_at" | "rider_name" | "status" | "distance_km" | "duration_seconds" | "total_fare" | "tip_amount";
+
 function DriverRidesTab({ rides, loading, driverName, fmtDate }: {
     rides: any[];
     loading: boolean;
     driverName: string;
     fmtDate: (d: string) => string;
 }) {
+    const [statusFilter, setStatusFilter] = useState<string>("all");
+    const [search, setSearch] = useState("");
+    const [sortKey, setSortKey] = useState<RidesSortKey>("created_at");
+    const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+    const [page, setPage] = useState(0);
+
+    useEffect(() => { setPage(0); }, [statusFilter, search, sortKey, sortDir]);
+
     const fmtDuration = (s?: number) => {
         if (!s) return "—";
         const m = Math.round(s / 60);
         return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${m % 60}m`;
     };
 
+    const riderDisplay = (r: any) => {
+        const name = (r.rider_name || "").trim();
+        if (name) return name;
+        if (r.rider_id) return `Rider ${String(r.rider_id).slice(0, 6)}`;
+        return "Unknown rider";
+    };
+
+    const statusCounts = useMemo(() => {
+        const c: Record<string, number> = { all: rides.length };
+        for (const r of rides) {
+            const s = r.status || "unknown";
+            c[s] = (c[s] || 0) + 1;
+        }
+        return c;
+    }, [rides]);
+
+    const statusOptions = useMemo(() => {
+        const seen = new Set<string>();
+        for (const r of rides) seen.add(r.status || "unknown");
+        return [
+            { value: "all", label: "All statuses" },
+            ...Array.from(seen).sort().map(s => ({
+                value: s,
+                label: RIDE_STATUS_STYLE[s]?.label || s,
+            })),
+        ];
+    }, [rides]);
+
+    const processed = useMemo(() => {
+        const q = search.trim().toLowerCase();
+        let out = rides;
+        if (statusFilter !== "all") out = out.filter(r => r.status === statusFilter);
+        if (q) out = out.filter(r => {
+            const haystack = `${riderDisplay(r)} ${r.id || ""} ${r.pickup_address || ""} ${r.dropoff_address || ""}`.toLowerCase();
+            return haystack.includes(q);
+        });
+        const sorted = [...out].sort((a, b) => {
+            let av: any, bv: any;
+            if (sortKey === "rider_name") { av = riderDisplay(a).toLowerCase(); bv = riderDisplay(b).toLowerCase(); }
+            else if (sortKey === "status") { av = a.status || ""; bv = b.status || ""; }
+            else if (sortKey === "total_fare") { av = Number(a.total_fare ?? a.fare_amount ?? a.base_fare ?? 0); bv = Number(b.total_fare ?? b.fare_amount ?? b.base_fare ?? 0); }
+            else if (sortKey === "tip_amount") { av = Number(a.tip_amount ?? 0); bv = Number(b.tip_amount ?? 0); }
+            else if (sortKey === "distance_km") { av = Number(a.distance_km ?? 0); bv = Number(b.distance_km ?? 0); }
+            else if (sortKey === "duration_seconds") { av = Number(a.duration_seconds ?? 0); bv = Number(b.duration_seconds ?? 0); }
+            else { av = a.created_at || ""; bv = b.created_at || ""; }
+            if (av < bv) return sortDir === "asc" ? -1 : 1;
+            if (av > bv) return sortDir === "asc" ? 1 : -1;
+            return 0;
+        });
+        return sorted;
+    }, [rides, statusFilter, search, sortKey, sortDir]);
+
+    const paged = processed.slice(page * DRIVER_RIDES_PAGE_SIZE, (page + 1) * DRIVER_RIDES_PAGE_SIZE);
+    const hasNextPage = processed.length > (page + 1) * DRIVER_RIDES_PAGE_SIZE;
+
+    const handleSort = (k: RidesSortKey) => {
+        if (sortKey === k) setSortDir(d => d === "asc" ? "desc" : "asc");
+        else {
+            setSortKey(k);
+            setSortDir(k === "rider_name" ? "asc" : "desc");
+        }
+    };
+
+    const SortIcon = ({ col }: { col: RidesSortKey }) => {
+        if (sortKey !== col) return <ArrowUpDown className="h-3 w-3 opacity-30 inline ml-1" />;
+        return sortDir === "asc" ? <ArrowUp className="h-3 w-3 inline ml-1" /> : <ArrowDown className="h-3 w-3 inline ml-1" />;
+    };
+
     if (loading) return (
         <div className="space-y-2.5 animate-pulse">
-            {Array.from({ length: 6 }).map((_, i) => (
-                <div key={i} className="h-16 rounded-xl bg-muted" />
+            <div className="h-9 w-full rounded-lg bg-muted" />
+            {Array.from({ length: 8 }).map((_, i) => (
+                <div key={i} className="h-12 rounded-lg bg-muted" />
             ))}
         </div>
     );
@@ -993,42 +1195,152 @@ function DriverRidesTab({ rides, loading, driverName, fmtDate }: {
     );
 
     return (
-        <div className="rounded-xl border border-border overflow-hidden">
-            <div className="grid grid-cols-[1fr_100px_90px_80px_90px_80px] gap-3 px-4 py-2.5 bg-muted/30 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                <div>Route</div>
-                <div>Date</div>
-                <div>Status</div>
-                <div>Fare</div>
-                <div>Distance</div>
-                <div>Duration</div>
+        <div className="space-y-3">
+            <div className="flex items-center gap-2 flex-wrap">
+                <div className="flex items-center gap-1.5">
+                    <Search className="h-4 w-4 text-muted-foreground" />
+                    <Input
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                        placeholder="Search rider, ride id, address"
+                        className="h-8 text-xs w-[260px]"
+                    />
+                </div>
+                <Select value={statusFilter} onValueChange={setStatusFilter}>
+                    <SelectTrigger className="h-8 text-xs w-[170px]">
+                        <SelectValue placeholder="Status" />
+                    </SelectTrigger>
+                    <SelectContent>
+                        {statusOptions.map((opt: { value: string; label: string }) => (
+                            <SelectItem key={opt.value} value={opt.value} className="text-xs">
+                                {opt.label}{opt.value !== "all" && statusCounts[opt.value] != null ? ` · ${statusCounts[opt.value]}` : opt.value === "all" ? ` · ${statusCounts.all}` : ""}
+                            </SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
+                <span className="ml-auto text-xs text-muted-foreground tabular-nums">
+                    {processed.length} of {rides.length}
+                </span>
             </div>
-            {rides.map((r) => {
-                const style = RIDE_STATUS_STYLE[r.status] ?? { bg: "bg-muted/30", text: "text-muted-foreground", label: r.status };
-                const fareAmt = r.fare_amount ?? r.total_fare ?? r.base_fare;
-                return (
-                    <div key={r.id} className="grid grid-cols-[1fr_100px_90px_80px_90px_80px] gap-3 items-start px-4 py-3 border-t border-border hover:bg-muted/20 transition-colors">
-                        <div className="min-w-0 space-y-0.5">
-                            <p className="text-xs font-medium truncate text-foreground" title={r.pickup_address}>{r.pickup_address || "—"}</p>
-                            <p className="text-xs text-muted-foreground truncate" title={r.dropoff_address}>{r.dropoff_address ? `→ ${r.dropoff_address}` : ""}</p>
-                        </div>
-                        <div className="text-xs text-muted-foreground tabular-nums">{r.created_at ? fmtDate(r.created_at) : "—"}</div>
-                        <div>
-                            <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold ${style.bg} ${style.text}`}>
-                                {style.label}
-                            </span>
-                        </div>
-                        <div className="text-sm font-semibold tabular-nums">
-                            {fareAmt != null ? `$${Number(fareAmt).toFixed(2)}` : "—"}
-                        </div>
-                        <div className="text-xs text-muted-foreground tabular-nums">
-                            {r.distance_km != null ? `${Number(r.distance_km).toFixed(1)} km` : "—"}
-                        </div>
-                        <div className="text-xs text-muted-foreground tabular-nums">
-                            {fmtDuration(r.duration_seconds)}
-                        </div>
-                    </div>
-                );
-            })}
+
+            <div className="rounded-xl border border-border overflow-x-auto">
+                <Table>
+                    <TableHeader>
+                        <TableRow className="bg-muted/30 hover:bg-muted/30">
+                            <TableHead className="h-9 text-[11px] uppercase tracking-wider cursor-pointer select-none" onClick={() => handleSort("created_at")}>
+                                Date<SortIcon col="created_at" />
+                            </TableHead>
+                            <TableHead className="h-9 text-[11px] uppercase tracking-wider cursor-pointer select-none" onClick={() => handleSort("rider_name")}>
+                                Rider<SortIcon col="rider_name" />
+                            </TableHead>
+                            <TableHead className="h-9 text-[11px] uppercase tracking-wider">Driver</TableHead>
+                            <TableHead className="h-9 text-[11px] uppercase tracking-wider">Route</TableHead>
+                            <TableHead className="h-9 text-[11px] uppercase tracking-wider cursor-pointer select-none" onClick={() => handleSort("status")}>
+                                Status<SortIcon col="status" />
+                            </TableHead>
+                            <TableHead className="h-9 text-[11px] uppercase tracking-wider text-right cursor-pointer select-none" onClick={() => handleSort("distance_km")}>
+                                Distance<SortIcon col="distance_km" />
+                            </TableHead>
+                            <TableHead className="h-9 text-[11px] uppercase tracking-wider text-right cursor-pointer select-none" onClick={() => handleSort("duration_seconds")}>
+                                Duration<SortIcon col="duration_seconds" />
+                            </TableHead>
+                            <TableHead className="h-9 text-[11px] uppercase tracking-wider text-right cursor-pointer select-none" onClick={() => handleSort("tip_amount")}>
+                                Tip<SortIcon col="tip_amount" />
+                            </TableHead>
+                            <TableHead className="h-9 text-[11px] uppercase tracking-wider text-right cursor-pointer select-none" onClick={() => handleSort("total_fare")}>
+                                Fare<SortIcon col="total_fare" />
+                            </TableHead>
+                            <TableHead className="h-9 text-[11px] uppercase tracking-wider">Ride</TableHead>
+                        </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                        {paged.length === 0 ? (
+                            <TableRow>
+                                <TableCell colSpan={10} className="text-center text-muted-foreground py-12">
+                                    <p className="text-sm">No rides match this filter.</p>
+                                </TableCell>
+                            </TableRow>
+                        ) : paged.map((r: any) => {
+                            const style = RIDE_STATUS_STYLE[r.status] ?? { bg: "bg-muted/30", text: "text-muted-foreground", label: r.status };
+                            const totalFare = r.total_fare ?? r.fare_amount ?? r.base_fare;
+                            const tip = r.tip_amount;
+                            const hasTip = tip != null && Number(tip) > 0;
+                            const dt = r.created_at ? new Date(r.created_at) : null;
+                            const rider = riderDisplay(r);
+                            return (
+                                <TableRow key={r.id} className="hover:bg-muted/20">
+                                    <TableCell className="text-xs tabular-nums whitespace-nowrap">
+                                        {dt ? (
+                                            <>
+                                                <div>{fmtDate(r.created_at)}</div>
+                                                <div className="text-[10px] text-muted-foreground">{dt.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</div>
+                                            </>
+                                        ) : "—"}
+                                    </TableCell>
+                                    <TableCell className="text-xs">
+                                        <span className="font-medium truncate block max-w-[150px]" title={rider}>{rider}</span>
+                                    </TableCell>
+                                    <TableCell className="text-xs text-muted-foreground truncate max-w-[150px]" title={driverName}>{driverName}</TableCell>
+                                    <TableCell className="text-xs">
+                                        <div className="max-w-[220px]">
+                                            <p className="truncate text-foreground" title={r.pickup_address}>{r.pickup_address || "—"}</p>
+                                            <p className="truncate text-muted-foreground text-[10px]" title={r.dropoff_address}>{r.dropoff_address ? `→ ${r.dropoff_address}` : ""}</p>
+                                        </div>
+                                    </TableCell>
+                                    <TableCell>
+                                        <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold ${style.bg} ${style.text}`}>
+                                            {style.label}
+                                        </span>
+                                    </TableCell>
+                                    <TableCell className="text-xs text-right tabular-nums">
+                                        {r.distance_km != null ? `${Number(r.distance_km).toFixed(1)} km` : "—"}
+                                    </TableCell>
+                                    <TableCell className="text-xs text-right tabular-nums">
+                                        {fmtDuration(r.duration_seconds)}
+                                    </TableCell>
+                                    <TableCell className="text-xs text-right tabular-nums">
+                                        {hasTip ? <span className="text-emerald-600 dark:text-emerald-400 font-medium">${Number(tip).toFixed(2)}</span> : <span className="text-muted-foreground">—</span>}
+                                    </TableCell>
+                                    <TableCell className="text-sm text-right font-semibold tabular-nums">
+                                        {totalFare != null ? `$${Number(totalFare).toFixed(2)}` : "—"}
+                                    </TableCell>
+                                    <TableCell>
+                                        {(() => {
+                                            // Prefer the human-readable ride_code (SPR-XXXXXX,
+                                            // canonical short identifier — see migration 40).
+                                            // Fall back to a UUID prefix only for rides predating
+                                            // the backfill, which shouldn't happen in practice.
+                                            const code = r.ride_code ? String(r.ride_code).toLowerCase() : `#${String(r.id).slice(0, 8)}`;
+                                            const copyTarget = r.ride_code || r.id;
+                                            return (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => navigator.clipboard.writeText(copyTarget)}
+                                                    title={`Click to copy ${copyTarget}\nFull ID: ${r.id}`}
+                                                    className="inline-flex items-center gap-1 text-[10px] font-mono text-muted-foreground hover:text-foreground transition-colors"
+                                                >
+                                                    {code}
+                                                    <Copy className="h-2.5 w-2.5" />
+                                                </button>
+                                            );
+                                        })()}
+                                    </TableCell>
+                                </TableRow>
+                            );
+                        })}
+                    </TableBody>
+                </Table>
+            </div>
+
+            {processed.length > DRIVER_RIDES_PAGE_SIZE && (
+                <Pagination
+                    page={page}
+                    pageSize={DRIVER_RIDES_PAGE_SIZE}
+                    hasNextPage={hasNextPage}
+                    totalCount={processed.length}
+                    onPageChange={setPage}
+                />
+            )}
         </div>
     );
 }
@@ -1099,15 +1411,75 @@ function EditField({ label, value, onChange, type = "text" }: { label: string; v
     return <div><label className="text-[11px] text-muted-foreground mb-1 block">{label}</label><Input type={type} value={value} onChange={e => onChange(e.target.value)} className="h-9 text-sm" /></div>;
 }
 
-function DocExpirySummaryCard({ label, expiry }: { label: string; expiry?: string }) {
-    const isExpired = expiry && new Date(expiry) < new Date();
+type DocSummary = {
+    expiry?: string;
+    docStatus: "approved" | "pending" | "rejected" | "missing";
+    expiryIsLegacy: boolean;
+};
+
+function DocExpirySummaryCard({ label, summary }: { label: string; summary: DocSummary }) {
+    const { expiry, docStatus } = summary;
+    const fmt = (d: string) => { try { return new Date(d).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" }); } catch { return d; } };
+    const isExpired = expiry ? new Date(expiry) < new Date() : false;
     const daysUntil = expiry ? Math.ceil((new Date(expiry).getTime() - Date.now()) / 86400000) : null;
     const isExpiringSoon = daysUntil !== null && daysUntil > 0 && daysUntil <= 30;
-    const fmt = (d: string) => { try { return new Date(d).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" }); } catch { return d; } };
+
+    // Pick palette + copy from the highest-priority signal: status first,
+    // then expiry health. Crucially, an approved doc that's missing an
+    // expiry is treated as amber ("Expiry not recorded") instead of being
+    // greyed-out like an upload that was never made — those are very
+    // different operational states.
+    let palette: "neutral" | "emerald" | "amber" | "red";
+    let primary: string;
+    let secondary: string | null = null;
+
+    if (docStatus === "missing") {
+        palette = "neutral";
+        primary = "Not uploaded";
+        secondary = "Driver has not provided this document yet";
+    } else if (docStatus === "rejected") {
+        palette = "red";
+        primary = "Re-upload needed";
+        secondary = "Previous upload was rejected";
+    } else if (docStatus === "pending") {
+        palette = "amber";
+        primary = "Pending review";
+        secondary = "Waiting for admin approval";
+    } else if (docStatus === "approved" && !expiry) {
+        // Approved but no expiry on file. Often a legacy approval predating
+        // the per-doc expiry column; re-approve to record one.
+        palette = "amber";
+        primary = "Approved";
+        secondary = "Expiry not recorded — re-approve to set";
+    } else if (isExpired) {
+        palette = "red";
+        primary = "Expired";
+        secondary = `Expired ${fmt(expiry!)}`;
+    } else if (isExpiringSoon) {
+        palette = "amber";
+        primary = fmt(expiry!);
+        secondary = `${daysUntil} day${daysUntil !== 1 ? "s" : ""} remaining`;
+    } else {
+        palette = "emerald";
+        primary = fmt(expiry!);
+        secondary = daysUntil !== null ? `${daysUntil} days remaining` : null;
+    }
+
+    const styles = {
+        neutral: { bg: "bg-muted/30 border-border", dot: "bg-gray-300", primary: "text-muted-foreground", secondary: "text-muted-foreground" },
+        emerald: { bg: "bg-emerald-50 dark:bg-emerald-900/10 border-emerald-200 dark:border-emerald-800", dot: "bg-emerald-500", primary: "text-emerald-700 dark:text-emerald-300", secondary: "text-emerald-600/70 dark:text-emerald-400/70" },
+        amber:   { bg: "bg-amber-50 dark:bg-amber-900/10 border-amber-200 dark:border-amber-800",       dot: "bg-amber-500",   primary: "text-amber-700 dark:text-amber-300",   secondary: "text-amber-600/80 dark:text-amber-400/80" },
+        red:     { bg: "bg-red-50 dark:bg-red-900/10 border-red-200 dark:border-red-800",               dot: "bg-red-500",     primary: "text-red-700 dark:text-red-300",       secondary: "text-red-600/80 dark:text-red-400/80" },
+    }[palette];
+
     return (
-        <div className={`rounded-xl p-3 border ${!expiry ? "bg-muted/30 border-border" : isExpired ? "bg-red-50 dark:bg-red-900/10 border-red-200 dark:border-red-800" : isExpiringSoon ? "bg-amber-50 dark:bg-amber-900/10 border-amber-200 dark:border-amber-800" : "bg-emerald-50 dark:bg-emerald-900/10 border-emerald-200 dark:border-emerald-800"}`}>
-            <div className="flex items-center gap-2 mb-1"><div className={`w-2 h-2 rounded-full ${!expiry ? "bg-gray-300" : isExpired ? "bg-red-500" : isExpiringSoon ? "bg-amber-500" : "bg-emerald-500"}`} /><p className="text-xs font-medium text-muted-foreground">{label}</p></div>
-            {expiry ? (<><p className={`text-sm font-bold ${isExpired ? "text-red-600" : isExpiringSoon ? "text-amber-600" : "text-emerald-600"}`}>{isExpired ? "EXPIRED" : fmt(expiry)}</p>{!isExpired && daysUntil !== null && <p className={`text-[10px] mt-0.5 ${isExpiringSoon ? "text-amber-500" : "text-muted-foreground"}`}>{daysUntil} day{daysUntil !== 1 ? "s" : ""} remaining</p>}</>) : <p className="text-sm font-medium text-muted-foreground">Not set</p>}
+        <div className={`rounded-xl p-3 border ${styles.bg}`}>
+            <div className="flex items-center gap-2 mb-1">
+                <div className={`w-2 h-2 rounded-full ${styles.dot}`} />
+                <p className="text-xs font-medium text-muted-foreground">{label}</p>
+            </div>
+            <p className={`text-sm font-bold ${styles.primary}`}>{primary}</p>
+            {secondary && <p className={`text-[10px] mt-0.5 ${styles.secondary}`}>{secondary}</p>}
         </div>
     );
 }
@@ -1142,94 +1514,3 @@ function DocCard({ d, docBusy, onPreview, onReview }: { d: any; docBusy: string 
     );
 }
 
-function CheckItem({ label, checked, expired, status }: { label: string; checked?: boolean; expired?: boolean; status?: "approved" | "pending" | "missing" | "expired" }) {
-    const s = status || (expired ? "expired" : checked ? "approved" : "missing");
-    const config = {
-        approved: { bg: "bg-emerald-50 dark:bg-emerald-900/10 border-emerald-200 dark:border-emerald-800", icon: <CheckCircle className="h-4 w-4 text-emerald-500" />, text: "text-emerald-600", label: "Approved" },
-        pending:  { bg: "bg-amber-50 dark:bg-amber-900/10 border-amber-200 dark:border-amber-800", icon: <Clock className="h-4 w-4 text-amber-500" />, text: "text-amber-600", label: "Pending Review" },
-        expired:  { bg: "bg-red-50 dark:bg-red-900/10 border-red-200 dark:border-red-800", icon: <AlertTriangle className="h-4 w-4 text-red-500" />, text: "text-red-500", label: "Expired" },
-        missing:  { bg: "bg-muted/30 border-border", icon: <div className="w-4 h-4 rounded-full border-2 border-muted-foreground/30" />, text: "text-muted-foreground", label: "Missing" },
-    }[s];
-    return (
-        <div className={`flex items-center justify-between p-3 rounded-lg border ${config.bg}`}>
-            <div className="flex items-center gap-2">{config.icon}<span className="text-sm font-medium">{label}</span></div>
-            <span className={`text-xs font-medium ${config.text}`}>{config.label}</span>
-        </div>
-    );
-}
-
-function VerificationRow({ label, status, hasExpiry, expiryDate, pendingDocId, pendingDocUrl, docBusy, onApprove, onReject, onPreview }: {
-    label: string;
-    status: "approved" | "pending" | "missing" | "expired";
-    hasExpiry: boolean;
-    expiryDate?: string;
-    pendingDocId?: string;
-    pendingDocUrl?: string;
-    docBusy: string | null;
-    onApprove: (docId: string) => void;
-    onReject: (docId: string) => void;
-    onPreview: (url: string) => void;
-}) {
-    const fmtDate = (d: string) => { try { return new Date(d).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" }); } catch { return d; } };
-    const isImage = pendingDocUrl && /\.(jpg|jpeg|png|gif|webp|bmp|svg)(\?|$)/i.test(pendingDocUrl);
-
-    const statusConfig = {
-        approved: { bg: "bg-emerald-50 dark:bg-emerald-900/10 border-emerald-200 dark:border-emerald-800", icon: <CheckCircle className="h-5 w-5 text-emerald-500" />, badgeBg: "bg-emerald-100 text-emerald-700", statusLabel: "Approved" },
-        pending:  { bg: "bg-amber-50 dark:bg-amber-900/10 border-amber-200 dark:border-amber-800", icon: <Clock className="h-5 w-5 text-amber-500" />, badgeBg: "bg-amber-100 text-amber-700", statusLabel: "Pending Review" },
-        expired:  { bg: "bg-red-50 dark:bg-red-900/10 border-red-200 dark:border-red-800", icon: <AlertTriangle className="h-5 w-5 text-red-500" />, badgeBg: "bg-red-100 text-red-700", statusLabel: "Expired" },
-        missing:  { bg: "bg-muted/30 border-border", icon: <div className="w-5 h-5 rounded-full border-2 border-muted-foreground/30" />, badgeBg: "bg-muted text-muted-foreground", statusLabel: "Missing" },
-    }[status];
-
-    return (
-        <div className={`rounded-xl border p-4 ${statusConfig.bg}`}>
-            <div className="flex items-start gap-3">
-                <div className="mt-0.5 shrink-0">{statusConfig.icon}</div>
-                <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-sm font-semibold">{label}</span>
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold ${statusConfig.badgeBg}`}>{statusConfig.statusLabel}</span>
-                    </div>
-
-                    {/* Expiry info */}
-                    {hasExpiry && (
-                        <div className="mt-1">
-                            {expiryDate ? (
-                                <p className={`text-xs flex items-center gap-1 ${status === "expired" ? "text-red-500 font-medium" : "text-muted-foreground"}`}>
-                                    <CalendarRange className="h-3 w-3" />
-                                    Expires: {fmtDate(expiryDate)}
-                                    {status === "expired" && " (EXPIRED)"}
-                                </p>
-                            ) : status !== "missing" ? (
-                                <p className="text-xs text-amber-600 flex items-center gap-1"><AlertTriangle className="h-3 w-3" /> No expiry date set — set one when approving</p>
-                            ) : null}
-                        </div>
-                    )}
-
-                    {/* Pending doc preview + actions */}
-                    {status === "pending" && pendingDocId && (
-                        <div className="mt-3 flex items-center gap-2">
-                            {pendingDocUrl && (
-                                <button onClick={() => onPreview(pendingDocUrl)} className="flex items-center gap-1.5 text-xs text-primary hover:underline font-medium">
-                                    {isImage ? <ZoomIn className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                                    Preview
-                                </button>
-                            )}
-                            <div className="flex-1" />
-                            <Button variant="outline" size="xs" className="text-emerald-600 border-emerald-300 hover:bg-emerald-50" disabled={docBusy === pendingDocId} onClick={() => onApprove(pendingDocId)}>
-                                <CheckCircle className="h-3 w-3" /> Approve
-                            </Button>
-                            <Button variant="outline" size="xs" className="text-red-600 border-red-300 hover:bg-red-50" disabled={docBusy === pendingDocId} onClick={() => onReject(pendingDocId)}>
-                                <XCircle className="h-3 w-3" /> Reject
-                            </Button>
-                        </div>
-                    )}
-
-                    {/* Missing — hint */}
-                    {status === "missing" && (
-                        <p className="text-xs text-muted-foreground mt-1">Driver has not uploaded this document yet.</p>
-                    )}
-                </div>
-            </div>
-        </div>
-    );
-}

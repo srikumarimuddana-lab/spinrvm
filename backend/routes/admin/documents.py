@@ -238,18 +238,27 @@ async def admin_review_driver_document(
         except ValueError:
             new_expiry_iso = None
 
-    # NOTE: driver_documents schema only guarantees these columns:
-    #   id, driver_id, document_type, document_url, status,
-    #   rejection_reason, uploaded_at, updated_at, requirement_id, side
-    # Writing `reviewed_at` or `expiry_date` here would cause PGRST204
-    # ("Could not find the X column") -> 500 response with no CORS headers,
-    # which is why this endpoint has been silently failing in production.
+    # Schema (after migration 91): id, driver_id, document_type,
+    # document_url, status, rejection_reason, uploaded_at, updated_at,
+    # requirement_id, requirement_key, side, expiry_date.
+    # Writing `reviewed_at` would still trigger PGRST204 — keep that out.
     updates: Dict[str, Any] = {
         "status": status,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     if rejection_reason:
         updates["rejection_reason"] = rejection_reason
+    # Persist the doc-level expiry. Without this, expiries set by the admin
+    # were silently dropped for any requirement that didn't map to a legacy
+    # drivers.* column (e.g. vehicle_registration), and the slideout's
+    # expiry card kept reading "Not set" no matter how many times the admin
+    # re-approved the doc.
+    if status == "approved":
+        updates["expiry_date"] = new_expiry_iso
+    elif status == "rejected":
+        # Clear any stale expiry on rejection so the next reviewer doesn't
+        # see a phantom date carried over from a prior approval.
+        updates["expiry_date"] = None
 
     try:
         await db_supabase.update_one("driver_documents", {"id": document_id}, updates)

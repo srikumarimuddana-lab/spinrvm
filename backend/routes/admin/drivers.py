@@ -1463,7 +1463,11 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
         "business_type": driver.get("stripe_business_type"),
         "id_number_provided": bool(driver.get("stripe_id_number_provided")),
         "id_number_last4": driver.get("stripe_id_number_last4"),
-        "gst_hst_number": driver.get("gst_hst_number"),
+        # Canonical column is gst_bn (migration 58). API field name stays
+        # gst_hst_number for clarity in the admin UI; the column-level
+        # gst_hst_number we briefly added was dropped from migration 92.
+        "gst_hst_number": driver.get("gst_bn"),
+        "gst_registered": bool(driver.get("gst_registered")),
         "requirements_due": driver.get("stripe_requirements_due") or [],
         "requirements_past_due": driver.get("stripe_requirements_past_due") or [],
         "disabled_reason": driver.get("stripe_disabled_reason"),

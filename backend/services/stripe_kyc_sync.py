@@ -54,7 +54,10 @@ def _kyc_mirror_fields(account: Dict[str, Any]) -> Dict[str, Any]:
 
     # business_profile.tax_id is what Express captures for the Canadian
     # GST/HST registration. Not PII (it's a public business identifier).
-    gst_hst = business_profile.get("tax_id") if business_profile else None
+    # Persisted into the canonical `gst_bn` column from migration 58 —
+    # NOT a new gst_hst_number column, which would compete with the
+    # driver-app's "Edit GST" form that writes gst_bn via /drivers/me.
+    gst_bn = business_profile.get("tax_id") if business_profile else None
 
     # ToS acceptance timestamp comes as a Unix timestamp.
     tos_ts = tos.get("date") if tos else None
@@ -75,7 +78,12 @@ def _kyc_mirror_fields(account: Dict[str, Any]) -> Dict[str, Any]:
         "stripe_disabled_reason": requirements.get("disabled_reason"),
         "stripe_verification_status": verification_status,
         "stripe_business_type": account.get("business_type"),
-        "gst_hst_number": gst_hst,
+        # Write the canonical gst_bn column (migration 58). Also flip
+        # gst_registered when Stripe reports a tax_id, so the driver's
+        # profile reflects their registered status without needing the
+        # driver to retype anything they already gave Stripe.
+        "gst_bn": gst_bn,
+        **({"gst_registered": True} if gst_bn else {}),
         "stripe_tos_accepted_at": tos_iso,
         "stripe_last_synced_at": datetime.now(timezone.utc).isoformat(),
         # Real onboarded gate: only true once Stripe says details_submitted.

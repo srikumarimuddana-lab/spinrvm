@@ -107,6 +107,7 @@
         "statusOffline": "OFFLINE",
         "reconnecting": "Reconnecting…",
         "connectionLost": "Connection lost",
+        "noInternet": "No internet connection",
         "findingRides": "Finding rides...",
         "completeProfile": "Complete Your Profile",
         "finishProfile": "Finish Profile",

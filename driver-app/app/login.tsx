@@ -19,7 +19,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import api from '@shared/api/client';
 import SpinrConfig from '@shared/config/spinr.config';
 import { useLanguageStore } from '../store/languageStore';
-import CustomAlert from '@shared/components/CustomAlert';
+import { showToast } from '../hooks/useToast';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -33,14 +33,6 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
   const [focused, setFocused] = useState(false);
   const inputRef = useRef<TextInput>(null);
-
-  // Alert state
-  const [alertState, setAlertState] = useState<{
-    visible: boolean;
-    title: string;
-    message: string;
-    variant: 'info' | 'warning' | 'danger' | 'success';
-  }>({ visible: false, title: '', message: '', variant: 'info' });
 
   // Request location permission and fetch location early so the map is
   // ready by the time the user reaches the dashboard after login.
@@ -94,12 +86,7 @@ export default function LoginScreen() {
 
   const handleSendCode = async () => {
     if (!phoneNumber || phoneNumber.length < 10) {
-      setAlertState({
-        visible: true,
-        title: 'Invalid Number',
-        message: 'Please enter a valid 10-digit phone number.',
-        variant: 'warning',
-      });
+      showToast('error', 'Invalid Number', 'Please enter a valid 10-digit phone number.');
       return;
     }
 
@@ -116,20 +103,10 @@ export default function LoginScreen() {
           params: { phoneNumber: formattedNumber, mode: 'backend' }
         });
       } else {
-        setAlertState({
-          visible: true,
-          title: 'Failed',
-          message: 'Could not send verification code. Please try again.',
-          variant: 'danger',
-        });
+        showToast('error', 'Failed', 'Could not send verification code. Please try again.');
       }
     } catch (error: any) {
-      setAlertState({
-        visible: true,
-        title: 'Connection Error',
-        message: error.message || 'Unable to reach server. Please check your connection.',
-        variant: 'danger',
-      });
+      showToast('error', 'Connection Error', error.message || 'Unable to reach server. Please check your connection.');
     } finally {
       setLoading(false);
     }
@@ -274,14 +251,6 @@ export default function LoginScreen() {
         </Text>
       </View>
 
-      <CustomAlert
-        visible={alertState.visible}
-        title={alertState.title}
-        message={alertState.message}
-        variant={alertState.variant}
-        buttons={[{ text: 'OK', style: 'default' }]}
-        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
-      />
     </KeyboardAvoidingView>
   );
 }

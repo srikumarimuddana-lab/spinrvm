@@ -12,6 +12,7 @@ import {
   TextInput,
   KeyboardAvoidingView,
   Keyboard,
+  Alert,
 } from 'react-native';
 import { Image } from 'expo-image';
 
@@ -26,7 +27,7 @@ import { useAuthStore, type User, type Driver } from '@shared/store/authStore';
 import api from '@shared/api/client';
 import { useDriverMe } from '@shared/hooks/queries';
 import SpinrConfig from '@shared/config/spinr.config';
-import CustomAlert from '@shared/components/CustomAlert';
+import { showToast } from '../../../hooks/useToast';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -64,18 +65,6 @@ export default function ProfileScreen() {
   const [showGenderPicker, setShowGenderPicker] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
-  // Custom alert state
-  const [showLogoutAlert, setShowLogoutAlert] = useState(false);
-  const [showLogoutAllAlert, setShowLogoutAllAlert] = useState(false);
-  const [showPhotoPickerAlert, setShowPhotoPickerAlert] = useState(false);
-  const [feedbackAlert, setFeedbackAlert] = useState<{
-    visible: boolean; title: string; message?: string;
-    variant: 'info' | 'success' | 'danger' | 'warning';
-  }>({ visible: false, title: '', variant: 'info' });
-
-  const showFeedback = (title: string, message: string, variant: 'success' | 'danger' | 'warning' | 'info' = 'info') => {
-    setFeedbackAlert({ visible: true, title, message, variant });
-  };
 
   const genderOptions = [
     { label: 'Male', value: 'Male' },
@@ -126,11 +115,17 @@ export default function ProfileScreen() {
     }, [])
   );
 
-  const handlePickPhoto = () => setShowPhotoPickerAlert(true);
+  const handlePickPhoto = () => {
+    Alert.alert('Update Photo', 'Choose how to update your profile photo.', [
+      { text: 'Take Photo', onPress: launchCamera },
+      { text: 'Library', onPress: launchGallery },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  };
 
   const launchCamera = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') return showFeedback('Permission Denied', 'Camera access is needed.', 'warning');
+    if (status !== 'granted') return showToast('error', 'Permission Denied', 'Camera access is needed.');
     const result = await ImagePicker.launchCameraAsync({
       mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.7,
     });
@@ -139,7 +134,7 @@ export default function ProfileScreen() {
 
   const launchGallery = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') return showFeedback('Permission Denied', 'Library access is needed.', 'warning');
+    if (status !== 'granted') return showToast('error', 'Permission Denied', 'Library access is needed.');
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'], allowsEditing: true, aspect: [1, 1], quality: 0.7,
     });
@@ -150,9 +145,9 @@ export default function ProfileScreen() {
     setIsUploadingPhoto(true);
     try {
       await updateProfileImage(uri);
-      showFeedback('Photo Updated', 'Your profile photo has been submitted for review.', 'success');
+      showToast('success', 'Photo Updated', 'Your profile photo has been submitted for review.');
     } catch (err: any) {
-      showFeedback('Upload Failed', err.message || 'Failed to upload', 'danger');
+      showToast('error', 'Upload Failed', err.message || 'Failed to upload');
     } finally {
       setIsUploadingPhoto(false);
     }
@@ -169,9 +164,9 @@ export default function ProfileScreen() {
 
   const handleSaveProfile = async () => {
     if (!editFirstName.trim() || !editLastName.trim() || !editEmail.trim() || !editGender) {
-      return showFeedback('Missing Info', 'Please fill in all fields', 'warning');
+      return showToast('error', 'Missing Info', 'Please fill in all fields');
     }
-    if (!EMAIL_REGEX.test(editEmail)) return showFeedback('Invalid Email', 'Please enter a valid email address', 'warning');
+    if (!EMAIL_REGEX.test(editEmail)) return showToast('error', 'Invalid Email', 'Please enter a valid email address');
 
     Keyboard.dismiss();
     setIsSaving(true);
@@ -184,23 +179,39 @@ export default function ProfileScreen() {
       });
       if (res.data) useAuthStore.setState({ user: res.data });
       setShowEditModal(false);
-      showFeedback('Profile Updated', 'Your information has been saved.', 'success');
+      showToast('success', 'Profile Updated', 'Your information has been saved.');
     } catch (err: any) {
-      showFeedback('Update Failed', err.message || 'Failed to update', 'danger');
+      showToast('error', 'Update Failed', err.message || 'Failed to update');
     } finally {
       setIsSaving(false);
     }
   };
 
   const handleLogout = () => {
-    setShowLogoutAlert(true);
+    Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Sign Out', style: 'destructive', onPress: async () => { await logout(); router.replace('/login' as any); } },
+    ]);
   };
 
   // Sign out of every device. Used for lost/stolen phone or compromised
   // account. Pairs with the B-P1-3 reuse-detection cascade — see runbook
   // docs/runbooks/auth-tokens.md for the user-driven recovery flow.
   const handleLogoutAll = () => {
-    setShowLogoutAllAlert(true);
+    Alert.alert(
+      'Sign out of all devices?',
+      'You will be signed out everywhere this driver account is logged in. Use this if your phone was lost or you suspect someone else has access.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Sign out everywhere',
+          style: 'destructive',
+          onPress: async () => {
+            try { await logoutAll(); } finally { router.replace('/login' as any); }
+          },
+        },
+      ]
+    );
   };
 
   const ratingElements = (rating: number) => {
@@ -834,51 +845,6 @@ export default function ProfileScreen() {
         </View>
       </Modal>
 
-      {/* Custom Alert Modals */}
-      <CustomAlert
-        visible={showLogoutAlert}
-        title="Sign Out"
-        message="Are you sure you want to sign out?"
-        variant="danger"
-        icon="log-out-outline"
-        buttons={[
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Sign Out', style: 'destructive', onPress: async () => { await logout(); router.replace('/login' as any); } },
-        ]}
-        onClose={() => setShowLogoutAlert(false)}
-      />
-      <CustomAlert
-        visible={showLogoutAllAlert}
-        title="Sign out of all devices?"
-        message="You will be signed out everywhere this driver account is logged in. Use this if your phone was lost or you suspect someone else has access."
-        variant="danger"
-        icon="log-out-outline"
-        buttons={[
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Sign out everywhere',
-            style: 'destructive',
-            onPress: async () => {
-              try { await logoutAll(); } finally { router.replace('/login' as any); }
-            },
-          },
-        ]}
-        onClose={() => setShowLogoutAllAlert(false)}
-      />
-      <CustomAlert
-        visible={showPhotoPickerAlert}
-        title="Update Photo"
-        message="Choose how to update your profile photo."
-        variant="info"
-        icon="camera-outline"
-        buttons={[
-          { text: 'Take Photo', style: 'default', onPress: launchCamera },
-          { text: 'Library', style: 'default', onPress: launchGallery },
-          { text: 'Cancel', style: 'cancel' },
-        ]}
-        onClose={() => setShowPhotoPickerAlert(false)}
-      />
-      <CustomAlert visible={feedbackAlert.visible} title={feedbackAlert.title} message={feedbackAlert.message} variant={feedbackAlert.variant} buttons={[{ text: 'OK', style: 'default' }]} onClose={() => setFeedbackAlert(prev => ({ ...prev, visible: false }))} />
     </View>
   );
 }

@@ -13,8 +13,9 @@ import {
     KeyboardAvoidingView,
     findNodeHandle,
     UIManager,
+    Alert,
 } from 'react-native';
-import CustomAlert, { AlertButton } from '@shared/components/CustomAlert';
+import { showToast } from '../hooks/useToast';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -41,15 +42,6 @@ export default function VehicleInfoScreen() {
     const { colors } = useTheme();
     const styles = useMemo(() => createStyles(colors), [colors]);
     const [saving, setSaving] = useState(false);
-    const [alert, setAlert] = useState<{
-        visible: boolean; title: string; message?: string;
-        variant: 'info' | 'success' | 'danger' | 'warning';
-        buttons?: AlertButton[];
-    }>({ visible: false, title: '', variant: 'info' });
-
-    const showAlert = (title: string, message: string, variant: 'success' | 'danger' | 'warning' | 'info' = 'info', buttons?: AlertButton[]) => {
-        setAlert({ visible: true, title, message, variant, buttons });
-    };
 
     const scrollRef = useRef<ScrollView>(null);
 
@@ -131,14 +123,14 @@ export default function VehicleInfoScreen() {
 
     const handleSubmit = async () => {
         if (!isFormValid) {
-            showAlert('Missing Information', 'Please fill in all required fields marked with *', 'warning');
+            showToast('info', 'Missing Information', 'Please fill in all required fields marked with *');
             return;
         }
-        showAlert(
+        Alert.alert(
             'Update Vehicle Info',
             "Changing your vehicle information will require admin re-verification. You will obtain a 'Pending' status and cannot go online until approved. Continue?",
-            'warning',
             [
+                { text: 'Cancel', style: 'cancel' },
                 {
                     text: 'Update & Verify',
                     style: 'destructive',
@@ -162,17 +154,15 @@ export default function VehicleInfoScreen() {
                             // migrated to the hook yet see the updated row.
                             await fetchDriverProfile();
                             await refreshProfile();
-                            showAlert('Success', 'Vehicle information updated. Please wait for admin approval.', 'success', [
-                                { text: 'OK', style: 'default', onPress: () => router.back() },
-                            ]);
+                            showToast('success', 'Success', 'Vehicle information updated. Please wait for admin approval.');
+                            router.back();
                         } catch (err: any) {
-                            showAlert('Error', err.response?.data?.detail || 'Failed to update vehicle info', 'danger');
+                            showToast('error', 'Error', err.response?.data?.detail || 'Failed to update vehicle info');
                         } finally {
                             setSaving(false);
                         }
                     },
                 },
-                { text: 'Cancel', style: 'cancel' },
             ]
         );
     };
@@ -355,15 +345,6 @@ export default function VehicleInfoScreen() {
                     </TouchableOpacity>
                 </View>
             </KeyboardAvoidingView>
-
-            <CustomAlert
-                visible={alert.visible}
-                title={alert.title}
-                message={alert.message}
-                variant={alert.variant}
-                buttons={alert.buttons || [{ text: 'OK', style: 'default' }]}
-                onClose={() => setAlert(a => ({ ...a, visible: false }))}
-            />
 
             {/* Vehicle Type Picker Modal */}
             <Modal

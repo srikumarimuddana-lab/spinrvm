@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
-  ActivityIndicator, Platform, Linking,
+  ActivityIndicator, Platform, Linking, Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -9,7 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import api from '@shared/api/client';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
-import CustomAlert, { AlertButton } from '@shared/components/CustomAlert';
+import { showToast } from '../../hooks/useToast';
 
 interface Plan {
   id: string;
@@ -41,15 +41,6 @@ export default function SubscriptionScreen() {
   const [subscribing, setSubscribing] = useState<string | null>(null);
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
-  const [alert, setAlert] = useState<{
-    visible: boolean; title: string; message?: string;
-    variant: 'info' | 'success' | 'danger' | 'warning';
-    buttons?: AlertButton[];
-  }>({ visible: false, title: '', variant: 'info' });
-
-  const showAlert = (title: string, message: string, variant: 'success' | 'danger' | 'warning' | 'info' = 'info', buttons?: AlertButton[]) => {
-    setAlert({ visible: true, title, message, variant, buttons });
-  };
 
   useEffect(() => { loadData(); }, []);
 
@@ -68,9 +59,9 @@ export default function SubscriptionScreen() {
       try {
         const res = await api.get<{ status?: string }>(`/drivers/subscription/verify-session?session_id=${sessionId}`);
         if (res.data?.status === 'active') {
-          showAlert('Payment Successful!', 'Your Spinr Pass is now active. Go online and start earning!', 'success');
+          showToast('success', 'Payment Successful!', 'Your Spinr Pass is now active. Go online and start earning!');
         } else {
-          showAlert('Processing...', 'Your payment is being confirmed. This may take a moment.', 'info');
+          showToast('info', 'Processing...', 'Your payment is being confirmed. This may take a moment.');
         }
       } catch (e) {
         console.log('[Subscription] verify-session error:', e);
@@ -114,23 +105,21 @@ export default function SubscriptionScreen() {
 
   const handleSubscribe = async (plan: Plan) => {
     if (currentSub?.has_subscription) {
-      showAlert(
+      Alert.alert(
         'Switch Plan?',
         `You currently have "${currentSub.subscription.plan_name}". Switch to "${plan.name}" for $${plan.price.toFixed(2)}?`,
-        'warning',
         [
-          { text: 'Switch', style: 'destructive', onPress: () => doSubscribe(plan) },
           { text: 'Cancel', style: 'cancel' },
+          { text: 'Switch', style: 'destructive', onPress: () => doSubscribe(plan) },
         ]
       );
     } else {
-      showAlert(
+      Alert.alert(
         'Subscribe',
         `Subscribe to "${plan.name}" for $${plan.price.toFixed(2)}/${getDurationLabel(plan.duration_days).toLowerCase()}?`,
-        'info',
         [
-          { text: 'Subscribe', style: 'destructive', onPress: () => doSubscribe(plan) },
           { text: 'Cancel', style: 'cancel' },
+          { text: 'Subscribe', style: 'destructive', onPress: () => doSubscribe(plan) },
         ]
       );
     }
@@ -161,7 +150,7 @@ export default function SubscriptionScreen() {
             try {
               const verifyRes = await api.get<{ status?: string }>(`/drivers/subscription/verify-session?session_id=${sessionId}`);
               if (verifyRes.data?.status === 'active') {
-                showAlert('Subscribed!', `You're now on the ${plan.name} plan. Go online and start earning!`, 'success');
+                showToast('success', 'Subscribed!', `You're now on the ${plan.name} plan. Go online and start earning!`);
                 loadData();
                 return;
               }
@@ -169,38 +158,37 @@ export default function SubscriptionScreen() {
           }
           // All retries exhausted — still pending. The deep-link handler
           // or next screen load will catch it.
-          showAlert('Processing...', 'Your payment is being confirmed. This may take a moment.', 'info');
+          showToast('info', 'Processing...', 'Your payment is being confirmed. This may take a moment.');
           loadData();
         }
       } else {
         // Dev/test mode — subscription activated immediately
-        showAlert('Subscribed!', `You're now on the ${plan.name} plan. Go online and start earning!`, 'success');
+        showToast('success', 'Subscribed!', `You're now on the ${plan.name} plan. Go online and start earning!`);
         loadData();
       }
     } catch (e: any) {
-      showAlert('Error', e.response?.data?.detail || 'Failed to subscribe', 'danger');
+      showToast('error', 'Error', e.response?.data?.detail || 'Failed to subscribe');
     } finally { setSubscribing(null); }
   };
 
   const handleCancel = () => {
-    showAlert(
+    Alert.alert(
       'Cancel Subscription',
       'Are you sure? You can still drive until your current plan expires.',
-      'warning',
       [
+        { text: 'Keep Plan', style: 'cancel' },
         {
           text: 'Cancel Plan', style: 'destructive',
           onPress: async () => {
             try {
               await api.post('/drivers/subscription/cancel');
-              showAlert('Cancelled', 'Your subscription has been cancelled.', 'info');
+              showToast('info', 'Cancelled', 'Your subscription has been cancelled.');
               loadData();
             } catch (e: any) {
-              showAlert('Error', e.response?.data?.detail || 'Failed to cancel', 'danger');
+              showToast('error', 'Error', e.response?.data?.detail || 'Failed to cancel');
             }
           },
         },
-        { text: 'Keep Plan', style: 'cancel' },
       ]
     );
   };
@@ -363,14 +351,6 @@ export default function SubscriptionScreen() {
 
       </ScrollView>
 
-      <CustomAlert
-        visible={alert.visible}
-        title={alert.title}
-        message={alert.message}
-        variant={alert.variant}
-        buttons={alert.buttons || [{ text: 'OK', style: 'default' }]}
-        onClose={() => setAlert(a => ({ ...a, visible: false }))}
-      />
     </SafeAreaView>
   );
 }

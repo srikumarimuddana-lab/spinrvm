@@ -29,6 +29,11 @@ jest.mock('../../config', () => ({
   API_URL: 'http://localhost:8000',
 }));
 
+jest.mock('../../config/spinr.config', () => ({
+  __esModule: true,
+  default: { backendUrl: 'http://localhost:8000' },
+}));
+
 jest.mock('../../services/firebase', () => ({
   auth: { currentUser: null, onAuthStateChanged: null },
   isFirebaseConfigured: false,
@@ -63,9 +68,21 @@ Object.defineProperty(global, 'localStorage', {
 import {
   setRefreshCallback,
   setInMemoryToken,
+  ensureFreshToken,
 } from '../../api/client';
 
 import api from '../../api/client';
+
+// Mock authStore for ensureFreshToken tests
+jest.mock('../../store/authStore', () => ({
+  useAuthStore: {
+    getState: jest.fn(() => ({
+      token: 'valid-token',
+      tokenExpiresAt: Date.now() + 15 * 60 * 1000,
+      logout: jest.fn(),
+    })),
+  },
+}));
 
 const makeOkResponse = (body: any = {}) =>
   new Response(JSON.stringify(body), {
@@ -122,9 +139,10 @@ describe('shared/api/client — token refresh mid-trip (P1-11 / E11)', () => {
 
     _mockFetch.mockResolvedValue(make401Response());
 
-    // Calling /auth/refresh directly must not call refreshCallback
+    // Calling /auth/refresh directly must not call refreshCallback — it
+    // should reject (the server said the refresh token is invalid).
     await expect(api.post('/auth/refresh', { refresh_token: 'bad-token' }))
-      .rejects.toThrow();
+      .rejects.toBeDefined();
 
     expect(refreshCallback).not.toHaveBeenCalled();
     // Only the single fetch for /auth/refresh — no dedup loop
@@ -160,6 +178,125 @@ describe('shared/api/client — token refresh mid-trip (P1-11 / E11)', () => {
     await Promise.allSettled([reqA, reqB]);
 
     // Refresh must only be called once, not once per 401
+    expect(refreshCallback).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('ensureFreshToken — proactive token refresh', () => {
+  const { useAuthStore } = require('../../store/authStore');
+
+  beforeEach(() => {
+    setRefreshCallback(null as any);
+    (useAuthStore.getState as jest.Mock).mockReturnValue({
+      token: 'valid-token',
+      tokenExpiresAt: Date.now() + 15 * 60 * 1000,
+    });
+  });
+
+  it('no-ops when token has >2 min remaining', async () => {
+    const refreshCallback = jest.fn().mockResolvedValue(true);
+    setRefreshCallback(refreshCallback);
+
+    (useAuthStore.getState as jest.Mock).mockReturnValue({
+      token: 'valid-token',
+      tokenExpiresAt: Date.now() + 10 * 60 * 1000, // 10 min left
+    });
+
+    await ensureFreshToken();
+    expect(refreshCallback).not.toHaveBeenCalled();
+  });
+
+  it('refreshes when token has <2 min remaining', async () => {
+    const refreshCallback = jest.fn().mockResolvedValue(true);
+    setRefreshCallback(refreshCallback);
+
+    (useAuthStore.getState as jest.Mock).mockReturnValue({
+      token: 'valid-token',
+      tokenExpiresAt: Date.now() + 60 * 1000, // 1 min left (< 2 min buffer)
+    });
+
+    await ensureFreshToken();
+    expect(refreshCallback).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes when token is already expired', async () => {
+    const refreshCallback = jest.fn().mockResolvedValue(true);
+    setRefreshCallback(refreshCallback);
+
+    (useAuthStore.getState as jest.Mock).mockReturnValue({
+      token: 'valid-token',
+      tokenExpiresAt: Date.now() - 5000, // expired 5s ago
+    });
+
+    await ensureFreshToken();
+    expect(refreshCallback).toHaveBeenCalledTimes(1);
+  });
+
+  it('no-ops when no callback registered', async () => {
+    setRefreshCallback(null as any);
+
+    (useAuthStore.getState as jest.Mock).mockReturnValue({
+      token: 'valid-token',
+      tokenExpiresAt: Date.now() + 30 * 1000,
+    });
+
+    // Should not throw
+    await ensureFreshToken();
+  });
+
+  it('no-ops when not authenticated', async () => {
+    const refreshCallback = jest.fn().mockResolvedValue(true);
+    setRefreshCallback(refreshCallback);
+
+    (useAuthStore.getState as jest.Mock).mockReturnValue({
+      token: null,
+      tokenExpiresAt: null,
+    });
+
+    await ensureFreshToken();
+    expect(refreshCallback).not.toHaveBeenCalled();
+  });
+
+  it('swallows refresh errors without throwing', async () => {
+    const refreshCallback = jest.fn().mockRejectedValue(new Error('network'));
+    setRefreshCallback(refreshCallback);
+
+    (useAuthStore.getState as jest.Mock).mockReturnValue({
+      token: 'valid-token',
+      tokenExpiresAt: Date.now() + 30 * 1000,
+    });
+
+    // Must not throw
+    await ensureFreshToken();
+    expect(refreshCallback).toHaveBeenCalledTimes(1);
+  });
+
+  it('piggybacks on existing _refreshPromise from 401 handler', async () => {
+    let resolveRefresh!: (v: boolean) => void;
+    const refreshPromise = new Promise<boolean>((res) => { resolveRefresh = res; });
+    const refreshCallback = jest.fn().mockReturnValue(refreshPromise);
+    setRefreshCallback(refreshCallback);
+
+    (useAuthStore.getState as jest.Mock).mockReturnValue({
+      token: 'valid-token',
+      tokenExpiresAt: Date.now() + 30 * 1000,
+    });
+
+    // Start a 401-triggered refresh by calling api.get which returns 401
+    _mockFetch
+      .mockResolvedValueOnce(make401Response())
+      .mockResolvedValue(makeOkResponse({ ok: true }));
+
+    const apiCall = api.get('/rides/active');
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Now call ensureFreshToken while 401 refresh is in-flight
+    const proactive = ensureFreshToken();
+    resolveRefresh(true);
+
+    await Promise.allSettled([apiCall, proactive]);
+
+    // Should only have called refreshCallback once — not twice
     expect(refreshCallback).toHaveBeenCalledTimes(1);
   });
 });

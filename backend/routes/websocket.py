@@ -773,6 +773,11 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                         )
                     if docs:
                         await db_supabase.insert_many("driver_location_history", docs)
+                        last = docs[-1]
+                        if last.get("lat") is not None and last.get("lng") is not None:
+                            manager.update_driver_location(driver_id, last["lat"], last["lng"])
+                            await db_supabase.update_driver_location(driver_id, last["lat"], last["lng"])
+                            await mark_present(driver_id)
                     await websocket.send_json(
                         {"type": "location_batch_ack", "count": len(docs)}
                     )

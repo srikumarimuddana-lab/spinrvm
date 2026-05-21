@@ -11,7 +11,7 @@ import {
     Pressable,
     KeyboardAvoidingView,
 } from 'react-native';
-import CustomAlert, { AlertButton } from '@shared/components/CustomAlert';
+import { showToast } from '../../hooks/useToast';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -49,15 +49,6 @@ export default function ReferralScreen() {
     const [isLoading, setIsLoading] = useState(true);
     const [showApplyModal, setShowApplyModal] = useState(false);
     const [referralCodeInput, setReferralCodeInput] = useState('');
-    const [alert, setAlert] = useState<{
-        visible: boolean; title: string; message?: string;
-        variant: 'info' | 'success' | 'danger' | 'warning';
-        buttons?: AlertButton[];
-    }>({ visible: false, title: '', variant: 'info' });
-
-    const showAlert = (title: string, message: string, variant: 'success' | 'danger' | 'warning' | 'info' = 'info', buttons?: AlertButton[]) => {
-        setAlert({ visible: true, title, message, variant, buttons });
-    };
 
     useEffect(() => {
         fetchReferralInfo();
@@ -82,35 +73,35 @@ export default function ReferralScreen() {
     const copyToClipboard = async () => {
         if (referralInfo?.referral_code) {
             await Clipboard.setStringAsync(referralInfo.referral_code);
-            showAlert('Copied!', 'Referral code copied to clipboard', 'success');
+            showToast('success', 'Copied!', 'Referral code copied to clipboard');
         }
     };
 
     const shareReferral = async () => {
         if (referralInfo?.referral_link) {
             await Clipboard.setStringAsync(referralInfo.referral_link);
-            showAlert(
+            showToast(
+                'info',
                 'Share Link',
                 `Your referral link has been copied: ${referralInfo.referral_link}`,
-                'info',
             );
         }
     };
 
     const applyReferralCode = async () => {
         if (!referralCodeInput.trim()) {
-            showAlert('Error', 'Please enter a referral code', 'danger');
+            showToast('error', 'Error', 'Please enter a referral code');
             return;
         }
 
         try {
             await api.post('/drivers/referral/apply', { referral_code: referralCodeInput.trim() });
-            showAlert('Success', 'Referral code applied successfully!', 'success');
+            showToast('success', 'Success', 'Referral code applied successfully!');
             setShowApplyModal(false);
             setReferralCodeInput('');
         } catch (err: any) {
             const errorMessage = err.response?.data?.detail || 'Failed to apply referral code';
-            showAlert('Error', errorMessage, 'danger');
+            showToast('error', 'Error', errorMessage);
         }
     };
 
@@ -232,15 +223,6 @@ export default function ReferralScreen() {
                 )}
             </ScrollView>
             </KeyboardAvoidingView>
-
-            <CustomAlert
-                visible={alert.visible}
-                title={alert.title}
-                message={alert.message}
-                variant={alert.variant}
-                buttons={alert.buttons || [{ text: 'OK', style: 'default' }]}
-                onClose={() => setAlert(a => ({ ...a, visible: false }))}
-            />
 
             {/* Apply Referral Modal */}
             <Modal

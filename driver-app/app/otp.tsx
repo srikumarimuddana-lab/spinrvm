@@ -15,7 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useAuthStore, type User } from '@shared/store/authStore';
 import api, { setInMemoryToken } from '@shared/api/client';
-import CustomAlert from '@shared/components/CustomAlert';
+import { showToast } from '../hooks/useToast';
 import { useLanguageStore } from '../store/languageStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -59,14 +59,6 @@ export default function OtpScreen() {
   const dotAnims = useRef(
     Array.from({ length: codeLength }, () => new Animated.Value(0))
   ).current;
-
-  // Alert state
-  const [alertState, setAlertState] = useState<{
-    visible: boolean;
-    title: string;
-    message: string;
-    variant: 'info' | 'warning' | 'danger' | 'success';
-  }>({ visible: false, title: '', message: '', variant: 'info' });
 
   useEffect(() => {
     if (!phoneNumber) {
@@ -129,12 +121,7 @@ export default function OtpScreen() {
   const handleVerify = async () => {
     if (!code || code.length !== codeLength) {
       triggerShake();
-      setAlertState({
-        visible: true,
-        title: 'Invalid Code',
-        message: `Please enter the ${codeLength}-digit code sent to your phone.`,
-        variant: 'warning',
-      });
+      showToast('error', 'Invalid Code', `Please enter the ${codeLength}-digit code sent to your phone.`);
       return;
     }
 
@@ -166,12 +153,7 @@ export default function OtpScreen() {
       triggerShake();
       setCode('');
       const message = err.response?.data?.detail || err.message || 'Invalid code. Please try again.';
-      setAlertState({
-        visible: true,
-        title: 'Verification Failed',
-        message,
-        variant: 'danger',
-      });
+      showToast('error', 'Verification Failed', message);
     } finally {
       setVerifying(false);
     }
@@ -183,19 +165,9 @@ export default function OtpScreen() {
     setCountdown(30);
     try {
       await api.post('/auth/send-otp', { phone: phoneNumber });
-      setAlertState({
-        visible: true,
-        title: 'Code Sent',
-        message: 'A new verification code has been sent to your phone.',
-        variant: 'success',
-      });
+      showToast('success', 'Code Sent', 'A new verification code has been sent to your phone.');
     } catch {
-      setAlertState({
-        visible: true,
-        title: 'Failed',
-        message: 'Could not resend code. Please try again.',
-        variant: 'danger',
-      });
+      showToast('error', 'Failed', 'Could not resend code. Please try again.');
     }
   };
 
@@ -349,14 +321,6 @@ export default function OtpScreen() {
         </View>
       </View>
 
-      <CustomAlert
-        visible={alertState.visible}
-        title={alertState.title}
-        message={alertState.message}
-        variant={alertState.variant}
-        buttons={[{ text: 'OK', style: 'default' }]}
-        onClose={() => setAlertState((prev) => ({ ...prev, visible: false }))}
-      />
     </KeyboardAvoidingView>
   );
 }

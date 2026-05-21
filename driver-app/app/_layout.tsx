@@ -2,7 +2,7 @@ import '../utils/backgroundLocation';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { View, ActivityIndicator, StyleSheet, Text, Platform, LogBox } from 'react-native';
+import { View, ActivityIndicator, StyleSheet, Text, Platform, LogBox, AppState } from 'react-native';
 
 // LogBox's notification container uses a codegen native component that's
 // broken under Bridgeless mode (RN 0.85.2). Disable it in dev to prevent
@@ -13,6 +13,7 @@ if (__DEV__) {
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold, PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import Toast from 'react-native-toast-message';
 import * as SplashScreen from 'expo-splash-screen';
 
 // Keep the native splash up until our React-rendered splash is mounted,
@@ -332,6 +333,34 @@ export default function RootLayout() {
     };
   }, [isAuthInitialized, authToken]);
 
+  // ── Proactive token refresh on foreground resume + periodic ──
+  // Ensures the access token is fresh BEFORE the driver taps a critical
+  // action after returning from background. Without this, the first API
+  // call after a long background period hits 401, causing a visible
+  // 1-2s refresh-then-retry delay.
+  useEffect(() => {
+    if (!isAuthInitialized || !authToken) return;
+
+    const { ensureFreshToken } = require('@shared/api/client');
+
+    const sub = AppState.addEventListener('change', (nextState: string) => {
+      if (nextState === 'active') {
+        ensureFreshToken().catch(() => {});
+      }
+    });
+
+    // With a 15-min token TTL and 2-min refresh buffer, a 60s check
+    // guarantees the token is always refreshed before the danger zone.
+    const interval = setInterval(() => {
+      ensureFreshToken().catch(() => {});
+    }, 60_000);
+
+    return () => {
+      sub.remove();
+      clearInterval(interval);
+    };
+  }, [isAuthInitialized, authToken]);
+
   const onLoadingLayout = useCallback(() => {
     SplashScreen.hideAsync().catch(() => {});
   }, []);
@@ -397,6 +426,7 @@ function DriverRootLayoutInner({
                 through a cross-fade out of the splash. */}
             <Stack.Screen name="driver" options={{ animation: "none", gestureEnabled: false }} />
           </Stack>
+          <Toast />
         </SafeAreaProvider>
       </GestureHandlerRootView>
     </ErrorBoundary>

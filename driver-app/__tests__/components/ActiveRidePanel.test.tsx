@@ -44,9 +44,8 @@ jest.mock('../../store/languageStore', () => ({
   useLanguageStore: () => ({ t: (key: string) => key }),
 }));
 
-jest.mock('@shared/components/CustomAlert', () => ({
-  __esModule: true,
-  default: () => null,
+jest.mock('../../hooks/useToast', () => ({
+  showToast: jest.fn(),
 }));
 
 const mockRide = {

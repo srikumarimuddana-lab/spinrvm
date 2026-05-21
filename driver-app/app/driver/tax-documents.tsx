@@ -9,7 +9,7 @@ import {
     Linking,
 } from 'react-native';
 import SafeRefreshControl from '../../components/SafeRefreshControl';
-import CustomAlert, { AlertButton } from '@shared/components/CustomAlert';
+import { showToast } from '../../hooks/useToast';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -36,15 +36,6 @@ function TaxDocumentsScreen() {
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [downloadingId, setDownloadingId] = useState<string | null>(null);
-    const [alert, setAlert] = useState<{
-        visible: boolean; title: string; message?: string;
-        variant: 'info' | 'success' | 'danger' | 'warning';
-        buttons?: AlertButton[];
-    }>({ visible: false, title: '', variant: 'info' });
-
-    const showAlert = (title: string, message: string, variant: 'success' | 'danger' | 'warning' | 'info' = 'info', buttons?: AlertButton[]) => {
-        setAlert({ visible: true, title, message, variant, buttons });
-    };
 
     useEffect(() => {
         fetchDocuments();
@@ -69,7 +60,7 @@ function TaxDocumentsScreen() {
             }));
             setDocuments(synthesized);
         } catch {
-            showAlert('Error', 'Failed to load tax documents. Please try again.', 'danger');
+            showToast('error', 'Error', 'Failed to load tax documents. Please try again.');
         } finally {
             setLoading(false);
             setRefreshing(false);
@@ -96,16 +87,16 @@ function TaxDocumentsScreen() {
             if (url) {
                 await Linking.openURL(url);
             } else if (res.data?.total_earnings != null) {
-                showAlert(
+                showToast(
+                    'info',
                     `T4A Summary — ${res.data.year}`,
                     `Total earnings: $${Number(res.data.total_earnings).toFixed(2)}\nTotal trips: ${res.data.total_trips}\nNet earnings: $${Number(res.data.net_earnings).toFixed(2)}\n\nA downloadable PDF will be available once tax documents are finalized.`,
-                    'info',
                 );
             } else {
-                showAlert('Unavailable', 'This document is not yet available for download.', 'warning');
+                showToast('info', 'Unavailable', 'This document is not yet available for download.');
             }
         } catch (err) {
-            showAlert('Error', 'Could not open the document. Please try again.', 'danger');
+            showToast('error', 'Error', 'Could not open the document. Please try again.');
         } finally {
             setDownloadingId(null);
         }
@@ -213,14 +204,6 @@ function TaxDocumentsScreen() {
                 />
             )}
 
-            <CustomAlert
-                visible={alert.visible}
-                title={alert.title}
-                message={alert.message}
-                variant={alert.variant}
-                buttons={alert.buttons || [{ text: 'OK', style: 'default' }]}
-                onClose={() => setAlert(a => ({ ...a, visible: false }))}
-            />
         </View>
     );
 }

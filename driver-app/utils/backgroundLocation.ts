@@ -118,7 +118,12 @@ TaskManager.defineTask<LocationTaskData>(TASK_NAME, async ({ data, error }) => {
   }
 });
 
-export async function startBackgroundLocation(): Promise<boolean> {
+interface BgLocationConfig {
+  timeInterval?: number;
+  distanceInterval?: number;
+}
+
+export async function startBackgroundLocation(config?: BgLocationConfig): Promise<boolean> {
   const isRunning = await TaskManager.isTaskRegisteredAsync(TASK_NAME);
   if (isRunning) {
     console.log('[BgLocation] Already running');
@@ -135,11 +140,14 @@ export async function startBackgroundLocation(): Promise<boolean> {
     return false;
   }
 
+  const interval = config?.timeInterval ?? 30_000;
+  const distance = config?.distanceInterval ?? 50;
+
   await Location.startLocationUpdatesAsync(TASK_NAME, {
     accuracy: Location.Accuracy.Balanced,
-    timeInterval: 30_000,
-    distanceInterval: 50,
-    deferredUpdatesInterval: 30_000,
+    timeInterval: interval,
+    distanceInterval: distance,
+    deferredUpdatesInterval: interval,
     showsBackgroundLocationIndicator: true,
     foregroundService: {
       notificationTitle: 'Spinr Driver',

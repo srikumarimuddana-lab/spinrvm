@@ -1,10 +1,9 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, BackHandler } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
-import SpinrConfig from '@shared/config/spinr.config';
-
-const COLORS = SpinrConfig.theme.colors;
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
 interface IncomingRide {
     ride_id: string;
@@ -37,6 +36,9 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
     onAccept,
     onDecline,
 }) => {
+    const { colors } = useTheme();
+    const styles = useMemo(() => createStyles(colors), [colors]);
+
     useEffect(() => {
         const sub = BackHandler.addEventListener('hardwareBackPress', () => true);
         return () => sub.remove();
@@ -61,7 +63,7 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
             accessibilityViewIsModal
             accessibilityLabel={panelLabel}
         >
-            <LinearGradient colors={['rgba(10,14,33,0.95)', COLORS.primary]} style={styles.rideOfferGradient}>
+            <LinearGradient colors={['rgba(10,14,33,0.95)', colors.primary]} style={styles.rideOfferGradient}>
                 {/* Countdown Ring */}
                 <View style={styles.countdownContainer}>
                     <View
@@ -88,7 +90,7 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                         </View>
                     )}
 
-                    <View style={styles.fareHighlight}>
+                    <View style={styles.fareHighlight} accessibilityRole="text" accessibilityLabel={`Your earnings: ${fareStr}`}>
                         <Text style={styles.fareLabel}>YOUR EARNINGS</Text>
                         <Text
                             style={styles.fareAmount}
@@ -124,16 +126,16 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
 
                     <View style={styles.addressRow}>
                         <View style={styles.addressDot}>
-                            <View style={[styles.dot, { backgroundColor: COLORS.accent }]} />
+                            <View style={[styles.dot, { backgroundColor: colors.primary }]} />
                             <View style={styles.dottedLine} />
-                            <View style={[styles.dot, { backgroundColor: COLORS.danger }]} />
+                            <View style={[styles.dot, { backgroundColor: colors.error }]} />
                         </View>
                         <View style={styles.addresses}>
-                            <Text style={styles.addressText} numberOfLines={1}>
+                            <Text style={styles.addressText} numberOfLines={1} accessibilityRole="text" accessibilityLabel={`Pickup: ${incomingRide.pickup_address}`}>
                                 {incomingRide.pickup_address}
                             </Text>
                             <View style={styles.addressDivider} />
-                            <Text style={styles.addressText} numberOfLines={1}>
+                            <Text style={styles.addressText} numberOfLines={1} accessibilityRole="text" accessibilityLabel={`Dropoff: ${incomingRide.dropoff_address}`}>
                                 {incomingRide.dropoff_address}
                             </Text>
                         </View>
@@ -142,12 +144,12 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                     {incomingRide.rider_name && (
                         <View style={styles.riderInfo}>
                             <View style={styles.riderAvatar}>
-                                <Ionicons name="person" size={20} color={COLORS.textDim} />
+                                <Ionicons name="person" size={20} color={colors.textDim} />
                             </View>
                             <Text style={styles.riderName}>{incomingRide.rider_name}</Text>
                             {incomingRide.rider_rating && (
                                 <View style={styles.ratingBadge}>
-                                    <Ionicons name="star" size={12} color={COLORS.gold} />
+                                    <Ionicons name="star" size={12} color={colors.gold} />
                                     <Text style={styles.ratingText} allowFontScaling={false}>{incomingRide.rider_rating.toFixed(1)}</Text>
                                 </View>
                             )}
@@ -164,7 +166,7 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                         accessibilityLabel="Decline ride offer"
                         accessibilityHint="Double-tap to decline this ride"
                     >
-                        <Ionicons name="close" size={28} color={COLORS.danger} />
+                        <Ionicons name="close" size={28} color={colors.error} />
                         <Text style={styles.declineText}>Decline</Text>
                     </TouchableOpacity>
 
@@ -178,7 +180,7 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                         accessibilityState={{ disabled: isLoading, busy: isLoading }}
                     >
                         <LinearGradient
-                            colors={[COLORS.accent, COLORS.accentDim]}
+                            colors={[colors.primary, colors.primaryDark]}
                             style={styles.acceptGradient}
                         >
                             {isLoading ? (
@@ -197,9 +199,10 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
     );
 };
 
-const styles = StyleSheet.create({
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
     rideOfferOverlay: {
-        ...StyleSheet.absoluteFill,
+        ...StyleSheet.absoluteFill as any,
         zIndex: 20,
     },
     rideOfferGradient: {
@@ -229,7 +232,7 @@ const styles = StyleSheet.create({
     },
     countdownBar: {
         height: 4,
-        backgroundColor: COLORS.accent,
+        backgroundColor: colors.primary,
         borderRadius: 2,
         maxWidth: 200,
     },
@@ -242,7 +245,7 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: '#2563EB',
+        backgroundColor: colors.info,
         borderRadius: 8,
         paddingVertical: 8,
         paddingHorizontal: 12,
@@ -380,7 +383,7 @@ const styles = StyleSheet.create({
     declineText: {
         fontSize: 16,
         fontWeight: '600',
-        color: COLORS.danger,
+        color: colors.error,
     },
     acceptBtn: {
         flex: 2,
@@ -399,6 +402,7 @@ const styles = StyleSheet.create({
         fontWeight: '700',
         color: '#fff',
     },
-});
+  });
+}
 
 export default RideOfferPanel;

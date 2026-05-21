@@ -11,8 +11,9 @@ import {
     Pressable,
     Platform,
     KeyboardAvoidingView,
+    Alert,
 } from 'react-native';
-import CustomAlert, { AlertButton } from '@shared/components/CustomAlert';
+import { showToast } from '../../hooks/useToast';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -73,15 +74,6 @@ export default function AddressesScreen() {
     const [loading, setLoading] = useState(true);
     const [showAddModal, setShowAddModal] = useState(false);
     const [newAddress, setNewAddress] = useState({ name: '', address: '' });
-    const [alert, setAlert] = useState<{
-        visible: boolean; title: string; message?: string;
-        variant: 'info' | 'success' | 'danger' | 'warning';
-        buttons?: AlertButton[];
-    }>({ visible: false, title: '', variant: 'info' });
-
-    const showAlert = (title: string, message: string, variant: 'success' | 'danger' | 'warning' | 'info' = 'info', buttons?: AlertButton[]) => {
-        setAlert({ visible: true, title, message, variant, buttons });
-    };
 
     useEffect(() => {
         fetchAddresses();
@@ -96,14 +88,15 @@ export default function AddressesScreen() {
             // PIPEDA: never spread the raw error body into logs — backend error
             // payloads can contain saved-address strings or user identifiers.
             console.error('Error fetching addresses', { code: err?.code, status: err?.status });
-            showAlert('Error', 'Failed to load saved addresses', 'danger');
+            showToast('error', 'Error', 'Failed to load saved addresses');
         } finally {
             setLoading(false);
         }
     };
 
     const handleDelete = (id: string) => {
-        showAlert('Delete Address', 'Are you sure you want to delete this address?', 'warning', [
+        Alert.alert('Delete Address', 'Are you sure you want to delete this address?', [
+            { text: 'Cancel', style: 'cancel' },
             {
                 text: 'Delete',
                 style: 'destructive',
@@ -111,19 +104,18 @@ export default function AddressesScreen() {
                     try {
                         await api.delete(`/addresses/${id}`);
                         await fetchAddresses();
-                        showAlert('Success', 'Address deleted', 'success');
+                        showToast('success', 'Success', 'Address deleted');
                     } catch (err: any) {
-                        showAlert('Error', 'Failed to delete address', 'danger');
+                        showToast('error', 'Error', 'Failed to delete address');
                     }
                 },
             },
-            { text: 'Cancel', style: 'cancel' },
         ]);
     };
 
     const handleAddAddress = async () => {
         if (!newAddress.name.trim() || !newAddress.address.trim()) {
-            showAlert('Error', 'Please fill in both fields', 'warning');
+            showToast('info', 'Error', 'Please fill in both fields');
             return;
         }
 
@@ -131,7 +123,7 @@ export default function AddressesScreen() {
             // Geocode the address to get real coordinates
             const coords = await geocodeAddress(newAddress.address.trim());
             if (!coords) {
-                showAlert('Address not found', 'We could not locate that address on the map. Please enter a more specific address (include city/province).', 'warning');
+                showToast('info', 'Address not found', 'We could not locate that address on the map. Please enter a more specific address (include city/province).');
                 return;
             }
 
@@ -145,10 +137,10 @@ export default function AddressesScreen() {
             setShowAddModal(false);
             setNewAddress({ name: '', address: '' });
             await fetchAddresses();
-            showAlert('Success', 'Address saved', 'success');
+            showToast('success', 'Success', 'Address saved');
         } catch (err: any) {
             const errorMessage = err.response?.data?.detail || 'Failed to save address';
-            showAlert('Error', errorMessage, 'danger');
+            showToast('error', 'Error', errorMessage);
         }
     };
 
@@ -228,14 +220,6 @@ export default function AddressesScreen() {
                 )}
             </ScrollView>
 
-            <CustomAlert
-                visible={alert.visible}
-                title={alert.title}
-                message={alert.message}
-                variant={alert.variant}
-                buttons={alert.buttons || [{ text: 'OK', style: 'default' }]}
-                onClose={() => setAlert(a => ({ ...a, visible: false }))}
-            />
 
             {/* Add Address Modal */}
             <Modal

@@ -9,12 +9,13 @@ import {
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import api from '@shared/api/client';
-import CustomAlert from '@shared/components/CustomAlert';
+import { showToast } from '../../hooks/useToast';
 import { useLanguageStore } from '../../store/languageStore';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -46,13 +47,6 @@ export default function EmergencyContactsScreen() {
   const [phone, setPhone] = useState('');
   const [relationship, setRelationship] = useState('Friend');
   const [saving, setSaving] = useState(false);
-  const [alertState, setAlertState] = useState<{
-    visible: boolean;
-    title: string;
-    message: string;
-    variant: 'info' | 'warning' | 'danger' | 'success';
-    buttons?: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>;
-  }>({ visible: false, title: '', message: '', variant: 'info' });
 
   const fetchContacts = useCallback(async () => {
     try {
@@ -74,11 +68,11 @@ export default function EmergencyContactsScreen() {
     const trimmedPhone = phone.trim().replace(/\D/g, '');
 
     if (!trimmedName) {
-      setAlertState({ visible: true, title: 'Missing Name', message: 'Please enter a contact name.', variant: 'warning' });
+      showToast('info', 'Missing Name', 'Please enter a contact name.');
       return;
     }
     if (trimmedPhone.length < 10) {
-      setAlertState({ visible: true, title: 'Invalid Phone', message: 'Please enter a valid phone number (at least 10 digits).', variant: 'warning' });
+      showToast('info', 'Invalid Phone', 'Please enter a valid phone number (at least 10 digits).');
       return;
     }
 
@@ -94,22 +88,20 @@ export default function EmergencyContactsScreen() {
       setPhone('');
       setRelationship('Friend');
       await fetchContacts();
-      setAlertState({ visible: true, title: 'Contact Added', message: `${trimmedName} has been added as an emergency contact.`, variant: 'success' });
+      showToast('success', 'Contact Added', `${trimmedName} has been added as an emergency contact.`);
     } catch (error: any) {
       const msg = error?.response?.data?.detail || 'Could not add contact.';
-      setAlertState({ visible: true, title: 'Error', message: msg, variant: 'danger' });
+      showToast('error', 'Error', msg);
     } finally {
       setSaving(false);
     }
   };
 
   const handleDelete = (contact: EmergencyContact) => {
-    setAlertState({
-      visible: true,
-      title: 'Remove Contact',
-      message: `Remove ${contact.name} as an emergency contact?`,
-      variant: 'warning',
-      buttons: [
+    Alert.alert(
+      'Remove Contact',
+      `Remove ${contact.name} as an emergency contact?`,
+      [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Remove',
@@ -119,12 +111,12 @@ export default function EmergencyContactsScreen() {
               await api.delete(`/users/emergency-contacts/${contact.id}`);
               await fetchContacts();
             } catch {
-              setAlertState({ visible: true, title: 'Error', message: 'Could not remove contact.', variant: 'danger' });
+              showToast('error', 'Error', 'Could not remove contact.');
             }
           },
         },
-      ],
-    });
+      ]
+    );
   };
 
   const formatPhone = (raw: string) => {
@@ -305,14 +297,6 @@ export default function EmergencyContactsScreen() {
           )}
         </ScrollView>
       </KeyboardAvoidingView>
-      <CustomAlert
-        visible={alertState.visible}
-        title={alertState.title}
-        message={alertState.message}
-        variant={alertState.variant}
-        buttons={alertState.buttons || [{ text: 'OK', style: 'default' }]}
-        onClose={() => setAlertState(prev => ({ ...prev, visible: false }))}
-      />
     </SafeAreaView>
   );
 }

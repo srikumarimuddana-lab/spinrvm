@@ -604,6 +604,49 @@ export const updateDriver = (id: string, data: Record<string, any>) =>
 /* ── Earnings ─────────────────────────────── */
 export const getEarnings = () => request<any[]>("/api/admin/earnings");
 
+export type EarningsPeriod = "7d" | "30d" | "mtd" | "ytd";
+
+export interface MetricWithDelta {
+    current: number;
+    previous: number;
+    /** Null when the previous-window value was 0 — UI shows "—" instead of "+Inf%". */
+    delta_pct: number | null;
+}
+
+export interface EarningsOverview {
+    period: {
+        key: EarningsPeriod;
+        label: string;
+        days: number;
+        start: string;
+        end: string;
+        prev_start: string;
+        prev_end: string;
+    };
+    metrics: {
+        gbv: MetricWithDelta;
+        net_revenue: MetricWithDelta;
+        take_rate_pct: MetricWithDelta;
+        completed_trips: MetricWithDelta;
+        active_riders: MetricWithDelta;
+        active_drivers: MetricWithDelta;
+        avg_fare: MetricWithDelta;
+        spinr_pass_mrr: MetricWithDelta;
+    };
+    daily_series: Array<{
+        date: string;
+        gbv: number;
+        trips: number;
+        net_revenue: number;
+    }>;
+}
+
+export const getEarningsOverview = (params: { period: EarningsPeriod; service_area_id?: string }) => {
+    const sp = new URLSearchParams({ period: params.period });
+    if (params.service_area_id) sp.set("service_area_id", params.service_area_id);
+    return request<EarningsOverview>(`/api/admin/earnings/overview?${sp.toString()}`);
+};
+
 export const getSubscriptionStats = (params?: { start_date?: string; end_date?: string; service_area_ids?: string }) => {
     const sp = new URLSearchParams();
     if (params?.start_date) sp.set("start_date", params.start_date);

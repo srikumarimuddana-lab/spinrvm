@@ -510,6 +510,211 @@ function PayoutsCeoHeader({
                     )}
                 </CardContent>
             </Card>
+
+            {/* Pass 2 — operational queues. Sits below the chart so the
+                CEO header reads first, then the operator drills down
+                into "what's actually broken". */}
+            {overview && <PayoutsOpsQueues overview={overview} />}
+        </div>
+    );
+}
+
+function PayoutsOpsQueues({ overview }: { overview: PayoutsOverview }) {
+    const { failure_reasons, stuck_over_48h, blocked_drivers, top_drivers, at_risk_drivers } = overview;
+    const hasAnyHealth = stuck_over_48h.count > 0 || blocked_drivers.count > 0 || failure_reasons.length > 0;
+
+    return (
+        <div className="space-y-4">
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+                Operational queues
+            </h2>
+
+            {/* Health-summary row. Stuck + Blocked are "right now"
+                counters that need intervention; rendered as alert-toned
+                cards so a non-zero value reads as a thing to address. */}
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                <Card className={`border-border/50 ${stuck_over_48h.count > 0 ? "border-amber-300 dark:border-amber-800" : ""}`}>
+                    <CardContent className="p-4">
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">
+                                <Hourglass className="h-3.5 w-3.5" />
+                                Stuck &gt; 48h
+                            </div>
+                            <span className="text-[10px] text-muted-foreground">manual review</span>
+                        </div>
+                        <p className={`text-2xl font-bold tabular-nums mt-1.5 ${stuck_over_48h.count > 0 ? "text-amber-600 dark:text-amber-400" : ""}`}>
+                            {stuck_over_48h.count}
+                        </p>
+                        <p className="text-[11px] text-muted-foreground mt-1">{fmtMoney(stuck_over_48h.amount)} held up</p>
+                    </CardContent>
+                </Card>
+                <Card className={`border-border/50 ${blocked_drivers.count > 0 ? "border-red-300 dark:border-red-800" : ""}`}>
+                    <CardContent className="p-4">
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">
+                                <XCircle className="h-3.5 w-3.5" />
+                                Blocked by Stripe
+                            </div>
+                            <span className="text-[10px] text-muted-foreground">payouts_enabled=false</span>
+                        </div>
+                        <p className={`text-2xl font-bold tabular-nums mt-1.5 ${blocked_drivers.count > 0 ? "text-red-600 dark:text-red-400" : ""}`}>
+                            {blocked_drivers.count}
+                        </p>
+                        <p className="text-[11px] text-muted-foreground mt-1">{fmtMoney(blocked_drivers.outstanding_balance)} undeliverable</p>
+                    </CardContent>
+                </Card>
+                <Card className="border-border/50">
+                    <CardContent className="p-4">
+                        <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">
+                                <AlertTriangle className="h-3.5 w-3.5" />
+                                Failure buckets
+                            </div>
+                            <span className="text-[10px] text-muted-foreground">top reasons</span>
+                        </div>
+                        <p className="text-2xl font-bold tabular-nums mt-1.5">{failure_reasons.length}</p>
+                        <p className="text-[11px] text-muted-foreground mt-1">distinct error groups in window</p>
+                    </CardContent>
+                </Card>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                {/* Failure reasons table. Sorted by count desc on the
+                    backend; truncates long error strings (already
+                    bucketed there) and shows count + amount. */}
+                <Card className="border-border/50">
+                    <CardHeader className="pb-2">
+                        <CardTitle className="text-sm flex items-center gap-2">
+                            <AlertTriangle className="h-4 w-4 text-red-500" />
+                            Why payouts are failing
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent className="p-0">
+                        {failure_reasons.length === 0 ? (
+                            <div className="px-6 py-10 text-center text-muted-foreground text-xs">
+                                No failed payouts in this window. {hasAnyHealth ? "" : "Looking good."}
+                            </div>
+                        ) : (
+                            <Table>
+                                <TableHeader>
+                                    <TableRow>
+                                        <TableHead className="text-[11px] uppercase tracking-wide h-9">Reason</TableHead>
+                                        <TableHead className="text-[11px] uppercase tracking-wide h-9 text-right">Count</TableHead>
+                                        <TableHead className="text-[11px] uppercase tracking-wide h-9 text-right">Amount</TableHead>
+                                    </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                    {failure_reasons.map((r) => (
+                                        <TableRow key={r.reason}>
+                                            <TableCell className="text-xs font-mono truncate max-w-[280px]" title={r.reason}>{r.reason}</TableCell>
+                                            <TableCell className="text-xs text-right tabular-nums font-semibold">{r.count}</TableCell>
+                                            <TableCell className="text-xs text-right tabular-nums">{fmtMoney(r.amount)}</TableCell>
+                                        </TableRow>
+                                    ))}
+                                </TableBody>
+                            </Table>
+                        )}
+                    </CardContent>
+                </Card>
+
+                {/* At-risk drivers — multi-failure list. Sorted by failure
+                    count desc on backend. Click navigates to the driver's
+                    Payouts tab in the existing slideout via the drivers
+                    page's id param. */}
+                <Card className="border-border/50">
+                    <CardHeader className="pb-2">
+                        <CardTitle className="text-sm flex items-center gap-2">
+                            <UserCheck className="h-4 w-4 text-amber-500" />
+                            At-risk drivers
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent className="p-0">
+                        {at_risk_drivers.length === 0 ? (
+                            <div className="px-6 py-10 text-center text-muted-foreground text-xs">
+                                No drivers with multiple failures in this window.
+                            </div>
+                        ) : (
+                            <Table>
+                                <TableHeader>
+                                    <TableRow>
+                                        <TableHead className="text-[11px] uppercase tracking-wide h-9">Driver</TableHead>
+                                        <TableHead className="text-[11px] uppercase tracking-wide h-9 text-right">Failures</TableHead>
+                                        <TableHead className="text-[11px] uppercase tracking-wide h-9">Last reason</TableHead>
+                                    </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                    {at_risk_drivers.map((d) => (
+                                        <TableRow key={d.driver_id}>
+                                            <TableCell className="text-xs">
+                                                <a
+                                                    href={`/dashboard/drivers?id=${d.driver_id}`}
+                                                    className="hover:underline font-medium truncate block max-w-[160px]"
+                                                    title={d.name}
+                                                >
+                                                    {d.name}
+                                                </a>
+                                            </TableCell>
+                                            <TableCell className="text-xs text-right tabular-nums font-semibold text-red-600 dark:text-red-400">
+                                                {d.failure_count}
+                                            </TableCell>
+                                            <TableCell className="text-xs text-muted-foreground font-mono truncate max-w-[220px]" title={d.last_reason ?? ""}>
+                                                {d.last_reason ? (d.last_reason.length > 40 ? d.last_reason.slice(0, 40) + "…" : d.last_reason) : "—"}
+                                            </TableCell>
+                                        </TableRow>
+                                    ))}
+                                </TableBody>
+                            </Table>
+                        )}
+                    </CardContent>
+                </Card>
+            </div>
+
+            {/* Top earning drivers in window — for relationship-management
+                and "who do we owe the most this week" context. */}
+            <Card className="border-border/50">
+                <CardHeader className="pb-2">
+                    <CardTitle className="text-sm flex items-center gap-2">
+                        <TrendingUp className="h-4 w-4 text-emerald-500" />
+                        Top drivers by payout volume
+                    </CardTitle>
+                </CardHeader>
+                <CardContent className="p-0">
+                    {top_drivers.length === 0 ? (
+                        <div className="px-6 py-10 text-center text-muted-foreground text-xs">
+                            No completed payouts in this window.
+                        </div>
+                    ) : (
+                        <Table>
+                            <TableHeader>
+                                <TableRow>
+                                    <TableHead className="text-[11px] uppercase tracking-wide h-9">#</TableHead>
+                                    <TableHead className="text-[11px] uppercase tracking-wide h-9">Driver</TableHead>
+                                    <TableHead className="text-[11px] uppercase tracking-wide h-9 text-right">Payouts</TableHead>
+                                    <TableHead className="text-[11px] uppercase tracking-wide h-9 text-right">Total</TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {top_drivers.map((d, i) => (
+                                    <TableRow key={d.driver_id}>
+                                        <TableCell className="text-xs text-muted-foreground font-mono">{i + 1}</TableCell>
+                                        <TableCell className="text-xs">
+                                            <a
+                                                href={`/dashboard/drivers?id=${d.driver_id}`}
+                                                className="hover:underline font-medium truncate block max-w-[220px]"
+                                                title={d.name}
+                                            >
+                                                {d.name}
+                                            </a>
+                                        </TableCell>
+                                        <TableCell className="text-xs text-right tabular-nums">{d.payout_count}</TableCell>
+                                        <TableCell className="text-sm text-right tabular-nums font-semibold">{fmtMoney(d.amount)}</TableCell>
+                                    </TableRow>
+                                ))}
+                            </TableBody>
+                        </Table>
+                    )}
+                </CardContent>
+            </Card>
         </div>
     );
 }

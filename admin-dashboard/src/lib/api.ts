@@ -1867,6 +1867,13 @@ export interface PayoutsOverview {
         pending: number;
         failed: number;
     }>;
+    // Pass 2 — operational queues. None carry PoP because they're
+    // "right now" lists rather than period totals.
+    failure_reasons: Array<{ reason: string; count: number; amount: number }>;
+    stuck_over_48h: { count: number; amount: number };
+    blocked_drivers: { count: number; outstanding_balance: number };
+    top_drivers: Array<{ driver_id: string; name: string; amount: number; payout_count: number }>;
+    at_risk_drivers: Array<{ driver_id: string; name: string; failure_count: number; last_reason: string | null }>;
 }
 
 export const getPayoutsOverview = (params: { period: EarningsPeriod; service_area_id?: string }) => {

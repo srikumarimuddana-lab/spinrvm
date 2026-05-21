@@ -1,0 +1,197 @@
+"""Tests for instant-payout (Stripe Instant Pay) in routes/drivers.py.
+
+Covers the fee math and the endpoint plumbing — Stripe is mocked.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from decimal import Decimal
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from fastapi import HTTPException
+
+# ── Fee math ─────────────────────────────────────────────────────────────
+
+
+class TestComputeInstantPayoutFee:
+    def test_min_floor_applies_for_small_amounts(self):
+        from backend.routes.drivers import INSTANT_PAYOUT_MIN_FEE, compute_instant_payout_fee
+
+        # 1.5% of $5 = $0.075 — well below the $0.50 floor.
+        assert compute_instant_payout_fee(Decimal("5.00")) == INSTANT_PAYOUT_MIN_FEE
+
+    def test_percentage_applies_in_band(self):
+        from backend.routes.drivers import compute_instant_payout_fee
+
+        # 1.5% of $100 = $1.50, within floor/ceiling.
+        assert compute_instant_payout_fee(Decimal("100.00")) == Decimal("1.50")
+
+    def test_max_ceiling_applies_for_large_amounts(self):
+        from backend.routes.drivers import INSTANT_PAYOUT_MAX_FEE, compute_instant_payout_fee
+
+        # 1.5% of $5000 = $75 — capped at $15.
+        assert compute_instant_payout_fee(Decimal("5000.00")) == INSTANT_PAYOUT_MAX_FEE
+
+    def test_rounds_to_two_decimals(self):
+        from backend.routes.drivers import compute_instant_payout_fee
+
+        # 1.5% of $42.33 = $0.63495 → rounds to $0.63 (still above $0.50 floor)
+        result = compute_instant_payout_fee(Decimal("42.33"))
+        assert result == Decimal("0.63")
+
+
+# ── Endpoint plumbing ────────────────────────────────────────────────────
+
+
+USER_ID = "user_instant"
+DRIVER_ID = "driver_instant"
+
+
+def _driver(**extra):
+    return {
+        "id": DRIVER_ID,
+        "user_id": USER_ID,
+        "stripe_account_id": "acct_TEST",
+        **extra,
+    }
+
+
+def _bank_account():
+    return {
+        "driver_id": DRIVER_ID,
+        "bank_name": "Test Bank",
+        "account_last4": "1234",
+    }
+
+
+class TestRequestInstantPayout:
+    def _balance(self, payable: str = "200.00"):
+        return {
+            "payable_balance": payable,
+            "pending_payouts": "0.00",
+            "earned_today": "0.00",
+        }
+
+    def test_rejects_when_no_stripe_connect_account(self):
+        from backend.routes import drivers as drv
+
+        def get_rows_side_effect(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver(stripe_account_id=None)]
+            if table == "bank_accounts":
+                return [_bank_account()]
+            return []
+
+        req = drv.InstantPayoutRequest(amount=Decimal("50.00"))
+
+        with (
+            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch("backend.routes.drivers.get_driver_balance", AsyncMock(return_value=self._balance())),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                asyncio.run(
+                    drv.request_instant_payout(
+                        req=req,
+                        request=MagicMock(),
+                        current_user={"id": USER_ID},
+                    )
+                )
+        assert exc.value.status_code == 400
+        assert "Stripe Connect" in exc.value.detail
+
+    def test_rejects_when_insufficient_funds(self):
+        from backend.routes import drivers as drv
+
+        def get_rows_side_effect(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "bank_accounts":
+                return [_bank_account()]
+            return []
+
+        req = drv.InstantPayoutRequest(amount=Decimal("500.00"))
+
+        with (
+            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch(
+                "backend.routes.drivers.get_driver_balance",
+                AsyncMock(return_value=self._balance(payable="100.00")),
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                asyncio.run(
+                    drv.request_instant_payout(
+                        req=req,
+                        request=MagicMock(),
+                        current_user={"id": USER_ID},
+                    )
+                )
+        assert exc.value.status_code == 400
+        assert "Insufficient" in exc.value.detail
+
+    def test_happy_path_stores_fee_and_net_amount(self):
+        from backend.routes import drivers as drv
+
+        def get_rows_side_effect(table, filters=None, **kw):
+            if table == "drivers":
+                return [_driver()]
+            if table == "bank_accounts":
+                return [_bank_account()]
+            return []
+
+        captured: dict = {}
+
+        async def fake_insert(_table, payload):
+            captured.update(payload)
+            return payload
+
+        req = drv.InstantPayoutRequest(amount=Decimal("100.00"))
+
+        with (
+            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(side_effect=get_rows_side_effect)),
+            patch("backend.routes.drivers.db_supabase.insert_one", AsyncMock(side_effect=fake_insert)),
+            patch("backend.routes.drivers.get_driver_balance", AsyncMock(return_value=self._balance())),
+            patch(
+                "backend.settings_loader.get_app_settings",
+                AsyncMock(return_value={"stripe_secret_key": "sk_test_abc"}),
+            ),
+            patch("backend.routes.drivers.stripe.Transfer.create", MagicMock(return_value=MagicMock(id="tr_x"))),
+            patch(
+                "backend.routes.drivers.stripe.Payout.create",
+                MagicMock(return_value=MagicMock(id="po_INSTANT")),
+            ),
+        ):
+            result = asyncio.run(
+                drv.request_instant_payout(
+                    req=req,
+                    request=MagicMock(),
+                    current_user={"id": USER_ID},
+                )
+            )
+
+        assert result["success"] is True
+        # Fee on $100 = 1.5% = $1.50; net = $98.50
+        assert captured["amount"] == Decimal("100.00")
+        assert captured["fee"] == Decimal("1.50")
+        assert captured["net_amount"] == Decimal("98.50")
+        assert captured["payout_type"] == "instant"
+        assert captured["stripe_payout_id"] == "po_INSTANT"
+
+
+class TestInstantPayoutQuote:
+    def test_returns_fee_and_net(self):
+        from backend.routes import drivers as drv
+
+        result = asyncio.run(
+            drv.get_instant_payout_quote(
+                amount=Decimal("50.00"),
+                current_user={"id": USER_ID},
+            )
+        )
+        assert result["amount"] == "50.00"
+        # 1.5% of 50 = 0.75 (above 0.50 floor)
+        assert result["fee"] == "0.75"
+        assert result["net_amount"] == "49.25"
+        assert result["payout_type"] == "instant"

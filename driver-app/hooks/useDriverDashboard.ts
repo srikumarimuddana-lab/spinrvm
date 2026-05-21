@@ -15,12 +15,20 @@ import { useDriverConfig } from '@shared/hooks/queries';
 import { API_URL } from '@shared/config';
 import { onForegroundMessage } from '@shared/services/firebase';
 import { Dimensions } from 'react-native';
-import { startBackgroundLocation, stopBackgroundLocation } from '../utils/backgroundLocation';
+import {
+  startBackgroundLocation,
+  stopBackgroundLocation,
+  startGeofenceRecovery,
+  stopGeofenceRecovery,
+} from '../utils/backgroundLocation';
 import { checkLocationIntegrity, resetLocationIntegrity } from '../utils/locationIntegrity';
 import { startSensorMonitoring, stopSensorMonitoring, isMovementConsistentWithSpeed } from '../utils/sensorIntegrity';
 import { attestDeviceIntegrity } from '../utils/deviceIntegrity';
 
 const { height } = Dimensions.get('window');
+// Each tier doubles; last-tier jitter must be large enough to disperse a
+// thundering herd (many drivers reconnecting simultaneously after a server
+// hiccup). ±500ms at 30 s base is only 1.7% dispersal — too tight.
 const RECONNECT_DELAYS = [1000, 2000, 5000, 10000, 30000];
 const MAX_RECONNECT_ATTEMPTS = 10;
 
@@ -688,6 +696,13 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     };
 
     ws.onclose = (event) => {
+      // Guard against stale sockets: when the app foregrounds, the AppState
+      // handler resets the counter and calls connectWebSocket() before the
+      // old socket finishes CLOSING. Without this guard the old socket's
+      // onclose fires after the reset and creates a second socket, which
+      // then has onclose fire again — producing a connection-storm.
+      if (ws !== wsRef.current) return;
+
       if (isOnlineRef.current && userRef.current) {
         if (reconnectAttemptRef.current >= MAX_RECONNECT_ATTEMPTS) {
           setConnectionState('disconnected');
@@ -695,8 +710,13 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           return;
         }
         setConnectionState('reconnecting');
-        const baseDelay = RECONNECT_DELAYS[Math.min(reconnectAttemptRef.current, RECONNECT_DELAYS.length - 1)];
-        const jitter = Math.random() * 1000 - 500; // ±500 ms
+        const tier = Math.min(reconnectAttemptRef.current, RECONNECT_DELAYS.length - 1);
+        const baseDelay = RECONNECT_DELAYS[tier];
+        // Scale jitter with the base delay so at 30 s we disperse ±2 s
+        // instead of ±500 ms — avoids a thundering herd when many drivers
+        // reconnect after a server hiccup at the same time.
+        const jitterRange = Math.max(1000, baseDelay * 0.067);
+        const jitter = Math.random() * jitterRange * 2 - jitterRange;
         const delay = Math.max(500, baseDelay + jitter);
         reconnectTimeoutRef.current = setTimeout(() => {
           reconnectAttemptRef.current++;
@@ -875,10 +895,25 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         const bgStarted = await startBackgroundLocation();
         if (!bgStarted) {
           showToast('error', "Background location needed", "Enable 'Allow all the time' in Settings to keep getting ride offers while minimized.");
+        } else {
+          // Arm the killed-app geofence around the current position. If the
+          // user force-swipes Spinr, the OS still wakes the process when
+          // they cross the boundary and the geofence task re-arms tracking
+          // — without this, the driver is invisible to dispatch until they
+          // manually relaunch the app. Non-fatal: if location isn't ready
+          // yet we just skip; the next significant movement won't re-arm,
+          // but the foreground service is still running.
+          const loc = locationRef.current;
+          if (loc) {
+            await startGeofenceRecovery(loc.coords.latitude, loc.coords.longitude).catch((e) => {
+              console.warn('[toggleOnline] geofence arm failed:', e);
+            });
+          }
         }
       } else {
         stopSensorMonitoring();
         await stopBackgroundLocation();
+        await stopGeofenceRecovery().catch(() => {});
         resetLocationIntegrity();
       }
     } catch (e) {

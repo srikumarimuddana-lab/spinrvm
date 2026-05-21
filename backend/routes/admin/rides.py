@@ -2288,6 +2288,33 @@ async def admin_get_payouts(
     return enriched
 
 
+# IMPORTANT: keep this BEFORE @router.get("/payouts/{payout_id}").
+# FastAPI matches routes in registration order — if /payouts/{payout_id}
+# is registered first, GET /payouts/stats matches it with payout_id="stats"
+# and returns 404 (the admin dashboard then crashes on the missing stats
+# response). Any future /payouts/<literal> route must go above the
+# {payout_id} handler for the same reason.
+@router.get("/payouts/stats")
+async def admin_get_payout_stats():
+    """Get payout stats: total paid, pending, failed."""
+    try:
+        all_payouts = await db.get_rows("payouts", {}, limit=10000)
+    except Exception:
+        all_payouts = []
+
+    total_paid = float(sum(Decimal(str(p.get("amount", 0))) for p in all_payouts if p.get("status") == "completed"))
+    total_pending = float(sum(Decimal(str(p.get("amount", 0))) for p in all_payouts if p.get("status") == "pending"))
+    total_failed = float(sum(Decimal(str(p.get("amount", 0))) for p in all_payouts if p.get("status") == "failed"))
+
+    return {
+        "total_paid": round(total_paid, 2),
+        "total_pending": round(total_pending, 2),
+        "total_failed": round(total_failed, 2),
+        "payout_count": len(all_payouts),
+        "pending_count": sum(1 for p in all_payouts if p.get("status") == "pending"),
+    }
+
+
 @router.get("/payouts/{payout_id}")
 async def admin_get_payout(payout_id: str, _: dict = Depends(get_admin_user)):
     """Return a single payout record by ID."""

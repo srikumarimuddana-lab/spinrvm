@@ -1,7 +1,7 @@
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -1342,6 +1342,163 @@ async def admin_get_driver_live_stats(driver_id: str):
         "acceptance_rate": acceptance_rate,
         "cancelled_by_driver": cancelled_by_driver,
         "total_assigned": total_assigned,
+    }
+
+
+@router.get("/drivers/{driver_id}/payouts-summary")
+async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50, ge=1, le=200)):
+    """Comprehensive payout view for the driver slideout's Payouts tab.
+
+    Returns the same operational picture an Uber/Lyft fleet-ops admin needs
+    when investigating an earnings or payout question:
+
+      - summary        — lifetime / paid-out / pending / on-hold / YTD,
+                         last payout date+amount, tips
+      - payment_method — bank-account preview + Stripe Connect status
+      - payouts        — newest-first list (capped by `limit`) ready to
+                         render in a table with a Retry action for the
+                         failed rows
+
+    Money is computed with Decimal then surfaced as float for the JSON
+    layer. The drivers.total_earnings column is ignored on purpose — it's
+    never maintained in production (see admin_get_driver_live_stats
+    comment for why).
+    """
+    driver = await db_supabase.get_driver_by_id(driver_id)
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    # ---- Aggregate from rides ----
+    rides = await db_supabase.get_rows(
+        "rides",
+        {"driver_id": driver_id, "status": "completed"},
+        limit=10000,
+    )
+
+    def _dec(x: Any) -> Decimal:
+        try:
+            return Decimal(str(x or 0))
+        except (InvalidOperation, ValueError):
+            return Decimal("0")
+
+    lifetime_earnings = sum((_dec(r.get("driver_earnings")) for r in rides), Decimal("0"))
+    lifetime_tips = sum((_dec(r.get("tip_amount")) for r in rides), Decimal("0"))
+
+    year_start = datetime(datetime.now(timezone.utc).year, 1, 1, tzinfo=timezone.utc).isoformat()
+    ytd_earnings = sum(
+        (
+            _dec(r.get("driver_earnings"))
+            for r in rides
+            if (r.get("completed_at") or r.get("created_at") or "") >= year_start
+        ),
+        Decimal("0"),
+    )
+
+    # Active days in last 30d — same definition the driver app's "Active
+    # days" earnings metric uses (≥1 completed ride on that calendar date).
+    thirty_days_ago = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    recent_dates = {
+        (r.get("completed_at") or r.get("created_at") or "")[:10]
+        for r in rides
+        if (r.get("completed_at") or r.get("created_at") or "") >= thirty_days_ago
+    }
+    active_days_30d = len([d for d in recent_dates if d])
+
+    # ---- Aggregate from payouts ----
+    payouts = await db_supabase.get_rows(
+        "payouts",
+        {"driver_id": driver_id},
+        order="created_at",
+        desc=True,
+        limit=max(limit, 200),
+    )
+
+    def _sum_by_status(*statuses: str) -> Decimal:
+        return sum(
+            (_dec(p.get("amount")) for p in payouts if p.get("status") in statuses),
+            Decimal("0"),
+        )
+
+    total_paid_out = _sum_by_status("completed")
+    pending_in_flight = _sum_by_status("pending", "processing")
+    on_hold = _sum_by_status("failed")
+
+    # Amount owed to the driver that hasn't been queued for payout yet.
+    # Negative would mean we've paid out more than they earned — guard
+    # by clamping at zero so the UI never shows a confusing negative
+    # owed balance (admins resolve that via a separate clawback flow).
+    pending_balance = max(lifetime_earnings - total_paid_out - pending_in_flight, Decimal("0"))
+
+    last_completed = next((p for p in payouts if p.get("status") == "completed"), None)
+    last_failed = next((p for p in payouts if p.get("status") == "failed"), None)
+
+    # ---- Payment method ----
+    bank = (lambda _r: _r[0] if _r else None)(
+        await db_supabase.get_rows("bank_accounts", {"driver_id": driver_id}, limit=1)
+    )
+    stripe_account_id = driver.get("stripe_account_id")
+    payment_method = {
+        "has_bank_account": bool(bank or stripe_account_id),
+        "bank_name": (bank or {}).get("bank_name"),
+        "account_last4": (bank or {}).get("account_last4"),
+        "account_holder_name": (bank or {}).get("account_holder_name"),
+        "account_type": (bank or {}).get("account_type"),
+        "is_verified": bool((bank or {}).get("is_verified")) if bank else None,
+        "stripe_connected": bool(stripe_account_id),
+        # Last 6 of the Stripe account id is enough for an operator to
+        # confirm the right connect account is wired up without leaking
+        # the full id (acct_xxx) into the admin frontend.
+        "stripe_account_hint": (stripe_account_id[-6:] if stripe_account_id else None),
+    }
+
+    return {
+        "summary": {
+            "lifetime_earnings": float(lifetime_earnings),
+            "lifetime_tips": float(lifetime_tips),
+            "ytd_earnings": float(ytd_earnings),
+            "total_paid_out": float(total_paid_out),
+            "pending_in_flight": float(pending_in_flight),
+            "pending_balance": float(pending_balance),
+            "on_hold": float(on_hold),
+            "rides_count": len(rides),
+            "active_days_30d": active_days_30d,
+            "last_payout": (
+                {
+                    "id": last_completed.get("id"),
+                    "amount": float(_dec(last_completed.get("amount"))),
+                    "processed_at": last_completed.get("processed_at") or last_completed.get("created_at"),
+                    "bank_name": last_completed.get("bank_name"),
+                    "account_last4": last_completed.get("account_last4"),
+                }
+                if last_completed
+                else None
+            ),
+            "last_failed_payout": (
+                {
+                    "id": last_failed.get("id"),
+                    "amount": float(_dec(last_failed.get("amount"))),
+                    "error_message": last_failed.get("error_message"),
+                    "created_at": last_failed.get("created_at"),
+                }
+                if last_failed
+                else None
+            ),
+        },
+        "payment_method": payment_method,
+        "payouts": [
+            {
+                "id": p.get("id"),
+                "amount": float(_dec(p.get("amount"))),
+                "status": p.get("status"),
+                "stripe_payout_id": p.get("stripe_payout_id"),
+                "bank_name": p.get("bank_name"),
+                "account_last4": p.get("account_last4"),
+                "error_message": p.get("error_message"),
+                "created_at": p.get("created_at"),
+                "processed_at": p.get("processed_at"),
+            }
+            for p in payouts[:limit]
+        ],
     }
 
 

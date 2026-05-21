@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import {
     RefreshCw,
     FileWarning,
@@ -28,6 +27,7 @@ import {
 import { useToast } from "@/components/ui/use-toast";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { QueueStats } from "./_components/queue-stats";
+import { DocumentReviewer } from "../_components/document-reviewer";
 
 const formatTimeInQueue = (seconds: number) => {
     if (seconds < 60) return `${seconds}s`;
@@ -61,6 +61,7 @@ export default function ApprovalQueuePage() {
     const [serviceAreaId, setServiceAreaId] = useState<string>("all");
     const [serviceAreas, setServiceAreas] = useState<Array<{ id: string; name?: string }>>([]);
     const [refreshing, setRefreshing] = useState(false);
+    const [reviewerDriver, setReviewerDriver] = useState<{ id: string; name: string } | null>(null);
 
     const load = useCallback(async () => {
         try {
@@ -209,17 +210,28 @@ export default function ApprovalQueuePage() {
                                 {it.service_area_name || "—"}
                             </div>
                             <div className="text-right">
-                                <Link href="/dashboard/drivers">
-                                    <Button size="sm" variant="default" className="h-8">
-                                        Review
-                                        <ChevronRight className="h-3.5 w-3.5 ml-0.5" />
-                                    </Button>
-                                </Link>
+                                <Button
+                                    size="sm"
+                                    variant="default"
+                                    className="h-8"
+                                    onClick={() => setReviewerDriver({ id: it.driver_id, name: it.name || it.email || it.driver_id })}
+                                >
+                                    Review
+                                    <ChevronRight className="h-3.5 w-3.5 ml-0.5" />
+                                </Button>
                             </div>
                         </div>
                     ))
                 )}
             </div>
+
+            <DocumentReviewer
+                open={!!reviewerDriver}
+                driverId={reviewerDriver?.id || null}
+                driverName={reviewerDriver?.name}
+                onClose={() => setReviewerDriver(null)}
+                onAfterAction={load}
+            />
         </div>
     );
 }

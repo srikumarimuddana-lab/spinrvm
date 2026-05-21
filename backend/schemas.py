@@ -149,6 +149,9 @@ class AppSettings(BaseModel):
     # bundled placeholder mp3. Uploaded via the admin dashboard into
     # Supabase Storage bucket `audio-assets`.
     ride_offer_sound_url: str = ""
+    # Distribution list for safety-incident transactional emails. See
+    # migration 95 + the _notify_safety_team helper in features.py.
+    safety_alert_emails: str = ""
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 

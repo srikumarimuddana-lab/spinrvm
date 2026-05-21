@@ -576,9 +576,9 @@ export default function DriversPage() {
                                                 <div><label className="text-[11px] text-muted-foreground mb-1 block">Service Area</label><Select value={ef("service_area_id") || "none"} onValueChange={v => setEf("service_area_id", v === "none" ? "" : v)}><SelectTrigger className="h-9 text-sm"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">Not assigned</SelectItem>{allServiceAreas.map(a => <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>)}</SelectContent></Select></div>
                                             </div>
                                         ) : (
-                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                                <DetailField icon={Mail} label="Email" value={selected.email || "\u2014"} />
-                                                <DetailField icon={Phone} label="Phone" value={selected.phone || "\u2014"} />
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                                                <CopyableField icon={Mail} label="Email" value={selected.email} />
+                                                <CopyableField icon={Phone} label="Phone" value={selected.phone} />
                                                 <DetailField icon={MapPin} label="City" value={selected.city || "\u2014"} />
                                                 <DetailField icon={MapPin} label="Service Area" value={serviceAreas.find(a => a.id === selected.service_area_id)?.name || selected.service_area_id?.slice(0, 8) || "Not assigned"} />
                                             </div>
@@ -644,25 +644,47 @@ export default function DriversPage() {
                                                 </div>
                                             );
                                         })() : (
-                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                                <DetailField icon={Car} label="Vehicle Type" value={vehicleTypes.find(v => v.id === selected.vehicle_type_id)?.name || (selected.vehicle_type_id ? selected.vehicle_type_id.slice(0, 8) : "Not assigned")} />
-                                                <DetailField icon={Car} label="Vehicle" value={`${selected.vehicle_color || ""} ${selected.vehicle_make || ""} ${selected.vehicle_model || ""}`.trim() || "\u2014"} />
-                                                <DetailField icon={CalendarRange} label="Year" value={selected.vehicle_year || "\u2014"} />
-                                                <DetailField icon={FileText} label="License Plate" value={selected.license_plate || "\u2014"} mono />
-                                                <DetailField icon={FileText} label="VIN" value={selected.vehicle_vin || "\u2014"} mono />
-                                            </div>
+                                            <>
+                                                <div className="grid grid-cols-2 gap-2.5">
+                                                    <DetailField icon={Car} label="Vehicle Type" value={vehicleTypes.find(v => v.id === selected.vehicle_type_id)?.name || (selected.vehicle_type_id ? selected.vehicle_type_id.slice(0, 8) : "Not assigned")} />
+                                                    <DetailField icon={CalendarRange} label="Year" value={selected.vehicle_year ? String(selected.vehicle_year) : "\u2014"} />
+                                                    <DetailField icon={Car} label="Make" value={selected.vehicle_make || "\u2014"} />
+                                                    <DetailField icon={Car} label="Model" value={selected.vehicle_model || "\u2014"} />
+                                                    <DetailField icon={Car} label="Color" value={selected.vehicle_color || "\u2014"} />
+                                                    <DetailField icon={FileText} label="License Plate" value={selected.license_plate || "\u2014"} mono />
+                                                </div>
+                                                <div className="mt-2.5">
+                                                    <DetailField icon={FileText} label="VIN" value={selected.vehicle_vin || "\u2014"} mono />
+                                                </div>
+                                            </>
                                         )}
                                     </DetailSection>
                                     <DetailSection title="Spinr Pass" icon={CreditCard}>
                                         {selected.subscription_status === "active" ? (
-                                            <div className="flex items-center gap-3 bg-violet-50 dark:bg-violet-900/20 rounded-xl p-4 border border-violet-200 dark:border-violet-800"><div className="w-10 h-10 rounded-xl bg-violet-100 dark:bg-violet-900/30 flex items-center justify-center"><CreditCard className="h-5 w-5 text-violet-600 dark:text-violet-400" /></div><div><p className="text-sm font-semibold text-violet-700 dark:text-violet-300">{selected.subscription_plan || "Active Plan"}</p><p className="text-xs text-violet-600/70 dark:text-violet-400/70">Subscription active</p></div></div>
+                                            <div className="flex items-center gap-3">
+                                                <div className="w-9 h-9 rounded-xl bg-violet-100 dark:bg-violet-900/30 flex items-center justify-center shrink-0">
+                                                    <CreditCard className="h-4 w-4 text-violet-600 dark:text-violet-400" />
+                                                </div>
+                                                <div className="flex-1 min-w-0">
+                                                    <p className="text-sm font-semibold text-violet-700 dark:text-violet-300">{selected.subscription_plan || "Active Plan"}</p>
+                                                    <p className="text-xs text-violet-600/70 dark:text-violet-400/70 mt-0.5">Subscription active</p>
+                                                </div>
+                                                <span className="inline-flex items-center px-2.5 py-1 rounded-full bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300 text-[10px] font-bold uppercase tracking-wide shrink-0">
+                                                    Active
+                                                </span>
+                                            </div>
                                         ) : (
-                                            <div className="flex items-center gap-3 bg-muted/30 rounded-xl p-4"><div className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center"><CreditCard className="h-5 w-5 text-muted-foreground" /></div><div><p className="text-sm font-medium text-muted-foreground">No active subscription</p></div></div>
+                                            <div className="flex items-center gap-3">
+                                                <div className="w-9 h-9 rounded-xl bg-muted flex items-center justify-center shrink-0">
+                                                    <CreditCard className="h-4 w-4 text-muted-foreground" />
+                                                </div>
+                                                <p className="text-sm text-muted-foreground">No active subscription</p>
+                                            </div>
                                         )}
                                     </DetailSection>
-                                    <div className="bg-muted/30 rounded-xl p-4 space-y-2">
-                                        <div className="flex items-center justify-between text-sm"><span className="text-muted-foreground">Joined</span><span className="font-medium">{fmtDate(selected.created_at)}</span></div>
-                                        <div className="flex items-center justify-between text-sm"><span className="text-muted-foreground">Last updated</span><span className="font-medium">{fmtDate(selected.updated_at)}</span></div>
+                                    <div className="grid grid-cols-2 gap-2.5">
+                                        <DetailField icon={CalendarRange} label="Joined" value={fmtDate(selected.created_at)} />
+                                        <DetailField icon={Clock} label="Last Updated" value={fmtDate(selected.updated_at)} />
                                     </div>
                                 </TabsContent>
 
@@ -908,11 +930,61 @@ function QuickStat({ icon: Icon, color, bg, label, value }: { icon: any; color: 
 }
 
 function DetailSection({ title, icon: Icon, children }: { title: string; icon: any; children: React.ReactNode }) {
-    return <div><div className="flex items-center gap-2 mb-3"><Icon className="h-4 w-4 text-muted-foreground" /><h4 className="text-sm font-semibold">{title}</h4></div><div className="bg-muted/20 rounded-xl p-4 border border-border/50">{children}</div></div>;
+    return (
+        <div>
+            <div className="flex items-center gap-2 mb-2.5">
+                <div className="w-6 h-6 rounded-md bg-muted/60 flex items-center justify-center shrink-0">
+                    <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+                </div>
+                <h4 className="text-sm font-semibold tracking-tight">{title}</h4>
+            </div>
+            <div className="bg-muted/10 rounded-xl p-3.5 border border-border/60">
+                {children}
+            </div>
+        </div>
+    );
 }
 
 function DetailField({ icon: Icon, label, value, mono }: { icon: any; label: string; value: string; mono?: boolean }) {
-    return <div className="flex items-center gap-2.5"><Icon className="h-4 w-4 text-muted-foreground shrink-0" /><div className="min-w-0"><p className="text-[11px] text-muted-foreground">{label}</p><p className={`text-sm font-medium truncate ${mono ? "font-mono tracking-wider" : ""}`}>{value}</p></div></div>;
+    return (
+        <div className="bg-background border border-border/60 rounded-lg px-3 py-2.5 flex items-center gap-3 min-w-0">
+            <div className="shrink-0 w-7 h-7 rounded-md bg-muted/50 flex items-center justify-center">
+                <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+            </div>
+            <div className="min-w-0">
+                <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide leading-none">{label}</p>
+                <p className={`text-sm font-medium truncate leading-tight mt-1 ${mono ? "font-mono tracking-wide text-xs" : ""}`}>{value}</p>
+            </div>
+        </div>
+    );
+}
+
+function CopyableField({ icon: Icon, label, value }: { icon: any; label: string; value?: string }) {
+    const { toast } = useToast();
+    const display = value || "—";
+    const canCopy = !!value;
+    const copy = () => {
+        if (!canCopy) return;
+        navigator.clipboard.writeText(value!);
+        toast({ description: `${label} copied`, duration: 1500 });
+    };
+    return (
+        <button
+            type="button"
+            onClick={copy}
+            disabled={!canCopy}
+            className="text-left bg-background border border-border/60 rounded-lg px-3 py-2.5 flex items-center gap-3 min-w-0 w-full hover:bg-muted/30 transition-colors group disabled:cursor-default disabled:opacity-70 disabled:hover:bg-transparent"
+        >
+            <div className="shrink-0 w-7 h-7 rounded-md bg-muted/50 flex items-center justify-center">
+                <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+            </div>
+            <div className="min-w-0 flex-1">
+                <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide leading-none">{label}</p>
+                <p className="text-sm font-medium truncate leading-tight mt-1">{display}</p>
+            </div>
+            {canCopy && <Copy className="h-3.5 w-3.5 text-muted-foreground/30 group-hover:text-muted-foreground shrink-0 transition-colors" />}
+        </button>
+    );
 }
 
 function EditField({ label, value, onChange, type = "text" }: { label: string; value: string; onChange: (v: string) => void; type?: string }) {

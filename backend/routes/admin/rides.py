@@ -1264,6 +1264,15 @@ async def admin_get_earnings(period: str = Query("month")):
 
 _PERIOD_DAYS = {"7d": 7, "30d": 30, "mtd": None, "ytd": None}
 
+# Module-level so both the earnings overview and payouts overview
+# endpoints render the same human label for a period key.
+_PERIOD_LABELS = {
+    "7d": "Last 7 days",
+    "30d": "Last 30 days",
+    "mtd": "Month to date",
+    "ytd": "Year to date",
+}
+
 
 def _resolve_period(period: str, now: datetime) -> tuple[datetime, datetime, datetime, datetime, int]:
     """Map a period label to (current_start, current_end, prev_start, prev_end, days).
@@ -1545,12 +1554,10 @@ async def admin_get_earnings_overview(
             )
     daily_series = list(daily.values())
 
-    period_labels = {"7d": "Last 7 days", "30d": "Last 30 days", "mtd": "Month to date", "ytd": "Year to date"}
-
     return {
         "period": {
             "key": period,
-            "label": period_labels[period],
+            "label": _PERIOD_LABELS[period],
             "days": days,
             "start": start.isoformat(),
             "end": end.isoformat(),
@@ -1709,6 +1716,233 @@ async def admin_export_drivers(
 
 
 # ---------- Payouts ----------
+
+
+@router.get("/payouts/overview")
+async def admin_get_payouts_overview(
+    period: str = Query("7d", pattern="^(7d|30d|mtd|ytd)$"),
+    service_area_id: Optional[str] = None,
+):
+    """CEO/CFO-grade payouts dashboard.
+
+    Mirrors the shape of admin_get_earnings_overview so the frontend can
+    reuse MetricCard / DeltaChip / the period chip group. Answers
+    "is payout flow healthy?" without forcing the operator to read the
+    transaction log.
+
+    Money helpers, _resolve_period and _metric live in the same file
+    (added with the earnings overview endpoint) — re-used here.
+
+    Service-area scoping: payouts have no service_area_id column, so we
+    resolve area → driver_ids first and filter the payout set against
+    that. Cheap because area-bounded driver lists are small.
+    """
+    now = datetime.now(timezone.utc)
+    start, end, prev_start, prev_end, _days = _resolve_period(period, now)
+
+    # ── Driver-set scoping when an area filter is set ────────────────────
+    driver_id_filter: Optional[set[str]] = None
+    if service_area_id:
+        area_drivers = await db_supabase.get_rows("drivers", {"service_area_id": service_area_id}, limit=5000)
+        driver_id_filter = {d["id"] for d in area_drivers if d.get("id")}
+        if not driver_id_filter:
+            # No drivers in this area — return an empty shell so the UI
+            # renders zeroes instead of erroring out.
+            empty = _metric(0.0, 0.0)
+            return {
+                "period": {
+                    "key": period,
+                    "label": _PERIOD_LABELS[period],
+                    "days": _days,
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                    "prev_start": prev_start.isoformat(),
+                    "prev_end": prev_end.isoformat(),
+                },
+                "metrics": {
+                    "outstanding_payable": empty,
+                    "total_paid_out": empty,
+                    "pending_in_flight": empty,
+                    "failed_amount": empty,
+                    "success_rate_pct": empty,
+                    "median_time_to_payout_hours": empty,
+                    "avg_payout_amount": empty,
+                    "payouts_count": empty,
+                },
+                "daily_series": [],
+            }
+
+    def _in_scope(row: Dict[str, Any]) -> bool:
+        return driver_id_filter is None or row.get("driver_id") in driver_id_filter
+
+    # ── Outstanding payable balance ──────────────────────────────────────
+    # Lifetime sum of driver_earnings on completed rides minus payouts
+    # that have either completed or are mid-flight. NOT scoped to the
+    # period — this is a "right now" snapshot. Showing PoP delta against
+    # "same number of days ago" so the operator can see whether the
+    # backlog is growing or shrinking.
+    def _sum(rows: list, key: str) -> Decimal:
+        return sum((Decimal(str(r.get(key) or 0)) for r in rows if _in_scope(r)), Decimal("0"))
+
+    all_completed_rides = await db_supabase.get_rows("rides", {"status": "completed"}, limit=200000)
+    all_payouts = await db_supabase.get_rows("payouts", {}, limit=200000)
+
+    earned_total = _sum(all_completed_rides, "driver_earnings")
+    paid_or_in_flight = sum(
+        (
+            Decimal(str(p.get("amount") or 0))
+            for p in all_payouts
+            if _in_scope(p) and p.get("status") in ("completed", "pending", "processing")
+        ),
+        Decimal("0"),
+    )
+    outstanding_now = max(earned_total - paid_or_in_flight, Decimal("0"))
+
+    # Same calculation snapshot at prev_end so we can show delta.
+    end_iso = end.isoformat()
+    prev_end_iso = prev_end.isoformat()
+
+    def _completed_up_to(rows: list, ts: str) -> Decimal:
+        return sum(
+            (
+                Decimal(str(r.get("driver_earnings") or 0))
+                for r in rows
+                if _in_scope(r) and (r.get("ride_completed_at") or r.get("updated_at") or "") <= ts
+            ),
+            Decimal("0"),
+        )
+
+    def _paid_up_to(rows: list, ts: str) -> Decimal:
+        return sum(
+            (
+                Decimal(str(p.get("amount") or 0))
+                for p in rows
+                if _in_scope(p)
+                and p.get("status") in ("completed", "pending", "processing")
+                and (p.get("created_at") or "") <= ts
+            ),
+            Decimal("0"),
+        )
+
+    outstanding_now_calc = _completed_up_to(all_completed_rides, end_iso) - _paid_up_to(all_payouts, end_iso)
+    outstanding_prev = _completed_up_to(all_completed_rides, prev_end_iso) - _paid_up_to(all_payouts, prev_end_iso)
+    outstanding_now_calc = max(outstanding_now_calc, Decimal("0"))
+    outstanding_prev = max(outstanding_prev, Decimal("0"))
+
+    # ── Period-windowed payout metrics ───────────────────────────────────
+    def _in_window(p: Dict[str, Any], lo: datetime, hi: datetime) -> bool:
+        # Completed payouts use processed_at when present (matches the
+        # actual settlement date); pending/failed use created_at since
+        # processed_at is null. Either way it's the operationally-relevant
+        # timestamp.
+        ts = p.get("processed_at") or p.get("created_at") or ""
+        return lo.isoformat() <= ts <= hi.isoformat()
+
+    cur_payouts = [p for p in all_payouts if _in_scope(p) and _in_window(p, start, end)]
+    prev_payouts = [p for p in all_payouts if _in_scope(p) and _in_window(p, prev_start, prev_end)]
+
+    def _by_status(rows: list, *statuses: str) -> list:
+        return [p for p in rows if p.get("status") in statuses]
+
+    cur_completed = _by_status(cur_payouts, "completed")
+    prev_completed = _by_status(prev_payouts, "completed")
+    cur_pending = _by_status(cur_payouts, "pending", "processing")
+    prev_pending = _by_status(prev_payouts, "pending", "processing")
+    cur_failed = _by_status(cur_payouts, "failed")
+    prev_failed = _by_status(prev_payouts, "failed")
+
+    def _amt(rows: list) -> float:
+        return float(sum((Decimal(str(r.get("amount") or 0)) for r in rows), Decimal("0")))
+
+    # ── Success rate ──
+    # Pending excluded from denominator — outcome unknown. completed /
+    # (completed + failed) over rows that have reached a terminal state.
+    def _success_rate(completed: list, failed: list) -> float:
+        terminal = len(completed) + len(failed)
+        return round((len(completed) / terminal) * 100, 1) if terminal > 0 else 0.0
+
+    cur_success = _success_rate(cur_completed, cur_failed)
+    prev_success = _success_rate(prev_completed, prev_failed)
+
+    # ── Median time to payout (hours) ──
+    # Difference between created_at (request) and processed_at (Stripe
+    # confirmed). Only over completed payouts that have both fields.
+    def _median_hours(completed: list) -> float:
+        deltas: list[float] = []
+        for p in completed:
+            requested = p.get("created_at")
+            settled = p.get("processed_at")
+            if not requested or not settled:
+                continue
+            try:
+                t_req = datetime.fromisoformat(requested.replace("Z", "+00:00"))
+                t_set = datetime.fromisoformat(settled.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            secs = (t_set - t_req).total_seconds()
+            if secs >= 0:
+                deltas.append(secs / 3600.0)
+        if not deltas:
+            return 0.0
+        deltas.sort()
+        n = len(deltas)
+        mid = n // 2
+        return round((deltas[mid] if n % 2 else (deltas[mid - 1] + deltas[mid]) / 2.0), 2)
+
+    cur_median_hours = _median_hours(cur_completed)
+    prev_median_hours = _median_hours(prev_completed)
+
+    # ── Avg payout amount ──
+    cur_avg = round(_amt(cur_completed) / len(cur_completed), 2) if cur_completed else 0.0
+    prev_avg = round(_amt(prev_completed) / len(prev_completed), 2) if prev_completed else 0.0
+
+    # ── Daily series for the chart ──
+    daily: Dict[str, Dict[str, Any]] = {}
+    cursor = start.date()
+    end_date = end.date()
+    while cursor <= end_date:
+        daily[cursor.isoformat()] = {
+            "date": cursor.isoformat(),
+            "paid_out": 0.0,
+            "pending": 0.0,
+            "failed": 0.0,
+        }
+        cursor += timedelta(days=1)
+    for p in cur_payouts:
+        ts = p.get("processed_at") or p.get("created_at") or ""
+        day = ts[:10]
+        if day not in daily:
+            continue
+        amt = float(Decimal(str(p.get("amount") or 0)))
+        if p.get("status") == "completed":
+            daily[day]["paid_out"] = round(daily[day]["paid_out"] + amt, 2)
+        elif p.get("status") in ("pending", "processing"):
+            daily[day]["pending"] = round(daily[day]["pending"] + amt, 2)
+        elif p.get("status") == "failed":
+            daily[day]["failed"] = round(daily[day]["failed"] + amt, 2)
+
+    return {
+        "period": {
+            "key": period,
+            "label": _PERIOD_LABELS[period],
+            "days": _days,
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "prev_start": prev_start.isoformat(),
+            "prev_end": prev_end.isoformat(),
+        },
+        "metrics": {
+            "outstanding_payable": _metric(float(outstanding_now_calc), float(outstanding_prev)),
+            "total_paid_out": _metric(_amt(cur_completed), _amt(prev_completed)),
+            "pending_in_flight": _metric(_amt(cur_pending), _amt(prev_pending)),
+            "failed_amount": _metric(_amt(cur_failed), _amt(prev_failed)),
+            "success_rate_pct": _metric(cur_success, prev_success),
+            "median_time_to_payout_hours": _metric(cur_median_hours, prev_median_hours),
+            "avg_payout_amount": _metric(cur_avg, prev_avg),
+            "payouts_count": _metric(len(cur_payouts), len(prev_payouts)),
+        },
+        "daily_series": list(daily.values()),
+    }
 
 
 @router.get("/payouts")

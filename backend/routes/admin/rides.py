@@ -1355,6 +1355,7 @@ async def admin_get_earnings_overview(
     # ── Rides ─────────────────────────────────────────────────────────────
     # Pull current + previous window in two queries. Bounded by completed-only
     # so cancellation rows don't inflate GBV.
+    # ── Rides — completed (the GBV / trips / net rev numerator) ──────────
     base_filter: Dict[str, Any] = {"status": "completed"}
     if service_area_id:
         base_filter["service_area_id"] = service_area_id
@@ -1370,21 +1371,135 @@ async def admin_get_earnings_overview(
         limit=50000,
     )
 
+    # ── Rides — cancelled (cancellation rate denominator + fee revenue) ──
+    # Cancelled rides have null ride_completed_at, so filter on created_at
+    # for the window. Same service-area scoping as completed rides above.
+    cancelled_filter: Dict[str, Any] = {"status": "cancelled"}
+    if service_area_id:
+        cancelled_filter["service_area_id"] = service_area_id
+    current_cancelled = await db_supabase.get_rows(
+        "rides",
+        {**cancelled_filter, "created_at": {"$gte": start.isoformat(), "$lte": end.isoformat()}},
+        limit=50000,
+    )
+    previous_cancelled = await db_supabase.get_rows(
+        "rides",
+        {**cancelled_filter, "created_at": {"$gte": prev_start.isoformat(), "$lte": prev_end.isoformat()}},
+        limit=50000,
+    )
+
+    # ── Disputes / refunds (resolved within window) ──────────────────────
+    # Refunds are persisted on `disputes.refund_amount` — service area
+    # isn't on the dispute row, so when a service-area filter is set we
+    # narrow to disputes whose ride_id is in the current ride set.
+    refunded_filter: Dict[str, Any] = {
+        "resolved_at": {"$gte": start.isoformat(), "$lte": end.isoformat()},
+    }
+    refunded_filter_prev: Dict[str, Any] = {
+        "resolved_at": {"$gte": prev_start.isoformat(), "$lte": prev_end.isoformat()},
+    }
+    current_refunds = await db_supabase.get_rows("disputes", refunded_filter, limit=10000)
+    previous_refunds = await db_supabase.get_rows("disputes", refunded_filter_prev, limit=10000)
+    if service_area_id:
+        # Cross-reference against the ride set; cheaper than a join.
+        current_ride_ids = {r.get("id") for r in current_rides + current_cancelled}
+        previous_ride_ids = {r.get("id") for r in previous_rides + previous_cancelled}
+        current_refunds = [d for d in current_refunds if d.get("ride_id") in current_ride_ids]
+        previous_refunds = [d for d in previous_refunds if d.get("ride_id") in previous_ride_ids]
+
     def _agg(rides: list) -> Dict[str, Any]:
         gbv = sum((Decimal(str(r.get("total_fare") or 0)) for r in rides), Decimal("0"))
         platform = sum((Decimal(str(r.get("admin_earnings") or 0)) for r in rides), Decimal("0"))
         rider_ids = {r.get("rider_id") for r in rides if r.get("rider_id")}
         driver_ids = {r.get("driver_id") for r in rides if r.get("driver_id")}
+        # Surge revenue: portion of total_fare attributable to the
+        # surge multiplier. base = total / surge_mult → surge = total -
+        # base. Only counts rides where surge actually applied (>1.0).
+        surge_rev = Decimal("0")
+        for r in rides:
+            mult = Decimal(str(r.get("surge_multiplier") or 1.0))
+            if mult > 1:
+                fare = Decimal(str(r.get("total_fare") or 0))
+                surge_rev += fare - (fare / mult)
+        # Promo spend: discount_amount on completed rides — what we
+        # gave away to acquire/retain the ride.
+        promo = sum((Decimal(str(r.get("discount_amount") or 0)) for r in rides), Decimal("0"))
+        promo_count = sum(1 for r in rides if Decimal(str(r.get("discount_amount") or 0)) > 0)
+        # Tax decomposition from rides.tax_breakdown JSONB — defensive
+        # because tax_name keys vary by service area config.
+        gst = Decimal("0")
+        pst = Decimal("0")
+        for r in rides:
+            breakdown = r.get("tax_breakdown") or {}
+            if isinstance(breakdown, dict):
+                for tax_name, info in breakdown.items():
+                    amount = Decimal("0")
+                    if isinstance(info, dict):
+                        amount = Decimal(str(info.get("amount") or 0))
+                    name_l = str(tax_name).lower()
+                    if "gst" in name_l or name_l == "hst":
+                        gst += amount
+                    elif "pst" in name_l or "qst" in name_l:
+                        pst += amount
         return {
             "gbv": float(gbv),
             "platform": float(platform),
             "trips": len(rides),
             "riders": len(rider_ids),
             "drivers": len(driver_ids),
+            "surge_revenue": float(surge_rev),
+            "promo_spend": float(promo),
+            "promo_count": promo_count,
+            "gst_collected": float(gst),
+            "pst_collected": float(pst),
+        }
+
+    def _agg_cancelled(rides: list) -> Dict[str, Any]:
+        """Cancellation-only aggregator. cancellation_fee_admin is the
+        platform's share of the cancel fee — that's the revenue side."""
+        cancel_revenue = sum(
+            (Decimal(str(r.get("cancellation_fee_admin") or 0)) for r in rides),
+            Decimal("0"),
+        )
+        # Rider vs driver vs system cancel breakdown — pulled from the
+        # cancellation_reason text field with a simple keyword match.
+        # Same convention the admin analytics page already uses.
+        rider_cancels = 0
+        driver_cancels = 0
+        for r in rides:
+            reason = (r.get("cancellation_reason") or "").lower()
+            if "driver" in reason:
+                driver_cancels += 1
+            elif "rider" in reason or "user" in reason:
+                rider_cancels += 1
+        return {
+            "count": len(rides),
+            "revenue": float(cancel_revenue),
+            "rider_cancels": rider_cancels,
+            "driver_cancels": driver_cancels,
         }
 
     cur = _agg(current_rides)
     prev = _agg(previous_rides)
+    cur_cx = _agg_cancelled(current_cancelled)
+    prev_cx = _agg_cancelled(previous_cancelled)
+
+    # Refund $ in window — disputes resolved during the period with a
+    # non-zero refund_amount. We don't distinguish full vs partial here;
+    # any payout to the rider counts as refund leakage.
+    cur_refund_amt = float(sum((Decimal(str(d.get("refund_amount") or 0)) for d in current_refunds), Decimal("0")))
+    prev_refund_amt = float(sum((Decimal(str(d.get("refund_amount") or 0)) for d in previous_refunds), Decimal("0")))
+    cur_refund_count = sum(1 for d in current_refunds if Decimal(str(d.get("refund_amount") or 0)) > 0)
+    prev_refund_count = sum(1 for d in previous_refunds if Decimal(str(d.get("refund_amount") or 0)) > 0)
+
+    # Cancellation rate: cancelled / (completed + cancelled). Same
+    # formula the ops cancellation-rate KPI uses across the codebase.
+    def _cancel_rate(completed: int, cancelled: int) -> float:
+        total = completed + cancelled
+        return round((cancelled / total) * 100, 1) if total > 0 else 0.0
+
+    cur_cancel_rate = _cancel_rate(cur["trips"], cur_cx["count"])
+    prev_cancel_rate = _cancel_rate(prev["trips"], prev_cx["count"])
 
     # ── Spinr Pass MRR snapshots ─────────────────────────────────────────
     # Sum the monthly price of subscriptions active at each cutoff. Cheap
@@ -1443,6 +1558,7 @@ async def admin_get_earnings_overview(
             "prev_end": prev_end.isoformat(),
         },
         "metrics": {
+            # Pass 1 — CEO row
             "gbv": _metric(cur["gbv"], prev["gbv"]),
             "net_revenue": _metric(cur_net_revenue, prev_net_revenue),
             "take_rate_pct": _metric(cur_take_rate, prev_take_rate),
@@ -1451,6 +1567,29 @@ async def admin_get_earnings_overview(
             "active_drivers": _metric(cur["drivers"], prev["drivers"]),
             "avg_fare": _metric(cur_avg_fare, prev_avg_fare),
             "spinr_pass_mrr": _metric(cur_mrr, prev_mrr),
+            # Pass 2 — operational health
+            "cancellation_rate_pct": _metric(cur_cancel_rate, prev_cancel_rate),
+            "cancellation_revenue": _metric(cur_cx["revenue"], prev_cx["revenue"]),
+            "cancelled_trips": _metric(cur_cx["count"], prev_cx["count"]),
+            "refund_amount": _metric(cur_refund_amt, prev_refund_amt),
+            "refund_count": _metric(cur_refund_count, prev_refund_count),
+            "promo_spend": _metric(cur["promo_spend"], prev["promo_spend"]),
+            "promo_count": _metric(cur["promo_count"], prev["promo_count"]),
+            "surge_revenue": _metric(cur["surge_revenue"], prev["surge_revenue"]),
+            "gst_collected": _metric(cur["gst_collected"], prev["gst_collected"]),
+            "pst_collected": _metric(cur["pst_collected"], prev["pst_collected"]),
+        },
+        "cancellation_breakdown": {
+            "current": {
+                "rider": cur_cx["rider_cancels"],
+                "driver": cur_cx["driver_cancels"],
+                "system": cur_cx["count"] - cur_cx["rider_cancels"] - cur_cx["driver_cancels"],
+            },
+            "previous": {
+                "rider": prev_cx["rider_cancels"],
+                "driver": prev_cx["driver_cancels"],
+                "system": prev_cx["count"] - prev_cx["rider_cancels"] - prev_cx["driver_cancels"],
+            },
         },
         "daily_series": daily_series,
     }

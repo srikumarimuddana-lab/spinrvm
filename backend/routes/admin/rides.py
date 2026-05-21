@@ -1921,6 +1921,131 @@ async def admin_get_payouts_overview(
         elif p.get("status") == "failed":
             daily[day]["failed"] = round(daily[day]["failed"] + amt, 2)
 
+    # ── Pass 2: failure breakdown + at-risk + blocked drivers ────────────
+
+    # Failure reasons — group by error_message text. Tight bucket bag
+    # so frontend just renders the top few. Empty / null message lumps
+    # into "Unknown".
+    failure_buckets: Dict[str, Dict[str, float]] = {}
+    for p in cur_failed:
+        reason_raw = (p.get("error_message") or "").strip()
+        # Normalise long stripe error strings to the first 60 chars so
+        # similar variants group together; full string is still on the
+        # payout row if an operator clicks through.
+        reason = (reason_raw[:60] + "…") if len(reason_raw) > 60 else (reason_raw or "Unknown")
+        bucket = failure_buckets.setdefault(reason, {"count": 0, "amount": 0.0})
+        bucket["count"] += 1
+        bucket["amount"] += float(Decimal(str(p.get("amount") or 0)))
+    failure_reasons = sorted(
+        [{"reason": r, "count": int(b["count"]), "amount": round(b["amount"], 2)} for r, b in failure_buckets.items()],
+        key=lambda x: (-x["count"], -x["amount"]),
+    )[:8]
+
+    # Stuck pending payouts — anything still pending more than 48h after
+    # creation. These are the manual-intervention queue: Stripe webhook
+    # didn't return or the rebalance is held up. NOT period-scoped —
+    # this is a "right now" signal regardless of the selected window.
+    stuck_threshold = (now - timedelta(hours=48)).isoformat()
+    stuck_rows = [
+        p
+        for p in all_payouts
+        if _in_scope(p)
+        and p.get("status") in ("pending", "processing")
+        and (p.get("created_at") or "") < stuck_threshold
+    ]
+    stuck_over_48h = {
+        "count": len(stuck_rows),
+        "amount": round(float(sum((Decimal(str(p.get("amount") or 0)) for p in stuck_rows), Decimal("0"))), 2),
+    }
+
+    # Blocked drivers — Stripe Connect KYC mirror says payouts are
+    # disabled. Uses the partial index from migration 92. Outstanding
+    # balance for these drivers is the operational "we can't pay
+    # them yet" number.
+    blocked_drivers_rows = await db_supabase.get_rows(
+        "drivers",
+        {"stripe_payouts_enabled": False, "stripe_account_id": {"$ne": None}},
+        limit=500,
+    )
+    if driver_id_filter is not None:
+        blocked_drivers_rows = [d for d in blocked_drivers_rows if d.get("id") in driver_id_filter]
+    blocked_driver_ids = {d.get("id") for d in blocked_drivers_rows if d.get("id")}
+    blocked_outstanding = Decimal("0")
+    if blocked_driver_ids:
+        for r in all_completed_rides:
+            if r.get("driver_id") in blocked_driver_ids:
+                blocked_outstanding += Decimal(str(r.get("driver_earnings") or 0))
+        for p in all_payouts:
+            if p.get("driver_id") in blocked_driver_ids and p.get("status") in ("completed", "pending", "processing"):
+                blocked_outstanding -= Decimal(str(p.get("amount") or 0))
+    blocked_drivers = {
+        "count": len(blocked_driver_ids),
+        "outstanding_balance": round(float(max(blocked_outstanding, Decimal("0"))), 2),
+    }
+
+    # Top earning drivers in window — sum of completed payout amounts
+    # per driver. Capped at 10 so the response stays small.
+    completed_by_driver: Dict[str, Dict[str, float]] = {}
+    for p in cur_completed:
+        did = p.get("driver_id")
+        if not did:
+            continue
+        b = completed_by_driver.setdefault(did, {"amount": 0.0, "count": 0})
+        b["amount"] += float(Decimal(str(p.get("amount") or 0)))
+        b["count"] += 1
+    top_driver_ids = sorted(completed_by_driver.keys(), key=lambda did: -completed_by_driver[did]["amount"])[:10]
+
+    # At-risk drivers — ≥ 2 failures in window. Ops follows up
+    # personally; multi-fail is rarely a transient issue.
+    failed_by_driver: Dict[str, Dict[str, Any]] = {}
+    for p in cur_failed:
+        did = p.get("driver_id")
+        if not did:
+            continue
+        b = failed_by_driver.setdefault(did, {"count": 0, "last_reason": None, "last_at": ""})
+        b["count"] += 1
+        ts = p.get("created_at") or ""
+        if ts > b["last_at"]:
+            b["last_at"] = ts
+            b["last_reason"] = p.get("error_message") or "Unknown"
+    at_risk_driver_ids = [did for did, b in failed_by_driver.items() if b["count"] >= 2]
+
+    # Enrich names in a single batch fetch for both lists. Cheap because
+    # the union of top + at-risk is bounded at ≤ 20 driver_ids.
+    enrich_ids = list(set(top_driver_ids) | set(at_risk_driver_ids))
+    drivers_map: Dict[str, Any] = {}
+    users_map: Dict[str, Any] = {}
+    if enrich_ids:
+        drivers_map, users_map = await _batch_fetch_drivers_and_users([], enrich_ids)
+
+    def _display_name(driver_id: str) -> str:
+        d = drivers_map.get(driver_id) or {}
+        u = users_map.get(d.get("user_id")) if d.get("user_id") else None
+        name = _user_display_name(u) if u else ""
+        return name or d.get("name") or driver_id[:8]
+
+    top_drivers = [
+        {
+            "driver_id": did,
+            "name": _display_name(did),
+            "amount": round(completed_by_driver[did]["amount"], 2),
+            "payout_count": int(completed_by_driver[did]["count"]),
+        }
+        for did in top_driver_ids
+    ]
+    at_risk_drivers = sorted(
+        [
+            {
+                "driver_id": did,
+                "name": _display_name(did),
+                "failure_count": int(failed_by_driver[did]["count"]),
+                "last_reason": failed_by_driver[did]["last_reason"],
+            }
+            for did in at_risk_driver_ids
+        ],
+        key=lambda x: -x["failure_count"],
+    )[:10]
+
     return {
         "period": {
             "key": period,
@@ -1942,6 +2067,13 @@ async def admin_get_payouts_overview(
             "payouts_count": _metric(len(cur_payouts), len(prev_payouts)),
         },
         "daily_series": list(daily.values()),
+        # Pass 2 — operational queues. None are PoP because they're
+        # "right now" lists rather than period totals.
+        "failure_reasons": failure_reasons,
+        "stuck_over_48h": stuck_over_48h,
+        "blocked_drivers": blocked_drivers,
+        "top_drivers": top_drivers,
+        "at_risk_drivers": at_risk_drivers,
     }
 
 

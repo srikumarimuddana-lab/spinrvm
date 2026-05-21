@@ -28,9 +28,20 @@ ALTER TABLE driver_location_history
 -- Soft FK: orphaned breadcrumbs (ride deleted mid-trip edge case) become
 -- ride_id = NULL rather than causing a constraint violation.
 -- NOT VALID = add constraint, skip full-table validation, safe for live traffic.
-ALTER TABLE driver_location_history
-    ADD CONSTRAINT IF NOT EXISTS driver_loc_hist_ride_fk
-    FOREIGN KEY (ride_id)
-    REFERENCES rides (id)
-    ON DELETE SET NULL
-    NOT VALID;
+--
+-- Postgres does not accept "ADD CONSTRAINT IF NOT EXISTS" — that syntax is
+-- only valid for columns and indexes. Guard with a DO block that checks
+-- pg_constraint so the migration is idempotent for re-runs.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'driver_loc_hist_ride_fk'
+    ) THEN
+        ALTER TABLE driver_location_history
+            ADD CONSTRAINT driver_loc_hist_ride_fk
+            FOREIGN KEY (ride_id)
+            REFERENCES rides (id)
+            ON DELETE SET NULL
+            NOT VALID;
+    END IF;
+END $$;

@@ -18,7 +18,7 @@ Covers functions not exercised by test_drivers.py:
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
@@ -680,8 +680,14 @@ class TestCompleteRide:
         # Build a breadcrumb trail: 8 points marching ~1 km north from
         # (52.10, -106.70), each 30 s apart so the time-gap filter doesn't
         # fire. Then inject one bogus spike ~55 km east at the midpoint.
+        # datetime(year, month, day, hour, minute, second, ...) requires
+        # second in 0..59, so passing i*30 directly raises ValueError once
+        # i*30 >= 60. Build the base instant and add a timedelta instead so
+        # any seconds offset is valid.
+        base_ts = datetime(2026, 5, 21, 12, 0, 0, tzinfo=timezone.utc)
+
         def _ts(seconds: int) -> str:
-            return datetime(2026, 5, 21, 12, 0, seconds, tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
+            return (base_ts + timedelta(seconds=seconds)).isoformat().replace("+00:00", "Z")
 
         crumbs = [
             {

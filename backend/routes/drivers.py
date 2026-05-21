@@ -1663,9 +1663,11 @@ async def onboard_stripe(current_user: dict = Depends(get_current_user)):
             type="account_onboarding",
             api_key=stripe_secret,
         )
-        # Mark as onboarded optimistically or handle via webhook/return_url properly in production
-        await db_supabase.update_one("drivers", {"id": driver["id"]}, {"stripe_account_onboarded": True})
-
+        # The real onboarded gate is now stripe_details_submitted, set by
+        # the account.updated webhook handler in services/stripe_kyc_sync.py.
+        # We used to flip stripe_account_onboarded=True here optimistically,
+        # which mis-classified every driver who abandoned Stripe's hosted
+        # flow halfway through as fully onboarded. Removed.
         return {"url": account_link.url, "mock": False}
     except Exception as e:
         logger.error(f"Stripe error: {e}")

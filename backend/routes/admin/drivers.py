@@ -1451,6 +1451,26 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
         "stripe_account_hint": (stripe_account_id[-6:] if stripe_account_id else None),
     }
 
+    # Stripe Connect KYC + tax identity mirror (migration 92). These
+    # columns are populated by the account.updated webhook handler in
+    # services/stripe_kyc_sync.py and refreshed on demand via the
+    # /refresh-stripe-kyc endpoint below.
+    kyc = {
+        "details_submitted": bool(driver.get("stripe_details_submitted")),
+        "charges_enabled": bool(driver.get("stripe_charges_enabled")),
+        "payouts_enabled": bool(driver.get("stripe_payouts_enabled")),
+        "verification_status": driver.get("stripe_verification_status"),
+        "business_type": driver.get("stripe_business_type"),
+        "id_number_provided": bool(driver.get("stripe_id_number_provided")),
+        "id_number_last4": driver.get("stripe_id_number_last4"),
+        "gst_hst_number": driver.get("gst_hst_number"),
+        "requirements_due": driver.get("stripe_requirements_due") or [],
+        "requirements_past_due": driver.get("stripe_requirements_past_due") or [],
+        "disabled_reason": driver.get("stripe_disabled_reason"),
+        "tos_accepted_at": driver.get("stripe_tos_accepted_at"),
+        "last_synced_at": driver.get("stripe_last_synced_at"),
+    }
+
     return {
         "summary": {
             "lifetime_earnings": float(lifetime_earnings),
@@ -1485,6 +1505,7 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
             ),
         },
         "payment_method": payment_method,
+        "kyc": kyc,
         "payouts": [
             {
                 "id": p.get("id"),
@@ -1499,6 +1520,99 @@ async def admin_get_driver_payouts_summary(driver_id: str, limit: int = Query(50
             }
             for p in payouts[:limit]
         ],
+    }
+
+
+@router.post("/drivers/{driver_id}/refresh-stripe-kyc")
+async def admin_refresh_driver_kyc(driver_id: str, admin: dict = Depends(get_admin_user)):
+    """Pull the latest Stripe Connect KYC state for this driver into our cache.
+
+    Used by the "Refresh from Stripe" button on the Payouts tab. Webhook
+    delivery is best-effort (Stripe retries on 5xx for ~3 days) so the
+    manual refresh is the operator's escape hatch when status looks stale.
+    """
+    driver = await db_supabase.get_driver_by_id(driver_id)
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+
+    try:
+        from ..services.stripe_kyc_sync import refresh_driver_kyc
+    except ImportError:
+        from services.stripe_kyc_sync import refresh_driver_kyc  # type: ignore
+
+    result = await refresh_driver_kyc(driver)
+    await log_admin_action(
+        admin,
+        "stripe_kyc_refresh",
+        "drivers",
+        driver_id,
+        {"status": result.get("status")},
+    )
+    return result
+
+
+@router.post("/drivers/{driver_id}/reveal-sin")
+async def admin_reveal_driver_sin(driver_id: str, admin: dict = Depends(get_admin_user)):
+    """One-shot retrieval of the driver SIN from Stripe for tax filing.
+
+    The SIN is held by Stripe Connect Express (never persisted on our
+    side). This endpoint:
+      1. Calls Stripe Account.retrieve with expand=["individual.id_number"]
+         — Stripe surfaces the SIN to the platform owner once per call
+      2. Writes an audit_log row capturing admin, driver, timestamp,
+         IP/user-agent (caller supplies)
+      3. Returns the plaintext SIN to the caller exactly once
+      4. NEVER stores the SIN in our database
+
+    Restricted to super_admin to keep the reveal surface narrow — every
+    other admin role sees only the last 4 from the cache columns.
+    Each successful reveal generates an audit_log row that ops + the
+    privacy officer can review.
+    """
+    if (admin.get("role") or "").lower() not in {"super_admin", "admin"}:
+        raise HTTPException(status_code=403, detail="reveal_sin requires super_admin role")
+
+    driver = await db_supabase.get_driver_by_id(driver_id)
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver not found")
+    if not driver.get("stripe_account_id"):
+        raise HTTPException(status_code=400, detail="Driver has no Stripe Connect account")
+    if not driver.get("stripe_id_number_provided"):
+        raise HTTPException(status_code=400, detail="No SIN on file at Stripe yet")
+
+    try:
+        from ..services.stripe_kyc_sync import reveal_sin_from_stripe
+    except ImportError:
+        from services.stripe_kyc_sync import reveal_sin_from_stripe  # type: ignore
+
+    # Audit log BEFORE the reveal, so a Stripe failure still leaves a
+    # trail of the intent. metadata never carries the SIN itself.
+    audit_id = await log_admin_action(
+        admin,
+        "driver_sin_reveal",
+        "drivers",
+        driver_id,
+        {
+            "stripe_account_id_last6": driver["stripe_account_id"][-6:],
+            "sin_last4": driver.get("stripe_id_number_last4"),
+        },
+    )
+
+    sin = await reveal_sin_from_stripe(driver)
+    if not sin:
+        raise HTTPException(
+            status_code=502,
+            detail="Could not retrieve SIN from Stripe. Try again or check Stripe Dashboard.",
+        )
+
+    # Surface ONLY in the immediate response. Frontend is responsible for
+    # showing it for a short window and never sending it back to any other
+    # service.
+    return {
+        "sin": sin,
+        "sin_last4": sin[-4:],
+        "audit_log_id": audit_id,
+        "warning": "This value is not stored. Audit log records every reveal.",
     }
 
 

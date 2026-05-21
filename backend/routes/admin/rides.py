@@ -67,9 +67,7 @@ async def admin_get_rides(
     # regular rides keep the created_at-desc feed.
     order_col = "scheduled_time" if is_scheduled else "created_at"
     order_desc = not is_scheduled
-    rides = await db_supabase.get_rows(
-        "rides", filters, order=order_col, desc=order_desc, limit=limit, offset=offset
-    )
+    rides = await db_supabase.get_rows("rides", filters, order=order_col, desc=order_desc, limit=limit, offset=offset)
     rider_ids = list({r.get("rider_id") for r in rides if r.get("rider_id")})
     driver_ids = list({r.get("driver_id") for r in rides if r.get("driver_id")})
     drivers_map, users_map = await _batch_fetch_drivers_and_users(rider_ids, driver_ids)
@@ -83,9 +81,7 @@ async def admin_get_rides(
                 **r,
                 "rider_name": _user_display_name(rider),
                 "driver_name": (
-                    _user_display_name(driver_user)
-                    if driver_user
-                    else (driver.get("name") if driver else None)
+                    _user_display_name(driver_user) if driver_user else (driver.get("name") if driver else None)
                 ),
             }
         )
@@ -139,9 +135,7 @@ async def admin_get_active_rides():
                 "total_fare": r.get("total_fare"),
                 "rider_name": _user_display_name(rider),
                 "driver_name": (
-                    _user_display_name(driver_user)
-                    if driver_user
-                    else (driver.get("name") if driver else None)
+                    _user_display_name(driver_user) if driver_user else (driver.get("name") if driver else None)
                 ),
                 "driver_lat": driver.get("lat") if driver else None,
                 "driver_lng": driver.get("lng") if driver else None,
@@ -199,9 +193,7 @@ async def admin_get_unpaid_rides(
                 "rider_name": _user_display_name(rider),
                 "rider_phone": (rider or {}).get("phone"),
                 "driver_name": (
-                    _user_display_name(driver_user)
-                    if driver_user
-                    else (driver.get("name") if driver else None)
+                    _user_display_name(driver_user) if driver_user else (driver.get("name") if driver else None)
                 ),
                 "created_at": r.get("created_at"),
                 "ride_completed_at": r.get("ride_completed_at"),
@@ -237,9 +229,7 @@ async def admin_cancel_ride(
         raise HTTPException(status_code=404, detail="Ride not found")
 
     if ride.get("status") in ("completed", "cancelled"):
-        raise HTTPException(
-            status_code=400, detail="Ride already completed or cancelled"
-        )
+        raise HTTPException(status_code=400, detail="Ride already completed or cancelled")
 
     reason = (body.reason or "Cancelled by admin").strip()[:500]
     now = datetime.now(timezone.utc)
@@ -271,11 +261,7 @@ async def admin_cancel_ride(
         try:
             await db_supabase.update_ride(ride_id, with_37)
         except Exception as e37:
-            original = (
-                getattr(e37, "details", {}).get("original")
-                if hasattr(e37, "details")
-                else None
-            )
+            original = getattr(e37, "details", {}).get("original") if hasattr(e37, "details") else None
             logger.error(
                 f"admin_cancel_ride: update failed ride_id={ride_id} "
                 f"admin_id={admin_user.get('id')} err={original or e37}"
@@ -394,15 +380,11 @@ async def admin_complete_ride(
     try:
         await db_supabase.update_ride(ride_id, update_data)
     except Exception as e:
-        original = (
-            getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
-        )
+        original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
         logger.error(
             f"admin_complete_ride: update failed ride_id={ride_id} admin_id={admin_user.get('id')} err={original or e}"
         )
-        raise HTTPException(
-            status_code=500, detail="Failed to update ride status"
-        ) from e
+        raise HTTPException(status_code=500, detail="Failed to update ride status") from e
 
     # Audit + period transition are best-effort — they must never roll back
     # the ride status mutation that already succeeded above.
@@ -449,9 +431,7 @@ async def admin_complete_ride(
         source="admin",
     )
     try:
-        await manager.broadcast_to_admins(
-            {"type": "ride_completed", "ride_id": ride_id, "source": "admin"}
-        )
+        await manager.broadcast_to_admins({"type": "ride_completed", "ride_id": ride_id, "source": "admin"})
     except Exception as e:  # pragma: no cover - best effort
         logger.warning(f"admin_complete_ride: admin broadcast failed: {e}")
 
@@ -484,9 +464,7 @@ async def admin_places_autocomplete(
     settings_row = await get_app_settings()
     api_key = (settings_row or {}).get("google_maps_api_key") or ""
     if not api_key:
-        raise HTTPException(
-            status_code=503, detail="Google Maps API key not configured"
-        )
+        raise HTTPException(status_code=503, detail="Google Maps API key not configured")
 
     url = "https://maps.googleapis.com/maps/api/place/autocomplete/json"
     params: dict = {
@@ -534,9 +512,7 @@ async def admin_places_details(
     settings_row = await get_app_settings()
     api_key = (settings_row or {}).get("google_maps_api_key") or ""
     if not api_key:
-        raise HTTPException(
-            status_code=503, detail="Google Maps API key not configured"
-        )
+        raise HTTPException(status_code=503, detail="Google Maps API key not configured")
 
     url = "https://maps.googleapis.com/maps/api/place/details/json"
     params: dict = {
@@ -670,9 +646,7 @@ async def admin_create_ride(
     exactly like a rider-initiated apply.
     """
     now = datetime.now(timezone.utc)
-    distance_km = calculate_distance(
-        body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng
-    )
+    distance_km = calculate_distance(body.pickup_lat, body.pickup_lng, body.dropoff_lat, body.dropoff_lng)
 
     status = "driver_assigned" if body.driver_id else "searching"
 
@@ -681,11 +655,7 @@ async def admin_create_ride(
     # written keyed to rider_id; the ride row references it via
     # promo_application_id.
     promo_application_id: Optional[str] = None
-    discount_amount: Decimal = (
-        Decimal(body.discount_amount)
-        if body.discount_amount is not None
-        else Decimal("0")
-    )
+    discount_amount: Decimal = Decimal(body.discount_amount) if body.discount_amount is not None else Decimal("0")
     promo_code_normalised: Optional[str] = None
     if body.promo_code:
         try:
@@ -736,9 +706,7 @@ async def admin_create_ride(
     try:
         await db_supabase.insert_one("rides", ride_doc)
     except Exception as e:
-        original = (
-            getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
-        )
+        original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
         logger.error(
             f"admin_create_ride: insert failed admin_id={admin_user.get('id')} err={original or e}",
             exc_info=True,
@@ -755,9 +723,7 @@ async def admin_create_ride(
             "driver_id": body.driver_id,
             "status": status,
             "vehicle_type_id": body.vehicle_type_id,
-            "subtotal_fare": (
-                str(body.subtotal_fare) if body.subtotal_fare is not None else None
-            ),
+            "subtotal_fare": (str(body.subtotal_fare) if body.subtotal_fare is not None else None),
             "discount_amount": str(discount_amount),
             "total_fare": str(ride_doc["total_fare"]),
             "promo_code": promo_code_normalised,
@@ -789,9 +755,7 @@ async def admin_create_ride(
 
             _admin_settings = await get_app_settings()
             _admin_timeout = int(_admin_settings.get("ride_offer_timeout_seconds", 15))
-            _offer_expires_at = (
-                datetime.now(timezone.utc) + timedelta(seconds=_admin_timeout + 15)
-            ).isoformat()
+            _offer_expires_at = (datetime.now(timezone.utc) + timedelta(seconds=_admin_timeout + 15)).isoformat()
 
             dispatch_payload = {
                 "type": "new_ride_assignment",
@@ -855,9 +819,7 @@ async def admin_get_stats():
 
     now_utc = datetime.now(timezone.utc)
     today_start = now_utc.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
-    month_start = now_utc.replace(
-        day=1, hour=0, minute=0, second=0, microsecond=0
-    ).isoformat()
+    month_start = now_utc.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
 
     # Parallelise all independent DB calls (F-49: previously 11 sequential round-trips).
     (
@@ -906,24 +868,14 @@ async def admin_get_stats():
         ),
     )
 
-    revenue_today = float(
-        sum(Decimal(str(r.get("total_fare") or 0)) for r in (completed_today or []))
-    )
-    revenue_month = float(
-        sum(Decimal(str(r.get("total_fare") or 0)) for r in completed_month)
-    )
+    revenue_today = float(sum(Decimal(str(r.get("total_fare") or 0)) for r in (completed_today or [])))
+    revenue_month = float(sum(Decimal(str(r.get("total_fare") or 0)) for r in completed_month))
     # Earnings + tip totals are aggregated over completed rides in the
     # current month; upstream's stats API never wired these up so we compute
     # them here rather than returning stale zeroes.
-    total_driver_earnings = float(
-        sum(Decimal(str(r.get("driver_earnings") or 0)) for r in completed_month)
-    )
-    total_admin_earnings = float(
-        sum(Decimal(str(r.get("admin_earnings") or 0)) for r in completed_month)
-    )
-    total_tips = float(
-        sum(Decimal(str(r.get("tip_amount") or 0)) for r in completed_month)
-    )
+    total_driver_earnings = float(sum(Decimal(str(r.get("driver_earnings") or 0)) for r in completed_month))
+    total_admin_earnings = float(sum(Decimal(str(r.get("admin_earnings") or 0)) for r in completed_month))
+    total_tips = float(sum(Decimal(str(r.get("tip_amount") or 0)) for r in completed_month))
     return {
         # Fields the dashboard page expects
         "total_rides": total_rides,
@@ -960,18 +912,12 @@ async def admin_get_ride_stats():
     month_start = today_start.replace(day=1)
     next_month = (month_start + timedelta(days=32)).replace(day=1)
 
-    today_count = await db_supabase.get_ride_count_by_date_range(
-        today_start.isoformat(), now.isoformat()
-    )
+    today_count = await db_supabase.get_ride_count_by_date_range(today_start.isoformat(), now.isoformat())
     yesterday_count = await db_supabase.get_ride_count_by_date_range(
         yesterday_start.isoformat(), today_start.isoformat()
     )
-    this_week_count = await db_supabase.get_ride_count_by_date_range(
-        week_start.isoformat(), week_end.isoformat()
-    )
-    this_month_count = await db_supabase.get_ride_count_by_date_range(
-        month_start.isoformat(), next_month.isoformat()
-    )
+    this_week_count = await db_supabase.get_ride_count_by_date_range(week_start.isoformat(), week_end.isoformat())
+    this_month_count = await db_supabase.get_ride_count_by_date_range(month_start.isoformat(), next_month.isoformat())
 
     # Revenue stats from completed rides
     completed_today = await db_supabase.get_rows(
@@ -979,12 +925,8 @@ async def admin_get_ride_stats():
         {"status": "completed", "ride_completed_at": {"$gte": today_start.isoformat()}},
         limit=10000,
     )
-    total_revenue = float(
-        sum(Decimal(str(r.get("total_fare") or 0)) for r in completed_today)
-    )
-    total_tips = float(
-        sum(Decimal(str(r.get("tip_amount") or 0)) for r in completed_today)
-    )
+    total_revenue = float(sum(Decimal(str(r.get("total_fare") or 0)) for r in completed_today))
+    total_tips = float(sum(Decimal(str(r.get("tip_amount") or 0)) for r in completed_today))
     completed_count = len(completed_today)
 
     # Monthly completed rides for revenue
@@ -993,18 +935,14 @@ async def admin_get_ride_stats():
         {"status": "completed", "ride_completed_at": {"$gte": month_start.isoformat()}},
         limit=10000,
     )
-    month_revenue = float(
-        sum(Decimal(str(r.get("total_fare") or 0)) for r in completed_month)
-    )
+    month_revenue = float(sum(Decimal(str(r.get("total_fare") or 0)) for r in completed_month))
 
     # Daily chart data for last 14 days
     daily_chart = []
     for i in range(13, -1, -1):
         day_start = today_start - timedelta(days=i)
         day_end = day_start + timedelta(days=1)
-        count = await db_supabase.get_ride_count_by_date_range(
-            day_start.isoformat(), day_end.isoformat()
-        )
+        count = await db_supabase.get_ride_count_by_date_range(day_start.isoformat(), day_end.isoformat())
         daily_chart.append(
             {
                 "date": day_start.strftime("%b %d"),
@@ -1155,9 +1093,7 @@ async def admin_get_ride_route_map(
     settings_row = await get_app_settings()
     api_key = (settings_row or {}).get("google_maps_api_key") or ""
     if not api_key:
-        raise HTTPException(
-            status_code=503, detail="Google Maps API key not configured"
-        )
+        raise HTTPException(status_code=503, detail="Google Maps API key not configured")
 
     # Build static map URL
     params = [
@@ -1310,15 +1246,9 @@ async def admin_get_earnings(period: str = Query("month")):
     )
 
     # Calculate totals
-    total_revenue = float(
-        sum(Decimal(str(r.get("total_fare") or 0)) for r in completed_rides)
-    )
-    driver_earnings = float(
-        sum(Decimal(str(r.get("driver_earnings") or 0)) for r in completed_rides)
-    )
-    platform_fees = float(
-        sum(Decimal(str(r.get("admin_earnings") or 0)) for r in completed_rides)
-    )
+    total_revenue = float(sum(Decimal(str(r.get("total_fare") or 0)) for r in completed_rides))
+    driver_earnings = float(sum(Decimal(str(r.get("driver_earnings") or 0)) for r in completed_rides))
+    platform_fees = float(sum(Decimal(str(r.get("admin_earnings") or 0)) for r in completed_rides))
 
     return {
         "period": period,
@@ -1326,6 +1256,203 @@ async def admin_get_earnings(period: str = Query("month")):
         "total_rides": len(completed_rides),
         "driver_earnings": driver_earnings,
         "platform_fees": platform_fees,
+    }
+
+
+# ---------- CEO-grade earnings overview ----------
+
+
+_PERIOD_DAYS = {"7d": 7, "30d": 30, "mtd": None, "ytd": None}
+
+
+def _resolve_period(period: str, now: datetime) -> tuple[datetime, datetime, datetime, datetime, int]:
+    """Map a period label to (current_start, current_end, prev_start, prev_end, days).
+
+    For mtd / ytd the previous-period window is the same length so the
+    delta is apples-to-apples (e.g. comparing MTD against the same number
+    of days in the prior month).
+    """
+    end = now
+    if period == "mtd":
+        start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    elif period == "ytd":
+        start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+    else:
+        days = _PERIOD_DAYS.get(period, 7) or 7
+        start = (now - timedelta(days=days)).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    span = end - start
+    prev_end = start
+    prev_start = start - span
+    days = max((end - start).days, 1)
+    return start, end, prev_start, prev_end, days
+
+
+def _delta_pct(current: float, previous: float) -> Optional[float]:
+    """Period-over-period percentage. None when previous is 0 so the UI can
+    render an em-dash instead of a misleading "+Inf%"."""
+    if previous == 0:
+        return None
+    return round(((current - previous) / previous) * 100, 1)
+
+
+def _metric(current: float, previous: float) -> Dict[str, Any]:
+    return {
+        "current": round(float(current), 2),
+        "previous": round(float(previous), 2),
+        "delta_pct": _delta_pct(current, previous),
+    }
+
+
+def _active_subs_at(subs: list[Dict[str, Any]], cutoff: datetime) -> list[Dict[str, Any]]:
+    """Snapshot active subscriptions at a point in time.
+
+    A subscription counts as active at `cutoff` if it started on or before
+    cutoff and either never ended OR ended after cutoff.
+    """
+    cutoff_iso = cutoff.isoformat()
+    out = []
+    for s in subs:
+        started = s.get("started_at") or s.get("created_at") or ""
+        if started > cutoff_iso:
+            continue
+        # ended_at / cancelled_at / expires_at — whichever Stripe wrote
+        ended = s.get("cancelled_at") or s.get("expires_at") or ""
+        if ended and ended <= cutoff_iso:
+            continue
+        out.append(s)
+    return out
+
+
+@router.get("/earnings/overview")
+async def admin_get_earnings_overview(
+    period: str = Query("7d", pattern="^(7d|30d|mtd|ytd)$"),
+    service_area_id: Optional[str] = None,
+):
+    """CEO-grade earnings dashboard with period-over-period deltas + daily series.
+
+    Returns the headline metrics a fleet-ops or exec dashboard needs to
+    answer "is the business healthy" in one screen:
+      - GBV (sum of completed-ride fares)
+      - Net Revenue (platform per-ride margin + Spinr Pass MRR)
+      - Take Rate % (net revenue / GBV)
+      - Completed trips
+      - Active riders (booked at least one ride in window)
+      - Active drivers (completed at least one ride in window)
+      - Avg fare per trip
+      - Spinr Pass MRR (snapshot at window end)
+
+    Every metric carries `current`, `previous` (same-length prior window),
+    and `delta_pct` so the UI can render the period-over-period chip
+    without a second round-trip.
+
+    `daily_series` is the per-day GBV / trips / net-revenue array for
+    the line chart below the cards.
+    """
+    now = datetime.now(timezone.utc)
+    start, end, prev_start, prev_end, days = _resolve_period(period, now)
+
+    # ── Rides ─────────────────────────────────────────────────────────────
+    # Pull current + previous window in two queries. Bounded by completed-only
+    # so cancellation rows don't inflate GBV.
+    base_filter: Dict[str, Any] = {"status": "completed"}
+    if service_area_id:
+        base_filter["service_area_id"] = service_area_id
+
+    current_rides = await db_supabase.get_rows(
+        "rides",
+        {**base_filter, "ride_completed_at": {"$gte": start.isoformat(), "$lte": end.isoformat()}},
+        limit=50000,
+    )
+    previous_rides = await db_supabase.get_rows(
+        "rides",
+        {**base_filter, "ride_completed_at": {"$gte": prev_start.isoformat(), "$lte": prev_end.isoformat()}},
+        limit=50000,
+    )
+
+    def _agg(rides: list) -> Dict[str, Any]:
+        gbv = sum((Decimal(str(r.get("total_fare") or 0)) for r in rides), Decimal("0"))
+        platform = sum((Decimal(str(r.get("admin_earnings") or 0)) for r in rides), Decimal("0"))
+        rider_ids = {r.get("rider_id") for r in rides if r.get("rider_id")}
+        driver_ids = {r.get("driver_id") for r in rides if r.get("driver_id")}
+        return {
+            "gbv": float(gbv),
+            "platform": float(platform),
+            "trips": len(rides),
+            "riders": len(rider_ids),
+            "drivers": len(driver_ids),
+        }
+
+    cur = _agg(current_rides)
+    prev = _agg(previous_rides)
+
+    # ── Spinr Pass MRR snapshots ─────────────────────────────────────────
+    # Sum the monthly price of subscriptions active at each cutoff. Cheap
+    # query — bounded by the count of subs ever created.
+    all_subs = await db_supabase.get_rows("driver_subscriptions", {}, limit=10000)
+    cur_mrr = float(sum((Decimal(str(s.get("price") or 0)) for s in _active_subs_at(all_subs, end)), Decimal("0")))
+    prev_mrr = float(
+        sum((Decimal(str(s.get("price") or 0)) for s in _active_subs_at(all_subs, prev_end)), Decimal("0"))
+    )
+
+    # Net revenue = per-ride platform margin + subscription MRR pro-rated
+    # for the window length. For 7d window, attribute 7/30 of the MRR
+    # snapshot as period revenue. Crude but matches how SaaS dashboards
+    # show recognised-revenue when MRR is bundled with transactional rev.
+    def _attribute_mrr(mrr_snapshot: float, window_days: int) -> float:
+        return round(mrr_snapshot * (window_days / 30.0), 2)
+
+    cur_net_revenue = cur["platform"] + _attribute_mrr(cur_mrr, days)
+    prev_net_revenue = prev["platform"] + _attribute_mrr(prev_mrr, days)
+
+    cur_take_rate = round((cur_net_revenue / cur["gbv"]) * 100, 2) if cur["gbv"] > 0 else 0.0
+    prev_take_rate = round((prev_net_revenue / prev["gbv"]) * 100, 2) if prev["gbv"] > 0 else 0.0
+
+    cur_avg_fare = round(cur["gbv"] / cur["trips"], 2) if cur["trips"] > 0 else 0.0
+    prev_avg_fare = round(prev["gbv"] / prev["trips"], 2) if prev["trips"] > 0 else 0.0
+
+    # ── Daily series for the line chart ───────────────────────────────────
+    daily: Dict[str, Dict[str, Any]] = {}
+    cursor = start.date()
+    end_date = end.date()
+    while cursor <= end_date:
+        daily[cursor.isoformat()] = {"date": cursor.isoformat(), "gbv": 0.0, "trips": 0, "net_revenue": 0.0}
+        cursor += timedelta(days=1)
+    for r in current_rides:
+        completed = r.get("ride_completed_at") or r.get("created_at") or ""
+        day = completed[:10]
+        if day in daily:
+            daily[day]["gbv"] = round(daily[day]["gbv"] + float(Decimal(str(r.get("total_fare") or 0))), 2)
+            daily[day]["trips"] += 1
+            daily[day]["net_revenue"] = round(
+                daily[day]["net_revenue"] + float(Decimal(str(r.get("admin_earnings") or 0))),
+                2,
+            )
+    daily_series = list(daily.values())
+
+    period_labels = {"7d": "Last 7 days", "30d": "Last 30 days", "mtd": "Month to date", "ytd": "Year to date"}
+
+    return {
+        "period": {
+            "key": period,
+            "label": period_labels[period],
+            "days": days,
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "prev_start": prev_start.isoformat(),
+            "prev_end": prev_end.isoformat(),
+        },
+        "metrics": {
+            "gbv": _metric(cur["gbv"], prev["gbv"]),
+            "net_revenue": _metric(cur_net_revenue, prev_net_revenue),
+            "take_rate_pct": _metric(cur_take_rate, prev_take_rate),
+            "completed_trips": _metric(cur["trips"], prev["trips"]),
+            "active_riders": _metric(cur["riders"], prev["riders"]),
+            "active_drivers": _metric(cur["drivers"], prev["drivers"]),
+            "avg_fare": _metric(cur_avg_fare, prev_avg_fare),
+            "spinr_pass_mrr": _metric(cur_mrr, prev_mrr),
+        },
+        "daily_series": daily_series,
     }
 
 
@@ -1351,9 +1478,7 @@ async def admin_export_rides(
     if end_date:
         date_filter.setdefault("created_at", {})["$lte"] = end_date + "T23:59:59Z"
 
-    rides = await db_supabase.get_rows(
-        "rides", date_filter, order="created_at", desc=True, limit=limit
-    )
+    rides = await db_supabase.get_rows("rides", date_filter, order="created_at", desc=True, limit=limit)
     rider_ids = list({r.get("rider_id") for r in rides if r.get("rider_id")})
     driver_ids = list({r.get("driver_id") for r in rides if r.get("driver_id")})
     drivers_map, users_map = await _batch_fetch_drivers_and_users(rider_ids, driver_ids)
@@ -1372,9 +1497,7 @@ async def admin_export_rides(
                 "created_at": r.get("created_at"),
                 "rider_name": _user_display_name(rider),
                 "driver_name": (
-                    _user_display_name(driver_user)
-                    if driver_user
-                    else (driver.get("name") if driver else None)
+                    _user_display_name(driver_user) if driver_user else (driver.get("name") if driver else None)
                 ),
             }
         )
@@ -1406,16 +1529,10 @@ async def admin_export_drivers(
     """Export drivers data. Writes an audit log entry (F-41)."""
     import uuid  # noqa: PLC0415
 
-    drivers = await db_supabase.get_rows(
-        "drivers", order="created_at", desc=True, limit=limit
-    )
+    drivers = await db_supabase.get_rows("drivers", order="created_at", desc=True, limit=limit)
     user_ids = list({d.get("user_id") for d in drivers if d.get("user_id")})
     users_list = (
-        await db_supabase.get_rows(
-            "users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)
-        )
-        if user_ids
-        else []
+        await db_supabase.get_rows("users", {"id": {"$in": user_ids}}, limit=max(len(user_ids), 1)) if user_ids else []
     )
     users_map = {u["id"]: u for u in users_list if u.get("id")}
     out = []
@@ -1510,9 +1627,7 @@ async def admin_get_payout(payout_id: str, _: dict = Depends(get_admin_user)):
                 exc_info=True,
             )
             driver = {}
-    payout["driver_name"] = (
-        driver.get("full_name") or driver.get("name") or payout.get("driver_name")
-    )
+    payout["driver_name"] = driver.get("full_name") or driver.get("name") or payout.get("driver_name")
     payout["driver_email"] = driver.get("email")
     payout["driver_phone"] = driver.get("phone")
     return payout
@@ -1560,27 +1675,9 @@ async def admin_get_payout_stats():
     except Exception:
         all_payouts = []
 
-    total_paid = float(
-        sum(
-            Decimal(str(p.get("amount", 0)))
-            for p in all_payouts
-            if p.get("status") == "completed"
-        )
-    )
-    total_pending = float(
-        sum(
-            Decimal(str(p.get("amount", 0)))
-            for p in all_payouts
-            if p.get("status") == "pending"
-        )
-    )
-    total_failed = float(
-        sum(
-            Decimal(str(p.get("amount", 0)))
-            for p in all_payouts
-            if p.get("status") == "failed"
-        )
-    )
+    total_paid = float(sum(Decimal(str(p.get("amount", 0))) for p in all_payouts if p.get("status") == "completed"))
+    total_pending = float(sum(Decimal(str(p.get("amount", 0))) for p in all_payouts if p.get("status") == "pending"))
+    total_failed = float(sum(Decimal(str(p.get("amount", 0))) for p in all_payouts if p.get("status") == "failed"))
 
     return {
         "total_paid": round(total_paid, 2),

@@ -1,0 +1,261 @@
+"""Admin safety queue.
+
+Lists + updates ``safety_incidents`` rows so an admin can triage SOS
+reports, driver safety reports, and auto-escalations from the
+check-in loop in one place.
+
+Authentication: gated by the parent admin_router via
+``Depends(get_admin_user)`` + ``require_module("support")`` (see
+routes/admin/__init__.py wiring at module mount time).
+"""
+
+import logging
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Literal, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
+
+try:
+    from ... import db_supabase
+    from ...dependencies import get_admin_user
+    from ...utils.audit_logger import log_admin_action
+    from .drivers import _batch_fetch_drivers_and_users, _user_display_name
+except ImportError:
+    import db_supabase  # type: ignore
+    from dependencies import get_admin_user  # type: ignore
+    from routes.admin.drivers import (  # type: ignore
+        _batch_fetch_drivers_and_users,
+        _user_display_name,
+    )
+    from utils.audit_logger import log_admin_action  # type: ignore
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/safety", tags=["Admin · Safety"])
+
+
+# ---------- List ----------
+
+# Status values that surface as "needs attention" on the queue —
+# default scope when no explicit status filter is passed.
+_OPEN_STATUSES = ("open", "in_progress")
+
+
+@router.get("/incidents")
+async def admin_list_safety_incidents(
+    status: Optional[str] = Query(
+        None,
+        description="open | in_progress | resolved | closed | duplicate. Omit for default 'open + in_progress' queue.",
+    ),
+    severity: Optional[Literal["sev1", "sev2", "sev3"]] = None,
+    role: Optional[Literal["rider", "driver", "system"]] = None,
+    category: Optional[str] = None,
+    ride_id: Optional[str] = None,
+    search: Optional[str] = Query(None, description="Matches description (case-insensitive substring)."),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+):
+    """Paginated list of safety incidents, newest-reported first.
+
+    Enriches each row with reporter_name (from drivers + users tables in
+    two batched queries) so the admin queue doesn't have to N+1.
+    """
+    # Build the filter. None of these are sensitive; if a category is
+    # supplied we pass it through as-is rather than restricting to a
+    # closed set — new abuse taxonomies should not need a backend deploy.
+    filters: Dict[str, Any] = {}
+    if status:
+        filters["status"] = status
+    else:
+        filters["status"] = {"$in": list(_OPEN_STATUSES)}
+    if severity:
+        filters["severity"] = severity
+    if role:
+        filters["role"] = role
+    if category:
+        filters["category"] = category
+    if ride_id:
+        filters["ride_id"] = ride_id
+
+    try:
+        rows = await db_supabase.get_rows(
+            "safety_incidents",
+            filters,
+            order="reported_at",
+            desc=True,
+            limit=limit + offset,
+        )
+    except Exception:
+        logger.error("safety_incidents list query failed", exc_info=True)
+        raise HTTPException(status_code=503, detail="Could not load safety queue.")
+
+    page = rows[offset : offset + limit]
+
+    if search:
+        needle = search.strip().lower()
+        page = [r for r in page if needle in (r.get("description") or "").lower()]
+
+    # Batch-fetch reporter names so the queue table doesn't have to N+1.
+    reporter_ids = list({r.get("reported_by_user_id") for r in page if r.get("reported_by_user_id")})
+    _drivers_map, users_map = await _batch_fetch_drivers_and_users([], [])
+    if reporter_ids:
+        users_list = await db_supabase.get_rows("users", {"id": {"$in": reporter_ids}}, limit=len(reporter_ids))
+        users_map = {u["id"]: u for u in users_list if u.get("id")}
+
+    enriched: List[Dict[str, Any]] = []
+    for r in page:
+        reporter = users_map.get(r.get("reported_by_user_id")) if r.get("reported_by_user_id") else None
+        enriched.append(
+            {
+                **r,
+                "reporter_name": _user_display_name(reporter) if reporter else None,
+            }
+        )
+
+    # Open count is useful for the sidebar badge and headline stat —
+    # cheap because we only query in the open status set.
+    try:
+        open_rows = await db_supabase.get_rows(
+            "safety_incidents",
+            {"status": {"$in": list(_OPEN_STATUSES)}},
+            limit=1000,
+        )
+        open_count = len(open_rows)
+    except Exception:
+        open_count = None
+
+    return {
+        "items": enriched,
+        "total": len(rows),
+        "offset": offset,
+        "limit": limit,
+        "open_count": open_count,
+    }
+
+
+# ---------- Single ----------
+
+
+@router.get("/incidents/{incident_id}")
+async def admin_get_safety_incident(incident_id: str):
+    """Detail view: incident row + reporter snapshot + ride summary."""
+    rows = await db_supabase.get_rows("safety_incidents", {"id": incident_id}, limit=1)
+    if not rows:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    incident = rows[0]
+
+    reporter = None
+    if incident.get("reported_by_user_id"):
+        try:
+            user_rows = await db_supabase.get_rows("users", {"id": incident["reported_by_user_id"]}, limit=1)
+            reporter = user_rows[0] if user_rows else None
+        except Exception:
+            logger.error("safety_incidents reporter lookup failed", exc_info=True)
+
+    ride_summary = None
+    if incident.get("ride_id"):
+        try:
+            ride_rows = await db_supabase.get_rows("rides", {"id": incident["ride_id"]}, limit=1)
+            ride = ride_rows[0] if ride_rows else None
+            if ride:
+                ride_summary = {
+                    "id": ride.get("id"),
+                    "ride_code": ride.get("ride_code"),
+                    "status": ride.get("status"),
+                    "rider_id": ride.get("rider_id"),
+                    "driver_id": ride.get("driver_id"),
+                    "pickup_address": ride.get("pickup_address"),
+                    "dropoff_address": ride.get("dropoff_address"),
+                    "total_fare": ride.get("total_fare"),
+                    "started_at": ride.get("started_at"),
+                    "completed_at": ride.get("ride_completed_at"),
+                }
+        except Exception:
+            logger.error("safety_incidents ride snapshot lookup failed", exc_info=True)
+
+    return {
+        "incident": incident,
+        "reporter": {
+            "id": reporter.get("id") if reporter else None,
+            "name": _user_display_name(reporter) if reporter else None,
+            "email": reporter.get("email") if reporter else None,
+            "phone": reporter.get("phone") if reporter else None,
+            "role": reporter.get("role") if reporter else None,
+        }
+        if reporter
+        else None,
+        "ride": ride_summary,
+    }
+
+
+# ---------- Update ----------
+
+
+class SafetyIncidentUpdate(BaseModel):
+    status: Optional[Literal["open", "in_progress", "resolved", "closed", "duplicate"]] = None
+    severity: Optional[Literal["sev1", "sev2", "sev3"]] = None
+    assigned_to_admin_id: Optional[str] = None
+    resolution_notes: Optional[str] = Field(default=None, max_length=4000)
+
+
+@router.patch("/incidents/{incident_id}")
+async def admin_update_safety_incident(
+    incident_id: str,
+    body: SafetyIncidentUpdate,
+    admin: dict = Depends(get_admin_user),
+):
+    """Update the triage state of an incident.
+
+    Status transitions are not enforced server-side — any → any is
+    allowed. The CHECK constraint on the column guards against
+    nonsense values; semantically the admin UI should restrict
+    backward transitions, but operators occasionally need to re-open
+    a closed incident.
+    """
+    existing_rows = await db_supabase.get_rows("safety_incidents", {"id": incident_id}, limit=1)
+    if not existing_rows:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    existing = existing_rows[0]
+
+    updates: Dict[str, Any] = {}
+    if body.status is not None:
+        updates["status"] = body.status
+        # When transitioning to a terminal state, stamp resolved_at +
+        # resolved_by from the acting admin. resolution_notes is set
+        # separately below if the caller provides one.
+        if body.status in ("resolved", "closed") and not existing.get("resolved_at"):
+            updates["resolved_at"] = datetime.now(timezone.utc).isoformat()
+            updates["resolved_by"] = admin.get("id")
+    if body.severity is not None:
+        updates["severity"] = body.severity
+    if body.assigned_to_admin_id is not None:
+        # Caller can pass an empty string to clear the assignment.
+        updates["assigned_to_admin_id"] = body.assigned_to_admin_id or None
+    if body.resolution_notes is not None:
+        updates["resolution_notes"] = body.resolution_notes
+
+    if not updates:
+        return {"updated": False, "incident": existing}
+
+    try:
+        await db_supabase.update_one("safety_incidents", {"id": incident_id}, updates)
+    except Exception:
+        logger.error("safety_incident update failed", exc_info=True, extra={"incident_id": incident_id})
+        raise HTTPException(status_code=503, detail="Could not update incident.")
+
+    # Audit log — never persist the description here (PII), only the
+    # field-level diff so we can answer "who set this to closed".
+    try:
+        await log_admin_action(
+            admin,
+            "safety_incident_update",
+            "safety_incidents",
+            incident_id,
+            {"updates": {k: v for k, v in updates.items() if k != "resolution_notes"}},
+        )
+    except Exception:
+        logger.error("safety_incident audit log write failed", exc_info=True)
+
+    refreshed_rows = await db_supabase.get_rows("safety_incidents", {"id": incident_id}, limit=1)
+    return {"updated": True, "incident": refreshed_rows[0] if refreshed_rows else existing}

@@ -35,6 +35,12 @@ _STRIPE_HANDLED_EVENTS = frozenset(
         "charge.dispute.created",
         "charge.dispute.closed",
         "customer.subscription.deleted",
+        # Connect Express KYC mirror — fired whenever the driver progresses
+        # through Stripe's hosted onboarding (uploads ID, accepts ToS,
+        # links bank), or whenever Stripe's verification team updates
+        # the account's status. Drives the Payouts tab's Tax & Identity
+        # section in the admin slideout.
+        "account.updated",
     }
 )
 # Public alias exported for tests
@@ -118,9 +124,7 @@ async def stripe_webhook(request: Request):
             except ImportError:
                 from services.corporate_wallet_service import apply_topup  # type: ignore
 
-            amount_cents = data_object.get("amount_received") or data_object.get(
-                "amount", 0
-            )
+            amount_cents = data_object.get("amount_received") or data_object.get("amount", 0)
             # Decimal-safe cents→dollars (2-dp HALF_UP). Float division
             # ``cents / 100`` drifts for arbitrary cent values; quantize
             # first, then hand the float to apply_topup (Postgres NUMERIC
@@ -147,9 +151,7 @@ async def stripe_webhook(request: Request):
             amount_cad_str = meta.get("amount_cad", "0")
             from decimal import ROUND_HALF_UP, Decimal
 
-            amount = Decimal(amount_cad_str).quantize(
-                Decimal("0.01"), rounding=ROUND_HALF_UP
-            )
+            amount = Decimal(amount_cad_str).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
             new_balance = await wallet_increment_balance(wallet_id, amount)
 
             try:
@@ -188,9 +190,7 @@ async def stripe_webhook(request: Request):
                         data={"type": "wallet_topup", "amount": str(amount)},
                     )
                 except Exception:
-                    logger.warning(
-                        "Push notification failed for wallet_topup", exc_info=True
-                    )
+                    logger.warning("Push notification failed for wallet_topup", exc_info=True)
 
             return {"received": True, "scope": "wallet_topup", "event_id": event_id}
 
@@ -217,9 +217,7 @@ async def stripe_webhook(request: Request):
                         "ride_id": ride_id,
                     },
                 )
-                raise HTTPException(
-                    status_code=500, detail="Ride update failed — Stripe will retry"
-                )
+                raise HTTPException(status_code=500, detail="Ride update failed — Stripe will retry")
             else:
                 logger.info(f"Payment confirmed via webhook for ride {ride_id}")
 
@@ -234,17 +232,13 @@ async def stripe_webhook(request: Request):
                     {"type": "payment_confirmed", "ride_id": ride_id or ""},
                 )
             except Exception as _push_err:
-                logger.error(
-                    f"Webhook: push notification failed for user {user_id}: {_push_err}"
-                )
+                logger.error(f"Webhook: push notification failed for user {user_id}: {_push_err}")
 
     elif event_type == "payment_intent.payment_failed":
         ride_id = data_object.get("metadata", {}).get("ride_id")
         user_id = data_object.get("metadata", {}).get("user_id")
         payment_intent_id = data_object.get("id")
-        failure_message = data_object.get("last_payment_error", {}).get(
-            "message", "Payment failed"
-        )
+        failure_message = data_object.get("last_payment_error", {}).get("message", "Payment failed")
 
         if ride_id:
             updated = await db_supabase.update_ride(
@@ -265,9 +259,7 @@ async def stripe_webhook(request: Request):
                         "ride_id": ride_id,
                     },
                 )
-                raise HTTPException(
-                    status_code=500, detail="Ride update failed — Stripe will retry"
-                )
+                raise HTTPException(status_code=500, detail="Ride update failed — Stripe will retry")
             logger.warning(f"Payment failed for ride {ride_id}: {failure_message}")
 
         if user_id:
@@ -279,9 +271,7 @@ async def stripe_webhook(request: Request):
                     {"type": "payment_failed", "ride_id": ride_id or ""},
                 )
             except Exception as _push_err:
-                logger.error(
-                    f"Webhook: push notification failed for user {user_id}: {_push_err}"
-                )
+                logger.error(f"Webhook: push notification failed for user {user_id}: {_push_err}")
 
         # Notify the driver so they know the rider's payment failed (13-10)
         if ride_id:
@@ -291,15 +281,11 @@ async def stripe_webhook(request: Request):
                 if ride_row:
                     driver_id = ride_row.get("driver_id")
                     if driver_id:
-                        driver_rows = await db_supabase.get_rows(
-                            "drivers", {"id": driver_id}, limit=1
-                        )
+                        driver_rows = await db_supabase.get_rows("drivers", {"id": driver_id}, limit=1)
                         if driver_rows:
                             driver_user_id = driver_rows[0].get("user_id")
             except Exception as lookup_err:
-                logger.error(
-                    f"Driver payment-failed lookup error: {lookup_err}", exc_info=True
-                )
+                logger.error(f"Driver payment-failed lookup error: {lookup_err}", exc_info=True)
                 driver_user_id = None
             if driver_user_id:
                 try:
@@ -359,12 +345,8 @@ async def stripe_webhook(request: Request):
             if rides:
                 ride = rides[0]
                 ride_id = ride["id"]
-                refunded_amount = Decimal(
-                    str(charge.get("amount_refunded", 0))
-                ) / Decimal("100")
-                refunded_amount = refunded_amount.quantize(
-                    _TWO_PLACES, rounding=ROUND_HALF_UP
-                )
+                refunded_amount = Decimal(str(charge.get("amount_refunded", 0))) / Decimal("100")
+                refunded_amount = refunded_amount.quantize(_TWO_PLACES, rounding=ROUND_HALF_UP)
                 await db_supabase.update_one(
                     "rides",
                     {"id": ride_id},
@@ -532,9 +514,7 @@ async def stripe_webhook(request: Request):
         stripe_customer_id = subscription.get("customer")
         if stripe_customer_id:
             # Look up the user by their Stripe customer ID, then find the linked driver
-            user_row = await db_supabase.find_one(
-                "users", {"stripe_customer_id": stripe_customer_id}
-            )
+            user_row = await db_supabase.find_one("users", {"stripe_customer_id": stripe_customer_id})
             if user_row:
                 user_id = user_row["id"]
                 driver_row = await db_supabase.find_one("drivers", {"user_id": user_id})
@@ -600,6 +580,18 @@ async def stripe_webhook(request: Request):
                 "customer.subscription.deleted: event has no customer field — skipping",
                 extra={"domain": "drivers", "event_id": event_id},
             )
+
+    elif event_type == "account.updated":
+        # Stripe Connect Express KYC mirror. Fires whenever the driver
+        # progresses through Stripe-hosted onboarding (uploads SIN,
+        # accepts ToS, links bank, etc.) or whenever Stripe's verification
+        # team flips a status. We persist only the cache columns added
+        # by migration 92 — never the SIN itself.
+        try:
+            from ..services.stripe_kyc_sync import apply_account_update
+        except ImportError:
+            from services.stripe_kyc_sync import apply_account_update
+        await apply_account_update(data_object, event_id=event_id)
 
     else:
         if event_type in _STRIPE_HANDLED_EVENTS:

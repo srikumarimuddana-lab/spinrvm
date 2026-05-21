@@ -8,13 +8,36 @@ from pydantic import BaseModel
 try:
     from ... import db_supabase
     from ...dependencies import get_admin_user
+    from ...features import send_push_notification
     from ...utils.audit_logger import log_admin_action
 except ImportError:
     import db_supabase
     from dependencies import get_admin_user  # noqa: F401
+    from features import send_push_notification  # noqa: F401
     from utils.audit_logger import log_admin_action  # noqa: F401
 
 from .drivers import _log_driver_activity
+
+# Templated push copy for document rejections. Keys match the dropdown in
+# the admin reviewer UI; "other" falls back to the free-text reason.
+_REJECT_TEMPLATES: Dict[str, tuple[str, str]] = {
+    "blurry_image": (
+        "Document needs re-upload",
+        "We couldn't read your {doc} clearly. Please re-upload a sharper photo.",
+    ),
+    "wrong_document_type": (
+        "Wrong document type",
+        "The file you uploaded for {doc} doesn't match what's required. Please upload the correct document.",
+    ),
+    "expired": (
+        "Expired document",
+        "Your {doc} appears expired. Please upload a current copy to continue driving.",
+    ),
+    "information_unclear": (
+        "Document information unclear",
+        "Some information on your {doc} is unclear or unreadable. Please re-upload.",
+    ),
+}
 
 logger = logging.getLogger(__name__)
 
@@ -43,9 +66,7 @@ class DocumentRequirementUpdateRequest(BaseModel):
 @router.get("/documents/requirements")
 async def admin_get_document_requirements():
     """Get all document requirements."""
-    requirements = await db_supabase.get_rows(
-        "document_requirements", order="created_at", limit=100
-    )
+    requirements = await db_supabase.get_rows("document_requirements", order="created_at", limit=100)
     return requirements or []
 
 
@@ -63,15 +84,11 @@ async def admin_create_document_requirement(
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     row = await db_supabase.insert_one("document_requirements", doc)
-    return {
-        "requirement_id": str(row.get("id") if row and isinstance(row, dict) else "")
-    }
+    return {"requirement_id": str(row.get("id") if row and isinstance(row, dict) else "")}
 
 
 @router.put("/documents/requirements/{requirement_id}")
-async def admin_update_document_requirement(
-    requirement_id: str, requirement: DocumentRequirementUpdateRequest
-):
+async def admin_update_document_requirement(requirement_id: str, requirement: DocumentRequirementUpdateRequest):
     """Update a document requirement."""
     updates: Dict[str, Any] = {}
     if requirement.name is not None:
@@ -87,9 +104,7 @@ async def admin_update_document_requirement(
 
     if updates:
         updates["updated_at"] = datetime.now(timezone.utc).isoformat()
-        await db_supabase.update_one(
-            "document_requirements", {"id": requirement_id}, updates
-        )
+        await db_supabase.update_one("document_requirements", {"id": requirement_id}, updates)
     return {"message": "Document requirement updated"}
 
 
@@ -183,6 +198,8 @@ class DocumentReviewRequest(BaseModel):
     status: str
     rejection_reason: Optional[str] = None
     expiry_date: Optional[str] = None
+    notify: bool = True
+    notify_template: Optional[str] = None  # see _REJECT_TEMPLATES
 
 
 @router.post("/documents/{document_id}/review")
@@ -217,24 +234,31 @@ async def admin_review_driver_document(
     new_expiry_iso: Optional[str] = None
     if expiry_raw:
         try:
-            new_expiry_iso = datetime.fromisoformat(
-                str(expiry_raw).replace("Z", "+00:00")
-            ).isoformat()
+            new_expiry_iso = datetime.fromisoformat(str(expiry_raw).replace("Z", "+00:00")).isoformat()
         except ValueError:
             new_expiry_iso = None
 
-    # NOTE: driver_documents schema only guarantees these columns:
-    #   id, driver_id, document_type, document_url, status,
-    #   rejection_reason, uploaded_at, updated_at, requirement_id, side
-    # Writing `reviewed_at` or `expiry_date` here would cause PGRST204
-    # ("Could not find the X column") -> 500 response with no CORS headers,
-    # which is why this endpoint has been silently failing in production.
+    # Schema (after migration 91): id, driver_id, document_type,
+    # document_url, status, rejection_reason, uploaded_at, updated_at,
+    # requirement_id, requirement_key, side, expiry_date.
+    # Writing `reviewed_at` would still trigger PGRST204 — keep that out.
     updates: Dict[str, Any] = {
         "status": status,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     if rejection_reason:
         updates["rejection_reason"] = rejection_reason
+    # Persist the doc-level expiry. Without this, expiries set by the admin
+    # were silently dropped for any requirement that didn't map to a legacy
+    # drivers.* column (e.g. vehicle_registration), and the slideout's
+    # expiry card kept reading "Not set" no matter how many times the admin
+    # re-approved the doc.
+    if status == "approved":
+        updates["expiry_date"] = new_expiry_iso
+    elif status == "rejected":
+        # Clear any stale expiry on rejection so the next reviewer doesn't
+        # see a phantom date carried over from a prior approval.
+        updates["expiry_date"] = None
 
     try:
         await db_supabase.update_one("driver_documents", {"id": document_id}, updates)
@@ -262,9 +286,7 @@ async def admin_review_driver_document(
         if existing_req_id:
             try:
                 req_row = (lambda _r: _r[0] if _r else None)(
-                    await db_supabase.get_rows(
-                        "document_requirements", {"id": existing_req_id}, limit=1
-                    )
+                    await db_supabase.get_rows("document_requirements", {"id": existing_req_id}, limit=1)
                 )
                 if req_row:
                     req_name = req_row.get("name")
@@ -320,9 +342,7 @@ async def admin_review_driver_document(
                             {"status": "active", "is_verified": True},
                         )
                 except Exception as _exc:
-                    logger.debug(
-                        f"Could not reset driver {driver_id} status to active: {_exc}"
-                    )
+                    logger.debug(f"Could not reset driver {driver_id} status to active: {_exc}")
 
     # Log to activity timeline
     doc_type = existing.get("document_type", "Document")
@@ -345,5 +365,49 @@ async def admin_review_driver_document(
             "rejection_reason": rejection_reason,
         },
     )
+
+    # Push the driver a re-upload prompt when the admin rejects a document.
+    # Skipped if (a) the caller opted out, (b) status isn't a rejection, or
+    # (c) the doc was already in "rejected" state before this call — that
+    # case is an edit (e.g. fixing the reason text) and re-firing would
+    # spam the driver. Push failures are intentionally swallowed: the
+    # DB-level rejection is already committed and the audit trail above
+    # records the action even if FCM is unreachable.
+    if status == "rejected" and review_data.notify and existing.get("status") != "rejected":
+        driver_id = existing.get("driver_id")
+        if driver_id:
+            try:
+                drv = await db_supabase.get_driver_by_id(driver_id)
+                user_id = (drv or {}).get("user_id")
+                if user_id:
+                    template = _REJECT_TEMPLATES.get(review_data.notify_template or "")
+                    if template:
+                        title, body_tmpl = template
+                        body = body_tmpl.format(doc=doc_type)
+                    else:
+                        title = "Document needs re-upload"
+                        body = (
+                            f"Your {doc_type} was not approved: {rejection_reason}"
+                            if rejection_reason
+                            else f"Your {doc_type} was not approved. Please re-upload."
+                        )
+                    await send_push_notification(
+                        user_id,
+                        title,
+                        body,
+                        data={
+                            "type": "document_rejected",
+                            "driver_id": driver_id,
+                            "document_id": document_id,
+                            "document_type": doc_type,
+                        },
+                    )
+            except Exception:
+                logger.warning(
+                    "Document-rejection push failed for driver %s doc %s",
+                    driver_id,
+                    document_id,
+                    exc_info=True,
+                )
 
     return {"message": f"Document {status}"}

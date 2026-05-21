@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 try:
     from ... import db_supabase
@@ -1259,6 +1259,449 @@ async def admin_get_earnings(period: str = Query("month")):
     }
 
 
+# ---------- Transaction-level earnings rows ----------
+
+
+@router.get("/earnings/rides")
+async def admin_get_earnings_rides(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    service_area_id: Optional[str] = None,
+    limit: int = Query(100, ge=1, le=10000),
+    offset: int = Query(0, ge=0),
+):
+    """Per-ride money breakdown for finance reconciliation.
+
+    Backs the date-filterable + CSV-exportable transaction table on
+    the Rides Earnings tab. Different shape from /earnings (period
+    aggregates) and /earnings/overview (PoP deltas + chart) — this
+    endpoint returns the individual ride rows finance needs to tie
+    out against Stripe charges and the bank ledger.
+
+    Default window: last 30 days when no start/end is supplied.
+    """
+    now = datetime.now(timezone.utc)
+    if not end_date:
+        end_iso = now.isoformat()
+    else:
+        end_iso = end_date if "T" in end_date else f"{end_date}T23:59:59+00:00"
+    if not start_date:
+        start_iso = (now - timedelta(days=30)).isoformat()
+    else:
+        start_iso = start_date if "T" in start_date else f"{start_date}T00:00:00+00:00"
+
+    filters: Dict[str, Any] = {
+        "status": "completed",
+        "ride_completed_at": {"$gte": start_iso, "$lte": end_iso},
+    }
+    if service_area_id:
+        filters["service_area_id"] = service_area_id
+
+    # Over-fetch by `limit + offset` and slice — Supabase helper doesn't
+    # expose OFFSET natively. Bounded by the 10k limit cap so the worst
+    # case is one full-table scan, which is fine for the finance use case
+    # (monthly closeout is the realistic upper bound).
+    fetch_size = limit + offset
+    rides = await db_supabase.get_rows(
+        "rides",
+        filters,
+        order="ride_completed_at",
+        desc=True,
+        limit=fetch_size,
+    )
+    page = rides[offset : offset + limit]
+
+    # Batch-fetch driver + rider names. The reconciliation flow often
+    # needs to attach a human name to a Stripe statement line, so this
+    # is more than just cosmetic enrichment.
+    driver_ids = list({r.get("driver_id") for r in page if r.get("driver_id")})
+    rider_ids = list({r.get("rider_id") for r in page if r.get("rider_id")})
+    drivers_map, users_map = await _batch_fetch_drivers_and_users(rider_ids, driver_ids)
+
+    def _driver_name(did: Optional[str]) -> Optional[str]:
+        if not did:
+            return None
+        d = drivers_map.get(did) or {}
+        u = users_map.get(d.get("user_id")) if d.get("user_id") else None
+        return _user_display_name(u) or d.get("name")
+
+    enriched = []
+    for r in page:
+        rider = users_map.get(r.get("rider_id")) if r.get("rider_id") else None
+        enriched.append(
+            {
+                "ride_id": r.get("id"),
+                "ride_code": r.get("ride_code"),
+                "status": r.get("status"),
+                "total_fare": float(Decimal(str(r.get("total_fare") or 0))),
+                "driver_earnings": float(Decimal(str(r.get("driver_earnings") or 0))),
+                "admin_earnings": float(Decimal(str(r.get("admin_earnings") or 0))),
+                "tip_amount": float(Decimal(str(r.get("tip_amount") or 0))),
+                "tax_amount": float(Decimal(str(r.get("tax_amount") or 0))),
+                "discount_amount": float(Decimal(str(r.get("discount_amount") or 0))),
+                "surge_multiplier": float(Decimal(str(r.get("surge_multiplier") or 1))),
+                "stripe_charge_id": r.get("stripe_charge_id"),
+                "driver_id": r.get("driver_id"),
+                "driver_name": _driver_name(r.get("driver_id")),
+                "rider_id": r.get("rider_id"),
+                "rider_name": _user_display_name(rider) if rider else None,
+                "service_area_id": r.get("service_area_id"),
+                "completed_at": r.get("ride_completed_at"),
+                "created_at": r.get("created_at"),
+            }
+        )
+
+    return {
+        "rides": enriched,
+        "total": len(rides),
+        "offset": offset,
+        "limit": limit,
+    }
+
+
+# ---------- CEO-grade earnings overview ----------
+
+
+_PERIOD_DAYS = {"7d": 7, "30d": 30, "mtd": None, "ytd": None}
+
+# Module-level so both the earnings overview and payouts overview
+# endpoints render the same human label for a period key.
+_PERIOD_LABELS = {
+    "7d": "Last 7 days",
+    "30d": "Last 30 days",
+    "mtd": "Month to date",
+    "ytd": "Year to date",
+}
+
+
+def _resolve_period(period: str, now: datetime) -> tuple[datetime, datetime, datetime, datetime, int]:
+    """Map a period label to (current_start, current_end, prev_start, prev_end, days).
+
+    For mtd / ytd the previous-period window is the same length so the
+    delta is apples-to-apples (e.g. comparing MTD against the same number
+    of days in the prior month).
+    """
+    end = now
+    if period == "mtd":
+        start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    elif period == "ytd":
+        start = now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+    else:
+        days = _PERIOD_DAYS.get(period, 7) or 7
+        start = (now - timedelta(days=days)).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    span = end - start
+    prev_end = start
+    prev_start = start - span
+    days = max((end - start).days, 1)
+    return start, end, prev_start, prev_end, days
+
+
+def _delta_pct(current: float, previous: float) -> Optional[float]:
+    """Period-over-period percentage. None when previous is 0 so the UI can
+    render an em-dash instead of a misleading "+Inf%"."""
+    if previous == 0:
+        return None
+    return round(((current - previous) / previous) * 100, 1)
+
+
+def _metric(current: float, previous: float) -> Dict[str, Any]:
+    return {
+        "current": round(float(current), 2),
+        "previous": round(float(previous), 2),
+        "delta_pct": _delta_pct(current, previous),
+    }
+
+
+def _active_subs_at(subs: list[Dict[str, Any]], cutoff: datetime) -> list[Dict[str, Any]]:
+    """Snapshot active subscriptions at a point in time.
+
+    A subscription counts as active at `cutoff` if it started on or before
+    cutoff and either never ended OR ended after cutoff.
+    """
+    cutoff_iso = cutoff.isoformat()
+    out = []
+    for s in subs:
+        started = s.get("started_at") or s.get("created_at") or ""
+        if started > cutoff_iso:
+            continue
+        # ended_at / cancelled_at / expires_at — whichever Stripe wrote
+        ended = s.get("cancelled_at") or s.get("expires_at") or ""
+        if ended and ended <= cutoff_iso:
+            continue
+        out.append(s)
+    return out
+
+
+@router.get("/earnings/overview")
+async def admin_get_earnings_overview(
+    period: str = Query("7d", pattern="^(7d|30d|mtd|ytd)$"),
+    service_area_id: Optional[str] = None,
+):
+    """CEO-grade earnings dashboard with period-over-period deltas + daily series.
+
+    Returns the headline metrics a fleet-ops or exec dashboard needs to
+    answer "is the business healthy" in one screen:
+      - GBV (sum of completed-ride fares)
+      - Net Revenue (platform per-ride margin + Spinr Pass MRR)
+      - Take Rate % (net revenue / GBV)
+      - Completed trips
+      - Active riders (booked at least one ride in window)
+      - Active drivers (completed at least one ride in window)
+      - Avg fare per trip
+      - Spinr Pass MRR (snapshot at window end)
+
+    Every metric carries `current`, `previous` (same-length prior window),
+    and `delta_pct` so the UI can render the period-over-period chip
+    without a second round-trip.
+
+    `daily_series` is the per-day GBV / trips / net-revenue array for
+    the line chart below the cards.
+    """
+    now = datetime.now(timezone.utc)
+    start, end, prev_start, prev_end, days = _resolve_period(period, now)
+
+    # ── Rides ─────────────────────────────────────────────────────────────
+    # Pull current + previous window in two queries. Bounded by completed-only
+    # so cancellation rows don't inflate GBV.
+    # ── Rides — completed (the GBV / trips / net rev numerator) ──────────
+    base_filter: Dict[str, Any] = {"status": "completed"}
+    if service_area_id:
+        base_filter["service_area_id"] = service_area_id
+
+    current_rides = await db_supabase.get_rows(
+        "rides",
+        {**base_filter, "ride_completed_at": {"$gte": start.isoformat(), "$lte": end.isoformat()}},
+        limit=50000,
+    )
+    previous_rides = await db_supabase.get_rows(
+        "rides",
+        {**base_filter, "ride_completed_at": {"$gte": prev_start.isoformat(), "$lte": prev_end.isoformat()}},
+        limit=50000,
+    )
+
+    # ── Rides — cancelled (cancellation rate denominator + fee revenue) ──
+    # Cancelled rides have null ride_completed_at, so filter on created_at
+    # for the window. Same service-area scoping as completed rides above.
+    cancelled_filter: Dict[str, Any] = {"status": "cancelled"}
+    if service_area_id:
+        cancelled_filter["service_area_id"] = service_area_id
+    current_cancelled = await db_supabase.get_rows(
+        "rides",
+        {**cancelled_filter, "created_at": {"$gte": start.isoformat(), "$lte": end.isoformat()}},
+        limit=50000,
+    )
+    previous_cancelled = await db_supabase.get_rows(
+        "rides",
+        {**cancelled_filter, "created_at": {"$gte": prev_start.isoformat(), "$lte": prev_end.isoformat()}},
+        limit=50000,
+    )
+
+    # ── Disputes / refunds (resolved within window) ──────────────────────
+    # Refunds are persisted on `disputes.refund_amount` — service area
+    # isn't on the dispute row, so when a service-area filter is set we
+    # narrow to disputes whose ride_id is in the current ride set.
+    refunded_filter: Dict[str, Any] = {
+        "resolved_at": {"$gte": start.isoformat(), "$lte": end.isoformat()},
+    }
+    refunded_filter_prev: Dict[str, Any] = {
+        "resolved_at": {"$gte": prev_start.isoformat(), "$lte": prev_end.isoformat()},
+    }
+    current_refunds = await db_supabase.get_rows("disputes", refunded_filter, limit=10000)
+    previous_refunds = await db_supabase.get_rows("disputes", refunded_filter_prev, limit=10000)
+    if service_area_id:
+        # Cross-reference against the ride set; cheaper than a join.
+        current_ride_ids = {r.get("id") for r in current_rides + current_cancelled}
+        previous_ride_ids = {r.get("id") for r in previous_rides + previous_cancelled}
+        current_refunds = [d for d in current_refunds if d.get("ride_id") in current_ride_ids]
+        previous_refunds = [d for d in previous_refunds if d.get("ride_id") in previous_ride_ids]
+
+    def _agg(rides: list) -> Dict[str, Any]:
+        gbv = sum((Decimal(str(r.get("total_fare") or 0)) for r in rides), Decimal("0"))
+        platform = sum((Decimal(str(r.get("admin_earnings") or 0)) for r in rides), Decimal("0"))
+        rider_ids = {r.get("rider_id") for r in rides if r.get("rider_id")}
+        driver_ids = {r.get("driver_id") for r in rides if r.get("driver_id")}
+        # Surge revenue: portion of total_fare attributable to the
+        # surge multiplier. base = total / surge_mult → surge = total -
+        # base. Only counts rides where surge actually applied (>1.0).
+        surge_rev = Decimal("0")
+        for r in rides:
+            mult = Decimal(str(r.get("surge_multiplier") or 1.0))
+            if mult > 1:
+                fare = Decimal(str(r.get("total_fare") or 0))
+                surge_rev += fare - (fare / mult)
+        # Promo spend: discount_amount on completed rides — what we
+        # gave away to acquire/retain the ride.
+        promo = sum((Decimal(str(r.get("discount_amount") or 0)) for r in rides), Decimal("0"))
+        promo_count = sum(1 for r in rides if Decimal(str(r.get("discount_amount") or 0)) > 0)
+        # Tax decomposition from rides.tax_breakdown JSONB — defensive
+        # because tax_name keys vary by service area config.
+        gst = Decimal("0")
+        pst = Decimal("0")
+        for r in rides:
+            breakdown = r.get("tax_breakdown") or {}
+            if isinstance(breakdown, dict):
+                for tax_name, info in breakdown.items():
+                    amount = Decimal("0")
+                    if isinstance(info, dict):
+                        amount = Decimal(str(info.get("amount") or 0))
+                    name_l = str(tax_name).lower()
+                    if "gst" in name_l or name_l == "hst":
+                        gst += amount
+                    elif "pst" in name_l or "qst" in name_l:
+                        pst += amount
+        return {
+            "gbv": float(gbv),
+            "platform": float(platform),
+            "trips": len(rides),
+            "riders": len(rider_ids),
+            "drivers": len(driver_ids),
+            "surge_revenue": float(surge_rev),
+            "promo_spend": float(promo),
+            "promo_count": promo_count,
+            "gst_collected": float(gst),
+            "pst_collected": float(pst),
+        }
+
+    def _agg_cancelled(rides: list) -> Dict[str, Any]:
+        """Cancellation-only aggregator. cancellation_fee_admin is the
+        platform's share of the cancel fee — that's the revenue side."""
+        cancel_revenue = sum(
+            (Decimal(str(r.get("cancellation_fee_admin") or 0)) for r in rides),
+            Decimal("0"),
+        )
+        # Rider vs driver vs system cancel breakdown — pulled from the
+        # cancellation_reason text field with a simple keyword match.
+        # Same convention the admin analytics page already uses.
+        rider_cancels = 0
+        driver_cancels = 0
+        for r in rides:
+            reason = (r.get("cancellation_reason") or "").lower()
+            if "driver" in reason:
+                driver_cancels += 1
+            elif "rider" in reason or "user" in reason:
+                rider_cancels += 1
+        return {
+            "count": len(rides),
+            "revenue": float(cancel_revenue),
+            "rider_cancels": rider_cancels,
+            "driver_cancels": driver_cancels,
+        }
+
+    cur = _agg(current_rides)
+    prev = _agg(previous_rides)
+    cur_cx = _agg_cancelled(current_cancelled)
+    prev_cx = _agg_cancelled(previous_cancelled)
+
+    # Refund $ in window — disputes resolved during the period with a
+    # non-zero refund_amount. We don't distinguish full vs partial here;
+    # any payout to the rider counts as refund leakage.
+    cur_refund_amt = float(sum((Decimal(str(d.get("refund_amount") or 0)) for d in current_refunds), Decimal("0")))
+    prev_refund_amt = float(sum((Decimal(str(d.get("refund_amount") or 0)) for d in previous_refunds), Decimal("0")))
+    cur_refund_count = sum(1 for d in current_refunds if Decimal(str(d.get("refund_amount") or 0)) > 0)
+    prev_refund_count = sum(1 for d in previous_refunds if Decimal(str(d.get("refund_amount") or 0)) > 0)
+
+    # Cancellation rate: cancelled / (completed + cancelled). Same
+    # formula the ops cancellation-rate KPI uses across the codebase.
+    def _cancel_rate(completed: int, cancelled: int) -> float:
+        total = completed + cancelled
+        return round((cancelled / total) * 100, 1) if total > 0 else 0.0
+
+    cur_cancel_rate = _cancel_rate(cur["trips"], cur_cx["count"])
+    prev_cancel_rate = _cancel_rate(prev["trips"], prev_cx["count"])
+
+    # ── Spinr Pass MRR snapshots ─────────────────────────────────────────
+    # Sum the monthly price of subscriptions active at each cutoff. Cheap
+    # query — bounded by the count of subs ever created.
+    all_subs = await db_supabase.get_rows("driver_subscriptions", {}, limit=10000)
+    cur_mrr = float(sum((Decimal(str(s.get("price") or 0)) for s in _active_subs_at(all_subs, end)), Decimal("0")))
+    prev_mrr = float(
+        sum((Decimal(str(s.get("price") or 0)) for s in _active_subs_at(all_subs, prev_end)), Decimal("0"))
+    )
+
+    # Net revenue = per-ride platform margin + subscription MRR pro-rated
+    # for the window length. For 7d window, attribute 7/30 of the MRR
+    # snapshot as period revenue. Crude but matches how SaaS dashboards
+    # show recognised-revenue when MRR is bundled with transactional rev.
+    def _attribute_mrr(mrr_snapshot: float, window_days: int) -> float:
+        return round(mrr_snapshot * (window_days / 30.0), 2)
+
+    cur_net_revenue = cur["platform"] + _attribute_mrr(cur_mrr, days)
+    prev_net_revenue = prev["platform"] + _attribute_mrr(prev_mrr, days)
+
+    cur_take_rate = round((cur_net_revenue / cur["gbv"]) * 100, 2) if cur["gbv"] > 0 else 0.0
+    prev_take_rate = round((prev_net_revenue / prev["gbv"]) * 100, 2) if prev["gbv"] > 0 else 0.0
+
+    cur_avg_fare = round(cur["gbv"] / cur["trips"], 2) if cur["trips"] > 0 else 0.0
+    prev_avg_fare = round(prev["gbv"] / prev["trips"], 2) if prev["trips"] > 0 else 0.0
+
+    # ── Daily series for the line chart ───────────────────────────────────
+    daily: Dict[str, Dict[str, Any]] = {}
+    cursor = start.date()
+    end_date = end.date()
+    while cursor <= end_date:
+        daily[cursor.isoformat()] = {"date": cursor.isoformat(), "gbv": 0.0, "trips": 0, "net_revenue": 0.0}
+        cursor += timedelta(days=1)
+    for r in current_rides:
+        completed = r.get("ride_completed_at") or r.get("created_at") or ""
+        day = completed[:10]
+        if day in daily:
+            daily[day]["gbv"] = round(daily[day]["gbv"] + float(Decimal(str(r.get("total_fare") or 0))), 2)
+            daily[day]["trips"] += 1
+            daily[day]["net_revenue"] = round(
+                daily[day]["net_revenue"] + float(Decimal(str(r.get("admin_earnings") or 0))),
+                2,
+            )
+    daily_series = list(daily.values())
+
+    return {
+        "period": {
+            "key": period,
+            "label": _PERIOD_LABELS[period],
+            "days": days,
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "prev_start": prev_start.isoformat(),
+            "prev_end": prev_end.isoformat(),
+        },
+        "metrics": {
+            # Pass 1 — CEO row
+            "gbv": _metric(cur["gbv"], prev["gbv"]),
+            "net_revenue": _metric(cur_net_revenue, prev_net_revenue),
+            "take_rate_pct": _metric(cur_take_rate, prev_take_rate),
+            "completed_trips": _metric(cur["trips"], prev["trips"]),
+            "active_riders": _metric(cur["riders"], prev["riders"]),
+            "active_drivers": _metric(cur["drivers"], prev["drivers"]),
+            "avg_fare": _metric(cur_avg_fare, prev_avg_fare),
+            "spinr_pass_mrr": _metric(cur_mrr, prev_mrr),
+            # Pass 2 — operational health
+            "cancellation_rate_pct": _metric(cur_cancel_rate, prev_cancel_rate),
+            "cancellation_revenue": _metric(cur_cx["revenue"], prev_cx["revenue"]),
+            "cancelled_trips": _metric(cur_cx["count"], prev_cx["count"]),
+            "refund_amount": _metric(cur_refund_amt, prev_refund_amt),
+            "refund_count": _metric(cur_refund_count, prev_refund_count),
+            "promo_spend": _metric(cur["promo_spend"], prev["promo_spend"]),
+            "promo_count": _metric(cur["promo_count"], prev["promo_count"]),
+            "surge_revenue": _metric(cur["surge_revenue"], prev["surge_revenue"]),
+            "gst_collected": _metric(cur["gst_collected"], prev["gst_collected"]),
+            "pst_collected": _metric(cur["pst_collected"], prev["pst_collected"]),
+        },
+        "cancellation_breakdown": {
+            "current": {
+                "rider": cur_cx["rider_cancels"],
+                "driver": cur_cx["driver_cancels"],
+                "system": cur_cx["count"] - cur_cx["rider_cancels"] - cur_cx["driver_cancels"],
+            },
+            "previous": {
+                "rider": prev_cx["rider_cancels"],
+                "driver": prev_cx["driver_cancels"],
+                "system": prev_cx["count"] - prev_cx["rider_cancels"] - prev_cx["driver_cancels"],
+            },
+        },
+        "daily_series": daily_series,
+    }
+
+
 # ---------- Exports ----------
 
 
@@ -1373,6 +1816,441 @@ async def admin_export_drivers(
 
 
 # ---------- Payouts ----------
+
+
+@router.get("/payouts/overview")
+async def admin_get_payouts_overview(
+    period: str = Query("7d", pattern="^(7d|30d|mtd|ytd)$"),
+    service_area_id: Optional[str] = None,
+):
+    """CEO/CFO-grade payouts dashboard.
+
+    Mirrors the shape of admin_get_earnings_overview so the frontend can
+    reuse MetricCard / DeltaChip / the period chip group. Answers
+    "is payout flow healthy?" without forcing the operator to read the
+    transaction log.
+
+    Money helpers, _resolve_period and _metric live in the same file
+    (added with the earnings overview endpoint) — re-used here.
+
+    Service-area scoping: payouts have no service_area_id column, so we
+    resolve area → driver_ids first and filter the payout set against
+    that. Cheap because area-bounded driver lists are small.
+    """
+    now = datetime.now(timezone.utc)
+    start, end, prev_start, prev_end, _days = _resolve_period(period, now)
+
+    # ── Driver-set scoping when an area filter is set ────────────────────
+    driver_id_filter: Optional[set[str]] = None
+    if service_area_id:
+        area_drivers = await db_supabase.get_rows("drivers", {"service_area_id": service_area_id}, limit=5000)
+        driver_id_filter = {d["id"] for d in area_drivers if d.get("id")}
+        if not driver_id_filter:
+            # No drivers in this area — return an empty shell so the UI
+            # renders zeroes instead of erroring out.
+            empty = _metric(0.0, 0.0)
+            return {
+                "period": {
+                    "key": period,
+                    "label": _PERIOD_LABELS[period],
+                    "days": _days,
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                    "prev_start": prev_start.isoformat(),
+                    "prev_end": prev_end.isoformat(),
+                },
+                "metrics": {
+                    "outstanding_payable": empty,
+                    "total_paid_out": empty,
+                    "pending_in_flight": empty,
+                    "failed_amount": empty,
+                    "success_rate_pct": empty,
+                    "median_time_to_payout_hours": empty,
+                    "avg_payout_amount": empty,
+                    "payouts_count": empty,
+                },
+                "daily_series": [],
+            }
+
+    def _in_scope(row: Dict[str, Any]) -> bool:
+        return driver_id_filter is None or row.get("driver_id") in driver_id_filter
+
+    # ── Outstanding payable balance ──────────────────────────────────────
+    # Lifetime sum of driver_earnings on completed rides minus payouts
+    # that have either completed or are mid-flight. NOT scoped to the
+    # period — this is a "right now" snapshot. Showing PoP delta against
+    # "same number of days ago" so the operator can see whether the
+    # backlog is growing or shrinking.
+    def _sum(rows: list, key: str) -> Decimal:
+        return sum((Decimal(str(r.get(key) or 0)) for r in rows if _in_scope(r)), Decimal("0"))
+
+    all_completed_rides = await db_supabase.get_rows("rides", {"status": "completed"}, limit=200000)
+    all_payouts = await db_supabase.get_rows("payouts", {}, limit=200000)
+
+    earned_total = _sum(all_completed_rides, "driver_earnings")
+    paid_or_in_flight = sum(
+        (
+            Decimal(str(p.get("amount") or 0))
+            for p in all_payouts
+            if _in_scope(p) and p.get("status") in ("completed", "pending", "processing")
+        ),
+        Decimal("0"),
+    )
+    outstanding_now = max(earned_total - paid_or_in_flight, Decimal("0"))
+
+    # Same calculation snapshot at prev_end so we can show delta.
+    end_iso = end.isoformat()
+    prev_end_iso = prev_end.isoformat()
+
+    def _completed_up_to(rows: list, ts: str) -> Decimal:
+        return sum(
+            (
+                Decimal(str(r.get("driver_earnings") or 0))
+                for r in rows
+                if _in_scope(r) and (r.get("ride_completed_at") or r.get("updated_at") or "") <= ts
+            ),
+            Decimal("0"),
+        )
+
+    def _paid_up_to(rows: list, ts: str) -> Decimal:
+        return sum(
+            (
+                Decimal(str(p.get("amount") or 0))
+                for p in rows
+                if _in_scope(p)
+                and p.get("status") in ("completed", "pending", "processing")
+                and (p.get("created_at") or "") <= ts
+            ),
+            Decimal("0"),
+        )
+
+    outstanding_now_calc = _completed_up_to(all_completed_rides, end_iso) - _paid_up_to(all_payouts, end_iso)
+    outstanding_prev = _completed_up_to(all_completed_rides, prev_end_iso) - _paid_up_to(all_payouts, prev_end_iso)
+    outstanding_now_calc = max(outstanding_now_calc, Decimal("0"))
+    outstanding_prev = max(outstanding_prev, Decimal("0"))
+
+    # ── Period-windowed payout metrics ───────────────────────────────────
+    def _in_window(p: Dict[str, Any], lo: datetime, hi: datetime) -> bool:
+        # Completed payouts use processed_at when present (matches the
+        # actual settlement date); pending/failed use created_at since
+        # processed_at is null. Either way it's the operationally-relevant
+        # timestamp.
+        ts = p.get("processed_at") or p.get("created_at") or ""
+        return lo.isoformat() <= ts <= hi.isoformat()
+
+    cur_payouts = [p for p in all_payouts if _in_scope(p) and _in_window(p, start, end)]
+    prev_payouts = [p for p in all_payouts if _in_scope(p) and _in_window(p, prev_start, prev_end)]
+
+    def _by_status(rows: list, *statuses: str) -> list:
+        return [p for p in rows if p.get("status") in statuses]
+
+    cur_completed = _by_status(cur_payouts, "completed")
+    prev_completed = _by_status(prev_payouts, "completed")
+    cur_pending = _by_status(cur_payouts, "pending", "processing")
+    prev_pending = _by_status(prev_payouts, "pending", "processing")
+    cur_failed = _by_status(cur_payouts, "failed")
+    prev_failed = _by_status(prev_payouts, "failed")
+
+    def _amt(rows: list) -> float:
+        return float(sum((Decimal(str(r.get("amount") or 0)) for r in rows), Decimal("0")))
+
+    # ── Success rate ──
+    # Pending excluded from denominator — outcome unknown. completed /
+    # (completed + failed) over rows that have reached a terminal state.
+    def _success_rate(completed: list, failed: list) -> float:
+        terminal = len(completed) + len(failed)
+        return round((len(completed) / terminal) * 100, 1) if terminal > 0 else 0.0
+
+    cur_success = _success_rate(cur_completed, cur_failed)
+    prev_success = _success_rate(prev_completed, prev_failed)
+
+    # ── Median time to payout (hours) ──
+    # Difference between created_at (request) and processed_at (Stripe
+    # confirmed). Only over completed payouts that have both fields.
+    def _median_hours(completed: list) -> float:
+        deltas: list[float] = []
+        for p in completed:
+            requested = p.get("created_at")
+            settled = p.get("processed_at")
+            if not requested or not settled:
+                continue
+            try:
+                t_req = datetime.fromisoformat(requested.replace("Z", "+00:00"))
+                t_set = datetime.fromisoformat(settled.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            secs = (t_set - t_req).total_seconds()
+            if secs >= 0:
+                deltas.append(secs / 3600.0)
+        if not deltas:
+            return 0.0
+        deltas.sort()
+        n = len(deltas)
+        mid = n // 2
+        return round((deltas[mid] if n % 2 else (deltas[mid - 1] + deltas[mid]) / 2.0), 2)
+
+    cur_median_hours = _median_hours(cur_completed)
+    prev_median_hours = _median_hours(prev_completed)
+
+    # ── Avg payout amount ──
+    cur_avg = round(_amt(cur_completed) / len(cur_completed), 2) if cur_completed else 0.0
+    prev_avg = round(_amt(prev_completed) / len(prev_completed), 2) if prev_completed else 0.0
+
+    # ── Daily series for the chart ──
+    daily: Dict[str, Dict[str, Any]] = {}
+    cursor = start.date()
+    end_date = end.date()
+    while cursor <= end_date:
+        daily[cursor.isoformat()] = {
+            "date": cursor.isoformat(),
+            "paid_out": 0.0,
+            "pending": 0.0,
+            "failed": 0.0,
+        }
+        cursor += timedelta(days=1)
+    for p in cur_payouts:
+        ts = p.get("processed_at") or p.get("created_at") or ""
+        day = ts[:10]
+        if day not in daily:
+            continue
+        amt = float(Decimal(str(p.get("amount") or 0)))
+        if p.get("status") == "completed":
+            daily[day]["paid_out"] = round(daily[day]["paid_out"] + amt, 2)
+        elif p.get("status") in ("pending", "processing"):
+            daily[day]["pending"] = round(daily[day]["pending"] + amt, 2)
+        elif p.get("status") == "failed":
+            daily[day]["failed"] = round(daily[day]["failed"] + amt, 2)
+
+    # ── Pass 2: failure breakdown + at-risk + blocked drivers ────────────
+
+    # Failure reasons — group by error_message text. Tight bucket bag
+    # so frontend just renders the top few. Empty / null message lumps
+    # into "Unknown".
+    failure_buckets: Dict[str, Dict[str, float]] = {}
+    for p in cur_failed:
+        reason_raw = (p.get("error_message") or "").strip()
+        # Normalise long stripe error strings to the first 60 chars so
+        # similar variants group together; full string is still on the
+        # payout row if an operator clicks through.
+        reason = (reason_raw[:60] + "…") if len(reason_raw) > 60 else (reason_raw or "Unknown")
+        bucket = failure_buckets.setdefault(reason, {"count": 0, "amount": 0.0})
+        bucket["count"] += 1
+        bucket["amount"] += float(Decimal(str(p.get("amount") or 0)))
+    failure_reasons = sorted(
+        [{"reason": r, "count": int(b["count"]), "amount": round(b["amount"], 2)} for r, b in failure_buckets.items()],
+        key=lambda x: (-x["count"], -x["amount"]),
+    )[:8]
+
+    # Stuck pending payouts — anything still pending more than 48h after
+    # creation. These are the manual-intervention queue: Stripe webhook
+    # didn't return or the rebalance is held up. NOT period-scoped —
+    # this is a "right now" signal regardless of the selected window.
+    stuck_threshold = (now - timedelta(hours=48)).isoformat()
+    stuck_rows = [
+        p
+        for p in all_payouts
+        if _in_scope(p)
+        and p.get("status") in ("pending", "processing")
+        and (p.get("created_at") or "") < stuck_threshold
+    ]
+    stuck_over_48h = {
+        "count": len(stuck_rows),
+        "amount": round(float(sum((Decimal(str(p.get("amount") or 0)) for p in stuck_rows), Decimal("0"))), 2),
+    }
+
+    # Blocked drivers — Stripe Connect KYC mirror says payouts are
+    # disabled. Uses the partial index from migration 92. Outstanding
+    # balance for these drivers is the operational "we can't pay
+    # them yet" number.
+    blocked_drivers_rows = await db_supabase.get_rows(
+        "drivers",
+        {"stripe_payouts_enabled": False, "stripe_account_id": {"$ne": None}},
+        limit=500,
+    )
+    if driver_id_filter is not None:
+        blocked_drivers_rows = [d for d in blocked_drivers_rows if d.get("id") in driver_id_filter]
+    blocked_driver_ids = {d.get("id") for d in blocked_drivers_rows if d.get("id")}
+    blocked_outstanding = Decimal("0")
+    if blocked_driver_ids:
+        for r in all_completed_rides:
+            if r.get("driver_id") in blocked_driver_ids:
+                blocked_outstanding += Decimal(str(r.get("driver_earnings") or 0))
+        for p in all_payouts:
+            if p.get("driver_id") in blocked_driver_ids and p.get("status") in ("completed", "pending", "processing"):
+                blocked_outstanding -= Decimal(str(p.get("amount") or 0))
+    blocked_drivers = {
+        "count": len(blocked_driver_ids),
+        "outstanding_balance": round(float(max(blocked_outstanding, Decimal("0"))), 2),
+    }
+
+    # Top earning drivers in window — sum of completed payout amounts
+    # per driver. Capped at 10 so the response stays small.
+    completed_by_driver: Dict[str, Dict[str, float]] = {}
+    for p in cur_completed:
+        did = p.get("driver_id")
+        if not did:
+            continue
+        b = completed_by_driver.setdefault(did, {"amount": 0.0, "count": 0})
+        b["amount"] += float(Decimal(str(p.get("amount") or 0)))
+        b["count"] += 1
+    top_driver_ids = sorted(completed_by_driver.keys(), key=lambda did: -completed_by_driver[did]["amount"])[:10]
+
+    # At-risk drivers — ≥ 2 failures in window. Ops follows up
+    # personally; multi-fail is rarely a transient issue.
+    failed_by_driver: Dict[str, Dict[str, Any]] = {}
+    for p in cur_failed:
+        did = p.get("driver_id")
+        if not did:
+            continue
+        b = failed_by_driver.setdefault(did, {"count": 0, "last_reason": None, "last_at": ""})
+        b["count"] += 1
+        ts = p.get("created_at") or ""
+        if ts > b["last_at"]:
+            b["last_at"] = ts
+            b["last_reason"] = p.get("error_message") or "Unknown"
+    at_risk_driver_ids = [did for did, b in failed_by_driver.items() if b["count"] >= 2]
+
+    # Enrich names in a single batch fetch for both lists. Cheap because
+    # the union of top + at-risk is bounded at ≤ 20 driver_ids.
+    enrich_ids = list(set(top_driver_ids) | set(at_risk_driver_ids))
+    drivers_map: Dict[str, Any] = {}
+    users_map: Dict[str, Any] = {}
+    if enrich_ids:
+        drivers_map, users_map = await _batch_fetch_drivers_and_users([], enrich_ids)
+
+    def _display_name(driver_id: str) -> str:
+        d = drivers_map.get(driver_id) or {}
+        u = users_map.get(d.get("user_id")) if d.get("user_id") else None
+        name = _user_display_name(u) if u else ""
+        return name or d.get("name") or driver_id[:8]
+
+    top_drivers = [
+        {
+            "driver_id": did,
+            "name": _display_name(did),
+            "amount": round(completed_by_driver[did]["amount"], 2),
+            "payout_count": int(completed_by_driver[did]["count"]),
+        }
+        for did in top_driver_ids
+    ]
+    at_risk_drivers = sorted(
+        [
+            {
+                "driver_id": did,
+                "name": _display_name(did),
+                "failure_count": int(failed_by_driver[did]["count"]),
+                "last_reason": failed_by_driver[did]["last_reason"],
+            }
+            for did in at_risk_driver_ids
+        ],
+        key=lambda x: -x["failure_count"],
+    )[:10]
+
+    # ── Pass 4: T4A snapshot ─────────────────────────────────────────────
+    # CRA T4A threshold for self-employed contractor reporting in Canada
+    # is $500 to the same payee in a tax year. The GST/HST mandatory
+    # registration threshold is $30,000 — that's the more operationally
+    # interesting line because it's when a driver MUST register their
+    # GST account. Bucket per driver against both numbers.
+    year_start = datetime(now.year, 1, 1, tzinfo=timezone.utc).isoformat()
+    ytd_completed = [
+        r
+        for r in all_completed_rides
+        if _in_scope(r) and (r.get("ride_completed_at") or r.get("updated_at") or "") >= year_start
+    ]
+    ytd_earnings_by_driver: Dict[str, Decimal] = {}
+    for r in ytd_completed:
+        did = r.get("driver_id")
+        if not did:
+            continue
+        ytd_earnings_by_driver[did] = ytd_earnings_by_driver.get(did, Decimal("0")) + Decimal(
+            str(r.get("driver_earnings") or 0)
+        )
+
+    t4a_buckets = {
+        "under_500": 0,  # below T4A reporting threshold (CRA $500)
+        "from_500_to_10k": 0,  # T4A required, GST registration not required
+        "from_10k_to_30k": 0,  # T4A required, GST elective
+        "over_30k": 0,  # T4A required, GST registration MANDATORY
+    }
+    for amt in ytd_earnings_by_driver.values():
+        if amt < Decimal("500"):
+            t4a_buckets["under_500"] += 1
+        elif amt < Decimal("10000"):
+            t4a_buckets["from_500_to_10k"] += 1
+        elif amt < Decimal("30000"):
+            t4a_buckets["from_10k_to_30k"] += 1
+        else:
+            t4a_buckets["over_30k"] += 1
+
+    # Period locks — derived from audit_log entries written by
+    # admin_close_payout_period. Surface the most recent N so the UI
+    # can show "May 2026 closed by alice@... on Jun 3" without a
+    # separate fetch.
+    period_locks: list[Dict[str, Any]] = []
+    try:
+        lock_rows = await db_supabase.get_rows(
+            "audit_logs",
+            {"action": "payouts_period_closed"},
+            order="created_at",
+            desc=True,
+            limit=24,
+        )
+        for lr in lock_rows:
+            md = lr.get("details") or {}
+            period_key = md.get("period")
+            if not period_key:
+                continue
+            period_locks.append(
+                {
+                    "period": period_key,
+                    "closed_at": lr.get("created_at"),
+                    "closed_by": lr.get("actor_id"),
+                    "actor_role": lr.get("actor_role"),
+                }
+            )
+    except Exception:
+        logger.error("payouts overview: period_locks query failed", exc_info=True)
+
+    return {
+        "period": {
+            "key": period,
+            "label": _PERIOD_LABELS[period],
+            "days": _days,
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "prev_start": prev_start.isoformat(),
+            "prev_end": prev_end.isoformat(),
+        },
+        "metrics": {
+            "outstanding_payable": _metric(float(outstanding_now_calc), float(outstanding_prev)),
+            "total_paid_out": _metric(_amt(cur_completed), _amt(prev_completed)),
+            "pending_in_flight": _metric(_amt(cur_pending), _amt(prev_pending)),
+            "failed_amount": _metric(_amt(cur_failed), _amt(prev_failed)),
+            "success_rate_pct": _metric(cur_success, prev_success),
+            "median_time_to_payout_hours": _metric(cur_median_hours, prev_median_hours),
+            "avg_payout_amount": _metric(cur_avg, prev_avg),
+            "payouts_count": _metric(len(cur_payouts), len(prev_payouts)),
+        },
+        "daily_series": list(daily.values()),
+        # Pass 2 — operational queues. None are PoP because they're
+        # "right now" lists rather than period totals.
+        "failure_reasons": failure_reasons,
+        "stuck_over_48h": stuck_over_48h,
+        "blocked_drivers": blocked_drivers,
+        "top_drivers": top_drivers,
+        "at_risk_drivers": at_risk_drivers,
+        # Pass 4 — compliance.
+        "t4a_snapshot": {
+            "tax_year": now.year,
+            "drivers_with_earnings": len(ytd_earnings_by_driver),
+            "buckets": t4a_buckets,
+            # Sum of YTD driver_earnings — the gross-side of the T4A
+            # generation pipeline, not what's been paid out.
+            "ytd_gross_earnings": round(float(sum(ytd_earnings_by_driver.values(), Decimal("0"))), 2),
+        },
+        "period_locks": period_locks,
+    }
 
 
 @router.get("/payouts")
@@ -1495,3 +2373,236 @@ async def admin_retry_payout(payout_id: str, admin: dict = Depends(get_admin_use
     )
     logger.info(f"Payout {payout_id} queued for retry by admin {admin.get('id')}")
     return {"success": True, "payout_id": payout_id, "status": "pending"}
+
+
+class BulkRetryPayoutsRequest(BaseModel):
+    """Body for POST /payouts/bulk-retry.
+
+    Either pass an explicit list of payout_ids (admin curated), or pass
+    a since timestamp and we'll retry every failed/cancelled payout in
+    the matching window. The two paths are mutually exclusive — passing
+    both returns 400 to avoid ambiguity about which one took effect.
+    """
+
+    payout_ids: Optional[list[str]] = None
+    since: Optional[str] = None  # ISO timestamp; defaults to 7d ago when only `since` mode is implied
+    service_area_id: Optional[str] = None
+    max_to_retry: int = Field(50, ge=1, le=500)
+
+
+@router.post("/payouts/bulk-retry")
+async def admin_bulk_retry_payouts(
+    body: BulkRetryPayoutsRequest,
+    admin: dict = Depends(get_admin_user),
+):
+    """Retry many failed/cancelled payouts at once.
+
+    Selection modes (exactly one):
+      • payout_ids[]   — explicit list (max_to_retry still capped)
+      • since (+area)  — every failed/cancelled payout since the
+                         timestamp, optionally narrowed to one
+                         service area. Useful for "retry everything
+                         from this morning after Stripe came back up"
+
+    Per-payout updates are sequential so the audit log keeps a clear
+    trail. Each row carries retry_requested_by + retry_requested_at
+    just like the single-retry endpoint. The payment-retry background
+    loop picks them up on its next tick.
+
+    Restricted to finance + super_admin, same as the single retry.
+    """
+    allowed_roles = {"finance", "super_admin"}
+    if admin.get("role") not in allowed_roles:
+        raise HTTPException(status_code=403, detail="role_required:finance")
+
+    if body.payout_ids and body.since:
+        raise HTTPException(
+            status_code=400,
+            detail="Pass either payout_ids[] OR since (and optional service_area_id), not both.",
+        )
+
+    # Build the candidate set.
+    candidates: list[Dict[str, Any]] = []
+    if body.payout_ids:
+        # Explicit list. Look each one up individually so a missing or
+        # ineligible id is reported in the result rather than failing
+        # the whole batch.
+        for pid in body.payout_ids[: body.max_to_retry]:
+            row = await db.find_one("payouts", {"id": pid})
+            if row:
+                candidates.append(row)
+            else:
+                candidates.append({"id": pid, "_missing": True})
+    else:
+        since_iso = body.since or (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        filters: Dict[str, Any] = {
+            "status": {"$in": ["failed", "cancelled"]},
+            "created_at": {"$gte": since_iso},
+        }
+        rows = await db.get_rows("payouts", filters, limit=body.max_to_retry, order="created_at", desc=False)
+        # Service-area filter — payouts have no service_area_id, so we
+        # have to resolve via drivers. Cheap because the area-bounded
+        # driver list is small.
+        if body.service_area_id:
+            area_drivers = await db.get_rows("drivers", {"service_area_id": body.service_area_id}, limit=5000)
+            scope = {d["id"] for d in area_drivers if d.get("id")}
+            rows = [r for r in rows if r.get("driver_id") in scope]
+        candidates = rows[: body.max_to_retry]
+
+    retried = 0
+    skipped = 0
+    failed_to_initiate = 0
+    details: list[Dict[str, Any]] = []
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    for row in candidates:
+        pid = row.get("id")
+        if row.get("_missing"):
+            failed_to_initiate += 1
+            details.append({"payout_id": pid, "status": "not_found"})
+            continue
+        cur_status = row.get("status")
+        if cur_status not in ("failed", "cancelled"):
+            skipped += 1
+            details.append({"payout_id": pid, "status": "skipped", "reason": f"current_status={cur_status}"})
+            continue
+        try:
+            await db.update_one(
+                "payouts",
+                {"id": pid},
+                {
+                    "status": "pending",
+                    "retry_requested_by": admin.get("id"),
+                    "retry_requested_at": now_iso,
+                },
+            )
+            retried += 1
+            details.append({"payout_id": pid, "status": "queued"})
+        except Exception:
+            logger.error(f"bulk-retry: failed to flip {pid} to pending", exc_info=True)
+            failed_to_initiate += 1
+            details.append({"payout_id": pid, "status": "error"})
+
+    logger.info(
+        f"Bulk retry by admin {admin.get('id')}: retried={retried} "
+        f"skipped={skipped} failed_to_initiate={failed_to_initiate}"
+    )
+    return {
+        "retried": retried,
+        "skipped": skipped,
+        "failed_to_initiate": failed_to_initiate,
+        "details": details,
+    }
+
+
+class ClosePayoutPeriodRequest(BaseModel):
+    """Body for POST /payouts/close-period.
+
+    Closes a calendar month (e.g. 2026-05) for accounting purposes:
+      • An audit_log row is written with action='payouts_period_closed'
+        and details={period, range_start, range_end, payout_ids[]}.
+      • The /payouts/overview response surfaces the lock so the UI can
+        show "May 2026 closed by alice@…on Jun 3".
+
+    Closure is advisory — we don't add a `locked` column to the payouts
+    table (avoids needing a migration for one extra column). If a
+    second close is requested for the same period a new audit_log row
+    is written; period_locks shows the most recent one.
+    """
+
+    year: int = Field(ge=2024, le=2100)
+    month: int = Field(ge=1, le=12)
+
+
+@router.post("/payouts/close-period")
+async def admin_close_payout_period(
+    body: ClosePayoutPeriodRequest,
+    admin: dict = Depends(get_admin_user),
+):
+    """Lock a calendar month for accounting purposes.
+
+    Writes an audit_log entry that the /payouts/overview response
+    surfaces under period_locks. Snapshots the list of completed
+    payout ids in the window so a future reviewer can confirm the
+    closure included exactly the right rows.
+    """
+    allowed_roles = {"finance", "super_admin"}
+    if admin.get("role") not in allowed_roles:
+        raise HTTPException(status_code=403, detail="role_required:finance")
+
+    # Build month bounds in UTC. Using exclusive end so the half-open
+    # interval matches how Python's calendar arithmetic generally works
+    # (e.g. May = [2026-05-01, 2026-06-01)).
+    range_start = datetime(body.year, body.month, 1, tzinfo=timezone.utc)
+    if body.month == 12:
+        range_end = datetime(body.year + 1, 1, 1, tzinfo=timezone.utc)
+    else:
+        range_end = datetime(body.year, body.month + 1, 1, tzinfo=timezone.utc)
+    period_key = f"{body.year:04d}-{body.month:02d}"
+
+    # Snapshot the completed payout id list for the audit row. Bounded
+    # at 5000 — beyond that we'd want a separate snapshot table, but
+    # for Spinr-scale fleets this is plenty.
+    rows = await db_supabase.get_rows(
+        "payouts",
+        {
+            "status": "completed",
+            "processed_at": {"$gte": range_start.isoformat(), "$lt": range_end.isoformat()},
+        },
+        limit=5000,
+    )
+    payout_ids = [r.get("id") for r in rows if r.get("id")]
+    total_amount = round(
+        float(sum((Decimal(str(r.get("amount") or 0)) for r in rows), Decimal("0"))),
+        2,
+    )
+
+    audit_id = await log_admin_action(
+        admin,
+        "payouts_period_closed",
+        "payouts",
+        period_key,
+        {
+            "period": period_key,
+            "range_start": range_start.isoformat(),
+            "range_end": range_end.isoformat(),
+            "payout_count": len(payout_ids),
+            "total_amount": total_amount,
+            # First 50 ids inline; the count is the authoritative number.
+            # If we ever need the full list later we'd add a separate
+            # period_close_snapshot table, but inline is fine for audit.
+            "payout_ids": payout_ids[:50],
+        },
+    )
+
+    logger.info(
+        f"Payout period {period_key} closed by admin {admin.get('id')} — "
+        f"{len(payout_ids)} payouts, total ${total_amount}"
+    )
+    return {
+        "period": period_key,
+        "payout_count": len(payout_ids),
+        "total_amount": total_amount,
+        "audit_log_id": audit_id,
+    }
+
+
+@router.get("/payouts/stats")
+async def admin_get_payout_stats():
+    """Get payout stats: total paid, pending, failed."""
+    try:
+        all_payouts = await db.get_rows("payouts", {}, limit=10000)
+    except Exception:
+        all_payouts = []
+
+    total_paid = float(sum(Decimal(str(p.get("amount", 0))) for p in all_payouts if p.get("status") == "completed"))
+    total_pending = float(sum(Decimal(str(p.get("amount", 0))) for p in all_payouts if p.get("status") == "pending"))
+    total_failed = float(sum(Decimal(str(p.get("amount", 0))) for p in all_payouts if p.get("status") == "failed"))
+
+    return {
+        "total_paid": round(total_paid, 2),
+        "total_pending": round(total_pending, 2),
+        "total_failed": round(total_failed, 2),
+        "payout_count": len(all_payouts),
+        "pending_count": sum(1 for p in all_payouts if p.get("status") == "pending"),
+    }

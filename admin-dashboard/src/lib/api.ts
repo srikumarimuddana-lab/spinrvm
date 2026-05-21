@@ -468,6 +468,97 @@ export const adminSearchUsers = (opts: {
 export const getDriverRides = (id: string) =>
     request<any>(`/api/admin/drivers/${id}/rides`);
 
+export interface DriverLiveStats {
+    total_rides: number;
+    total_earnings: number;
+    avg_rating: number | null;
+    acceptance_rate: number | null;
+    cancelled_by_driver: number;
+    total_assigned: number;
+}
+export const getDriverLiveStats = (id: string) =>
+    request<DriverLiveStats>(`/api/admin/drivers/${id}/live-stats`);
+
+export interface DriverPayoutSummary {
+    summary: {
+        lifetime_earnings: number;
+        lifetime_tips: number;
+        ytd_earnings: number;
+        total_paid_out: number;
+        pending_in_flight: number;
+        pending_balance: number;
+        on_hold: number;
+        rides_count: number;
+        active_days_30d: number;
+        last_payout: {
+            id: string;
+            amount: number;
+            processed_at: string | null;
+            bank_name: string | null;
+            account_last4: string | null;
+        } | null;
+        last_failed_payout: {
+            id: string;
+            amount: number;
+            error_message: string | null;
+            created_at: string;
+        } | null;
+    };
+    payment_method: {
+        has_bank_account: boolean;
+        bank_name: string | null;
+        account_last4: string | null;
+        account_holder_name: string | null;
+        account_type: string | null;
+        is_verified: boolean | null;
+        stripe_connected: boolean;
+        stripe_account_hint: string | null;
+    };
+    payouts: Array<{
+        id: string;
+        amount: number;
+        status: "pending" | "processing" | "completed" | "failed" | string;
+        stripe_payout_id: string | null;
+        bank_name: string | null;
+        account_last4: string | null;
+        error_message: string | null;
+        created_at: string;
+        processed_at: string | null;
+    }>;
+    // Stripe Connect KYC + tax identity mirror (migration 92).
+    // SIN itself is never exposed here — only id_number_provided and
+    // last4. Use /reveal-sin for the one-shot retrieval.
+    kyc: {
+        details_submitted: boolean;
+        charges_enabled: boolean;
+        payouts_enabled: boolean;
+        verification_status: string | null;
+        business_type: string | null;
+        id_number_provided: boolean;
+        id_number_last4: string | null;
+        gst_hst_number: string | null;
+        requirements_due: string[];
+        requirements_past_due: string[];
+        disabled_reason: string | null;
+        tos_accepted_at: string | null;
+        last_synced_at: string | null;
+    };
+}
+export const getDriverPayoutsSummary = (id: string) =>
+    request<DriverPayoutSummary>(`/api/admin/drivers/${id}/payouts-summary`);
+
+export const refreshDriverStripeKyc = (id: string) =>
+    request<{ status: string }>(`/api/admin/drivers/${id}/refresh-stripe-kyc`, { method: "POST" });
+
+export interface RevealSinResponse {
+    sin: string;
+    sin_last4: string;
+    audit_log_id: string | null;
+    warning: string;
+}
+export const revealDriverSin = (id: string) =>
+    request<RevealSinResponse>(`/api/admin/drivers/${id}/reveal-sin`, { method: "POST" });
+
 export const getDriverStats = (params?: {
     service_area_id?: string;
     start_date?: string;
@@ -512,6 +603,110 @@ export const updateDriver = (id: string, data: Record<string, any>) =>
 
 /* ── Earnings ─────────────────────────────── */
 export const getEarnings = () => request<any[]>("/api/admin/earnings");
+
+export interface EarningsRide {
+    ride_id: string;
+    ride_code: string | null;
+    status: string;
+    total_fare: number;
+    driver_earnings: number;
+    admin_earnings: number;
+    tip_amount: number;
+    tax_amount: number;
+    discount_amount: number;
+    surge_multiplier: number;
+    stripe_charge_id: string | null;
+    driver_id: string | null;
+    driver_name: string | null;
+    rider_id: string | null;
+    rider_name: string | null;
+    service_area_id: string | null;
+    completed_at: string | null;
+    created_at: string | null;
+}
+
+export interface EarningsRidesResponse {
+    rides: EarningsRide[];
+    total: number;
+    offset: number;
+    limit: number;
+}
+
+export const getEarningsRides = (params?: {
+    start_date?: string;
+    end_date?: string;
+    service_area_id?: string;
+    limit?: number;
+    offset?: number;
+}) => {
+    const sp = new URLSearchParams();
+    if (params?.start_date) sp.set("start_date", params.start_date);
+    if (params?.end_date) sp.set("end_date", params.end_date);
+    if (params?.service_area_id) sp.set("service_area_id", params.service_area_id);
+    if (params?.limit != null) sp.set("limit", String(params.limit));
+    if (params?.offset != null) sp.set("offset", String(params.offset));
+    const qs = sp.toString();
+    return request<EarningsRidesResponse>(`/api/admin/earnings/rides${qs ? `?${qs}` : ""}`);
+};
+
+export type EarningsPeriod = "7d" | "30d" | "mtd" | "ytd";
+
+export interface MetricWithDelta {
+    current: number;
+    previous: number;
+    /** Null when the previous-window value was 0 — UI shows "—" instead of "+Inf%". */
+    delta_pct: number | null;
+}
+
+export interface EarningsOverview {
+    period: {
+        key: EarningsPeriod;
+        label: string;
+        days: number;
+        start: string;
+        end: string;
+        prev_start: string;
+        prev_end: string;
+    };
+    metrics: {
+        // Pass 1 — CEO row
+        gbv: MetricWithDelta;
+        net_revenue: MetricWithDelta;
+        take_rate_pct: MetricWithDelta;
+        completed_trips: MetricWithDelta;
+        active_riders: MetricWithDelta;
+        active_drivers: MetricWithDelta;
+        avg_fare: MetricWithDelta;
+        spinr_pass_mrr: MetricWithDelta;
+        // Pass 2 — operational health
+        cancellation_rate_pct: MetricWithDelta;
+        cancellation_revenue: MetricWithDelta;
+        cancelled_trips: MetricWithDelta;
+        refund_amount: MetricWithDelta;
+        refund_count: MetricWithDelta;
+        promo_spend: MetricWithDelta;
+        promo_count: MetricWithDelta;
+        surge_revenue: MetricWithDelta;
+        gst_collected: MetricWithDelta;
+        pst_collected: MetricWithDelta;
+    };
+    cancellation_breakdown: {
+        current: { rider: number; driver: number; system: number };
+        previous: { rider: number; driver: number; system: number };
+    };
+    daily_series: Array<{
+        date: string;
+        gbv: number;
+        trips: number;
+        net_revenue: number;
+    }>;
+}
+
+export const getEarningsOverview = (params: { period: EarningsPeriod; service_area_id?: string }) => {
+    const sp = new URLSearchParams({ period: params.period });
+    if (params.service_area_id) sp.set("service_area_id", params.service_area_id);
+    return request<EarningsOverview>(`/api/admin/earnings/overview?${sp.toString()}`);
+};
 
 export const getSubscriptionStats = (params?: { start_date?: string; end_date?: string; service_area_ids?: string }) => {
     const sp = new URLSearchParams();
@@ -620,11 +815,24 @@ export const updateSurge = (areaId: string, data: any) =>
 export const getDriverDocuments = (driverId: string) =>
     request<any[]>(`/api/admin/documents/drivers/${driverId}`);
 
+export type RejectTemplate =
+    | "blurry_image"
+    | "wrong_document_type"
+    | "expired"
+    | "information_unclear"
+    | "other";
+
+export interface ReviewDocumentOptions {
+    notify?: boolean;
+    notifyTemplate?: RejectTemplate;
+}
+
 export const reviewDocument = (
     docId: string,
     status: string,
     reason?: string,
     expiryDate?: string,
+    options?: ReviewDocumentOptions,
 ) =>
     request<any>(`/api/admin/documents/${docId}/review`, {
         method: "POST",
@@ -632,7 +840,96 @@ export const reviewDocument = (
             status,
             rejection_reason: reason,
             expiry_date: expiryDate,
+            ...(options?.notify !== undefined ? { notify: options.notify } : {}),
+            ...(options?.notifyTemplate ? { notify_template: options.notifyTemplate } : {}),
         }),
+    });
+
+export interface ApprovalQueueItem {
+    driver_id: string;
+    user_id: string | null;
+    first_name: string;
+    last_name: string;
+    name: string;
+    email: string | null;
+    phone: string | null;
+    profile_photo_url: string | null;
+    status: string;
+    created_at: string | null;
+    queue_started_at: string | null;
+    time_in_queue_seconds: number;
+    pending_docs_count: number;
+    missing_docs_count: number;
+    service_area_id: string | null;
+    service_area_name: string | null;
+    vehicle_type_id: string | null;
+    vehicle_type_name: string | null;
+}
+
+export interface ApprovalQueueResponse {
+    stats: {
+        total_pending: number;
+        oldest_in_queue_hours: number;
+        median_wait_hours: number;
+        over_24h_count: number;
+    };
+    items: ApprovalQueueItem[];
+}
+
+export const getApprovalQueue = (params?: {
+    limit?: number;
+    service_area_id?: string;
+}) => {
+    const q = new URLSearchParams();
+    if (params?.limit) q.set("limit", String(params.limit));
+    if (params?.service_area_id) q.set("service_area_id", params.service_area_id);
+    const qs = q.toString();
+    return request<ApprovalQueueResponse>(
+        `/api/admin/drivers/approval-queue${qs ? `?${qs}` : ""}`,
+    );
+};
+
+export interface ExpiringDocItem {
+    driver_id: string;
+    user_id: string | null;
+    name: string;
+    first_name: string;
+    last_name: string;
+    email: string | null;
+    phone: string | null;
+    profile_photo_url: string | null;
+    status: string | null;
+    service_area_id: string | null;
+    service_area_name: string | null;
+    doc_type: string;
+    doc_label: string;
+    doc_field: string;
+    expiry_date: string;
+    days_remaining: number;
+    rides_last_30d: number;
+    last_nudged_at: string | null;
+}
+
+export const getExpiringDocs = (params?: {
+    window_days?: 7 | 14 | 30 | number;
+    service_area_id?: string;
+}) => {
+    const q = new URLSearchParams();
+    if (params?.window_days) q.set("window_days", String(params.window_days));
+    if (params?.service_area_id) q.set("service_area_id", params.service_area_id);
+    const qs = q.toString();
+    return request<{ items: ExpiringDocItem[] }>(
+        `/api/admin/drivers/expiring${qs ? `?${qs}` : ""}`,
+    );
+};
+
+export const nudgeDriverExpiry = (
+    driverId: string,
+    body: { doc_type: string; doc_label?: string; custom_message?: string },
+) =>
+    request<{ ok: boolean }>(`/api/admin/drivers/${driverId}/nudge-expiry`, {
+        method: "POST",
+        body: JSON.stringify(body),
     });
 
 /* ── Corporate Accounts ─────────────────────── */
@@ -1200,6 +1497,105 @@ export const updateDispute = (id: string, data: any) =>
         body: JSON.stringify(data),
     });
 
+/* ── Safety Queue ───────────────────────────── */
+export type SafetyStatus = "open" | "in_progress" | "resolved" | "closed" | "duplicate";
+export type SafetySeverity = "sev1" | "sev2" | "sev3";
+export type SafetyRole = "rider" | "driver" | "system";
+
+export interface SafetyIncident {
+    id: string;
+    reported_by_user_id: string | null;
+    role: SafetyRole;
+    category: string;
+    description: string;
+    status: SafetyStatus;
+    severity: SafetySeverity | null;
+    ride_id: string | null;
+    latitude: number | null;
+    longitude: number | null;
+    location_accuracy: number | null;
+    assigned_to_admin_id: string | null;
+    resolved_at: string | null;
+    resolved_by: string | null;
+    resolution_notes: string | null;
+    reported_at: string;
+    created_at: string;
+    updated_at: string;
+    reporter_name?: string | null;
+}
+
+export interface SafetyIncidentListResponse {
+    items: SafetyIncident[];
+    total: number;
+    offset: number;
+    limit: number;
+    open_count: number | null;
+}
+
+export interface SafetyIncidentDetail {
+    incident: SafetyIncident;
+    reporter: {
+        id: string | null;
+        name: string | null;
+        email: string | null;
+        phone: string | null;
+        role: string | null;
+    } | null;
+    ride: {
+        id: string | null;
+        ride_code: string | null;
+        status: string | null;
+        rider_id: string | null;
+        driver_id: string | null;
+        pickup_address: string | null;
+        dropoff_address: string | null;
+        total_fare: number | null;
+        started_at: string | null;
+        completed_at: string | null;
+    } | null;
+}
+
+export const getSafetyIncidents = (params?: {
+    status?: SafetyStatus;
+    severity?: SafetySeverity;
+    role?: SafetyRole;
+    category?: string;
+    ride_id?: string;
+    search?: string;
+    limit?: number;
+    offset?: number;
+}) => {
+    const sp = new URLSearchParams();
+    if (params?.status) sp.set("status", params.status);
+    if (params?.severity) sp.set("severity", params.severity);
+    if (params?.role) sp.set("role", params.role);
+    if (params?.category) sp.set("category", params.category);
+    if (params?.ride_id) sp.set("ride_id", params.ride_id);
+    if (params?.search) sp.set("search", params.search);
+    if (params?.limit != null) sp.set("limit", String(params.limit));
+    if (params?.offset != null) sp.set("offset", String(params.offset));
+    const qs = sp.toString();
+    return request<SafetyIncidentListResponse>(`/api/admin/safety/incidents${qs ? `?${qs}` : ""}`);
+};
+
+export const getSafetyIncident = (id: string) =>
+    request<SafetyIncidentDetail>(`/api/admin/safety/incidents/${id}`);
+
+export const updateSafetyIncident = (
+    id: string,
+    body: Partial<{
+        status: SafetyStatus;
+        severity: SafetySeverity;
+        assigned_to_admin_id: string;
+        resolution_notes: string;
+    }>,
+) =>
+    request<{ updated: boolean; incident: SafetyIncident }>(
+        `/api/admin/safety/incidents/${id}`,
+        { method: "PATCH", body: JSON.stringify(body) },
+    );
+
+
 /* ── Support Tickets ────────────────────────── */
 export const getTickets = (opts: {
     limit?: number;
@@ -1490,6 +1886,77 @@ export const getPayoutById = (id: string) =>
 export const getPayoutStats = () =>
     request<any>("/api/admin/payouts/stats");
 
+export interface PayoutsOverview {
+    period: {
+        key: EarningsPeriod;
+        label: string;
+        days: number;
+        start: string;
+        end: string;
+        prev_start: string;
+        prev_end: string;
+    };
+    metrics: {
+        outstanding_payable: MetricWithDelta;
+        total_paid_out: MetricWithDelta;
+        pending_in_flight: MetricWithDelta;
+        failed_amount: MetricWithDelta;
+        success_rate_pct: MetricWithDelta;
+        median_time_to_payout_hours: MetricWithDelta;
+        avg_payout_amount: MetricWithDelta;
+        payouts_count: MetricWithDelta;
+    };
+    daily_series: Array<{
+        date: string;
+        paid_out: number;
+        pending: number;
+        failed: number;
+    }>;
+    // Pass 2 — operational queues. None carry PoP because they're
+    // "right now" lists rather than period totals.
+    failure_reasons: Array<{ reason: string; count: number; amount: number }>;
+    stuck_over_48h: { count: number; amount: number };
+    blocked_drivers: { count: number; outstanding_balance: number };
+    top_drivers: Array<{ driver_id: string; name: string; amount: number; payout_count: number }>;
+    at_risk_drivers: Array<{ driver_id: string; name: string; failure_count: number; last_reason: string | null }>;
+    // Pass 4 — compliance.
+    t4a_snapshot: {
+        tax_year: number;
+        drivers_with_earnings: number;
+        buckets: {
+            under_500: number;
+            from_500_to_10k: number;
+            from_10k_to_30k: number;
+            over_30k: number;
+        };
+        ytd_gross_earnings: number;
+    };
+    period_locks: Array<{
+        period: string;
+        closed_at: string;
+        closed_by: string | null;
+        actor_role: string | null;
+    }>;
+}
+
+export interface ClosePayoutPeriodResponse {
+    period: string;
+    payout_count: number;
+    total_amount: number;
+    audit_log_id: string | null;
+}
+export const closePayoutPeriod = (year: number, month: number) =>
+    request<ClosePayoutPeriodResponse>(`/api/admin/payouts/close-period`, {
+        method: "POST",
+        body: JSON.stringify({ year, month }),
+    });
+
+export const getPayoutsOverview = (params: { period: EarningsPeriod; service_area_id?: string }) => {
+    const sp = new URLSearchParams({ period: params.period });
+    if (params.service_area_id) sp.set("service_area_id", params.service_area_id);
+    return request<PayoutsOverview>(`/api/admin/payouts/overview?${sp.toString()}`);
+};
+
 /* ── Disputes (resolve) ─────────────────── */
 export const resolveDispute = (id: string, data: { resolution: string; refund_amount?: number; admin_note?: string }) =>
     request<any>(`/api/admin/disputes/${id}/resolve`, { method: "PUT", body: JSON.stringify(data) });
@@ -1757,3 +2224,21 @@ export const getPendingDocuments = (params?: { limit?: number; cursor?: string; 
 /* ── Payout retry (A-P4-2) ──────────────── */
 export const retryPayout = (id: string) =>
     request<any>(`/api/admin/payouts/${id}/retry`, { method: "POST" });
+
+export interface BulkRetryPayoutsRequest {
+    payout_ids?: string[];
+    since?: string;
+    service_area_id?: string;
+    max_to_retry?: number;
+}
+export interface BulkRetryPayoutsResponse {
+    retried: number;
+    skipped: number;
+    failed_to_initiate: number;
+    details: Array<{ payout_id: string; status: string; reason?: string }>;
+}
+export const bulkRetryPayouts = (body: BulkRetryPayoutsRequest) =>
+    request<BulkRetryPayoutsResponse>(`/api/admin/payouts/bulk-retry`, {
+        method: "POST",
+        body: JSON.stringify(body),
+    });

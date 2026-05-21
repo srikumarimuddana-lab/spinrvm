@@ -7,12 +7,13 @@ import {
     LayoutDashboard, Car, Users, DollarSign, Settings, MapPin, Ticket,
     Flame, Building2, LifeBuoy, HelpCircle,
     LogOut, Menu, X, ChevronLeft, ChevronRight,
-    Sun, Moon, Shield, Cloud, Trophy, TrendingUp, Activity,
+    Sun, Moon, Shield, ShieldAlert, Cloud, Trophy, TrendingUp, Activity,
+    Inbox, Clock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useState, useEffect } from "react";
 import { useAuthStore } from "@/store/authStore";
-import { logoutAllAdmin } from "@/lib/api";
+import { logoutAllAdmin, getApprovalQueue, getExpiringDocs } from "@/lib/api";
 import { useTheme } from "next-themes";
 
 interface NavItem {
@@ -20,6 +21,11 @@ interface NavItem {
     label: string;
     icon: any;
     module: string;
+    /** Sub-navigation rendered indented under the parent. The current
+     *  pattern: parent route is still its own page (e.g. /drivers shows
+     *  the list); children are deeper triage views. Active highlight on
+     *  the parent uses startsWith() so any child path keeps it lit. */
+    children?: NavItem[];
 }
 
 interface NavGroup {
@@ -39,7 +45,16 @@ const NAV_GROUPS: NavGroup[] = [
         items: [
             { href: "/dashboard/monitoring", label: "Live Monitoring", icon: LayoutDashboard, module: "rides" },
             { href: "/dashboard/rides", label: "Rides", icon: Car, module: "rides" },
-            { href: "/dashboard/drivers", label: "Drivers", icon: Car, module: "drivers" },
+            {
+                href: "/dashboard/drivers",
+                label: "Drivers",
+                icon: Car,
+                module: "drivers",
+                children: [
+                    { href: "/dashboard/drivers/queue", label: "Approvals", icon: Inbox, module: "drivers" },
+                    { href: "/dashboard/drivers/expiring", label: "Expiring Docs", icon: Clock, module: "drivers" },
+                ],
+            },
             { href: "/dashboard/users", label: "Users", icon: Users, module: "users" },
             { href: "/dashboard/heatmap", label: "Heat Map", icon: Flame, module: "heatmap" },
             { href: "/dashboard/analytics", label: "Analytics", icon: LayoutDashboard, module: "dashboard" },
@@ -68,6 +83,7 @@ const NAV_GROUPS: NavGroup[] = [
         title: "Support",
         items: [
             { href: "/dashboard/support", label: "Support & Issues", icon: LifeBuoy, module: "support" },
+            { href: "/dashboard/safety", label: "Safety", icon: ShieldAlert, module: "support" },
             { href: "/dashboard/disputes", label: "Disputes & Refunds", icon: Shield, module: "support" },
             { href: "/dashboard/faqs", label: "FAQs", icon: HelpCircle, module: "support" },
             { href: "/dashboard/cloud-messaging", label: "Cloud Messaging", icon: Cloud, module: "notifications" },
@@ -95,10 +111,48 @@ export function Sidebar() {
     const userModules = user?.modules || [];
     const isSuperAdmin = user?.role === 'super_admin' || user?.role === 'admin';
 
+    // Live counts for sidebar badges. Fetched once on mount + every 60s
+    // so the admin sees an up-to-date backlog without reloading. Only
+    // fetched when the user has the drivers module — saves a needless
+    // API call for staff that can't access those pages anyway.
+    const [approvalsCount, setApprovalsCount] = useState<number | null>(null);
+    const [expiringCount, setExpiringCount] = useState<number | null>(null);
+
     useEffect(() => {
         const sc = localStorage.getItem('spinr-sidebar-collapsed');
         if (sc === 'true') setCollapsed(true);
     }, []);
+
+    useEffect(() => {
+        const canSee = isSuperAdmin || userModules.includes("drivers");
+        if (!canSee) return;
+        let cancelled = false;
+        const load = async () => {
+            try {
+                // Approval queue endpoint returns stats.total_pending even
+                // on a limit=1 request, so we keep the JSON small.
+                const res = await getApprovalQueue({ limit: 1 });
+                if (!cancelled) setApprovalsCount(res?.stats?.total_pending ?? 0);
+            } catch {}
+            try {
+                // Expiring docs has no separate stats counter — count the
+                // items in the default 30-day window.
+                const res = await getExpiringDocs({ window_days: 30 });
+                if (!cancelled) setExpiringCount(res?.items?.length ?? 0);
+            } catch {}
+        };
+        load();
+        const t = setInterval(load, 60_000);
+        return () => { cancelled = true; clearInterval(t); };
+    }, [isSuperAdmin, userModules]);
+
+    // Map href → numeric badge count. Centralised so we only update one
+    // dict when adding a new badge later.
+    const badgeFor = (href: string): number | null => {
+        if (href === "/dashboard/drivers/queue") return approvalsCount;
+        if (href === "/dashboard/drivers/expiring") return expiringCount;
+        return null;
+    };
 
     const toggleTheme = () => {
         setTheme(theme === 'dark' ? 'light' : 'dark');
@@ -176,20 +230,100 @@ export function Sidebar() {
                                 {visibleItems.map((item) => {
                                     const active = pathname === item.href ||
                                         (item.href !== "/dashboard" && pathname.startsWith(item.href));
+                                    // Filter children the same way we filtered the parent group
+                                    // — admin/super_admin always see them; other staff only see
+                                    // children whose module they hold.
+                                    const childItems = (item.children || []).filter(child =>
+                                        isSuperAdmin || userModules.includes(child.module)
+                                    );
                                     return (
-                                        <Link key={item.href} href={item.href} onClick={() => setMobileOpen(false)}
-                                            title={collapsed ? item.label : undefined}
-                                            className={cn(
-                                                "flex items-center rounded-lg text-[13px] font-medium transition-colors",
-                                                collapsed ? "justify-center p-2.5 my-0.5" : "gap-2.5 px-2.5 py-[7px] my-[1px]",
-                                                active
-                                                    ? "bg-primary/10 text-primary"
-                                                    : "text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                                        <div key={item.href}>
+                                            <Link href={item.href} onClick={() => setMobileOpen(false)}
+                                                title={collapsed ? item.label : undefined}
+                                                className={cn(
+                                                    "flex items-center rounded-lg text-[13px] font-medium transition-colors",
+                                                    collapsed ? "justify-center p-2.5 my-0.5" : "gap-2.5 px-2.5 py-[7px] my-[1px]",
+                                                    active
+                                                        ? "bg-primary/10 text-primary"
+                                                        : "text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                                                )}
+                                            >
+                                                <item.icon className={cn("shrink-0", collapsed ? "h-[18px] w-[18px]" : "h-4 w-4")} />
+                                                {!collapsed && item.label}
+                                            </Link>
+                                            {/* Children. In expanded mode they're indented under
+                                                the parent with a guide line. In collapsed mode
+                                                we flatten them as sibling icons since there's
+                                                no horizontal room to nest visually — tooltip
+                                                still names them. */}
+                                            {childItems.length > 0 && (
+                                                collapsed ? (
+                                                    childItems.map(child => {
+                                                        const childActive = pathname === child.href || pathname.startsWith(child.href);
+                                                        const childBadge = badgeFor(child.href);
+                                                        return (
+                                                            <Link
+                                                                key={child.href}
+                                                                href={child.href}
+                                                                onClick={() => setMobileOpen(false)}
+                                                                title={
+                                                                    childBadge && childBadge > 0
+                                                                        ? `${item.label} → ${child.label} (${childBadge} pending)`
+                                                                        : `${item.label} → ${child.label}`
+                                                                }
+                                                                className={cn(
+                                                                    "relative flex items-center rounded-lg text-[13px] font-medium transition-colors",
+                                                                    "justify-center p-2.5 my-0.5",
+                                                                    childActive
+                                                                        ? "bg-primary/10 text-primary"
+                                                                        : "text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                                                                )}
+                                                            >
+                                                                <child.icon className="shrink-0 h-[18px] w-[18px]" />
+                                                                {/* Collapsed badge: indicator dot in
+                                                                    the top-right corner. Tooltip
+                                                                    above carries the actual count. */}
+                                                                {childBadge != null && childBadge > 0 && (
+                                                                    <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-amber-500 ring-2 ring-sidebar" />
+                                                                )}
+                                                            </Link>
+                                                        );
+                                                    })
+                                                ) : (
+                                                    <div className="ml-[18px] pl-3 border-l border-sidebar-border/50 my-0.5">
+                                                        {childItems.map(child => {
+                                                            const childActive = pathname === child.href || pathname.startsWith(child.href);
+                                                            const childBadge = badgeFor(child.href);
+                                                            return (
+                                                                <Link
+                                                                    key={child.href}
+                                                                    href={child.href}
+                                                                    onClick={() => setMobileOpen(false)}
+                                                                    className={cn(
+                                                                        "flex items-center gap-2 rounded-lg text-[12px] font-medium transition-colors px-2.5 py-[6px] my-[1px]",
+                                                                        childActive
+                                                                            ? "bg-primary/10 text-primary"
+                                                                            : "text-sidebar-foreground/50 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                                                                    )}
+                                                                >
+                                                                    <child.icon className="shrink-0 h-3.5 w-3.5" />
+                                                                    <span className="flex-1">{child.label}</span>
+                                                                    {/* Expanded badge: amber pill
+                                                                        with the count. Only shown
+                                                                        when > 0 so a clean queue
+                                                                        doesn't visually nag. */}
+                                                                    {childBadge != null && childBadge > 0 && (
+                                                                        <span className="ml-auto bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 text-[10px] font-bold px-1.5 py-0.5 rounded-full tabular-nums">
+                                                                            {childBadge > 99 ? "99+" : childBadge}
+                                                                        </span>
+                                                                    )}
+                                                                </Link>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                )
                                             )}
-                                        >
-                                            <item.icon className={cn("shrink-0", collapsed ? "h-[18px] w-[18px]" : "h-4 w-4")} />
-                                            {!collapsed && item.label}
-                                        </Link>
+                                        </div>
                                     );
                                 })}
                             </div>

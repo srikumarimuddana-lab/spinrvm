@@ -57,7 +57,7 @@ async def submit_safety_report(
 ):
     """Record a safety incident submitted by a driver or rider."""
     user_id = current_user.get("id")
-    user_role = current_user.get("role") or "rider"
+    user_role = "driver" if current_user.get("is_driver") else "rider"
 
     incident_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()

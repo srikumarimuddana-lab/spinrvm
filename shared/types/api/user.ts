@@ -8,10 +8,11 @@ export interface UserProfile {
   profile_image?: string;
   profile_image_status?: string;
   role: string;
+  is_rider: boolean;
+  is_driver: boolean;
   corporate_account_id?: string;
   created_at: string;
   profile_complete: boolean;
-  is_driver: boolean;
   driver_onboarding_status?: string;
   driver_onboarding_detail?: string;
   driver_onboarding_next_screen?: string;

@@ -1254,17 +1254,25 @@ async def send_push_notification(
         logger.info(f"No FCM token for user {user_id}")
         return False
 
+    is_dispatch = (data or {}).get("type") == "new_ride_assignment"
+
     try:
+        # Android: data-only for dispatch so Notifee (driver app) renders the
+        # rich heads-up + full-screen-intent notification with Accept/Decline
+        # action buttons. Otherwise let the OS show its default banner.
+        android_cfg = messaging.AndroidConfig(
+            priority="high",
+            notification=None
+            if is_dispatch
+            else messaging.AndroidNotification(
+                channel_id="ride-offers",
+            ),
+        )
         message = messaging.Message(
-            notification=messaging.Notification(title=title, body=body),
+            notification=None if is_dispatch else messaging.Notification(title=title, body=body),
             data=data or {},
             token=token,
-            android=messaging.AndroidConfig(
-                priority="high",
-                notification=messaging.AndroidNotification(
-                    channel_id="ride-offers",
-                ),
-            ),
+            android=android_cfg,
             apns=messaging.APNSConfig(
                 headers={
                     "apns-priority": "10",
@@ -1273,7 +1281,7 @@ async def send_push_notification(
             ),
         )
         response = await asyncio.to_thread(messaging.send, message)
-        logger.info(f"Push notification sent to {user_id}: {response}")
+        logger.info(f"Push notification sent to {user_id}: {response} (dispatch={is_dispatch})")
         return True
     except Exception as e:
         logger.error(f"Failed to send push notification: {e}")

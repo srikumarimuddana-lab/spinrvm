@@ -69,17 +69,41 @@ async def list_incentives(
             q = q.eq("service_area_id", service_area_id)
         if active_only:
             q = q.eq("is_active", True)
-        result = db_supabase.run_sync(q.execute)
+        result = await db_supabase.run_sync(q.execute)
         return result.data or []
     except Exception as e:
         logger.error(f"[INCENTIVES] list failed: {e}", exc_info=True)
         raise HTTPException(status_code=503, detail="Failed to fetch incentives") from e
 
 
+@router.get("/claims/stats")
+async def incentive_claim_stats(
+    incentive_id: Optional[str] = Query(None),
+    driver_id: Optional[str] = Query(None),
+):
+    try:
+        q = db_supabase.supabase.table("ride_incentive_claims").select("*")
+        if incentive_id:
+            q = q.eq("incentive_id", incentive_id)
+        if driver_id:
+            q = q.eq("driver_id", driver_id)
+        result = await db_supabase.run_sync(q.order("claimed_at", desc=True).limit(100).execute)
+        claims = result.data or []
+        total_paid = sum(float(c.get("bonus_amount", 0)) for c in claims)
+        return {
+            "claims": claims,
+            "total_claims": len(claims),
+            "total_paid": round(total_paid, 2),
+        }
+    except Exception as e:
+        logger.error(f"[INCENTIVES] claims stats failed: {e}", exc_info=True)
+        raise HTTPException(status_code=503, detail="Failed to fetch claim stats") from e
+
+
 @router.get("/{incentive_id}")
 async def get_incentive(incentive_id: str):
     try:
-        result = db_supabase.run_sync(
+        result = await db_supabase.run_sync(
             db_supabase.supabase.table("ride_incentives").select("*").eq("id", incentive_id).single().execute
         )
         if not result.data:
@@ -116,7 +140,7 @@ async def create_incentive(req: IncentiveCreateRequest):
         row["max_budget"] = req.max_budget
 
     try:
-        result = db_supabase.run_sync(db_supabase.supabase.table("ride_incentives").insert(row).execute)
+        result = await db_supabase.run_sync(db_supabase.supabase.table("ride_incentives").insert(row).execute)
         created = (result.data or [{}])[0]
         logger.info(f"[INCENTIVES] created incentive {created.get('id')} name={req.name}")
         return created
@@ -136,7 +160,7 @@ async def update_incentive(incentive_id: str, req: IncentiveUpdateRequest):
     updates["updated_at"] = datetime.now(timezone.utc).isoformat()
 
     try:
-        result = db_supabase.run_sync(
+        result = await db_supabase.run_sync(
             db_supabase.supabase.table("ride_incentives").update(updates).eq("id", incentive_id).execute
         )
         if not result.data:
@@ -153,7 +177,7 @@ async def update_incentive(incentive_id: str, req: IncentiveUpdateRequest):
 @router.patch("/{incentive_id}/toggle")
 async def toggle_incentive(incentive_id: str):
     try:
-        current = db_supabase.run_sync(
+        current = await db_supabase.run_sync(
             db_supabase.supabase.table("ride_incentives")
             .select("id, is_active")
             .eq("id", incentive_id)
@@ -164,7 +188,7 @@ async def toggle_incentive(incentive_id: str):
             raise HTTPException(status_code=404, detail="Incentive not found")
 
         new_active = not current.data["is_active"]
-        result = db_supabase.run_sync(
+        result = await db_supabase.run_sync(
             db_supabase.supabase.table("ride_incentives")
             .update({"is_active": new_active, "updated_at": datetime.now(timezone.utc).isoformat()})
             .eq("id", incentive_id)
@@ -182,7 +206,7 @@ async def toggle_incentive(incentive_id: str):
 @router.delete("/{incentive_id}")
 async def delete_incentive(incentive_id: str):
     try:
-        result = db_supabase.run_sync(
+        result = await db_supabase.run_sync(
             db_supabase.supabase.table("ride_incentives").delete().eq("id", incentive_id).execute
         )
         if not result.data:
@@ -194,27 +218,3 @@ async def delete_incentive(incentive_id: str):
     except Exception as e:
         logger.error(f"[INCENTIVES] delete {incentive_id} failed: {e}", exc_info=True)
         raise HTTPException(status_code=503, detail="Failed to delete incentive") from e
-
-
-@router.get("/claims/stats")
-async def incentive_claim_stats(
-    incentive_id: Optional[str] = Query(None),
-    driver_id: Optional[str] = Query(None),
-):
-    try:
-        q = db_supabase.supabase.table("ride_incentive_claims").select("*")
-        if incentive_id:
-            q = q.eq("incentive_id", incentive_id)
-        if driver_id:
-            q = q.eq("driver_id", driver_id)
-        result = db_supabase.run_sync(q.order("claimed_at", desc=True).limit(100).execute)
-        claims = result.data or []
-        total_paid = sum(float(c.get("bonus_amount", 0)) for c in claims)
-        return {
-            "claims": claims,
-            "total_claims": len(claims),
-            "total_paid": round(total_paid, 2),
-        }
-    except Exception as e:
-        logger.error(f"[INCENTIVES] claims stats failed: {e}", exc_info=True)
-        raise HTTPException(status_code=503, detail="Failed to fetch claim stats") from e

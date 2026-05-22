@@ -1013,7 +1013,16 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       const next = !isOnline;
       setIsOnline(next);
       try {
-        await updateDriverStatus(next);
+        // Pass the last known GPS so the backend persists it in the same
+        // write as the is_online flip. Without this the driver row sits
+        // at the (0, 0) registration default until the first background
+        // location-batch arrives, and during that window riders and
+        // admins see an empty map even though the driver is "ONLINE".
+        const loc = locationRef.current;
+        const locationPayload = next && loc?.coords
+          ? { lat: loc.coords.latitude, lng: loc.coords.longitude }
+          : undefined;
+        await updateDriverStatus(next, locationPayload);
       } catch (err: any) {
         setIsOnline(!next);
 

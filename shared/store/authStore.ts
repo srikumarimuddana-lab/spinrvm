@@ -204,7 +204,7 @@ interface AuthState {
   refreshProfile: () => Promise<void>;
   registerDriver: (data: DriverRegistrationPayload) => Promise<void>;
   toggleDriverMode: () => void;
-  updateDriverStatus: (isOnline: boolean) => Promise<void>;
+  updateDriverStatus: (isOnline: boolean, location?: { lat: number; lng: number }) => Promise<void>;
   updateProfileImage: (imageUri: string) => Promise<void>;
   logout: () => Promise<void>;
   logoutAll: () => Promise<{ revoked_refresh_tokens: number }>;
@@ -462,13 +462,23 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ isDriverMode: !isDriverMode });
   },
 
-  updateDriverStatus: async (isOnline: boolean) => {
+  updateDriverStatus: async (isOnline: boolean, location?: { lat: number; lng: number }) => {
     const driver = get().driver;
     if (!driver?.id) {
       throw new Error('Driver ID not found');
     }
     try {
-      await api.put(`/drivers/${driver.id}/status`, { is_online: isOnline });
+      // Send current GPS alongside the online flip when available. Without
+      // this, the driver row sits at the (0, 0) registration default until
+      // the first background location-batch arrives — during that window
+      // the rider /drivers/nearby and admin monitoring views can't place
+      // the driver on the map.
+      const body: { is_online: boolean; lat?: number; lng?: number } = { is_online: isOnline };
+      if (isOnline && location && Number.isFinite(location.lat) && Number.isFinite(location.lng)) {
+        body.lat = location.lat;
+        body.lng = location.lng;
+      }
+      await api.put(`/drivers/${driver.id}/status`, body);
       set({ driver: { ...driver, is_online: isOnline } });
     } catch (error: unknown) {
       if (__DEV__) console.log('Failed to update status');

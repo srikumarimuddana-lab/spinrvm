@@ -119,16 +119,20 @@ function RideOptionsScreenContent() {
   const selectedEstimate = estimates.length > selectedIndex ? estimates[selectedIndex] : null;
 
   const allUnavailable = estimates.length > 0 && !estimates.some(e => e.available);
-  // Promo discount caps at the ride_fare portion, NOT the grand total.
-  // Backend settlement (backend/routes/rides.py:1786) does
-  //   final = grand_total - min(promo.discount_amount, ride_fare)
-  // because fees + GST are not discountable. If the frontend subtracts the
-  // raw promo from grand_total it shows e.g. $0.00 for a ride that actually
-  // charges $2.57 — misleading the rider into expecting a free trip.
-  const ridePortion = parseFloat(selectedEstimate?.total_fare || '0');
-  const grandTotal = parseFloat((selectedEstimate as any)?.grand_total || selectedEstimate?.total_fare || '0');
-  const promoDiscount = Math.min(appliedPromo?.discount_amount ?? 0, ridePortion);
-  const totalFare = Math.max(0, grandTotal - promoDiscount);
+  // Single source of truth: the backend's final_total. It is computed
+  // server-side from the same _validate_promo_for_user helper that
+  // settlement uses, so quote == actual charge by construction. Falls
+  // back to grand_total / total_fare for pre-promo or legacy responses.
+  // Do NOT re-derive this from individual line items in JS — that path
+  // is what caused the $0.00-quote-but-$2.57-charged display bug.
+  const totalFare = parseFloat(
+    String(
+      (selectedEstimate as any)?.final_total
+        ?? (selectedEstimate as any)?.grand_total
+        ?? selectedEstimate?.total_fare
+        ?? '0'
+    )
+  );
 
   const paymentLabel = useMemo(() => {
     if (useCorporate && selectedCorporateId) {
@@ -643,8 +647,26 @@ function RideOptionsScreenContent() {
           {selectedEstimate?.fare_breakdown && selectedEstimate.fare_breakdown.length > 0 && (
             <View style={styles.fareBreakdownCard}>
               <Text style={styles.fareBreakdownTitle}>Fare breakdown</Text>
-              {selectedEstimate.fare_breakdown.map((line, i) => (
-                line.amount != null ? (
+              {selectedEstimate.fare_breakdown.map((line, i) => {
+                if (line.amount == null) return null;
+                const amt = parseFloat(String(line.amount));
+                const isDiscount = line.type === 'discount';
+                // Discounts render in green with an explicit "-$X.XX"
+                // shape; the absolute value is shown so we don't end up
+                // with "$-6.73". All other types use the default styling.
+                const labelStyle = [
+                  styles.fareBreakdownLabel,
+                  line.type === 'tax' && { color: '#6B7280' },
+                  isDiscount && { color: '#10B981' },
+                ];
+                const valueStyle = [
+                  styles.fareBreakdownValue,
+                  isDiscount && { color: '#10B981' },
+                ];
+                const valueText = isDiscount
+                  ? `-$${Math.abs(amt).toFixed(2)}`
+                  : `$${amt.toFixed(2)}`;
+                return (
                   <View key={i} style={[styles.fareBreakdownRow, line.type === 'ride' && { alignItems: 'flex-start' }]}>
                     {line.type === 'ride' ? (
                       <View style={{ flex: 1 }}>
@@ -652,18 +674,12 @@ function RideOptionsScreenContent() {
                         <Text style={styles.fareBreakdownDriverBadge}>100% goes to your driver · ride local, support local</Text>
                       </View>
                     ) : (
-                      <Text style={[styles.fareBreakdownLabel, line.type === 'tax' && { color: '#6B7280' }]}>{line.label}</Text>
+                      <Text style={labelStyle}>{line.label}</Text>
                     )}
-                    <Text style={styles.fareBreakdownValue}>${parseFloat(String(line.amount)).toFixed(2)}</Text>
+                    <Text style={valueStyle}>{valueText}</Text>
                   </View>
-                ) : null
-              ))}
-              {appliedPromo && promoDiscount > 0 && (
-                <View style={[styles.fareBreakdownRow, { marginTop: 2 }]}>
-                  <Text style={[styles.fareBreakdownLabel, { color: '#10B981' }]}>Promo ({appliedPromo.code})</Text>
-                  <Text style={[styles.fareBreakdownValue, { color: '#10B981' }]}>-${promoDiscount.toFixed(2)}</Text>
-                </View>
-              )}
+                );
+              })}
               <View style={[styles.fareBreakdownRow, styles.fareBreakdownTotal]}>
                 <Text style={styles.fareBreakdownTotalLabel}>Total</Text>
                 <Text style={styles.fareBreakdownTotalValue}>${totalFare.toFixed(2)}</Text>
@@ -1065,24 +1081,28 @@ function AnimatedVehicleCard({
           )}
         </View>
         <View style={[styles.optionPriceContainer, !isAvailable && { opacity: 0.4 }]}>
-          {appliedPromo && (appliedPromo.discount_amount ?? 0) > 0 && isSelected ? (() => {
-            // Same cap-at-ride-fare rule as the totalFare computation above —
-            // mirrors backend settlement at backend/routes/rides.py:1786.
-            const tierRide = parseFloat(estimate.total_fare || '0');
-            const tierGrand = parseFloat((estimate as any).grand_total || estimate.total_fare || '0');
-            const tierDiscount = Math.min(appliedPromo.discount_amount ?? 0, tierRide);
-            const tierFinal = Math.max(0, tierGrand - tierDiscount);
-            return (
-              <View style={{ alignItems: 'flex-end' }}>
-                <Text style={styles.optionPriceStruck} allowFontScaling={false}>
-                  ${tierGrand.toFixed(2)}
-                </Text>
-                <Text style={styles.optionPriceDiscounted} allowFontScaling={false}>
-                  ${tierFinal.toFixed(2)}
-                </Text>
-              </View>
-            );
-          })() : (
+          {(() => {
+            // Pull both prices straight from the backend. final_total is
+            // post-promo (already capped at ride_fare server-side);
+            // grand_total is the pre-promo price we strike through to
+            // show the savings. No client-side promo math.
+            const tierGrand = parseFloat(String((estimate as any).grand_total ?? estimate.total_fare ?? '0'));
+            const tierFinal = parseFloat(String((estimate as any).final_total ?? tierGrand));
+            const hasDiscount = tierFinal < tierGrand - 0.005;
+            if (hasDiscount && isSelected) {
+              return (
+                <View style={{ alignItems: 'flex-end' }}>
+                  <Text style={styles.optionPriceStruck} allowFontScaling={false}>
+                    ${tierGrand.toFixed(2)}
+                  </Text>
+                  <Text style={styles.optionPriceDiscounted} allowFontScaling={false}>
+                    ${tierFinal.toFixed(2)}
+                  </Text>
+                </View>
+              );
+            }
+            return null;
+          })() || (
             <Text style={styles.optionPrice} allowFontScaling={false}>
               ${parseFloat((estimate as any).grand_total || estimate.total_fare || '0').toFixed(2)}
             </Text>

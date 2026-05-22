@@ -315,7 +315,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   },
 
   fetchEstimates: async () => {
-    const { pickup, dropoff, stops, estimates: existing } = get();
+    const { pickup, dropoff, stops, estimates: existing, appliedPromo } = get();
     if (!pickup || !dropoff) return;
 
     try {
@@ -324,12 +324,18 @@ export const useRideStore = create<RideState>((set, get) => ({
       if (existing.length === 0) {
         set({ isLoading: true, error: null });
       }
+      // Pass the applied promo so the backend returns the discount line
+      // in fare_breakdown and a post-promo final_total. The rider app no
+      // longer hand-rolls the promo line or computes the total — the API
+      // is the single source of truth (matches the receipt / in-progress
+      // / history surfaces which already use this pattern).
       const response = await api.post<RideEstimate[]>('/rides/estimate', {
         pickup_lat: pickup.lat,
         pickup_lng: pickup.lng,
         dropoff_lat: dropoff.lat,
         dropoff_lng: dropoff.lng,
         stops: stops,
+        promo_code: appliedPromo?.code || null,
       });
       const fresh = Array.isArray(response.data) ? response.data as RideEstimate[] : [];
       // Never replace a populated list with an empty one during a background
@@ -375,7 +381,14 @@ export const useRideStore = create<RideState>((set, get) => ({
       // Auto-apply best eligible promo (sorted: eligible first, then by discount)
       if (promos.length > 0 && !get().appliedPromo) {
         const best = promos.find((p: any) => p.eligible !== false);
-        if (best) set({ appliedPromo: best });
+        if (best) {
+          set({ appliedPromo: best });
+          // Re-fetch estimates so the backend returns the discount line
+          // and post-promo final_total — otherwise the UI shows the
+          // pre-promo total because the previous estimate response had
+          // no promo_code in its request.
+          get().fetchEstimates();
+        }
       }
     } catch (error) {
       console.log('Error fetching promos:', error);
@@ -383,7 +396,14 @@ export const useRideStore = create<RideState>((set, get) => ({
     }
   },
 
-  applyPromo: (promo) => set({ appliedPromo: promo }),
+  // Setting / clearing a promo must trigger a re-quote so the displayed
+  // breakdown and totals match what settlement will charge. Without this,
+  // tapping "Remove promo" would leave the previously-discounted totals
+  // on screen until the next background refresh.
+  applyPromo: (promo) => {
+    set({ appliedPromo: promo });
+    get().fetchEstimates();
+  },
 
   // Sync offline queued requests when back online.
   // Queue entry shape: { id, type, rideId, data, retryCount, timestamp }

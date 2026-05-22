@@ -164,7 +164,7 @@ export default function CloudMessagingPage() {
         try {
             const data = type === "customer" ? await getUsers() : await getDrivers();
             const opts: UserOption[] = (data || []).map((u: any) => ({
-                id: u.id,
+                id: type === "driver" ? (u.user_id || u.id) : u.id,
                 label: `${u.first_name || ""} ${u.last_name || ""}`.trim() || u.email || u.phone || u.id,
                 email: u.email,
                 phone: u.phone,

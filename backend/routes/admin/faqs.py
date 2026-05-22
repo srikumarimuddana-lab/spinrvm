@@ -139,12 +139,12 @@ async def admin_send_notification(request: Request, notification: NotificationRe
             await send_push_notification(u["id"], title, body)
         logger.info(f"Broadcast notification to all users: {title}")
     elif audience == "riders":
-        riders = await db.get_rows("users", {"role": "rider"}, limit=10000)
+        riders = await db.get_rows("users", {"is_rider": True}, limit=10000)
         for u in riders or []:
             await send_push_notification(u["id"], title, body)
         logger.info(f"Broadcast notification to all riders: {title}")
     elif audience == "drivers":
-        drivers = await db.get_rows("users", {"role": "driver"}, limit=10000)
+        drivers = await db.get_rows("users", {"is_driver": True}, limit=10000)
         for u in drivers or []:
             await send_push_notification(u["id"], title, body)
         logger.info(f"Broadcast notification to all drivers: {title}")
@@ -172,12 +172,7 @@ async def admin_get_notifications(
         order=(
             "created_at"
             if "created_at"
-            in (
-                (lambda _r: _r[0] if _r else None)(
-                    await db_supabase.get_rows("notifications", {}, limit=1)
-                )
-                or {}
-            )
+            in ((lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("notifications", {}, limit=1)) or {})
             else "sent_at"
         ),
         desc=True,

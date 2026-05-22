@@ -40,7 +40,7 @@ import {
 import { Pagination } from "@/components/ui/pagination";
 import { Users, Search, Mail, Phone, MapPin, Star, Calendar, Car, ShieldCheck, Download, RefreshCw, Ban, CheckCircle, AlertTriangle, Wallet, Plus, Minus, Eye, EyeOff } from "lucide-react";
 import { formatDate } from "@/lib/utils";
-import { getUsersPaginated, updateUserStatus, updateUserRole, getStats, getUserWallet, creditUserWallet, debitUserWallet, exportUsers, logPiiReveal } from "@/lib/api";
+import { getUsersPaginated, updateUserStatus, updateUserFlags, getStats, getUserWallet, creditUserWallet, debitUserWallet, exportUsers, logPiiReveal } from "@/lib/api";
 import { maskEmail, maskPhone } from "@/lib/pii";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { useToast } from "@/components/ui/use-toast";
@@ -55,7 +55,7 @@ export default function UsersPage() {
     const [error, setError] = useState("");
     const [search, setSearch] = useState("");
     const [statusUpdating, setStatusUpdating] = useState<string | null>(null);
-    const [roleFilter, setRoleFilter] = useState<"all" | "rider" | "driver">("all");
+    const [roleFilter, setRoleFilter] = useState<"all" | "rider" | "driver" | "both">("all");
     const [selectedUser, setSelectedUser] = useState<any>(null);
     const [page, setPage] = useState(0);
     const [hasNextPage, setHasNextPage] = useState(false);
@@ -330,14 +330,15 @@ export default function UsersPage() {
                         className="pl-9"
                     />
                 </div>
-                <Select value={roleFilter} onValueChange={(v) => setRoleFilter(v as "all" | "rider" | "driver")}>
+                <Select value={roleFilter} onValueChange={(v) => setRoleFilter(v as "all" | "rider" | "driver" | "both")}>
                     <SelectTrigger className="w-36" aria-label="Filter by role">
                         <SelectValue placeholder="Role" />
                     </SelectTrigger>
                     <SelectContent>
                         <SelectItem value="all">All Roles</SelectItem>
-                        <SelectItem value="rider">Riders</SelectItem>
-                        <SelectItem value="driver">Drivers</SelectItem>
+                        <SelectItem value="rider">Riders only</SelectItem>
+                        <SelectItem value="driver">Drivers only</SelectItem>
+                        <SelectItem value="both">Dual-role</SelectItem>
                     </SelectContent>
                 </Select>
                 {(search || roleFilter !== "all") && (
@@ -593,48 +594,52 @@ export default function UsersPage() {
                                 </div>
                             </div>
 
-                            {/* Role Correction */}
+                            {/* Role Flags (independent toggles — dual-role supported) */}
                             <div className="border-t pt-4">
-                                <Label className="text-xs text-muted-foreground mb-2 block">Role Correction</Label>
+                                <Label className="text-xs text-muted-foreground mb-2 block">Role Flags</Label>
                                 <p className="text-xs text-muted-foreground mb-2">
-                                    Use if a user's role in the DB doesn't match how they actually use the app.
+                                    Each flag is independent. A user can be both a rider and a driver.
                                 </p>
                                 <div className="flex gap-2">
                                     <Button
                                         className="flex-1"
-                                        variant="outline"
-                                        disabled={selectedUser.role === "rider" || statusUpdating === selectedUser.id}
+                                        variant={selectedUser.is_rider ? "default" : "outline"}
+                                        size="sm"
+                                        disabled={statusUpdating === selectedUser.id}
                                         onClick={async () => {
                                             setStatusUpdating(selectedUser.id);
+                                            const next = !selectedUser.is_rider;
                                             try {
-                                                await updateUserRole(selectedUser.id, "rider");
-                                                setSelectedUser({ ...selectedUser, role: "rider" });
-                                                setUsers(prev => prev.map(u => u.id === selectedUser.id ? { ...u, role: "rider" } : u));
-                                                toast({ title: "Role changed to Rider" });
+                                                await updateUserFlags(selectedUser.id, { is_rider: next });
+                                                setSelectedUser({ ...selectedUser, is_rider: next });
+                                                setUsers(prev => prev.map(u => u.id === selectedUser.id ? { ...u, is_rider: next } : u));
+                                                toast({ title: next ? "Rider flag enabled" : "Rider flag disabled" });
                                             } catch (err: any) {
-                                                toast({ title: "Failed to change role", description: err?.message, variant: "destructive" });
+                                                toast({ title: "Failed to update flag", description: err?.message, variant: "destructive" });
                                             } finally { setStatusUpdating(null); }
                                         }}
                                     >
-                                        Set as Rider
+                                        {selectedUser.is_rider ? "✓ Rider" : "Rider off"}
                                     </Button>
                                     <Button
                                         className="flex-1"
-                                        variant="outline"
-                                        disabled={selectedUser.role === "driver" || statusUpdating === selectedUser.id}
+                                        variant={selectedUser.is_driver ? "default" : "outline"}
+                                        size="sm"
+                                        disabled={statusUpdating === selectedUser.id}
                                         onClick={async () => {
                                             setStatusUpdating(selectedUser.id);
+                                            const next = !selectedUser.is_driver;
                                             try {
-                                                await updateUserRole(selectedUser.id, "driver");
-                                                setSelectedUser({ ...selectedUser, role: "driver" });
-                                                setUsers(prev => prev.map(u => u.id === selectedUser.id ? { ...u, role: "driver" } : u));
-                                                toast({ title: "Role changed to Driver" });
+                                                await updateUserFlags(selectedUser.id, { is_driver: next });
+                                                setSelectedUser({ ...selectedUser, is_driver: next });
+                                                setUsers(prev => prev.map(u => u.id === selectedUser.id ? { ...u, is_driver: next } : u));
+                                                toast({ title: next ? "Driver flag enabled" : "Driver flag disabled" });
                                             } catch (err: any) {
-                                                toast({ title: "Failed to change role", description: err?.message, variant: "destructive" });
+                                                toast({ title: "Failed to update flag", description: err?.message, variant: "destructive" });
                                             } finally { setStatusUpdating(null); }
                                         }}
                                     >
-                                        Set as Driver
+                                        {selectedUser.is_driver ? "✓ Driver" : "Driver off"}
                                     </Button>
                                 </div>
                             </div>

@@ -303,7 +303,14 @@ export default function CloudMessagingPage() {
         URL.revokeObjectURL(url);
     };
 
-    const getChannels = (m: CloudMessage) => m.channels || (m.channel ? [m.channel] : ["push"]);
+    const getChannels = (m: CloudMessage): string[] => {
+        let ch: unknown = m.channels;
+        if (typeof ch === "string") {
+            try { ch = JSON.parse(ch); } catch { ch = [ch]; }
+        }
+        if (Array.isArray(ch) && ch.length > 0) return ch as string[];
+        return m.channel ? [m.channel] : ["push"];
+    };
 
     if (!allowed) return null;
 

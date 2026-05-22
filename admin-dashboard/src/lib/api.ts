@@ -1401,7 +1401,7 @@ export const getUsers = (role: "all" | "rider" | "driver" | "admin" = "all") =>
     request<any[]>(`/api/admin/users?role=${role}`);
 
 export const getUsersPaginated = (opts: {
-    role?: "all" | "rider" | "driver" | "admin";
+    role?: "all" | "rider" | "driver" | "both" | "admin";
     search?: string;
     limit?: number;
     offset?: number;
@@ -1421,6 +1421,12 @@ export const updateUserStatus = (id: string, statusData: any) =>
     request<any>(`/api/admin/users/${id}/status`, {
         method: "PUT",
         body: JSON.stringify(statusData),
+    });
+
+export const updateUserFlags = (id: string, flags: { is_rider?: boolean; is_driver?: boolean }) =>
+    request<any>(`/api/admin/users/${id}/role`, {
+        method: "PATCH",
+        body: JSON.stringify(flags),
     });
 
 export const exportUsers = (limit = 1000) =>

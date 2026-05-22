@@ -43,14 +43,21 @@ async def admin_get_users(
     """
     filters: Dict[str, Any] = {}
     role_param = (role or "all").lower()
-    if role_param in ("rider", "driver", "admin"):
-        filters["role"] = role_param
+    if role_param == "rider":
+        filters["is_rider"] = True
+        filters["role"] = {"$ne": "admin"}
+    elif role_param == "driver":
+        filters["is_driver"] = True
+    elif role_param == "both":
+        filters["is_rider"] = True
+        filters["is_driver"] = True
+    elif role_param == "admin":
+        filters["role"] = "admin"
     elif role_param == "all":
-        # Every non-admin. Admin dashboard users are managed on the Staff
-        # page, not here.
+        # Every non-admin user — managed on the Staff page instead.
         filters["role"] = {"$ne": "admin"}
     else:
-        raise HTTPException(status_code=400, detail="role must be one of rider, driver, admin, all")
+        raise HTTPException(status_code=400, detail="role must be one of rider, driver, both, admin, all")
 
     if search:
         # Basic contains-match on phone / email / first_name; callers typically
@@ -130,6 +137,70 @@ async def admin_update_user_status(user_id: str, status_data: UserStatusRequest,
     )
 
     return {"message": f"User status updated to {new_status}"}
+
+
+class UserFlagsRequest(BaseModel):
+    is_rider: Optional[bool] = None
+    is_driver: Optional[bool] = None
+
+
+@router.patch("/users/{user_id}/role")
+async def admin_update_user_flags(
+    user_id: str,
+    body: UserFlagsRequest,
+    admin: dict = Depends(get_admin_user),
+):
+    """Set is_rider / is_driver flags independently (dual-role support).
+
+    Each flag is optional — send only the ones you want to change.
+    A user can have both flags true (rides and drives), either alone,
+    or neither (deactivated from both roles).
+
+    Setting is_driver=False does NOT delete the drivers row — trip history
+    is preserved. Setting is_driver=True does NOT create a drivers row —
+    the user must complete onboarding first.
+    """
+    if body.is_rider is None and body.is_driver is None:
+        raise HTTPException(status_code=400, detail="Provide at least one of is_rider or is_driver")
+
+    user = await db_supabase.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    update: dict = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    old_flags = {"is_rider": user.get("is_rider"), "is_driver": user.get("is_driver")}
+    new_flags: dict = {}
+
+    if body.is_rider is not None:
+        update["is_rider"] = body.is_rider
+        new_flags["is_rider"] = body.is_rider
+    if body.is_driver is not None:
+        update["is_driver"] = body.is_driver
+        new_flags["is_driver"] = body.is_driver
+        # Keep role column in sync for backward-compat (admin queries, JWT)
+        if body.is_driver and user.get("role") not in ("driver", "admin"):
+            update["role"] = "driver"
+        elif not body.is_driver and not body.is_rider and user.get("role") == "driver":
+            update["role"] = "rider"
+
+    await db_supabase.update_one("users", {"id": user_id}, update)
+
+    await db_supabase.insert_one(
+        "audit_logs",
+        {
+            "id": str(uuid.uuid4()),
+            "actor_id": admin["id"],
+            "actor_role": admin.get("role"),
+            "action": "flags_change",
+            "entity_type": "user",
+            "entity_id": user_id,
+            "details": {"old_flags": old_flags, "new_flags": new_flags},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+
+    logger.info(f"Admin {admin['id']} updated user {user_id} flags: {old_flags} → {new_flags}")
+    return {"message": "User flags updated", "old": old_flags, "new": new_flags}
 
 
 # ---------- Export & PII Audit ----------

@@ -61,9 +61,7 @@ async def init_database():
         logger.error(f"Supabase health check failed: {e}")
         if settings.ENV.lower() == "production":
             raise
-        logger.warning(
-            f"Continuing in {settings.ENV} mode despite health-check failure"
-        )
+        logger.warning(f"Continuing in {settings.ENV} mode despite health-check failure")
 
     return supabase
 
@@ -100,9 +98,7 @@ async def lifespan(app: FastAPI):
 
     executor_size = int(_os.environ.get("BACKEND_EXECUTOR_WORKERS", "64"))
     loop = _asyncio_lifespan.get_event_loop()
-    loop.set_default_executor(
-        _Executor(max_workers=executor_size, thread_name_prefix="spinr-db")
-    )
+    loop.set_default_executor(_Executor(max_workers=executor_size, thread_name_prefix="spinr-db"))
     logger.info(f"Default executor sized to {executor_size} workers")
 
     # Initialize database
@@ -172,9 +168,7 @@ async def lifespan(app: FastAPI):
 
         _spawn("subscription_expiry (6h)", check_expiring_subscriptions)
     except Exception as e:
-        logger.error(
-            f"Failed to import subscription expiry checker: {e}", exc_info=True
-        )
+        logger.error(f"Failed to import subscription expiry checker: {e}", exc_info=True)
 
     # Automated surge pricing — recalculates demand/supply ratio every 2 min
     # and updates service_areas.surge_multiplier for auto-managed areas.
@@ -237,17 +231,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to import allowance reset loop: {e}", exc_info=True)
 
-    # Driver presence sweeper — reconciles drivers.is_online against Redis
-    # presence heartbeats every 60s, so ghost-online rows (app killed,
-    # phone dead) flip offline without manual intervention. Dispatch
-    # already filters on live presence; this keeps admin and analytics
-    # tables honest.
-    try:
-        from utils.presence_sweeper import presence_sweeper_loop
-
-        _spawn("presence_sweeper (60s)", presence_sweeper_loop)
-    except Exception as e:
-        logger.error(f"Failed to import presence sweeper loop: {e}", exc_info=True)
+    # Presence sweeper REMOVED — Uber/Lyft-style presence model.
+    # We no longer flip drivers.is_online=False from a background loop.
+    # `is_online` is now pure driver intent (only the driver or an admin
+    # writes it); reachability is the Redis presence key. Composing the
+    # two at read time prevents the dual-source-of-truth drift class that
+    # let a transient WS gap / unconfigured Redis silently corrupt the
+    # persistent flag. See backend/utils/driver_online.py for the
+    # effective-online helper used by readers.
 
     # Safety check-in — every 30s: sends a push to riders whose trip has been
     # in_progress for ≥ 20 minutes.  If the rider does not respond within 90s,
@@ -338,7 +329,6 @@ async def lifespan(app: FastAPI):
             "corporate_autotopup (10min)",
             "corporate_low_balance (1h)",
             "allowance_reset (1h)",
-            "presence_sweeper (60s)",
             "retention_purge (24h)",
             "stripe_reconcile (24h)",
             "t4a_annual_job (yearly Feb 28)",
@@ -384,9 +374,7 @@ async def lifespan(app: FastAPI):
         from utils.ws_pubsub import pubsub as ws_pubsub
         from utils.ws_pubsub import resolve_ws_redis_url
 
-        ws_redis_url = resolve_ws_redis_url(
-            settings.WS_REDIS_URL, settings.RATE_LIMIT_REDIS_URL
-        )
+        ws_redis_url = resolve_ws_redis_url(settings.WS_REDIS_URL, settings.RATE_LIMIT_REDIS_URL)
         ws_started = await ws_pubsub.start(ws_manager, ws_redis_url)
         app.state.ws_pubsub = ws_pubsub
         if not ws_started and settings.ENV.lower() == "production":
@@ -404,9 +392,7 @@ async def lifespan(app: FastAPI):
         logger.error(f"Failed to start WS pub/sub: {e}", exc_info=True)
 
     # Perform startup checks
-    logger.info(
-        f"Spinr API startup complete ({len(background_tasks)} background tasks running)"
-    )
+    logger.info(f"Spinr API startup complete ({len(background_tasks)} background tasks running)")
 
     yield
 

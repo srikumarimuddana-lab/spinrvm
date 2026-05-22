@@ -1196,14 +1196,19 @@ async def _send_expo_push(token: str, title: str, body: str, data: Dict[str, str
                 headers={"Accept": "application/json", "Content-Type": "application/json"},
             )
             result = resp.json()
-            status = result.get("data", {}).get("status") if isinstance(result.get("data"), dict) else None
+            data_block = result.get("data", {}) if isinstance(result.get("data"), dict) else {}
+            status = data_block.get("status")
             if status == "ok":
                 logger.info(f"Expo push sent OK to {token[:35]}...")
                 return True
-            logger.error(f"Expo push non-ok response: {result}")
+            error_code = data_block.get("details", {}).get("error", "")
+            if error_code == "DeviceNotRegistered":
+                logger.warning(f"Expo token unregistered (DeviceNotRegistered): {token[:35]}...")
+            else:
+                logger.error(f"Expo push non-ok response: {result}")
             return False
     except Exception as e:
-        logger.error(f"Failed to send Expo push notification: {e}")
+        logger.error(f"Failed to send Expo push notification: {e}", exc_info=True)
         return False
 
 
@@ -1244,6 +1249,7 @@ async def send_push_notification(
         return await _send_expo_push(token, title, body, data)
 
     try:
+        from firebase_admin import exceptions as firebase_exceptions
         from firebase_admin import messaging
     except ImportError:
         logger.error("firebase_admin not available for push notifications — FCM delivery will fail")
@@ -1278,8 +1284,20 @@ async def send_push_notification(
         response = await asyncio.to_thread(messaging.send, message)
         logger.info(f"Push notification sent to {user_id}: {response} (dispatch={is_dispatch})")
         return True
+    except firebase_exceptions.NotFoundError:
+        # Token is stale (app uninstalled / token rotated). Purge it so the
+        # next login registers a fresh token and delivery resumes.
+        logger.warning(f"Stale FCM token for user {user_id} — purging from users and push_tokens")
+        try:
+            await db.update_one("users", {"id": user_id}, {"fcm_token": None})
+            rows = await db_supabase.get_rows("push_tokens", {"user_id": user_id, "token": token}, limit=1)
+            if rows:
+                await db_supabase.delete_one("push_tokens", {"id": rows[0]["id"]})
+        except Exception:
+            logger.error("Failed to purge stale FCM token", exc_info=True)
+        return False
     except Exception as e:
-        logger.error(f"Failed to send push notification: {e}")
+        logger.error(f"Failed to send push notification to user {user_id}: {e}", exc_info=True)
         return False
 
 

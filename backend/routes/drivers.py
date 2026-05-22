@@ -54,6 +54,7 @@ except ImportError:
     from services.fare_service import recalculate_fare_for_distance
     from socket_manager import manager
     from utils.datetime_utils import parse_iso_utc
+    from utils.driver_online import intent_online  # type: ignore
     from utils.driver_presence import clear_presence, mark_present, present_driver_ids, reset_miss_streak
     from utils.error_handling import (
         AccountDisabledException,

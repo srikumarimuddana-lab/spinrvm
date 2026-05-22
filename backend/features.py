@@ -1200,7 +1200,7 @@ async def _send_expo_push(token: str, title: str, body: str, data: Dict[str, str
             if status == "ok":
                 logger.info(f"Expo push sent OK to {token[:35]}...")
                 return True
-            logger.warning(f"Expo push non-ok response: {result}")
+            logger.error(f"Expo push non-ok response: {result}")
             return False
     except Exception as e:
         logger.error(f"Failed to send Expo push notification: {e}")
@@ -1230,8 +1230,8 @@ async def send_push_notification(
 
             await enqueue_push(user_id, title, body, data, priority=priority)
             return True
-        except Exception as exc:
-            logger.warning(f"push enqueue failed, falling back to direct send: {exc}")
+        except Exception:
+            logger.error("push enqueue failed, falling back to direct send", exc_info=True)
 
     user = await db.find_one("users", {"id": user_id})
     if not user or not user.get("fcm_token"):
@@ -1246,12 +1246,7 @@ async def send_push_notification(
     try:
         from firebase_admin import messaging
     except ImportError:
-        logger.warning("firebase_admin not available for push notifications")
-        return False
-
-    user = await db_supabase.get_user_by_id(user_id)
-    if not user or not user.get("fcm_token"):
-        logger.info(f"No FCM token for user {user_id}")
+        logger.error("firebase_admin not available for push notifications — FCM delivery will fail")
         return False
 
     is_dispatch = (data or {}).get("type") == "new_ride_assignment"

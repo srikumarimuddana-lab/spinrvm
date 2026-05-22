@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 try:
@@ -50,9 +50,7 @@ async def admin_get_users(
         # page, not here.
         filters["role"] = {"$ne": "admin"}
     else:
-        raise HTTPException(
-            status_code=400, detail="role must be one of rider, driver, admin, all"
-        )
+        raise HTTPException(status_code=400, detail="role must be one of rider, driver, admin, all")
 
     if search:
         # Basic contains-match on phone / email / first_name; callers typically
@@ -65,9 +63,7 @@ async def admin_get_users(
                 {"first_name": {"$regex": re.escape(term), "$options": "i"}},
                 {"last_name": {"$regex": re.escape(term), "$options": "i"}},
             ]
-    users = await db_supabase.get_rows(
-        "users", filters, order="created_at", desc=True, limit=limit, offset=offset
-    )
+    users = await db_supabase.get_rows("users", filters, order="created_at", desc=True, limit=limit, offset=offset)
     return users
 
 
@@ -94,23 +90,17 @@ async def admin_get_user_details(user_id: str):
         raise HTTPException(status_code=404, detail="User not found")
 
     # Get user's recent rides
-    rides = await db_supabase.get_rows(
-        "rides", {"rider_id": user_id}, order="created_at", desc=True, limit=10
-    )
+    rides = await db_supabase.get_rows("rides", {"rider_id": user_id}, order="created_at", desc=True, limit=10)
 
     return {
         **user,
-        "total_rides": await db_supabase.count_documents(
-            "rides", {"rider_id": user_id}
-        ),
+        "total_rides": await db_supabase.count_documents("rides", {"rider_id": user_id}),
         "recent_rides": rides,
     }
 
 
 @router.put("/users/{user_id}/status")
-async def admin_update_user_status(
-    user_id: str, status_data: UserStatusRequest, admin: dict = Depends(get_admin_user)
-):
+async def admin_update_user_status(user_id: str, status_data: UserStatusRequest, admin: dict = Depends(get_admin_user)):
     """Update user status (e.g., suspend, activate)."""
     new_status = status_data.status
 
@@ -140,6 +130,76 @@ async def admin_update_user_status(
     )
 
     return {"message": f"User status updated to {new_status}"}
+
+
+# ---------- Export & PII Audit ----------
+
+_EXPORT_MAX_ROWS = 5000
+
+
+def _mask_email(email: Optional[str]) -> Optional[str]:
+    if not email:
+        return None
+    local, _, domain = email.partition("@")
+    if not domain:
+        return "***"
+    return f"{local[0] if local else ''}***@{domain}"
+
+
+def _mask_phone(phone: Optional[str]) -> Optional[str]:
+    if not phone:
+        return None
+    digits = re.sub(r"\D", "", phone)
+    return f"***-{digits[-4:]}" if len(digits) >= 4 else "***"
+
+
+@router.get("/export/users")
+async def admin_export_users(
+    limit: int = Query(1000, ge=1, le=_EXPORT_MAX_ROWS),
+    admin: dict = Depends(get_admin_user),
+):
+    """Export users with masked PII. Writes an audit log entry."""
+    is_super = admin.get("role") == "super_admin"
+    users = await db_supabase.get_rows(
+        "users",
+        {"role": {"$ne": "admin"}},
+        order="created_at",
+        desc=True,
+        limit=limit,
+    )
+    out = []
+    for u in users:
+        row = {
+            "id": u.get("id"),
+            "name": f"{u.get('first_name') or ''} {u.get('last_name') or ''}".strip()
+            or u.get("email")
+            or u.get("phone"),
+            "email": u.get("email") if is_super else _mask_email(u.get("email")),
+            "phone": u.get("phone") if is_super else _mask_phone(u.get("phone")),
+            "city": u.get("city"),
+            "role": u.get("role"),
+            "total_rides": u.get("total_rides", 0),
+            "rating": u.get("rating"),
+            "is_verified": u.get("is_verified"),
+            "status": u.get("status"),
+            "created_at": u.get("created_at"),
+        }
+        out.append(row)
+
+    await db_supabase.insert_one(
+        "audit_logs",
+        {
+            "id": str(uuid.uuid4()),
+            "actor_id": admin["id"],
+            "actor_role": admin.get("role"),
+            "action": "export_users",
+            "entity_type": "users",
+            "entity_id": "export",
+            "details": {"row_count": len(out), "pii_unmasked": is_super},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    return {"users": out, "count": len(out)}
 
 
 # ---------- DSAR (Data Subject Access Requests) ----------

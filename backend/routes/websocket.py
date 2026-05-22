@@ -59,8 +59,10 @@ _ETA_PICKUP_STATUSES = {"driver_assigned", "driver_accepted", "driver_arrived"}
 
 router = APIRouter()
 
-# GAP FIX: Heartbeat constants (matching industry standard for rideshare apps)
-HEARTBEAT_INTERVAL = 30  # Send ping every 30 seconds
+# GAP FIX: Heartbeat constants — tightened from 30s to 10s to match
+# Uber's ~4s/7s cadence more closely. A 30s ping meant a dead connection
+# could go undetected for 45s+ (driver misses 2-3 ride offers).
+HEARTBEAT_INTERVAL = 10  # Send ping every 10 seconds
 HEARTBEAT_TIMEOUT = 10  # Expect pong within 10 seconds
 
 # Rate limiting: max messages per second per connection
@@ -265,7 +267,12 @@ async def heartbeat_task(
 
 
 @router.websocket("/ws/{client_type}/{client_id}")
-async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: str):
+async def websocket_endpoint(
+    websocket: WebSocket,
+    client_type: str,
+    client_id: str,
+    last_seq: int | None = None,
+):
     """Require clients to authenticate via a first 'auth' message that contains a Firebase ID token or legacy JWT.
 
     After successful verification we register the connection as '{client_type}_{user_id}' and proceed to handle messages.
@@ -449,6 +456,22 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                 }
             )
 
+        # Replay missed sequenced messages (if any)
+        if last_seq is not None:
+            try:
+                from ..utils.ws_pubsub import pubsub
+
+                messages = await pubsub.get_outbox(connection_key)
+                replayed = 0
+                for msg_obj in messages:
+                    if msg_obj.get("seq", 0) > last_seq:
+                        await websocket.send_json(msg_obj)
+                        replayed += 1
+                if replayed > 0:
+                    logger.info(f"Replayed {replayed} messages to {connection_key} (last_seq={last_seq})")
+            except Exception as e:
+                logger.warning(f"Failed to replay messages for {connection_key}: {e}")
+
         # GAP FIX: Start heartbeat background task. conn_state is shared with
         # heartbeat_task so it can detect stale connections — every pong the
         # client sends bumps last_pong_at; the heartbeat closes the socket
@@ -546,7 +569,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                     if not trusted:
                         continue
 
-                    manager.update_driver_location(driver_id, lat, lng)
+                    await manager.update_driver_location(driver_id, lat, lng)
                     await db_supabase.update_driver_location(driver_id, lat, lng)
                     # Location pings are an even stronger liveness signal
                     # than pongs — fresh GPS proves the app is running and
@@ -746,7 +769,7 @@ async def websocket_endpoint(websocket: WebSocket, client_type: str, client_id: 
                         await db_supabase.insert_many("driver_location_history", docs)
                         last = docs[-1]
                         if last.get("lat") is not None and last.get("lng") is not None:
-                            manager.update_driver_location(driver_id, last["lat"], last["lng"])
+                            await manager.update_driver_location(driver_id, last["lat"], last["lng"])
                             await db_supabase.update_driver_location(driver_id, last["lat"], last["lng"])
                             await mark_present(driver_id)
                     await websocket.send_json({"type": "location_batch_ack", "count": len(docs)})

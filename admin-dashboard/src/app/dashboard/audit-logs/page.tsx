@@ -60,7 +60,7 @@ const ACTION_CONFIG: Record<string, { label: string; color: string }> = {
 const PAGE_SIZE = 50;
 
 export default function AuditLogsPage() {
-    const { allowed } = useRequireModule("settings");
+    const { allowed } = useRequireModule("audit");
     const [logs, setLogs] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState("");

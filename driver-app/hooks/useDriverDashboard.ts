@@ -22,7 +22,7 @@ import {
   stopGeofenceRecovery,
 } from '../utils/backgroundLocation';
 import { checkLocationIntegrity, resetLocationIntegrity } from '../utils/locationIntegrity';
-import { startSensorMonitoring, stopSensorMonitoring, isMovementConsistentWithSpeed } from '../utils/sensorIntegrity';
+import { startSensorMonitoring, stopSensorMonitoring, checkMovementConsistency } from '../utils/sensorIntegrity';
 import { attestDeviceIntegrity } from '../utils/deviceIntegrity';
 
 const { height } = Dimensions.get('window');
@@ -130,6 +130,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   const MAX_LOCATION_RETRIES = 3;
   const lastServerMsgRef = useRef<number>(Date.now());
   const pongSentAtRef = useRef<number>(0);
+  const lastSeqRef = useRef<number>(0);
   // Refs used inside WebSocket callbacks to avoid stale closure values.
   // Also used to stabilize the connectWebSocket useCallback — if we closed
   // over `user` / `handleWSMessage` directly, any store state change would
@@ -373,9 +374,12 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
             console.warn(`[Location] Spoofed/invalid fix rejected: ${integrity.reason}`);
             return;
           }
-          if (!isMovementConsistentWithSpeed(loc.coords.speed)) {
-            console.warn('[Location] Sensor mismatch: GPS shows movement but accelerometer is still');
-            return;
+          // Sensor mismatch: tag the payload instead of dropping the location.
+          // Dropping made the driver invisible to dispatch on false positives
+          // (phone on soft mount, smooth highway, cup holder vibration).
+          const sensorCheck = checkMovementConsistency(loc.coords.speed);
+          if (!sensorCheck.consistent) {
+            console.warn(`[Location] Sensor suspect: variance=${sensorCheck.variance.toFixed(4)}`);
           }
 
           locationRef.current = loc;
@@ -404,6 +408,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
             accuracy: loc.coords.accuracy ?? null,
             altitude: loc.coords.altitude ?? null,
             mocked: loc.mocked ?? false,
+            sensor_suspect: !sensorCheck.consistent,
             ride_id: rideId,
             tracking_phase: phaseMap[currentRideState] || 'online_idle',
             timestamp: new Date().toISOString(),
@@ -481,6 +486,11 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           requires_wav: data.requires_wav === true,
           countdown_seconds: typeof data.countdown_seconds === 'number' ? data.countdown_seconds : undefined,
           offer_expires_at: data.offer_expires_at,
+          surge_multiplier: typeof data.surge_multiplier === 'number' ? data.surge_multiplier : undefined,
+          incentives: Array.isArray(data.incentives) ? data.incentives : undefined,
+          total_bonus: typeof data.total_bonus === 'number' ? data.total_bonus : undefined,
+          quest_hint: data.quest_hint || undefined,
+          payment_method: data.payment_method || undefined,
         });
         break;
       }
@@ -491,6 +501,16 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         offerSound.stop();
         resetRideState();
         showToast('info', 'Offer expired', 'Looking for the next ride...');
+        break;
+      case 'auto_offline':
+        // Backend took the driver offline after N consecutive missed offers.
+        offerSound.stop();
+        resetRideState();
+        setIsOnline(false);
+        Alert.alert(
+          'You\'re now offline',
+          data.message || 'You were taken offline because you missed several ride offers in a row. Tap "Go Online" when you\'re ready.',
+        );
         break;
       case 'ride_cancelled':
         showToast(
@@ -598,7 +618,15 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     try {
       const { ensureFreshToken } = require('@shared/api/client');
       await ensureFreshToken();
-    } catch {}
+    } catch (err) {
+      // Token refresh failed — the stored token may still be valid (short
+      // background period) so we proceed. If it's truly expired, the server
+      // will reject auth, onclose fires, and the reconnect loop retries
+      // with a fresh ensureFreshToken() call. Previously this was an empty
+      // catch that silently swallowed the error, making it invisible why
+      // drivers got stuck in a "Reconnecting…" loop after long backgrounds.
+      console.warn('[WS] ensureFreshToken failed, proceeding with current token:', err);
+    }
 
     const currentUser = userRef.current;
     if (!isOnlineRef.current || !currentUser) return;
@@ -612,7 +640,8 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     // http backends (local dev) use ws://. Checking __DEV__ is wrong — Railway's
     // edge proxy rejects plain ws:// with "Invalid Sec-WebSocket-Accept response".
     const useSecure = API_URL.startsWith('https');
-    const wsUrl = `${API_URL.replace(/^https?/, useSecure ? 'wss' : 'ws')}/ws/driver/${currentUser.id}`;
+    const wsBaseUrl = `${API_URL.replace(/^https?/, useSecure ? 'wss' : 'ws')}/ws/driver/${currentUser.id}`;
+    const wsUrl = lastSeqRef.current > 0 ? `${wsBaseUrl}?last_seq=${lastSeqRef.current}` : wsBaseUrl;
     // Flip the banner to 'reconnecting' the moment we start connecting.
     // The initial state is 'disconnected', which renders as the red
     // "Connection Lost" banner — if we leave it there during the TLS +
@@ -647,7 +676,12 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
 
     ws.onmessage = (event) => {
       try {
-        const data = JSON.parse(event.data);
+        let data = JSON.parse(event.data);
+        if (data && typeof data === 'object' && 'seq' in data && 'data' in data) {
+          lastSeqRef.current = data.seq;
+          data = data.data;
+        }
+
         lastServerMsgRef.current = Date.now();
         if (data.type === 'error') {
           setWsError(data.message || 'Connection error');
@@ -822,17 +856,75 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   }, []);
 
   // ─── Client-side heartbeat watchdog ──────────────────────────────
-  // Server sends ping every 30s. If we receive no message for 45s the
+  // Server sends ping every 10s. If we receive no message for 15s the
   // network likely dropped silently — force-close to trigger reconnect.
   useEffect(() => {
     if (connectionState !== 'connected') return;
     const id = setInterval(() => {
-      if (Date.now() - lastServerMsgRef.current > 45_000) {
+      if (Date.now() - lastServerMsgRef.current > 15_000) {
         wsRef.current?.close(4001, 'heartbeat_timeout');
       }
-    }, 15_000);
+    }, 5_000);
     return () => clearInterval(id);
   }, [connectionState]);
+
+  // ─── Engagement Check (Zombie Driver Prevention) ─────────────────
+  // Uber/Lyft prompt "Are you still there?" after ~15 mins of idle online time.
+  // Prevents drivers from leaving the app open on a desk and walking away,
+  // which causes missed offers and bad rider experiences.
+  const [idleResetCount, setIdleResetCount] = useState(0);
+  useEffect(() => {
+    if (!isOnline || rideState !== 'idle') {
+      return;
+    }
+
+    let promptTimeout: ReturnType<typeof setTimeout>;
+    let offlineTimeout: ReturnType<typeof setTimeout>;
+
+    const IDLE_MINUTES = 15;
+    const RESPONSE_SECONDS = 60;
+
+    promptTimeout = setTimeout(() => {
+      Alert.alert(
+        "Still driving?",
+        "You've been online but idle for a while. Do you want to stay online and receive rides?",
+        [
+          {
+            text: "Go Offline",
+            style: "destructive",
+            onPress: () => {
+              clearTimeout(offlineTimeout);
+              setIsOnline(false);
+              updateDriverStatus(false).catch(() => {});
+            }
+          },
+          {
+            text: "Stay Online",
+            style: "default",
+            onPress: () => {
+              clearTimeout(offlineTimeout);
+              setIdleResetCount(c => c + 1);
+            }
+          }
+        ],
+        { cancelable: false }
+      );
+
+      // Force offline if no response
+      offlineTimeout = setTimeout(() => {
+        setIsOnline(false);
+        updateDriverStatus(false).catch(() => {});
+        Alert.alert("Went Offline", "You were taken offline due to inactivity.");
+      }, RESPONSE_SECONDS * 1000);
+
+    }, IDLE_MINUTES * 60 * 1000);
+
+    return () => {
+      clearTimeout(promptTimeout);
+      clearTimeout(offlineTimeout);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOnline, rideState, idleResetCount]);
 
   // ─── Toggle Online/Offline ───────────────────────────────────────
   const toggleOnline = async () => {
@@ -894,7 +986,12 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         startSensorMonitoring();
         const bgStarted = await startBackgroundLocation();
         if (!bgStarted) {
-          showToast('error', "Background location needed", "Enable 'Allow all the time' in Settings to keep getting ride offers while minimized.");
+          // Rollback: driver can't receive background offers without this
+          // permission, so don't leave them marked online in the backend.
+          setIsOnline(false);
+          try { await updateDriverStatus(false); } catch {}
+          stopSensorMonitoring();
+          showToast('error', "Background location needed", "Enable 'Allow all the time' in Settings to go online and receive ride offers.");
         } else {
           // Arm the killed-app geofence around the current position. If the
           // user force-swipes Spinr, the OS still wakes the process when
@@ -1019,7 +1116,20 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           rider_rating: data.rider_rating ? parseFloat(data.rider_rating) : undefined,
           countdown_seconds: Number.isFinite(countdownNum) ? countdownNum : undefined,
           offer_expires_at: data.offer_expires_at,
+          surge_multiplier: data.surge_multiplier ? parseFloat(data.surge_multiplier) : undefined,
+          incentives: data.incentives_json ? JSON.parse(data.incentives_json) : undefined,
+          total_bonus: data.total_bonus ? parseFloat(data.total_bonus) : undefined,
+          quest_hint: data.quest_hint_json ? JSON.parse(data.quest_hint_json) : undefined,
+          payment_method: data.payment_method || undefined,
         });
+      } else if (data?.type === 'auto_offline') {
+        offerSound.stop();
+        resetRideState();
+        setIsOnline(false);
+        Alert.alert(
+          'You\'re now offline',
+          data.message || 'You were taken offline because you missed several ride offers in a row.',
+        );
       } else if (data?.type === 'ride_cancelled') {
         showToast('error', 'Ride Cancelled', 'The rider has cancelled this ride.');
         resetRideState();

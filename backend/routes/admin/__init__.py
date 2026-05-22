@@ -59,6 +59,7 @@ from .auth import router as auth_router
 from .documents import router as documents_router
 from .drivers import router as drivers_router
 from .faqs import router as faqs_router
+from .incentives import router as incentives_router
 from .legal_documents import router as legal_documents_router
 from .maintenance import router as maintenance_router
 from .messaging import router as messaging_router
@@ -107,6 +108,7 @@ admin_router.include_router(messaging_router, dependencies=[Depends(require_modu
 admin_router.include_router(maintenance_router, dependencies=[Depends(require_module("dashboard"))])
 admin_router.include_router(analytics_router, dependencies=[Depends(require_module("dashboard"))])
 admin_router.include_router(wallet_router, dependencies=[Depends(require_module("earnings"))])
+admin_router.include_router(incentives_router, dependencies=[Depends(require_module("service_areas"))])
 admin_router.include_router(disputes_admin_router, dependencies=[Depends(require_module("disputes"))])
 
 __all__ = ["admin_router", "admin_auth_router"]

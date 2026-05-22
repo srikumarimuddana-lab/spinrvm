@@ -13,6 +13,7 @@ import {
   TripCompletedPanel,
   MapControls,
 } from '../../../components/dashboard';
+import { RideOfferPanel } from '../../../components/panels/RideOfferPanel';
 import { useDriverDashboard } from '../../../hooks/useDriverDashboard';
 import { CarMarker } from '../../../components/CarMarker';
 import { SOSButton } from '@shared/components/SOSButton';
@@ -725,7 +726,28 @@ function DriverDashboard() {
           pulseAnim={pulseAnim}
         />
       )}
-      {rideState === 'ride_offered' && renderRideOfferPanel()}
+      {rideState === 'ride_offered' && incomingRide && (
+        <RideOfferPanel
+          incomingRide={incomingRide as any}
+          countdownSeconds={countdown}
+          maxCountdown={configuredCountdownSeconds || 15}
+          pickupDistanceKm={
+            location?.coords?.latitude != null && incomingRide.pickup_lat != null
+              ? (() => {
+                  const R = 6371;
+                  const toRad = (d: number) => (d * Math.PI) / 180;
+                  const dLat = toRad(incomingRide.pickup_lat - location.coords.latitude);
+                  const dLng = toRad(incomingRide.pickup_lng - location.coords.longitude);
+                  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(location.coords.latitude)) * Math.cos(toRad(incomingRide.pickup_lat)) * Math.sin(dLng / 2) ** 2;
+                  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+                })()
+              : null
+          }
+          isLoading={false}
+          onAccept={() => acceptRide(incomingRide.ride_id)}
+          onDecline={() => declineRide(incomingRide.ride_id)}
+        />
+      )}
       {(rideState === 'navigating_to_pickup' ||
         rideState === 'arrived_at_pickup' ||
         rideState === 'trip_in_progress') && (

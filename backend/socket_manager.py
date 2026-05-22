@@ -41,7 +41,6 @@ WS_MAX_MESSAGES_PER_SECOND_PER_USER = 30
 class ConnectionManager:
     def __init__(self):
         self.active_connections: Dict[str, WebSocket] = {}
-        self.driver_locations: Dict[str, Dict] = {}
         # B-P1-12: per-user inbound msg timestamps. See module-level
         # comment above for the cross-machine caveat.
         self._user_msg_timestamps: Dict[str, List[float]] = {}
@@ -72,11 +71,6 @@ class ConnectionManager:
         user_id = self._user_id_from_key(client_id)
         if user_id is not None:
             self._maybe_drop_user_bucket(user_id)
-        # driver_locations is keyed by raw user_id (without "driver_" prefix).
-        # Remove the entry on disconnect so the dict doesn't grow unbounded as
-        # drivers cycle through online/offline sessions.
-        if client_id.startswith("driver_"):
-            self.driver_locations.pop(user_id, None)
 
     @staticmethod
     def _user_id_from_key(client_id: str) -> Optional[str]:
@@ -183,10 +177,7 @@ class ConnectionManager:
             # and a stale entry would let send_personal_message try to
             # write to a dead handle.
             self.active_connections.pop(key, None)
-            # driver_locations is keyed by raw user_id. Remove on eviction
-            # so the dict doesn't grow unbounded across driver sessions.
-            if client_type == "driver":
-                self.driver_locations.pop(user_id, None)
+
             closed += 1
         if closed:
             logger.info(f"disconnect_user: kicked {closed} local socket(s) for user_id={user_id} reason={reason}")
@@ -384,15 +375,38 @@ class ConnectionManager:
             except Exception as e:
                 logger.warning(f"Failed to send to {key}: {e}")
 
-    def update_driver_location(self, driver_id: str, lat: float, lng: float):
-        self.driver_locations[driver_id] = {
-            "lat": lat,
-            "lng": lng,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
+    async def update_driver_location(self, driver_id: str, lat: float, lng: float):
+        try:
+            from utils.redis_client import redis_set
+        except ImportError:
+            from .utils.redis_client import redis_set  # type: ignore
 
-    def get_driver_location(self, driver_id: str):
-        return self.driver_locations.get(driver_id)
+        import json
+
+        payload = json.dumps(
+            {
+                "lat": lat,
+                "lng": lng,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        await redis_set(f"spinr:driver:location:{driver_id}", payload, ttl=60)
+
+    async def get_driver_location(self, driver_id: str) -> Optional[Dict]:
+        try:
+            from utils.redis_client import redis_get
+        except ImportError:
+            from .utils.redis_client import redis_get  # type: ignore
+
+        import json
+
+        data = await redis_get(f"spinr:driver:location:{driver_id}")
+        if data:
+            try:
+                return json.loads(data)
+            except json.JSONDecodeError:
+                pass
+        return None
 
 
 manager = ConnectionManager()

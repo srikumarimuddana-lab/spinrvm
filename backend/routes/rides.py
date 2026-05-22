@@ -1,4 +1,5 @@
 import asyncio
+import json
 import secrets
 import uuid
 from datetime import datetime, timezone
@@ -638,11 +639,68 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
             last = rider_user.get("last_name") or ""
             rider_display_name = (first + " " + last).strip() or rider_user.get("name") or None
 
+        # ── Enrich: surge, incentives, quest progress ─────────────
+        _surge_mult = float(ride.get("surge_multiplier") or 1.0)
+
+        _incentives: list = []
+        _total_bonus = 0.0
+        try:
+            iq = (
+                db_supabase.supabase.table("ride_incentives")
+                .select("id, name, bonus_amount, incentive_type, bonus_type, conditions")
+                .eq("is_active", True)
+            )
+            sa_id = ride.get("service_area_id")
+            if sa_id:
+                iq = iq.or_(f"service_area_id.is.null,service_area_id.eq.{sa_id}")
+            else:
+                iq = iq.is_("service_area_id", "null")
+            ir = db_supabase.run_sync(iq.execute)
+            vt_id = ride.get("vehicle_type_id")
+            for inc in ir.data or []:
+                if inc.get("vehicle_type_id") and inc["vehicle_type_id"] != vt_id:
+                    continue
+                ba = float(inc.get("bonus_amount") or 0)
+                _incentives.append(
+                    {
+                        "name": inc["name"],
+                        "bonus_amount": ba,
+                        "incentive_type": inc.get("incentive_type", "per_ride"),
+                    }
+                )
+                _total_bonus += ba
+        except Exception as e:
+            logger.warning(f"[DISPATCH] incentive lookup non-fatal: {e}")
+
+        _quest_hint = None
+        try:
+            driver_uid = selected_driver.get("user_id")
+            if driver_uid:
+                qr = db_supabase.run_sync(
+                    db_supabase.supabase.table("quest_progress")
+                    .select("current_value, status, quest:quests(title, target_value, reward_amount)")
+                    .eq("driver_id", driver_uid)
+                    .eq("status", "active")
+                    .limit(1)
+                    .execute
+                )
+                if qr.data:
+                    qp = qr.data[0]
+                    q = qp.get("quest") or {}
+                    tv = float(q.get("target_value") or 1)
+                    cv = float(qp.get("current_value") or 0)
+                    _quest_hint = {
+                        "title": q.get("title", ""),
+                        "current_value": cv,
+                        "target_value": tv,
+                        "progress_pct": round(min(cv / tv, 1.0) * 100, 1) if tv else 0,
+                        "reward_amount": float(q.get("reward_amount") or 0),
+                    }
+        except Exception as e:
+            logger.warning(f"[DISPATCH] quest hint lookup non-fatal: {e}")
+
         # Build the full dispatch payload. Keys MUST match what the driver
-        # app consumes in useDriverDashboard.ts handleWSMessage:
-        # ride_id, pickup_address, dropoff_address, pickup_lat, pickup_lng,
-        # dropoff_lat, dropoff_lng, fare, distance_km, duration_minutes,
-        # rider_name, rider_rating.
+        # app consumes in useDriverDashboard.ts handleWSMessage.
         from datetime import timedelta as _td
 
         _offer_expires_at = (datetime.now(timezone.utc) + _td(seconds=offer_timeout + 15)).isoformat()
@@ -661,13 +719,13 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
             "rider_name": rider_display_name,
             "rider_rating": (rider_user or {}).get("rating"),
             "requires_wav": bool(ride.get("requires_wav")),
-            # Per-offer countdown sourced from current app_settings — driver-app
-            # honors this over its cached config so admin changes take effect
-            # immediately, not on next cold start.
             "countdown_seconds": offer_timeout,
-            # Absolute expiry so the client can validate stale FCM offers
-            # that arrive after the backend TTL has already fired.
             "offer_expires_at": _offer_expires_at,
+            "surge_multiplier": _surge_mult if _surge_mult > 1.0 else None,
+            "incentives": _incentives if _incentives else None,
+            "total_bonus": _total_bonus if _total_bonus > 0 else None,
+            "quest_hint": _quest_hint,
+            "payment_method": ride.get("payment_method"),
         }
 
         # Notify driver via WebSocket (only reaches the driver if they have
@@ -712,6 +770,11 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
                         "rider_rating": str((rider_user or {}).get("rating") or ""),
                         "countdown_seconds": str(offer_timeout),
                         "offer_expires_at": _offer_expires_at,
+                        "surge_multiplier": str(_surge_mult) if _surge_mult > 1.0 else "",
+                        "incentives_json": json.dumps(_incentives) if _incentives else "",
+                        "total_bonus": str(_total_bonus) if _total_bonus > 0 else "",
+                        "quest_hint_json": json.dumps(_quest_hint) if _quest_hint else "",
+                        "payment_method": ride.get("payment_method") or "",
                         "deeplink": "/driver/",
                     },
                     priority="dispatch",
@@ -763,12 +826,30 @@ async def _offer_timeout_handler(
     releases the driver, sets the ride back to `searching`, notifies the
     rider, and re-dispatches.
 
+    Consecutive misses are tracked per driver. When the streak reaches
+    ``auto_offline_miss_threshold`` (app_settings, default 3) the driver
+    is set fully offline instead of released back to the available pool —
+    a sleeping driver stops absorbing offers that just expire.
+
     This mirrors the driver-app's client-side countdown timer but is
     authoritative — it fires even if the device crashes or loses network.
     The 15 s grace period between the driver-app countdown (default 15 s)
     and this handler (default 30 s = 15 + 15) avoids racing the
     client-side decline call.
     """
+    try:
+        from ..utils.driver_presence import (
+            clear_presence,
+            increment_miss_streak,
+            reset_miss_streak,
+        )
+    except ImportError:
+        from utils.driver_presence import (  # type: ignore
+            clear_presence,
+            increment_miss_streak,
+            reset_miss_streak,
+        )
+
     await asyncio.sleep(timeout_seconds)
     try:
         ride = await db.find_one("rides", {"id": ride_id})
@@ -784,12 +865,40 @@ async def _offer_timeout_handler(
             f"didn't respond within {timeout_seconds}s — re-searching"
         )
 
-        # Release the driver back to the available pool.
-        await db.update_one(
-            "drivers",
-            {"id": driver_id},
-            {"$set": {"is_available": True}},
-        )
+        # Track consecutive misses and decide whether to auto-offline.
+        miss_count = await increment_miss_streak(driver_id)
+        try:
+            settings = await get_app_settings()
+            miss_threshold = int(settings.get("auto_offline_miss_threshold", 3))
+        except Exception:
+            miss_threshold = 3
+
+        auto_offline = miss_count >= miss_threshold
+
+        if auto_offline:
+            # Driver has missed N consecutive offers — take them offline.
+            logger.info(
+                f"[DISPATCH] Auto-offline: driver {driver_id} missed "
+                f"{miss_count} consecutive offers (threshold={miss_threshold})"
+            )
+            await db.update_one(
+                "drivers",
+                {"id": driver_id},
+                {"$set": {"is_online": False, "is_available": False}},
+            )
+            await clear_presence(driver_id)
+            await reset_miss_streak(driver_id)
+            # Period 0: driver is fully offline (personal insurance only).
+            await record_period_transition(driver_id, 0)
+        else:
+            # Normal timeout — release driver back to the available pool.
+            await db.update_one(
+                "drivers",
+                {"id": driver_id},
+                {"$set": {"is_available": True}},
+            )
+            # Period 1: online, no ride.
+            await record_period_transition(driver_id, 1)
 
         # Put the ride back in the searching state so it can be
         # re-dispatched or picked up by the next dispatch cycle.
@@ -805,9 +914,6 @@ async def _offer_timeout_handler(
                 }
             },
         )
-        # M-5: SGI insurance period audit — offer timeout releases the
-        # driver from period 2 back to period 1 (online, no ride).
-        await record_period_transition(driver_id, 1)
 
         # Notify rider via WebSocket.
         if rider_id:
@@ -820,18 +926,38 @@ async def _offer_timeout_handler(
                 f"rider_{rider_id}",
             )
 
-        # Notify the driver too — without this the panel just vanishes on
-        # the next reconnect with no explanation, which looked like a bug
-        # to drivers. Lookup is best-effort; a failure here must not block
-        # the rider-side re-dispatch.
+        # Notify the driver. If auto-offlined, send a distinct event so
+        # the app can show an explanation and flip its local state.
         try:
             driver_row = await db_supabase.get_driver_by_id(driver_id)
             driver_user_id = (driver_row or {}).get("user_id")
             if driver_user_id:
-                await manager.send_personal_message(
-                    {"type": "ride_offer_expired", "ride_id": ride_id},
-                    f"driver_{driver_user_id}",
-                )
+                if auto_offline:
+                    await manager.send_personal_message(
+                        {
+                            "type": "auto_offline",
+                            "reason": "missed_offers",
+                            "miss_count": miss_count,
+                            "message": (
+                                "You've been taken offline because you missed "
+                                f"{miss_count} ride offers in a row. "
+                                "Tap 'Go Online' when you're ready."
+                            ),
+                        },
+                        f"driver_{driver_user_id}",
+                    )
+                    await send_push_notification(
+                        driver_user_id,
+                        "You're now offline",
+                        f"You missed {miss_count} ride offers in a row. "
+                        "Tap 'Go Online' when you're ready to drive again.",
+                        data={"type": "auto_offline", "reason": "missed_offers"},
+                    )
+                else:
+                    await manager.send_personal_message(
+                        {"type": "ride_offer_expired", "ride_id": ride_id},
+                        f"driver_{driver_user_id}",
+                    )
         except Exception as e:
             logger.warning(f"[DISPATCH] could not notify driver of offer expiry for ride {ride_id}: {e}")
 

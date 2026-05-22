@@ -1,10 +1,17 @@
 import logging
 import re
+import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel
+
+try:
+    from ...dependencies import get_admin_user, require_module
+except ImportError:
+    from dependencies import get_admin_user, require_module  # type: ignore
 
 try:
     from ... import db_supabase
@@ -73,9 +80,7 @@ async def admin_cleanup_location_history(days: int = Query(30, ge=7, le=1095)):
     deleted_historical = -1
     deleted_idle = -1
     try:
-        await db_supabase.delete_many(
-            "driver_location_history", {"timestamp": {"$lt": cutoff_historical}}
-        )
+        await db_supabase.delete_many("driver_location_history", {"timestamp": {"$lt": cutoff_historical}})
     except Exception as e:
         logger.error(f"Cleanup historical GPS failed: {e}", exc_info=True)
 
@@ -87,9 +92,7 @@ async def admin_cleanup_location_history(days: int = Query(30, ge=7, le=1095)):
     except Exception as e:
         logger.error(f"Cleanup idle GPS failed: {e}", exc_info=True)
 
-    logger.info(
-        "[CLEANUP] Deleted historical + idle GPS points (counts not tracked — direct delete)"
-    )
+    logger.info("[CLEANUP] Deleted historical + idle GPS points (counts not tracked — direct delete)")
     return {
         "deleted_historical": deleted_historical,
         "deleted_idle": deleted_idle,
@@ -214,19 +217,9 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
         rides_completed = sum(1 for r in rides if r.get("status") == "completed")
         rides_cancelled = sum(1 for r in rides if r.get("status") == "cancelled")
         total_earnings = float(
-            sum(
-                Decimal(str(r.get("driver_earnings") or 0))
-                for r in rides
-                if r.get("status") == "completed"
-            )
+            sum(Decimal(str(r.get("driver_earnings") or 0)) for r in rides if r.get("status") == "completed")
         )
-        total_tips = float(
-            sum(
-                Decimal(str(r.get("tip_amount") or 0))
-                for r in rides
-                if r.get("status") == "completed"
-            )
-        )
+        total_tips = float(sum(Decimal(str(r.get("tip_amount") or 0)) for r in rides if r.get("status") == "completed"))
 
         # Determine service area from driver profile
         drv = await db_supabase.get_driver_by_id(driver_id)
@@ -256,23 +249,17 @@ async def admin_rollup_driver_daily(target_date: Optional[str] = None):
 
         # Upsert
         existing = (lambda _r: _r[0] if _r else None)(
-            await db_supabase.get_rows(
-                "driver_daily_stats", {"id": stat_row["id"]}, limit=1
-            )
+            await db_supabase.get_rows("driver_daily_stats", {"id": stat_row["id"]}, limit=1)
         )
         if existing:
-            await db_supabase.update_one(
-                "driver_daily_stats", {"id": stat_row["id"]}, stat_row
-            )
+            await db_supabase.update_one("driver_daily_stats", {"id": stat_row["id"]}, stat_row)
             updated += 1
         else:
             stat_row["created_at"] = datetime.now(timezone.utc).isoformat()
             await db_supabase.insert_one("driver_daily_stats", stat_row)
             created += 1
 
-    logger.info(
-        f"[ROLLUP] driver_daily_stats for {stat_date}: created={created} updated={updated}"
-    )
+    logger.info(f"[ROLLUP] driver_daily_stats for {stat_date}: created={created} updated={updated}")
     return {
         "stat_date": stat_date.isoformat(),
         "drivers_processed": len(all_driver_ids),
@@ -293,6 +280,7 @@ async def get_audit_logs(
     action: Optional[str] = Query(None),
     entity_type: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
+    _admin: dict = Depends(require_module("audit")),
 ):
     """Get audit log entries with optional filters and pagination."""
     filters: Dict[str, Any] = {}
@@ -308,7 +296,32 @@ async def get_audit_logs(
                 {"resource_id": {"$regex": term, "$options": "i"}},
                 {"details": {"$regex": term, "$options": "i"}},
             ]
-    logs = await db_supabase.get_rows(
-        "audit_logs", filters, order="created_at", desc=True, limit=limit, offset=offset
-    )
+    logs = await db_supabase.get_rows("audit_logs", filters, order="created_at", desc=True, limit=limit, offset=offset)
     return logs
+
+
+class PiiRevealRequest(BaseModel):
+    entity_type: str
+    entity_id: str
+
+
+@router.post("/audit/pii-reveal")
+async def admin_log_pii_reveal(
+    body: PiiRevealRequest,
+    admin: dict = Depends(get_admin_user),
+):
+    """Log when an admin reveals PII for a specific entity (PIPEDA audit trail)."""
+    await db_supabase.insert_one(
+        "audit_logs",
+        {
+            "id": str(uuid.uuid4()),
+            "actor_id": admin["id"],
+            "actor_role": admin.get("role"),
+            "action": "pii_revealed",
+            "entity_type": body.entity_type,
+            "entity_id": body.entity_id,
+            "details": {},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    return {"ok": True}

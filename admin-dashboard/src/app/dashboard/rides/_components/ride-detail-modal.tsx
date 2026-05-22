@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { getRideDetails } from "@/lib/api";
+import { getRideDetails, adminCancelRide } from "@/lib/api";
 import { formatCurrency } from "@/lib/utils";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import {
@@ -9,7 +9,7 @@ import {
     DollarSign, Receipt, Ticket, AlertTriangle, Flag, Radio,
     FileWarning, MapPinned, CalendarDays, Hash,
     Gauge, Shield, Users, MapPin, CheckCircle2, XCircle,
-    TrendingUp, CreditCard,
+    TrendingUp, CreditCard, Ban,
 } from "lucide-react";
 import { Sec, FR, MStat, TL, getStatusBadge, fmtTime, isRideLive, computePhaseDistances } from "./ride-ui-helpers";
 import RideInvoice from "./ride-invoice";
@@ -81,6 +81,9 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
     const [loadError, setLoadError] = useState<string | null>(null);
     const [flagTarget, setFlagTarget] = useState<{ type: "rider" | "driver"; name: string } | null>(null);
     const [showComplaint, setShowComplaint] = useState(false);
+    const [showCancelDialog, setShowCancelDialog] = useState(false);
+    const [cancelReason, setCancelReason] = useState("Cancelled by admin");
+    const [cancelling, setCancelling] = useState(false);
     const [selectedPhase, setSelectedPhase] = useState<"pickup" | "actual" | "planned">("actual");
 
     const loadRide = useCallback(async () => {
@@ -653,6 +656,12 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                                 className="flex items-center gap-1.5 text-xs font-semibold text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-900/20 px-3 py-2 rounded-lg border border-amber-200 dark:border-amber-900/30 transition-colors">
                                                 <FileWarning className="h-3.5 w-3.5" /> Raise Complaint
                                             </button>
+                                            {ride.status && !["completed", "cancelled"].includes(ride.status) && (
+                                                <button onClick={() => { setCancelReason("Cancelled by admin"); setShowCancelDialog(true); }}
+                                                    className="flex items-center gap-1.5 text-xs font-semibold text-red-700 hover:bg-red-100 dark:hover:bg-red-900/30 px-3 py-2 rounded-lg border border-red-300 dark:border-red-800 transition-colors ml-auto">
+                                                    <Ban className="h-3.5 w-3.5" /> Force Cancel
+                                                </button>
+                                            )}
                                         </div>
                                     </div>
                                 </Card>
@@ -687,6 +696,52 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                 rideId={ride?.id || ""}
                 onCreated={loadRide}
             />
+
+            <Dialog open={showCancelDialog} onOpenChange={v => !v && setShowCancelDialog(false)}>
+                <DialogContent className="max-w-md">
+                    <DialogTitle>Force Cancel Ride</DialogTitle>
+                    <p className="text-sm text-muted-foreground">
+                        This will immediately cancel the ride and notify the rider and driver. This action cannot be undone.
+                    </p>
+                    <div className="space-y-2 py-2">
+                        <label htmlFor="cancel-reason" className="text-sm font-medium">Reason (shown to rider &amp; driver)</label>
+                        <input
+                            id="cancel-reason"
+                            className="w-full border rounded-lg px-3 py-2 text-sm"
+                            value={cancelReason}
+                            onChange={e => setCancelReason(e.target.value)}
+                            placeholder="Cancelled by admin"
+                        />
+                    </div>
+                    <div className="flex justify-end gap-2 pt-2">
+                        <button
+                            onClick={() => setShowCancelDialog(false)}
+                            className="px-4 py-2 text-sm rounded-lg border hover:bg-muted transition-colors"
+                        >
+                            Back
+                        </button>
+                        <button
+                            disabled={cancelling}
+                            onClick={async () => {
+                                if (!ride?.id) return;
+                                setCancelling(true);
+                                try {
+                                    await adminCancelRide(ride.id, cancelReason.trim() || "Cancelled by admin");
+                                    setShowCancelDialog(false);
+                                    await loadRide();
+                                } catch (err: any) {
+                                    alert(err?.message || "Failed to cancel ride");
+                                } finally {
+                                    setCancelling(false);
+                                }
+                            }}
+                            className="px-4 py-2 text-sm font-semibold rounded-lg bg-red-600 text-white hover:bg-red-700 disabled:opacity-50 transition-colors"
+                        >
+                            {cancelling ? "Cancelling..." : "Confirm Cancel"}
+                        </button>
+                    </div>
+                </DialogContent>
+            </Dialog>
         </>
     );
 }

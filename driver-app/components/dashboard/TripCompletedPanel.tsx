@@ -80,11 +80,24 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
 
   return (
     <View style={styles.completedOverlay}>
-      <LinearGradient colors={[colors.surface, colors.background]} style={[styles.completedPanel, { paddingBottom: Math.max(insets.bottom, 16) + 16 }]}>
+      <View style={styles.dimBg} />
+      <View style={[styles.completedPanel, { paddingBottom: Math.max(insets.bottom, 16) + 16 }]}>
         <View style={styles.completedIcon}>
-          <Ionicons name="checkmark-circle" size={60} color={colors.primary} />
+          <Ionicons name="checkmark-circle" size={56} color="#34C759" />
         </View>
         <Text style={styles.completedTitle} accessibilityRole="header">{t('tripCompleted.title')}</Text>
+
+        {/* Hero earnings */}
+        <View style={styles.earningsHero}>
+          <Text style={styles.earningsHeroLabel}>YOUR EARNINGS</Text>
+          <Text style={styles.earningsHeroAmount} allowFontScaling={false}>
+            ${money(completedRide?.driver_earnings)}
+          </Text>
+          <View style={styles.keepBadge}>
+            <Ionicons name="checkmark-circle" size={12} color="#34C759" />
+            <Text style={styles.keepBadgeText}>You kept 100% — $0 commission</Text>
+          </View>
+        </View>
 
         {/* Fare breakdown */}
         <View style={styles.fareBreakdown}>
@@ -100,13 +113,15 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
             <Text allowFontScaling={false} style={styles.fareItemLabel}>{t('tripCompleted.timeFare')}</Text>
             <Text style={styles.fareItemValue}>${money(completedRide?.time_fare)}</Text>
           </View>
-          <View style={styles.fareDivider} />
-          <View style={styles.fareRow}>
-            <Text allowFontScaling={false} style={styles.fareEarningsLabel}>{t('tripCompleted.yourEarnings')}</Text>
-            <Text style={styles.fareEarningsValue}>
-              ${money(completedRide?.driver_earnings)}
-            </Text>
-          </View>
+          {n(completedRide?.tip_amount) > 0 && (
+            <>
+              <View style={styles.fareDivider} />
+              <View style={styles.fareRow}>
+                <Text allowFontScaling={false} style={styles.fareItemLabel}>{t('tripCompleted.tip')}</Text>
+                <Text style={[styles.fareItemValue, { color: '#34C759' }]}>${money(completedRide?.tip_amount)}</Text>
+              </View>
+            </>
+          )}
         </View>
 
         {/* Trip stats */}
@@ -250,25 +265,68 @@ function createStyles(colors: ThemeColors) {
   return StyleSheet.create({
     completedOverlay: {
       position: 'absolute',
+      top: 0,
       bottom: 0,
       left: 0,
       right: 0,
       justifyContent: 'flex-end',
     },
+    dimBg: {
+      ...StyleSheet.absoluteFillObject as any,
+      backgroundColor: 'rgba(0,0,0,0.3)',
+    },
     completedPanel: {
+      backgroundColor: colors.surface,
       borderTopLeftRadius: 28,
       borderTopRightRadius: 28,
       padding: 20,
       alignItems: 'center',
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: -8 },
+      shadowOpacity: 0.12,
+      shadowRadius: 20,
+      elevation: 20,
     },
     completedIcon: {
-      marginBottom: 16,
+      marginBottom: 10,
     },
     completedTitle: {
-      fontSize: 24,
-      fontWeight: '800',
+      fontSize: 20,
+      fontWeight: '700',
       color: colors.text,
-      marginBottom: 24,
+      marginBottom: 12,
+    },
+    earningsHero: {
+      alignItems: 'center',
+      marginBottom: 16,
+    },
+    earningsHeroLabel: {
+      fontSize: 10,
+      fontWeight: '600',
+      color: colors.textDim,
+      letterSpacing: 0.8,
+    },
+    earningsHeroAmount: {
+      fontSize: 40,
+      fontWeight: '800',
+      color: '#34C759',
+      letterSpacing: -1,
+      marginTop: 2,
+    },
+    keepBadge: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 4,
+      backgroundColor: '#34C75915',
+      paddingHorizontal: 10,
+      paddingVertical: 4,
+      borderRadius: 10,
+      marginTop: 6,
+    },
+    keepBadgeText: {
+      fontSize: 11,
+      fontWeight: '600',
+      color: '#34C759',
     },
     fareBreakdown: {
       width: '100%',
@@ -297,13 +355,13 @@ function createStyles(colors: ThemeColors) {
       marginVertical: 12,
     },
     fareEarningsLabel: {
-      color: colors.primary,
-      fontSize: 16,
+      color: '#34C759',
+      fontSize: 14,
       fontWeight: '700',
     },
     fareEarningsValue: {
-      color: colors.primary,
-      fontSize: 20,
+      color: '#34C759',
+      fontSize: 16,
       fontWeight: '800',
     },
     tripStats: {

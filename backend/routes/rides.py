@@ -3907,13 +3907,13 @@ async def rider_report_lost_item(
         driver = await db_supabase.get_driver_by_id(driver_id)
         if driver and driver.get("user_id"):
             driver_user = await db_supabase.get_user_by_id(driver["user_id"])
-            if driver_user and driver_user.get("fcm_token"):
+            if driver_user:
                 try:
                     from ..features import send_push_notification
                 except ImportError:
                     from features import send_push_notification  # type: ignore
                 await send_push_notification(
-                    driver_user["fcm_token"],
+                    driver_user["id"],
                     "Lost Item Report",
                     f"A rider reported a lost item: {req.item_description}. Please check your vehicle.",
                     {"type": "lost_and_found", "ride_id": ride_id},
@@ -3926,7 +3926,7 @@ async def rider_report_lost_item(
                     },
                 )
     except Exception as e:
-        logger.warning(f"Lost item driver notification failed for ride {ride_id}: {e}")
+        logger.error(f"Lost item driver notification failed for ride {ride_id}: {e}", exc_info=True)
 
     return {"success": True, "item": item}
 

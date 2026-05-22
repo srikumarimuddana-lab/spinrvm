@@ -88,6 +88,18 @@ interface UseDriverDashboardReturn {
   fadeAnim: any;
 }
 
+// Lazy-load Notifee helpers; mirrors the gating in _layout.tsx so the
+// dashboard still mounts in Expo Go / web (where the native module is absent).
+let _dismissRideOfferNotification: (() => Promise<void>) | null = null;
+if (Platform.OS === 'android' || Platform.OS === 'ios') {
+  try {
+    _dismissRideOfferNotification = require('../services/notifeeService').dismissRideOfferNotification;
+  } catch {
+    _dismissRideOfferNotification = null;
+  }
+}
+const PENDING_ACTION_KEY = 'spinr_pending_notifee_action';
+
 export const useDriverDashboard = (): UseDriverDashboardReturn => {
   const { user, driver: driverData, updateDriverStatus, refreshProfile } = useAuthStore();
   const {
@@ -101,11 +113,56 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     fetchEarnings,
     applyDriverConfig,
     earnings,
+    acceptRide: storeAcceptRide,
+    declineRide: storeDeclineRide,
   } = useDriverStore();
 
   // Audio cue for ride offers — recurring tone every ~2.5s until
   // the offer is accepted, declined, or expired (see effect below).
   const offerSound = useRideOfferSound();
+
+  // Consume any Accept/Decline action the user tapped from the Notifee
+  // notification while the app was killed/backgrounded. _layout.tsx
+  // stashed it in AsyncStorage; we replay it here on the next mount /
+  // focus so the backend call actually fires.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+        const raw = await AsyncStorage.getItem(PENDING_ACTION_KEY);
+        if (!raw) return;
+        await AsyncStorage.removeItem(PENDING_ACTION_KEY);
+        if (cancelled) return;
+        const { action, ride_id, ts } = JSON.parse(raw) as {
+          action: 'accept' | 'decline' | 'tap';
+          ride_id: string;
+          ts: number;
+        };
+        // Stale guard — Notifee actions older than 60s are likely from a
+        // ride already resolved on another channel (WS / offer expiry).
+        if (Date.now() - ts > 60_000) return;
+        if (action === 'accept') {
+          await storeAcceptRide(ride_id);
+        } else if (action === 'decline') {
+          await storeDeclineRide(ride_id);
+        }
+      } catch (e) {
+        console.warn('[Notifee] pending action consume failed:', e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [storeAcceptRide, storeDeclineRide]);
+
+  // Dismiss the Notifee ride-offer notification once we're no longer in
+  // the offer state (accepted, declined, expired, or cancelled). Without
+  // this the heads-up banner / lock-screen card would linger after the
+  // panel is gone.
+  useEffect(() => {
+    if (rideState !== 'ride_offered' && _dismissRideOfferNotification) {
+      _dismissRideOfferNotification().catch(() => undefined);
+    }
+  }, [rideState]);
 
   // State
   const [isOnline, setIsOnline] = useState(driverData?.is_online || false);

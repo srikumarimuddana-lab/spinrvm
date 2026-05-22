@@ -190,33 +190,60 @@ async def _send_fcm_push(
     data: dict,
     user_id: str,
 ) -> bool:
-    """Send a push notification via Firebase Admin SDK (native FCM token)."""
+    """Send a push notification via Firebase Admin SDK (native FCM token).
+
+    Dispatch pushes (data["type"] == "new_ride_assignment") are sent
+    Android-data-only so the OS does NOT show its default banner — the
+    driver app's Notifee background handler picks up the data payload
+    and displays a rich heads-up + full-screen-intent notification with
+    Accept/Decline action buttons. Without this branch, drivers see two
+    competing notifications (the OS one and the Notifee one).
+    """
     try:
         from firebase_admin import messaging
     except ImportError:
         logger.warning("push_retry: firebase_admin not available; cannot deliver FCM push")
         return False
 
+    is_dispatch = (data or {}).get("type") == "new_ride_assignment"
+
     try:
+        # Android: data-only for dispatch (Notifee renders). For everything
+        # else, keep the default notification block so the OS handles it.
+        android_cfg = messaging.AndroidConfig(
+            priority="high",
+            notification=None
+            if is_dispatch
+            else messaging.AndroidNotification(
+                channel_id="ride-offers",
+            ),
+        )
         message = messaging.Message(
-            notification=messaging.Notification(title=title, body=body),
+            # Top-level notification only when iOS needs an alert.
+            notification=None if is_dispatch else messaging.Notification(title=title, body=body),
             data={k: str(v) for k, v in (data or {}).items()},
             token=token,
-            android=messaging.AndroidConfig(
-                priority="high",
-                notification=messaging.AndroidNotification(
-                    channel_id="ride-offers",
-                ),
-            ),
+            android=android_cfg,
             apns=messaging.APNSConfig(
                 headers={
                     "apns-priority": "10",
                     "apns-push-type": "alert",
                 },
+                payload=messaging.APNSPayload(
+                    aps=messaging.Aps(
+                        alert=messaging.ApsAlert(title=title, body=body),
+                        sound="ride_offer.caf" if is_dispatch else "default",
+                        category="ride-offer" if is_dispatch else None,
+                        content_available=True,
+                        mutable_content=True,
+                    ),
+                )
+                if is_dispatch
+                else None,
             ),
         )
         response = await asyncio.to_thread(messaging.send, message)
-        logger.info(f"push_retry: FCM send OK for user {user_id!r}: {response}")
+        logger.info(f"push_retry: FCM send OK for user {user_id!r}: {response} (dispatch={is_dispatch})")
         return True
     except Exception:
         logger.error(

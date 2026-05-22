@@ -38,6 +38,26 @@ import {
   setBackgroundMessageHandler,
   onTokenRefresh,
 } from '@shared/services/firebase';
+// Notifee — rich notifications (heads-up + full-screen intent + Accept/Decline
+// action buttons). Lazy-required because the native module isn't linked in
+// Expo Go / web; we treat the import failure the same as Expo Go: no-op.
+let notifee: any = null;
+let parseRideOfferEvent: any = null;
+let displayRideOfferNotification: any = null;
+let dismissRideOfferNotification: any = null;
+let ensureNotifeeReady: any = null;
+if (Platform.OS === 'android' || Platform.OS === 'ios') {
+  try {
+    notifee = require('@notifee/react-native').default;
+    const svc = require('../services/notifeeService');
+    parseRideOfferEvent = svc.parseRideOfferEvent;
+    displayRideOfferNotification = svc.displayRideOfferNotification;
+    dismissRideOfferNotification = svc.dismissRideOfferNotification;
+    ensureNotifeeReady = svc.ensureNotifeeReady;
+  } catch (e) {
+    console.log('[Notifee] native module not available — falling back to expo-notifications only');
+  }
+}
 
 // expo-notifications' push-token APIs were removed from Expo Go in SDK 53,
 // and its import throws on web where notifications don't exist. Lazy-require
@@ -90,9 +110,21 @@ if (Notifications) {
 //    home screen can hydrate the offer panel instantly on cold start
 //    (useDriverDashboard.ts reads PENDING_OFFER_KEY on mount).
 const PENDING_OFFER_KEY = 'spinr_pending_ride_offer';
+const PENDING_ACTION_KEY = 'spinr_pending_notifee_action';
 setBackgroundMessageHandler(async (remoteMessage: any) => {
   const data = remoteMessage?.data || {};
   if (data?.type === 'new_ride_assignment' && data?.ride_id) {
+    const safeParse = <T,>(s: any): T | undefined => {
+      if (!s) return undefined;
+      try { return JSON.parse(s) as T; } catch { return undefined; }
+    };
+    const fare = parseFloat(data.fare || '0');
+    const totalBonus = data.total_bonus ? parseFloat(data.total_bonus) : 0;
+    const surgeMultiplier = data.surge_multiplier ? parseFloat(data.surge_multiplier) : undefined;
+    const incentives = safeParse<any[]>(data.incentives_json);
+
+    // 1. Persist the full offer payload so the in-app panel can hydrate
+    //    instantly on cold start (driver dashboard reads on mount).
     try {
       const AsyncStorage = require('@react-native-async-storage/async-storage').default;
       await AsyncStorage.setItem(
@@ -105,18 +137,74 @@ setBackgroundMessageHandler(async (remoteMessage: any) => {
           pickup_lng: parseFloat(data.pickup_lng || '0'),
           dropoff_lat: parseFloat(data.dropoff_lat || '0'),
           dropoff_lng: parseFloat(data.dropoff_lng || '0'),
-          fare: parseFloat(data.fare || '0'),
+          fare,
           distance_km: data.distance_km ? parseFloat(data.distance_km) : undefined,
           duration_minutes: data.duration_minutes ? parseFloat(data.duration_minutes) : undefined,
           rider_name: data.rider_name || undefined,
           rider_rating: data.rider_rating ? parseFloat(data.rider_rating) : undefined,
+          requires_wav: data.requires_wav === 'true' || data.requires_wav === true,
+          countdown_seconds: data.countdown_seconds ? parseInt(data.countdown_seconds, 10) : undefined,
+          offer_expires_at: data.offer_expires_at,
+          surge_multiplier: surgeMultiplier,
+          incentives,
+          total_bonus: totalBonus || undefined,
+          quest_hint: safeParse(data.quest_hint_json),
+          payment_method: data.payment_method || undefined,
         }),
       );
     } catch (e) {
       console.warn('[Push] Failed to persist background ride offer:', e);
     }
+
+    // 2. Surface the Uber-style heads-up + full-screen-intent notification
+    //    via Notifee. This is what the driver actually sees on the lock
+    //    screen, with Accept/Decline buttons. Suppress the default FCM
+    //    notification block server-side (we send data-only) so Notifee
+    //    is the only thing shown.
+    if (displayRideOfferNotification) {
+      try {
+        await displayRideOfferNotification({
+          ride_id: data.ride_id,
+          pickup_address: data.pickup_address,
+          dropoff_address: data.dropoff_address,
+          fare,
+          total_bonus: totalBonus,
+          distance_km: data.distance_km ? parseFloat(data.distance_km) : undefined,
+          duration_minutes: data.duration_minutes ? parseFloat(data.duration_minutes) : undefined,
+          surge_multiplier: surgeMultiplier,
+          rider_name: data.rider_name,
+          incentives_count: Array.isArray(incentives) ? incentives.length : 0,
+        });
+      } catch (e) {
+        console.warn('[Notifee] displayRideOfferNotification failed:', e);
+      }
+    }
   }
 });
+
+// Notifee background event listener — fires when the user taps Accept/Decline
+// from the lock screen or notification shade while the app is killed. Must be
+// registered at module top level (mirrors the FCM background handler). We
+// stash the action in AsyncStorage so useDriverDashboard.ts can consume it on
+// mount and call accept/decline against the backend.
+if (notifee && parseRideOfferEvent) {
+  notifee.onBackgroundEvent(async (event: any) => {
+    const parsed = parseRideOfferEvent(event);
+    if (!parsed || !parsed.ride_id) return;
+    try {
+      const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+      await AsyncStorage.setItem(
+        PENDING_ACTION_KEY,
+        JSON.stringify({ action: parsed.action, ride_id: parsed.ride_id, ts: Date.now() }),
+      );
+      // Dismiss the notification so the driver doesn't see stale "Accept"
+      // buttons while we open the app.
+      if (dismissRideOfferNotification) await dismissRideOfferNotification();
+    } catch (e) {
+      console.warn('[Notifee] background action persist failed:', e);
+    }
+  });
+}
 
 // DV-9: Route push-notification taps to the correct in-app screen.
 // new_ride_assignment → driver home (offer panel hydrates from AsyncStorage);
@@ -139,6 +227,33 @@ function usePushNotificationRouter() {
       },
     );
     return () => sub?.remove?.();
+  }, [router]);
+
+  // Notifee foreground event listener — fires when the user taps the
+  // Accept/Decline action buttons or the notification body while the app
+  // is in the foreground or backgrounded (but not killed; killed-state
+  // events come through the module-level notifee.onBackgroundEvent above).
+  useEffect(() => {
+    if (!notifee || !parseRideOfferEvent) return;
+    const unsub = notifee.onForegroundEvent(async (event: any) => {
+      const parsed = parseRideOfferEvent(event);
+      if (!parsed || !parsed.ride_id) return;
+      // Always route to the driver home so the offer panel is on screen;
+      // accept/decline execution happens inside the dashboard which polls
+      // the pending-action AsyncStorage key on mount + on focus.
+      try {
+        const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+        await AsyncStorage.setItem(
+          PENDING_ACTION_KEY,
+          JSON.stringify({ action: parsed.action, ride_id: parsed.ride_id, ts: Date.now() }),
+        );
+        if (dismissRideOfferNotification) await dismissRideOfferNotification();
+      } catch (e) {
+        console.warn('[Notifee] foreground action persist failed:', e);
+      }
+      router.push('/driver/' as any);
+    });
+    return () => unsub?.();
   }, [router]);
 
   // Killed-state deep linking — getInitialNotificationResponseAsync() returns
@@ -261,6 +376,14 @@ export default function RootLayout() {
             });
           } catch (e) {
             console.log('[Push] Android channel setup failed:', e);
+          }
+        }
+
+        // Notifee channel + iOS category setup. Drives the rich heads-up
+        // + full-screen-intent ride offer (Uber-style "incoming call" UX).
+        if (ensureNotifeeReady) {
+          try { await ensureNotifeeReady(); } catch (e) {
+            console.log('[Notifee] ensureReady failed:', e);
           }
         }
       } catch (err: any) {

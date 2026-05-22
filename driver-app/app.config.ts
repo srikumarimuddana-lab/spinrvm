@@ -236,6 +236,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
         // versions when rootProject.kotlinVersion isn't yet set at buildscript-eval time.
         // See plugin file comments for the full diagnosis.
         './plugins/withKspVersion',
+        // Declares USE_FULL_SCREEN_INTENT + POST_NOTIFICATIONS + WAKE_LOCK +
+        // VIBRATE + SCHEDULE_EXACT_ALARM so Notifee can wake the screen and
+        // show the ride-offer panel like an incoming call when the app is
+        // backgrounded or killed. See plugins/withNotifeePermissions.js.
+        './plugins/withNotifeePermissions',
         '@logrocket/react-native',
     ],
     experiments: {

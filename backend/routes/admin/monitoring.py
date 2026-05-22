@@ -26,6 +26,7 @@ except ImportError:
     from db_supabase import _rows_from_res, run_sync
     from dependencies import get_admin_user
     from supabase_client import supabase
+    from utils.driver_online import intent_online  # type: ignore
     from utils.driver_presence import PRESENCE_TTL, present_driver_ids  # type: ignore
     from utils.metrics import snapshot as _metrics_snapshot  # type: ignore
     from utils.redis_client import (  # type: ignore

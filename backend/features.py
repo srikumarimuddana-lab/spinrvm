@@ -1235,7 +1235,7 @@ async def send_push_notification(
 
     user = await db.find_one("users", {"id": user_id})
     if not user or not user.get("fcm_token"):
-        logger.info(f"No push token for user {user_id}")
+        logger.warning(f"No FCM token on file for user {user_id} — push dropped")
         return False
 
     token: str = user["fcm_token"]

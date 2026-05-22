@@ -12,6 +12,7 @@ try:
     from ...db_supabase import _rows_from_res, run_sync
     from ...dependencies import get_admin_user
     from ...supabase_client import supabase
+    from ...utils.driver_online import intent_online
     from ...utils.driver_presence import PRESENCE_TTL, present_driver_ids
     from ...utils.metrics import snapshot as _metrics_snapshot
     from ...utils.redis_client import (
@@ -62,7 +63,9 @@ async def fetch_monitoring_drivers() -> List[Dict[str, Any]]:
         lambda: (
             supabase.table("drivers")
             .select(
-                "id, user_id, is_online, is_available, lat, lng, "
+                "id, user_id, is_online, is_available, "
+                "went_online_at, went_offline_at, "
+                "lat, lng, "
                 "vehicle_make, vehicle_model, vehicle_color, license_plate, "
                 "vehicle_type_id, rating, total_rides, service_area_id"
             )
@@ -104,7 +107,10 @@ async def fetch_monitoring_drivers() -> List[Dict[str, Any]]:
         user = users_by_id.get(d.get("user_id", ""), {})
         first = user.get("first_name") or ""
         last = user.get("last_name") or ""
-        intent_online = bool(d.get("is_online"))
+        # Authoritative intent comes from the went_online_at / went_offline_at
+        # timestamps (migration 97); intent_online() falls back to the legacy
+        # is_online flag when both timestamps are NULL (unmigrated rows).
+        driver_intent_online = intent_online(d)
         is_present = d["id"] in present_ids
         result.append(
             {
@@ -114,8 +120,8 @@ async def fetch_monitoring_drivers() -> List[Dict[str, Any]]:
                 "photo_url": user.get("profile_image"),
                 "lat": d.get("lat"),
                 "lng": d.get("lng"),
-                "is_online": intent_online and is_present,
-                "intent_online": intent_online,
+                "is_online": driver_intent_online and is_present,
+                "intent_online": driver_intent_online,
                 "is_present": is_present,
                 "presence_ttl": PRESENCE_TTL,
                 "is_available": bool(d.get("is_available")) and is_present,
@@ -164,12 +170,7 @@ async def fetch_monitoring_rides() -> List[Dict[str, Any]]:
                 .execute()
             )
         ),
-        run_sync(
-            lambda: supabase.table("drivers")
-            .select("id, user_id, lat, lng")
-            .in_("id", driver_ids)
-            .execute()
-        ),
+        run_sync(lambda: supabase.table("drivers").select("id, user_id, lat, lng").in_("id", driver_ids).execute()),
     )
     riders_by_id = {u["id"]: u for u in _rows_from_res(riders_res)}
     drivers_rows = _rows_from_res(drivers_map_res)
@@ -177,10 +178,7 @@ async def fetch_monitoring_rides() -> List[Dict[str, Any]]:
 
     driver_user_ids = [d["user_id"] for d in drivers_rows if d.get("user_id")]
     driver_users_res = await run_sync(
-        lambda: supabase.table("users")
-        .select("id, first_name, last_name, phone")
-        .in_("id", driver_user_ids)
-        .execute()
+        lambda: supabase.table("users").select("id, first_name, last_name, phone").in_("id", driver_user_ids).execute()
     )
     driver_users_by_id = {u["id"]: u for u in _rows_from_res(driver_users_res)}
 
@@ -195,13 +193,11 @@ async def fetch_monitoring_rides() -> List[Dict[str, Any]]:
                 "id": r["id"],
                 "status": r["status"],
                 "rider_id": r.get("rider_id"),
-                "rider_name": f"{rider.get('first_name', '')} {rider.get('last_name', '')}".strip()
-                or "Unknown",
+                "rider_name": f"{rider.get('first_name', '')} {rider.get('last_name', '')}".strip() or "Unknown",
                 "rider_phone": rider.get("phone"),
                 "rider_photo": rider.get("profile_image"),
                 "driver_id": r.get("driver_id"),
-                "driver_name": f"{drv_user.get('first_name', '')} {drv_user.get('last_name', '')}".strip()
-                or None,
+                "driver_name": f"{drv_user.get('first_name', '')} {drv_user.get('last_name', '')}".strip() or None,
                 "driver_phone": drv_user.get("phone"),
                 "pickup_lat": r.get("pickup_lat"),
                 "pickup_lng": r.get("pickup_lng"),
@@ -213,11 +209,7 @@ async def fetch_monitoring_rides() -> List[Dict[str, Any]]:
                 "driver_lng": r.get("driver_current_lng") or drv_row.get("lng"),
                 "total_fare": r.get("total_fare"),
                 "distance_km": r.get("distance_km"),
-                "created_at": (
-                    created.isoformat()
-                    if hasattr(created, "isoformat")
-                    else str(created)
-                ),
+                "created_at": (created.isoformat() if hasattr(created, "isoformat") else str(created)),
                 "is_corporate": bool(r.get("corporate_account_id")),
             }
         )
@@ -273,9 +265,7 @@ async def get_redis_health(
     hits = stats.get("keyspace_hits_total") or 0
     misses = stats.get("keyspace_misses_total") or 0
     total_ops = hits + misses
-    stats["hit_rate_percent"] = (
-        round(hits / total_ops * 100, 2) if total_ops > 0 else None
-    )
+    stats["hit_rate_percent"] = round(hits / total_ops * 100, 2) if total_ops > 0 else None
 
     # Annotate each prefix so the dashboard can label rows without
     # hard-coding the mapping in the frontend. Add new prefixes here
@@ -313,9 +303,7 @@ async def get_redis_health(
 
 
 class FlushPrefixRequest(BaseModel):
-    prefix: str = Field(
-        ..., description="Key prefix ending with ':' — e.g. 'cache:user:'"
-    )
+    prefix: str = Field(..., description="Key prefix ending with ':' — e.g. 'cache:user:'")
     confirm: str = Field(
         ...,
         description="Must be 'FLUSH' to proceed. Prevents accidental one-click wipes.",
@@ -409,9 +397,7 @@ async def get_infrastructure_stats(
 
     loop = _asyncio.get_running_loop()
     executor = getattr(loop, "_default_executor", None)
-    max_workers = (
-        getattr(executor, "_max_workers", None) if executor is not None else None
-    )
+    max_workers = getattr(executor, "_max_workers", None) if executor is not None else None
 
     # DB circuit breaker snapshot
     db_circuit = {
@@ -512,27 +498,17 @@ async def get_dashboard_health(
     # Operational counts — best-effort; query failures don't change overall status
     try:
         active_res = await run_sync(
-            lambda: supabase.table("rides")
-            .select("id", count="exact")
-            .in_("status", ACTIVE_RIDE_STATUSES)
-            .execute()
+            lambda: supabase.table("rides").select("id", count="exact").in_("status", ACTIVE_RIDE_STATUSES).execute()
         )
-        active_rides: Optional[int] = getattr(active_res, "count", None) or len(
-            _rows_from_res(active_res)
-        )
+        active_rides: Optional[int] = getattr(active_res, "count", None) or len(_rows_from_res(active_res))
     except Exception:
         active_rides = None
 
     try:
         online_res = await run_sync(
-            lambda: supabase.table("drivers")
-            .select("id", count="exact")
-            .eq("is_online", True)
-            .execute()
+            lambda: supabase.table("drivers").select("id", count="exact").eq("is_online", True).execute()
         )
-        online_drivers: Optional[int] = getattr(online_res, "count", None) or len(
-            _rows_from_res(online_res)
-        )
+        online_drivers: Optional[int] = getattr(online_res, "count", None) or len(_rows_from_res(online_res))
     except Exception:
         online_drivers = None
 

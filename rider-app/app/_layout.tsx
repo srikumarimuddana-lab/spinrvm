@@ -326,6 +326,21 @@ export default function RootLayout() {
         return;
       }
 
+      // Display a local notification banner — FCM foreground messages are
+      // not shown by the OS automatically; we must present them ourselves.
+      if (Notifications && remoteMessage?.notification?.title) {
+        Notifications.scheduleNotificationAsync({
+          content: {
+            title: remoteMessage.notification.title,
+            body: remoteMessage.notification.body ?? '',
+            data: (remoteMessage.data ?? {}) as Record<string, unknown>,
+            sound: 'default',
+            ...(Platform.OS === 'android' ? { channelId: 'ride-updates' } : {}),
+          },
+          trigger: null,
+        }).catch(() => {});
+      }
+
       const currentRide = useRideStore.getState().currentRide;
       if (currentRide?.id) {
         useRideStore.getState().fetchRide(currentRide.id).catch((e) => console.warn('[Layout] fetchRide on foreground failed:', e?.message ?? e));

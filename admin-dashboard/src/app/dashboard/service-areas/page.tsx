@@ -8,8 +8,8 @@ import {
     AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
     AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { getServiceAreas, createServiceArea, updateServiceArea, deleteServiceArea, getSubscriptionPlans, createSubscriptionPlan, updateSubscriptionPlan, deleteSubscriptionPlan, getDriverSubscriptions, getAreaFees, createAreaFee, updateAreaFee, deleteAreaFee, getVehicleTypes } from "@/lib/api";
-import { Plus, Trash2, Pencil, MapPin, Settings, DollarSign, Car, CreditCard, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, FileText, Clock, ShieldCheck, ShieldAlert, CheckCircle, Image, Plane, Radar } from "lucide-react";
+import { getServiceAreas, createServiceArea, updateServiceArea, deleteServiceArea, getSubscriptionPlans, createSubscriptionPlan, updateSubscriptionPlan, deleteSubscriptionPlan, getDriverSubscriptions, getAreaFees, createAreaFee, updateAreaFee, deleteAreaFee, getVehicleTypes, getIncentives, createIncentive, toggleIncentive, deleteIncentive } from "@/lib/api";
+import { Plus, Trash2, Pencil, MapPin, Settings, DollarSign, Car, CreditCard, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, FileText, Clock, ShieldCheck, ShieldAlert, CheckCircle, Image, Plane, Radar, Gift } from "lucide-react";
 import { useRequireModule } from "@/hooks/useRequireModule";
 
 const GeofenceMap = lazy(() => import("@/components/geofence-map"));
@@ -333,6 +333,7 @@ export default function ServiceAreasPage() {
                         { key: 'fees', label: 'Fees & Taxes', icon: DollarSign },
                         { key: 'subscriptions', label: 'Spinr Pass', icon: CreditCard },
                         { key: 'documents', label: 'Documents', icon: FileText },
+                        { key: 'incentives', label: 'Incentives', icon: Gift },
                         { key: 'subregions', label: 'Airport Zones', icon: Plane },
                       ].map(tab => (
                         <button key={tab.key} onClick={() => setEditTab(tab.key)}
@@ -503,6 +504,11 @@ export default function ServiceAreasPage() {
                           )}
                         </div>
                       )}
+
+                      {/* Incentives Tab */}
+                      {editTab === 'incentives' && (
+                        <IncentivesTab areaId={area.id} areaName={area.name} vehicleTypes={vehicleTypes} />
+                      )}
                     </div>
                   </div>
                 )}
@@ -548,12 +554,20 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
     // surge_multiplier is the factor (1.0 = off, 1.5 = +50%, etc.).
     surge_active: area.surge_active !== undefined ? area.surge_active : !!area.surge_enabled,
     surge_multiplier: area.surge_multiplier ?? 1.0,
+    surge_justification: "",
   });
   const [pendingPolygon, setPendingPolygon] = useState<any>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
+  const surgeValue = parseFloat(String(form.surge_multiplier)) || 1.0;
+  const needsJustification = form.surge_active && surgeValue > 2.5;
+
   const handleSave = async () => {
+    if (needsJustification && !form.surge_justification.trim()) {
+      alert("A written justification is required for surge multipliers above 2.5× (regulatory + reputational risk).");
+      return;
+    }
     setSaving(true);
     // Only stamp surge_source="manual" if the operator actually
     // changed one of the surge fields since load. If they didn't
@@ -574,9 +588,10 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
       min_driver_rating: parseFloat(String(form.min_driver_rating)) || 4.0,
       show_demand_heatmap: form.show_demand_heatmap,
       surge_active: form.surge_active,
-      surge_multiplier: parseFloat(String(form.surge_multiplier)) || 1.0,
+      surge_multiplier: surgeValue,
     };
     if (surgeTouched) updates.surge_source = "manual";
+    if (needsJustification) updates.surge_justification = form.surge_justification.trim();
     if (pendingPolygon) {
       updates.polygon = pendingPolygon;
     }
@@ -652,30 +667,47 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
             <span className="text-amber-600"> Currently on manual override — surge engine will not touch this area until you reset.</span>
           )}
         </p>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
-          <div className="flex items-center gap-2 pt-1">
-            <button type="button" onClick={() => setForm({ ...form, surge_active: !form.surge_active })}>
-              {form.surge_active ? <ToggleRight className="h-6 w-6 text-green-500" /> : <ToggleLeft className="h-6 w-6 text-gray-300" />}
-            </button>
-            <label className="text-xs font-semibold text-gray-500">
-              Surge {form.surge_active ? "ON" : "off"}
-            </label>
-          </div>
-          <div>
-            <label className="block text-xs font-semibold text-gray-500 mb-1">Surge Multiplier</label>
-            <input
-              className="w-full border rounded-lg px-3 py-2 text-sm"
-              type="number"
-              step="0.1"
-              min="1"
-              max="5"
-              value={form.surge_multiplier}
-              onChange={e => setForm({ ...form, surge_multiplier: e.target.value as any })}
-              disabled={!form.surge_active}
-            />
-          </div>
-          <p className="text-[11px] text-gray-400 pb-2">1.0 = no surge · 1.5 = +50% · 2.0 = double</p>
+        <div className="flex items-center gap-2 pt-1">
+          <button type="button" onClick={() => setForm({ ...form, surge_active: !form.surge_active })}>
+            {form.surge_active ? <ToggleRight className="h-6 w-6 text-green-500" /> : <ToggleLeft className="h-6 w-6 text-gray-300" />}
+          </button>
+          <label className="text-xs font-semibold text-gray-500">
+            Surge {form.surge_active ? "ON" : "off"}
+          </label>
         </div>
+        {form.surge_active && (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end mt-3">
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 mb-1">Surge Multiplier</label>
+                <input
+                  className="w-full border rounded-lg px-3 py-2 text-sm"
+                  type="number"
+                  step="0.1"
+                  min="1"
+                  max="10"
+                  value={form.surge_multiplier}
+                  onChange={e => setForm({ ...form, surge_multiplier: e.target.value as any })}
+                />
+              </div>
+              <p className="text-[11px] text-gray-400 pb-2">1.0 = no surge · 1.5 = +50% · 2.0 = double · Auto cap = 2.5×</p>
+            </div>
+            {needsJustification && (
+              <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 space-y-2 mt-3">
+                <p className="text-xs font-semibold text-amber-800">
+                  Surge above 2.5× requires documented justification (regulatory + reputational risk).
+                </p>
+                <textarea
+                  className="w-full border border-amber-300 rounded-lg px-3 py-2 text-sm bg-white"
+                  rows={2}
+                  placeholder="e.g. Major event surge — approved by ops lead @name on 2026-05-21"
+                  value={form.surge_justification}
+                  onChange={e => setForm({ ...form, surge_justification: e.target.value })}
+                />
+              </div>
+            )}
+          </>
+        )}
       </div>
 
       {/* Driver Matching */}
@@ -1564,6 +1596,185 @@ function SpinrPassAreaTab({ area, plans, onToggle, onPlansChanged }: {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </div>
+  );
+}
+
+// --- Incentives Tab ---
+
+const INCENTIVE_TYPES = [
+  { value: 'per_ride', label: 'Per Ride', desc: 'Flat bonus on every ride' },
+  { value: 'peak_hours', label: 'Peak Hours', desc: 'Bonus during busy times' },
+  { value: 'time_limited', label: 'Time Limited', desc: 'Limited-time campaign' },
+  { value: 'min_distance', label: 'Min Distance', desc: 'Bonus for longer rides' },
+  { value: 'area_boost', label: 'Area Boost', desc: 'Boost for this area' },
+];
+
+function IncentivesTab({ areaId, areaName, vehicleTypes }: { areaId: string; areaName: string; vehicleTypes: { id: string; name: string }[] }) {
+  const [incentives, setIncentives] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({
+    name: '', description: '', incentive_type: 'per_ride', bonus_amount: 5,
+    bonus_type: 'flat' as string, vehicle_type_id: '', is_active: true, priority: 0,
+    max_budget: '',
+  });
+  const [saving, setSaving] = useState(false);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const data = await getIncentives(areaId);
+      setIncentives(data || []);
+    } catch (e) { console.error('[incentives] load:', e); }
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, [areaId]);
+
+  const handleCreate = async () => {
+    setSaving(true);
+    try {
+      await createIncentive({
+        ...form,
+        service_area_id: areaId,
+        vehicle_type_id: form.vehicle_type_id || null,
+        bonus_amount: parseFloat(String(form.bonus_amount)) || 0,
+        max_budget: form.max_budget ? parseFloat(form.max_budget) : null,
+      });
+      setShowForm(false);
+      setForm({ name: '', description: '', incentive_type: 'per_ride', bonus_amount: 5, bonus_type: 'flat', vehicle_type_id: '', is_active: true, priority: 0, max_budget: '' });
+      await load();
+    } catch (e) { console.error('[incentives] create:', e); }
+    setSaving(false);
+  };
+
+  const handleToggle = async (id: string) => {
+    try { await toggleIncentive(id); await load(); } catch (e) { console.error('[incentives] toggle:', e); }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm('Delete this incentive?')) return;
+    try { await deleteIncentive(id); await load(); } catch (e) { console.error('[incentives] delete:', e); }
+  };
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h4 className="font-bold text-gray-800">Driver Ride Incentives</h4>
+          <p className="text-sm text-gray-500">Bonuses shown to drivers on the ride offer screen in {areaName}.</p>
+        </div>
+        {!showForm && (
+          <button onClick={() => setShowForm(true)}
+            className="flex items-center gap-2 bg-amber-500 text-white px-4 py-2 rounded-xl text-sm font-semibold hover:bg-amber-600">
+            <Gift className="h-4 w-4" /> Add Incentive
+          </button>
+        )}
+      </div>
+
+      {showForm && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-5 mb-5">
+          <h5 className="font-bold text-amber-900 mb-3 flex items-center gap-2">
+            <Gift className="h-4 w-4" /> New Incentive for {areaName}
+          </h5>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+            <div>
+              <label className="block text-xs font-semibold text-amber-800 mb-1">Name *</label>
+              <input className="w-full border border-amber-200 rounded-lg px-3 py-2 text-sm bg-white"
+                value={form.name} onChange={e => setForm({ ...form, name: e.target.value })}
+                placeholder="e.g. Peak Hour Bonus" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-amber-800 mb-1">Type</label>
+              <select className="w-full border border-amber-200 rounded-lg px-3 py-2 text-sm bg-white"
+                value={form.incentive_type} onChange={e => setForm({ ...form, incentive_type: e.target.value })}>
+                {INCENTIVE_TYPES.map(t => <option key={t.value} value={t.value}>{t.label} — {t.desc}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-amber-800 mb-1">Bonus Amount ($)</label>
+              <input className="w-full border border-amber-200 rounded-lg px-3 py-2 text-sm bg-white"
+                type="number" step="0.50" min="0.50" max="500"
+                value={form.bonus_amount} onChange={e => setForm({ ...form, bonus_amount: parseFloat(e.target.value) || 0 })} />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-amber-800 mb-1">Vehicle Type (optional)</label>
+              <select className="w-full border border-amber-200 rounded-lg px-3 py-2 text-sm bg-white"
+                value={form.vehicle_type_id} onChange={e => setForm({ ...form, vehicle_type_id: e.target.value })}>
+                <option value="">All vehicle types</option>
+                {vehicleTypes.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-amber-800 mb-1">Description</label>
+              <input className="w-full border border-amber-200 rounded-lg px-3 py-2 text-sm bg-white"
+                value={form.description} onChange={e => setForm({ ...form, description: e.target.value })}
+                placeholder="Shown to drivers on ride offer" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-amber-800 mb-1">Budget Cap ($ optional)</label>
+              <input className="w-full border border-amber-200 rounded-lg px-3 py-2 text-sm bg-white"
+                type="number" step="100" min="0"
+                value={form.max_budget} onChange={e => setForm({ ...form, max_budget: e.target.value })}
+                placeholder="Leave empty for unlimited" />
+            </div>
+          </div>
+          <div className="flex gap-3">
+            <button onClick={handleCreate} disabled={saving || !form.name}
+              className="bg-amber-600 text-white px-5 py-2 rounded-lg text-sm font-semibold hover:bg-amber-700 disabled:opacity-50">
+              {saving ? 'Creating...' : 'Create Incentive'}
+            </button>
+            <button onClick={() => setShowForm(false)} className="text-gray-500 px-4 py-2 rounded-lg text-sm hover:bg-gray-100">Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {loading ? (
+        <div className="text-center py-8 text-gray-400">Loading incentives...</div>
+      ) : incentives.length === 0 ? (
+        <div className="text-center py-8 text-gray-400">
+          <Gift className="h-8 w-8 mx-auto mb-2 opacity-40" />
+          <p className="font-medium">No incentives configured</p>
+          <p className="text-sm">Add incentives to attract drivers to accept rides in this area.</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {incentives.map(inc => {
+            const typeInfo = INCENTIVE_TYPES.find(t => t.value === inc.incentive_type);
+            const vtName = inc.vehicle_type_id
+              ? vehicleTypes.find((v: any) => v.id === inc.vehicle_type_id)?.name || 'Specific vehicle'
+              : 'All vehicles';
+            return (
+              <div key={inc.id} className={`flex items-center gap-4 p-4 rounded-xl border ${inc.is_active ? 'bg-white border-amber-200' : 'bg-gray-50 border-gray-200 opacity-60'}`}>
+                <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${inc.is_active ? 'bg-amber-100' : 'bg-gray-200'}`}>
+                  <Gift className={`h-5 w-5 ${inc.is_active ? 'text-amber-600' : 'text-gray-400'}`} />
+                </div>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-gray-900">{inc.name}</span>
+                    <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-xs font-bold rounded-md">${parseFloat(inc.bonus_amount).toFixed(2)}</span>
+                    <span className="px-2 py-0.5 bg-gray-100 text-gray-600 text-xs font-semibold rounded-md">{typeInfo?.label || inc.incentive_type}</span>
+                  </div>
+                  <p className="text-sm text-gray-500">{vtName}{inc.description ? ` · ${inc.description}` : ''}</p>
+                  {inc.max_budget && (
+                    <p className="text-xs text-gray-400 mt-1">Budget: ${parseFloat(inc.budget_used || 0).toFixed(0)} / ${parseFloat(inc.max_budget).toFixed(0)}</p>
+                  )}
+                </div>
+                <button onClick={() => handleToggle(inc.id)}
+                  className={`p-2 rounded-lg ${inc.is_active ? 'text-green-600 hover:bg-green-50' : 'text-gray-400 hover:bg-gray-100'}`}
+                  title={inc.is_active ? 'Deactivate' : 'Activate'}>
+                  {inc.is_active ? <ToggleRight className="h-5 w-5" /> : <ToggleLeft className="h-5 w-5" />}
+                </button>
+                <button onClick={() => handleDelete(inc.id)}
+                  className="p-2 rounded-lg text-red-400 hover:bg-red-50 hover:text-red-600" title="Delete">
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

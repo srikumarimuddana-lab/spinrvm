@@ -30,7 +30,7 @@ try:
     from ..services.fare_service import recalculate_fare_for_distance
     from ..socket_manager import manager
     from ..utils.datetime_utils import parse_iso_utc
-    from ..utils.driver_presence import clear_presence, mark_present, present_driver_ids
+    from ..utils.driver_presence import clear_presence, mark_present, present_driver_ids, reset_miss_streak
     from ..utils.error_handling import (
         AccountDisabledException,
         ErrorCode,
@@ -53,7 +53,7 @@ except ImportError:
     from services.fare_service import recalculate_fare_for_distance
     from socket_manager import manager
     from utils.datetime_utils import parse_iso_utc
-    from utils.driver_presence import clear_presence, mark_present, present_driver_ids
+    from utils.driver_presence import clear_presence, mark_present, present_driver_ids, reset_miss_streak
     from utils.error_handling import (
         AccountDisabledException,
         ErrorCode,
@@ -2480,6 +2480,8 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
         f"post_status={ride.get('status') if ride else 'ROW_GONE'}"
     )
 
+    await reset_miss_streak(driver["id"])
+
     # Capture the pickup-leg ESTIMATE shown to the rider at the moment of
     # acceptance. This is the only piece of ride_metrics with no other home —
     # everything else is either already on the row (planned/actual trip
@@ -2575,6 +2577,8 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
         # M-5: SGI insurance period audit — decline releases the driver from
         # period 2 back to period 1 only when the decline actually took effect.
         await record_period_transition(driver["id"], 1)
+
+    await reset_miss_streak(driver["id"])
 
     # Record the decline in audit_logs so daily stats can count it
     try:
@@ -3019,7 +3023,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         _fl_settings = await _gas()
         _fare_lock = (_fl_settings or {}).get("fare_lock_enabled", False)
     except Exception:
-        pass
+        logger.debug("fare_lock_enabled check failed, defaulting to False", exc_info=True)
 
     if _fare_lock:
         update_fields["distance_km"] = actual_distance_km
@@ -4137,6 +4141,7 @@ async def update_driver_status(
     # from the pool without waiting for the 90 s TTL to expire.
     if is_online:
         await mark_present(driver_id)
+        await reset_miss_streak(driver_id)
     else:
         await clear_presence(driver_id)
 

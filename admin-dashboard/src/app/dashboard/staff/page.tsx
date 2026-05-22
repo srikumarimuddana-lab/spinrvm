@@ -30,13 +30,14 @@ const ALL_MODULES = [
   { key: "documents", label: "Documents" },
   { key: "heatmap", label: "Heat Map" },
   { key: "staff", label: "Staff Management" },
+  { key: "audit", label: "Audit Logs" },
 ];
 
 const ROLE_PRESETS: Record<string, string[]> = {
   super_admin: ALL_MODULES.map((m) => m.key),
   operations: ["dashboard", "rides", "drivers", "surge", "service_areas", "vehicle_types", "heatmap"],
   support: ["dashboard", "support", "disputes", "notifications", "users"],
-  finance: ["dashboard", "earnings", "promotions", "corporate_accounts", "pricing"],
+  finance: ["dashboard", "earnings", "promotions", "corporate_accounts", "pricing", "audit"],
 };
 
 const ROLE_COLORS: Record<string, string> = {

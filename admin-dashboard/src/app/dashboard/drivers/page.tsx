@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
-import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, getDriverPayoutsSummary, retryPayout, refreshDriverStripeKyc, revealDriverSin, type DriverLiveStats, type DriverPayoutSummary } from "@/lib/api";
+import { getDriverStats, getDrivers, getDriverDocuments, reviewDocument, updateDriver, getServiceAreas, getVehicleTypes, getFareConfigs, exportDrivers, getDriverRides, getDriverLiveStats, getDriverPayoutsSummary, retryPayout, refreshDriverStripeKyc, revealDriverSin, logPiiReveal, type DriverLiveStats, type DriverPayoutSummary } from "@/lib/api";
 import { Pagination } from "@/components/ui/pagination";
 import { exportToCsv } from "@/lib/export-csv";
 import { formatCurrency } from "@/lib/utils";
@@ -13,7 +13,8 @@ import { Sheet, SheetContent, SheetTitle, SheetDescription } from "@/components/
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Search, Users, Wifi, ShieldCheck, ShieldAlert, Shield, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, ArrowUpDown, ArrowUp, ArrowDown, Ban, Pause, Maximize2, RefreshCw } from "lucide-react";
+import { Search, Users, Wifi, ShieldCheck, ShieldAlert, Shield, Download, X, Star, Car, MapPin, CreditCard, Clock, DollarSign, CheckCircle, XCircle, FileText, Phone, Mail, CalendarRange, ExternalLink, Copy, AlertTriangle, ZoomIn, Image, Pencil, Save, Loader2, Eye, EyeOff, ArrowUpDown, ArrowUp, ArrowDown, Ban, Pause, Maximize2, RefreshCw } from "lucide-react";
+import { maskEmail, maskPhone, maskPlate } from "@/lib/pii";
 import { DocumentReviewer } from "./_components/document-reviewer";
 import DriverStatsCards from "./_components/driver-stats-cards";
 import DriverCharts from "./_components/driver-charts";
@@ -76,6 +77,7 @@ export default function DriversPage() {
     const [hasNextPage, setHasNextPage] = useState(false);
     const reqIdRef = useRef(0);
     const [search, setSearch] = useState("");
+    const [showPii, setShowPii] = useState(false);
     const [statusFilter, setStatusFilter] = useState("all");
     const [sortKey, setSortKey] = useState<string>("created_at");
     const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
@@ -464,6 +466,7 @@ export default function DriversPage() {
                         <Input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="h-9 w-[140px] text-xs" aria-label="Filter to date" />
                     </div>
                     {(serviceAreaId || vehicleTypeFilter || startDate || endDate) && <Button variant="ghost" size="sm" onClick={() => { setServiceAreaId(""); setVehicleTypeFilter(""); setStartDate(""); setEndDate(""); }}><X className="h-3.5 w-3.5" /> Clear</Button>}
+                    <Button variant="outline" size="sm" onClick={() => { const next = !showPii; setShowPii(next); if (next) logPiiReveal("drivers", "page_toggle").catch(() => {}); }}>{showPii ? <EyeOff className="h-4 w-4 mr-1" /> : <Eye className="h-4 w-4 mr-1" />}{showPii ? "Hide PII" : "Show PII"}</Button>
                     <Button variant="outline" size="sm" onClick={handleExport} disabled={filtered.length === 0}><Download className="h-4 w-4" /> Export</Button>
                 </div>
             </div>
@@ -533,8 +536,8 @@ export default function DriversPage() {
                                                 </div>
                                                 <div className="flex-1 min-w-0">
                                                     <p className="text-sm font-semibold truncate">{driver.first_name} {driver.last_name}</p>
-                                                    {driver.email && <p className="text-[11px] text-muted-foreground truncate">{driver.email}</p>}
-                                                    {driver.phone && <p className="text-[11px] text-muted-foreground flex items-center gap-1 mt-0.5"><Phone className="h-2.5 w-2.5" /> {driver.phone}</p>}
+                                                    {driver.email && <p className="text-[11px] text-muted-foreground truncate">{showPii ? driver.email : maskEmail(driver.email)}</p>}
+                                                    {driver.phone && <p className="text-[11px] text-muted-foreground flex items-center gap-1 mt-0.5"><Phone className="h-2.5 w-2.5" /> {showPii ? driver.phone : maskPhone(driver.phone)}</p>}
                                                 </div>
                                             </div>
                                         </TableCell>
@@ -573,7 +576,7 @@ export default function DriversPage() {
                                                     <Car className="h-3.5 w-3.5" />
                                                     <span className="truncate max-w-[120px]">{[driver.vehicle_color, driver.vehicle_make, driver.vehicle_model].filter(Boolean).join(" ") || "No vehicle"}</span>
                                                 </div>
-                                                {driver.license_plate ? <span className="font-mono font-bold text-foreground/80 tracking-wider bg-muted px-1.5 py-0.5 rounded text-[10px] border shadow-sm self-start">{driver.license_plate}</span> : <span className="text-[10px] text-muted-foreground/60 italic">No plate</span>}
+                                                {driver.license_plate ? <span className="font-mono font-bold text-foreground/80 tracking-wider bg-muted px-1.5 py-0.5 rounded text-[10px] border shadow-sm self-start">{showPii ? driver.license_plate : maskPlate(driver.license_plate)}</span> : <span className="text-[10px] text-muted-foreground/60 italic">No plate</span>}
                                             </div>
                                         </TableCell>
                                         <TableCell className="text-center">
@@ -629,9 +632,9 @@ export default function DriversPage() {
                                             <div className="flex items-center gap-2 mt-1 flex-wrap">
                                                 <button onClick={() => navigator.clipboard.writeText(selected.id)} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition font-mono bg-muted/50 px-2 py-0.5 rounded" title="Copy driver UUID">{selected.id?.slice(0, 12)}…<Copy className="h-3 w-3" /></button>
                                                 {selected.email && (
-                                                    <button onClick={() => navigator.clipboard.writeText(selected.email)} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition px-2 py-0.5 rounded hover:bg-muted/50" title={`Copy email: ${selected.email}`}>
+                                                    <button onClick={() => navigator.clipboard.writeText(selected.email)} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition px-2 py-0.5 rounded hover:bg-muted/50" title={showPii ? `Copy email: ${selected.email}` : "Reveal PII to copy"}>
                                                         <Mail className="h-3 w-3" />
-                                                        <span className="truncate max-w-[220px]">{selected.email}</span>
+                                                        <span className="truncate max-w-[220px]">{showPii ? selected.email : maskEmail(selected.email)}</span>
                                                     </button>
                                                 )}
                                             </div>
@@ -750,8 +753,8 @@ export default function DriversPage() {
                                             </div>
                                         ) : (
                                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                                                <CopyableField icon={Mail} label="Email" value={selected.email} />
-                                                <CopyableField icon={Phone} label="Phone" value={selected.phone} />
+                                                <CopyableField icon={Mail} label="Email" value={showPii ? selected.email : maskEmail(selected.email)} />
+                                                <CopyableField icon={Phone} label="Phone" value={showPii ? selected.phone : maskPhone(selected.phone)} />
                                                 <DetailField icon={MapPin} label="City" value={selected.city || "\u2014"} />
                                                 <DetailField icon={MapPin} label="Service Area" value={serviceAreas.find(a => a.id === selected.service_area_id)?.name || selected.service_area_id?.slice(0, 8) || "Not assigned"} />
                                             </div>
@@ -824,7 +827,7 @@ export default function DriversPage() {
                                                     <DetailField icon={Car} label="Make" value={selected.vehicle_make || "\u2014"} />
                                                     <DetailField icon={Car} label="Model" value={selected.vehicle_model || "\u2014"} />
                                                     <DetailField icon={Car} label="Color" value={selected.vehicle_color || "\u2014"} />
-                                                    <DetailField icon={FileText} label="License Plate" value={selected.license_plate || "\u2014"} mono />
+                                                    <DetailField icon={FileText} label="License Plate" value={showPii ? (selected.license_plate || "\u2014") : maskPlate(selected.license_plate)} mono />
                                                 </div>
                                                 <div className="mt-2.5">
                                                     <DetailField icon={FileText} label="VIN" value={selected.vehicle_vin || "\u2014"} mono />

@@ -126,8 +126,25 @@ class _WSPubSub:
         """
         if not self.active:
             return False
+
+        # Sequence and buffer for reconnect replays (2 round-trips:
+        # one INCR to get the seq, then a 3-op pipeline for the outbox).
+        seq_message: Any = message
         try:
-            body = json.dumps({"kind": "unicast", "client_id": client_id, "message": message})
+            seq = await self._redis.incr(f"spinr:ws:seq:{client_id}")
+            seq_message = {"seq": seq, "data": message}
+            outbox_key = f"spinr:ws:outbox:{client_id}"
+            pipe = self._redis.pipeline(transaction=False)
+            pipe.rpush(outbox_key, json.dumps(seq_message))
+            pipe.ltrim(outbox_key, -50, -1)
+            pipe.expire(outbox_key, 300)
+            await pipe.execute()
+        except Exception as e:
+            logger.error(f"WS pub/sub: outbox sequence failed for {client_id}: {e}")
+            seq_message = message
+
+        try:
+            body = json.dumps({"kind": "unicast", "client_id": client_id, "message": seq_message})
         except (TypeError, ValueError) as e:
             # Non-JSON-serialisable payloads would cause every message
             # to fail silently if we swallowed this; log loudly.
@@ -139,6 +156,17 @@ class _WSPubSub:
         except Exception as e:
             logger.error(f"WS pub/sub: publish failed, falling back to local delivery: {e}", exc_info=True)
             return False
+
+    async def get_outbox(self, client_id: str) -> list:
+        """Return all buffered outbox messages for a client (up to 50)."""
+        if not self.active:
+            return []
+        try:
+            raw = await self._redis.lrange(f"spinr:ws:outbox:{client_id}", 0, -1)
+            return [json.loads(m) for m in raw]
+        except Exception as e:
+            logger.warning(f"WS pub/sub: get_outbox({client_id}) failed: {e}")
+            return []
 
     async def publish_broadcast(self, prefix: str, message: dict) -> bool:
         """Publish a prefix-broadcast to every VM.

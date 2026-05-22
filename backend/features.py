@@ -1259,6 +1259,18 @@ async def send_push_notification(
             notification=messaging.Notification(title=title, body=body),
             data=data or {},
             token=token,
+            android=messaging.AndroidConfig(
+                priority="high",
+                notification=messaging.AndroidNotification(
+                    channel_id="ride-offers",
+                ),
+            ),
+            apns=messaging.APNSConfig(
+                headers={
+                    "apns-priority": "10",
+                    "apns-push-type": "alert",
+                },
+            ),
         )
         response = await asyncio.to_thread(messaging.send, message)
         logger.info(f"Push notification sent to {user_id}: {response}")

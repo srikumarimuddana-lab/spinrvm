@@ -224,7 +224,11 @@ export function useRiderSocket() {
 
     ws.onmessage = (event) => {
       try {
-        const data = JSON.parse(event.data);
+        let data = JSON.parse(event.data);
+        // Unwrap sequenced envelope from ws_pubsub ({"seq": N, "data": {...}})
+        if (data && typeof data === 'object' && 'seq' in data && 'data' in data) {
+          data = data.data;
+        }
         handleMessage(data);
       } catch { /* malformed JSON — ignore */ }
     };

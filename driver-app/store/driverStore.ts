@@ -265,6 +265,17 @@ interface IncomingRide {
     // takes effect on the very next offer, not the next cold start.
     countdown_seconds?: number;
     offer_expires_at?: string;
+    surge_multiplier?: number;
+    incentives?: Array<{ name: string; bonus_amount: number; incentive_type: string }>;
+    total_bonus?: number;
+    quest_hint?: {
+        title: string;
+        current_value: number;
+        target_value: number;
+        progress_pct: number;
+        reward_amount: number;
+    } | null;
+    payment_method?: string;
 }
 
 interface DriverState {

@@ -154,18 +154,23 @@ export default function DriverMap({ drivers, serviceAreas = [], selectedArea = "
                     size: 14,
                 });
 
+                const esc = (s: unknown): string => {
+                    const t = String(s ?? "");
+                    return t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+                            .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+                };
                 const rating = driver.rating?.toFixed(1) || "5.0";
                 const status = driver.is_online
                     ? '<span style="color:#10b981;font-weight:600">● Online</span>'
                     : '<span style="color:#71717a;font-weight:600">● Offline</span>';
                 const popupHtml = `<div style="min-width:180px;font-family:system-ui;font-size:13px;line-height:1.5">
-                    <strong style="font-size:14px">${driver.name || "Unknown"}</strong><br/>
+                    <strong style="font-size:14px">${esc(driver.name) || "Unknown"}</strong><br/>
                     ${status}<br/>
-                    <span style="color:#888">📱</span> ${driver.phone || "—"}<br/>
-                    <span style="color:#888">🚗</span> ${driver.vehicle_color || ""} ${driver.vehicle_make || ""} ${driver.vehicle_model || ""}<br/>
-                    <span style="color:#888">🔢</span> ${driver.license_plate || "—"}<br/>
-                    <span style="color:#f59e0b">★</span> ${rating}
-                    <span style="margin-left:8px;color:#888">${driver.total_rides || 0} rides</span>
+                    <span style="color:#888">📱</span> ${esc(driver.phone) || "—"}<br/>
+                    <span style="color:#888">🚗</span> ${esc(driver.vehicle_color)} ${esc(driver.vehicle_make)} ${esc(driver.vehicle_model)}<br/>
+                    <span style="color:#888">🔢</span> ${esc(driver.license_plate) || "—"}<br/>
+                    <span style="color:#f59e0b">★</span> ${esc(rating)}
+                    <span style="margin-left:8px;color:#888">${esc(driver.total_rides) || 0} rides</span>
                 </div>`;
 
                 const popup = new maplibregl.Popup({ closeButton: false, offset: 8 }).setHTML(popupHtml);

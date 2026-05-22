@@ -41,10 +41,11 @@ export interface WSNearbyDrivers {
 
 export interface WSChatMessage {
   type: 'chat_message';
+  id: string;
   ride_id: string;
-  sender_id: string;
-  message: string;
-  sent_at: string;
+  text: string;
+  sender: 'rider' | 'driver';
+  timestamp: string;
 }
 
 export interface WSPing {

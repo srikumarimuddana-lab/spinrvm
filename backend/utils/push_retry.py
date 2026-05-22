@@ -6,25 +6,24 @@ alert.  A background loop picks up unsent rows every 30 seconds, attempts
 delivery, and applies exponential back-off before giving up after
 _MAX_ATTEMPTS failures.
 """
+
 import asyncio
 from datetime import datetime, timedelta, timezone
 
 from loguru import logger
 
 try:
-    from .. import db_supabase
     from ..db_supabase import run_sync
     from ..features import _is_expo_token, _send_expo_push
     from ..supabase_client import supabase
 except ImportError:
-    import db_supabase  # type: ignore
     from db_supabase import run_sync  # type: ignore
     from features import _is_expo_token, _send_expo_push  # type: ignore
     from supabase_client import supabase  # type: ignore
 
-_LOOP_INTERVAL = 30       # seconds between ticks
-_MAX_ATTEMPTS = 5         # give up after this many failures
-_BACKOFF_BASE = 60        # seconds; doubled for each subsequent attempt
+_LOOP_INTERVAL = 30  # seconds between ticks
+_MAX_ATTEMPTS = 5  # give up after this many failures
+_BACKOFF_BASE = 60  # seconds; doubled for each subsequent attempt
 
 
 async def enqueue_push(
@@ -41,21 +40,21 @@ async def enqueue_push(
     """
     try:
         await run_sync(
-            lambda: supabase.table("push_retry_queue")
-            .insert(
-                {
-                    "user_id": user_id,
-                    "title": title,
-                    "body": body,
-                    "data": data or {},
-                    "priority": priority,
-                }
+            lambda: (
+                supabase.table("push_retry_queue")
+                .insert(
+                    {
+                        "user_id": user_id,
+                        "title": title,
+                        "body": body,
+                        "data": data or {},
+                        "priority": priority,
+                    }
+                )
+                .execute()
             )
-            .execute()
         )
-        logger.info(
-            f"push_retry: enqueued {priority} push for user {user_id!r}"
-        )
+        logger.info(f"push_retry: enqueued {priority} push for user {user_id!r}")
     except Exception:
         logger.error(
             f"push_retry: failed to enqueue push for user {user_id!r}",
@@ -79,13 +78,15 @@ async def _tick() -> None:
 
     try:
         resp = await run_sync(
-            lambda: supabase.table("push_retry_queue")
-            .select("*, users!inner(fcm_token)")
-            .is_("sent_at", "null")
-            .lte("next_attempt_at", now_iso)
-            .lte("attempts", _MAX_ATTEMPTS - 1)
-            .limit(50)
-            .execute()
+            lambda: (
+                supabase.table("push_retry_queue")
+                .select("*, users!inner(fcm_token)")
+                .is_("sent_at", "null")
+                .lte("next_attempt_at", now_iso)
+                .lte("attempts", _MAX_ATTEMPTS - 1)
+                .limit(50)
+                .execute()
+            )
         )
     except Exception:
         logger.error("push_retry: failed to query pending rows", exc_info=True)
@@ -115,10 +116,7 @@ async def _process_row(row: dict) -> None:
     token: str | None = user_data.get("fcm_token") if isinstance(user_data, dict) else None
 
     if not token:
-        logger.info(
-            f"push_retry: no FCM token for user {user_id!r}, "
-            f"dropping row {row_id}"
-        )
+        logger.info(f"push_retry: no FCM token for user {user_id!r}, dropping row {row_id}")
         await _delete_row(row_id)
         return
 
@@ -130,8 +128,7 @@ async def _process_row(row: dict) -> None:
             success = await _send_fcm_push(token, title, body, data, user_id)
     except Exception:
         logger.error(
-            f"push_retry: unexpected error sending to user {user_id!r} "
-            f"(row {row_id})",
+            f"push_retry: unexpected error sending to user {user_id!r} (row {row_id})",
             exc_info=True,
         )
         success = False
@@ -141,14 +138,10 @@ async def _process_row(row: dict) -> None:
     if success:
         try:
             await run_sync(
-                lambda: supabase.table("push_retry_queue")
-                .update({"sent_at": now_iso})
-                .eq("id", row_id)
-                .execute()
+                lambda: supabase.table("push_retry_queue").update({"sent_at": now_iso}).eq("id", row_id).execute()
             )
             logger.info(
-                f"push_retry: delivered notification to user {user_id!r} "
-                f"(row {row_id}, attempt {attempts + 1})"
+                f"push_retry: delivered notification to user {user_id!r} (row {row_id}, attempt {attempts + 1})"
             )
         except Exception:
             logger.error(
@@ -161,32 +154,28 @@ async def _process_row(row: dict) -> None:
     new_attempts = attempts + 1
     if new_attempts >= _MAX_ATTEMPTS:
         logger.error(
-            f"push_retry: giving up on row {row_id} for user {user_id!r} "
-            f"after {new_attempts} attempt(s); dropping"
+            f"push_retry: giving up on row {row_id} for user {user_id!r} after {new_attempts} attempt(s); dropping"
         )
         await _delete_row(row_id)
         return
 
-    backoff_seconds = _BACKOFF_BASE * (2 ** attempts)
-    next_attempt_at = (
-        datetime.now(timezone.utc) + timedelta(seconds=backoff_seconds)
-    ).isoformat()
+    backoff_seconds = _BACKOFF_BASE * (2**attempts)
+    next_attempt_at = (datetime.now(timezone.utc) + timedelta(seconds=backoff_seconds)).isoformat()
     try:
         await run_sync(
-            lambda: supabase.table("push_retry_queue")
-            .update(
-                {
-                    "attempts": new_attempts,
-                    "next_attempt_at": next_attempt_at,
-                }
+            lambda: (
+                supabase.table("push_retry_queue")
+                .update(
+                    {
+                        "attempts": new_attempts,
+                        "next_attempt_at": next_attempt_at,
+                    }
+                )
+                .eq("id", row_id)
+                .execute()
             )
-            .eq("id", row_id)
-            .execute()
         )
-        logger.warning(
-            f"push_retry: attempt {new_attempts} failed for row {row_id}; "
-            f"next retry in {backoff_seconds}s"
-        )
+        logger.warning(f"push_retry: attempt {new_attempts} failed for row {row_id}; next retry in {backoff_seconds}s")
     except Exception:
         logger.error(
             f"push_retry: failed to update back-off for row {row_id}",
@@ -205,9 +194,7 @@ async def _send_fcm_push(
     try:
         from firebase_admin import messaging
     except ImportError:
-        logger.warning(
-            "push_retry: firebase_admin not available; cannot deliver FCM push"
-        )
+        logger.warning("push_retry: firebase_admin not available; cannot deliver FCM push")
         return False
 
     try:
@@ -215,11 +202,21 @@ async def _send_fcm_push(
             notification=messaging.Notification(title=title, body=body),
             data={k: str(v) for k, v in (data or {}).items()},
             token=token,
+            android=messaging.AndroidConfig(
+                priority="high",
+                notification=messaging.AndroidNotification(
+                    channel_id="ride-offers",
+                ),
+            ),
+            apns=messaging.APNSConfig(
+                headers={
+                    "apns-priority": "10",
+                    "apns-push-type": "alert",
+                },
+            ),
         )
         response = await asyncio.to_thread(messaging.send, message)
-        logger.info(
-            f"push_retry: FCM send OK for user {user_id!r}: {response}"
-        )
+        logger.info(f"push_retry: FCM send OK for user {user_id!r}: {response}")
         return True
     except Exception:
         logger.error(
@@ -232,13 +229,6 @@ async def _send_fcm_push(
 async def _delete_row(row_id: str) -> None:
     """Remove a permanently-failed push notification row."""
     try:
-        await run_sync(
-            lambda: supabase.table("push_retry_queue")
-            .delete()
-            .eq("id", row_id)
-            .execute()
-        )
+        await run_sync(lambda: supabase.table("push_retry_queue").delete().eq("id", row_id).execute())
     except Exception:
-        logger.error(
-            f"push_retry: failed to delete row {row_id}", exc_info=True
-        )
+        logger.error(f"push_retry: failed to delete row {row_id}", exc_info=True)

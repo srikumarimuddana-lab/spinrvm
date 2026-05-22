@@ -740,6 +740,24 @@ export const updateServiceArea = (id: string, data: any) =>
 export const deleteServiceArea = (id: string) =>
     request<any>(`/api/admin/service-areas/${id}`, { method: "DELETE" });
 
+/* ── Ride Incentives ──────────────────────── */
+export const getIncentives = (areaId?: string) =>
+    request<any[]>(`/api/admin/incentives${areaId ? `?service_area_id=${areaId}` : ''}`);
+export const createIncentive = (data: any) =>
+    request<any>("/api/admin/incentives", {
+        method: "POST",
+        body: JSON.stringify(data),
+    });
+export const updateIncentive = (id: string, data: any) =>
+    request<any>(`/api/admin/incentives/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(data),
+    });
+export const toggleIncentive = (id: string) =>
+    request<any>(`/api/admin/incentives/${id}/toggle`, { method: "PATCH" });
+export const deleteIncentive = (id: string) =>
+    request<any>(`/api/admin/incentives/${id}`, { method: "DELETE" });
+
 /* ── Surge Pricing ────────────────────────── */
 export const getSurgeStatus = () =>
     request<any[]>("/api/admin/surge/status");
@@ -1403,6 +1421,15 @@ export const updateUserStatus = (id: string, statusData: any) =>
     request<any>(`/api/admin/users/${id}/status`, {
         method: "PUT",
         body: JSON.stringify(statusData),
+    });
+
+export const exportUsers = (limit = 1000) =>
+    request<{ users: any[]; count: number }>(`/api/admin/export/users?limit=${limit}`);
+
+export const logPiiReveal = (entityType: string, entityId: string) =>
+    request<{ ok: boolean }>("/api/admin/audit/pii-reveal", {
+        method: "POST",
+        body: JSON.stringify({ entity_type: entityType, entity_id: entityId }),
     });
 
 /* ── Wallet (admin) ─────────────────────────── */

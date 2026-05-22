@@ -38,9 +38,10 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { Pagination } from "@/components/ui/pagination";
-import { Users, Search, Mail, Phone, MapPin, Star, Calendar, Car, ShieldCheck, Download, RefreshCw, Ban, CheckCircle, AlertTriangle, Wallet, Plus, Minus } from "lucide-react";
+import { Users, Search, Mail, Phone, MapPin, Star, Calendar, Car, ShieldCheck, Download, RefreshCw, Ban, CheckCircle, AlertTriangle, Wallet, Plus, Minus, Eye, EyeOff } from "lucide-react";
 import { formatDate } from "@/lib/utils";
-import { getUsersPaginated, updateUserStatus, getStats, getUserWallet, creditUserWallet, debitUserWallet } from "@/lib/api";
+import { getUsersPaginated, updateUserStatus, getStats, getUserWallet, creditUserWallet, debitUserWallet, exportUsers, logPiiReveal } from "@/lib/api";
+import { maskEmail, maskPhone } from "@/lib/pii";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { useToast } from "@/components/ui/use-toast";
 
@@ -60,6 +61,8 @@ export default function UsersPage() {
     const [hasNextPage, setHasNextPage] = useState(false);
     const [stats, setStats] = useState<{ total_users: number; total_drivers: number } | null>(null);
     const reqIdRef = useRef(0);
+
+    const [showPii, setShowPii] = useState(false);
 
     const [pendingStatusChange, setPendingStatusChange] = useState<{ id: string; status: "suspended" | "banned"; name: string } | null>(null);
 
@@ -177,27 +180,33 @@ export default function UsersPage() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [page]);
 
-    const handleExport = () => {
-        const headers = ["ID", "Name", "Email", "Phone", "City", "Total Rides", "Rating", "Verified", "Joined Date"];
-        const rows = users.map(u => [
-            u.id,
-            u.name,
-            u.email,
-            u.phone,
-            u.city || "N/A",
-            u.total_rides || 0,
-            u.rating || "N/A",
-            u.is_verified ? "Yes" : "No",
-            formatDate(u.created_at),
-        ]);
-        const csv = [headers, ...rows].map(row => row.join(",")).join("\n");
-        const blob = new Blob([csv], { type: "text/csv" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `users-${new Date().toISOString().split("T")[0]}.csv`;
-        a.click();
-        URL.revokeObjectURL(url);
+    const handleExport = async () => {
+        try {
+            const res = await exportUsers();
+            const headers = ["ID", "Name", "Email", "Phone", "City", "Total Rides", "Rating", "Verified", "Joined Date"];
+            const rows = (res.users || []).map((u: any) => [
+                u.id,
+                u.name,
+                u.email,
+                u.phone,
+                u.city || "N/A",
+                u.total_rides || 0,
+                u.rating || "N/A",
+                u.is_verified ? "Yes" : "No",
+                formatDate(u.created_at),
+            ]);
+            const csv = [headers, ...rows].map(row => row.join(",")).join("\n");
+            const blob = new Blob([csv], { type: "text/csv" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `users-${new Date().toISOString().split("T")[0]}.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+            toast({ title: "Export complete", description: `${res.count ?? 0} users exported.` });
+        } catch {
+            toast({ title: "Export failed", variant: "destructive" });
+        }
     };
 
     const totalForRoleStat = roleFilter === "driver"
@@ -224,8 +233,16 @@ export default function UsersPage() {
                     <Button variant="outline" size="icon" onClick={fetchUsers} disabled={loading}>
                         <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
                     </Button>
+                    <Button variant="outline" size="sm" onClick={() => {
+                        const next = !showPii;
+                        setShowPii(next);
+                        if (next) logPiiReveal("users", "page_toggle").catch(() => {});
+                    }}>
+                        {showPii ? <EyeOff className="mr-2 h-4 w-4" /> : <Eye className="mr-2 h-4 w-4" />}
+                        {showPii ? "Hide PII" : "Show PII"}
+                    </Button>
                     <Button variant="outline" onClick={handleExport} disabled={users.length === 0}>
-                        <Download className="mr-2 h-4 w-4" /> Export Page
+                        <Download className="mr-2 h-4 w-4" /> Export
                     </Button>
                 </div>
             </div>
@@ -379,11 +396,11 @@ export default function UsersPage() {
                                                     <div className="space-y-1 text-sm">
                                                         <div className="flex items-center gap-1 text-muted-foreground">
                                                             <Mail className="h-3 w-3" />
-                                                            {user.email || "—"}
+                                                            {showPii ? (user.email || "—") : maskEmail(user.email)}
                                                         </div>
                                                         <div className="flex items-center gap-1 text-muted-foreground">
                                                             <Phone className="h-3 w-3" />
-                                                            {user.phone || "—"}
+                                                            {showPii ? (user.phone || "—") : maskPhone(user.phone)}
                                                         </div>
                                                     </div>
                                                 </TableCell>
@@ -471,13 +488,13 @@ export default function UsersPage() {
                                     <Label className="text-xs text-muted-foreground flex items-center gap-1">
                                         <Mail className="h-3 w-3" /> Email
                                     </Label>
-                                    <p className="text-sm">{selectedUser.email}</p>
+                                    <p className="text-sm">{showPii ? selectedUser.email : maskEmail(selectedUser.email)}</p>
                                 </div>
                                 <div className="space-y-1">
                                     <Label className="text-xs text-muted-foreground flex items-center gap-1">
                                         <Phone className="h-3 w-3" /> Phone
                                     </Label>
-                                    <p className="text-sm">{selectedUser.phone}</p>
+                                    <p className="text-sm">{showPii ? selectedUser.phone : maskPhone(selectedUser.phone)}</p>
                                 </div>
                                 <div className="space-y-1">
                                     <Label className="text-xs text-muted-foreground flex items-center gap-1">

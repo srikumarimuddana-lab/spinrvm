@@ -18,9 +18,9 @@ const BACKEND_URL =
   process.env.NEXT_PUBLIC_API_URL ||
   "http://127.0.0.1:8000";
 
-// Content-Security-Policy is set dynamically per-request in src/proxy.ts
-// (middleware) so a nonce can be embedded. Do NOT add a static CSP header here —
-// a static header would override the nonce-bearing one set by middleware.
+// Content-Security-Policy is set dynamically per-request in src/middleware.ts
+// so a per-request nonce can be embedded. A static CSP here would clobber the
+// nonce-bearing header and ship unsafe-inline + unsafe-eval in production.
 const securityHeaders = [
   { key: "X-Frame-Options", value: "DENY" },
   { key: "X-Content-Type-Options", value: "nosniff" },
@@ -32,24 +32,6 @@ const securityHeaders = [
   {
     key: "Strict-Transport-Security",
     value: "max-age=63072000; includeSubDomains; preload",
-  },
-  // Admin uses none of these APIs; block them as defence-in-depth ([23-4])
-  {
-    key: "Content-Security-Policy",
-    value: [
-      "default-src 'self'",
-      // unsafe-inline needed by Next.js inline scripts; unsafe-eval needed by
-      // Turbopack dev. Roll out CSP-Report-Only to tighten before removing.
-      "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://va.vercel-scripts.com",
-      "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data: blob: https:",
-      "font-src 'self'",
-      "connect-src 'self' https: wss: ws:",
-      "frame-ancestors 'none'",
-      "form-action 'self'",
-      "base-uri 'self'",
-      "object-src 'none'",
-    ].join("; "),
   },
   {
     key: "Permissions-Policy",

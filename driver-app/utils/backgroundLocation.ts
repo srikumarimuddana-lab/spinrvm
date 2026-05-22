@@ -160,6 +160,10 @@ export async function startBackgroundLocation(config?: BgLocationConfig): Promis
     distanceInterval: distance,
     deferredUpdatesInterval: interval,
     showsBackgroundLocationIndicator: true,
+    // iOS: prevent CoreLocation from silently pausing updates when the
+    // driver appears stationary (red light, loading zone, traffic jam).
+    pausesUpdatesAutomatically: false,
+    activityType: Location.ActivityType.AutomotiveNavigation,
     foregroundService: {
       notificationTitle: 'Spinr Driver',
       notificationBody: "You're online and receiving ride requests",

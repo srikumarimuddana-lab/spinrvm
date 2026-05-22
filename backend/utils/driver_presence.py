@@ -13,7 +13,7 @@ producing "ghost online" drivers nobody could dispatch to.
 
 TTL policy
 ----------
-``PRESENCE_TTL`` is 90 s — 3× the 30 s WebSocket heartbeat interval in
+``PRESENCE_TTL`` is 30 s — 3× the 10 s WebSocket heartbeat interval in
 ``routes/websocket.py``. That gives a driver two missed pings of grace
 before they drop offline, which matches how Uber/Lyft behave on flaky
 networks.
@@ -36,7 +36,9 @@ try:
         _get_redis,
         _local,
         redis_delete,
+        redis_expire,
         redis_get,
+        redis_incr,
         redis_set,
     )
 except ImportError:  # pragma: no cover
@@ -44,14 +46,16 @@ except ImportError:  # pragma: no cover
         _get_redis,
         _local,
         redis_delete,
+        redis_expire,
         redis_get,
+        redis_incr,
         redis_set,
     )
 
 logger = logging.getLogger(__name__)
 
-# TTL in seconds. 3× the 30 s WebSocket heartbeat — two missed pings of grace.
-PRESENCE_TTL = 90
+# TTL in seconds. 3× the 10 s WebSocket heartbeat — two missed pings of grace.
+PRESENCE_TTL = 30
 
 _PREFIX = "spinr:presence:driver:"
 
@@ -164,3 +168,51 @@ async def presence_ttl(driver_id: str) -> Optional[int]:
     except Exception as exc:  # pragma: no cover
         logger.warning(f"[presence] ttl({driver_id}) failed: {exc}")
         return None
+
+
+# ── Missed-offer streak tracking ─────────────────────────────────────────────
+# Tracks consecutive offer timeouts per driver. When the streak reaches the
+# configured threshold the driver is auto-offlined so they stop absorbing
+# offers that expire and delay riders.
+
+_MISS_PREFIX = "spinr:offer_miss_streak:"
+_MISS_TTL = 1800  # 30 min — streak resets if no offers for this long
+
+
+def _miss_key(driver_id: str) -> str:
+    return f"{_MISS_PREFIX}{driver_id}"
+
+
+async def increment_miss_streak(driver_id: str) -> int:
+    """Bump the consecutive-miss counter and return the new value."""
+    if not driver_id:
+        return 0
+    try:
+        count = await redis_incr(_miss_key(driver_id))
+        await redis_expire(_miss_key(driver_id), _MISS_TTL)
+        return count
+    except Exception as exc:
+        logger.error(f"[presence] increment_miss_streak({driver_id}) failed: {exc}", exc_info=True)
+        return 0
+
+
+async def reset_miss_streak(driver_id: str) -> None:
+    """Clear the streak — called when the driver accepts, declines, or goes online."""
+    if not driver_id:
+        return
+    try:
+        await redis_delete(_miss_key(driver_id))
+    except Exception as exc:
+        logger.error(f"[presence] reset_miss_streak({driver_id}) failed: {exc}", exc_info=True)
+
+
+async def get_miss_streak(driver_id: str) -> int:
+    """Return the current consecutive-miss count (0 if no key)."""
+    if not driver_id:
+        return 0
+    try:
+        val = await redis_get(_miss_key(driver_id))
+        return int(val) if val else 0
+    except Exception as exc:
+        logger.error(f"[presence] get_miss_streak({driver_id}) failed: {exc}", exc_info=True)
+        return 0

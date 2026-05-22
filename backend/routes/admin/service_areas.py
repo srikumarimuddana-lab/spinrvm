@@ -174,7 +174,8 @@ class ServiceAreaUpdateRequest(BaseModel):
     airport_fee: Optional[float] = Field(default=None, ge=0, le=100)
     surge_enabled: Optional[bool] = None
     surge_active: Optional[bool] = None
-    surge_multiplier: Optional[float] = Field(default=None, ge=1.0, le=2.5)
+    surge_multiplier: Optional[float] = Field(default=None, ge=1.0, le=10.0)
+    surge_justification: Optional[str] = None
     gst_enabled: Optional[bool] = None
     gst_rate: Optional[float] = Field(default=None, ge=0, le=100)
     pst_enabled: Optional[bool] = None
@@ -448,12 +449,26 @@ async def admin_update_service_area(
                 detail=f"surge_multiplier must be between 1.0 and {_SURGE_MAX}",
             )
         if sm > SURGE_CAP:
+            justification = (area.surge_justification or "").strip()
+            if not justification:
+                raise HTTPException(
+                    status_code=400,
+                    detail="surge_multiplier above 2.5 requires a written justification (regulatory + reputational risk)",
+                )
             logger.warning(
                 "surge_multiplier %.2f exceeds auto-mode cap (%.1f) for area %s — "
-                "manual override; fare_service enforces cap for auto-mode areas",
+                "manual override with justification: %s",
                 sm,
                 SURGE_CAP,
                 area_id,
+                justification,
+            )
+            await log_admin_action(
+                admin,
+                "surge_override_above_cap",
+                "service_areas",
+                area_id,
+                {"surge_multiplier": sm, "justification": justification},
             )
 
     update_payload: Dict[str, Any] = {}

@@ -1442,7 +1442,11 @@ async def get_nearby_drivers_public(
             continue
         d_lat = d.get("lat")
         d_lng = d.get("lng")
-        if d_lat and d_lng:
+        # `is not None` (not truthy) so a driver legitimately at lat=0 or
+        # lng=0 still matches. The literal (0, 0) is the registration
+        # default and means "no GPS yet" — skip those so a freshly-online
+        # driver doesn't surface as a ghost car at the origin.
+        if d_lat is not None and d_lng is not None and (d_lat != 0 or d_lng != 0):
             dist = calculate_distance(lat, lng, d_lat, d_lng)
             if dist <= radius:
                 # hide personal info for riders
@@ -3764,6 +3768,12 @@ async def update_driver_status(
     # query parameters, and the mobile client (which posts it as body) got
     # a 422 and surfaced it as "Request failed".
     is_online: bool = Body(..., embed=True),
+    # Optional GPS coords sent by the driver app on Go Online. Closes the
+    # window between the status flip and the first /drivers/location-batch
+    # POST during which the driver would otherwise sit at the registration
+    # default (0, 0) and be invisible to riders/admins.
+    lat: Optional[float] = Body(None, embed=True),
+    lng: Optional[float] = Body(None, embed=True),
     current_user: dict = Depends(get_current_user),
 ):
     """Toggle the driver's online flag (driver-facing "Go online" / "Go offline").
@@ -4064,6 +4074,13 @@ async def update_driver_status(
     # payload so the flip itself still lands.
     _now_iso = datetime.now(timezone.utc).isoformat()
     _base = {"is_online": is_online, "is_available": is_online, "updated_at": _now_iso}
+    # If the driver app supplied current GPS on Go Online, persist it in the
+    # same write so the rider/admin queries see a real location immediately
+    # instead of the registration default (0, 0). Guarded on is_online so the
+    # Go Offline path doesn't overwrite a perfectly good last-known location.
+    if is_online and lat is not None and lng is not None and (lat != 0 or lng != 0):
+        _base["lat"] = lat
+        _base["lng"] = lng
     # Invariant guardrail: is_available => is_online (see handler docstring).
     # This is a sanity check on the payload we are about to write — never
     # gate user behaviour on the assert; if it ever trips, the bug is in the

@@ -1423,6 +1423,12 @@ export const updateUserStatus = (id: string, statusData: any) =>
         body: JSON.stringify(statusData),
     });
 
+export const updateUserRole = (id: string, role: "rider" | "driver") =>
+    request<any>(`/api/admin/users/${id}/role`, {
+        method: "PATCH",
+        body: JSON.stringify({ role }),
+    });
+
 export const exportUsers = (limit = 1000) =>
     request<{ users: any[]; count: number }>(`/api/admin/export/users?limit=${limit}`);
 

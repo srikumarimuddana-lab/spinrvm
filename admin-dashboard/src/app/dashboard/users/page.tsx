@@ -40,7 +40,7 @@ import {
 import { Pagination } from "@/components/ui/pagination";
 import { Users, Search, Mail, Phone, MapPin, Star, Calendar, Car, ShieldCheck, Download, RefreshCw, Ban, CheckCircle, AlertTriangle, Wallet, Plus, Minus, Eye, EyeOff } from "lucide-react";
 import { formatDate } from "@/lib/utils";
-import { getUsersPaginated, updateUserStatus, getStats, getUserWallet, creditUserWallet, debitUserWallet, exportUsers, logPiiReveal } from "@/lib/api";
+import { getUsersPaginated, updateUserStatus, updateUserRole, getStats, getUserWallet, creditUserWallet, debitUserWallet, exportUsers, logPiiReveal } from "@/lib/api";
 import { maskEmail, maskPhone } from "@/lib/pii";
 import { useRequireModule } from "@/hooks/useRequireModule";
 import { useToast } from "@/components/ui/use-toast";
@@ -590,6 +590,52 @@ export default function UsersPage() {
                                             <Ban className="h-4 w-4 mr-2" /> Ban
                                         </Button>
                                     )}
+                                </div>
+                            </div>
+
+                            {/* Role Correction */}
+                            <div className="border-t pt-4">
+                                <Label className="text-xs text-muted-foreground mb-2 block">Role Correction</Label>
+                                <p className="text-xs text-muted-foreground mb-2">
+                                    Use if a user's role in the DB doesn't match how they actually use the app.
+                                </p>
+                                <div className="flex gap-2">
+                                    <Button
+                                        className="flex-1"
+                                        variant="outline"
+                                        disabled={selectedUser.role === "rider" || statusUpdating === selectedUser.id}
+                                        onClick={async () => {
+                                            setStatusUpdating(selectedUser.id);
+                                            try {
+                                                await updateUserRole(selectedUser.id, "rider");
+                                                setSelectedUser({ ...selectedUser, role: "rider" });
+                                                setUsers(prev => prev.map(u => u.id === selectedUser.id ? { ...u, role: "rider" } : u));
+                                                toast({ title: "Role changed to Rider" });
+                                            } catch (err: any) {
+                                                toast({ title: "Failed to change role", description: err?.message, variant: "destructive" });
+                                            } finally { setStatusUpdating(null); }
+                                        }}
+                                    >
+                                        Set as Rider
+                                    </Button>
+                                    <Button
+                                        className="flex-1"
+                                        variant="outline"
+                                        disabled={selectedUser.role === "driver" || statusUpdating === selectedUser.id}
+                                        onClick={async () => {
+                                            setStatusUpdating(selectedUser.id);
+                                            try {
+                                                await updateUserRole(selectedUser.id, "driver");
+                                                setSelectedUser({ ...selectedUser, role: "driver" });
+                                                setUsers(prev => prev.map(u => u.id === selectedUser.id ? { ...u, role: "driver" } : u));
+                                                toast({ title: "Role changed to Driver" });
+                                            } catch (err: any) {
+                                                toast({ title: "Failed to change role", description: err?.message, variant: "destructive" });
+                                            } finally { setStatusUpdating(null); }
+                                        }}
+                                    >
+                                        Set as Driver
+                                    </Button>
                                 </div>
                             </div>
 

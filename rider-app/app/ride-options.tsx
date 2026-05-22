@@ -119,9 +119,16 @@ function RideOptionsScreenContent() {
   const selectedEstimate = estimates.length > selectedIndex ? estimates[selectedIndex] : null;
 
   const allUnavailable = estimates.length > 0 && !estimates.some(e => e.available);
-  // Use server-computed discount_amount — correct for percentage promos and free_ride.
-  const promoDiscount = appliedPromo?.discount_amount ?? 0;
-  const totalFare = Math.max(0, parseFloat((selectedEstimate as any)?.grand_total || selectedEstimate?.total_fare || '0') - promoDiscount);
+  // Promo discount caps at the ride_fare portion, NOT the grand total.
+  // Backend settlement (backend/routes/rides.py:1786) does
+  //   final = grand_total - min(promo.discount_amount, ride_fare)
+  // because fees + GST are not discountable. If the frontend subtracts the
+  // raw promo from grand_total it shows e.g. $0.00 for a ride that actually
+  // charges $2.57 — misleading the rider into expecting a free trip.
+  const ridePortion = parseFloat(selectedEstimate?.total_fare || '0');
+  const grandTotal = parseFloat((selectedEstimate as any)?.grand_total || selectedEstimate?.total_fare || '0');
+  const promoDiscount = Math.min(appliedPromo?.discount_amount ?? 0, ridePortion);
+  const totalFare = Math.max(0, grandTotal - promoDiscount);
 
   const paymentLabel = useMemo(() => {
     if (useCorporate && selectedCorporateId) {
@@ -1058,16 +1065,24 @@ function AnimatedVehicleCard({
           )}
         </View>
         <View style={[styles.optionPriceContainer, !isAvailable && { opacity: 0.4 }]}>
-          {appliedPromo && (appliedPromo.discount_amount ?? 0) > 0 && isSelected ? (
-            <View style={{ alignItems: 'flex-end' }}>
-              <Text style={styles.optionPriceStruck} allowFontScaling={false}>
-                ${parseFloat((estimate as any).grand_total || estimate.total_fare || '0').toFixed(2)}
-              </Text>
-              <Text style={styles.optionPriceDiscounted} allowFontScaling={false}>
-                ${Math.max(0, parseFloat((estimate as any).grand_total || estimate.total_fare || '0') - (appliedPromo.discount_amount ?? 0)).toFixed(2)}
-              </Text>
-            </View>
-          ) : (
+          {appliedPromo && (appliedPromo.discount_amount ?? 0) > 0 && isSelected ? (() => {
+            // Same cap-at-ride-fare rule as the totalFare computation above —
+            // mirrors backend settlement at backend/routes/rides.py:1786.
+            const tierRide = parseFloat(estimate.total_fare || '0');
+            const tierGrand = parseFloat((estimate as any).grand_total || estimate.total_fare || '0');
+            const tierDiscount = Math.min(appliedPromo.discount_amount ?? 0, tierRide);
+            const tierFinal = Math.max(0, tierGrand - tierDiscount);
+            return (
+              <View style={{ alignItems: 'flex-end' }}>
+                <Text style={styles.optionPriceStruck} allowFontScaling={false}>
+                  ${tierGrand.toFixed(2)}
+                </Text>
+                <Text style={styles.optionPriceDiscounted} allowFontScaling={false}>
+                  ${tierFinal.toFixed(2)}
+                </Text>
+              </View>
+            );
+          })() : (
             <Text style={styles.optionPrice} allowFontScaling={false}>
               ${parseFloat((estimate as any).grand_total || estimate.total_fare || '0').toFixed(2)}
             </Text>

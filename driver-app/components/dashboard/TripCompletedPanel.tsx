@@ -256,7 +256,7 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
             </Text>
           </LinearGradient>
         </TouchableOpacity>
-      </LinearGradient>
+      </View>
     </View>
   );
 };

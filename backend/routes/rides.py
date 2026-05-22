@@ -998,6 +998,12 @@ class RideEstimateRequest(BaseModel):
     corporate_account_id: Optional[str] = None
     work_profile: Optional[bool] = False
     requires_wav: bool = False
+    # Optional promo code. When provided we validate it (no consumption)
+    # against this rider + ride fare so the quote breakdown can include
+    # the discount line and a final_total that matches what settlement
+    # will actually charge. Backwards-compatible: omit it for the
+    # unaffected pre-promo quote.
+    promo_code: Optional[str] = None
 
 
 @api_router.post("/estimate")
@@ -1182,6 +1188,58 @@ async def estimate_ride(
             tax_breakdown=fees_result.get("tax_breakdown", {}),
         )
 
+        # Promo line — append to fare_breakdown in the same shape the
+        # completed-ride view emits at _build_fare_breakdown (rides.py:332)
+        # so every surface (estimate, in-progress, receipt, history) renders
+        # an identical discount row. The validator already caps the amount
+        # at ride_fare for flat promos and at max_discount for percentage
+        # promos, so the line never over-discounts fees + GST. Settlement
+        # uses the same _validate_promo_for_user helper, so the quote total
+        # equals what the rider is actually charged.
+        promo_discount = Decimal("0")
+        if body.promo_code:
+            try:
+                try:
+                    from .promotions import _validate_promo_for_user
+                except ImportError:
+                    from routes.promotions import _validate_promo_for_user  # type: ignore
+                _validation = await _validate_promo_for_user(
+                    body.promo_code,
+                    current_user["id"],
+                    ride_fare=fb.total_fare,
+                    grand_total=_d(grand_total),
+                )
+                promo_discount = _d(_validation.get("discount_amount") or 0)
+                if promo_discount > 0:
+                    fare_breakdown_lines.append(
+                        {
+                            "label": f"Promo ({_validation['code']})",
+                            "amount": _f(-promo_discount),
+                            "type": "discount",
+                        }
+                    )
+            except HTTPException:
+                # Silently skip an invalid promo at quote time. The user
+                # already saw the validation error when they applied it
+                # via POST /promo/validate, and we don't want to break the
+                # whole estimate response because one vehicle type's quote
+                # crossed a min-fare gate, etc.
+                promo_discount = Decimal("0")
+            except Exception as exc:
+                logger.error(
+                    "[estimate] promo validation crashed for code=%s: %s",
+                    body.promo_code,
+                    exc,
+                    exc_info=True,
+                )
+                promo_discount = Decimal("0")
+
+        # final_total is the single source of truth for the post-promo
+        # price. Equals sum(fare_breakdown_lines.amount) by construction
+        # — the frontend can either render `final_total` directly or sum
+        # the lines; both yield the same number.
+        final_total = _f(_round(_d(grand_total) - promo_discount))
+
         estimates.append(
             {
                 "vehicle_type": fare_info["vehicle_type"],
@@ -1198,6 +1256,8 @@ async def estimate_ride(
                 "tax_breakdown": fees_result.get("tax_breakdown", {}),
                 "tax_amount": tax_amount,
                 "grand_total": grand_total,
+                "promo_discount": _f(promo_discount),
+                "final_total": final_total,
                 "fare_breakdown": fare_breakdown_lines,
                 "available": is_available,
                 "eta_minutes": eta_minutes,

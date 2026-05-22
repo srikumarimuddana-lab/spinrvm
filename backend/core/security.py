@@ -1,9 +1,12 @@
 import json
+import logging
 
 import firebase_admin
 from firebase_admin import credentials as firebase_credentials
 
 from .config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def init_firebase():
@@ -22,5 +25,5 @@ def init_firebase():
                 firebase_admin.initialize_app()
             except Exception:  # noqa: S110
                 pass
-    except Exception as e:
-        print(f"Firebase initialization failed: {e}")
+    except Exception:
+        logger.error("Firebase initialization failed — all FCM pushes will be silently dropped", exc_info=True)

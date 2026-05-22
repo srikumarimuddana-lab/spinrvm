@@ -647,15 +647,15 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
         try:
             iq = (
                 db_supabase.supabase.table("ride_incentives")
-                .select("id, name, bonus_amount, incentive_type, bonus_type, conditions")
+                .select(
+                    "id, name, bonus_amount, incentive_type, bonus_type, conditions, service_area_id, vehicle_type_id"
+                )
                 .eq("is_active", True)
             )
             sa_id = ride.get("service_area_id")
             if sa_id:
                 iq = iq.or_(f"service_area_id.is.null,service_area_id.eq.{sa_id}")
-            else:
-                iq = iq.is_("service_area_id", "null")
-            ir = db_supabase.run_sync(iq.execute)
+            ir = await db_supabase.run_sync(iq.execute)
             vt_id = ride.get("vehicle_type_id")
             for inc in ir.data or []:
                 if inc.get("vehicle_type_id") and inc["vehicle_type_id"] != vt_id:
@@ -669,14 +669,17 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
                     }
                 )
                 _total_bonus += ba
+            logger.info(
+                f"[DISPATCH] enriched ride {ride_id} with {len(_incentives)} incentives, bonus=${_total_bonus:.2f}"
+            )
         except Exception as e:
-            logger.warning(f"[DISPATCH] incentive lookup non-fatal: {e}")
+            logger.error(f"[DISPATCH] incentive lookup failed: {e}", exc_info=True)
 
         _quest_hint = None
         try:
             driver_uid = selected_driver.get("user_id")
             if driver_uid:
-                qr = db_supabase.run_sync(
+                qr = await db_supabase.run_sync(
                     db_supabase.supabase.table("quest_progress")
                     .select("current_value, status, quest:quests(title, target_value, reward_amount)")
                     .eq("driver_id", driver_uid)

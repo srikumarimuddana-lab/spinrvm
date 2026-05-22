@@ -290,7 +290,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           let driverData: Driver | null = null;
           const looksLikeDriver =
             !!userData.is_driver ||
-            userData.role === 'driver' ||
             !!userData.driver_onboarding_status;
           if (looksLikeDriver) {
             try {
@@ -402,7 +401,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       // button stays disabled because `driver` is null in the store.
       const looksLikeDriver =
         !!userData?.is_driver ||
-        userData?.role === 'driver' ||
         !!userData?.driver_onboarding_status;
       if (looksLikeDriver) {
         try {
@@ -434,7 +432,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       set({ isLoading: true, error: null });
       const response = await api.post<Driver>('/drivers/register', data);
       const user = get().user;
-      const updatedUser = user ? { ...user, role: 'driver', is_driver: true } : user;
+      const updatedUser = user ? { ...user, role: 'driver', is_driver: true, is_rider: user.is_rider ?? true } : user;
       set({
         driver: response.data,
         user: updatedUser,

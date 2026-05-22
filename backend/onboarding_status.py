@@ -114,10 +114,6 @@ async def derive_driver_onboarding_status(
     if not user:
         return None, None, None
 
-    # Only compute for users who are drivers or on the driver app flow.
-    # The driver app sets role='driver' on registration; if role isn't set
-    # yet we still compute because the user is about to become a driver.
-    role = (user.get("role") or "").lower()
     user_id = user.get("id")
 
     # Step 1: profile fields
@@ -133,9 +129,8 @@ async def derive_driver_onboarding_status(
     except Exception:
         driver = None
 
-    # If we're on the rider app (role=rider, no driver row, is_driver=False),
-    # don't emit a driver onboarding status at all — this is a rider.
-    if role != "driver" and not driver:
+    # If the user has no driver flag and no driver row, skip onboarding status.
+    if not user.get("is_driver") and not driver:
         return None, None, None
 
     if not _has_vehicle(driver):

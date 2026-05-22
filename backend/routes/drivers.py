@@ -532,7 +532,8 @@ async def update_my_driver(body: UpdateDriverProfileRequest, current_user: dict 
             **updates,
         }
         await db_supabase.insert_one("drivers", new_driver)
-        # Also flip the user role to 'driver' if not already
+        # Mark as driver; is_rider is intentionally left unchanged so a
+        # driver who was already riding keeps both flags (dual-role).
         await db_supabase.update_one("users", {"id": current_user["id"]}, {"role": "driver", "is_driver": True})
         return serialize_doc(new_driver)
 
@@ -710,12 +711,9 @@ async def register_driver(
     }
     await db_supabase.insert_one("drivers", await _encrypt_driver_pii(new_driver))
 
-    # Canonicalize the identity: if the user's role is still 'rider' flip
-    # it to 'driver' so admin lists, login resolution, and role-gated code
-    # all agree (see migration 31 for the one-shot backfill of legacy
-    # rows). Only updates when needed so we don't churn updated_at on
-    # users who are already tagged correctly.
-    if current_user.get("role") != "driver" or not current_user.get("is_driver"):
+    # Canonicalize is_driver flag. is_rider is intentionally NOT cleared here
+    # so that a driver who already has is_rider=true keeps dual-role status.
+    if not current_user.get("is_driver"):
         try:
             # users table has no updated_at column (supabase_schema.sql).
             await db_supabase.update_one(

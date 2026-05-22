@@ -30,6 +30,7 @@ try:
     from ..services.fare_service import recalculate_fare_for_distance
     from ..socket_manager import manager
     from ..utils.datetime_utils import parse_iso_utc
+    from ..utils.driver_online import intent_online
     from ..utils.driver_presence import clear_presence, mark_present, present_driver_ids, reset_miss_streak
     from ..utils.error_handling import (
         AccountDisabledException,
@@ -1439,6 +1440,13 @@ async def get_nearby_drivers_public(
     for d in drivers:
         # Exclude orphan/demo driver rows (no user_id → cannot be dispatched).
         if not d.get("user_id"):
+            continue
+        # Authoritative intent check using the went_online_at /
+        # went_offline_at timestamps (migration 97). The DB pre-filter
+        # already used `is_online=True`, but intent_online() also catches
+        # the case where the column is stale and prefers the timestamp
+        # when both are present. Falls back to is_online for unmigrated rows.
+        if not intent_online(d):
             continue
         d_lat = d.get("lat")
         d_lng = d.get("lng")

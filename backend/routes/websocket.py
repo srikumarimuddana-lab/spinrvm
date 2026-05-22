@@ -815,18 +815,34 @@ async def websocket_endpoint(
                         limit=100,
                     )
 
+                    try:
+                        from ..utils.driver_online import intent_online
+                    except ImportError:
+                        from utils.driver_online import intent_online  # type: ignore
+
                     nearby = []
                     for driver in drivers:
+                        # Authoritative intent gate (migration 97): trust the
+                        # went_online_at / went_offline_at timestamps over the
+                        # legacy is_online flag. Falls back to is_online for
+                        # unmigrated rows.
+                        if not intent_online(driver):
+                            continue
+                        d_lat = driver.get("lat")
+                        d_lng = driver.get("lng")
+                        # Same (0, 0) registration-default guard as /drivers/nearby.
+                        if d_lat is None or d_lng is None or (d_lat == 0 and d_lng == 0):
+                            continue
                         # Calculate distance
                         from ..geo_utils import calculate_distance
 
-                        dist = calculate_distance(lat, lng, driver["lat"], driver["lng"])
+                        dist = calculate_distance(lat, lng, d_lat, d_lng)
                         if dist <= radius:
                             nearby.append(
                                 {
                                     "id": driver["id"],
-                                    "lat": driver["lat"],
-                                    "lng": driver["lng"],
+                                    "lat": d_lat,
+                                    "lng": d_lng,
                                     "vehicle_type_id": driver["vehicle_type_id"],
                                 }
                             )

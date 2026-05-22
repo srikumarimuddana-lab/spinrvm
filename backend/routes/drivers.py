@@ -4087,7 +4087,19 @@ async def update_driver_status(
     # logic that built _base, not in the driver's request.
     assert not (_base["is_available"] and not _base["is_online"]), "is_available implies is_online"
     status_flipped = bool(driver.get("is_online")) != bool(is_online)
-    _payload = {**_base, "last_status_changed_at": _now_iso} if status_flipped else _base
+    # Durable intent timestamps (migration 97). Only written on an actual
+    # flip — re-tapping Go Online while already online does NOT bump
+    # went_online_at; that timestamp is "when this intent began", not "last
+    # refresh time". Readers compose these with the Redis presence key to
+    # derive effective_online, replacing the retired presence_sweeper.
+    _intent_payload = {}
+    if status_flipped:
+        _intent_payload["last_status_changed_at"] = _now_iso
+        if is_online:
+            _intent_payload["went_online_at"] = _now_iso
+        else:
+            _intent_payload["went_offline_at"] = _now_iso
+    _payload = {**_base, **_intent_payload}
     try:
         await db_supabase.update_one("drivers", {"id": driver_id}, _payload)
     except Exception as _col_exc:
@@ -4103,9 +4115,12 @@ async def update_driver_status(
             _detail = str(_details_attr.get("original") or "")
         _cause_text = str(getattr(_col_exc, "__cause__", "") or "")
         _combined = f"{_col_exc} {_detail} {_cause_text}".lower()
-        if "last_status_changed_at" in _combined or "pgrst204" in _combined:
+        _missing_intent = any(
+            col in _combined for col in ("last_status_changed_at", "went_online_at", "went_offline_at", "pgrst204")
+        )
+        if _missing_intent:
             logger.warning(
-                f"[GO-ONLINE] last_status_changed_at missing; retrying minimal. original={_detail or _col_exc}"
+                f"[GO-ONLINE] intent timestamp column(s) missing; retrying minimal. original={_detail or _col_exc}"
             )
             await db_supabase.update_one("drivers", {"id": driver_id}, _base)
         else:

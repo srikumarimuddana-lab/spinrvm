@@ -161,11 +161,9 @@ async def register_push_token(body: RegisterTokenRequest, current_user: dict = D
             },
         )
 
-    # Mirror to users.fcm_token so features.send_push_notification can find it.
-    # This is best-effort: if the column doesn't exist yet (pre sql/03_features),
-    # the update is a no-op rather than a hard failure.
+    # Mirror to users.fcm_token — this is what send_push_notification reads.
     try:
-        await db.update_one("users", {"id": current_user["id"]}, {"$set": {"fcm_token": token}})
+        await db.update_one("users", {"id": current_user["id"]}, {"fcm_token": token})
     except Exception as exc:
         logger.error(f"Failed to mirror FCM token onto users.fcm_token: {exc}", exc_info=True)
 

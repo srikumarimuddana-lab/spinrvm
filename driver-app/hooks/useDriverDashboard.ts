@@ -1151,10 +1151,11 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     const unsubscribe = onForegroundMessage((remoteMessage: any) => {
       const data = remoteMessage?.data || {};
       if (data?.type === 'new_ride_assignment' && data?.ride_id) {
-        // Hydrate an incoming ride offer from the FCM payload. Backend
-        // sends coordinates as strings (FCM data values are always
-        // string-typed). Reject the offer if any coord fails to parse —
-        // a (0,0) fallback would plot at the Gulf of Guinea.
+        const existing = useDriverStore.getState().incomingRide;
+        if (existing?.ride_id === data.ride_id) {
+          console.log('[FCM] ride offer already loaded via WS, skipping FCM overwrite', data.ride_id);
+          return;
+        }
         const pLat = _toFiniteCoord(data.pickup_lat);
         const pLng = _toFiniteCoord(data.pickup_lng);
         const dLat = _toFiniteCoord(data.dropoff_lat);

@@ -553,12 +553,14 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         break;
       }
       case 'ride_offer_expired':
-        // Backend tells us the offer-TTL fired before we accepted/declined.
-        // Without this, the panel just vanished on the next reconnect when
-        // fetchActiveRide() found no driver_assigned row. Now it's explicit.
         offerSound.stop();
         resetRideState();
         showToast('info', 'Offer expired', 'Looking for the next ride...');
+        break;
+      case 'ride_taken':
+        offerSound.stop();
+        resetRideState();
+        showToast('info', 'Ride taken', 'Another driver accepted this ride.');
         break;
       case 'auto_offline':
         // Backend took the driver offline after N consecutive missed offers.

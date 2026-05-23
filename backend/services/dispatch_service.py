@@ -36,6 +36,25 @@ VALID_ALGORITHMS = ("nearest", "rating_based", "combined", "round_robin")
 
 DEFAULT_MIN_RATING = 4.0
 DEFAULT_SEARCH_RADIUS_KM = 10.0
+DEFAULT_MAX_SIMULTANEOUS_OFFERS = 3
+
+
+def rank_by_eta_with_acceptance(
+    drivers_with_eta: List[Tuple[Dict[str, Any], int]],
+) -> List[Tuple[Dict[str, Any], int, float]]:
+    """Sort drivers by effective_eta = eta_seconds / acceptance_rate.
+
+    Returns [(driver, eta_seconds, effective_eta), ...] ascending.
+    Lower effective_eta = closer + more reliable → offered first.
+    """
+    result = []
+    for driver, eta in drivers_with_eta:
+        rate = float(driver.get("acceptance_rate") or 1.0)
+        rate = max(rate, 0.1)  # floor to avoid division explosion
+        effective = eta / rate
+        result.append((driver, eta, effective))
+    result.sort(key=lambda x: x[2])
+    return result
 
 
 def _is_dispatchable_driver(driver: Dict[str, Any]) -> bool:
@@ -186,16 +205,13 @@ class DispatchService:
         ride: Dict[str, Any],
         *,
         app_settings: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[str, float, float]:
+    ) -> Tuple[str, float, float, int, bool]:
         """
-        Return ``(algorithm, min_rating, search_radius_km)`` for this ride.
+        Return ``(algorithm, min_rating, search_radius_km,
+        max_offers, use_eta)`` for this ride.
 
         Reads ``service_areas`` first (the area can override matching
         behaviour), then falls back to the global ``app_settings``.
-
-        ``app_settings`` may be passed by callers that already fetched it
-        to avoid a redundant ``settings`` lookup. When omitted this
-        method loads it itself.
         """
         if app_settings is None:
             app_settings = await get_app_settings()
@@ -215,7 +231,17 @@ class DispatchService:
         search_radius_km = float(
             area_settings.get("search_radius_km") or app_settings.get("search_radius_km", DEFAULT_SEARCH_RADIUS_KM)
         )
-        return algorithm, min_rating, search_radius_km
+        max_offers = int(
+            area_settings.get("max_simultaneous_offers")
+            or app_settings.get("max_simultaneous_offers", DEFAULT_MAX_SIMULTANEOUS_OFFERS)
+        )
+        max_offers = max(1, min(max_offers, 10))
+        use_eta = bool(
+            area_settings.get("use_eta_ranking")
+            if area_settings.get("use_eta_ranking") is not None
+            else app_settings.get("use_eta_ranking", True)
+        )
+        return algorithm, min_rating, search_radius_km, max_offers, use_eta
 
     async def find_candidate_drivers(self, ride: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Online + available + verified + *present* drivers for this ride.

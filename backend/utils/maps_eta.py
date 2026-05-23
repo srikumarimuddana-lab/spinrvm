@@ -120,3 +120,58 @@ async def get_ride_eta_seconds(
         logger.warning("[ETA] Redis set failed — ETA won't be cached", exc_info=False)
 
     return eta_seconds
+
+
+async def batch_get_etas(
+    drivers: list[dict],
+    dest_lat: float,
+    dest_lng: float,
+    maps_api_key: str,
+) -> dict[str, int]:
+    """Return {driver_id: eta_seconds} for multiple drivers in one API call.
+
+    Google Distance Matrix accepts up to 25 pipe-separated origins per
+    request.  Each driver dict must have 'id', 'lat', 'lng'.
+    """
+    if not drivers:
+        return {}
+
+    result: dict[str, int] = {}
+
+    if not maps_api_key:
+        for d in drivers:
+            result[d["id"]] = _haversine_eta_seconds(d["lat"], d["lng"], dest_lat, dest_lng)
+        return result
+
+    origins = "|".join(f"{d['lat']},{d['lng']}" for d in drivers[:25])
+    try:
+        params = {
+            "origins": origins,
+            "destinations": f"{dest_lat},{dest_lng}",
+            "departure_time": "now",
+            "traffic_model": "best_guess",
+            "key": maps_api_key,
+        }
+        async with httpx.AsyncClient(timeout=_MAPS_TIMEOUT) as client:
+            resp = await client.get(_MAPS_URL, params=params)
+            resp.raise_for_status()
+            body = resp.json()
+
+        for i, d in enumerate(drivers[:25]):
+            element = body["rows"][i]["elements"][0]
+            if element.get("status") == "OK":
+                duration = element.get("duration_in_traffic") or element.get("duration")
+                result[d["id"]] = int(duration["value"])
+            else:
+                result[d["id"]] = _haversine_eta_seconds(d["lat"], d["lng"], dest_lat, dest_lng)
+
+    except Exception:
+        logger.error("[ETA] Batch Maps API call failed — haversine fallback for all", exc_info=True)
+        for d in drivers[:25]:
+            result[d["id"]] = _haversine_eta_seconds(d["lat"], d["lng"], dest_lat, dest_lng)
+
+    # Drivers beyond the 25-origin limit get haversine only
+    for d in drivers[25:]:
+        result[d["id"]] = _haversine_eta_seconds(d["lat"], d["lng"], dest_lat, dest_lng)
+
+    return result

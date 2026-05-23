@@ -160,6 +160,8 @@ class ServiceAreaCreateRequest(BaseModel):
     driver_matching_algorithm: str = "nearest"
     search_radius_km: float = Field(default=10.0, ge=1, le=100)
     min_driver_rating: float = Field(default=4.0, ge=1.0, le=5.0)
+    max_simultaneous_offers: int = Field(default=3, ge=1, le=10)
+    use_eta_ranking: bool = True
     show_demand_heatmap: bool = False
 
 
@@ -188,6 +190,8 @@ class ServiceAreaUpdateRequest(BaseModel):
     driver_matching_algorithm: Optional[str] = None
     search_radius_km: Optional[float] = Field(default=None, ge=1, le=100)
     min_driver_rating: Optional[float] = Field(default=None, ge=1.0, le=5.0)
+    max_simultaneous_offers: Optional[int] = Field(default=None, ge=1, le=10)
+    use_eta_ranking: Optional[bool] = None
     show_demand_heatmap: Optional[bool] = None
     vehicle_pricing: Optional[List[Dict[str, Any]]] = None
     province: Optional[str] = None
@@ -384,6 +388,8 @@ async def admin_create_service_area(area: ServiceAreaCreateRequest, admin: dict 
         "driver_matching_algorithm": area.driver_matching_algorithm,
         "search_radius_km": area.search_radius_km,
         "min_driver_rating": area.min_driver_rating,
+        "max_simultaneous_offers": area.max_simultaneous_offers,
+        "use_eta_ranking": area.use_eta_ranking,
         "show_demand_heatmap": area.show_demand_heatmap,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -494,6 +500,8 @@ async def admin_update_service_area(
         "driver_matching_algorithm",
         "search_radius_km",
         "min_driver_rating",
+        "max_simultaneous_offers",
+        "use_eta_ranking",
         "show_demand_heatmap",
         "vehicle_pricing",
         "max_pickup_radius_km",

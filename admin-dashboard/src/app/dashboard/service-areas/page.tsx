@@ -548,6 +548,8 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
     driver_matching_algorithm: area.driver_matching_algorithm || "nearest",
     search_radius_km: area.search_radius_km || 10,
     min_driver_rating: area.min_driver_rating || 4.0,
+    max_simultaneous_offers: area.max_simultaneous_offers || 3,
+    use_eta_ranking: area.use_eta_ranking !== false,
     show_demand_heatmap: area.show_demand_heatmap || false,
     // Surge is per-area now — no separate Pricing page. surge_active
     // gates whether build_fares_for_area multiplies the fare;
@@ -586,6 +588,8 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
       driver_matching_algorithm: form.driver_matching_algorithm,
       search_radius_km: parseFloat(String(form.search_radius_km)) || 10,
       min_driver_rating: parseFloat(String(form.min_driver_rating)) || 4.0,
+      max_simultaneous_offers: Math.max(1, Math.min(10, parseInt(String(form.max_simultaneous_offers)) || 3)),
+      use_eta_ranking: form.use_eta_ranking,
       show_demand_heatmap: form.show_demand_heatmap,
       surge_active: form.surge_active,
       surge_multiplier: surgeValue,
@@ -731,6 +735,14 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
           <div>
             <label className="block text-xs font-semibold text-gray-500 mb-1">Min Driver Rating</label>
             <input className="w-full border rounded-lg px-3 py-2 text-sm" type="number" step="0.1" min="1" max="5" value={form.min_driver_rating} onChange={e => setForm({ ...form, min_driver_rating: e.target.value as any })} />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 mb-1">Simultaneous Offers</label>
+            <input className="w-full border rounded-lg px-3 py-2 text-sm" type="number" min="1" max="10" value={form.max_simultaneous_offers} onChange={e => setForm({ ...form, max_simultaneous_offers: e.target.value as any })} />
+          </div>
+          <div className="flex items-center gap-2 pt-5">
+            <input type="checkbox" id="use_eta" checked={form.use_eta_ranking} onChange={e => setForm({ ...form, use_eta_ranking: e.target.checked })} />
+            <label htmlFor="use_eta" className="text-sm font-medium text-gray-700">ETA Ranking</label>
           </div>
         </div>
       </div>

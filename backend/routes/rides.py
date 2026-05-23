@@ -30,6 +30,7 @@ try:
     from ..services import DispatchService
     from ..services.dispatch_service import (
         filter_and_rank_drivers,
+        rank_by_eta_with_acceptance,
     )
     from ..services.fare_service import build_fare_breakdown_lines, calculate_fare
     from ..settings_loader import get_app_settings
@@ -43,6 +44,7 @@ try:
     )
     from ..utils.error_keys import ErrorKeys
     from ..utils.idempotency import idempotent_endpoint
+    from ..utils.maps_eta import batch_get_etas
     from ..utils.rate_limiter import (
         api_rate_limit,
         cancel_ride_limit,
@@ -68,6 +70,7 @@ except ImportError:
     from services.dispatch_service import (
         DispatchService,
         filter_and_rank_drivers,
+        rank_by_eta_with_acceptance,
     )
     from services.fare_service import build_fare_breakdown_lines, calculate_fare
     from settings_loader import get_app_settings
@@ -81,6 +84,7 @@ except ImportError:
     )
     from utils.error_keys import ErrorKeys
     from utils.idempotency import idempotent_endpoint
+    from utils.maps_eta import batch_get_etas
     from utils.rate_limiter import (
         api_rate_limit,
         cancel_ride_limit,
@@ -448,14 +452,16 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
     # value, which drifted when admin changed the setting mid-session.
     offer_timeout = int(app_settings.get("ride_offer_timeout_seconds", 15))
 
-    # Algorithm + radius + rating floor (area overrides app settings).
-    algorithm, min_rating, search_radius = await dispatch.resolve_matching_config(ride, app_settings=app_settings)
+    # Algorithm + radius + rating floor + batch config (area overrides app settings).
+    algorithm, min_rating, search_radius, max_offers, use_eta = await dispatch.resolve_matching_config(
+        ride, app_settings=app_settings
+    )
 
     logger.info(
         f"[DISPATCH] match start ride_id={ride_id} "
         f"pickup=({ride['pickup_lat']},{ride['pickup_lng']}) "
         f"vehicle_type_id={ride['vehicle_type_id']} algorithm={algorithm} "
-        f"radius_km={search_radius}"
+        f"radius_km={search_radius} batch={max_offers} eta={use_eta}"
     )
 
     # Find candidate drivers. We read the drivers table directly and filter
@@ -511,167 +517,133 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
         logger.info(f"[DISPATCH] no eligible drivers for ride {ride_id} — ride stays in searching")
         return
 
-    selected_driver = None
-    _rpc_claimed = False
+    # ── ETA ranking ───────────────────────────────────────────────
+    # Pre-filter to top 15 by haversine, then batch-query Distance
+    # Matrix for real ETAs. Falls back to haversine if API fails.
+    drivers_with_distance.sort(key=lambda x: x[1])
+    pre_filtered = drivers_with_distance[: max(max_offers * 5, 15)]
 
-    if algorithm == "nearest":
-        # Fast path: let the DB atomically find-and-claim the nearest driver
-        # via the PostGIS `match_and_claim_driver` RPC (migration 77).
-        # Falls back to the Python-sort path if the RPC returns None
-        # (PostGIS unavailable, no driver found, or any error).
-        rpc_result = await db_supabase.match_and_claim_driver(
-            vehicle_type_id=ride["vehicle_type_id"],
-            pickup_lat=ride["pickup_lat"],
-            pickup_lng=ride["pickup_lng"],
-            radius_km=search_radius,
-            min_rating=min_rating,
-        )
-        if rpc_result:
-            selected_driver = rpc_result
-            _rpc_claimed = True
-        else:
-            drivers_with_distance.sort(key=lambda x: x[1])
-            selected_driver = drivers_with_distance[0][0] if drivers_with_distance else None
-    elif algorithm == "combined":
-        drivers_with_distance.sort(key=lambda x: x[1])
-        selected_driver = drivers_with_distance[0][0]
-    elif algorithm == "rating_based":
-        drivers_with_distance.sort(key=lambda x: x[0].get("rating", 5.0), reverse=True)
-        selected_driver = drivers_with_distance[0][0]
-    elif algorithm == "round_robin":
-        last_ride = (lambda _r: _r[0] if _r else None)(
-            await db_supabase.get_rows(
-                "rides",
-                {"driver_id": {"$ne": None}},
-                order="created_at",
-                desc=True,
-                limit=1,
+    if use_eta:
+        try:
+            maps_key = app_settings.get("google_maps_api_key", "")
+            eta_map = await batch_get_etas(
+                [d for d, _ in pre_filtered],
+                ride["pickup_lat"],
+                ride["pickup_lng"],
+                maps_key,
             )
-        )
-        if last_ride:
-            last_driver_idx = next(
-                (i for i, (d, _) in enumerate(drivers_with_distance) if d["id"] == last_ride["driver_id"]),
-                -1,
+            ranked = rank_by_eta_with_acceptance([(d, eta_map.get(d["id"], 9999)) for d, _ in pre_filtered])
+        except Exception as e:
+            logger.error(f"[DISPATCH] ETA ranking failed, falling back to haversine: {e}", exc_info=True)
+            ranked = [(d, int(dist * 120), dist) for d, dist in pre_filtered]
+    else:
+        ranked = [(d, int(dist * 120), dist) for d, dist in pre_filtered]
+
+    # ── Batch claim ───────────────────────────────────────────────
+    claimed_drivers: list[tuple[dict, int]] = []
+    for driver, eta_sec, _ in ranked:
+        if len(claimed_drivers) >= max_offers:
+            break
+        if await db_supabase.claim_driver_atomic(driver["id"]):
+            fresh = await db_supabase.get_driver_by_id(driver["id"])
+            if fresh and fresh.get("is_online"):
+                claimed_drivers.append((fresh, eta_sec))
+            else:
+                await db_supabase.set_driver_available(driver["id"], True)
+
+    if not claimed_drivers:
+        logger.info(f"[DISPATCH] no drivers could be claimed for ride {ride_id}")
+        return
+
+    logger.info(
+        f"[DISPATCH] batch: claimed {len(claimed_drivers)} driver(s) for ride {ride_id}: "
+        f"{[d['id'] for d, _ in claimed_drivers]}"
+    )
+
+    # ── Insert ride_offers rows ───────────────────────────────────
+    now = datetime.now(timezone.utc)
+    offer_rows = [
+        {
+            "ride_id": ride_id,
+            "driver_id": d["id"],
+            "status": "pending",
+            "eta_seconds": eta,
+            "offered_at": now.isoformat(),
+        }
+        for d, eta in claimed_drivers
+    ]
+    try:
+        await db_supabase.run_sync(lambda: db_supabase.supabase.table("ride_offers").insert(offer_rows).execute())
+    except Exception as e:
+        logger.error(f"[DISPATCH] ride_offers insert failed: {e}", exc_info=True)
+        for d, _ in claimed_drivers:
+            await db_supabase.set_driver_available(d["id"], True)
+        return
+
+    # ── Parallel enrichment (shared across all drivers) ───────────
+    async def _fetch_rider() -> dict | None:
+        try:
+            return await db_supabase.get_user_by_id(ride["rider_id"])
+        except Exception as e:
+            logger.error(f"[DISPATCH] could not load rider user {ride['rider_id']}: {e}", exc_info=True)
+            return None
+
+    async def _fetch_incentives() -> tuple[list, float]:
+        try:
+            iq = (
+                db_supabase.supabase.table("ride_incentives")
+                .select(
+                    "id, name, bonus_amount, incentive_type, bonus_type, conditions, service_area_id, vehicle_type_id"
+                )
+                .eq("is_active", True)
             )
-            next_idx = (last_driver_idx + 1) % len(drivers_with_distance)
-            selected_driver = drivers_with_distance[next_idx][0]
-        else:
-            selected_driver = drivers_with_distance[0][0]
-
-    if selected_driver:
-        # Attempt to atomically claim the driver (only if still available).
-        # Skipped when _rpc_claimed is True — the PostGIS RPC already performed
-        # the atomic claim with SELECT ... FOR UPDATE SKIP LOCKED.
-        if not _rpc_claimed:
-            claim_result = await db_supabase.claim_driver_atomic(selected_driver["id"])
-
-            if not claim_result:
-                # Driver was taken by another process; try to find next candidate
-                claimed = False
-                for d, _ in drivers_with_distance:
-                    if await db_supabase.claim_driver_atomic(d["id"]):
-                        selected_driver = d
-                        claimed = True
-                        break
-                if not claimed:
-                    # No drivers could be claimed
-                    return
-
-        # Guard: re-verify the claimed driver is still online. A driver can
-        # toggle offline between the candidate read and the atomic claim write,
-        # which would leave a ride silently assigned to a driver who will never
-        # see it (ghost assignment).
-        fresh_driver = await db_supabase.get_driver_by_id(selected_driver["id"])
-        if not fresh_driver or not fresh_driver.get("is_online"):
-            logger.warning(
-                f"[DISPATCH] Driver {selected_driver['id']} went offline before "
-                f"claim — releasing and re-dispatching ride {ride_id}"
-            )
-            await db_supabase.set_driver_available(selected_driver["id"], True)
-            await match_driver_to_ride(ride_id)
-            return
-
-        # Update ride with selected driver. Do NOT pre-populate
-        # driver_accepted_at here — that field is set by the
-        # /drivers/rides/{id}/accept endpoint when the driver actually taps
-        # Accept. Setting it at dispatch time was a "demo auto-accept" hack
-        # that made the rider-app show the driver card before the driver
-        # had actually agreed to the ride.
-        await db_supabase.update_ride(
-            ride_id,
-            {
-                "driver_id": selected_driver["id"],
-                "status": RideStatus.DRIVER_ASSIGNED,
-                "driver_notified_at": datetime.now(timezone.utc),
-                "updated_at": datetime.now(timezone.utc),
-            },
-        )
-        logger.info(
-            f"[DISPATCH] ride {ride_id} assigned to driver_id={selected_driver['id']} "
-            f"user_id={selected_driver.get('user_id')} name={selected_driver.get('name')}"
-        )
-
-        # No rider-facing WS event here — the rider app waits for
-        # ``driver_accepted`` (emitted when the driver actually taps
-        # Accept). Notifying on bare assignment caused premature "driver
-        # found" banners that reverted if the driver timed out.
-
-        # ── Parallel enrichment ───────────────────────────────────
-        # These 4 operations are independent of each other. Running them
-        # sequentially added ~5-7s of latency before the driver saw the
-        # offer. asyncio.gather cuts it to the slowest single query.
-
-        async def _fetch_rider() -> dict | None:
-            try:
-                return await db_supabase.get_user_by_id(ride["rider_id"])
-            except Exception as e:
-                logger.error(
-                    f"[DISPATCH] could not load rider user {ride['rider_id']}: {e}",
-                    exc_info=True,
+            sa_id = ride.get("service_area_id")
+            if sa_id:
+                iq = iq.or_(f"service_area_id.is.null,service_area_id.eq.{sa_id}")
+            ir = await db_supabase.run_sync(iq.execute)
+            vt_id = ride.get("vehicle_type_id")
+            incentives = []
+            total_bonus = 0.0
+            for inc in ir.data or []:
+                if inc.get("vehicle_type_id") and inc["vehicle_type_id"] != vt_id:
+                    continue
+                ba = float(inc.get("bonus_amount") or 0)
+                incentives.append(
+                    {
+                        "name": inc["name"],
+                        "bonus_amount": ba,
+                        "incentive_type": inc.get("incentive_type", "per_ride"),
+                    }
                 )
-                return None
+                total_bonus += ba
+            return incentives, total_bonus
+        except Exception as e:
+            logger.error(f"[DISPATCH] incentive lookup failed: {e}", exc_info=True)
+            return [], 0.0
 
-        async def _fetch_incentives() -> tuple[list, float]:
-            try:
-                iq = (
-                    db_supabase.supabase.table("ride_incentives")
-                    .select(
-                        "id, name, bonus_amount, incentive_type, bonus_type, conditions, service_area_id, vehicle_type_id"
-                    )
-                    .eq("is_active", True)
-                )
-                sa_id = ride.get("service_area_id")
-                if sa_id:
-                    iq = iq.or_(f"service_area_id.is.null,service_area_id.eq.{sa_id}")
-                ir = await db_supabase.run_sync(iq.execute)
-                vt_id = ride.get("vehicle_type_id")
-                incentives = []
-                total_bonus = 0.0
-                for inc in ir.data or []:
-                    if inc.get("vehicle_type_id") and inc["vehicle_type_id"] != vt_id:
-                        continue
-                    ba = float(inc.get("bonus_amount") or 0)
-                    incentives.append(
-                        {
-                            "name": inc["name"],
-                            "bonus_amount": ba,
-                            "incentive_type": inc.get("incentive_type", "per_ride"),
-                        }
-                    )
-                    total_bonus += ba
-                logger.info(
-                    f"[DISPATCH] enriched ride {ride_id} with {len(incentives)} incentives, bonus=${total_bonus:.2f}"
-                )
-                return incentives, total_bonus
-            except Exception as e:
-                logger.error(f"[DISPATCH] incentive lookup failed: {e}", exc_info=True)
-                return [], 0.0
+    rider_user, (_incentives, _total_bonus) = await asyncio.gather(
+        _fetch_rider(),
+        _fetch_incentives(),
+    )
 
-        async def _fetch_quest() -> dict | None:
-            try:
-                driver_uid = selected_driver.get("user_id")
-                if not driver_uid:
-                    return None
+    rider_display_name = None
+    if rider_user:
+        first = rider_user.get("first_name") or ""
+        last = rider_user.get("last_name") or ""
+        rider_display_name = (first + " " + last).strip() or rider_user.get("name") or None
+
+    _surge_mult = float(ride.get("surge_multiplier") or 1.0)
+    from datetime import timedelta as _td
+
+    _offer_expires_at = (now + _td(seconds=offer_timeout)).isoformat()
+
+    # ── Notify each claimed driver ────────────────────────────────
+    for driver, _eta in claimed_drivers:
+        # Per-driver quest progress
+        _quest_hint = None
+        try:
+            driver_uid = driver.get("user_id")
+            if driver_uid:
                 qr = await db_supabase.run_sync(
                     db_supabase.supabase.table("quest_progress")
                     .select("current_value, status, quest:quests(title, target_value, reward_amount)")
@@ -685,40 +657,16 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
                     q = qp.get("quest") or {}
                     tv = float(q.get("target_value") or 1)
                     cv = float(qp.get("current_value") or 0)
-                    return {
+                    _quest_hint = {
                         "title": q.get("title", ""),
                         "current_value": cv,
                         "target_value": tv,
                         "progress_pct": round(min(cv / tv, 1.0) * 100, 1) if tv else 0,
                         "reward_amount": float(q.get("reward_amount") or 0),
                     }
-                return None
-            except Exception as e:
-                logger.warning(f"[DISPATCH] quest hint lookup non-fatal: {e}")
-                return None
+        except Exception as e:
+            logger.warning(f"Failed to fetch quest progress for driver {driver['id']}: {e}")
 
-        # M-5: SGI insurance period audit — driver_assigned starts period 2
-        # record_period_transition swallows its own exceptions.
-        rider_user, (_incentives, _total_bonus), _quest_hint, _ = await asyncio.gather(
-            _fetch_rider(),
-            _fetch_incentives(),
-            _fetch_quest(),
-            record_period_transition(selected_driver["id"], 2, ride_id=ride_id),
-        )
-
-        rider_display_name = None
-        if rider_user:
-            first = rider_user.get("first_name") or ""
-            last = rider_user.get("last_name") or ""
-            rider_display_name = (first + " " + last).strip() or rider_user.get("name") or None
-
-        _surge_mult = float(ride.get("surge_multiplier") or 1.0)
-
-        # Build the full dispatch payload. Keys MUST match what the driver
-        # app consumes in useDriverDashboard.ts handleWSMessage.
-        from datetime import timedelta as _td
-
-        _offer_expires_at = (datetime.now(timezone.utc) + _td(seconds=offer_timeout + 15)).isoformat()
         dispatch_payload = {
             "type": "new_ride_assignment",
             "ride_id": ride_id,
@@ -743,19 +691,8 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
             "payment_method": ride.get("payment_method"),
         }
 
-        # Notify driver via WebSocket (only reaches the driver if they have
-        # an open WS connection — silent no-op otherwise).
-        if selected_driver.get("user_id"):
-            logger.info(
-                f"[DISPATCH] sending WS new_ride_assignment to "
-                f"driver_{selected_driver['user_id']} payload_keys="
-                f"{list(dispatch_payload.keys())}"
-            )
-            await manager.send_personal_message(dispatch_payload, f"driver_{selected_driver['user_id']}")
-
-            # Push-notification fallback for backgrounded/killed app.
-            # Derived from the same dispatch_payload so both channels
-            # carry identical data. FCM values must be strings.
+        if driver.get("user_id"):
+            await manager.send_personal_message(dispatch_payload, f"driver_{driver['user_id']}")
             try:
                 fcm_data = {
                     k: json.dumps(v) if isinstance(v, (dict, list)) else str(v) if v is not None else ""
@@ -763,45 +700,21 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
                 }
                 fcm_data["deeplink"] = "/driver/"
                 await send_push_notification(
-                    selected_driver["user_id"],
+                    driver["user_id"],
                     "New ride request",
-                    (
-                        f"{ride.get('pickup_address') or 'Nearby pickup'} "
-                        f"→ {ride.get('dropoff_address') or 'destination'}"
-                    ),
+                    f"{ride.get('pickup_address') or 'Nearby pickup'} → {ride.get('dropoff_address') or 'destination'}",
                     fcm_data,
                     priority="dispatch",
                 )
-                logger.info(f"[DISPATCH] push new_ride_assignment sent to user_id={selected_driver['user_id']}")
             except Exception as e:
-                logger.error(
-                    f"[DISPATCH] push notification failed for user_id={selected_driver['user_id']}: {e}",
-                    exc_info=True,
-                )
-        else:
-            logger.error(
-                f"[DISPATCH] selected_driver has no user_id — cannot notify. "
-                f"driver_id={selected_driver.get('id')} name={selected_driver.get('name')}. "
-                f"This row is likely an orphan demo driver; clean up the drivers table."
-            )
+                logger.error(f"[DISPATCH] push failed for driver {driver['user_id']}: {e}", exc_info=True)
 
-    # ── Backend-enforced offer TTL ─────────────────────────────────
-    # The driver-app's countdown timer handles the happy path (driver
-    # taps Decline before timeout), but if the device dies, loses
-    # network, or the app crashes, the ride is stuck in
-    # `driver_assigned` forever and the rider waits endlessly.
-    #
-    # This background task fires after the configured timeout + a
-    # 15 s grace period (for network latency and FCM delivery). If
-    # the ride is STILL `driver_assigned` to THIS specific driver,
-    # it unassigns and re-dispatches. ``offer_timeout`` was computed
-    # earlier so it could also be embedded in the dispatch payload.
+    # ── Batch timeout handler (no grace period) ───────────────────
     asyncio.create_task(
-        _offer_timeout_handler(
+        _batch_offer_timeout_handler(
             ride_id,
-            selected_driver["id"],
             rider_id=ride.get("rider_id"),
-            timeout_seconds=offer_timeout + 15,
+            timeout_seconds=offer_timeout,
         )
     )
 
@@ -973,6 +886,123 @@ async def _offer_timeout_handler(
             f"[DISPATCH] Offer timeout handler error for ride {ride_id}: {e}",
             exc_info=True,
         )
+
+
+async def _batch_offer_timeout_handler(
+    ride_id: str,
+    rider_id: str | None,
+    timeout_seconds: int = 15,
+):
+    """Expire all still-pending batch offers after timeout (no grace period)."""
+    try:
+        from ..repositories.driver_repo import update_acceptance_rate
+        from ..utils.driver_presence import (
+            clear_presence,
+            increment_miss_streak,
+            reset_miss_streak,
+        )
+        from ..utils.redis_client import redis_set as _redis_set
+    except ImportError:
+        from repositories.driver_repo import update_acceptance_rate  # type: ignore
+        from utils.driver_presence import (  # type: ignore
+            clear_presence,
+            increment_miss_streak,
+            reset_miss_streak,
+        )
+        from utils.redis_client import redis_set as _redis_set  # type: ignore
+
+    await asyncio.sleep(timeout_seconds)
+    try:
+        ride = await db_supabase.get_ride(ride_id)
+        if not ride or ride.get("status") != RideStatus.SEARCHING:
+            return
+
+        pending = await db_supabase.run_sync(
+            lambda: (
+                db_supabase.supabase.table("ride_offers")
+                .select("driver_id")
+                .eq("ride_id", ride_id)
+                .eq("status", "pending")
+                .execute()
+            )
+        )
+        pending_ids = [r["driver_id"] for r in (pending.data or [])]
+        if not pending_ids:
+            return
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        await db_supabase.run_sync(
+            lambda: (
+                db_supabase.supabase.table("ride_offers")
+                .update({"status": "expired", "responded_at": now_iso})
+                .eq("ride_id", ride_id)
+                .eq("status", "pending")
+                .execute()
+            )
+        )
+
+        try:
+            settings = await get_app_settings()
+            miss_threshold = int(settings.get("auto_offline_miss_threshold", 3))
+        except Exception:
+            miss_threshold = 3
+
+        for did in pending_ids:
+            miss_count = await increment_miss_streak(did)
+            await update_acceptance_rate(did, accepted=False)
+
+            auto_offline = miss_count >= miss_threshold
+            if auto_offline:
+                logger.info(
+                    f"[DISPATCH] Auto-offline: driver {did} missed "
+                    f"{miss_count} consecutive offers (threshold={miss_threshold})"
+                )
+                await db_supabase.set_driver_available(did, False)
+                await db_supabase.run_sync(
+                    lambda _did=did: (
+                        db_supabase.supabase.table("drivers")
+                        .update({"is_online": False, "is_available": False})
+                        .eq("id", _did)
+                        .execute()
+                    )
+                )
+                await clear_presence(did)
+                await reset_miss_streak(did)
+                await record_period_transition(did, 0)
+            else:
+                await db_supabase.set_driver_available(did, True)
+                await record_period_transition(did, 1)
+
+            try:
+                await _redis_set(f"spinr:offer_skip:{ride_id}:{did}", "1", ttl=300)
+            except Exception as e:
+                logger.warning(f"Failed to set offer skip key for driver {did}: {e}")
+            try:
+                drv = await db_supabase.get_driver_by_id(did)
+                uid = (drv or {}).get("user_id")
+                if uid:
+                    msg_type = "auto_offline" if auto_offline else "ride_offer_expired"
+                    await manager.send_personal_message(
+                        {"type": msg_type, "ride_id": ride_id},
+                        f"driver_{uid}",
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to send offer_expired WS to driver {did}: {e}")
+
+        if rider_id:
+            await manager.send_personal_message(
+                {
+                    "type": "driver_timeout",
+                    "ride_id": ride_id,
+                    "message": "Driver didn't respond. Finding another driver...",
+                },
+                f"rider_{rider_id}",
+            )
+
+        await match_driver_to_ride(ride_id)
+
+    except Exception as e:
+        logger.error(f"[DISPATCH] Batch timeout handler error for ride {ride_id}: {e}", exc_info=True)
 
 
 class RideEstimateRequest(BaseModel):

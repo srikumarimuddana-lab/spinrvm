@@ -231,6 +231,33 @@ async def claim_driver_atomic(driver_id: str) -> bool:
     return claimed
 
 
+_EWMA_ALPHA = 0.1
+
+
+async def update_acceptance_rate(driver_id: str, accepted: bool) -> None:
+    """Update driver.acceptance_rate using exponentially weighted moving average.
+
+    alpha=0.1 so recent behaviour matters without a single bad day
+    cratering the score.  new = alpha * outcome + (1-alpha) * old.
+    """
+    if not supabase:
+        return
+    try:
+        row = await run_sync(
+            lambda: _single_row_from_res(
+                supabase.table("drivers").select("acceptance_rate").eq("id", driver_id).execute()
+            )
+        )
+        old = float((row or {}).get("acceptance_rate") or 1.0)
+        outcome = 1.0 if accepted else 0.0
+        new_rate = round(_EWMA_ALPHA * outcome + (1 - _EWMA_ALPHA) * old, 4)
+        await run_sync(
+            lambda: supabase.table("drivers").update({"acceptance_rate": new_rate}).eq("id", driver_id).execute()
+        )
+    except Exception as exc:
+        logger.error(f"update_acceptance_rate failed for {driver_id}: {exc}", exc_info=True)
+
+
 async def claim_ride_atomic(ride_id: str, driver_id: str) -> bool:
     """Atomically claim a ride offer for `driver_id`.
 

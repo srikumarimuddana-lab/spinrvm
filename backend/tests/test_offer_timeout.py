@@ -209,7 +209,7 @@ class TestDispatchHardening:
             patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(return_value=[self._DRIVER])),
             patch(
                 "backend.routes.rides.dispatch.resolve_matching_config",
-                AsyncMock(return_value=("nearest", 4.0, 10.0)),
+                AsyncMock(return_value=("nearest", 4.0, 10.0, 3, True)),
             ),
             patch("backend.routes.rides.db_supabase.match_and_claim_driver", AsyncMock(return_value=None)),
             patch("backend.routes.rides.db_supabase.claim_driver_atomic", AsyncMock(return_value=True)),

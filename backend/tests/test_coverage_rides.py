@@ -996,7 +996,7 @@ async def test_match_driver_to_ride_no_drivers():
     ):
         mock_db.get_ride = AsyncMock(return_value=ride)
         mock_db.get_rows = AsyncMock(return_value=[])
-        mock_dispatch.resolve_matching_config = AsyncMock(return_value=("nearest", 4.0, 10.0))
+        mock_dispatch.resolve_matching_config = AsyncMock(return_value=("nearest", 4.0, 10.0, 3, True))
 
         await match_driver_to_ride(_RIDE_ID, ride=ride)
 
@@ -1049,7 +1049,7 @@ async def test_match_driver_to_ride_assigns_driver():
         mock_db.get_driver_by_id = AsyncMock(return_value=driver)
         mock_db.update_ride = AsyncMock()
         mock_db.get_user_by_id = AsyncMock(return_value={"first_name": "Alice", "last_name": "R"})
-        mock_dispatch.resolve_matching_config = AsyncMock(return_value=("nearest", 4.0, 10.0))
+        mock_dispatch.resolve_matching_config = AsyncMock(return_value=("nearest", 4.0, 10.0, 3, True))
         mock_manager.send_personal_message = AsyncMock()
 
         await match_driver_to_ride(_RIDE_ID, ride=ride)
@@ -1411,7 +1411,7 @@ async def test_match_driver_no_claim_returns_early():
         mock_db.get_rows = AsyncMock(return_value=[driver])
         mock_db.claim_driver_atomic = AsyncMock(return_value=None)  # claim always fails
         mock_db.update_ride = AsyncMock()
-        mock_dispatch.resolve_matching_config = AsyncMock(return_value=("nearest", 4.0, 10.0))
+        mock_dispatch.resolve_matching_config = AsyncMock(return_value=("nearest", 4.0, 10.0, 3, True))
 
         await match_driver_to_ride(_RIDE_ID, ride=ride)
 
@@ -1449,7 +1449,7 @@ async def test_match_driver_offline_after_claim():
         mock_db.get_driver_by_id = AsyncMock(return_value={"id": _DRIVER_ID, "is_online": False})
         mock_db.set_driver_available = AsyncMock()
         mock_db.update_ride = AsyncMock()
-        mock_dispatch.resolve_matching_config = AsyncMock(return_value=("nearest", 4.0, 10.0))
+        mock_dispatch.resolve_matching_config = AsyncMock(return_value=("nearest", 4.0, 10.0, 3, True))
 
         await match_driver_to_ride(_RIDE_ID, ride=ride)
 

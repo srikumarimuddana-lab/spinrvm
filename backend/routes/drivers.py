@@ -2558,6 +2558,63 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
 
     await reset_miss_streak(driver["id"])
 
+    # ── Batch dispatch: resolve offers for this ride ──────────────
+    try:
+        from ..repositories.driver_repo import update_acceptance_rate
+    except ImportError:
+        from repositories.driver_repo import update_acceptance_rate  # type: ignore
+
+    await update_acceptance_rate(driver["id"], accepted=True)
+
+    # Mark winner's offer as accepted, expire losers, release them
+    try:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        await db_supabase.run_sync(
+            lambda: (
+                db_supabase.supabase.table("ride_offers")
+                .update({"status": "accepted", "responded_at": now_iso})
+                .eq("ride_id", ride_id)
+                .eq("driver_id", driver["id"])
+                .eq("status", "pending")
+                .execute()
+            )
+        )
+        losers = await db_supabase.run_sync(
+            lambda: (
+                db_supabase.supabase.table("ride_offers")
+                .select("driver_id")
+                .eq("ride_id", ride_id)
+                .eq("status", "pending")
+                .execute()
+            )
+        )
+        loser_ids = [r["driver_id"] for r in (losers.data or [])]
+        if loser_ids:
+            await db_supabase.run_sync(
+                lambda: (
+                    db_supabase.supabase.table("ride_offers")
+                    .update({"status": "expired", "responded_at": now_iso})
+                    .eq("ride_id", ride_id)
+                    .eq("status", "pending")
+                    .execute()
+                )
+            )
+            for lid in loser_ids:
+                await db_supabase.set_driver_available(lid, True)
+                await record_period_transition(lid, 1)
+                try:
+                    loser_drv = await db_supabase.get_driver_by_id(lid)
+                    loser_uid = (loser_drv or {}).get("user_id")
+                    if loser_uid:
+                        await manager.send_personal_message(
+                            {"type": "ride_taken", "ride_id": ride_id},
+                            f"driver_{loser_uid}",
+                        )
+                except Exception as e:
+                    logger.warning(f"Failed to send ride_taken WS to loser driver {lid}: {e}")
+    except Exception as e:
+        logger.error(f"[ACCEPT] batch offer cleanup failed for ride {ride_id}: {e}", exc_info=True)
+
     # Capture the pickup-leg ESTIMATE shown to the rider at the moment of
     # acceptance. This is the only piece of ride_metrics with no other home —
     # everything else is either already on the row (planned/actual trip
@@ -2624,36 +2681,41 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
-    # Conditional reset: only unassign if this driver is still the assigned one.
-    # An unconditional update_ride() would overwrite a concurrent accept_ride() that
-    # already moved the ride to driver_accepted with a different driver.
-    declined = await db_supabase.update_one(
-        "rides",
-        {
-            "id": ride_id,
-            "driver_id": driver["id"],
-            "status": {"$in": [RideStatus.SEARCHING, RideStatus.DRIVER_ASSIGNED]},
-        },
-        {
-            "$set": {
-                "driver_id": None,
-                "status": RideStatus.SEARCHING,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }
-        },
-    )
-    if declined is None:
-        # Race lost — another driver already accepted; our decline is a no-op.
-        logger.info(f"[DECLINE] ride {ride_id} already claimed by another driver; decline ignored")
-        # SGI insurance period audit — even on a race loss the driver is no
-        # longer obligated to this ride, so we must log the period transition
-        # back to period 1 to avoid a gap in the commercial-insurance audit trail.
-        await record_period_transition(driver["id"], 1)
-    else:
-        # M-5: SGI insurance period audit — decline releases the driver from
-        # period 2 back to period 1 only when the decline actually took effect.
-        await record_period_transition(driver["id"], 1)
+    ride = await db_supabase.get_ride(ride_id)
+    if not ride:
+        raise HTTPException(status_code=404, detail="Ride not found")
+    if ride.get("status") not in ("searching", "driver_assigned"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot decline ride in status '{ride.get('status')}'",
+        )
 
+    # ── Batch dispatch: update this driver's offer row ───────────
+    try:
+        from ..repositories.driver_repo import update_acceptance_rate
+    except ImportError:
+        from repositories.driver_repo import update_acceptance_rate  # type: ignore
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    try:
+        await db_supabase.run_sync(
+            lambda: (
+                db_supabase.supabase.table("ride_offers")
+                .update({"status": "declined", "responded_at": now_iso})
+                .eq("ride_id", ride_id)
+                .eq("driver_id", driver["id"])
+                .eq("status", "pending")
+                .execute()
+            )
+        )
+    except Exception as e:
+        logger.error(f"[DECLINE] ride_offers update failed: {e}", exc_info=True)
+
+    await update_acceptance_rate(driver["id"], accepted=False)
+
+    # Release this driver back to available
+    await db_supabase.set_driver_available(driver["id"], True)
+    await record_period_transition(driver["id"], 1)
     await reset_miss_streak(driver["id"])
 
     # Record the decline in audit_logs so daily stats can count it
@@ -2676,7 +2738,6 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
         logger.error(f"Could not log ride decline to audit_logs: {_e}", exc_info=True)
 
     # Cooldown: skip this driver for 5 minutes on the next dispatch cycle
-    # so they are not immediately re-offered the same ride they declined.
     try:
         from ..utils.redis_client import redis_set as _redis_set  # type: ignore
     except ImportError:
@@ -2686,16 +2747,34 @@ async def decline_ride(ride_id: str, current_user: dict = Depends(get_current_us
     except Exception as _e:
         logger.error(f"Could not set offer cooldown key for ride {ride_id}: {_e}", exc_info=True)
 
-    # GAP FIX: Re-match to find the next available driver
+    # Early resolution: if no pending offers remain and ride is still
+    # searching, re-dispatch immediately instead of waiting for batch timeout.
     try:
         import asyncio
 
-        from .rides import match_driver_to_ride
+        try:
+            from .rides import match_driver_to_ride
+        except ImportError:
+            from rides import match_driver_to_ride  # type: ignore
 
-        asyncio.create_task(match_driver_to_ride(ride_id))
-        logger.info(f"Re-matching ride {ride_id} after driver {driver['id']} declined")
+        fresh_ride = await db_supabase.get_ride(ride_id)
+        if fresh_ride and fresh_ride.get("status") == "searching":
+            remaining = await db_supabase.run_sync(
+                lambda: (
+                    db_supabase.supabase.table("ride_offers")
+                    .select("id")
+                    .eq("ride_id", ride_id)
+                    .eq("status", "pending")
+                    .execute()
+                )
+            )
+            if not (remaining.data or []):
+                asyncio.create_task(match_driver_to_ride(ride_id))
+                logger.info(f"[DECLINE] all offers resolved for ride {ride_id} — re-dispatching")
+            else:
+                logger.info(f"[DECLINE] ride {ride_id} still has {len(remaining.data)} pending offer(s)")
     except Exception as e:
-        logger.error(f"Could not trigger re-matching for ride {ride_id}: {e}", exc_info=True)
+        logger.error(f"Could not check/trigger re-match for ride {ride_id}: {e}", exc_info=True)
 
     return {"success": True}
 

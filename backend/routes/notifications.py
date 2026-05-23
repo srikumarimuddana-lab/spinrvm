@@ -133,6 +133,22 @@ async def register_push_token(body: RegisterTokenRequest, current_user: dict = D
     platform = body.platform
     client_type = body.client_type if body.client_type in ("rider", "driver") else None
 
+    # If the app didn't send client_type (pre-EAS-update), infer from
+    # the user's is_driver flag. A pure rider (is_driver=false) must be
+    # the rider app; a driver-only user must be the driver app.
+    # Dual-role users stay None until the EAS update ships client_type.
+    if not client_type:
+        is_driver = current_user.get("is_driver", False)
+        is_rider = current_user.get("is_rider", True)
+        if is_driver and not is_rider:
+            client_type = "driver"
+        elif is_rider and not is_driver:
+            client_type = "rider"
+        else:
+            # Dual-role: write to BOTH columns so cloud messaging
+            # reaches whichever app surface the admin targets.
+            client_type = "both"
+
     # Upsert: one token per user per platform.
     existing = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows(
@@ -163,20 +179,21 @@ async def register_push_token(body: RegisterTokenRequest, current_user: dict = D
             },
         )
 
-    # Always update the legacy fcm_token column. Only write to per-app
-    # columns when client_type is explicitly provided (requires EAS update).
     user_update: dict = {"fcm_token": token}
     if client_type == "driver":
         user_update["fcm_token_driver"] = token
     elif client_type == "rider":
         user_update["fcm_token_rider"] = token
+    elif client_type == "both":
+        user_update["fcm_token_rider"] = token
+        user_update["fcm_token_driver"] = token
 
     try:
         await db.update_one("users", {"id": current_user["id"]}, user_update)
     except Exception as exc:
         logger.error(f"Failed to mirror FCM token onto users: {exc}", exc_info=True)
 
-    logger.info(f"FCM token registered for user {current_user['id']} ({platform}, client_type={client_type})")
+    logger.info(f"FCM token registered for user {current_user['id']} ({platform}, inferred={client_type})")
     return {"success": True}
 
 

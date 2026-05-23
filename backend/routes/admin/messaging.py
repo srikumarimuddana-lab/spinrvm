@@ -29,26 +29,47 @@ class CloudMessageRequest(BaseModel):
     scheduled_at: Optional[str] = None
 
 
-async def _fan_out_push(message_id: str, target_users: list, title: str, description: str) -> None:
-    """Fan-out push notifications concurrently and persist final stats to the cloud_messages record."""
+def _token_column_for_audience(audience: str) -> str:
+    """Map audience to the correct per-app FCM token column on users."""
+    if audience in ("drivers", "particular_driver"):
+        return "fcm_token_driver"
+    return "fcm_token_rider"
+
+
+async def _fan_out_push(
+    message_id: str,
+    target_users: list,
+    title: str,
+    description: str,
+    token_column: str = "fcm_token",  # noqa: S107
+) -> None:
+    """Fan-out push notifications concurrently and persist final stats.
+
+    ``token_column`` selects which users column to read the FCM token
+    from — ``fcm_token_rider`` for customer audiences, ``fcm_token_driver``
+    for driver audiences. This ensures dual-role users receive the
+    notification in the correct app.
+    """
     try:
-        from ...features import send_push_notification
+        from ...features import _is_expo_token, _send_expo_push
     except ImportError:
-        from features import send_push_notification
+        from features import _is_expo_token, _send_expo_push  # type: ignore
 
     sem = asyncio.Semaphore(50)
 
-    async def _send_one(uid: str) -> bool:
+    async def _send_one(token: str) -> bool:
         async with sem:
             try:
-                return bool(await send_push_notification(uid, title, description))
+                if _is_expo_token(token):
+                    return bool(await _send_expo_push(token, title, description, None))
+                return bool(await _send_fcm(token, title, description))
             except Exception:
                 return False
 
-    uids = [u.get("id") if isinstance(u, dict) else u for u in target_users]
-    uids = [uid for uid in uids if uid]
+    tokens = [u.get(token_column) or u.get("fcm_token") for u in target_users if isinstance(u, dict)]
+    tokens = [t for t in tokens if t]
 
-    results = await asyncio.gather(*[_send_one(uid) for uid in uids], return_exceptions=True)
+    results = await asyncio.gather(*[_send_one(t) for t in tokens], return_exceptions=True)
     successful = sum(1 for r in results if r is True)
     failed_count = len(results) - successful
 
@@ -62,6 +83,32 @@ async def _fan_out_push(message_id: str, target_users: list, title: str, descrip
         )
     except Exception:
         logger.error(f"Failed to update cloud_message stats for {message_id}", exc_info=True)
+
+
+async def _send_fcm(token: str, title: str, body: str) -> bool:
+    """Send a single FCM notification (non-Expo token)."""
+    try:
+        from firebase_admin import messaging
+    except ImportError:
+        logger.warning("firebase_admin not available for FCM push")
+        return False
+    try:
+        message = messaging.Message(
+            notification=messaging.Notification(title=title, body=body),
+            token=token,
+            android=messaging.AndroidConfig(
+                priority="high",
+                notification=messaging.AndroidNotification(channel_id="cloud-messages"),
+            ),
+            apns=messaging.APNSConfig(
+                headers={"apns-priority": "10", "apns-push-type": "alert"},
+            ),
+        )
+        await asyncio.to_thread(messaging.send, message)
+        return True
+    except Exception:
+        logger.error("FCM send failed for cloud message", exc_info=True)
+        return False
 
 
 # ---------- Cloud Messaging ----------
@@ -93,24 +140,35 @@ async def admin_send_cloud_message(
     status = "scheduled" if is_scheduled else "sent"
 
     total_recipients = 1
+    token_col = _token_column_for_audience(audience)
 
     if audience in ("particular_customer", "particular_driver"):
         total_recipients = len(particular_ids) if particular_ids else 1
     elif audience == "customers":
-        count = await db_supabase.count_documents("users", {"is_rider": True})
+        count = await db_supabase.count_documents("users", {"role": "rider"})
         total_recipients = count if count > 0 else 0
     elif audience == "drivers":
         count = await db_supabase.count_documents("users", {"is_driver": True})
+        total_recipients = count if count > 0 else 0
+    elif audience == "all":
+        count = await db_supabase.count_documents("users", {})
         total_recipients = count if count > 0 else 0
 
     target_users: list = []
     if not is_scheduled:
         if audience in ("particular_customer", "particular_driver"):
-            target_users = [{"id": uid} for uid in particular_ids]
+            ids = particular_ids or []
+            target_users = []
+            for uid in ids:
+                rows = await db.get_rows("users", {"id": uid}, limit=1)
+                if rows:
+                    target_users.append(rows[0])
         elif audience == "customers":
-            target_users = await db.get_rows("users", {"is_rider": True}, limit=10000)
+            target_users = await db.get_rows("users", {"role": "rider"}, limit=10000)
         elif audience == "drivers":
             target_users = await db.get_rows("users", {"is_driver": True}, limit=10000)
+        elif audience == "all":
+            target_users = await db.get_rows("users", {}, limit=10000)
 
     doc = {
         "id": str(uuid.uuid4()),
@@ -141,7 +199,7 @@ async def admin_send_cloud_message(
         ) from e
 
     if not is_scheduled:
-        background_tasks.add_task(_fan_out_push, doc["id"], target_users, title, description)
+        background_tasks.add_task(_fan_out_push, doc["id"], target_users, title, description, token_col)
         response.status_code = 202
 
     return {"success": True, "message": doc}

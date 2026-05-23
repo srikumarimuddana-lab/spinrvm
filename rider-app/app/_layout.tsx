@@ -243,6 +243,7 @@ export default function RootLayout() {
         await api.post('/notifications/register-token', {
           token: fcmToken,
           platform: Platform.OS,
+          client_type: 'rider',
         });
         fcmRegisteredRef.current = true;
         const uid = useAuthStore.getState().user?.id;
@@ -264,6 +265,7 @@ export default function RootLayout() {
         await api.post('/notifications/register-token', {
           token: newToken,
           platform: Platform.OS,
+          client_type: 'rider',
         });
       } catch (e) {
         console.log('[Push] Rider refreshed FCM token registration failed:', e);

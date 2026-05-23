@@ -139,7 +139,7 @@ async def admin_send_notification(request: Request, notification: NotificationRe
             await send_push_notification(u["id"], title, body)
         logger.info(f"Broadcast notification to all users: {title}")
     elif audience == "riders":
-        riders = await db.get_rows("users", {"is_rider": True}, limit=10000)
+        riders = await db.get_rows("users", {"role": "rider"}, limit=10000)
         for u in riders or []:
             await send_push_notification(u["id"], title, body)
         logger.info(f"Broadcast notification to all riders: {title}")

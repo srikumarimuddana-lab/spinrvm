@@ -45,6 +45,7 @@ class PreferencesUpdate(BaseModel):
 class RegisterTokenRequest(BaseModel):
     token: str
     platform: str = "unknown"
+    client_type: str = "rider"
 
 
 class TestPushRequest(BaseModel):
@@ -130,8 +131,9 @@ async def register_push_token(body: RegisterTokenRequest, current_user: dict = D
     """
     token = body.token
     platform = body.platform
+    client_type = body.client_type if body.client_type in ("rider", "driver") else "rider"
 
-    # Upsert: one token per user per platform
+    # Upsert: one token per user per platform.
     existing = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows(
             "push_tokens",
@@ -161,13 +163,19 @@ async def register_push_token(body: RegisterTokenRequest, current_user: dict = D
             },
         )
 
-    # Mirror to users.fcm_token — this is what send_push_notification reads.
+    # Mirror to users.fcm_token (legacy, used by dispatch/ride pushes) and
+    # the per-app column so cloud messaging targets the correct app surface.
+    app_col = "fcm_token_driver" if client_type == "driver" else "fcm_token_rider"
     try:
-        await db.update_one("users", {"id": current_user["id"]}, {"fcm_token": token})
+        await db.update_one(
+            "users",
+            {"id": current_user["id"]},
+            {"fcm_token": token, app_col: token},
+        )
     except Exception as exc:
-        logger.error(f"Failed to mirror FCM token onto users.fcm_token: {exc}", exc_info=True)
+        logger.error(f"Failed to mirror FCM token onto users: {exc}", exc_info=True)
 
-    logger.info(f"FCM token registered for user {current_user['id']} ({platform})")
+    logger.info(f"FCM token registered for user {current_user['id']} ({platform}, {client_type})")
     return {"success": True}
 
 

@@ -418,6 +418,7 @@ export default function RootLayout() {
         await api.post('/notifications/register-token', {
           token: fcmToken,
           platform: Platform.OS,
+          client_type: 'driver',
         });
         fcmRegisteredRef.current = true;
         const uid = useAuthStore.getState().user?.id;
@@ -444,6 +445,7 @@ export default function RootLayout() {
         await api.post('/notifications/register-token', {
           token: newToken,
           platform: Platform.OS,
+          client_type: 'driver',
         });
         console.log('[Push] Refreshed FCM token registered with backend');
       } catch (e) {

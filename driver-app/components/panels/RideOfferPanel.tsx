@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import {
     View, Text, TouchableOpacity, StyleSheet, ActivityIndicator,
-    BackHandler, Animated, Easing, Dimensions, ScrollView, Platform, Vibration
+    BackHandler, Animated, Easing, Dimensions, Platform, Vibration
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -53,34 +53,11 @@ interface RideOfferPanelProps {
     onDecline: () => void;
 }
 
-// Color palette — bold, premium, money-positive
-const GOLD = '#FFD60A';
-const GOLD_DARK = '#B8860B';
-const MONEY_GREEN = '#00D26A';
-const MONEY_GREEN_DARK = '#00A050';
-const SURGE_ORANGE = '#FF6B00';
-const SURGE_RED = '#FF3B30';
-const QUEST_PURPLE = '#A855F7';
-const QUEST_PURPLE_DARK = '#7C3AED';
-const COUNTDOWN_GREEN = '#34C759';
-const COUNTDOWN_AMBER = '#FF9500';
-const COUNTDOWN_RED = '#FF453A';
-
-function getCountdownColor(seconds: number): string {
-    if (seconds > 10) return COUNTDOWN_GREEN;
-    if (seconds > 5) return COUNTDOWN_AMBER;
-    return COUNTDOWN_RED;
-}
-
-function getIncentiveIcon(type: string): keyof typeof Ionicons.glyphMap {
-    switch (type) {
-        case 'peak_hours': return 'flame';
-        case 'time_limited': return 'timer';
-        case 'min_distance': return 'speedometer';
-        case 'area_boost': return 'location';
-        default: return 'gift';
-    }
-}
+const ACCENT = '#10B981';
+const ACCENT_DARK = '#059669';
+const SURGE_ORANGE = '#F97316';
+const GOLD = '#F59E0B';
+const QUEST_PURPLE = '#8B5CF6';
 
 export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
     incomingRide,
@@ -96,11 +73,7 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
     const screenHeight = Dimensions.get('window').height;
 
     const slideAnim = useRef(new Animated.Value(screenHeight)).current;
-    const pulseAnim = useRef(new Animated.Value(1)).current;
-    const glowAnim = useRef(new Animated.Value(0)).current;
     const progressAnim = useRef(new Animated.Value(1)).current;
-    const heroScale = useRef(new Animated.Value(0.5)).current;
-    const badgeShimmer = useRef(new Animated.Value(0)).current;
 
     useEffect(() => {
         const sub = BackHandler.addEventListener('hardwareBackPress', () => true);
@@ -109,52 +82,15 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
 
     useEffect(() => {
         if (incomingRide) {
-            // Haptic feedback on appear
             if (Platform.OS !== 'web') {
                 Vibration.vibrate([0, 80, 60, 80]);
             }
-
-            // Slide up entrance
             Animated.spring(slideAnim, {
                 toValue: 0,
-                tension: 60,
-                friction: 11,
+                tension: 65,
+                friction: 12,
                 useNativeDriver: true,
             }).start();
-
-            // Hero scale pop-in
-            Animated.spring(heroScale, {
-                toValue: 1,
-                tension: 80,
-                friction: 7,
-                useNativeDriver: true,
-            }).start();
-
-            // Continuous accept button pulse
-            Animated.loop(
-                Animated.sequence([
-                    Animated.timing(pulseAnim, { toValue: 1.04, duration: 800, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-                    Animated.timing(pulseAnim, { toValue: 1, duration: 800, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-                ])
-            ).start();
-
-            // Hero glow breathing animation
-            Animated.loop(
-                Animated.sequence([
-                    Animated.timing(glowAnim, { toValue: 1, duration: 1500, easing: Easing.inOut(Easing.ease), useNativeDriver: false }),
-                    Animated.timing(glowAnim, { toValue: 0, duration: 1500, easing: Easing.inOut(Easing.ease), useNativeDriver: false }),
-                ])
-            ).start();
-
-            // Shimmer across bonus badges
-            Animated.loop(
-                Animated.timing(badgeShimmer, {
-                    toValue: 1,
-                    duration: 2200,
-                    easing: Easing.linear,
-                    useNativeDriver: true,
-                })
-            ).start();
         }
     }, [incomingRide]);
 
@@ -175,57 +111,36 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
         : (incomingRide.fare || 0);
     const totalBonus = incomingRide.total_bonus ?? 0;
     const totalEarnings = baseFare + totalBonus;
-
-    const timerColor = getCountdownColor(countdownSeconds);
-
-    const perHr = incomingRide.duration_minutes && incomingRide.duration_minutes > 0
-        ? ((totalEarnings / incomingRide.duration_minutes) * 60).toFixed(0) : null;
-    const perKm = incomingRide.distance_km && incomingRide.distance_km > 0
-        ? (totalEarnings / incomingRide.distance_km).toFixed(2) : null;
-
     const hasSurge = (incomingRide.surge_multiplier ?? 0) > 1.0;
     const hasIncentives = (incomingRide.incentives?.length ?? 0) > 0;
     const hasBonus = totalBonus > 0;
     const quest = incomingRide.quest_hint;
 
+    const timerPct = countdownSeconds / maxCountdown;
+    const timerColor = timerPct > 0.6 ? ACCENT : timerPct > 0.3 ? '#F59E0B' : '#EF4444';
+
     const pickupStr = pickupDistanceKm != null
         ? (pickupDistanceKm < 1
-            ? `${Math.round(pickupDistanceKm * 1000)} m`
-            : `${pickupDistanceKm.toFixed(1)} km`)
+            ? `${Math.round(pickupDistanceKm * 1000)}m`
+            : `${pickupDistanceKm.toFixed(1)}km`)
         : null;
-
-    // Hero gradient — gets richer when bonus/surge present
-    const heroGradient: [string, string, ...string[]] = hasBonus || hasSurge
-        ? ['#00D26A', '#00A050', '#008040']
-        : ['#34C759', '#28A745'];
-
-    const glowOpacity = glowAnim.interpolate({
-        inputRange: [0, 1],
-        outputRange: [0.3, 0.85],
-    });
-
-    const shimmerTranslate = badgeShimmer.interpolate({
-        inputRange: [0, 1],
-        outputRange: [-200, 200],
-    });
 
     return (
         <View style={styles.overlay} accessibilityViewIsModal>
-            {/* Dim background */}
             <Animated.View
                 style={[
-                    styles.dimBackground,
+                    styles.dim,
                     { opacity: slideAnim.interpolate({ inputRange: [0, screenHeight], outputRange: [1, 0] }) }
                 ]}
             />
 
-            <Animated.View style={[styles.cardContainer, { transform: [{ translateY: slideAnim }] }]}>
+            <Animated.View style={[styles.container, { transform: [{ translateY: slideAnim }] }]}>
                 <View style={styles.card}>
 
-                    {/* Countdown progress bar at top */}
-                    <View style={styles.progressTrack}>
+                    {/* Timer bar */}
+                    <View style={styles.timerTrack}>
                         <Animated.View style={[
-                            styles.progressFill,
+                            styles.timerFill,
                             {
                                 backgroundColor: timerColor,
                                 width: progressAnim.interpolate({
@@ -236,327 +151,194 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                         ]} />
                     </View>
 
-                    <ScrollView
-                        showsVerticalScrollIndicator={false}
-                        bounces={false}
-                        contentContainerStyle={styles.scrollContent}
-                    >
-                        {/* Header row: New Request title + Countdown ring */}
-                        <View style={styles.headerRow}>
-                            <View style={styles.headerLeft}>
-                                <View style={styles.newRequestBadge}>
-                                    <View style={[styles.liveDot, { backgroundColor: MONEY_GREEN }]} />
-                                    <Text style={styles.newRequestText}>NEW REQUEST</Text>
-                                </View>
-                                {incomingRide.rider_name && (
-                                    <View style={styles.riderRow}>
-                                        <View style={styles.riderAvatar}>
-                                            <Text style={styles.riderInitial}>
-                                                {incomingRide.rider_name.charAt(0).toUpperCase()}
-                                            </Text>
-                                        </View>
-                                        <View>
-                                            <Text style={styles.riderName} numberOfLines={1}>
-                                                {incomingRide.rider_name}
-                                            </Text>
-                                            {incomingRide.rider_rating ? (
-                                                <View style={styles.ratingRow}>
-                                                    <Ionicons name="star" size={11} color={GOLD} />
-                                                    <Text style={styles.ratingText}>
-                                                        {incomingRide.rider_rating.toFixed(1)}
-                                                    </Text>
-                                                </View>
-                                            ) : null}
-                                        </View>
-                                    </View>
-                                )}
+                    {/* Header: countdown + label */}
+                    <View style={styles.header}>
+                        <View style={styles.headerLeft}>
+                            <View style={styles.liveIndicator}>
+                                <View style={[styles.liveDot, { backgroundColor: ACCENT }]} />
+                                <Text style={styles.liveText}>NEW RIDE</Text>
                             </View>
-
-                            {/* Countdown ring */}
-                            <View style={styles.countdownWrap}>
-                                <View style={[styles.countdownOuterRing, { borderColor: timerColor + '30' }]}>
-                                    <View style={[styles.countdownInnerRing, { borderColor: timerColor }]}>
-                                        <Text style={[styles.countdownText, { color: timerColor }]}>
-                                            {countdownSeconds}
+                            {incomingRide.rider_name ? (
+                                <View style={styles.riderInfo}>
+                                    <View style={styles.riderAvatar}>
+                                        <Text style={styles.riderInitial}>
+                                            {incomingRide.rider_name.charAt(0).toUpperCase()}
                                         </Text>
-                                        <Text style={[styles.countdownUnit, { color: timerColor }]}>SEC</Text>
                                     </View>
+                                    <Text style={styles.riderName} numberOfLines={1}>{incomingRide.rider_name}</Text>
+                                    {incomingRide.rider_rating ? (
+                                        <>
+                                            <Ionicons name="star" size={12} color={GOLD} />
+                                            <Text style={styles.riderRating}>{incomingRide.rider_rating.toFixed(1)}</Text>
+                                        </>
+                                    ) : null}
                                 </View>
-                            </View>
+                            ) : null}
                         </View>
+                        <View style={[styles.timerCircle, { borderColor: timerColor }]}>
+                            <Text style={[styles.timerText, { color: timerColor }]}>{countdownSeconds}</Text>
+                            <Text style={[styles.timerUnit, { color: timerColor }]}>s</Text>
+                        </View>
+                    </View>
 
-                        {/* HERO EARNINGS — the showpiece */}
-                        <Animated.View style={[styles.heroContainer, { transform: [{ scale: heroScale }] }]}>
-                            {/* Glow effect behind */}
-                            <Animated.View style={[styles.heroGlow, { opacity: glowOpacity }]} />
+                    {/* Earnings hero */}
+                    <View style={styles.earningsSection}>
+                        <Text style={styles.earningsLabel}>YOUR EARNINGS</Text>
+                        <View style={styles.earningsRow}>
+                            <Text style={styles.earningsDollar}>$</Text>
+                            <Text style={styles.earningsAmount} allowFontScaling={false}>
+                                {totalEarnings.toFixed(2)}
+                            </Text>
+                        </View>
+                        {hasBonus && (
+                            <Text style={styles.earningsBreakdown}>
+                                ${baseFare.toFixed(2)} fare + ${totalBonus.toFixed(2)} bonus
+                            </Text>
+                        )}
+                        <View style={styles.keepBadge}>
+                            <Ionicons name="shield-checkmark" size={12} color={ACCENT} />
+                            <Text style={styles.keepText}>100% yours — $0 commission</Text>
+                        </View>
+                    </View>
 
-                            <LinearGradient
-                                colors={heroGradient}
-                                start={{ x: 0, y: 0 }}
-                                end={{ x: 1, y: 1 }}
-                                style={styles.heroGradientBg}
-                            >
-                                {/* Decorative corner sparkles */}
-                                <View style={styles.sparkleTopLeft}>
-                                    <Ionicons name="sparkles" size={18} color="rgba(255,255,255,0.4)" />
-                                </View>
-                                <View style={styles.sparkleBottomRight}>
-                                    <Ionicons name="sparkles" size={14} color="rgba(255,255,255,0.3)" />
-                                </View>
-
-                                <Text style={styles.heroLabel}>YOU EARN</Text>
-                                <View style={styles.heroFareRow}>
-                                    <Text style={styles.heroDollar} allowFontScaling={false}>$</Text>
-                                    <Text style={styles.heroFare} allowFontScaling={false}>
-                                        {totalEarnings.toFixed(2)}
+                    {/* Badges row: surge, wav, cash, payment */}
+                    {(hasSurge || incomingRide.requires_wav || incomingRide.payment_method === 'cash') && (
+                        <View style={styles.badgesRow}>
+                            {hasSurge && (
+                                <View style={[styles.badge, { backgroundColor: SURGE_ORANGE + '20' }]}>
+                                    <Ionicons name="flame" size={13} color={SURGE_ORANGE} />
+                                    <Text style={[styles.badgeText, { color: SURGE_ORANGE }]}>
+                                        {incomingRide.surge_multiplier!.toFixed(1)}x Surge
                                     </Text>
-                                </View>
-
-                                {/* 100% commission badge with shimmer */}
-                                <View style={styles.commissionBadge}>
-                                    <Ionicons name="shield-checkmark" size={13} color="#FFF" />
-                                    <Text style={styles.commissionText}>YOU KEEP 100% — $0 COMMISSION</Text>
-                                    <Animated.View
-                                        style={[
-                                            styles.shimmer,
-                                            { transform: [{ translateX: shimmerTranslate }] }
-                                        ]}
-                                    />
-                                </View>
-
-                                {/* Earnings breakdown line */}
-                                {hasBonus && (
-                                    <View style={styles.breakdownRow}>
-                                        <Text style={styles.breakdownText}>
-                                            ${baseFare.toFixed(2)} fare
-                                        </Text>
-                                        <Ionicons name="add" size={14} color="rgba(255,255,255,0.85)" />
-                                        <Text style={[styles.breakdownText, styles.breakdownBonus]}>
-                                            ${totalBonus.toFixed(2)} bonus
-                                        </Text>
-                                    </View>
-                                )}
-                            </LinearGradient>
-                        </Animated.View>
-
-                        {/* Top badges row: Surge / WAV / Payment */}
-                        {(hasSurge || incomingRide.requires_wav || incomingRide.payment_method === 'cash') && (
-                            <View style={styles.badgesRow}>
-                                {hasSurge && (
-                                    <LinearGradient
-                                        colors={[SURGE_ORANGE, SURGE_RED]}
-                                        start={{ x: 0, y: 0 }}
-                                        end={{ x: 1, y: 1 }}
-                                        style={styles.chipGradient}
-                                    >
-                                        <Ionicons name="flame" size={14} color="#FFF" />
-                                        <Text style={styles.chipText}>
-                                            {incomingRide.surge_multiplier!.toFixed(1)}× SURGE
-                                        </Text>
-                                    </LinearGradient>
-                                )}
-                                {incomingRide.requires_wav && (
-                                    <View style={[styles.chip, { backgroundColor: '#0A84FF' }]}>
-                                        <Ionicons name="accessibility" size={14} color="#FFF" />
-                                        <Text style={styles.chipText}>WAV</Text>
-                                    </View>
-                                )}
-                                {incomingRide.payment_method === 'cash' && (
-                                    <View style={[styles.chip, { backgroundColor: '#3A3A3C' }]}>
-                                        <Ionicons name="cash" size={14} color="#FFF" />
-                                        <Text style={styles.chipText}>CASH</Text>
-                                    </View>
-                                )}
-                            </View>
-                        )}
-
-                        {/* INCENTIVES — vibrant gold cards */}
-                        {hasIncentives && (
-                            <View style={styles.incentivesContainer}>
-                                <View style={styles.sectionHeader}>
-                                    <Ionicons name="gift" size={16} color={GOLD_DARK} />
-                                    <Text style={styles.sectionTitle}>BONUS BOOSTS</Text>
-                                    <View style={styles.totalBonusPill}>
-                                        <Text style={styles.totalBonusText}>
-                                            +${totalBonus.toFixed(2)}
-                                        </Text>
-                                    </View>
-                                </View>
-                                {incomingRide.incentives!.map((inc, idx) => (
-                                    <View key={idx} style={styles.incentiveCard}>
-                                        <LinearGradient
-                                            colors={['#FFD60A', '#FFAB00']}
-                                            start={{ x: 0, y: 0 }}
-                                            end={{ x: 1, y: 1 }}
-                                            style={styles.incentiveIconWrap}
-                                        >
-                                            <Ionicons
-                                                name={getIncentiveIcon(inc.incentive_type)}
-                                                size={20}
-                                                color="#1C1C1E"
-                                            />
-                                        </LinearGradient>
-                                        <View style={styles.incentiveTextWrap}>
-                                            <Text style={styles.incentiveName} numberOfLines={1}>
-                                                {inc.name}
-                                            </Text>
-                                            <Text style={styles.incentiveType}>
-                                                {inc.incentive_type.replace(/_/g, ' ').toUpperCase()}
-                                            </Text>
-                                        </View>
-                                        <Text style={styles.incentiveAmount}>
-                                            +${inc.bonus_amount.toFixed(2)}
-                                        </Text>
-                                    </View>
-                                ))}
-                            </View>
-                        )}
-
-                        {/* QUEST PROGRESS — purple premium card */}
-                        {quest && quest.target_value > 0 && (
-                            <LinearGradient
-                                colors={['#A855F7', '#7C3AED']}
-                                start={{ x: 0, y: 0 }}
-                                end={{ x: 1, y: 1 }}
-                                style={styles.questCard}
-                            >
-                                <View style={styles.questHeader}>
-                                    <View style={styles.questIconCircle}>
-                                        <Ionicons name="trophy" size={20} color={GOLD} />
-                                    </View>
-                                    <View style={styles.questTextWrap}>
-                                        <Text style={styles.questTitle} numberOfLines={1}>
-                                            {quest.title}
-                                        </Text>
-                                        <Text style={styles.questSubtitle}>
-                                            Ride {Math.floor(quest.current_value) + 1} of {Math.floor(quest.target_value)} • Reward ${quest.reward_amount.toFixed(0)}
-                                        </Text>
-                                    </View>
-                                </View>
-                                <View style={styles.questProgressTrack}>
-                                    <View style={[
-                                        styles.questProgressFill,
-                                        { width: `${Math.min(100, ((quest.current_value + 1) / quest.target_value) * 100)}%` }
-                                    ]} />
-                                </View>
-                            </LinearGradient>
-                        )}
-
-                        {/* TRIP METRICS — premium cards */}
-                        <View style={styles.metricsRow}>
-                            <View style={styles.metricCard}>
-                                <Ionicons name="navigate-circle" size={22} color={colors.primary} />
-                                <Text style={styles.metricValue}>
-                                    {incomingRide.distance_km?.toFixed(1) || '--'}
-                                </Text>
-                                <Text style={styles.metricUnit}>KM TRIP</Text>
-                            </View>
-                            <View style={styles.metricCard}>
-                                <Ionicons name="time" size={22} color={colors.primary} />
-                                <Text style={styles.metricValue}>
-                                    {Math.round(incomingRide.duration_minutes || 0)}
-                                </Text>
-                                <Text style={styles.metricUnit}>MIN</Text>
-                            </View>
-                            {perKm && (
-                                <View style={[styles.metricCard, styles.metricCardHighlight]}>
-                                    <Ionicons name="cash" size={22} color={MONEY_GREEN_DARK} />
-                                    <Text style={[styles.metricValue, { color: MONEY_GREEN_DARK }]}>
-                                        ${perKm}
-                                    </Text>
-                                    <Text style={[styles.metricUnit, { color: MONEY_GREEN_DARK }]}>PER KM</Text>
                                 </View>
                             )}
-                            {perHr && (
-                                <View style={[styles.metricCard, styles.metricCardHighlight]}>
-                                    <Ionicons name="trending-up" size={22} color={MONEY_GREEN_DARK} />
-                                    <Text style={[styles.metricValue, { color: MONEY_GREEN_DARK }]}>
-                                        ${perHr}
-                                    </Text>
-                                    <Text style={[styles.metricUnit, { color: MONEY_GREEN_DARK }]}>HR RATE</Text>
+                            {incomingRide.requires_wav && (
+                                <View style={[styles.badge, { backgroundColor: '#3B82F620' }]}>
+                                    <Ionicons name="accessibility" size={13} color="#3B82F6" />
+                                    <Text style={[styles.badgeText, { color: '#3B82F6' }]}>WAV</Text>
+                                </View>
+                            )}
+                            {incomingRide.payment_method === 'cash' && (
+                                <View style={[styles.badge, { backgroundColor: '#6B728020' }]}>
+                                    <Ionicons name="cash" size={13} color={colors.textDim} />
+                                    <Text style={[styles.badgeText, { color: colors.textDim }]}>Cash</Text>
                                 </View>
                             )}
                         </View>
+                    )}
 
-                        {/* ROUTE TIMELINE — clean two-stop visualization */}
-                        <View style={styles.routeCard}>
-                            <View style={styles.routeColumn}>
-                                <LinearGradient
-                                    colors={[MONEY_GREEN, MONEY_GREEN_DARK]}
-                                    style={styles.routeDot}
-                                />
-                                <View style={styles.routeLine} />
-                                <View style={[styles.routeDot, { backgroundColor: SURGE_RED }]} />
-                            </View>
+                    {/* Incentives */}
+                    {hasIncentives && (
+                        <View style={styles.incentivesRow}>
+                            {incomingRide.incentives!.map((inc, idx) => (
+                                <View key={idx} style={styles.incentiveChip}>
+                                    <Ionicons name="gift" size={12} color={GOLD} />
+                                    <Text style={styles.incentiveText} numberOfLines={1}>
+                                        {inc.name}
+                                    </Text>
+                                    <Text style={styles.incentiveAmount}>+${inc.bonus_amount.toFixed(2)}</Text>
+                                </View>
+                            ))}
+                        </View>
+                    )}
+
+                    {/* Quest progress */}
+                    {quest && quest.target_value > 0 && (
+                        <View style={styles.questRow}>
+                            <Ionicons name="trophy" size={14} color={QUEST_PURPLE} />
+                            <Text style={styles.questText} numberOfLines={1}>
+                                {quest.title} — {Math.floor(quest.current_value)}/{Math.floor(quest.target_value)}
+                            </Text>
+                            <Text style={styles.questReward}>${quest.reward_amount.toFixed(0)}</Text>
+                        </View>
+                    )}
+
+                    {/* Route */}
+                    <View style={styles.routeSection}>
+                        <View style={styles.routeStop}>
+                            <View style={[styles.routeDot, { backgroundColor: ACCENT }]} />
                             <View style={styles.routeContent}>
-                                <View style={styles.routeStop}>
-                                    <View style={styles.routeStopHeader}>
-                                        <Text style={styles.routeLabel}>PICKUP</Text>
-                                        {pickupStr && (
-                                            <View style={styles.distanceChip}>
-                                                <Ionicons name="navigate" size={10} color={colors.primary} />
-                                                <Text style={styles.distanceChipText}>{pickupStr} away</Text>
-                                            </View>
-                                        )}
-                                    </View>
-                                    <Text style={styles.routeAddress} numberOfLines={2}>
-                                        {incomingRide.pickup_address || 'Pickup location'}
-                                    </Text>
+                                <View style={styles.routeLabelRow}>
+                                    <Text style={styles.routeLabel}>PICKUP</Text>
+                                    {pickupStr && (
+                                        <Text style={styles.routeDistance}>{pickupStr} away</Text>
+                                    )}
                                 </View>
-                                <View style={styles.routeStopDivider} />
-                                <View style={styles.routeStop}>
-                                    <Text style={styles.routeLabel}>DROP-OFF</Text>
-                                    <Text style={styles.routeAddress} numberOfLines={2}>
-                                        {incomingRide.dropoff_address || 'Drop-off location'}
-                                    </Text>
-                                </View>
+                                <Text style={styles.routeAddress} numberOfLines={1}>
+                                    {incomingRide.pickup_address || 'Pickup location'}
+                                </Text>
                             </View>
                         </View>
-                    </ScrollView>
+                        <View style={styles.routeLine} />
+                        <View style={styles.routeStop}>
+                            <View style={[styles.routeDot, { backgroundColor: '#EF4444' }]} />
+                            <View style={styles.routeContent}>
+                                <Text style={styles.routeLabel}>DROP-OFF</Text>
+                                <Text style={styles.routeAddress} numberOfLines={1}>
+                                    {incomingRide.dropoff_address || 'Drop-off location'}
+                                </Text>
+                            </View>
+                        </View>
+                    </View>
 
-                    {/* Action buttons — fixed at bottom */}
+                    {/* Trip metrics */}
+                    <View style={styles.metricsRow}>
+                        <View style={styles.metric}>
+                            <Text style={styles.metricValue}>{incomingRide.distance_km?.toFixed(1) || '--'}</Text>
+                            <Text style={styles.metricUnit}>km</Text>
+                        </View>
+                        <View style={styles.metricDivider} />
+                        <View style={styles.metric}>
+                            <Text style={styles.metricValue}>{Math.round(incomingRide.duration_minutes || 0)}</Text>
+                            <Text style={styles.metricUnit}>min</Text>
+                        </View>
+                        {incomingRide.distance_km && incomingRide.distance_km > 0 && (
+                            <>
+                                <View style={styles.metricDivider} />
+                                <View style={styles.metric}>
+                                    <Text style={[styles.metricValue, { color: ACCENT_DARK }]}>
+                                        ${(totalEarnings / incomingRide.distance_km).toFixed(2)}
+                                    </Text>
+                                    <Text style={[styles.metricUnit, { color: ACCENT_DARK }]}>/km</Text>
+                                </View>
+                            </>
+                        )}
+                    </View>
+
+                    {/* Action buttons — Decline left, Accept right (reversed from typical so Accept is away from next screen's Cancel) */}
                     <View style={styles.actionBar}>
                         <TouchableOpacity
                             style={styles.declineBtn}
                             onPress={onDecline}
                             activeOpacity={0.7}
-                            accessibilityLabel="Decline"
+                            accessibilityLabel="Decline ride"
                             disabled={isLoading}
                         >
-                            <Ionicons name="close" size={28} color={colors.textDim} />
+                            <Text style={styles.declineBtnText}>Decline</Text>
                         </TouchableOpacity>
 
-                        <Animated.View style={[styles.acceptBtnWrapper, { transform: [{ scale: pulseAnim }] }]}>
-                            <TouchableOpacity
-                                style={styles.acceptBtn}
-                                onPress={onAccept}
-                                disabled={isLoading}
-                                activeOpacity={0.85}
-                                accessibilityLabel="Accept Ride"
+                        <TouchableOpacity
+                            style={styles.acceptBtn}
+                            onPress={onAccept}
+                            disabled={isLoading}
+                            activeOpacity={0.85}
+                            accessibilityLabel="Accept ride"
+                        >
+                            <LinearGradient
+                                colors={[ACCENT, ACCENT_DARK]}
+                                style={styles.acceptGradient}
+                                start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
                             >
-                                <LinearGradient
-                                    colors={[MONEY_GREEN, MONEY_GREEN_DARK, '#008040']}
-                                    style={styles.acceptGradient}
-                                    start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
-                                >
-                                    {isLoading ? (
-                                        <ActivityIndicator color="#fff" size="small" />
-                                    ) : (
-                                        <>
-                                            <View style={styles.acceptTextWrap}>
-                                                <Text style={styles.acceptBtnText}>ACCEPT</Text>
-                                                <Text style={styles.acceptBtnSub}>
-                                                    ${totalEarnings.toFixed(2)}
-                                                </Text>
-                                            </View>
-                                            <View style={styles.acceptArrow}>
-                                                <Ionicons name="arrow-forward" size={22} color="#FFF" />
-                                            </View>
-                                        </>
-                                    )}
-                                </LinearGradient>
-                            </TouchableOpacity>
-                        </Animated.View>
+                                {isLoading ? (
+                                    <ActivityIndicator color="#fff" size="small" />
+                                ) : (
+                                    <>
+                                        <Text style={styles.acceptBtnText}>Accept</Text>
+                                        <Text style={styles.acceptBtnFare}>${totalEarnings.toFixed(2)}</Text>
+                                    </>
+                                )}
+                            </LinearGradient>
+                        </TouchableOpacity>
                     </View>
                 </View>
             </Animated.View>
@@ -564,7 +346,13 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
     );
 };
 
+const { width: SCREEN_W } = Dimensions.get('window');
+
 function createStyles(colors: ThemeColors, isDark: boolean) {
+    const bg = isDark ? '#1C1C1E' : '#FFFFFF';
+    const surfaceBg = isDark ? '#2C2C2E' : '#F5F5F7';
+    const borderClr = isDark ? '#3A3A3C' : '#E5E5EA';
+
     return StyleSheet.create({
         overlay: {
             position: 'absolute',
@@ -572,544 +360,362 @@ function createStyles(colors: ThemeColors, isDark: boolean) {
             zIndex: 100,
             justifyContent: 'flex-end',
         },
-        dimBackground: {
-            ...StyleSheet.absoluteFill as any,
-            backgroundColor: 'rgba(0,0,0,0.6)',
+        dim: {
+            ...StyleSheet.absoluteFillObject,
+            backgroundColor: 'rgba(0,0,0,0.55)',
         },
-        cardContainer: {
-            paddingHorizontal: 8,
-            paddingBottom: Platform.OS === 'ios' ? 24 : 12,
+        container: {
+            paddingHorizontal: 12,
+            paddingBottom: Platform.OS === 'ios' ? 28 : 16,
         },
         card: {
-            backgroundColor: isDark ? '#1C1C1E' : '#FFFFFF',
-            borderRadius: 32,
+            backgroundColor: bg,
+            borderRadius: 24,
             overflow: 'hidden',
             shadowColor: '#000',
-            shadowOffset: { width: 0, height: -8 },
-            shadowOpacity: 0.4,
-            shadowRadius: 24,
-            elevation: 24,
-            maxHeight: Dimensions.get('window').height * 0.92,
-        },
-        progressTrack: {
-            height: 4,
-            backgroundColor: isDark ? '#2C2C2E' : '#F2F2F7',
-        },
-        progressFill: {
-            height: '100%',
-        },
-        scrollContent: {
-            padding: 18,
-            paddingBottom: 4,
+            shadowOffset: { width: 0, height: -4 },
+            shadowOpacity: 0.2,
+            shadowRadius: 16,
+            elevation: 20,
         },
 
-        // HEADER
-        headerRow: {
+        // Timer
+        timerTrack: {
+            height: 3,
+            backgroundColor: borderClr,
+        },
+        timerFill: {
+            height: '100%',
+        },
+
+        // Header
+        header: {
             flexDirection: 'row',
             alignItems: 'center',
             justifyContent: 'space-between',
-            marginBottom: 14,
+            paddingHorizontal: 20,
+            paddingTop: 16,
+            paddingBottom: 8,
         },
         headerLeft: {
             flex: 1,
             marginRight: 12,
         },
-        newRequestBadge: {
+        liveIndicator: {
             flexDirection: 'row',
             alignItems: 'center',
-            backgroundColor: isDark ? '#0F2F1F' : '#E8FAF0',
-            paddingHorizontal: 10,
-            paddingVertical: 5,
-            borderRadius: 8,
-            alignSelf: 'flex-start',
             gap: 6,
-            marginBottom: 10,
+            marginBottom: 6,
         },
         liveDot: {
-            width: 7,
-            height: 7,
-            borderRadius: 4,
+            width: 6, height: 6,
+            borderRadius: 3,
         },
-        newRequestText: {
-            color: MONEY_GREEN,
+        liveText: {
             fontSize: 11,
-            fontWeight: '900',
-            letterSpacing: 0.8,
+            fontWeight: '800',
+            color: ACCENT,
+            letterSpacing: 1,
         },
-        riderRow: {
+        riderInfo: {
             flexDirection: 'row',
             alignItems: 'center',
-            gap: 10,
+            gap: 8,
         },
         riderAvatar: {
-            width: 36, height: 36,
-            borderRadius: 18,
+            width: 30, height: 30,
+            borderRadius: 15,
             backgroundColor: colors.primary,
             justifyContent: 'center',
             alignItems: 'center',
         },
         riderInitial: {
             color: '#FFF',
-            fontSize: 16,
-            fontWeight: '800',
-        },
-        riderName: {
-            color: colors.text,
-            fontSize: 15,
-            fontWeight: '700',
-            maxWidth: 140,
-        },
-        ratingRow: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            gap: 3,
-            marginTop: 2,
-        },
-        ratingText: {
-            color: colors.textDim,
-            fontSize: 12,
-            fontWeight: '600',
-        },
-
-        // COUNTDOWN RING
-        countdownWrap: {
-            position: 'relative',
-        },
-        countdownOuterRing: {
-            width: 64, height: 64,
-            borderRadius: 32,
-            borderWidth: 3,
-            justifyContent: 'center',
-            alignItems: 'center',
-        },
-        countdownInnerRing: {
-            width: 54, height: 54,
-            borderRadius: 27,
-            borderWidth: 3,
-            justifyContent: 'center',
-            alignItems: 'center',
-            backgroundColor: isDark ? '#2C2C2E' : '#FAFAFA',
-        },
-        countdownText: {
-            fontSize: 20,
-            fontWeight: '900',
-            lineHeight: 22,
-        },
-        countdownUnit: {
-            fontSize: 8,
-            fontWeight: '800',
-            letterSpacing: 0.5,
-            marginTop: -2,
-        },
-
-        // HERO
-        heroContainer: {
-            marginBottom: 14,
-            position: 'relative',
-        },
-        heroGlow: {
-            position: 'absolute',
-            top: -10, left: -10, right: -10, bottom: -10,
-            backgroundColor: MONEY_GREEN,
-            borderRadius: 32,
-            opacity: 0.5,
-        },
-        heroGradientBg: {
-            borderRadius: 24,
-            padding: 22,
-            paddingTop: 18,
-            alignItems: 'center',
-            overflow: 'hidden',
-            position: 'relative',
-        },
-        sparkleTopLeft: {
-            position: 'absolute',
-            top: 12, left: 14,
-        },
-        sparkleBottomRight: {
-            position: 'absolute',
-            bottom: 14, right: 16,
-        },
-        heroLabel: {
-            color: 'rgba(255,255,255,0.85)',
-            fontSize: 11,
-            fontWeight: '800',
-            letterSpacing: 1.5,
-            marginBottom: 4,
-        },
-        heroFareRow: {
-            flexDirection: 'row',
-            alignItems: 'flex-start',
-            justifyContent: 'center',
-        },
-        heroDollar: {
-            color: '#FFF',
-            fontSize: 32,
-            fontWeight: '800',
-            marginTop: 12,
-            marginRight: 2,
-        },
-        heroFare: {
-            color: '#FFF',
-            fontSize: 64,
-            fontWeight: '900',
-            letterSpacing: -3,
-            includeFontPadding: false,
-            lineHeight: 68,
-        },
-        commissionBadge: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            backgroundColor: 'rgba(0,0,0,0.25)',
-            paddingHorizontal: 12,
-            paddingVertical: 6,
-            borderRadius: 14,
-            gap: 6,
-            marginTop: 6,
-            overflow: 'hidden',
-            borderWidth: 1,
-            borderColor: 'rgba(255,255,255,0.2)',
-        },
-        commissionText: {
-            color: '#FFF',
-            fontSize: 11,
-            fontWeight: '900',
-            letterSpacing: 0.5,
-        },
-        shimmer: {
-            position: 'absolute',
-            top: 0, bottom: 0,
-            width: 60,
-            backgroundColor: 'rgba(255,255,255,0.3)',
-            transform: [{ skewX: '-20deg' }],
-        },
-        breakdownRow: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            gap: 6,
-            marginTop: 10,
-        },
-        breakdownText: {
-            color: 'rgba(255,255,255,0.9)',
-            fontSize: 13,
-            fontWeight: '700',
-        },
-        breakdownBonus: {
-            color: GOLD,
-        },
-
-        // BADGES
-        badgesRow: {
-            flexDirection: 'row',
-            flexWrap: 'wrap',
-            gap: 8,
-            marginBottom: 14,
-        },
-        chip: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            paddingHorizontal: 12,
-            paddingVertical: 6,
-            borderRadius: 14,
-            gap: 6,
-        },
-        chipGradient: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            paddingHorizontal: 12,
-            paddingVertical: 6,
-            borderRadius: 14,
-            gap: 6,
-        },
-        chipText: {
-            color: '#FFF',
-            fontSize: 12,
-            fontWeight: '800',
-            letterSpacing: 0.5,
-        },
-
-        // SECTION HEADER (shared)
-        sectionHeader: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            gap: 6,
-            marginBottom: 8,
-        },
-        sectionTitle: {
-            color: colors.textDim,
-            fontSize: 11,
-            fontWeight: '900',
-            letterSpacing: 1,
-            flex: 1,
-        },
-
-        // INCENTIVES
-        incentivesContainer: {
-            backgroundColor: isDark ? '#2A2515' : '#FFFBEB',
-            borderRadius: 18,
-            padding: 12,
-            marginBottom: 14,
-            borderWidth: 1,
-            borderColor: GOLD + '40',
-        },
-        totalBonusPill: {
-            backgroundColor: GOLD,
-            paddingHorizontal: 10,
-            paddingVertical: 3,
-            borderRadius: 10,
-        },
-        totalBonusText: {
-            color: '#1C1C1E',
-            fontSize: 12,
-            fontWeight: '900',
-            letterSpacing: 0.3,
-        },
-        incentiveCard: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            backgroundColor: isDark ? '#1C1C1E' : '#FFFFFF',
-            borderRadius: 12,
-            padding: 10,
-            marginTop: 6,
-            shadowColor: GOLD,
-            shadowOffset: { width: 0, height: 2 },
-            shadowOpacity: 0.15,
-            shadowRadius: 4,
-            elevation: 2,
-        },
-        incentiveIconWrap: {
-            width: 40, height: 40,
-            borderRadius: 20,
-            justifyContent: 'center',
-            alignItems: 'center',
-            marginRight: 12,
-        },
-        incentiveTextWrap: {
-            flex: 1,
-        },
-        incentiveName: {
-            color: colors.text,
             fontSize: 14,
             fontWeight: '700',
         },
-        incentiveType: {
+        riderName: {
+            color: colors.text,
+            fontSize: 14,
+            fontWeight: '600',
+            maxWidth: 120,
+        },
+        riderRating: {
             color: colors.textDim,
-            fontSize: 10,
-            fontWeight: '700',
-            letterSpacing: 0.5,
-            marginTop: 2,
-        },
-        incentiveAmount: {
-            color: GOLD_DARK,
-            fontSize: 17,
-            fontWeight: '900',
-            letterSpacing: -0.3,
-        },
-
-        // QUEST
-        questCard: {
-            borderRadius: 18,
-            padding: 14,
-            marginBottom: 14,
-        },
-        questHeader: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            marginBottom: 10,
-        },
-        questIconCircle: {
-            width: 38, height: 38,
-            borderRadius: 19,
-            backgroundColor: 'rgba(0,0,0,0.25)',
-            justifyContent: 'center',
-            alignItems: 'center',
-            marginRight: 12,
-        },
-        questTextWrap: {
-            flex: 1,
-        },
-        questTitle: {
-            color: '#FFF',
-            fontSize: 15,
-            fontWeight: '800',
-        },
-        questSubtitle: {
-            color: 'rgba(255,255,255,0.85)',
             fontSize: 12,
             fontWeight: '600',
-            marginTop: 2,
         },
-        questProgressTrack: {
-            height: 8,
-            backgroundColor: 'rgba(0,0,0,0.3)',
-            borderRadius: 4,
-            overflow: 'hidden',
-        },
-        questProgressFill: {
-            height: '100%',
-            backgroundColor: GOLD,
-            borderRadius: 4,
-        },
-
-        // METRICS
-        metricsRow: {
-            flexDirection: 'row',
-            gap: 8,
-            marginBottom: 14,
-        },
-        metricCard: {
-            flex: 1,
-            backgroundColor: isDark ? '#2C2C2E' : '#F5F5F7',
-            borderRadius: 14,
-            paddingVertical: 12,
-            paddingHorizontal: 6,
+        timerCircle: {
+            width: 52, height: 52,
+            borderRadius: 26,
+            borderWidth: 3,
+            justifyContent: 'center',
             alignItems: 'center',
+            backgroundColor: surfaceBg,
         },
-        metricCardHighlight: {
-            backgroundColor: isDark ? '#0F2F1F' : '#E8FAF0',
-            borderWidth: 1,
-            borderColor: MONEY_GREEN + '40',
-        },
-        metricValue: {
-            color: colors.text,
-            fontSize: 19,
+        timerText: {
+            fontSize: 18,
             fontWeight: '900',
-            marginTop: 4,
-            letterSpacing: -0.5,
+            lineHeight: 20,
         },
-        metricUnit: {
-            color: colors.textDim,
+        timerUnit: {
             fontSize: 9,
-            fontWeight: '800',
-            letterSpacing: 0.8,
-            marginTop: 2,
+            fontWeight: '700',
+            marginTop: -2,
         },
 
-        // ROUTE
-        routeCard: {
-            flexDirection: 'row',
-            backgroundColor: isDark ? '#2C2C2E' : '#F8F8FA',
-            borderRadius: 18,
-            padding: 14,
-            marginBottom: 10,
-        },
-        routeColumn: {
+        // Earnings
+        earningsSection: {
             alignItems: 'center',
-            marginRight: 12,
+            paddingVertical: 12,
+            paddingHorizontal: 20,
+        },
+        earningsLabel: {
+            fontSize: 10,
+            fontWeight: '800',
+            color: colors.textDim,
+            letterSpacing: 1.2,
+            marginBottom: 2,
+        },
+        earningsRow: {
+            flexDirection: 'row',
+            alignItems: 'flex-start',
+        },
+        earningsDollar: {
+            fontSize: 24,
+            fontWeight: '700',
+            color: colors.text,
+            marginTop: 8,
+            marginRight: 1,
+        },
+        earningsAmount: {
+            fontSize: 52,
+            fontWeight: '900',
+            color: colors.text,
+            letterSpacing: -2,
+            lineHeight: 56,
+        },
+        earningsBreakdown: {
+            fontSize: 12,
+            fontWeight: '600',
+            color: ACCENT_DARK,
+            marginTop: 2,
+        },
+        keepBadge: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 4,
+            backgroundColor: ACCENT + '15',
+            paddingHorizontal: 10,
             paddingVertical: 4,
+            borderRadius: 8,
+            marginTop: 6,
+        },
+        keepText: {
+            fontSize: 11,
+            fontWeight: '700',
+            color: ACCENT_DARK,
+        },
+
+        // Badges
+        badgesRow: {
+            flexDirection: 'row',
+            flexWrap: 'wrap',
+            gap: 6,
+            paddingHorizontal: 20,
+            marginBottom: 8,
+            justifyContent: 'center',
+        },
+        badge: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            paddingHorizontal: 10,
+            paddingVertical: 5,
+            borderRadius: 8,
+            gap: 4,
+        },
+        badgeText: {
+            fontSize: 12,
+            fontWeight: '700',
+        },
+
+        // Incentives
+        incentivesRow: {
+            paddingHorizontal: 20,
+            marginBottom: 8,
+            gap: 4,
+        },
+        incentiveChip: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            backgroundColor: GOLD + '12',
+            borderRadius: 8,
+            paddingHorizontal: 10,
+            paddingVertical: 6,
+            gap: 6,
+        },
+        incentiveText: {
+            flex: 1,
+            fontSize: 12,
+            fontWeight: '600',
+            color: colors.text,
+        },
+        incentiveAmount: {
+            fontSize: 13,
+            fontWeight: '800',
+            color: GOLD,
+        },
+
+        // Quest
+        questRow: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            marginHorizontal: 20,
+            marginBottom: 8,
+            backgroundColor: QUEST_PURPLE + '12',
+            borderRadius: 8,
+            paddingHorizontal: 10,
+            paddingVertical: 6,
+            gap: 6,
+        },
+        questText: {
+            flex: 1,
+            fontSize: 12,
+            fontWeight: '600',
+            color: colors.text,
+        },
+        questReward: {
+            fontSize: 13,
+            fontWeight: '800',
+            color: QUEST_PURPLE,
+        },
+
+        // Route
+        routeSection: {
+            marginHorizontal: 20,
+            marginBottom: 10,
+            backgroundColor: surfaceBg,
+            borderRadius: 14,
+            padding: 14,
+        },
+        routeStop: {
+            flexDirection: 'row',
+            alignItems: 'flex-start',
+            gap: 10,
         },
         routeDot: {
-            width: 12, height: 12,
-            borderRadius: 6,
+            width: 10, height: 10,
+            borderRadius: 5,
+            marginTop: 4,
         },
         routeLine: {
             width: 2,
-            flex: 1,
-            backgroundColor: isDark ? '#3A3A3C' : '#D1D1D6',
-            marginVertical: 4,
+            height: 8,
+            backgroundColor: borderClr,
+            marginLeft: 4,
+            marginVertical: 2,
         },
         routeContent: {
             flex: 1,
         },
-        routeStop: {
-            paddingVertical: 2,
-        },
-        routeStopDivider: {
-            height: 8,
-        },
-        routeStopHeader: {
+        routeLabelRow: {
             flexDirection: 'row',
             alignItems: 'center',
             justifyContent: 'space-between',
-            marginBottom: 2,
         },
         routeLabel: {
-            color: colors.textDim,
-            fontSize: 10,
+            fontSize: 9,
             fontWeight: '800',
+            color: colors.textDim,
             letterSpacing: 0.8,
         },
-        distanceChip: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            gap: 3,
-            backgroundColor: colors.primary + '15',
-            paddingHorizontal: 7,
-            paddingVertical: 2,
-            borderRadius: 8,
-        },
-        distanceChipText: {
-            color: colors.primary,
+        routeDistance: {
             fontSize: 10,
-            fontWeight: '800',
+            fontWeight: '700',
+            color: ACCENT_DARK,
         },
         routeAddress: {
-            color: colors.text,
             fontSize: 14,
             fontWeight: '600',
-            lineHeight: 19,
+            color: colors.text,
+            marginTop: 1,
         },
 
-        // ACTION BAR
-        actionBar: {
+        // Metrics
+        metricsRow: {
             flexDirection: 'row',
             alignItems: 'center',
-            gap: 12,
-            padding: 14,
-            paddingTop: 6,
-            borderTopWidth: 1,
-            borderTopColor: isDark ? '#2C2C2E' : '#F2F2F7',
+            justifyContent: 'center',
+            marginHorizontal: 20,
+            marginBottom: 14,
+            gap: 16,
+        },
+        metric: {
+            flexDirection: 'row',
+            alignItems: 'baseline',
+            gap: 2,
+        },
+        metricValue: {
+            fontSize: 16,
+            fontWeight: '800',
+            color: colors.text,
+        },
+        metricUnit: {
+            fontSize: 11,
+            fontWeight: '600',
+            color: colors.textDim,
+        },
+        metricDivider: {
+            width: 1,
+            height: 16,
+            backgroundColor: borderClr,
+        },
+
+        // Action buttons
+        actionBar: {
+            flexDirection: 'row',
+            gap: 10,
+            paddingHorizontal: 20,
+            paddingTop: 4,
+            paddingBottom: 20,
         },
         declineBtn: {
-            width: 64, height: 64,
-            borderRadius: 32,
-            backgroundColor: isDark ? '#2C2C2E' : '#F2F2F7',
+            flex: 1,
+            height: 54,
+            borderRadius: 14,
+            backgroundColor: surfaceBg,
             justifyContent: 'center',
             alignItems: 'center',
             borderWidth: 1,
-            borderColor: isDark ? '#3A3A3C' : '#E5E5EA',
+            borderColor: borderClr,
         },
-        acceptBtnWrapper: {
-            flex: 1,
+        declineBtnText: {
+            fontSize: 16,
+            fontWeight: '700',
+            color: colors.textDim,
         },
         acceptBtn: {
-            height: 64,
-            borderRadius: 32,
+            flex: 2,
+            height: 54,
+            borderRadius: 14,
             overflow: 'hidden',
-            shadowColor: MONEY_GREEN,
-            shadowOffset: { width: 0, height: 8 },
-            shadowOpacity: 0.5,
-            shadowRadius: 18,
-            elevation: 14,
         },
         acceptGradient: {
             flex: 1,
             flexDirection: 'row',
             alignItems: 'center',
-            justifyContent: 'space-between',
-            paddingHorizontal: 22,
-        },
-        acceptTextWrap: {
-            flexDirection: 'column',
+            justifyContent: 'center',
+            gap: 8,
         },
         acceptBtnText: {
-            color: '#fff',
-            fontSize: 19,
-            fontWeight: '900',
-            letterSpacing: 1.2,
+            color: '#FFF',
+            fontSize: 17,
+            fontWeight: '800',
         },
-        acceptBtnSub: {
-            color: 'rgba(255,255,255,0.95)',
-            fontSize: 14,
+        acceptBtnFare: {
+            color: 'rgba(255,255,255,0.9)',
+            fontSize: 15,
             fontWeight: '700',
-            marginTop: -1,
-        },
-        acceptArrow: {
-            width: 36, height: 36,
-            borderRadius: 18,
-            backgroundColor: 'rgba(255,255,255,0.25)',
-            justifyContent: 'center',
-            alignItems: 'center',
         },
     });
 }

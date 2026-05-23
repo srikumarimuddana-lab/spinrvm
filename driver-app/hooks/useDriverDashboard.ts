@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Alert, Animated } from 'react-native';
+import { Animated } from 'react-native';
+import { showAlert } from '../components/AlertDialog';
 import * as Location from 'expo-location';
 import { Platform, Vibration, Linking, AppState } from 'react-native';
 import { showToast } from './useToast';
@@ -564,7 +565,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         offerSound.stop();
         resetRideState();
         setIsOnline(false);
-        Alert.alert(
+        showAlert(
           'You\'re now offline',
           data.message || 'You were taken offline because you missed several ride offers in a row. Tap "Go Online" when you\'re ready.',
         );
@@ -942,7 +943,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     const RESPONSE_SECONDS = 60;
 
     promptTimeout = setTimeout(() => {
-      Alert.alert(
+      showAlert(
         "Still driving?",
         "You've been online but idle for a while. Do you want to stay online and receive rides?",
         [
@@ -964,14 +965,13 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
             }
           }
         ],
-        { cancelable: false }
       );
 
       // Force offline if no response
       offlineTimeout = setTimeout(() => {
         setIsOnline(false);
         updateDriverStatus(false).catch(() => {});
-        Alert.alert("Went Offline", "You were taken offline due to inactivity.");
+        showAlert("Went Offline", "You were taken offline due to inactivity.");
       }, RESPONSE_SECONDS * 1000);
 
     }, IDLE_MINUTES * 60 * 1000);
@@ -987,7 +987,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   const toggleOnline = async () => {
     try {
       if (!driverData?.vehicle_make || !driverData?.license_plate) {
-        Alert.alert(
+        showAlert(
           "Profile Incomplete",
           "You must provide vehicle details before going online.",
           [
@@ -999,7 +999,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
       }
 
       if (!driverData?.is_verified) {
-        Alert.alert(
+        showAlert(
           "Account Not Verified",
           "Your account is not verified yet. Please complete your profile and wait for admin approval before going online.",
           [
@@ -1028,7 +1028,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
 
         // 402 = no subscription
         if (err.response?.status === 402) {
-          Alert.alert(
+          showAlert(
             "Spinr Pass Required",
             err.response?.data?.detail || "You need an active subscription to go online.",
             [
@@ -1192,7 +1192,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         offerSound.stop();
         resetRideState();
         setIsOnline(false);
-        Alert.alert(
+        showAlert(
           'You\'re now offline',
           data.message || 'You were taken offline because you missed several ride offers in a row.',
         );
@@ -1200,7 +1200,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         showToast('error', 'Ride Cancelled', 'The rider has cancelled this ride.');
         resetRideState();
       } else if (data?.type === 'subscription_expiring') {
-        Alert.alert(
+        showAlert(
           'Spinr Pass Expiring',
           'Your Spinr Pass expires soon — renew to keep earning',
           [
@@ -1209,7 +1209,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           ]
         );
       } else if (data?.type === 'document_expiry_warning') {
-        Alert.alert(
+        showAlert(
           'Document Expiring',
           'A document is expiring — tap to update it',
           [

@@ -91,6 +91,26 @@ export async function initFirebaseServices() {
 
 
 /**
+ * Request notification permission only (no token fetch).
+ * Call on first open so the OS dialog appears before login.
+ */
+export async function requestNotificationPermission(): Promise<boolean> {
+  if (!messaging) return false;
+  try {
+    const authStatus = await messaging().requestPermission();
+    const enabled =
+      authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
+      authStatus === messaging.AuthorizationStatus.PROVISIONAL;
+    console.log('[Firebase] Notification permission:', enabled ? 'granted' : 'denied');
+    return enabled;
+  } catch (e) {
+    console.log('[Firebase] Permission request failed:', e);
+    return false;
+  }
+}
+
+
+/**
  * Request push notification permission and get FCM token.
  * Returns the token string or null.
  */

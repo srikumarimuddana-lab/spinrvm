@@ -606,11 +606,6 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
                 "updated_at": datetime.now(timezone.utc),
             },
         )
-        # M-5: SGI insurance period audit — driver_assigned starts period 2
-        # (en route to pickup). Helper swallows its own exceptions so a
-        # broken audit write cannot block dispatch.
-        await record_period_transition(selected_driver["id"], 2, ride_id=ride_id)
-
         logger.info(
             f"[DISPATCH] ride {ride_id} assigned to driver_id={selected_driver['id']} "
             f"user_id={selected_driver.get('user_id')} name={selected_driver.get('name')}"
@@ -621,64 +616,62 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
         # Accept). Notifying on bare assignment caused premature "driver
         # found" banners that reverted if the driver timed out.
 
-        # Look up the rider so we can include name/rating in the dispatch
-        # payload sent to the driver-app. Missing fields are fine — the
-        # driver-app has fallbacks — but sending them avoids an empty popup.
-        rider_user = None
-        try:
-            rider_user = await db_supabase.get_user_by_id(ride["rider_id"])
-        except Exception as e:
-            logger.error(
-                f"[DISPATCH] could not load rider user {ride['rider_id']}: {e}",
-                exc_info=True,
-            )
+        # ── Parallel enrichment ───────────────────────────────────
+        # These 4 operations are independent of each other. Running them
+        # sequentially added ~5-7s of latency before the driver saw the
+        # offer. asyncio.gather cuts it to the slowest single query.
 
-        rider_display_name = None
-        if rider_user:
-            first = rider_user.get("first_name") or ""
-            last = rider_user.get("last_name") or ""
-            rider_display_name = (first + " " + last).strip() or rider_user.get("name") or None
-
-        # ── Enrich: surge, incentives, quest progress ─────────────
-        _surge_mult = float(ride.get("surge_multiplier") or 1.0)
-
-        _incentives: list = []
-        _total_bonus = 0.0
-        try:
-            iq = (
-                db_supabase.supabase.table("ride_incentives")
-                .select(
-                    "id, name, bonus_amount, incentive_type, bonus_type, conditions, service_area_id, vehicle_type_id"
+        async def _fetch_rider() -> dict | None:
+            try:
+                return await db_supabase.get_user_by_id(ride["rider_id"])
+            except Exception as e:
+                logger.error(
+                    f"[DISPATCH] could not load rider user {ride['rider_id']}: {e}",
+                    exc_info=True,
                 )
-                .eq("is_active", True)
-            )
-            sa_id = ride.get("service_area_id")
-            if sa_id:
-                iq = iq.or_(f"service_area_id.is.null,service_area_id.eq.{sa_id}")
-            ir = await db_supabase.run_sync(iq.execute)
-            vt_id = ride.get("vehicle_type_id")
-            for inc in ir.data or []:
-                if inc.get("vehicle_type_id") and inc["vehicle_type_id"] != vt_id:
-                    continue
-                ba = float(inc.get("bonus_amount") or 0)
-                _incentives.append(
-                    {
-                        "name": inc["name"],
-                        "bonus_amount": ba,
-                        "incentive_type": inc.get("incentive_type", "per_ride"),
-                    }
-                )
-                _total_bonus += ba
-            logger.info(
-                f"[DISPATCH] enriched ride {ride_id} with {len(_incentives)} incentives, bonus=${_total_bonus:.2f}"
-            )
-        except Exception as e:
-            logger.error(f"[DISPATCH] incentive lookup failed: {e}", exc_info=True)
+                return None
 
-        _quest_hint = None
-        try:
-            driver_uid = selected_driver.get("user_id")
-            if driver_uid:
+        async def _fetch_incentives() -> tuple[list, float]:
+            try:
+                iq = (
+                    db_supabase.supabase.table("ride_incentives")
+                    .select(
+                        "id, name, bonus_amount, incentive_type, bonus_type, conditions, service_area_id, vehicle_type_id"
+                    )
+                    .eq("is_active", True)
+                )
+                sa_id = ride.get("service_area_id")
+                if sa_id:
+                    iq = iq.or_(f"service_area_id.is.null,service_area_id.eq.{sa_id}")
+                ir = await db_supabase.run_sync(iq.execute)
+                vt_id = ride.get("vehicle_type_id")
+                incentives = []
+                total_bonus = 0.0
+                for inc in ir.data or []:
+                    if inc.get("vehicle_type_id") and inc["vehicle_type_id"] != vt_id:
+                        continue
+                    ba = float(inc.get("bonus_amount") or 0)
+                    incentives.append(
+                        {
+                            "name": inc["name"],
+                            "bonus_amount": ba,
+                            "incentive_type": inc.get("incentive_type", "per_ride"),
+                        }
+                    )
+                    total_bonus += ba
+                logger.info(
+                    f"[DISPATCH] enriched ride {ride_id} with {len(incentives)} incentives, bonus=${total_bonus:.2f}"
+                )
+                return incentives, total_bonus
+            except Exception as e:
+                logger.error(f"[DISPATCH] incentive lookup failed: {e}", exc_info=True)
+                return [], 0.0
+
+        async def _fetch_quest() -> dict | None:
+            try:
+                driver_uid = selected_driver.get("user_id")
+                if not driver_uid:
+                    return None
                 qr = await db_supabase.run_sync(
                     db_supabase.supabase.table("quest_progress")
                     .select("current_value, status, quest:quests(title, target_value, reward_amount)")
@@ -692,15 +685,34 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
                     q = qp.get("quest") or {}
                     tv = float(q.get("target_value") or 1)
                     cv = float(qp.get("current_value") or 0)
-                    _quest_hint = {
+                    return {
                         "title": q.get("title", ""),
                         "current_value": cv,
                         "target_value": tv,
                         "progress_pct": round(min(cv / tv, 1.0) * 100, 1) if tv else 0,
                         "reward_amount": float(q.get("reward_amount") or 0),
                     }
-        except Exception as e:
-            logger.warning(f"[DISPATCH] quest hint lookup non-fatal: {e}")
+                return None
+            except Exception as e:
+                logger.warning(f"[DISPATCH] quest hint lookup non-fatal: {e}")
+                return None
+
+        # M-5: SGI insurance period audit — driver_assigned starts period 2
+        # record_period_transition swallows its own exceptions.
+        rider_user, (_incentives, _total_bonus), _quest_hint, _ = await asyncio.gather(
+            _fetch_rider(),
+            _fetch_incentives(),
+            _fetch_quest(),
+            record_period_transition(selected_driver["id"], 2, ride_id=ride_id),
+        )
+
+        rider_display_name = None
+        if rider_user:
+            first = rider_user.get("first_name") or ""
+            last = rider_user.get("last_name") or ""
+            rider_display_name = (first + " " + last).strip() or rider_user.get("name") or None
+
+        _surge_mult = float(ride.get("surge_multiplier") or 1.0)
 
         # Build the full dispatch payload. Keys MUST match what the driver
         # app consumes in useDriverDashboard.ts handleWSMessage.

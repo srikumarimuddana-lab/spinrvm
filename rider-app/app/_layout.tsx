@@ -33,6 +33,7 @@ import { captureMessage, setUser } from '@shared/services/errorReporting';
 import Analytics from '@shared/analytics';
 import {
   initFirebaseServices,
+  requestNotificationPermission,
   requestPushPermissionAndGetToken,
   onForegroundMessage,
   setBackgroundMessageHandler,
@@ -175,6 +176,7 @@ export default function RootLayout() {
 
         await useRideStore.getState().hydrateActiveRide();
         await initFirebaseServices();
+        await requestNotificationPermission();
         captureMessage('rider-app cold start', 'log');
 
         if (Notifications && Platform.OS === 'android') {

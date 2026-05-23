@@ -14,6 +14,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold, PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import Toast from 'react-native-toast-message';
+import { AlertDialog } from '../components/AlertDialog';
 import * as SplashScreen from 'expo-splash-screen';
 
 // Keep the native splash up until our React-rendered splash is mounted,
@@ -34,6 +35,7 @@ import { queryClient, asyncStoragePersister, QUERY_CACHE_BUSTER } from '@shared/
 import { captureMessage, setUser } from '@shared/services/errorReporting';
 import {
   initFirebaseServices,
+  requestNotificationPermission,
   requestPushPermissionAndGetToken,
   setBackgroundMessageHandler,
   onTokenRefresh,
@@ -349,6 +351,7 @@ export default function RootLayout() {
         // registration is deferred to a separate effect that waits for
         // an authenticated session (below).
         await initFirebaseServices();
+        await requestNotificationPermission();
 
         captureMessage('driver-app cold start', 'log');
 
@@ -551,6 +554,7 @@ function DriverRootLayoutInner({
                 through a cross-fade out of the splash. */}
             <Stack.Screen name="driver" options={{ animation: "none", gestureEnabled: false }} />
           </Stack>
+          <AlertDialog />
           <Toast />
         </SafeAreaProvider>
       </GestureHandlerRootView>

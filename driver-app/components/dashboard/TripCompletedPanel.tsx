@@ -75,6 +75,11 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
       }
     }
 
+    try {
+      const { onRideRated } = require('@shared/utils/appRating');
+      await onRideRated(rating > 0 ? rating : 5);
+    } catch { /* non-critical */ }
+
     onDone();
   };
 

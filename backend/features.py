@@ -1218,11 +1218,17 @@ async def send_push_notification(
     body: str,
     data: Dict[str, str] | None = None,
     priority: str = "normal",
+    target_app: str | None = None,
 ):
     """Send a push notification to a user.
 
     Routes automatically: Expo push tokens go via Expo's REST API; all other
     tokens are assumed to be FCM and sent via Firebase Admin SDK.
+
+    ``target_app`` selects which per-app token column to read:
+      - ``"rider"``  → ``fcm_token_rider``
+      - ``"driver"`` → ``fcm_token_driver``
+      - ``None``     → legacy ``fcm_token`` (backward compat)
 
     Dispatch and safety priority pushes are written to the push_retry_queue
     table first so that a transient FCM/Expo outage doesn't silently drop a
@@ -1239,11 +1245,21 @@ async def send_push_notification(
             logger.error("push enqueue failed, falling back to direct send", exc_info=True)
 
     user = await db.find_one("users", {"id": user_id})
-    if not user or not user.get("fcm_token"):
-        logger.warning(f"No FCM token on file for user {user_id} — push dropped")
+    if not user:
+        logger.warning(f"No user found for {user_id} — push dropped")
         return False
 
-    token: str = user["fcm_token"]
+    token: str | None = None
+    if target_app == "rider":
+        token = user.get("fcm_token_rider") or user.get("fcm_token")
+    elif target_app == "driver":
+        token = user.get("fcm_token_driver") or user.get("fcm_token")
+    else:
+        token = user.get("fcm_token")
+
+    if not token:
+        logger.warning(f"No FCM token on file for user {user_id} (target_app={target_app}) — push dropped")
+        return False
 
     if _is_expo_token(token):
         return await _send_expo_push(token, title, body, data)
@@ -1287,9 +1303,14 @@ async def send_push_notification(
     except firebase_exceptions.NotFoundError:
         # Token is stale (app uninstalled / token rotated). Purge it so the
         # next login registers a fresh token and delivery resumes.
-        logger.warning(f"Stale FCM token for user {user_id} — purging from users and push_tokens")
+        logger.warning(f"Stale FCM token for user {user_id} (target_app={target_app}) — purging")
         try:
-            await db.update_one("users", {"id": user_id}, {"fcm_token": None})
+            purge: dict = {"fcm_token": None}
+            if target_app == "rider":
+                purge["fcm_token_rider"] = None
+            elif target_app == "driver":
+                purge["fcm_token_driver"] = None
+            await db.update_one("users", {"id": user_id}, purge)
             rows = await db_supabase.get_rows("push_tokens", {"user_id": user_id, "token": token}, limit=1)
             if rows:
                 await db_supabase.delete_one("push_tokens", {"id": rows[0]["id"]})

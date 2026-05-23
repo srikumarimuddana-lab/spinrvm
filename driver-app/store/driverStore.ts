@@ -658,6 +658,17 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                     const riderRating = rider && rider.rating != null
                         ? Number(rider.rating)
                         : undefined;
+                    const existing = get().incomingRide;
+                    const enrichment = existing?.ride_id === ride.id ? {
+                        surge_multiplier: existing.surge_multiplier,
+                        incentives: existing.incentives,
+                        total_bonus: existing.total_bonus,
+                        quest_hint: existing.quest_hint,
+                        payment_method: existing.payment_method,
+                        offer_expires_at: existing.offer_expires_at,
+                        countdown_seconds: existing.countdown_seconds,
+                        requires_wav: existing.requires_wav,
+                    } : {};
                     set({
                         activeRide: res.data,
                         rideState: 'ride_offered',
@@ -674,6 +685,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                             duration_minutes: ride.duration_minutes,
                             rider_name: riderName as string | undefined,
                             rider_rating: riderRating,
+                            ...enrichment,
                         },
                         countdownSeconds: countdown,
                     });

@@ -44,11 +44,11 @@ async def admin_get_users(
     filters: Dict[str, Any] = {}
     role_param = (role or "all").lower()
     if role_param == "rider":
-        filters["role"] = "rider"
+        filters["is_rider"] = True
     elif role_param == "driver":
         filters["is_driver"] = True
     elif role_param == "both":
-        filters["role"] = "rider"
+        filters["is_rider"] = True
         filters["is_driver"] = True
     elif role_param == "admin":
         filters["role"] = "admin"

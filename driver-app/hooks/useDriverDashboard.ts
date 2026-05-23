@@ -1151,11 +1151,6 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     const unsubscribe = onForegroundMessage((remoteMessage: any) => {
       const data = remoteMessage?.data || {};
       if (data?.type === 'new_ride_assignment' && data?.ride_id) {
-        const existing = useDriverStore.getState().incomingRide;
-        if (existing?.ride_id === data.ride_id) {
-          console.log('[FCM] ride offer already loaded via WS, skipping FCM overwrite', data.ride_id);
-          return;
-        }
         const pLat = _toFiniteCoord(data.pickup_lat);
         const pLng = _toFiniteCoord(data.pickup_lng);
         const dLat = _toFiniteCoord(data.dropoff_lat);
@@ -1164,10 +1159,18 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           console.error('[FCM] dropping ride offer with invalid coords', { ride_id: data.ride_id });
           return;
         }
-        Vibration.vibrate([0, 500, 200, 500]);
-        offerSound.play();
+        const existing = useDriverStore.getState().incomingRide;
+        const isUpdate = existing?.ride_id === data.ride_id;
+        if (!isUpdate) {
+          Vibration.vibrate([0, 500, 200, 500]);
+          offerSound.play();
+        }
         const countdownStr = data.countdown_seconds;
         const countdownNum = typeof countdownStr === 'string' ? parseInt(countdownStr, 10) : undefined;
+        const fcmIncentives = data.incentives_json ? JSON.parse(data.incentives_json) : undefined;
+        const fcmTotalBonus = data.total_bonus ? parseFloat(data.total_bonus) : undefined;
+        const fcmQuestHint = data.quest_hint_json ? JSON.parse(data.quest_hint_json) : undefined;
+        const fcmSurge = data.surge_multiplier ? parseFloat(data.surge_multiplier) : undefined;
         setIncomingRide({
           ride_id: data.ride_id,
           pickup_address: data.pickup_address || '',
@@ -1183,11 +1186,11 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           rider_rating: data.rider_rating ? parseFloat(data.rider_rating) : undefined,
           countdown_seconds: Number.isFinite(countdownNum) ? countdownNum : undefined,
           offer_expires_at: data.offer_expires_at,
-          surge_multiplier: data.surge_multiplier ? parseFloat(data.surge_multiplier) : undefined,
-          incentives: data.incentives_json ? JSON.parse(data.incentives_json) : undefined,
-          total_bonus: data.total_bonus ? parseFloat(data.total_bonus) : undefined,
-          quest_hint: data.quest_hint_json ? JSON.parse(data.quest_hint_json) : undefined,
-          payment_method: data.payment_method || undefined,
+          surge_multiplier: fcmSurge ?? existing?.surge_multiplier,
+          incentives: fcmIncentives ?? existing?.incentives,
+          total_bonus: fcmTotalBonus ?? existing?.total_bonus,
+          quest_hint: fcmQuestHint ?? existing?.quest_hint,
+          payment_method: data.payment_method || existing?.payment_method || undefined,
         });
       } else if (data?.type === 'auto_offline') {
         offerSound.stop();

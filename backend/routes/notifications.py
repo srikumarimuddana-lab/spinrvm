@@ -45,7 +45,7 @@ class PreferencesUpdate(BaseModel):
 class RegisterTokenRequest(BaseModel):
     token: str
     platform: str = "unknown"
-    client_type: str = "rider"
+    client_type: Optional[str] = None
 
 
 class TestPushRequest(BaseModel):
@@ -131,7 +131,7 @@ async def register_push_token(body: RegisterTokenRequest, current_user: dict = D
     """
     token = body.token
     platform = body.platform
-    client_type = body.client_type if body.client_type in ("rider", "driver") else "rider"
+    client_type = body.client_type if body.client_type in ("rider", "driver") else None
 
     # Upsert: one token per user per platform.
     existing = (lambda _r: _r[0] if _r else None)(
@@ -163,19 +163,20 @@ async def register_push_token(body: RegisterTokenRequest, current_user: dict = D
             },
         )
 
-    # Mirror to users.fcm_token (legacy, used by dispatch/ride pushes) and
-    # the per-app column so cloud messaging targets the correct app surface.
-    app_col = "fcm_token_driver" if client_type == "driver" else "fcm_token_rider"
+    # Always update the legacy fcm_token column. Only write to per-app
+    # columns when client_type is explicitly provided (requires EAS update).
+    user_update: dict = {"fcm_token": token}
+    if client_type == "driver":
+        user_update["fcm_token_driver"] = token
+    elif client_type == "rider":
+        user_update["fcm_token_rider"] = token
+
     try:
-        await db.update_one(
-            "users",
-            {"id": current_user["id"]},
-            {"fcm_token": token, app_col: token},
-        )
+        await db.update_one("users", {"id": current_user["id"]}, user_update)
     except Exception as exc:
         logger.error(f"Failed to mirror FCM token onto users: {exc}", exc_info=True)
 
-    logger.info(f"FCM token registered for user {current_user['id']} ({platform}, {client_type})")
+    logger.info(f"FCM token registered for user {current_user['id']} ({platform}, client_type={client_type})")
     return {"success": True}
 
 

@@ -2,21 +2,17 @@
 -- Rollback: ALTER TABLE users DROP COLUMN IF EXISTS fcm_token_rider;
 --           ALTER TABLE users DROP COLUMN IF EXISTS fcm_token_driver;
 
--- Cloud messaging sends to "customers" or "drivers" but dual-role users only
--- have one fcm_token — whichever app registered last wins. Adding per-app
--- token columns lets cloud messaging target the correct app surface.
+-- Per-app FCM token columns for dual-role users. Cloud messaging reads
+-- fcm_token_rider for customer pushes, fcm_token_driver for driver pushes,
+-- falling back to the legacy fcm_token when the per-app column is NULL.
 --
--- fcm_token        — legacy single column, still used by dispatch/ride pushes
--- fcm_token_rider  — set by rider app on register-token
--- fcm_token_driver — set by driver app on register-token
+-- Columns are populated when each app registers with client_type='rider'
+-- or client_type='driver'. Until then they stay NULL and the legacy
+-- fcm_token column is used for all pushes.
 
 ALTER TABLE users ADD COLUMN IF NOT EXISTS fcm_token_rider TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS fcm_token_driver TEXT;
 
--- Backfill: copy current fcm_token into both columns as a safe default.
--- Once both apps re-register, each column will hold the correct token.
-UPDATE users
-SET    fcm_token_rider  = fcm_token,
-       fcm_token_driver = fcm_token
-WHERE  fcm_token IS NOT NULL
-  AND  fcm_token_rider IS NULL;
+-- No backfill — columns stay NULL until each app explicitly registers.
+-- This prevents the driver app's token from being copied into
+-- fcm_token_rider (which would route rider notifications to the driver app).

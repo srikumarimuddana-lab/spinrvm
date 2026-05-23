@@ -31,17 +31,14 @@
     "build:watch": "tsc --project tsconfig.build.json --watch",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {
-    "@react-native-community/netinfo": "^11.5.2"
-  },
   "peerDependencies": {
+    "@react-native-community/netinfo": ">=11.0.0",
     "react": ">=18.0.0",
     "react-native": ">=0.72.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/react": "^19.0.0",
-    "@types/react-native": "^0.73.0",
     "typescript": "~5.9.2"
   }
 }

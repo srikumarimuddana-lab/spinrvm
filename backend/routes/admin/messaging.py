@@ -56,12 +56,23 @@ async def _fan_out_push(
     async def _send_one(uid: str) -> bool:
         async with sem:
             try:
-                return bool(await send_push_notification(uid, title, description, target_app=target_app))
-            except Exception:
+                result = await send_push_notification(uid, title, description, target_app=target_app)
+                if not result:
+                    logger.warning(
+                        f"Cloud message {message_id}: push to {uid} returned False (target_app={target_app})"
+                    )
+                return bool(result)
+            except Exception as e:
+                logger.error(f"Cloud message {message_id}: push to {uid} raised {e}", exc_info=True)
                 return False
 
     uids = [u.get("id") if isinstance(u, dict) else u for u in target_users]
     uids = [uid for uid in uids if uid]
+
+    logger.info(f"Cloud message {message_id}: starting fan-out to {len(uids)} user(s) (target_app={target_app})")
+
+    if not uids:
+        logger.warning(f"Cloud message {message_id}: no target users found — skipping fan-out")
 
     results = await asyncio.gather(*[_send_one(uid) for uid in uids], return_exceptions=True)
     successful = sum(1 for r in results if r is True)

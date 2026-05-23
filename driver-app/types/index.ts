@@ -19,6 +19,9 @@ export interface ActiveRide {
     ride: any;
     rider: any;
     vehicle_type: any;
+    incentives?: Array<{ name: string; bonus_amount: number; incentive_type?: string }>;
+    total_bonus?: number;
+    quest_hint?: { title: string; progress: string; reward: number } | null;
 }
 
 export interface DriverData {

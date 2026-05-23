@@ -104,6 +104,9 @@ export interface ActiveRide {
     ride: RideInfo;
     rider: RiderInfo;
     vehicle_type: VehicleTypeInfo;
+    incentives?: Array<{ name: string; bonus_amount: number; incentive_type?: string }>;
+    total_bonus?: number;
+    quest_hint?: { title: string; progress: string; reward: number } | null;
 }
 
 export interface CompletedRideData {
@@ -658,17 +661,10 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                     const riderRating = rider && rider.rating != null
                         ? Number(rider.rating)
                         : undefined;
+                    const apiIncentives = Array.isArray(res.data.incentives) ? res.data.incentives : undefined;
+                    const apiTotalBonus = typeof res.data.total_bonus === 'number' ? res.data.total_bonus : undefined;
+                    const apiQuestHint = res.data.quest_hint ?? undefined;
                     const existing = get().incomingRide;
-                    const enrichment = existing?.ride_id === ride.id ? {
-                        surge_multiplier: existing.surge_multiplier,
-                        incentives: existing.incentives,
-                        total_bonus: existing.total_bonus,
-                        quest_hint: existing.quest_hint,
-                        payment_method: existing.payment_method,
-                        offer_expires_at: existing.offer_expires_at,
-                        countdown_seconds: existing.countdown_seconds,
-                        requires_wav: existing.requires_wav,
-                    } : {};
                     set({
                         activeRide: res.data,
                         rideState: 'ride_offered',
@@ -685,7 +681,13 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                             duration_minutes: ride.duration_minutes,
                             rider_name: riderName as string | undefined,
                             rider_rating: riderRating,
-                            ...enrichment,
+                            surge_multiplier: ride.surge_multiplier > 1 ? ride.surge_multiplier : undefined,
+                            incentives: apiIncentives ?? existing?.incentives,
+                            total_bonus: apiTotalBonus ?? existing?.total_bonus,
+                            quest_hint: apiQuestHint ?? existing?.quest_hint,
+                            payment_method: ride.payment_method ?? existing?.payment_method,
+                            offer_expires_at: ride.offer_expires_at ?? existing?.offer_expires_at,
+                            requires_wav: ride.requires_wav ?? existing?.requires_wav,
                         },
                         countdownSeconds: countdown,
                     });

@@ -453,13 +453,13 @@ async def get_available_promos(
     available = []
     for p in promos:
         try:
-            # Expiry
+            # Expiry — keep both sides tz-aware so the comparison never raises
+            # "can't compare offset-naive and offset-aware datetimes" when a
+            # promo row has a TIMESTAMPTZ value with offset info.
             expiry = p.get("expiry_date")
-            if expiry and isinstance(expiry, str):
-                exp_dt = datetime.fromisoformat(expiry.replace("Z", "+00:00"))
-                if exp_dt.tzinfo:
-                    exp_dt = exp_dt.replace(tzinfo=None)  # noqa: E701
-                if exp_dt < now:
+            if expiry:
+                exp_dt = parse_iso_utc(expiry) if isinstance(expiry, str) else expiry
+                if exp_dt and exp_dt < now:
                     continue  # noqa: E701
 
             # Total usage (0 = unlimited)
@@ -544,16 +544,16 @@ async def get_available_promos(
                 discount = min(discount_value, cap_basis) if cap_basis > 0 else discount_value
 
             entry: dict = {
-                    "promo_id": p["id"],
-                    "code": p.get("code"),
-                    "free_ride": free_ride_flag,
-                    "discount_type": discount_type,
-                    "discount_value": discount_value,
-                    "max_discount": p.get("max_discount"),
-                    "discount_amount": discount,
-                    "description": p.get("description", ""),
-                    "expiry_date": p.get("expiry_date"),
-                    "min_ride_fare": p.get("min_ride_fare", 0),
+                "promo_id": p["id"],
+                "code": p.get("code"),
+                "free_ride": free_ride_flag,
+                "discount_type": discount_type,
+                "discount_value": discount_value,
+                "max_discount": p.get("max_discount"),
+                "discount_amount": discount,
+                "description": p.get("description", ""),
+                "expiry_date": p.get("expiry_date"),
+                "min_ride_fare": p.get("min_ride_fare", 0),
             }
             if _below_min_fare:
                 entry["eligible"] = False

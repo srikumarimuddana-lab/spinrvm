@@ -280,16 +280,49 @@ export const useRideStore = create<RideState>((set, get) => ({
   isLoading: false,
   error: null,
 
-  setPickup: (location) => set({ pickup: location }),
-  setDropoff: (location) => set({ dropoff: location }),
+  // Changing pickup/dropoff/stops invalidates the current route, so the
+  // previously-fetched estimates, the cached list of available promos, and
+  // the auto-applied promo all need to clear. Otherwise the rider sees the
+  // OLD promo's discount applied to the NEW route's fare until the next
+  // estimates poll lands — visually wrong and economically wrong (the
+  // server-side validation rejects the booking but the screen looks
+  // committed). fetchAvailablePromos re-runs from the ride-options effect
+  // and will auto-apply the best eligible promo for the new route.
+  setPickup: (location) => set({
+    pickup: location,
+    estimates: [],
+    availablePromos: [],
+    appliedPromo: null,
+  }),
+  setDropoff: (location) => set({
+    dropoff: location,
+    estimates: [],
+    availablePromos: [],
+    appliedPromo: null,
+  }),
   setUserLocation: (loc) => set({ userLocation: loc }),
 
-  addStop: (location) => set((state) => ({ stops: [...state.stops, location] })),
-  removeStop: (index) => set((state) => ({ stops: state.stops.filter((_, i) => i !== index) })),
+  addStop: (location) => set((state) => ({
+    stops: [...state.stops, location],
+    estimates: [],
+    availablePromos: [],
+    appliedPromo: null,
+  })),
+  removeStop: (index) => set((state) => ({
+    stops: state.stops.filter((_, i) => i !== index),
+    estimates: [],
+    availablePromos: [],
+    appliedPromo: null,
+  })),
   updateStop: (index, location) => set((state) => {
     const newStops = [...state.stops];
     newStops[index] = location;
-    return { stops: newStops };
+    return {
+      stops: newStops,
+      estimates: [],
+      availablePromos: [],
+      appliedPromo: null,
+    };
   }),
 
   fetchActiveRide: async () => {
@@ -371,12 +404,32 @@ export const useRideStore = create<RideState>((set, get) => ({
       const portionParam = ridePortion !== undefined ? `&ride_portion=${ridePortion}` : '';
       const response = await api.get<Promo[]>(`/promo/available?ride_fare=${fare}${portionParam}${coords}`);
       const promos = response.data || [];
-      set({ availablePromos: promos });
-      // Auto-apply best eligible promo (sorted: eligible first, then by discount)
-      if (promos.length > 0 && !get().appliedPromo) {
-        const best = promos.find((p: any) => p.eligible !== false);
-        if (best) set({ appliedPromo: best });
+
+      // Re-validate any promo that's currently applied against the freshly-
+      // returned list. If the user picked a new destination (different
+      // service area, fare dropped below min_ride_fare, etc.) the old promo
+      // may no longer apply — drop it and let the auto-pick below choose
+      // a replacement.
+      const current = get().appliedPromo;
+      let stillValid: Promo | null = null;
+      if (current) {
+        const match = promos.find(
+          (p: any) =>
+            (current.promo_id && p.promo_id === current.promo_id) ||
+            (current.code && p.code === current.code),
+        );
+        if (match && (match as any).eligible !== false) {
+          // Refresh the discount_amount to the new route's value.
+          stillValid = match;
+        }
       }
+
+      let nextApplied: Promo | null = stillValid;
+      // Auto-apply best eligible promo if no valid one is currently applied.
+      if (!nextApplied && promos.length > 0) {
+        nextApplied = promos.find((p: any) => p.eligible !== false) ?? null;
+      }
+      set({ availablePromos: promos, appliedPromo: nextApplied });
     } catch (error) {
       console.log('Error fetching promos:', error);
       set({ availablePromos: [] });

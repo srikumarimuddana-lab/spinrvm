@@ -181,20 +181,46 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                         </View>
                     </View>
 
-                    {/* Earnings hero */}
+                    {/* Earnings hero + trip metrics side by side */}
                     <View style={styles.earningsSection}>
                         <Text style={styles.earningsLabel}>YOUR EARNINGS</Text>
-                        <View style={styles.earningsRow}>
-                            <Text style={styles.earningsDollar}>$</Text>
-                            <Text style={styles.earningsAmount} allowFontScaling={false}>
-                                {totalEarnings.toFixed(2)}
-                            </Text>
+                        <View style={styles.earningsHero}>
+                            <View style={styles.earningsLeft}>
+                                <View style={styles.earningsRow}>
+                                    <Text style={styles.earningsDollar}>$</Text>
+                                    <Text style={styles.earningsAmount} allowFontScaling={false}>
+                                        {totalEarnings.toFixed(2)}
+                                    </Text>
+                                </View>
+                                {hasBonus && (
+                                    <Text style={styles.earningsBreakdown}>
+                                        ${baseFare.toFixed(2)} fare + ${totalBonus.toFixed(2)} bonus
+                                    </Text>
+                                )}
+                            </View>
+                            <View style={styles.metricsStack}>
+                                <View style={styles.metricItem}>
+                                    <Text style={styles.metricValue}>{incomingRide.distance_km?.toFixed(1) || '--'}</Text>
+                                    <Text style={styles.metricUnit}>km</Text>
+                                </View>
+                                <View style={styles.metricItemDivider} />
+                                <View style={styles.metricItem}>
+                                    <Text style={styles.metricValue}>{Math.round(incomingRide.duration_minutes || 0)}</Text>
+                                    <Text style={styles.metricUnit}>min</Text>
+                                </View>
+                                {incomingRide.distance_km && incomingRide.distance_km > 0 && (
+                                    <>
+                                        <View style={styles.metricItemDivider} />
+                                        <View style={styles.metricItem}>
+                                            <Text style={[styles.metricValue, { color: ACCENT_DARK }]}>
+                                                ${(totalEarnings / incomingRide.distance_km).toFixed(2)}
+                                            </Text>
+                                            <Text style={[styles.metricUnit, { color: ACCENT_DARK }]}>/km</Text>
+                                        </View>
+                                    </>
+                                )}
+                            </View>
                         </View>
-                        {hasBonus && (
-                            <Text style={styles.earningsBreakdown}>
-                                ${baseFare.toFixed(2)} fare + ${totalBonus.toFixed(2)} bonus
-                            </Text>
-                        )}
                         <View style={styles.keepBadge}>
                             <Ionicons name="shield-checkmark" size={12} color={ACCENT} />
                             <Text style={styles.keepText}>100% yours — $0 commission</Text>
@@ -281,29 +307,6 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                         </View>
                     </View>
 
-                    {/* Trip metrics */}
-                    <View style={styles.metricsRow}>
-                        <View style={styles.metric}>
-                            <Text style={styles.metricValue}>{incomingRide.distance_km?.toFixed(1) || '--'}</Text>
-                            <Text style={styles.metricUnit}>km</Text>
-                        </View>
-                        <View style={styles.metricDivider} />
-                        <View style={styles.metric}>
-                            <Text style={styles.metricValue}>{Math.round(incomingRide.duration_minutes || 0)}</Text>
-                            <Text style={styles.metricUnit}>min</Text>
-                        </View>
-                        {incomingRide.distance_km && incomingRide.distance_km > 0 && (
-                            <>
-                                <View style={styles.metricDivider} />
-                                <View style={styles.metric}>
-                                    <Text style={[styles.metricValue, { color: ACCENT_DARK }]}>
-                                        ${(totalEarnings / incomingRide.distance_km).toFixed(2)}
-                                    </Text>
-                                    <Text style={[styles.metricUnit, { color: ACCENT_DARK }]}>/km</Text>
-                                </View>
-                            </>
-                        )}
-                    </View>
 
                     {/* Action buttons — Decline left, Accept right (reversed from typical so Accept is away from next screen's Cancel) */}
                     <View style={styles.actionBar}>
@@ -475,7 +478,16 @@ function createStyles(colors: ThemeColors, isDark: boolean) {
             fontWeight: '800',
             color: colors.textDim,
             letterSpacing: 1.2,
-            marginBottom: 2,
+            marginBottom: 4,
+        },
+        earningsHero: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 16,
+        },
+        earningsLeft: {
+            alignItems: 'center',
         },
         earningsRow: {
             flexDirection: 'row',
@@ -501,6 +513,32 @@ function createStyles(colors: ThemeColors, isDark: boolean) {
             color: ACCENT_DARK,
             marginTop: 2,
         },
+        metricsStack: {
+            backgroundColor: surfaceBg,
+            borderRadius: 12,
+            paddingHorizontal: 14,
+            paddingVertical: 10,
+            gap: 6,
+        },
+        metricItem: {
+            flexDirection: 'row',
+            alignItems: 'baseline',
+            gap: 3,
+        },
+        metricItemDivider: {
+            height: 1,
+            backgroundColor: borderClr,
+        },
+        metricValue: {
+            fontSize: 18,
+            fontWeight: '800',
+            color: colors.text,
+        },
+        metricUnit: {
+            fontSize: 12,
+            fontWeight: '600',
+            color: colors.textDim,
+        },
         keepBadge: {
             flexDirection: 'row',
             alignItems: 'center',
@@ -509,7 +547,7 @@ function createStyles(colors: ThemeColors, isDark: boolean) {
             paddingHorizontal: 10,
             paddingVertical: 4,
             borderRadius: 8,
-            marginTop: 6,
+            marginTop: 8,
         },
         keepText: {
             fontSize: 11,
@@ -639,36 +677,6 @@ function createStyles(colors: ThemeColors, isDark: boolean) {
             fontWeight: '600',
             color: colors.text,
             marginTop: 1,
-        },
-
-        // Metrics
-        metricsRow: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'center',
-            marginHorizontal: 20,
-            marginBottom: 14,
-            gap: 16,
-        },
-        metric: {
-            flexDirection: 'row',
-            alignItems: 'baseline',
-            gap: 2,
-        },
-        metricValue: {
-            fontSize: 16,
-            fontWeight: '800',
-            color: colors.text,
-        },
-        metricUnit: {
-            fontSize: 11,
-            fontWeight: '600',
-            color: colors.textDim,
-        },
-        metricDivider: {
-            width: 1,
-            height: 16,
-            backgroundColor: borderClr,
         },
 
         // Action buttons

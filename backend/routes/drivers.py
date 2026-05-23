@@ -2355,10 +2355,75 @@ async def get_active_ride(current_user: dict = Depends(get_current_user)):
         raw = serialize_doc(rider)
         safe_rider = {k: raw[k] for k in raw if k not in {"phone", "email", "stripe_customer_id"}}
 
+    # Enrich with incentives + quest progress for driver_assigned rides
+    # so fetchActiveRide never strips enrichment data from the offer panel.
+    incentives = None
+    total_bonus = None
+    quest_hint = None
+    if ride.get("status") == RideStatus.DRIVER_ASSIGNED.value:
+        try:
+            iq = (
+                db_supabase.supabase.table("ride_incentives")
+                .select("name, bonus_amount, incentive_type, service_area_id, vehicle_type_id")
+                .eq("is_active", True)
+            )
+            sa_id = ride.get("service_area_id")
+            if sa_id:
+                iq = iq.or_(f"service_area_id.is.null,service_area_id.eq.{sa_id}")
+            ir = await db_supabase.run_sync(iq.execute)
+            vt_id = ride.get("vehicle_type_id")
+            _inc_list = []
+            _bonus = 0.0
+            for inc in ir.data or []:
+                if inc.get("vehicle_type_id") and inc["vehicle_type_id"] != vt_id:
+                    continue
+                ba = float(inc.get("bonus_amount") or 0)
+                _inc_list.append(
+                    {
+                        "name": inc["name"],
+                        "bonus_amount": ba,
+                        "incentive_type": inc.get("incentive_type", "per_ride"),
+                    }
+                )
+                _bonus += ba
+            if _inc_list:
+                incentives = _inc_list
+                total_bonus = _bonus
+        except Exception as e:
+            logger.error(f"get_active_ride: incentive lookup failed: {e}", exc_info=True)
+
+        try:
+            driver_uid = current_user["id"]
+            qr = await db_supabase.run_sync(
+                db_supabase.supabase.table("quest_progress")
+                .select("current_value, status, quest:quests(title, target_value, reward_amount)")
+                .eq("driver_id", driver_uid)
+                .eq("status", "active")
+                .limit(1)
+                .execute
+            )
+            if qr.data:
+                qp = qr.data[0]
+                q = qp.get("quest") or {}
+                tv = float(q.get("target_value") or 1)
+                cv = float(qp.get("current_value") or 0)
+                quest_hint = {
+                    "title": q.get("title", ""),
+                    "current_value": cv,
+                    "target_value": tv,
+                    "progress_pct": round(min(cv / tv, 1.0) * 100, 1) if tv else 0,
+                    "reward_amount": float(q.get("reward_amount") or 0),
+                }
+        except Exception as e:
+            logger.warning(f"get_active_ride: quest hint lookup non-fatal: {e}")
+
     return {
         "ride": serialize_doc(ride),
         "rider": safe_rider,
         "vehicle_type": serialize_doc(vehicle_type) if vehicle_type else None,
+        "incentives": incentives,
+        "total_bonus": total_bonus,
+        "quest_hint": quest_hint,
     }
 
 

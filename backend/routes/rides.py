@@ -754,11 +754,14 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
             await manager.send_personal_message(dispatch_payload, f"driver_{selected_driver['user_id']}")
 
             # Push-notification fallback for backgrounded/killed app.
-            # The driver-app background handler (app/_layout.tsx) persists
-            # the full ride data to AsyncStorage; useDriverDashboard.ts then
-            # hydrates the store on cold-start without a network round-trip.
-            # FCM `data` values MUST be strings — all numbers are str()-wrapped.
+            # Derived from the same dispatch_payload so both channels
+            # carry identical data. FCM values must be strings.
             try:
+                fcm_data = {
+                    k: json.dumps(v) if isinstance(v, (dict, list)) else str(v) if v is not None else ""
+                    for k, v in dispatch_payload.items()
+                }
+                fcm_data["deeplink"] = "/driver/"
                 await send_push_notification(
                     selected_driver["user_id"],
                     "New ride request",
@@ -766,32 +769,7 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
                         f"{ride.get('pickup_address') or 'Nearby pickup'} "
                         f"→ {ride.get('dropoff_address') or 'destination'}"
                     ),
-                    {
-                        "type": "new_ride_assignment",
-                        "ride_id": ride_id,
-                        "pickup_address": ride.get("pickup_address") or "",
-                        "dropoff_address": ride.get("dropoff_address") or "",
-                        # Coords are guaranteed non-null here — the null-coord
-                        # guard at the top of match_driver_to_ride aborts
-                        # dispatch before we reach this branch.
-                        "pickup_lat": str(ride["pickup_lat"]),
-                        "pickup_lng": str(ride["pickup_lng"]),
-                        "dropoff_lat": str(ride["dropoff_lat"]),
-                        "dropoff_lng": str(ride["dropoff_lng"]),
-                        "fare": str(ride.get("driver_earnings") or 0),
-                        "distance_km": str(ride.get("distance_km") or ""),
-                        "duration_minutes": str(ride.get("duration_minutes") or ""),
-                        "rider_name": rider_display_name or "",
-                        "rider_rating": str((rider_user or {}).get("rating") or ""),
-                        "countdown_seconds": str(offer_timeout),
-                        "offer_expires_at": _offer_expires_at,
-                        "surge_multiplier": str(_surge_mult) if _surge_mult > 1.0 else "",
-                        "incentives_json": json.dumps(_incentives) if _incentives else "",
-                        "total_bonus": str(_total_bonus) if _total_bonus > 0 else "",
-                        "quest_hint_json": json.dumps(_quest_hint) if _quest_hint else "",
-                        "payment_method": ride.get("payment_method") or "",
-                        "deeplink": "/driver/",
-                    },
+                    fcm_data,
                     priority="dispatch",
                 )
                 logger.info(f"[DISPATCH] push new_ride_assignment sent to user_id={selected_driver['user_id']}")

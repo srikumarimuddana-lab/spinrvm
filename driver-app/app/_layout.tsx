@@ -116,14 +116,22 @@ const PENDING_ACTION_KEY = 'spinr_pending_notifee_action';
 setBackgroundMessageHandler(async (remoteMessage: any) => {
   const data = remoteMessage?.data || {};
   if (data?.type === 'new_ride_assignment' && data?.ride_id) {
+    // FCM data uses same keys as WS dispatch_payload, all stringified.
     const safeParse = <T,>(s: any): T | undefined => {
-      if (!s) return undefined;
+      if (!s || s === 'null' || s === 'None') return undefined;
+      if (typeof s !== 'string') return s as T;
       try { return JSON.parse(s) as T; } catch { return undefined; }
     };
-    const fare = parseFloat(data.fare || '0');
-    const totalBonus = data.total_bonus ? parseFloat(data.total_bonus) : 0;
-    const surgeMultiplier = data.surge_multiplier ? parseFloat(data.surge_multiplier) : undefined;
-    const incentives = safeParse<any[]>(data.incentives_json);
+    const toNum = (v: any): number | undefined => {
+      if (!v || v === '' || v === 'None') return undefined;
+      const n = parseFloat(v);
+      return Number.isFinite(n) ? n : undefined;
+    };
+    const fare = toNum(data.fare) ?? 0;
+    const totalBonus = toNum(data.total_bonus) ?? 0;
+    const surgeMultiplier = toNum(data.surge_multiplier);
+    const incentives = safeParse<any[]>(data.incentives);
+    const questHint = safeParse<any>(data.quest_hint);
 
     // 1. Persist the full offer payload so the in-app panel can hydrate
     //    instantly on cold start (driver dashboard reads on mount).
@@ -135,22 +143,22 @@ setBackgroundMessageHandler(async (remoteMessage: any) => {
           ride_id: data.ride_id,
           pickup_address: data.pickup_address || '',
           dropoff_address: data.dropoff_address || '',
-          pickup_lat: parseFloat(data.pickup_lat || '0'),
-          pickup_lng: parseFloat(data.pickup_lng || '0'),
-          dropoff_lat: parseFloat(data.dropoff_lat || '0'),
-          dropoff_lng: parseFloat(data.dropoff_lng || '0'),
+          pickup_lat: toNum(data.pickup_lat) ?? 0,
+          pickup_lng: toNum(data.pickup_lng) ?? 0,
+          dropoff_lat: toNum(data.dropoff_lat) ?? 0,
+          dropoff_lng: toNum(data.dropoff_lng) ?? 0,
           fare,
-          distance_km: data.distance_km ? parseFloat(data.distance_km) : undefined,
-          duration_minutes: data.duration_minutes ? parseFloat(data.duration_minutes) : undefined,
+          distance_km: toNum(data.distance_km),
+          duration_minutes: toNum(data.duration_minutes),
           rider_name: data.rider_name || undefined,
-          rider_rating: data.rider_rating ? parseFloat(data.rider_rating) : undefined,
-          requires_wav: data.requires_wav === 'true' || data.requires_wav === true,
-          countdown_seconds: data.countdown_seconds ? parseInt(data.countdown_seconds, 10) : undefined,
-          offer_expires_at: data.offer_expires_at,
+          rider_rating: toNum(data.rider_rating),
+          requires_wav: data.requires_wav === 'true' || data.requires_wav === 'True',
+          countdown_seconds: toNum(data.countdown_seconds),
+          offer_expires_at: data.offer_expires_at || undefined,
           surge_multiplier: surgeMultiplier,
           incentives,
           total_bonus: totalBonus || undefined,
-          quest_hint: safeParse(data.quest_hint_json),
+          quest_hint: questHint,
           payment_method: data.payment_method || undefined,
         }),
       );
@@ -160,9 +168,7 @@ setBackgroundMessageHandler(async (remoteMessage: any) => {
 
     // 2. Surface the Uber-style heads-up + full-screen-intent notification
     //    via Notifee. This is what the driver actually sees on the lock
-    //    screen, with Accept/Decline buttons. Suppress the default FCM
-    //    notification block server-side (we send data-only) so Notifee
-    //    is the only thing shown.
+    //    screen, with Accept/Decline buttons.
     if (displayRideOfferNotification) {
       try {
         await displayRideOfferNotification({
@@ -171,8 +177,8 @@ setBackgroundMessageHandler(async (remoteMessage: any) => {
           dropoff_address: data.dropoff_address,
           fare,
           total_bonus: totalBonus,
-          distance_km: data.distance_km ? parseFloat(data.distance_km) : undefined,
-          duration_minutes: data.duration_minutes ? parseFloat(data.duration_minutes) : undefined,
+          distance_km: toNum(data.distance_km),
+          duration_minutes: toNum(data.duration_minutes),
           surge_multiplier: surgeMultiplier,
           rider_name: data.rider_name,
           incentives_count: Array.isArray(incentives) ? incentives.length : 0,

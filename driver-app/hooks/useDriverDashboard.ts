@@ -1165,12 +1165,17 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           Vibration.vibrate([0, 500, 200, 500]);
           offerSound.play();
         }
-        const countdownStr = data.countdown_seconds;
-        const countdownNum = typeof countdownStr === 'string' ? parseInt(countdownStr, 10) : undefined;
-        const fcmIncentives = data.incentives_json ? JSON.parse(data.incentives_json) : undefined;
-        const fcmTotalBonus = data.total_bonus ? parseFloat(data.total_bonus) : undefined;
-        const fcmQuestHint = data.quest_hint_json ? JSON.parse(data.quest_hint_json) : undefined;
-        const fcmSurge = data.surge_multiplier ? parseFloat(data.surge_multiplier) : undefined;
+        // FCM values are all strings. Parse JSON for arrays/objects.
+        const safeParse = (v: unknown) => {
+          if (!v || v === 'null' || v === 'None') return undefined;
+          if (typeof v === 'string') { try { return JSON.parse(v); } catch { return undefined; } }
+          return v;
+        };
+        const toNum = (v: unknown) => {
+          if (!v || v === '' || v === 'None') return undefined;
+          const n = typeof v === 'number' ? v : parseFloat(String(v));
+          return Number.isFinite(n) ? n : undefined;
+        };
         setIncomingRide({
           ride_id: data.ride_id,
           pickup_address: data.pickup_address || '',
@@ -1180,16 +1185,16 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           dropoff_lat: dLat,
           dropoff_lng: dLng,
           fare: String(data.fare ?? '0.00'),
-          distance_km: data.distance_km ? parseFloat(data.distance_km) : undefined,
-          duration_minutes: data.duration_minutes ? parseFloat(data.duration_minutes) : undefined,
-          rider_name: data.rider_name,
-          rider_rating: data.rider_rating ? parseFloat(data.rider_rating) : undefined,
-          countdown_seconds: Number.isFinite(countdownNum) ? countdownNum : undefined,
-          offer_expires_at: data.offer_expires_at,
-          surge_multiplier: fcmSurge ?? existing?.surge_multiplier,
-          incentives: fcmIncentives ?? existing?.incentives,
-          total_bonus: fcmTotalBonus ?? existing?.total_bonus,
-          quest_hint: fcmQuestHint ?? existing?.quest_hint,
+          distance_km: toNum(data.distance_km),
+          duration_minutes: toNum(data.duration_minutes),
+          rider_name: data.rider_name || undefined,
+          rider_rating: toNum(data.rider_rating),
+          countdown_seconds: toNum(data.countdown_seconds),
+          offer_expires_at: data.offer_expires_at || undefined,
+          surge_multiplier: toNum(data.surge_multiplier),
+          incentives: safeParse(data.incentives) ?? existing?.incentives,
+          total_bonus: toNum(data.total_bonus) ?? existing?.total_bonus,
+          quest_hint: safeParse(data.quest_hint) ?? existing?.quest_hint,
           payment_method: data.payment_method || existing?.payment_method || undefined,
         });
       } else if (data?.type === 'auto_offline') {

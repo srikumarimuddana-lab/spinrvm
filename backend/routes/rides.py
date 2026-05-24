@@ -262,6 +262,39 @@ def _money_str(v: Decimal) -> str:
     return str(_round(_d(v)))
 
 
+import re as _re
+
+_HOUSE_NUM_RE = _re.compile(
+    r"^\s*#?\d[\d\w/-]*[\s,]+",
+)
+
+
+def _truncate_address(addr: str | None) -> str | None:
+    """Strip house/unit numbers from an address, keeping street and city.
+
+    '123 Main Street, Saskatoon, SK' → 'Main Street, Saskatoon, SK'
+    '#4-567 Broadway Ave, Regina'    → 'Broadway Ave, Regina'
+    """
+    if not addr:
+        return addr
+    truncated = _HOUSE_NUM_RE.sub("", addr, count=1)
+    return truncated if truncated else addr
+
+
+def _redact_driver_location_fields(ride: dict) -> None:
+    """Redact addresses to street-level and coordinates to ~110m for drivers."""
+    for key in ("pickup_address", "dropoff_address"):
+        if key in ride:
+            ride[key] = _truncate_address(ride[key])
+    for key in ("pickup_lat", "dropoff_lat", "pickup_lng", "dropoff_lng"):
+        val = ride.get(key)
+        if val is not None:
+            try:
+                ride[key] = round(float(val), 3)
+            except (ValueError, TypeError):
+                pass
+
+
 def _actual_duration_minutes(ride: dict) -> int | None:
     """Derive the actual trip-in-progress duration in whole minutes.
 
@@ -2279,22 +2312,14 @@ async def get_ride(
         ride["offer_expires_at"] = None
         ride["offer_timeout_seconds"] = None
 
-    # PIPEDA / threat-model RI-2: drivers only need pickup/dropoff addresses
-    # while the trip is active. Retaining exact addresses post-completion
-    # enables address-based stalking (attack tree RAT-1). Riders retain their
-    # own address history (is_rider check).
+    # PIPEDA / threat-model RI-2: drivers see street-level (no house number)
+    # addresses and block-level coordinates for completed rides. Exact
+    # addresses are stripped to mitigate address-based stalking (RAT-1)
+    # while still giving drivers useful trip history (Uber/Lyft pattern).
     if is_driver and not is_rider:
         ride.pop("pickup_otp", None)
         if ride.get("status") in RideStatus.terminal_statuses():
-            for _addr_key in (
-                "pickup_address",
-                "dropoff_address",
-                "pickup_lat",
-                "pickup_lng",
-                "dropoff_lat",
-                "dropoff_lng",
-            ):
-                ride.pop(_addr_key, None)
+            _redact_driver_location_fields(ride)
 
     # When a fare snapshot exists and fare_lock is enabled, the snapshot
     # IS the bill — use it verbatim instead of recomputing from ride fields

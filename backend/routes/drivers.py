@@ -2459,6 +2459,13 @@ async def get_ride_history(
         total = 0
         rides = []
 
+    try:
+        from .rides import _redact_driver_location_fields
+    except ImportError:
+        from routes.rides import _redact_driver_location_fields
+    for r in rides:
+        _redact_driver_location_fields(r)
+
     return {"total": total, "rides": [serialize_doc(r) for r in rides]}
 
 

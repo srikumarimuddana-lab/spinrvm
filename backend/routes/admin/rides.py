@@ -1064,6 +1064,23 @@ async def admin_get_ride_route_map(
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
 
+    # Serve the pre-rendered snapshot if available (avoids Google API call).
+    snapshot_url = ride.get("route_snapshot_url")
+    if snapshot_url:
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(snapshot_url)
+            if resp.status_code == 200:
+                return Response(
+                    content=resp.content,
+                    media_type="image/png",
+                    headers={"Cache-Control": "private, max-age=3600"},
+                )
+        except Exception as exc:
+            logger.warning("Snapshot fetch failed for ride %s, falling back to Google Static Maps: %s", ride_id, exc)
+
     pickup_lat = ride.get("pickup_lat")
     pickup_lng = ride.get("pickup_lng")
     dropoff_lat = ride.get("dropoff_lat")
@@ -1896,7 +1913,7 @@ async def admin_get_payouts_overview(
         ),
         Decimal("0"),
     )
-    outstanding_now = max(earned_total - paid_or_in_flight, Decimal("0"))
+    outstanding_now = max(earned_total - paid_or_in_flight, Decimal("0"))  # noqa: F841
 
     # Same calculation snapshot at prev_end so we can show delta.
     end_iso = end.isoformat()
@@ -2294,27 +2311,6 @@ async def admin_get_payouts(
 # and returns 404 (the admin dashboard then crashes on the missing stats
 # response). Any future /payouts/<literal> route must go above the
 # {payout_id} handler for the same reason.
-@router.get("/payouts/stats")
-async def admin_get_payout_stats():
-    """Get payout stats: total paid, pending, failed."""
-    try:
-        all_payouts = await db.get_rows("payouts", {}, limit=10000)
-    except Exception:
-        all_payouts = []
-
-    total_paid = float(sum(Decimal(str(p.get("amount", 0))) for p in all_payouts if p.get("status") == "completed"))
-    total_pending = float(sum(Decimal(str(p.get("amount", 0))) for p in all_payouts if p.get("status") == "pending"))
-    total_failed = float(sum(Decimal(str(p.get("amount", 0))) for p in all_payouts if p.get("status") == "failed"))
-
-    return {
-        "total_paid": round(total_paid, 2),
-        "total_pending": round(total_pending, 2),
-        "total_failed": round(total_failed, 2),
-        "payout_count": len(all_payouts),
-        "pending_count": sum(1 for p in all_payouts if p.get("status") == "pending"),
-    }
-
-
 @router.get("/payouts/{payout_id}")
 async def admin_get_payout(payout_id: str, _: dict = Depends(get_admin_user)):
     """Return a single payout record by ID."""

@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState, useMemo } from 'react';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput, Modal,
-  Platform, ActivityIndicator, BackHandler, KeyboardAvoidingView, Animated,
+  Platform, ActivityIndicator, BackHandler, KeyboardAvoidingView, Animated, Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -56,7 +56,7 @@ function RideCompletedScreenContent() {
   const [alreadyPaid, setAlreadyPaid] = useState(false);
   const [paymentProcessed, setPaymentProcessed] = useState(false);
 
-  const [routeCoords, setRouteCoords] = useState<any[]>([]);
+  const [fallbackCoords, setFallbackCoords] = useState<any[]>([]);
   const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean;
     title: string;
@@ -67,6 +67,19 @@ function RideCompletedScreenContent() {
   const mapRef = React.useRef<MapView>(null);
   const successScale = useRef(new Animated.Value(0)).current;
   const successOpacity = useRef(new Animated.Value(0)).current;
+
+  const savedPolyline = useMemo(() => {
+    if (!currentRide) return [];
+    const raw = (Array.isArray((currentRide as any).route_polyline) && (currentRide as any).route_polyline.length >= 2)
+      ? (currentRide as any).route_polyline
+      : (currentRide as any).planned_route_polyline;
+    if (!Array.isArray(raw) || raw.length < 2) return [];
+    return raw
+      .filter((p: any) => Array.isArray(p) && p.length >= 2)
+      .map((p: any) => ({ latitude: p[0], longitude: p[1] }));
+  }, [currentRide]);
+
+  const polylineToRender = savedPolyline.length >= 2 ? savedPolyline : fallbackCoords;
 
 
   useEffect(() => {
@@ -459,70 +472,85 @@ function RideCompletedScreenContent() {
           </View>
         </View>
 
-        {/* ═══ 4. Route Map ═══ */}
+        {/* ═══ 4. Route Map — snapshot image first, live MapView as fallback ═══ */}
         {currentRide && Number(currentRide.pickup_lat) && Number(currentRide.dropoff_lat) && (
           <View style={styles.mapCard}>
-            <MapView
-              ref={mapRef}
-              style={styles.map}
-              provider={MAP_PROVIDER}
-              scrollEnabled={false}
-              zoomEnabled={false}
-              rotateEnabled={false}
-              pitchEnabled={false}
-              userInterfaceStyle={isDark ? 'dark' : 'light'}
-              initialRegion={{
-                latitude: (Number(currentRide.pickup_lat) + Number(currentRide.dropoff_lat)) / 2,
-                longitude: (Number(currentRide.pickup_lng) + Number(currentRide.dropoff_lng)) / 2,
-                latitudeDelta: Math.abs(Number(currentRide.pickup_lat) - Number(currentRide.dropoff_lat)) * 2.5 + 0.01,
-                longitudeDelta: Math.abs(Number(currentRide.pickup_lng) - Number(currentRide.dropoff_lng)) * 2.5 + 0.01,
-              }}
-            >
-              {GOOGLE_MAPS_API_KEY && (
-                <MapViewDirections
-                  origin={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }}
-                  destination={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }}
-                  apikey={GOOGLE_MAPS_API_KEY}
-                  strokeWidth={0}
-                  strokeColor="transparent"
-                  onReady={(result: any) => {
-                    setRouteCoords(result.coordinates);
-                    if (mapRef.current && result.coordinates?.length > 1) {
-                      mapRef.current.fitToCoordinates(result.coordinates, {
-                        edgePadding: { top: 30, right: 30, bottom: 30, left: 30 },
-                        animated: false,
-                      });
-                    }
-                  }}
-                />
-              )}
+            {(currentRide as any).route_snapshot_url ? (
+              <Image
+                source={{ uri: (currentRide as any).route_snapshot_url }}
+                style={styles.map}
+                resizeMode="cover"
+              />
+            ) : (
+              <MapView
+                ref={mapRef}
+                style={styles.map}
+                provider={MAP_PROVIDER}
+                scrollEnabled={false}
+                zoomEnabled={false}
+                rotateEnabled={false}
+                pitchEnabled={false}
+                userInterfaceStyle={isDark ? 'dark' : 'light'}
+                initialRegion={{
+                  latitude: (Number(currentRide.pickup_lat) + Number(currentRide.dropoff_lat)) / 2,
+                  longitude: (Number(currentRide.pickup_lng) + Number(currentRide.dropoff_lng)) / 2,
+                  latitudeDelta: Math.abs(Number(currentRide.pickup_lat) - Number(currentRide.dropoff_lat)) * 2.5 + 0.01,
+                  longitudeDelta: Math.abs(Number(currentRide.pickup_lng) - Number(currentRide.dropoff_lng)) * 2.5 + 0.01,
+                }}
+                onMapReady={() => {
+                  if (savedPolyline.length >= 2) {
+                    mapRef.current?.fitToCoordinates(savedPolyline, {
+                      edgePadding: { top: 30, right: 30, bottom: 30, left: 30 }, animated: false,
+                    });
+                  }
+                }}
+              >
+                {savedPolyline.length < 2 && GOOGLE_MAPS_API_KEY && (
+                  <MapViewDirections
+                    origin={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }}
+                    destination={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }}
+                    apikey={GOOGLE_MAPS_API_KEY}
+                    strokeWidth={0}
+                    strokeColor="transparent"
+                    onReady={(result: any) => {
+                      setFallbackCoords(result.coordinates);
+                      if (mapRef.current && result.coordinates?.length > 1) {
+                        mapRef.current.fitToCoordinates(result.coordinates, {
+                          edgePadding: { top: 30, right: 30, bottom: 30, left: 30 },
+                          animated: false,
+                        });
+                      }
+                    }}
+                  />
+                )}
 
-              {routeCoords.length > 1 && (() => {
-                const total = routeCoords.length;
-                const SEGS = 15;
-                const chunk = Math.max(1, Math.floor(total / SEGS));
-                const segments: { coords: any[]; color: string }[] = [];
-                for (let i = 0; i < total - 1; i += chunk) {
-                  const end = Math.min(i + chunk + 1, total);
-                  const t = i / Math.max(total - 1, 1);
-                  const r = Math.round(255 + (238 - 255) * t);
-                  const g = Math.round(149 + (43 - 149) * t);
-                  const b = Math.round(0 + (43 - 0) * t);
-                  segments.push({ coords: routeCoords.slice(i, end), color: `rgb(${r},${g},${b})` });
-                }
-                return segments.map((seg, idx) => (
-                  <Polyline key={`seg-${idx}`} coordinates={seg.coords} strokeWidth={4}
-                    strokeColor={seg.color} lineCap="round" lineJoin="round" />
-                ));
-              })()}
+                {polylineToRender.length > 1 && (() => {
+                  const total = polylineToRender.length;
+                  const SEGS = 15;
+                  const chunk = Math.max(1, Math.floor(total / SEGS));
+                  const segments: { coords: any[]; color: string }[] = [];
+                  for (let i = 0; i < total - 1; i += chunk) {
+                    const end = Math.min(i + chunk + 1, total);
+                    const t = i / Math.max(total - 1, 1);
+                    const r = Math.round(255 + (238 - 255) * t);
+                    const g = Math.round(149 + (43 - 149) * t);
+                    const b = Math.round(0 + (43 - 0) * t);
+                    segments.push({ coords: polylineToRender.slice(i, end), color: `rgb(${r},${g},${b})` });
+                  }
+                  return segments.map((seg, idx) => (
+                    <Polyline key={`seg-${idx}`} coordinates={seg.coords} strokeWidth={4}
+                      strokeColor={seg.color} lineCap="round" lineJoin="round" />
+                  ));
+                })()}
 
-              <Marker coordinate={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }} anchor={{ x: 0.5, y: 0.5 }}>
-                <View style={styles.mapPin}><Ionicons name="location" size={14} color="#FFF" /></View>
-              </Marker>
-              <Marker coordinate={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }} anchor={{ x: 0.5, y: 0.5 }}>
-                <View style={[styles.mapPin, { backgroundColor: '#EF4444' }]}><Ionicons name="flag" size={14} color="#FFF" /></View>
-              </Marker>
-            </MapView>
+                <Marker coordinate={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }} anchor={{ x: 0.5, y: 0.5 }}>
+                  <View style={styles.mapPin}><Ionicons name="location" size={14} color="#FFF" /></View>
+                </Marker>
+                <Marker coordinate={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }} anchor={{ x: 0.5, y: 0.5 }}>
+                  <View style={[styles.mapPin, { backgroundColor: '#EF4444' }]}><Ionicons name="flag" size={14} color="#FFF" /></View>
+                </Marker>
+              </MapView>
+            )}
 
             {/* Address overlay */}
             <View style={styles.mapOverlay}>

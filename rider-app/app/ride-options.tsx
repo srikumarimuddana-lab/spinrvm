@@ -64,6 +64,7 @@ function RideOptionsScreenContent() {
     requiresWav, setRequiresWav, showWavOption,
     scheduledTime, setScheduledTime, quietMode, setQuietMode,
     availablePromos, appliedPromo, fetchAvailablePromos, applyPromo,
+    setRoutePolyline,
   } = useRideStore();
 
   // ── Payment state ──
@@ -230,7 +231,10 @@ function RideOptionsScreenContent() {
   // ── Handlers ──
 
   const onReadyDirections = (result: any) => {
-    if (result.coordinates) setRouteCoordinates(result.coordinates);
+    if (result.coordinates) {
+      setRouteCoordinates(result.coordinates);
+      setRoutePolyline(result.coordinates);
+    }
     if (mapRef.current && mapReady) {
       mapRef.current.fitToCoordinates(result.coordinates, {
         edgePadding: { top: 60, right: 50, bottom: SCREEN_HEIGHT * 0.68 + 30, left: 50 },

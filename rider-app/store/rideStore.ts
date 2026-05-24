@@ -190,6 +190,7 @@ interface RideState {
   appliedPromo: Promo | null;
   quietMode: boolean;
   riderNotes: string;
+  routePolyline: [number, number][];
   isLoading: boolean;
   error: string | null;
 
@@ -226,6 +227,7 @@ interface RideState {
   setShowWavOption: (value: boolean) => void;
   setQuietMode: (v: boolean) => void;
   setRiderNotes: (v: string) => void;
+  setRoutePolyline: (coords: { latitude: number; longitude: number }[]) => void;
   /**
    * Update the rider_notes for the currently-in-flight ride. Used by the
    * post-confirm "Add note for driver" chip on ride-status. Backend
@@ -274,6 +276,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   showWavOption: false,
   quietMode: false,
   riderNotes: '',
+  routePolyline: [],
   scheduledTime: null,
   scheduledRides: [],
   userLocation: null,
@@ -526,7 +529,7 @@ export const useRideStore = create<RideState>((set, get) => ({
   },
 
   createRide: async (paymentMethod, corporateAccountId, paymentMethodId) => {
-    const { pickup, dropoff, selectedVehicle, stops, scheduledTime, estimates, requiresWav, quietMode, riderNotes } = get();
+    const { pickup, dropoff, selectedVehicle, stops, scheduledTime, estimates, requiresWav, quietMode, riderNotes, routePolyline } = get();
     if (!pickup || !dropoff || !selectedVehicle) {
       throw new Error('Missing ride details');
     }
@@ -562,6 +565,7 @@ export const useRideStore = create<RideState>((set, get) => ({
         quiet_mode: quietMode,
         rider_notes: riderNotes || null,
         promo_code: get().appliedPromo?.code || null,
+        planned_route_polyline: routePolyline.length >= 2 ? routePolyline : null,
         created_at: new Date().toISOString(),
       };
 
@@ -575,7 +579,7 @@ export const useRideStore = create<RideState>((set, get) => ({
       const response = await api.post<Ride>('/rides', rideData, {
         headers: { 'Idempotency-Key': idempotencyKey },
       });
-      set({ currentRide: response.data, isLoading: false, scheduledTime: null, requiresWav: false, quietMode: false, riderNotes: '', appliedPromo: null, _clearedRideId: null });
+      set({ currentRide: response.data, isLoading: false, scheduledTime: null, requiresWav: false, quietMode: false, riderNotes: '', routePolyline: [], appliedPromo: null, _clearedRideId: null });
       _persistRide(response.data, null);
       return response.data;
     } catch (error: unknown) {
@@ -834,6 +838,9 @@ export const useRideStore = create<RideState>((set, get) => ({
   },
   setQuietMode: (v) => set({ quietMode: v }),
   setRiderNotes: (v) => set({ riderNotes: v }),
+  setRoutePolyline: (coords) => set({
+    routePolyline: coords.map(c => [c.latitude, c.longitude] as [number, number]),
+  }),
 
   updateRideNotes: async (notes) => {
     const { currentRide } = get();

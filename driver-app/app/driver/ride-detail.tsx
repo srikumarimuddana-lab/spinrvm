@@ -335,9 +335,18 @@ export default function RideDetailScreen() {
 
                                 {parseFloat(ride.tip_amount || '0') > 0 && (
                                     <View style={styles.fareRow}>
-                                        <Text style={[styles.fareLabel, { color: '#FFD700' }]}>Tip</Text>
-                                        <Text style={[styles.fareValue, { color: '#FFD700' }]}>
+                                        <Text style={[styles.fareLabel, { color: '#f59e0b' }]}>Tip</Text>
+                                        <Text style={[styles.fareValue, { color: '#f59e0b' }]}>
                                             +${parseFloat(ride.tip_amount || '0').toFixed(2)}
+                                        </Text>
+                                    </View>
+                                )}
+
+                                {parseFloat(ride.incentive_amount || '0') > 0 && (
+                                    <View style={styles.fareRow}>
+                                        <Text style={[styles.fareLabel, { color: '#8b5cf6' }]}>Area Boost</Text>
+                                        <Text style={[styles.fareValue, { color: '#8b5cf6' }]}>
+                                            +${parseFloat(ride.incentive_amount || '0').toFixed(2)}
                                         </Text>
                                     </View>
                                 )}
@@ -347,7 +356,7 @@ export default function RideDetailScreen() {
                                 <View style={styles.fareRow}>
                                     <Text style={styles.earningsLabel}>Total Earned</Text>
                                     <Text style={styles.earningsValue}>
-                                        ${parseFloat(ride.driver_earnings || ride.total_fare || '0').toFixed(2)}
+                                        ${parseFloat(ride.total_earned || ride.driver_earnings || '0').toFixed(2)}
                                     </Text>
                                 </View>
                             </View>
@@ -379,6 +388,32 @@ export default function RideDetailScreen() {
                                 </View>
                             )}
                         </>
+                    )}
+
+                    {/* Cancellation / No-show fee earned */}
+                    {ride.status === 'cancelled' && parseFloat(ride.cancel_fee_earned || '0') > 0 && (
+                        <View style={styles.card}>
+                            <Text style={styles.cardTitle}>
+                                {ride.cancellation_type === 'noshow' ? 'No-Show Fee' : 'Cancellation Fee'}
+                            </Text>
+                            <View style={styles.fareRow}>
+                                <Text style={styles.fareLabel}>
+                                    {ride.cancellation_type === 'noshow'
+                                        ? 'Rider did not show up'
+                                        : 'Rider cancelled after acceptance'}
+                                </Text>
+                                <Text style={[styles.fareValue, { color: '#f59e0b' }]}>
+                                    +${parseFloat(ride.cancel_fee_earned || '0').toFixed(2)}
+                                </Text>
+                            </View>
+                            <View style={styles.fareDivider} />
+                            <View style={styles.taxNoteBox}>
+                                <Ionicons name="information-circle-outline" size={16} color={colors.textDim} />
+                                <Text style={styles.taxNoteText}>
+                                    This fee has been credited to your wallet.
+                                </Text>
+                            </View>
+                        </View>
                     )}
 
                     {/* Trip Timeline */}

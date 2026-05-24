@@ -934,9 +934,36 @@ async def get_driver_earnings(period: str = Query("week"), current_user: dict = 
 
         rides = await db_supabase.get_rows("rides", filters, limit=10000)
 
+        # Fetch incentive claims for these rides
+        _ride_ids = [r["id"] for r in rides if r.get("id")]
+        _incentive_total = Decimal("0")
+        if _ride_ids:
+            try:
+                _claims = (
+                    db_supabase.supabase.table("ride_incentive_claims")
+                    .select("bonus_amount")
+                    .in_("ride_id", _ride_ids)
+                    .execute()
+                ).data or []
+                _incentive_total = sum(Decimal(str(c.get("bonus_amount") or 0)) for c in _claims)
+            except Exception:
+                logger.debug("earnings: ride_incentive_claims lookup failed", exc_info=True)
+
+        # Fetch cancellation/no-show fees earned by this driver
+        _cancel_filters: Dict[str, Any] = {
+            "driver_id": driver["id"],
+            "status": RideStatus.CANCELLED,
+        }
+        if use_date_filter and start_date:
+            _cancel_filters["cancelled_at"] = {"$gte": start_date.isoformat()}
+        _cancelled_rides = await db_supabase.get_rows("rides", _cancel_filters, limit=10000)
+        _cancel_fees_total = sum(Decimal(str(r.get("cancellation_fee_driver") or 0)) for r in _cancelled_rides)
+
         stats = {
             "total_earnings": sum(r.get("driver_earnings", 0) or 0 for r in rides),
             "total_tips": sum(r.get("tip_amount", 0) or 0 for r in rides),
+            "total_incentives": float(_incentive_total),
+            "total_cancel_fees": float(_cancel_fees_total),
             "total_rides": len(rides),
             "total_distance_km": sum(r.get("distance_km", 0) or 0 for r in rides),
             "total_duration_minutes": sum(r.get("duration_minutes", 0) or 0 for r in rides),
@@ -951,17 +978,22 @@ async def get_driver_earnings(period: str = Query("week"), current_user: dict = 
             "total_duration_minutes": 0,
         }
 
+    _total_with_extras = (
+        Decimal(str(stats.get("total_earnings", 0)))
+        + Decimal(str(stats.get("total_incentives", 0)))
+        + Decimal(str(stats.get("total_cancel_fees", 0)))
+    )
     return {
         "period": period,
-        "total_earnings": _money_str(stats.get("total_earnings", 0)),
+        "total_earnings": _money_str(_total_with_extras),
         "total_tips": _money_str(stats.get("total_tips", 0)),
+        "total_incentives": _money_str(stats.get("total_incentives", 0)),
+        "total_cancel_fees": _money_str(stats.get("total_cancel_fees", 0)),
         "total_rides": stats.get("total_rides", 0),
         "total_distance_km": stats.get("total_distance_km", 0),
         "total_duration_minutes": stats.get("total_duration_minutes", 0),
         "average_per_ride": (
-            _money_str(Decimal(str(stats.get("total_earnings", 0))) / stats.get("total_rides", 1))
-            if stats.get("total_rides", 0) > 0
-            else "0.00"
+            _money_str(_total_with_extras / stats.get("total_rides", 1)) if stats.get("total_rides", 0) > 0 else "0.00"
         ),
     }
 
@@ -2499,6 +2531,43 @@ async def get_ride_history(
         from routes.rides import _redact_driver_location_fields
     for r in rides:
         _redact_driver_location_fields(r)
+
+    # Enrich rides with incentive claims and earnings breakdown
+    ride_ids = [r["id"] for r in rides if r.get("id")]
+    incentive_map: Dict[str, float] = {}
+    if ride_ids:
+        try:
+            claims = (
+                db_supabase.supabase.table("ride_incentive_claims")
+                .select("ride_id, bonus_amount")
+                .in_("ride_id", ride_ids)
+                .execute()
+            ).data or []
+            for c in claims:
+                rid = str(c.get("ride_id", ""))
+                incentive_map[rid] = incentive_map.get(rid, 0) + float(c.get("bonus_amount") or 0)
+        except Exception:
+            logger.debug("ride_incentive_claims lookup failed", exc_info=True)
+
+    for r in rides:
+        rid = str(r.get("id", ""))
+        tip = float(r.get("tip_amount") or 0)
+        de = float(r.get("driver_earnings") or 0)
+        incentive = incentive_map.get(rid, 0)
+        cancel_fee = float(r.get("cancellation_fee_driver") or 0)
+        fare_only = round(de - tip, 2)
+        tax = float(r.get("tax_amount") or 0)
+        if tax == 0:
+            snap = r.get("fare_breakdown_snapshot") or {}
+            for ln in snap.get("lines") or []:
+                if ln.get("type") in ("tax", "gst", "pst"):
+                    tax += float(ln.get("amount") or 0)
+            tax = round(tax, 2)
+        r["fare_only"] = fare_only
+        r["incentive_amount"] = round(incentive, 2)
+        r["tax_amount_total"] = tax
+        r["cancel_fee_earned"] = round(cancel_fee, 2)
+        r["total_earned"] = round(de + incentive + cancel_fee, 2)
 
     return {"total": total, "rides": [serialize_doc(r) for r in rides]}
 

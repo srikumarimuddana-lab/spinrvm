@@ -143,6 +143,8 @@ export interface EarningsSummary {
     period: string;
     total_earnings: string; // MoneyString
     total_tips: string; // MoneyString
+    total_incentives: string; // MoneyString
+    total_cancel_fees: string; // MoneyString
     total_rides: number;
     total_distance_km: number;
     total_duration_minutes: number;

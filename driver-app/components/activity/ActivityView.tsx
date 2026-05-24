@@ -56,7 +56,8 @@ export default function ActivityView() {
 
   const totalEarnings = parseMoney(earnings?.total_earnings);
   const totalTips = parseMoney(earnings?.total_tips);
-  const fareEarnings = Math.max(totalEarnings - totalTips, 0);
+  const totalIncentives = parseMoney(earnings?.total_incentives);
+  const fareEarnings = Math.max(totalEarnings - totalTips - totalIncentives, 0);
 
   const filteredRides = useMemo(() => {
     return rideHistory.filter((r) => {
@@ -105,23 +106,27 @@ export default function ActivityView() {
         <>
           {/* Earnings breakdown */}
           <View style={styles.card}>
+            <View style={styles.totalRow}>
+              <Text style={styles.totalLabel}>Total Earned</Text>
+              <Text style={styles.totalValue}>${toMoney(totalEarnings)}</Text>
+            </View>
             <View style={styles.breakdownRow}>
               <View style={styles.breakdownItem}>
-                <Ionicons name="cash-outline" size={20} color="#ef4444" />
+                <Ionicons name="cash-outline" size={18} color="#ef4444" />
                 <Text style={styles.label}>Fare</Text>
                 <Text style={styles.value}>${toMoney(fareEarnings)}</Text>
               </View>
               <View style={styles.divider} />
               <View style={styles.breakdownItem}>
-                <Ionicons name="gift-outline" size={20} color="#f59e0b" />
+                <Ionicons name="gift-outline" size={18} color="#f59e0b" />
                 <Text style={styles.label}>Tips</Text>
                 <Text style={[styles.value, { color: '#f59e0b' }]}>${toMoney(totalTips)}</Text>
               </View>
               <View style={styles.divider} />
               <View style={styles.breakdownItem}>
-                <Ionicons name="wallet" size={20} color="#10b981" />
-                <Text style={styles.label}>Total</Text>
-                <Text style={[styles.value, { color: '#10b981' }]}>${toMoney(totalEarnings)}</Text>
+                <Ionicons name="flash" size={18} color="#8b5cf6" />
+                <Text style={styles.label}>Bonus</Text>
+                <Text style={[styles.value, { color: '#8b5cf6' }]}>${toMoney(totalIncentives)}</Text>
               </View>
             </View>
           </View>
@@ -207,10 +212,9 @@ export default function ActivityView() {
                 const statusIcon = isCompleted ? 'checkmark-circle' : isCancelled ? 'close-circle' : 'time';
 
                 const date = ride.ride_completed_at || (ride as any).cancelled_at || ride.created_at;
-                const driverEarnings = parseMoney((ride as any).driver_earnings);
                 const tipAmount = parseMoney((ride as any).tip_amount);
                 const incentiveAmount = parseMoney((ride as any).incentive_amount);
-                const totalEarned = driverEarnings + tipAmount + incentiveAmount;
+                const totalEarned = parseMoney((ride as any).total_earned);
 
                 return (
                   <TouchableOpacity
@@ -289,9 +293,20 @@ export default function ActivityView() {
                             )}
                           </>
                         ) : isCancelled ? (
-                          <Text style={[styles.fareAmount, { color: '#9ca3af', fontSize: 16 }]}>$0.00</Text>
+                          parseMoney((ride as any).cancel_fee_earned) > 0 ? (
+                            <>
+                              <Text style={[styles.fareAmount, { color: '#f59e0b' }]}>
+                                +${toMoney((ride as any).cancel_fee_earned)}
+                              </Text>
+                              <Text style={styles.cancelFeeText}>
+                                {(ride as any).cancellation_type === 'noshow' ? 'No-show fee' : 'Cancel fee'}
+                              </Text>
+                            </>
+                          ) : (
+                            <Text style={[styles.fareAmount, { color: '#9ca3af', fontSize: 16 }]}>$0.00</Text>
+                          )
                         ) : (
-                          <Text style={styles.fareAmount}>Est. ${toMoney(driverEarnings)}</Text>
+                          <Text style={styles.fareAmount}>Est. ${toMoney(parseMoney((ride as any).driver_earnings))}</Text>
                         )}
                       </View>
                     </View>
@@ -353,6 +368,24 @@ const styles = StyleSheet.create({
     padding: 16,
     borderWidth: 1,
     borderColor: '#e5e7eb',
+  },
+  totalRow: {
+    alignItems: 'center',
+    marginBottom: 14,
+    paddingBottom: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f3f4f6',
+  },
+  totalLabel: {
+    color: '#6b7280',
+    fontSize: 12,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  totalValue: {
+    color: '#10b981',
+    fontSize: 28,
+    fontWeight: '900',
   },
   breakdownRow: {
     flexDirection: 'row',
@@ -581,6 +614,12 @@ const styles = StyleSheet.create({
     color: '#f59e0b',
     fontSize: 11,
     fontWeight: '700',
+    marginTop: 2,
+  },
+  cancelFeeText: {
+    color: '#f59e0b',
+    fontSize: 11,
+    fontWeight: '600',
     marginTop: 2,
   },
   // Empty state

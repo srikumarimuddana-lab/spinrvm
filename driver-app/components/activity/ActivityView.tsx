@@ -209,6 +209,8 @@ export default function ActivityView() {
                 const date = ride.ride_completed_at || (ride as any).cancelled_at || ride.created_at;
                 const driverEarnings = parseMoney((ride as any).driver_earnings);
                 const tipAmount = parseMoney((ride as any).tip_amount);
+                const incentiveAmount = parseMoney((ride as any).incentive_amount);
+                const totalEarned = driverEarnings + tipAmount + incentiveAmount;
 
                 return (
                   <TouchableOpacity
@@ -276,9 +278,14 @@ export default function ActivityView() {
                       <View style={{ alignItems: 'flex-end' }}>
                         {isCompleted ? (
                           <>
-                            <Text style={styles.fareAmount}>${toMoney(driverEarnings)}</Text>
-                            {tipAmount > 0 && (
-                              <Text style={styles.tipText}>+ ${toMoney(tipAmount)} tip</Text>
+                            <Text style={styles.fareAmount}>${toMoney(totalEarned)}</Text>
+                            {(tipAmount > 0 || incentiveAmount > 0) && (
+                              <Text style={styles.tipText}>
+                                {[
+                                  tipAmount > 0 ? `$${toMoney(tipAmount)} tip` : '',
+                                  incentiveAmount > 0 ? `$${toMoney(incentiveAmount)} bonus` : '',
+                                ].filter(Boolean).join(' + ')}
+                              </Text>
                             )}
                           </>
                         ) : isCancelled ? (

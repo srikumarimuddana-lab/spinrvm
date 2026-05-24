@@ -232,7 +232,13 @@ async def _generate_and_store_ride_snapshot(
     See backend/docs/STORAGE_BUCKETS.md for one-time setup.
     """
     if pickup_lat is None or pickup_lng is None or dropoff_lat is None or dropoff_lng is None:
+        logger.warning(f"Snapshot skipped for ride {ride_id}: missing coordinates")
         return
+    poly_len = len(route_polyline) if isinstance(route_polyline, list) else 0
+    phase_keys = list((phase_polylines or {}).keys()) if phase_polylines else []
+    logger.info(
+        f"Snapshot pipeline start for ride {ride_id}: route_polyline={poly_len} pts, phase_polylines={phase_keys}"
+    )
     try:
         try:
             from ..core.config import settings
@@ -262,6 +268,13 @@ async def _generate_and_store_ride_snapshot(
                     phase_polylines=phase_polylines,
                     route_polyline=route_polyline,
                 )
+                logger.info(
+                    f"Google Static Maps for ride {ride_id}: "
+                    f"{'success' if png_bytes else 'returned None'} "
+                    f"({len(png_bytes) if png_bytes else 0} bytes)"
+                )
+            else:
+                logger.warning(f"No Google Maps API key found for ride {ride_id} snapshot")
         except Exception as google_exc:
             logger.warning(f"Google Static Maps failed for ride {ride_id}, trying OSM fallback: {google_exc}")
 
@@ -3338,22 +3351,22 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         logger.info(f"Sending email receipt for ride {ride_id} (rider_id={rider.get('id')})")
 
     # Fire-and-forget: render the route PNG from phase_polylines and
-    # upload to Cloudinary so the admin drawer + email receipt can
-    # embed a permanent image URL. Runs as a background task so the
-    # driver's "Complete" response isn't blocked on OSM tile fetches.
-    # Any failure here is swallowed — the snapshot is best-effort and
-    # the ride is already fully persisted with phase data.
-    asyncio.create_task(
-        _generate_and_store_ride_snapshot(
-            ride_id=ride_id,
-            pickup_lat=ride.get("pickup_lat"),
-            pickup_lng=ride.get("pickup_lng"),
-            dropoff_lat=ride.get("dropoff_lat"),
-            dropoff_lng=ride.get("dropoff_lng"),
-            phase_polylines=phase_polylines,
-            route_polyline=route_polyline,
+    # upload to Supabase Storage so the admin drawer + email receipt can
+    # embed a permanent image URL. Only regenerate if we have actual GPS
+    # data — otherwise preserve the planned-route snapshot from creation.
+    has_gps_trail = bool(route_polyline) or any(bool(v) for v in phase_polylines.values())
+    if has_gps_trail:
+        asyncio.create_task(
+            _generate_and_store_ride_snapshot(
+                ride_id=ride_id,
+                pickup_lat=ride.get("pickup_lat"),
+                pickup_lng=ride.get("pickup_lng"),
+                dropoff_lat=ride.get("dropoff_lat"),
+                dropoff_lng=ride.get("dropoff_lng"),
+                phase_polylines=phase_polylines,
+                route_polyline=route_polyline,
+            )
         )
-    )
 
     # Fire-and-forget: validate GPS trace against road network.
     # Flags spoofed trips for admin review without blocking completion.

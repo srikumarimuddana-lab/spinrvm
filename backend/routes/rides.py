@@ -1905,6 +1905,12 @@ async def create_ride(
     # Generate a PNG map of the planned route and upload to Supabase
     # Storage. Available even if the ride is later cancelled/failed.
     planned_poly = fresh_ride.get("planned_route_polyline")
+    logger.info(
+        f"create_ride: planned_route_polyline check — "
+        f"present={planned_poly is not None}, "
+        f"type={type(planned_poly).__name__}, "
+        f"len={len(planned_poly) if isinstance(planned_poly, list) else 'N/A'}"
+    )
     if planned_poly and isinstance(planned_poly, list) and len(planned_poly) >= 2:
 
         async def _create_planned_snapshot():
@@ -1913,6 +1919,9 @@ async def create_ride(
                     from .drivers import _generate_and_store_ride_snapshot
                 except ImportError:
                     from routes.drivers import _generate_and_store_ride_snapshot
+                logger.info(
+                    f"create_ride: generating planned route snapshot for ride {ride.id} with {len(planned_poly)} points"
+                )
                 await _generate_and_store_ride_snapshot(
                     ride_id=ride.id,
                     pickup_lat=fresh_ride.get("pickup_lat"),
@@ -1922,6 +1931,7 @@ async def create_ride(
                     phase_polylines=None,
                     route_polyline=planned_poly,
                 )
+                logger.info(f"create_ride: planned route snapshot completed for ride {ride.id}")
             except Exception as exc:
                 logger.error(f"create_ride: planned route snapshot failed: {exc}", exc_info=True)
 

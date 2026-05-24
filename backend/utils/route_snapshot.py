@@ -65,6 +65,14 @@ async def render_ride_snapshot_google(
             except (TypeError, ValueError, IndexError):
                 continue
 
+    logger.info(
+        "render_ride_snapshot_google: trail_points=%d, route_polyline=%s (len=%d), phase_polylines keys=%s",
+        len(trail_points),
+        type(route_polyline).__name__ if route_polyline else "None",
+        len(route_polyline) if isinstance(route_polyline, list) else 0,
+        list((phase_polylines or {}).keys()),
+    )
+
     if trail_points:
         # Google Static Maps URL limit is ~8192 chars. Sample if needed.
         if len(trail_points) > 80:

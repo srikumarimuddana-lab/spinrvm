@@ -32,8 +32,8 @@ WHERE r.status = 'completed'
   AND r.driver_id IS NOT NULL
   AND i.is_active = TRUE
   AND i.bonus_amount > 0
-  AND (i.service_area_id IS NULL OR i.service_area_id = r.service_area_id)
-  AND (i.vehicle_type_id IS NULL OR i.vehicle_type_id = r.vehicle_type_id)
+  AND (i.service_area_id IS NULL OR i.service_area_id = r.service_area_id::uuid)
+  AND (i.vehicle_type_id IS NULL OR i.vehicle_type_id = r.vehicle_type_id::uuid)
   AND (i.start_date IS NULL OR i.start_date <= COALESCE(r.ride_completed_at, r.created_at))
   AND (i.end_date IS NULL OR i.end_date >= COALESCE(r.ride_completed_at, r.created_at))
   AND NOT EXISTS (

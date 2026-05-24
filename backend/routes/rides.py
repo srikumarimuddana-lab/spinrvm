@@ -1691,6 +1691,8 @@ async def create_ride(
     # Preserve the original planned (straight-line) distance. ride.distance_km
     # will be overwritten with the actual GPS-measured distance on completion.
     ride_data["planned_distance_km"] = round(distance_km, 2)
+    if body.planned_route_polyline:
+        ride_data["planned_route_polyline"] = body.planned_route_polyline
     # Only store airport surcharge when it actually applies
     if airport_fee > 0:
         ride_data["airport_fee"] = _f(airport_fee)
@@ -1898,6 +1900,32 @@ async def create_ride(
         fresh_ride["fare_breakdown_snapshot"] = fare_snapshot
     except Exception as snap_err:
         logger.warning(f"create_ride: fare snapshot save failed: {snap_err}")
+
+    # ── Route snapshot at creation ──
+    # Generate a PNG map of the planned route and upload to Supabase
+    # Storage. Available even if the ride is later cancelled/failed.
+    planned_poly = fresh_ride.get("planned_route_polyline")
+    if planned_poly and isinstance(planned_poly, list) and len(planned_poly) >= 2:
+
+        async def _create_planned_snapshot():
+            try:
+                try:
+                    from .drivers import _generate_and_store_ride_snapshot
+                except ImportError:
+                    from routes.drivers import _generate_and_store_ride_snapshot
+                await _generate_and_store_ride_snapshot(
+                    ride_id=ride.id,
+                    pickup_lat=fresh_ride.get("pickup_lat"),
+                    pickup_lng=fresh_ride.get("pickup_lng"),
+                    dropoff_lat=fresh_ride.get("dropoff_lat"),
+                    dropoff_lng=fresh_ride.get("dropoff_lng"),
+                    phase_polylines=None,
+                    route_polyline=planned_poly,
+                )
+            except Exception as exc:
+                logger.error(f"create_ride: planned route snapshot failed: {exc}", exc_info=True)
+
+        asyncio.create_task(_create_planned_snapshot())
 
     # Let admin live-monitoring see the request before dispatch starts —
     # previously the dashboard only observed a ride once a driver accepted,

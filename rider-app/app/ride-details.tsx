@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import {
-  View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Platform,
+  View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Platform, Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -21,7 +21,7 @@ export default function RideDetailsScreen() {
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [ride, setRide] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [routeCoords, setRouteCoords] = useState<any[]>([]);
+  const [fallbackCoords, setFallbackCoords] = useState<any[]>([]);
   const mapRef = React.useRef<MapView>(null);
 
   useEffect(() => {
@@ -66,6 +66,19 @@ export default function RideDetailsScreen() {
 
     return lines;
   }, [ride]);
+
+  const savedPolyline = useMemo(() => {
+    if (!ride) return [];
+    const raw = (Array.isArray(ride.route_polyline) && ride.route_polyline.length >= 2)
+      ? ride.route_polyline
+      : ride.planned_route_polyline;
+    if (!Array.isArray(raw) || raw.length < 2) return [];
+    return raw
+      .filter((p: any) => Array.isArray(p) && p.length >= 2)
+      .map((p: any) => ({ latitude: p[0], longitude: p[1] }));
+  }, [ride]);
+
+  const polylineToRender = savedPolyline.length >= 2 ? savedPolyline : fallbackCoords;
 
   const formatDate = (d: string) => {
     try {
@@ -127,74 +140,89 @@ export default function RideDetailsScreen() {
           <Text style={styles.statusDate}>{formatDate(ride.created_at)}</Text>
         </View>
 
-        {/* Route Map */}
+        {/* Route Map — snapshot image first, live MapView as fallback */}
         {ride.pickup_lat && ride.dropoff_lat && (
           <View style={styles.mapCard}>
-            <MapView
-              ref={mapRef}
-              style={styles.map}
-              provider={MAP_PROVIDER}
-              scrollEnabled={false}
-              zoomEnabled={false}
-              rotateEnabled={false}
-              userInterfaceStyle={isDark ? "dark" : "light"}
-              initialRegion={{
-                latitude: (ride.pickup_lat + ride.dropoff_lat) / 2,
-                longitude: (ride.pickup_lng + ride.dropoff_lng) / 2,
-                latitudeDelta: Math.abs(ride.pickup_lat - ride.dropoff_lat) * 2.5 + 0.01,
-                longitudeDelta: Math.abs(ride.pickup_lng - ride.dropoff_lng) * 2.5 + 0.01,
-              }}
-            >
-              {GOOGLE_MAPS_API_KEY && (
-                <MapViewDirections
-                  origin={{ latitude: ride.pickup_lat, longitude: ride.pickup_lng }}
-                  destination={{ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }}
-                  apikey={GOOGLE_MAPS_API_KEY}
-                  strokeWidth={0}
-                  strokeColor="transparent"
-                  onReady={(r: any) => {
-                    setRouteCoords(r.coordinates);
-                    mapRef.current?.fitToCoordinates(r.coordinates, {
+            {ride.route_snapshot_url ? (
+              <Image
+                source={{ uri: ride.route_snapshot_url }}
+                style={styles.map}
+                resizeMode="cover"
+              />
+            ) : (
+              <MapView
+                ref={mapRef}
+                style={styles.map}
+                provider={MAP_PROVIDER}
+                scrollEnabled={false}
+                zoomEnabled={false}
+                rotateEnabled={false}
+                userInterfaceStyle={isDark ? "dark" : "light"}
+                initialRegion={{
+                  latitude: (ride.pickup_lat + ride.dropoff_lat) / 2,
+                  longitude: (ride.pickup_lng + ride.dropoff_lng) / 2,
+                  latitudeDelta: Math.abs(ride.pickup_lat - ride.dropoff_lat) * 2.5 + 0.01,
+                  longitudeDelta: Math.abs(ride.pickup_lng - ride.dropoff_lng) * 2.5 + 0.01,
+                }}
+                onMapReady={() => {
+                  if (savedPolyline.length >= 2) {
+                    mapRef.current?.fitToCoordinates(savedPolyline, {
                       edgePadding: { top: 30, right: 30, bottom: 30, left: 30 }, animated: false,
                     });
-                  }}
-                />
-              )}
-              {routeCoords.length > 1 && (() => {
-                const total = routeCoords.length;
-                const SEGS = 15;
-                const chunk = Math.max(1, Math.floor(total / SEGS));
-                const segments: { coords: any[]; color: string }[] = [];
-                for (let i = 0; i < total - 1; i += chunk) {
-                  const end = Math.min(i + chunk + 1, total);
-                  const t = i / Math.max(total - 1, 1);
-                  const r = Math.round(255 + (238 - 255) * t);
-                  const g = Math.round(149 + (43 - 149) * t);
-                  const b = Math.round(0 + (43 - 0) * t);
-                  segments.push({ coords: routeCoords.slice(i, end), color: `rgb(${r},${g},${b})` });
-                }
-                return segments.map((seg, idx) => (
-                  <Polyline
-                    key={`rd-seg-${idx}`}
-                    coordinates={seg.coords}
-                    strokeWidth={4}
-                    strokeColor={seg.color}
-                    lineCap="round"
-                    lineJoin="round"
+                  }
+                }}
+              >
+                {savedPolyline.length < 2 && GOOGLE_MAPS_API_KEY && (
+                  <MapViewDirections
+                    origin={{ latitude: ride.pickup_lat, longitude: ride.pickup_lng }}
+                    destination={{ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }}
+                    apikey={GOOGLE_MAPS_API_KEY}
+                    strokeWidth={0}
+                    strokeColor="transparent"
+                    onReady={(r: any) => {
+                      setFallbackCoords(r.coordinates);
+                      mapRef.current?.fitToCoordinates(r.coordinates, {
+                        edgePadding: { top: 30, right: 30, bottom: 30, left: 30 }, animated: false,
+                      });
+                    }}
                   />
-                ));
-              })()}
-              <Marker coordinate={{ latitude: ride.pickup_lat, longitude: ride.pickup_lng }} anchor={{ x: 0.5, y: 0.5 }}>
-                <View style={[styles.pin, { backgroundColor: '#10B981' }]}>
-                  <Ionicons name="location" size={14} color="#FFF" />
-                </View>
-              </Marker>
-              <Marker coordinate={{ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }} anchor={{ x: 0.5, y: 0.5 }}>
-                <View style={[styles.pin, { backgroundColor: '#EF4444' }]}>
-                  <Ionicons name="flag" size={14} color="#FFF" />
-                </View>
-              </Marker>
-            </MapView>
+                )}
+                {polylineToRender.length > 1 && (() => {
+                  const total = polylineToRender.length;
+                  const SEGS = 15;
+                  const chunk = Math.max(1, Math.floor(total / SEGS));
+                  const segments: { coords: any[]; color: string }[] = [];
+                  for (let i = 0; i < total - 1; i += chunk) {
+                    const end = Math.min(i + chunk + 1, total);
+                    const t = i / Math.max(total - 1, 1);
+                    const r = Math.round(255 + (238 - 255) * t);
+                    const g = Math.round(149 + (43 - 149) * t);
+                    const b = Math.round(0 + (43 - 0) * t);
+                    segments.push({ coords: polylineToRender.slice(i, end), color: `rgb(${r},${g},${b})` });
+                  }
+                  return segments.map((seg, idx) => (
+                    <Polyline
+                      key={`rd-seg-${idx}`}
+                      coordinates={seg.coords}
+                      strokeWidth={4}
+                      strokeColor={seg.color}
+                      lineCap="round"
+                      lineJoin="round"
+                    />
+                  ));
+                })()}
+                <Marker coordinate={{ latitude: ride.pickup_lat, longitude: ride.pickup_lng }} anchor={{ x: 0.5, y: 0.5 }}>
+                  <View style={[styles.pin, { backgroundColor: '#10B981' }]}>
+                    <Ionicons name="location" size={14} color="#FFF" />
+                  </View>
+                </Marker>
+                <Marker coordinate={{ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }} anchor={{ x: 0.5, y: 0.5 }}>
+                  <View style={[styles.pin, { backgroundColor: '#EF4444' }]}>
+                    <Ionicons name="flag" size={14} color="#FFF" />
+                  </View>
+                </Marker>
+              </MapView>
+            )}
           </View>
         )}
 

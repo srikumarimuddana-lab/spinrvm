@@ -364,6 +364,7 @@ class CreateRideRequest(BaseModel):
     work_profile: Optional[bool] = None
     promo_code: Optional[str] = None
     requires_wav: bool = False
+    planned_route_polyline: Optional[List[List[float]]] = None
 
     # ── Input validation (SEC-017) ──────────────────────────────────────── #
 

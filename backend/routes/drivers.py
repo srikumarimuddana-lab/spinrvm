@@ -3450,13 +3450,6 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             )
             _total_bonus += ba
         if _total_bonus > 0:
-            existing_de = Decimal(str(ride.get("driver_earnings") or 0))
-            new_de = (existing_de + _total_bonus).quantize(Decimal("0.01"))
-            await db_supabase.update_one(
-                "rides",
-                {"id": ride_id},
-                {"driver_earnings": float(new_de)},
-            )
             logger.info(
                 "complete_ride: claimed %s incentive bonus for ride %s (driver %s)",
                 float(_total_bonus.quantize(Decimal("0.01"))),

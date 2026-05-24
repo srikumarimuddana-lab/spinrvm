@@ -224,11 +224,9 @@ async def _generate_and_store_ride_snapshot(
 ) -> None:
     """Render the ride's route PNG and upload to Supabase Storage.
 
-    Called as a background task from ``complete_ride`` — the driver's
-    request has already returned by the time this runs. Any failure
-    (tile server down, bucket missing, Pillow missing) is logged and
-    swallowed; the ride row already has phase_polylines so the drawer
-    and email can always fall back to the live map.
+    Uses Google Static Maps API for high-quality map tiles with the route
+    polyline drawn server-side. Falls back to OSM/staticmap if the Google
+    API key is unavailable.
 
     Requires a public ``ride-snapshots`` bucket in Supabase Storage.
     See backend/docs/STORAGE_BUCKETS.md for one-time setup.
@@ -238,26 +236,49 @@ async def _generate_and_store_ride_snapshot(
     try:
         try:
             from ..core.config import settings
+            from ..settings_loader import get_app_settings
             from ..supabase_client import supabase  # type: ignore
-            from ..utils.route_snapshot import render_ride_snapshot
+            from ..utils.route_snapshot import render_ride_snapshot, render_ride_snapshot_google
         except ImportError:
             from core.config import settings  # type: ignore
+            from settings_loader import get_app_settings  # type: ignore
             from supabase_client import supabase  # type: ignore
-            from utils.route_snapshot import render_ride_snapshot  # type: ignore
+            from utils.route_snapshot import render_ride_snapshot, render_ride_snapshot_google  # type: ignore
 
-        loop = asyncio.get_event_loop()
-        # Tile fetches + PIL rendering are blocking; punt to the executor.
-        png_bytes = await loop.run_in_executor(
-            None,
-            lambda: render_ride_snapshot(
-                pickup_lat=float(pickup_lat),
-                pickup_lng=float(pickup_lng),
-                dropoff_lat=float(dropoff_lat),
-                dropoff_lng=float(dropoff_lng),
-                phase_polylines=phase_polylines,
-                route_polyline=route_polyline,
-            ),
-        )
+        png_bytes = None
+
+        # Try Google Static Maps first (proper Google Maps tiles + polyline)
+        try:
+            app_settings = await get_app_settings() or {}
+            gmap_key = app_settings.get("google_maps_api_key") or ""
+            if gmap_key:
+                png_bytes = await render_ride_snapshot_google(
+                    api_key=gmap_key,
+                    pickup_lat=float(pickup_lat),
+                    pickup_lng=float(pickup_lng),
+                    dropoff_lat=float(dropoff_lat),
+                    dropoff_lng=float(dropoff_lng),
+                    phase_polylines=phase_polylines,
+                    route_polyline=route_polyline,
+                )
+        except Exception as google_exc:
+            logger.warning(f"Google Static Maps failed for ride {ride_id}, trying OSM fallback: {google_exc}")
+
+        # Fallback to OSM/staticmap
+        if not png_bytes:
+            loop = asyncio.get_event_loop()
+            png_bytes = await loop.run_in_executor(
+                None,
+                lambda: render_ride_snapshot(
+                    pickup_lat=float(pickup_lat),
+                    pickup_lng=float(pickup_lng),
+                    dropoff_lat=float(dropoff_lat),
+                    dropoff_lng=float(dropoff_lng),
+                    phase_polylines=phase_polylines,
+                    route_polyline=route_polyline,
+                ),
+            )
+
         if not png_bytes:
             return
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
 } from 'react-native';
 import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import { useDriverStore } from '../../store/driverStore';
 
 const toMoney = (s: string | number | null | undefined): string => {
@@ -47,9 +48,11 @@ export default function ActivityView() {
     setLoading(false);
   }, [period]);
 
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
+  useFocusEffect(
+    useCallback(() => {
+      loadData();
+    }, [loadData])
+  );
 
   const totalEarnings = parseMoney(earnings?.total_earnings);
   const totalTips = parseMoney(earnings?.total_tips);

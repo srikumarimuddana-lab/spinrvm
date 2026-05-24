@@ -3,17 +3,13 @@ import {
   View,
   Text,
   StyleSheet,
-  TouchableOpacity,
   ScrollView,
   ActivityIndicator,
+  TouchableOpacity,
 } from 'react-native';
-import SafeRefreshControl from '../SafeRefreshControl';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import { useDriverStore } from '../../store/driverStore';
-import { useTheme } from '@shared/theme/ThemeContext';
-import type { ThemeColors } from '@shared/theme/index';
-import { useLanguageStore } from '../../store/languageStore';
 
 const toMoney = (s: string | number | null | undefined): string => {
   const n = Math.round((parseFloat(String(s ?? '0')) || 0) * 100) / 100;
@@ -23,34 +19,31 @@ const parseMoney = (s: string | number | null | undefined): number =>
   Math.round((parseFloat(String(s ?? '0')) || 0) * 100) / 100;
 
 type Period = 'today' | 'week' | 'month' | 'all';
+type StatusFilter = 'all' | 'completed' | 'cancelled' | 'scheduled';
 
 export default function ActivityView() {
-  const insets = useSafeAreaInsets();
-  const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
-  const { t } = useLanguageStore();
+  const router = useRouter();
   const {
     earnings,
+    rideHistory,
     fetchEarnings,
+    fetchRideHistory,
     fetchDriverBalance,
   } = useDriverStore();
 
   const [period, setPeriod] = useState<Period>('today');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [fetchError, setFetchError] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
     setLoading(true);
-    setFetchError(null);
     try {
       await Promise.allSettled([
         fetchEarnings(period),
+        fetchRideHistory(50, 0),
         fetchDriverBalance(),
       ]);
-    } catch {
-      setFetchError('Could not load data. Pull down to retry.');
-    }
+    } catch {}
     setLoading(false);
   }, [period]);
 
@@ -58,78 +51,83 @@ export default function ActivityView() {
     loadData();
   }, [loadData]);
 
-  const onRefresh = async () => {
-    setRefreshing(true);
-    await loadData();
-    setRefreshing(false);
-  };
-
   const totalEarnings = parseMoney(earnings?.total_earnings);
   const totalTips = parseMoney(earnings?.total_tips);
   const fareEarnings = Math.max(totalEarnings - totalTips, 0);
 
+  const filteredRides = useMemo(() => {
+    return rideHistory.filter((r) => {
+      if (statusFilter !== 'all') {
+        if (statusFilter === 'scheduled' && r.status !== 'scheduled') return false;
+        if (statusFilter !== 'scheduled' && r.status !== statusFilter) return false;
+      }
+      if (period !== 'all') {
+        const dateStr = r.ride_completed_at || (r as any).cancelled_at || r.created_at;
+        if (!dateStr) return false;
+        const date = new Date(dateStr);
+        const today = new Date();
+        if (period === 'today') {
+          if (date.getDate() !== today.getDate() || date.getMonth() !== today.getMonth() || date.getFullYear() !== today.getFullYear()) return false;
+        } else if (period === 'week') {
+          const diffDays = (today.getTime() - date.getTime()) / (1000 * 3600 * 24);
+          if (diffDays > 7 || diffDays < 0) return false;
+        } else if (period === 'month') {
+          if (date.getMonth() !== today.getMonth() || date.getFullYear() !== today.getFullYear()) return false;
+        }
+      }
+      return true;
+    });
+  }, [rideHistory, statusFilter, period]);
+
   return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 16) + 24 }}
-      showsVerticalScrollIndicator={false}
-      refreshControl={<SafeRefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
-    >
-      {/* Period Filter Pills */}
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterWrapper} contentContainerStyle={styles.filterListContent}>
+    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      {/* Period pills */}
+      <View style={styles.pillRow}>
         {(['today', 'week', 'month', 'all'] as Period[]).map((item) => (
           <TouchableOpacity
             key={item}
-            style={[styles.filterPill, period === item && styles.filterPillActive]}
+            style={[styles.pill, period === item && styles.pillActive]}
             onPress={() => setPeriod(item)}
-            activeOpacity={0.7}
           >
-            <Text style={[styles.filterPillText, period === item && styles.filterPillTextActive]}>
-              {item === 'all' ? t('earnings.allTime') : item === 'today' ? t('earnings.today') : item === 'week' ? t('earnings.thisWeek') : t('earnings.thisMonth')}
+            <Text style={[styles.pillText, period === item && styles.pillTextActive]}>
+              {item === 'all' ? 'All Time' : item === 'today' ? 'Today' : item === 'week' ? 'This Week' : 'This Month'}
             </Text>
           </TouchableOpacity>
         ))}
-      </ScrollView>
-
-      {fetchError && (
-        <View style={styles.errorBanner} accessibilityRole="alert" accessibilityLiveRegion="polite" accessibilityLabel={fetchError}>
-          <Ionicons name="alert-circle-outline" size={16} color="#fff" />
-          <Text style={styles.errorBannerText}>{fetchError}</Text>
-        </View>
-      )}
+      </View>
 
       {loading ? (
-        <ActivityIndicator color={colors.primary} style={{ marginTop: 60 }} />
+        <ActivityIndicator color="#ef4444" style={{ marginTop: 60 }} />
       ) : (
         <>
-          {/* Earnings + Tips Breakdown */}
-          <View style={styles.breakdownCard}>
+          {/* Earnings breakdown */}
+          <View style={styles.card}>
             <View style={styles.breakdownRow}>
               <View style={styles.breakdownItem}>
-                <Ionicons name="cash-outline" size={20} color={colors.primary} />
-                <Text style={styles.breakdownLabel}>Fare Earnings</Text>
-                <Text style={styles.breakdownValue}>${toMoney(fareEarnings)}</Text>
+                <Ionicons name="cash-outline" size={20} color="#ef4444" />
+                <Text style={styles.label}>Fare</Text>
+                <Text style={styles.value}>${toMoney(fareEarnings)}</Text>
               </View>
-              <View style={styles.breakdownDivider} />
+              <View style={styles.divider} />
               <View style={styles.breakdownItem}>
-                <Ionicons name="gift-outline" size={20} color={colors.gold} />
-                <Text style={styles.breakdownLabel}>Tips</Text>
-                <Text style={[styles.breakdownValue, { color: colors.gold }]}>${toMoney(totalTips)}</Text>
+                <Ionicons name="gift-outline" size={20} color="#f59e0b" />
+                <Text style={styles.label}>Tips</Text>
+                <Text style={[styles.value, { color: '#f59e0b' }]}>${toMoney(totalTips)}</Text>
               </View>
-              <View style={styles.breakdownDivider} />
+              <View style={styles.divider} />
               <View style={styles.breakdownItem}>
-                <Ionicons name="wallet" size={20} color={colors.success} />
-                <Text style={styles.breakdownLabel}>Total</Text>
-                <Text style={[styles.breakdownValue, { color: colors.success }]}>${toMoney(totalEarnings)}</Text>
+                <Ionicons name="wallet" size={20} color="#10b981" />
+                <Text style={styles.label}>Total</Text>
+                <Text style={[styles.value, { color: '#10b981' }]}>${toMoney(totalEarnings)}</Text>
               </View>
             </View>
           </View>
 
-          {/* Stats Grid */}
+          {/* Stats grid */}
           <View style={styles.statsGrid}>
             <View style={styles.statCard}>
-              <View style={[styles.statIconWrapper, { backgroundColor: 'rgba(239, 68, 68, 0.1)' }]}>
-                <FontAwesome5 name="car" size={16} color={colors.primary} />
+              <View style={[styles.iconWrap, { backgroundColor: 'rgba(239,68,68,0.1)' }]}>
+                <FontAwesome5 name="car" size={16} color="#ef4444" />
               </View>
               <View>
                 <Text style={styles.statValue}>{earnings?.total_rides || 0}</Text>
@@ -137,8 +135,8 @@ export default function ActivityView() {
               </View>
             </View>
             <View style={styles.statCard}>
-              <View style={[styles.statIconWrapper, { backgroundColor: 'rgba(245, 158, 11, 0.1)' }]}>
-                <MaterialCommunityIcons name="road-variant" size={18} color="#F59E0B" />
+              <View style={[styles.iconWrap, { backgroundColor: 'rgba(245,158,11,0.1)' }]}>
+                <MaterialCommunityIcons name="road-variant" size={18} color="#f59e0b" />
               </View>
               <View>
                 <Text style={styles.statValue}>{parseMoney(earnings?.total_distance_km).toFixed(1)}</Text>
@@ -146,8 +144,8 @@ export default function ActivityView() {
               </View>
             </View>
             <View style={styles.statCard}>
-              <View style={[styles.statIconWrapper, { backgroundColor: 'rgba(16, 185, 129, 0.1)' }]}>
-                <Ionicons name="time" size={18} color={colors.success} />
+              <View style={[styles.iconWrap, { backgroundColor: 'rgba(16,185,129,0.1)' }]}>
+                <Ionicons name="time" size={18} color="#10b981" />
               </View>
               <View>
                 <Text style={styles.statValue}>
@@ -157,8 +155,8 @@ export default function ActivityView() {
               </View>
             </View>
             <View style={styles.statCard}>
-              <View style={[styles.statIconWrapper, { backgroundColor: 'rgba(56, 189, 248, 0.1)' }]}>
-                <Ionicons name="trending-up" size={18} color="#38BDF8" />
+              <View style={[styles.iconWrap, { backgroundColor: 'rgba(56,189,248,0.1)' }]}>
+                <Ionicons name="trending-up" size={18} color="#38bdf8" />
               </View>
               <View>
                 <Text style={styles.statValue}>${toMoney(earnings?.average_per_ride)}</Text>
@@ -166,138 +164,430 @@ export default function ActivityView() {
               </View>
             </View>
           </View>
+
+          {/* Rides section */}
+          <View style={styles.ridesSection}>
+            <View style={styles.ridesSectionHeader}>
+              <Text style={styles.sectionTitle}>Your Rides</Text>
+              <Text style={styles.rideCount}>{filteredRides.length} rides</Text>
+            </View>
+
+            {/* Status filter pills */}
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.statusPillRow}>
+              {(['all', 'completed', 'scheduled', 'cancelled'] as StatusFilter[]).map((item) => (
+                <TouchableOpacity
+                  key={item}
+                  style={[styles.statusPill, statusFilter === item && styles.statusPillActive]}
+                  onPress={() => setStatusFilter(item)}
+                >
+                  <Text style={[styles.statusPillText, statusFilter === item && styles.statusPillTextActive]}>
+                    {item === 'all' ? 'All Status' : item.charAt(0).toUpperCase() + item.slice(1)}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+
+            {/* Ride cards */}
+            {filteredRides.length === 0 ? (
+              <View style={styles.emptyState}>
+                <Ionicons name="car-sport-outline" size={48} color="#d1d5db" />
+                <Text style={styles.emptyTitle}>No Rides Found</Text>
+                <Text style={styles.emptyDesc}>No rides match this filter for the selected period.</Text>
+              </View>
+            ) : (
+              filteredRides.map((ride) => {
+                const isCompleted = ride.status === 'completed';
+                const isCancelled = ride.status === 'cancelled';
+                const statusColor = isCompleted ? '#10b981' : isCancelled ? '#ef4444' : '#f59e0b';
+                const statusBg = isCompleted ? 'rgba(16,185,129,0.1)' : isCancelled ? 'rgba(239,68,68,0.1)' : 'rgba(245,158,11,0.1)';
+                const statusLabel = isCompleted ? 'Completed' : isCancelled ? 'Cancelled' : 'Scheduled';
+                const statusIcon = isCompleted ? 'checkmark-circle' : isCancelled ? 'close-circle' : 'time';
+
+                const date = ride.ride_completed_at || (ride as any).cancelled_at || ride.created_at;
+                const driverEarnings = parseMoney((ride as any).driver_earnings);
+                const tipAmount = parseMoney((ride as any).tip_amount);
+
+                return (
+                  <TouchableOpacity
+                    key={ride.id}
+                    style={styles.rideCard}
+                    activeOpacity={0.7}
+                    onPress={() => router.push(`/driver/ride-detail?id=${ride.id}` as any)}
+                  >
+                    {/* Top row: status + date */}
+                    <View style={styles.rideTopRow}>
+                      <View style={[styles.statusBadge, { backgroundColor: statusBg }]}>
+                        <Ionicons name={statusIcon as any} size={14} color={statusColor} />
+                        <Text style={[styles.statusText, { color: statusColor }]}>{statusLabel}</Text>
+                      </View>
+                      <View style={{ alignItems: 'flex-end' }}>
+                        <Text style={styles.dateText}>
+                          {date ? new Date(date).toLocaleDateString('en', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''}
+                        </Text>
+                        <Text style={styles.rideCodeText}>
+                          {ride.ride_code ? String(ride.ride_code) : `#${String(ride.id).substring(0, 8).toUpperCase()}`}
+                        </Text>
+                      </View>
+                    </View>
+
+                    {/* Route: pickup → dropoff */}
+                    <View style={styles.routeContainer}>
+                      <View style={styles.routeDots}>
+                        <View style={[styles.dot, { backgroundColor: '#ef4444' }]} />
+                        <View style={styles.routeLine} />
+                        <View style={[styles.dot, { backgroundColor: '#10b981' }]} />
+                      </View>
+                      <View style={styles.routeAddresses}>
+                        <View>
+                          <Text style={styles.routeLabel}>PICKUP</Text>
+                          <Text style={styles.routeAddress} numberOfLines={1}>
+                            {ride.pickup_address || 'Unknown'}
+                          </Text>
+                        </View>
+                        <View style={{ height: 16 }} />
+                        <View>
+                          <Text style={styles.routeLabel}>DROP-OFF</Text>
+                          <Text style={styles.routeAddress} numberOfLines={1}>
+                            {ride.dropoff_address || 'Unknown'}
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
+
+                    {/* Bottom row: trip meta + fare */}
+                    <View style={styles.rideBottomRow}>
+                      <View style={styles.tripMeta}>
+                        {ride.distance_km != null && (
+                          <View style={styles.metaBadge}>
+                            <Ionicons name="map-outline" size={13} color="#9ca3af" />
+                            <Text style={styles.metaText}>{ride.distance_km.toFixed(1)} km</Text>
+                          </View>
+                        )}
+                        {ride.duration_minutes != null && (
+                          <View style={styles.metaBadge}>
+                            <Ionicons name="time-outline" size={13} color="#9ca3af" />
+                            <Text style={styles.metaText}>{ride.duration_minutes} min</Text>
+                          </View>
+                        )}
+                      </View>
+                      <View style={{ alignItems: 'flex-end' }}>
+                        {isCompleted ? (
+                          <>
+                            <Text style={styles.fareAmount}>${toMoney(driverEarnings)}</Text>
+                            {tipAmount > 0 && (
+                              <Text style={styles.tipText}>+ ${toMoney(tipAmount)} tip</Text>
+                            )}
+                          </>
+                        ) : isCancelled ? (
+                          <Text style={[styles.fareAmount, { color: '#9ca3af', fontSize: 16 }]}>$0.00</Text>
+                        ) : (
+                          <Text style={styles.fareAmount}>Est. ${toMoney(driverEarnings)}</Text>
+                        )}
+                      </View>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })
+            )}
+          </View>
         </>
       )}
     </ScrollView>
   );
 }
 
-function createStyles(colors: ThemeColors) {
-  return StyleSheet.create({
-    container: {
-      flex: 1,
-    },
-    filterWrapper: {
-      marginTop: 12,
-      marginBottom: 4,
-    },
-    filterListContent: {
-      paddingHorizontal: 16,
-      gap: 10,
-    },
-    filterPill: {
-      paddingHorizontal: 18,
-      paddingVertical: 8,
-      borderRadius: 24,
-      backgroundColor: colors.surface,
-      borderWidth: 1,
-      borderColor: colors.border,
-    },
-    filterPillActive: {
-      backgroundColor: colors.primary,
-      borderColor: colors.primary,
-    },
-    filterPillText: {
-      color: colors.textDim,
-      fontSize: 13,
-      fontWeight: '600',
-    },
-    filterPillTextActive: {
-      color: '#fff',
-      fontWeight: '700',
-    },
-    errorBanner: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      backgroundColor: colors.error,
-      paddingHorizontal: 16,
-      paddingVertical: 10,
-      gap: 8,
-    },
-    errorBannerText: {
-      color: '#fff',
-      fontSize: 13,
-      flex: 1,
-    },
-    breakdownCard: {
-      marginHorizontal: 16,
-      marginTop: 12,
-      marginBottom: 16,
-      backgroundColor: colors.surface,
-      borderRadius: 20,
-      padding: 16,
-      borderWidth: 1,
-      borderColor: colors.border,
-    },
-    breakdownRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-around',
-    },
-    breakdownItem: {
-      flex: 1,
-      alignItems: 'center',
-      gap: 4,
-    },
-    breakdownLabel: {
-      color: colors.textDim,
-      fontSize: 11,
-      fontWeight: '600',
-      letterSpacing: 0.3,
-    },
-    breakdownValue: {
-      color: colors.text,
-      fontSize: 20,
-      fontWeight: '900',
-    },
-    breakdownDivider: {
-      width: 1,
-      height: 44,
-      backgroundColor: colors.border,
-    },
-    statsGrid: {
-      flexDirection: 'row',
-      flexWrap: 'wrap',
-      gap: 12,
-      paddingHorizontal: 16,
-      paddingTop: 8,
-      marginBottom: 24,
-    },
-    statCard: {
-      flexBasis: '47%',
-      flexGrow: 1,
-      backgroundColor: colors.surface,
-      borderRadius: 20,
-      padding: 16,
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 12,
-      borderWidth: 1,
-      borderColor: colors.border,
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.03,
-      shadowRadius: 10,
-      elevation: 2,
-    },
-    statIconWrapper: {
-      width: 36,
-      height: 36,
-      borderRadius: 18,
-      justifyContent: 'center',
-      alignItems: 'center',
-    },
-    statValue: {
-      color: colors.text,
-      fontSize: 18,
-      fontWeight: '800',
-    },
-    statLabel: {
-      color: colors.textDim,
-      fontSize: 11,
-      fontWeight: '600',
-      letterSpacing: 0.2,
-      marginTop: 1,
-    },
-  });
-}
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+  },
+  content: {
+    paddingBottom: 40,
+  },
+  // Period pills
+  pillRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    gap: 10,
+    marginTop: 12,
+    marginBottom: 4,
+  },
+  pill: {
+    paddingHorizontal: 18,
+    paddingVertical: 8,
+    borderRadius: 24,
+    backgroundColor: '#f3f4f6',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  pillActive: {
+    backgroundColor: '#ef4444',
+    borderColor: '#ef4444',
+  },
+  pillText: {
+    color: '#6b7280',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  pillTextActive: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  // Earnings card
+  card: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    marginBottom: 16,
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  breakdownRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-around',
+  },
+  breakdownItem: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 4,
+  },
+  label: {
+    color: '#6b7280',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  value: {
+    color: '#111827',
+    fontSize: 20,
+    fontWeight: '900',
+  },
+  divider: {
+    width: 1,
+    height: 44,
+    backgroundColor: '#e5e7eb',
+  },
+  // Stats grid
+  statsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    marginBottom: 24,
+  },
+  statCard: {
+    flexBasis: '47%',
+    flexGrow: 1,
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    padding: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  iconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  statValue: {
+    color: '#111827',
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  statLabel: {
+    color: '#6b7280',
+    fontSize: 11,
+    fontWeight: '600',
+    marginTop: 1,
+  },
+  // Rides section
+  ridesSection: {
+    paddingHorizontal: 16,
+  },
+  ridesSectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  sectionTitle: {
+    color: '#111827',
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  rideCount: {
+    color: '#9ca3af',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  // Status filter pills
+  statusPillRow: {
+    gap: 8,
+    marginBottom: 16,
+  },
+  statusPill: {
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 20,
+    backgroundColor: '#f3f4f6',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+  statusPillActive: {
+    backgroundColor: '#1f2937',
+    borderColor: '#1f2937',
+  },
+  statusPillText: {
+    color: '#6b7280',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  statusPillTextActive: {
+    color: '#fff',
+    fontWeight: '700',
+  },
+  // Ride cards
+  rideCard: {
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    padding: 18,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.04,
+    shadowRadius: 12,
+    elevation: 2,
+  },
+  rideTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  statusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 12,
+  },
+  statusText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  dateText: {
+    color: '#6b7280',
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  rideCodeText: {
+    color: '#9ca3af',
+    fontSize: 10,
+    fontWeight: '600',
+    marginTop: 2,
+    letterSpacing: 0.5,
+  },
+  // Route
+  routeContainer: {
+    flexDirection: 'row',
+    marginBottom: 16,
+  },
+  routeDots: {
+    alignItems: 'center',
+    width: 20,
+    paddingTop: 4,
+  },
+  dot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+  },
+  routeLine: {
+    width: 2,
+    flex: 1,
+    backgroundColor: '#e5e7eb',
+    marginVertical: 4,
+  },
+  routeAddresses: {
+    flex: 1,
+    marginLeft: 8,
+  },
+  routeLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#9ca3af',
+    letterSpacing: 1,
+    marginBottom: 2,
+  },
+  routeAddress: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#111827',
+  },
+  // Bottom row
+  rideBottomRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-end',
+    paddingTop: 14,
+    borderTopWidth: 1,
+    borderTopColor: '#f3f4f6',
+  },
+  tripMeta: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  metaBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#f9fafb',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 8,
+  },
+  metaText: {
+    color: '#6b7280',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  fareAmount: {
+    fontSize: 20,
+    fontWeight: '900',
+    color: '#10b981',
+  },
+  tipText: {
+    color: '#f59e0b',
+    fontSize: 11,
+    fontWeight: '700',
+    marginTop: 2,
+  },
+  // Empty state
+  emptyState: {
+    alignItems: 'center',
+    paddingVertical: 40,
+  },
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#374151',
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  emptyDesc: {
+    fontSize: 13,
+    color: '#9ca3af',
+    textAlign: 'center',
+  },
+});

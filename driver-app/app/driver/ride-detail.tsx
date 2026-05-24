@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import {
     View,
     Text,
@@ -32,6 +32,7 @@ export default function RideDetailScreen() {
     const insets = useSafeAreaInsets();
     const [ride, setRide] = useState<any>(null);
     const [loading, setLoading] = useState(true);
+    const mapRef = useRef<MapView>(null);
     const { colors } = useTheme();
     const styles = useMemo(() => createStyles(colors), [colors]);
 
@@ -49,6 +50,41 @@ export default function RideDetailScreen() {
         }
         setLoading(false);
     };
+
+    const hasPickup = ride?.pickup_lat && ride?.pickup_lng;
+    const hasDropoff = ride?.dropoff_lat && ride?.dropoff_lng;
+
+    const mapRegion = useMemo(() => {
+        if (!ride) return { latitude: 52.1332, longitude: -106.67, latitudeDelta: 0.03, longitudeDelta: 0.03 };
+        if (hasPickup && hasDropoff) {
+            const minLat = Math.min(ride.pickup_lat, ride.dropoff_lat);
+            const maxLat = Math.max(ride.pickup_lat, ride.dropoff_lat);
+            const minLng = Math.min(ride.pickup_lng, ride.dropoff_lng);
+            const maxLng = Math.max(ride.pickup_lng, ride.dropoff_lng);
+            const padLat = Math.max((maxLat - minLat) * 0.4, 0.01);
+            const padLng = Math.max((maxLng - minLng) * 0.4, 0.01);
+            return {
+                latitude: (minLat + maxLat) / 2,
+                longitude: (minLng + maxLng) / 2,
+                latitudeDelta: (maxLat - minLat) + padLat,
+                longitudeDelta: (maxLng - minLng) + padLng,
+            };
+        }
+        return {
+            latitude: ride.pickup_lat || 52.1332,
+            longitude: ride.pickup_lng || -106.6700,
+            latitudeDelta: 0.03,
+            longitudeDelta: 0.03,
+        };
+    }, [ride, hasPickup, hasDropoff]);
+
+    const routeCoords = useMemo(() => {
+        if (!ride) return [];
+        const coords: { latitude: number; longitude: number }[] = [];
+        if (hasPickup) coords.push({ latitude: ride.pickup_lat, longitude: ride.pickup_lng });
+        if (hasDropoff) coords.push({ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng });
+        return coords;
+    }, [ride, hasPickup, hasDropoff]);
 
     if (loading) {
         return (
@@ -74,22 +110,6 @@ export default function RideDetailScreen() {
     const statusColor = isCompleted ? colors.primary : colors.primary;
     const statusLabel = ride.status?.charAt(0).toUpperCase() + ride.status?.slice(1);
 
-    const mapRegion = {
-        latitude: ride.pickup_lat || 52.1332,
-        longitude: ride.pickup_lng || -106.6700,
-        latitudeDelta: 0.06,
-        longitudeDelta: 0.06,
-    };
-
-    // Build route coordinates for polyline
-    const routeCoords = [];
-    if (ride.pickup_lat && ride.pickup_lng) {
-        routeCoords.push({ latitude: ride.pickup_lat, longitude: ride.pickup_lng });
-    }
-    if (ride.dropoff_lat && ride.dropoff_lng) {
-        routeCoords.push({ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng });
-    }
-
     const completedDate = ride.ride_completed_at || ride.cancelled_at || ride.created_at;
     const formattedDate = completedDate
         ? new Date(completedDate).toLocaleDateString('en', {
@@ -104,18 +124,27 @@ export default function RideDetailScreen() {
 
     return (
         <View style={styles.container}>
-            <ScrollView showsVerticalScrollIndicator={false}>
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: insets.bottom + 24 }}>
                 {/* Back Button + Map */}
                 <View style={styles.mapContainer}>
                     <MapView
+                        ref={mapRef}
                         style={styles.map}
                         provider={MAP_PROVIDER}
                         initialRegion={mapRegion}
                         customMapStyle={mapStyle}
                         scrollEnabled={false}
                         zoomEnabled={false}
+                        onMapReady={() => {
+                            if (routeCoords.length >= 2) {
+                                mapRef.current?.fitToCoordinates(routeCoords, {
+                                    edgePadding: { top: 50, right: 50, bottom: 50, left: 50 },
+                                    animated: false,
+                                });
+                            }
+                        }}
                     >
-                        {ride.pickup_lat && ride.pickup_lng && (
+                        {hasPickup && (
                             <Marker
                                 coordinate={{ latitude: ride.pickup_lat, longitude: ride.pickup_lng }}
                                 title="Pickup"
@@ -125,7 +154,7 @@ export default function RideDetailScreen() {
                                 </View>
                             </Marker>
                         )}
-                        {ride.dropoff_lat && ride.dropoff_lng && (
+                        {hasDropoff && (
                             <Marker
                                 coordinate={{ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }}
                                 title="Dropoff"
@@ -171,11 +200,11 @@ export default function RideDetailScreen() {
                             <View style={styles.routeTexts}>
                                 <View>
                                     <Text style={styles.routeLabel}>PICKUP</Text>
-                                    <Text style={styles.routeAddress}>{ride.pickup_address || 'Pickup location'}</Text>
+                                    <Text style={styles.routeAddress}>{ride.pickup_address || 'Not available'}</Text>
                                 </View>
                                 <View>
                                     <Text style={styles.routeLabel}>DROPOFF</Text>
-                                    <Text style={styles.routeAddress}>{ride.dropoff_address || 'Dropoff location'}</Text>
+                                    <Text style={styles.routeAddress}>{ride.dropoff_address || 'Not available'}</Text>
                                 </View>
                             </View>
                         </View>
@@ -220,9 +249,8 @@ export default function RideDetailScreen() {
                             )}
 
                             <View style={styles.card}>
-                                <Text style={styles.cardTitle}>Trip Earnings</Text>
+                                <Text style={styles.cardTitle}>Your Earnings</Text>
 
-                                {/* Base fare — always shown */}
                                 <View style={styles.fareRow}>
                                     <Text style={styles.fareLabel}>Base Fare</Text>
                                     <Text style={styles.fareValue}>
@@ -230,49 +258,35 @@ export default function RideDetailScreen() {
                                     </Text>
                                 </View>
 
-                                {/* Distance charge — hidden if zero */}
                                 {parseFloat(ride.distance_fare || '0') > 0 && (
                                     <View style={styles.fareRow}>
-                                        <Text style={styles.fareLabel}>Distance Charge</Text>
+                                        <Text style={styles.fareLabel}>Distance</Text>
                                         <Text style={styles.fareValue}>
                                             ${parseFloat(ride.distance_fare || '0').toFixed(2)}
                                         </Text>
                                     </View>
                                 )}
 
-                                {/* Time charge — hidden if zero */}
                                 {parseFloat(ride.time_fare || '0') > 0 && (
                                     <View style={styles.fareRow}>
-                                        <Text style={styles.fareLabel}>Time Charge</Text>
+                                        <Text style={styles.fareLabel}>Time</Text>
                                         <Text style={styles.fareValue}>
                                             ${parseFloat(ride.time_fare || '0').toFixed(2)}
                                         </Text>
                                     </View>
                                 )}
 
-                                {/* Booking fee — informational */}
-                                {parseFloat(ride.booking_fee || '0') > 0 && (
-                                    <View style={styles.fareRow}>
-                                        <Text style={styles.fareLabel}>Booking Fee</Text>
-                                        <Text style={styles.fareValue}>
-                                            ${parseFloat(ride.booking_fee || '0').toFixed(2)}
-                                        </Text>
-                                    </View>
-                                )}
-
-                                {/* Surge bonus — hidden when multiplier is 1.0 */}
                                 {parseFloat(ride.surge_multiplier || '1') > 1 && (
                                     <View style={styles.fareRow}>
-                                        <Text style={styles.fareLabel}>
-                                            Surge Bonus ({parseFloat(ride.surge_multiplier || '1').toFixed(2)}×)
+                                        <Text style={[styles.fareLabel, { color: '#FF9500' }]}>
+                                            Surge ({parseFloat(ride.surge_multiplier || '1').toFixed(1)}×)
                                         </Text>
                                         <Text style={[styles.fareValue, { color: '#FF9500' }]}>
-                                            ${parseFloat(ride.surge_fee || '0').toFixed(2)}
+                                            Included
                                         </Text>
                                     </View>
                                 )}
 
-                                {/* Tip — shown in gold when present */}
                                 {parseFloat(ride.tip_amount || '0') > 0 && (
                                     <View style={styles.fareRow}>
                                         <Text style={[styles.fareLabel, { color: '#FFD700' }]}>Tip</Text>
@@ -284,54 +298,40 @@ export default function RideDetailScreen() {
 
                                 <View style={styles.fareDivider} />
 
-                                {/* Your Earnings = grand_total (0% commission model) */}
                                 <View style={styles.fareRow}>
-                                    <Text style={styles.earningsLabel}>Your Earnings</Text>
+                                    <Text style={styles.earningsLabel}>Total Earned</Text>
                                     <Text style={styles.earningsValue}>
-                                        ${parseFloat(ride.grand_total || ride.total_fare || '0').toFixed(2)}
+                                        ${parseFloat(ride.driver_earnings || ride.total_fare || '0').toFixed(2)}
                                     </Text>
                                 </View>
                             </View>
 
-                            {/* T4A Tax Summary — informational only */}
-                            <View style={styles.card}>
-                                <Text style={styles.cardTitle}>Tax Summary (T4A)</Text>
+                            {parseFloat(ride.tax_amount || '0') > 0 && (
+                                <View style={styles.card}>
+                                    <Text style={styles.cardTitle}>Tax Info</Text>
 
-                                {/* GST: 5% of subtotal before taxes */}
-                                {(() => {
-                                    const subtotal = parseFloat(ride.subtotal || ride.fare_before_tax || '0');
-                                    const gstAmt = subtotal > 0
-                                        ? subtotal * 0.05
-                                        : parseFloat(
-                                            (ride.tax_breakdown?.GST?.amount ?? ride.gst_amount ?? '0').toString()
-                                        );
-                                    const pstAmt = subtotal > 0
-                                        ? subtotal * 0.06
-                                        : parseFloat(
-                                            (ride.tax_breakdown?.PST?.amount ?? ride.pst_amount ?? '0').toString()
-                                        );
-                                    return (
-                                        <>
-                                            <View style={styles.fareRow}>
-                                                <Text style={styles.fareLabel}>GST Collected (5%)</Text>
-                                                <Text style={styles.fareValue}>${gstAmt.toFixed(2)}</Text>
-                                            </View>
-                                            <View style={styles.fareRow}>
-                                                <Text style={styles.fareLabel}>PST Collected (6%)</Text>
-                                                <Text style={styles.fareValue}>${pstAmt.toFixed(2)}</Text>
-                                            </View>
-                                        </>
-                                    );
-                                })()}
+                                    <View style={styles.fareRow}>
+                                        <Text style={styles.fareLabel}>GST (5%)</Text>
+                                        <Text style={styles.fareValue}>
+                                            ${parseFloat(ride.tax_breakdown?.GST?.amount ?? '0').toFixed(2)}
+                                        </Text>
+                                    </View>
+                                    <View style={styles.fareRow}>
+                                        <Text style={styles.fareLabel}>PST (6%)</Text>
+                                        <Text style={styles.fareValue}>
+                                            ${parseFloat(ride.tax_breakdown?.PST?.amount ?? '0').toFixed(2)}
+                                        </Text>
+                                    </View>
 
-                                <View style={styles.fareDivider} />
-                                <View style={[styles.taxNoteBox]}>
-                                    <Ionicons name="information-circle-outline" size={16} color={colors.textDim} />
-                                    <Text style={styles.taxNoteText}>
-                                        GST/PST collected from rider and remitted. Not deducted from your earnings.
-                                    </Text>
+                                    <View style={styles.fareDivider} />
+                                    <View style={styles.taxNoteBox}>
+                                        <Ionicons name="information-circle-outline" size={16} color={colors.textDim} />
+                                        <Text style={styles.taxNoteText}>
+                                            Tax is collected from the rider. Not deducted from your earnings.
+                                        </Text>
+                                    </View>
                                 </View>
-                            </View>
+                            )}
                         </>
                     )}
 
@@ -372,7 +372,7 @@ export default function RideDetailScreen() {
 function createStyles(colors: ThemeColors) {
     return StyleSheet.create({
         container: { flex: 1, backgroundColor: colors.background },
-        mapContainer: { height: '30%', minHeight: 180, maxHeight: 300, position: 'relative' },
+        mapContainer: { height: 220, position: 'relative' },
         map: { ...StyleSheet.absoluteFill },
         backBtn: {
             position: 'absolute',

@@ -2386,10 +2386,28 @@ async def get_ride(
         ride["fare_locked"] = False
     ride["actual_duration_minutes"] = _actual_duration_minutes(ride)
 
-    def serialize_doc(doc):
-        return doc
+    # Enrich with incentive claims and cancellation fee for this ride
+    try:
+        _claims = (
+            db_supabase.supabase.table("ride_incentive_claims")
+            .select("bonus_amount, incentive_id")
+            .eq("ride_id", ride_id)
+            .execute()
+        ).data or []
+        _incentive_total = sum(float(c.get("bonus_amount") or 0) for c in _claims)
+        ride["incentive_amount"] = round(_incentive_total, 2)
+    except Exception:
+        logger.debug("ride incentive_claims lookup failed", exc_info=True)
+        ride["incentive_amount"] = 0
 
-    return serialize_doc(ride)
+    tip = float(ride.get("tip_amount") or 0)
+    de = float(ride.get("driver_earnings") or 0)
+    cancel_fee = float(ride.get("cancellation_fee_driver") or 0)
+    ride["fare_only"] = round(de - tip, 2)
+    ride["cancel_fee_earned"] = round(cancel_fee, 2)
+    ride["total_earned"] = round(de + ride["incentive_amount"] + cancel_fee, 2)
+
+    return ride
 
 
 @api_router.post("/{ride_id}/tip")

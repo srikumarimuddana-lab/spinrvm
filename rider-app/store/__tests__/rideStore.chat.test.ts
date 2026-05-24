@@ -6,8 +6,9 @@
  *   - addChatMessage: preserves order (appends)
  *   - setChatMessages: replaces full list
  *   - clearRide: resets chatMessages to []
+ *   - ChatMessage type has ride_id, timestamp, and strict sender union
  *
- * Code under test: rider-app/store/rideStore.ts::addChatMessage (~line 540)
+ * Code under test: rider-app/store/rideStore.ts::addChatMessage
  */
 
 jest.mock('react-native', () => ({
@@ -95,5 +96,35 @@ describe('rideStore — chat slice (P2-13 / R7)', () => {
     useRideStore.getState().addChatMessage(_msg('m2'));
     const after = useRideStore.getState().chatMessages;
     expect(after).not.toBe(before);
+  });
+
+  it('ChatMessage carries ride_id and timestamp fields', () => {
+    const msg = _msg('m1', 'check fields');
+    useRideStore.getState().addChatMessage(msg);
+    const stored = useRideStore.getState().chatMessages[0];
+    expect(stored.ride_id).toBe('ride-001');
+    expect(stored.timestamp).toBeTruthy();
+    expect(typeof stored.timestamp).toBe('string');
+  });
+
+  it('sender is preserved correctly for both roles', () => {
+    useRideStore.getState().addChatMessage(_msg('r1', 'from rider', 'rider'));
+    useRideStore.getState().addChatMessage(_msg('d1', 'from driver', 'driver'));
+    const [r, d] = useRideStore.getState().chatMessages;
+    expect(r.sender).toBe('rider');
+    expect(d.sender).toBe('driver');
+  });
+
+  it('setChatMessages with multiple messages updates the full list', () => {
+    const batch = [_msg('b1', 'one'), _msg('b2', 'two'), _msg('b3', 'three')];
+    useRideStore.getState().setChatMessages(batch);
+    expect(useRideStore.getState().chatMessages).toHaveLength(3);
+  });
+
+  it('deduplication does not affect messages with distinct ids', () => {
+    for (let i = 0; i < 5; i++) {
+      useRideStore.getState().addChatMessage(_msg(`m${i}`, `msg ${i}`));
+    }
+    expect(useRideStore.getState().chatMessages).toHaveLength(5);
   });
 });

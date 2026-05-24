@@ -3414,6 +3414,63 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         else:
             raise
 
+    # ── Record incentive claims ──────────────────────────────────
+    # Fetch active incentives matching this ride's service area / vehicle type
+    # and create claim records + update driver_earnings with the bonus.
+    try:
+        sa_id = ride.get("service_area_id")
+        vt_id = ride.get("vehicle_type_id")
+        iq = (
+            db_supabase.supabase.table("ride_incentives")
+            .select("id, bonus_amount, vehicle_type_id")
+            .eq("is_active", True)
+        )
+        if sa_id:
+            iq = iq.or_(f"service_area_id.is.null,service_area_id.eq.{sa_id}")
+        else:
+            iq = iq.is_("service_area_id", "null")
+        inc_result = await db_supabase.run_sync(iq.execute)
+        _total_bonus = Decimal("0")
+        for inc in inc_result.data or []:
+            if inc.get("vehicle_type_id") and inc["vehicle_type_id"] != vt_id:
+                continue
+            ba = Decimal(str(inc.get("bonus_amount") or 0))
+            if ba <= 0:
+                continue
+            await db_supabase.insert_one(
+                "ride_incentive_claims",
+                {
+                    "id": str(uuid.uuid4()),
+                    "ride_id": ride_id,
+                    "driver_id": driver["id"],
+                    "incentive_id": inc["id"],
+                    "bonus_amount": float(ba.quantize(Decimal("0.01"))),
+                    "claimed_at": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+            _total_bonus += ba
+        if _total_bonus > 0:
+            existing_de = Decimal(str(ride.get("driver_earnings") or 0))
+            new_de = (existing_de + _total_bonus).quantize(Decimal("0.01"))
+            await db_supabase.update_one(
+                "rides",
+                {"id": ride_id},
+                {"driver_earnings": float(new_de)},
+            )
+            logger.info(
+                "complete_ride: claimed %s incentive bonus for ride %s (driver %s)",
+                float(_total_bonus.quantize(Decimal("0.01"))),
+                ride_id,
+                driver["id"],
+            )
+    except Exception as inc_err:
+        logger.error(
+            "complete_ride: incentive claim failed for ride %s: %s",
+            ride_id,
+            inc_err,
+            exc_info=True,
+        )
+
     # Post-ride receipt notification stub
     rider = await db_supabase.get_user_by_id(ride.get("rider_id"))
     if rider and rider.get("email"):

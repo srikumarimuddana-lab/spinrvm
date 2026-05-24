@@ -12,7 +12,9 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRideStore } from '../store/rideStore';
+import type { ChatMessage } from '../store/rideStore';
 import api from '@shared/api/client';
 import { showToast } from '../store/toastStore';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -37,20 +39,41 @@ export default function ChatDriverScreen() {
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
-  // Load chat history from the backend on mount.
+  const CHAT_STORAGE_KEY = rideId ? `spinr_chat_rider_${rideId}` : null;
+
+  // Load chat history: AsyncStorage first (instant), then backend (authoritative).
   useEffect(() => {
     if (!rideId) { router.replace('/(tabs)' as any); return; }
     (async () => {
+      // 1. Seed from local cache for instant render
       try {
-        const res = await api.get<{ messages: unknown[] }>(`/rides/${rideId}/messages`);
-        if (res.data?.messages) {
-          setChatMessages(res.data.messages as import('../store/rideStore').ChatMessage[]);
+        if (CHAT_STORAGE_KEY) {
+          const saved = await AsyncStorage.getItem(CHAT_STORAGE_KEY);
+          if (saved) setChatMessages(JSON.parse(saved) as ChatMessage[]);
+        }
+      } catch (e) {
+        console.log('[Chat] Cache read failed:', e);
+      }
+      // 2. Fetch authoritative history from backend
+      try {
+        const res = await api.get<{ messages: ChatMessage[] }>(`/rides/${rideId}/messages`);
+        if (res.data?.messages?.length) {
+          setChatMessages(res.data.messages);
+          if (CHAT_STORAGE_KEY) {
+            AsyncStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(res.data.messages)).catch(() => {});
+          }
         }
       } catch (e) {
         console.log('[Chat] Failed to load history:', e);
       }
     })();
   }, [rideId]);
+
+  // Persist to AsyncStorage whenever the store updates (keeps cache fresh for next cold-start).
+  useEffect(() => {
+    if (!CHAT_STORAGE_KEY || chatMessages.length === 0) return;
+    AsyncStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(chatMessages)).catch(() => {});
+  }, [chatMessages, CHAT_STORAGE_KEY]);
 
   // Scroll to bottom when new messages arrive (via WS or local send).
   useEffect(() => {
@@ -97,9 +120,10 @@ export default function ChatDriverScreen() {
     setSending(true);
     setMessage('');
 
-    const optimisticId = `local-${Date.now()}`;
+    const optimisticId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     addChatMessage({
       id: optimisticId,
+      ride_id: rideId,
       text: trimmed,
       sender: 'rider',
       timestamp: new Date().toISOString(),
@@ -108,7 +132,7 @@ export default function ChatDriverScreen() {
     try {
       const res = await api.post<{ message?: unknown }>(`/rides/${rideId}/messages`, { text: trimmed });
       if (res.data?.message) {
-        const serverMsg = res.data.message as import('../store/rideStore').ChatMessage;
+        const serverMsg = res.data.message as ChatMessage;
         const current = useRideStore.getState().chatMessages;
         setChatMessages(
           current

@@ -852,35 +852,42 @@ async def websocket_endpoint(
             elif data.get("type") == "chat_message":
                 ride_id = data.get("ride_id")
                 message = data.get("text")
-                sender = data.get("sender")
-                if ride_id and message:
+                if ride_id and isinstance(message, str) and message.strip():
                     ride = await db_supabase.get_ride(ride_id)
                     if ride:
+                        # Derive sender from the authenticated connection key rather
+                        # than trusting the client-supplied "sender" field. This
+                        # prevents impersonation via a crafted WS payload.
                         target = None
-                        if sender == "driver":
-                            target = f"rider_{ride['rider_id']}"
-                        elif sender == "rider" and ride.get("driver_id"):
-                            driver = await db_supabase.get_driver_by_id(ride["driver_id"])
-                            if driver and driver.get("user_id"):
-                                target = f"driver_{driver['user_id']}"
+                        if client_type == "driver":
+                            # Verify this driver is actually assigned to the ride.
+                            _dp = await db_supabase.get_rows("drivers", {"user_id": user["id"]}, limit=1)
+                            _dp = _dp[0] if _dp else None
+                            if not _dp or _dp["id"] != ride.get("driver_id"):
+                                await websocket.send_json({"type": "error", "message": "not_ride_participant"})
+                            else:
+                                sender = "driver"
+                                target = f"rider_{ride['rider_id']}"
+                        elif client_type == "rider":
+                            if user["id"] != ride.get("rider_id"):
+                                await websocket.send_json({"type": "error", "message": "not_ride_participant"})
+                            else:
+                                sender = "rider"
+                                if ride.get("driver_id"):
+                                    _dd = await db_supabase.get_driver_by_id(ride["driver_id"])
+                                    if _dd and _dd.get("user_id"):
+                                        target = f"driver_{_dd['user_id']}"
 
-                        msg_data = {
-                            "id": str(uuid.uuid4()),
-                            "ride_id": ride_id,
-                            "text": message,
-                            "sender": sender,
-                            "timestamp": datetime.now(timezone.utc),
-                        }
-
-                        # Persist message to database
-                        await db_supabase.insert_one("ride_messages", msg_data)
-
-                        # Forward to connected target
                         if target:
-                            # Format timestamp strings for JSON
-                            msg_data["timestamp"] = msg_data["timestamp"].isoformat()
-                            msg_data["type"] = "chat_message"
-                            await manager.send_personal_message(msg_data, target)
+                            msg_data = {
+                                "id": str(uuid.uuid4()),
+                                "ride_id": ride_id,
+                                "text": message.strip(),
+                                "sender": sender,
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                            }
+                            await db_supabase.insert_one("ride_messages", msg_data)
+                            await manager.send_personal_message({**msg_data, "type": "chat_message"}, target)
 
             elif data.get("type") in ("get_drivers_snapshot", "get_rides_snapshot") and client_type == "admin":
                 try:

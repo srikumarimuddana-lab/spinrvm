@@ -102,3 +102,65 @@ class TestSendRideMessage:
             with pytest.raises(HTTPException) as exc_info:
                 await send_ride_message("ride_1", body, current_user={"id": "user_1"})
             assert exc_info.value.status_code == 404
+
+    async def test_driver_can_send_message(self):
+        """Driver is a participant too — should be able to send."""
+        ride = {"id": "ride_1", "rider_id": "user_1", "driver_id": "driver_1", "status": "in_progress"}
+        driver_row = {"id": "driver_1", "user_id": "user_driver_1"}
+
+        with (
+            patch("backend.routes.rides.db.find_one", AsyncMock(side_effect=[ride, driver_row])),
+            patch("backend.routes.rides.db.insert_one", AsyncMock(return_value=None)),
+            patch("backend.routes.rides.manager.send_personal_message", AsyncMock()),
+        ):
+            from backend.routes.rides import SendMessageRequest, send_ride_message
+
+            body = SendMessageRequest(text="I've arrived!")
+            result = await send_ride_message("ride_1", body, current_user={"id": "user_driver_1"})
+
+        assert result["success"] is True
+        assert result["message"]["sender"] == "driver"
+        assert result["message"]["text"] == "I've arrived!"
+
+    async def test_driver_send_notifies_rider_via_ws(self):
+        """Driver message must be forwarded to rider_{rider_id}."""
+        ride = {"id": "ride_1", "rider_id": "user_1", "driver_id": "driver_1", "status": "in_progress"}
+        driver_row = {"id": "driver_1", "user_id": "user_driver_1"}
+        ws_calls: list = []
+
+        async def _capture_ws(message, channel):
+            ws_calls.append((channel, message))
+
+        with (
+            patch("backend.routes.rides.db.find_one", AsyncMock(side_effect=[ride, driver_row])),
+            patch("backend.routes.rides.db.insert_one", AsyncMock(return_value=None)),
+            patch("backend.routes.rides.manager.send_personal_message", AsyncMock(side_effect=_capture_ws)),
+        ):
+            from backend.routes.rides import SendMessageRequest, send_ride_message
+
+            await send_ride_message("ride_1", SendMessageRequest(text="Ping"), current_user={"id": "user_driver_1"})
+
+        assert any("rider_user_1" in str(ch) for ch, _ in ws_calls), "Rider was not notified"
+        assert ws_calls[0][1]["type"] == "chat_message"
+
+    def test_empty_message_rejected_by_model(self):
+        from pydantic import ValidationError
+
+        from backend.routes.rides import SendMessageRequest
+
+        with pytest.raises(ValidationError):
+            SendMessageRequest(text="")
+
+    def test_message_over_500_chars_rejected(self):
+        from pydantic import ValidationError
+
+        from backend.routes.rides import SendMessageRequest
+
+        with pytest.raises(ValidationError):
+            SendMessageRequest(text="x" * 501)
+
+    def test_500_char_message_accepted(self):
+        from backend.routes.rides import SendMessageRequest
+
+        body = SendMessageRequest(text="a" * 500)
+        assert len(body.text) == 500

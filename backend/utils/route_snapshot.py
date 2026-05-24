@@ -74,7 +74,7 @@ async def render_ride_snapshot_google(
     )
 
     if trail_points:
-        # Google Static Maps URL limit is ~8192 chars. Sample if needed.
+        # Sample down to keep URL under ~8192 chars.
         if len(trail_points) > 80:
             step = max(1, len(trail_points) // 80)
             sampled = trail_points[::step]
@@ -82,8 +82,21 @@ async def render_ride_snapshot_google(
                 sampled.append(trail_points[-1])
             trail_points = sampled
 
-        path_str = "|".join(trail_points)
-        params.append(f"path=color:0x3B82F6FF|weight:4|{path_str}")
+        # Split into gradient segments (orange #FF9500 → red #EE2B2B),
+        # matching the app's MapView gradient polyline.
+        SEGS = 10
+        total = len(trail_points)
+        chunk = max(2, total // SEGS)
+        for i in range(0, total - 1, chunk):
+            end = min(i + chunk + 1, total)
+            t = i / max(total - 1, 1)
+            r = int(255 + (238 - 255) * t)
+            g = int(149 + (43 - 149) * t)
+            b = int(0 + (43 - 0) * t)
+            seg_points = trail_points[i:end]
+            if len(seg_points) >= 2:
+                seg_str = "|".join(seg_points)
+                params.append(f"path=color:0x{r:02X}{g:02X}{b:02X}FF|weight:4|{seg_str}")
 
     params.append(f"key={api_key}")
     url = f"{_STATIC_MAPS_URL}?{'&'.join(params)}"

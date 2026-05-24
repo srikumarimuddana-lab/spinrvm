@@ -2403,9 +2403,17 @@ async def get_ride(
     tip = float(ride.get("tip_amount") or 0)
     de = float(ride.get("driver_earnings") or 0)
     cancel_fee = float(ride.get("cancellation_fee_driver") or 0)
+    tax = float(ride.get("tax_amount") or 0)
+    if tax == 0:
+        snap = ride.get("fare_breakdown_snapshot") or {}
+        for ln in snap.get("lines") or []:
+            if ln.get("type") in ("tax", "gst", "pst"):
+                tax += float(ln.get("amount") or 0)
+        tax = round(tax, 2)
     ride["fare_only"] = round(de - tip, 2)
     ride["cancel_fee_earned"] = round(cancel_fee, 2)
-    ride["total_earned"] = round(de + ride["incentive_amount"] + cancel_fee, 2)
+    ride["tax_amount_total"] = tax
+    ride["total_earned"] = round(de + ride["incentive_amount"] + cancel_fee + tax, 2)
 
     return ride
 

@@ -959,11 +959,23 @@ async def get_driver_earnings(period: str = Query("week"), current_user: dict = 
         _cancelled_rides = await db_supabase.get_rows("rides", _cancel_filters, limit=10000)
         _cancel_fees_total = sum(Decimal(str(r.get("cancellation_fee_driver") or 0)) for r in _cancelled_rides)
 
+        # Tax collected from riders — passed through to driver as their income
+        _total_tax = Decimal("0")
+        for r in rides:
+            _t = Decimal(str(r.get("tax_amount") or 0))
+            if _t == 0:
+                _snap = r.get("fare_breakdown_snapshot") or {}
+                for _ln in _snap.get("lines") or []:
+                    if _ln.get("type") in ("tax", "gst", "pst"):
+                        _t += Decimal(str(_ln.get("amount") or 0))
+            _total_tax += _t
+
         stats = {
             "total_earnings": sum(r.get("driver_earnings", 0) or 0 for r in rides),
             "total_tips": sum(r.get("tip_amount", 0) or 0 for r in rides),
             "total_incentives": float(_incentive_total),
             "total_cancel_fees": float(_cancel_fees_total),
+            "total_tax": float(_total_tax),
             "total_rides": len(rides),
             "total_distance_km": sum(r.get("distance_km", 0) or 0 for r in rides),
             "total_duration_minutes": sum(r.get("duration_minutes", 0) or 0 for r in rides),
@@ -982,6 +994,7 @@ async def get_driver_earnings(period: str = Query("week"), current_user: dict = 
         Decimal(str(stats.get("total_earnings", 0)))
         + Decimal(str(stats.get("total_incentives", 0)))
         + Decimal(str(stats.get("total_cancel_fees", 0)))
+        + Decimal(str(stats.get("total_tax", 0)))
     )
     return {
         "period": period,
@@ -989,6 +1002,7 @@ async def get_driver_earnings(period: str = Query("week"), current_user: dict = 
         "total_tips": _money_str(stats.get("total_tips", 0)),
         "total_incentives": _money_str(stats.get("total_incentives", 0)),
         "total_cancel_fees": _money_str(stats.get("total_cancel_fees", 0)),
+        "total_tax": _money_str(stats.get("total_tax", 0)),
         "total_rides": stats.get("total_rides", 0),
         "total_distance_km": stats.get("total_distance_km", 0),
         "total_duration_minutes": stats.get("total_duration_minutes", 0),
@@ -2567,7 +2581,7 @@ async def get_ride_history(
         r["incentive_amount"] = round(incentive, 2)
         r["tax_amount_total"] = tax
         r["cancel_fee_earned"] = round(cancel_fee, 2)
-        r["total_earned"] = round(de + incentive + cancel_fee, 2)
+        r["total_earned"] = round(de + incentive + cancel_fee + tax, 2)
 
     return {"total": total, "rides": [serialize_doc(r) for r in rides]}
 

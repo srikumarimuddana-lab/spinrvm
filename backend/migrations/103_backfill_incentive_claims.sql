@@ -21,8 +21,8 @@
 INSERT INTO ride_incentive_claims (id, ride_id, driver_id, incentive_id, bonus_amount, claimed_at)
 SELECT
     gen_random_uuid(),
-    r.id,
-    r.driver_id,
+    r.id::uuid,
+    r.driver_id::uuid,
     i.id,
     i.bonus_amount,
     COALESCE(r.ride_completed_at, r.created_at)
@@ -38,5 +38,5 @@ WHERE r.status = 'completed'
   AND (i.end_date IS NULL OR i.end_date >= COALESCE(r.ride_completed_at, r.created_at))
   AND NOT EXISTS (
       SELECT 1 FROM ride_incentive_claims c
-      WHERE c.ride_id = r.id AND c.incentive_id = i.id
+      WHERE c.ride_id = r.id::uuid AND c.incentive_id = i.id
   );

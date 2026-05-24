@@ -165,6 +165,7 @@ export function useRiderSocket() {
       case 'chat_message':
         console.log('[WS] Chat message received:', data.text?.slice(0, 40));
         useRideStore.getState().addChatMessage(data);
+        Vibration.vibrate(100);
         break;
 
       case 'auth_success':

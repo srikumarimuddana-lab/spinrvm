@@ -8,6 +8,7 @@ import {
     ActivityIndicator,
     TouchableOpacity,
     Dimensions,
+    Image,
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -86,6 +87,17 @@ export default function RideDetailScreen() {
         return coords;
     }, [ride, hasPickup, hasDropoff]);
 
+    const savedPolyline = useMemo(() => {
+        if (!ride) return [];
+        const raw = ride.route_polyline;
+        if (!Array.isArray(raw) || raw.length < 2) return [];
+        return raw
+            .filter((p: any) => Array.isArray(p) && p.length >= 2)
+            .map((p: any) => ({ latitude: p[0], longitude: p[1] }));
+    }, [ride]);
+
+    const snapshotUrl = ride?.route_snapshot_url;
+
     if (loading) {
         return (
             <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
@@ -125,54 +137,69 @@ export default function RideDetailScreen() {
     return (
         <View style={styles.container}>
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: insets.bottom + 24 }}>
-                {/* Back Button + Map */}
+                {/* Route Map */}
                 <View style={styles.mapContainer}>
-                    <MapView
-                        ref={mapRef}
-                        style={styles.map}
-                        provider={MAP_PROVIDER}
-                        initialRegion={mapRegion}
-                        customMapStyle={mapStyle}
-                        scrollEnabled={false}
-                        zoomEnabled={false}
-                        onMapReady={() => {
-                            if (routeCoords.length >= 2) {
-                                mapRef.current?.fitToCoordinates(routeCoords, {
-                                    edgePadding: { top: 50, right: 50, bottom: 50, left: 50 },
-                                    animated: false,
-                                });
-                            }
-                        }}
-                    >
-                        {hasPickup && (
-                            <Marker
-                                coordinate={{ latitude: ride.pickup_lat, longitude: ride.pickup_lng }}
-                                title="Pickup"
-                            >
-                                <View style={[styles.markerDot, { backgroundColor: '#10B981' }]}>
-                                    <Ionicons name="location" size={14} color="#fff" />
-                                </View>
-                            </Marker>
-                        )}
-                        {hasDropoff && (
-                            <Marker
-                                coordinate={{ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }}
-                                title="Dropoff"
-                            >
-                                <View style={[styles.markerDot, { backgroundColor: '#EF4444' }]}>
-                                    <Ionicons name="flag" size={14} color="#fff" />
-                                </View>
-                            </Marker>
-                        )}
-                        {routeCoords.length === 2 && (
-                            <Polyline
-                                coordinates={routeCoords}
-                                strokeColor="#EE2B2B"
-                                strokeWidth={3}
-                                lineDashPattern={[6, 4]}
-                            />
-                        )}
-                    </MapView>
+                    {snapshotUrl ? (
+                        <Image
+                            source={{ uri: snapshotUrl }}
+                            style={styles.map}
+                            resizeMode="cover"
+                        />
+                    ) : (
+                        <MapView
+                            ref={mapRef}
+                            style={styles.map}
+                            provider={MAP_PROVIDER}
+                            initialRegion={mapRegion}
+                            customMapStyle={mapStyle}
+                            scrollEnabled={false}
+                            zoomEnabled={false}
+                            onMapReady={() => {
+                                const fitCoords = savedPolyline.length >= 2 ? savedPolyline : routeCoords;
+                                if (fitCoords.length >= 2) {
+                                    mapRef.current?.fitToCoordinates(fitCoords, {
+                                        edgePadding: { top: 50, right: 50, bottom: 50, left: 50 },
+                                        animated: false,
+                                    });
+                                }
+                            }}
+                        >
+                            {hasPickup && (
+                                <Marker
+                                    coordinate={{ latitude: ride.pickup_lat, longitude: ride.pickup_lng }}
+                                    title="Pickup"
+                                >
+                                    <View style={[styles.markerDot, { backgroundColor: '#10B981' }]}>
+                                        <Ionicons name="location" size={14} color="#fff" />
+                                    </View>
+                                </Marker>
+                            )}
+                            {hasDropoff && (
+                                <Marker
+                                    coordinate={{ latitude: ride.dropoff_lat, longitude: ride.dropoff_lng }}
+                                    title="Dropoff"
+                                >
+                                    <View style={[styles.markerDot, { backgroundColor: '#EF4444' }]}>
+                                        <Ionicons name="flag" size={14} color="#fff" />
+                                    </View>
+                                </Marker>
+                            )}
+                            {savedPolyline.length >= 2 ? (
+                                <Polyline
+                                    coordinates={savedPolyline}
+                                    strokeColor="#EE2B2B"
+                                    strokeWidth={3}
+                                />
+                            ) : routeCoords.length === 2 ? (
+                                <Polyline
+                                    coordinates={routeCoords}
+                                    strokeColor="#EE2B2B"
+                                    strokeWidth={3}
+                                    lineDashPattern={[6, 4]}
+                                />
+                            ) : null}
+                        </MapView>
+                    )}
 
                     <TouchableOpacity style={[styles.backBtn, { top: insets.top + 12 }]} onPress={() => router.back()}>
                         <Ionicons name="arrow-back" size={22} color="#fff" />

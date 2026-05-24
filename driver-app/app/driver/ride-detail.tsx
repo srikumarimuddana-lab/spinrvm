@@ -351,6 +351,15 @@ export default function RideDetailScreen() {
                                     </View>
                                 )}
 
+                                {parseFloat(ride.tax_amount || '0') > 0 && (
+                                    <View style={styles.fareRow}>
+                                        <Text style={[styles.fareLabel, { color: '#6366f1' }]}>Tax</Text>
+                                        <Text style={[styles.fareValue, { color: '#6366f1' }]}>
+                                            +${parseFloat(ride.tax_amount || '0').toFixed(2)}
+                                        </Text>
+                                    </View>
+                                )}
+
                                 <View style={styles.fareDivider} />
 
                                 <View style={styles.fareRow}>
@@ -382,7 +391,7 @@ export default function RideDetailScreen() {
                                     <View style={styles.taxNoteBox}>
                                         <Ionicons name="information-circle-outline" size={16} color={colors.textDim} />
                                         <Text style={styles.taxNoteText}>
-                                            Tax is collected from the rider. Not deducted from your earnings.
+                                            Tax collected from the rider is included in your total earnings. You are responsible for filing and remitting this amount.
                                         </Text>
                                     </View>
                                 </View>

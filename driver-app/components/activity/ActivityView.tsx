@@ -57,7 +57,8 @@ export default function ActivityView() {
   const totalEarnings = parseMoney(earnings?.total_earnings);
   const totalTips = parseMoney(earnings?.total_tips);
   const totalIncentives = parseMoney(earnings?.total_incentives);
-  const fareEarnings = Math.max(totalEarnings - totalTips - totalIncentives, 0);
+  const totalTax = parseMoney(earnings?.total_tax);
+  const fareEarnings = Math.max(totalEarnings - totalTips - totalIncentives - totalTax, 0);
 
   const filteredRides = useMemo(() => {
     return rideHistory.filter((r) => {
@@ -127,6 +128,12 @@ export default function ActivityView() {
                 <Ionicons name="flash" size={18} color="#8b5cf6" />
                 <Text style={styles.label}>Bonus</Text>
                 <Text style={[styles.value, { color: '#8b5cf6' }]}>${toMoney(totalIncentives)}</Text>
+              </View>
+              <View style={styles.divider} />
+              <View style={styles.breakdownItem}>
+                <Ionicons name="receipt-outline" size={18} color="#6b7280" />
+                <Text style={styles.label}>Tax</Text>
+                <Text style={[styles.value, { color: '#6b7280' }]}>${toMoney(totalTax)}</Text>
               </View>
             </View>
           </View>

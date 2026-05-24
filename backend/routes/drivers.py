@@ -246,6 +246,7 @@ async def _generate_and_store_ride_snapshot(
             from utils.route_snapshot import render_ride_snapshot, render_ride_snapshot_google  # type: ignore
 
         png_bytes = None
+        loop = asyncio.get_event_loop()
 
         # Try Google Static Maps first (proper Google Maps tiles + polyline)
         try:
@@ -266,7 +267,6 @@ async def _generate_and_store_ride_snapshot(
 
         # Fallback to OSM/staticmap
         if not png_bytes:
-            loop = asyncio.get_event_loop()
             png_bytes = await loop.run_in_executor(
                 None,
                 lambda: render_ride_snapshot(

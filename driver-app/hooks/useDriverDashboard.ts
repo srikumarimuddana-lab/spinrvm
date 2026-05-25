@@ -529,6 +529,15 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   const handleWSMessage = useCallback((data: any) => {
     switch (data.type) {
       case 'new_ride_assignment': {
+        // Guard: drop offers that arrive after the driver already accepted.
+        // Backend sends both WS + FCM for the same dispatch event; whichever
+        // arrives second would otherwise overwrite navigating_to_pickup state
+        // and pop the offer panel back up over the OTP screen.
+        const { rideState: _wsRideState } = useDriverStore.getState();
+        if (_wsRideState !== 'idle') {
+          console.warn('[WS] ignoring new_ride_assignment in state:', _wsRideState, 'ride_id:', data.ride_id);
+          break;
+        }
         const pLat = _toFiniteCoord(data.pickup_lat);
         const pLng = _toFiniteCoord(data.pickup_lng);
         const dLat = _toFiniteCoord(data.dropoff_lat);
@@ -1168,6 +1177,12 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
     const unsubscribe = onForegroundMessage((remoteMessage: any) => {
       const data = remoteMessage?.data || {};
       if (data?.type === 'new_ride_assignment' && data?.ride_id) {
+        // Same guard as the WS handler: drop if driver already accepted.
+        const { rideState: _fcmRideState, incomingRide: _fcmExisting } = useDriverStore.getState();
+        if (_fcmRideState !== 'idle') {
+          console.warn('[FCM] ignoring new_ride_assignment in state:', _fcmRideState, 'ride_id:', data.ride_id);
+          return;
+        }
         const pLat = _toFiniteCoord(data.pickup_lat);
         const pLng = _toFiniteCoord(data.pickup_lng);
         const dLat = _toFiniteCoord(data.dropoff_lat);
@@ -1176,7 +1191,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           console.error('[FCM] dropping ride offer with invalid coords', { ride_id: data.ride_id });
           return;
         }
-        const existing = useDriverStore.getState().incomingRide;
+        const existing = _fcmExisting;
         const isUpdate = existing?.ride_id === data.ride_id;
         if (!isUpdate) {
           Vibration.vibrate([0, 500, 200, 500]);

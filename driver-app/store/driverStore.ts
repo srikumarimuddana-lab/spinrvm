@@ -411,6 +411,15 @@ export const useDriverStore = create<DriverState>((set, get) => ({
     error: null,
 
     setIncomingRide: (ride) => {
+        if (ride !== null) {
+            const current = get().rideState;
+            if (current !== 'idle') {
+                // Defense-in-depth: WS and FCM handlers guard first, but if a
+                // duplicate slips through, don't overwrite an active ride state.
+                console.warn('[driverStore] setIncomingRide blocked in state:', current);
+                return;
+            }
+        }
         const cached = get().configuredCountdownSeconds || FALLBACK_COUNTDOWN;
         // Per-offer countdown from the WS/FCM payload wins over the cached
         // config — the backend may have a newer value than this app instance.

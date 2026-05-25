@@ -858,7 +858,8 @@ async def websocket_endpoint(
                         # Derive sender from the authenticated connection key rather
                         # than trusting the client-supplied "sender" field. This
                         # prevents impersonation via a crafted WS payload.
-                        target = None
+                        sender: str | None = None
+                        target: str | None = None
                         if client_type == "driver":
                             # Verify this driver is actually assigned to the ride.
                             _dp = await db_supabase.get_rows("drivers", {"user_id": user["id"]}, limit=1)
@@ -878,7 +879,11 @@ async def websocket_endpoint(
                                     if _dd and _dd.get("user_id"):
                                         target = f"driver_{_dd['user_id']}"
 
-                        if target:
+                        # Persist the message regardless of whether the recipient is
+                        # currently connected — they can fetch history on next open.
+                        # Only gate on sender (participant verified); target may be
+                        # None when no driver is yet assigned.
+                        if sender:
                             msg_data = {
                                 "id": str(uuid.uuid4()),
                                 "ride_id": ride_id,
@@ -887,7 +892,8 @@ async def websocket_endpoint(
                                 "timestamp": datetime.now(timezone.utc).isoformat(),
                             }
                             await db_supabase.insert_one("ride_messages", msg_data)
-                            await manager.send_personal_message({**msg_data, "type": "chat_message"}, target)
+                            if target:
+                                await manager.send_personal_message({**msg_data, "type": "chat_message"}, target)
 
             elif data.get("type") in ("get_drivers_snapshot", "get_rides_snapshot") and client_type == "admin":
                 try:

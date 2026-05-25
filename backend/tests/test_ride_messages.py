@@ -249,3 +249,18 @@ class TestChatPushNotifications:
         data = {"type": "chat_message", "ride_id": "ride_1", "deeplink": "/chat-driver?rideId=ride_1"}
         for k, v in data.items():
             assert isinstance(v, str), f"data[{k!r}] must be a string for FCM, got {type(v)}"
+
+    async def test_null_name_field_does_not_crash(self):
+        """current_user with name=null must not raise AttributeError in sender_name resolution."""
+        ride = {"id": "ride_1", "rider_id": "user_1", "driver_id": "driver_1", "status": "in_progress"}
+        driver_row = {"id": "driver_1", "user_id": "user_driver_1"}
+        # Simulate a partially-filled profile: name key present but value is None.
+        _, push_calls = await self._send(
+            "user_1",
+            ride,
+            driver_row=driver_row,
+            sender_first_name=None,  # type: ignore[arg-type]
+        )
+        # Should succeed and fall back to the role default "Rider".
+        assert push_calls, "Push must still fire even when first_name is None"
+        assert "Rider" in push_calls[0]["title"]

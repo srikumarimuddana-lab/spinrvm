@@ -629,6 +629,16 @@ export const useDriverStore = create<DriverState>((set, get) => ({
 
     fetchActiveRide: async () => {
         try {
+            // Guard: if the driver already has a live offer counting down
+            // (set by the WS/FCM handler), don't let the HTTP poll clobber it.
+            // The WS event is authoritative for new offers; the API round-trip
+            // can race and return stale state (no active ride yet, or a
+            // different offer_expires_at) that would flash-dismiss the panel.
+            const _cur = get();
+            if (_cur.rideState === 'ride_offered' && _cur.incomingRide && _cur.countdownSeconds > 2) {
+                return;
+            }
+
             const res = await api.get<ActiveRide | null>('/drivers/rides/active');
             if (res.data && res.data.ride) {
                 const ride = res.data.ride;

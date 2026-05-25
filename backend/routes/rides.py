@@ -3654,7 +3654,7 @@ async def send_ride_message(
     if push_recipient_user_id:
         sender_name = (
             (current_user.get("first_name") or "").strip()
-            or current_user.get("name", "").strip()
+            or (current_user.get("name") or "").strip()
             or ("Rider" if sender == "rider" else "Driver")
         )
         preview = body.text.strip()

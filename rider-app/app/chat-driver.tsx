@@ -35,6 +35,10 @@ export default function ChatDriverScreen() {
   const scrollViewRef = useRef<ScrollView>(null);
   const [message, setMessage] = useState('');
   const [sending, setSending] = useState(false);
+  // Tracks when the initial AsyncStorage read has completed so the persist
+  // effect knows it is safe to write an empty array without clobbering a
+  // warm cache that hasn't been loaded into the store yet.
+  const cacheReadDoneRef = useRef(false);
 
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -44,6 +48,7 @@ export default function ChatDriverScreen() {
   // Load chat history: AsyncStorage first (instant), then backend (authoritative).
   useEffect(() => {
     if (!rideId) { router.replace('/(tabs)' as any); return; }
+    cacheReadDoneRef.current = false;
     (async () => {
       // 1. Seed from local cache for instant render
       try {
@@ -54,6 +59,7 @@ export default function ChatDriverScreen() {
       } catch (e) {
         console.log('[Chat] Cache read failed:', e);
       }
+      cacheReadDoneRef.current = true;
       // 2. Fetch authoritative history from backend (always authoritative —
       //    replace cache even when server returns empty array, so stale data
       //    from a previous ride is not shown to the user).
@@ -71,13 +77,15 @@ export default function ChatDriverScreen() {
     })();
   }, [rideId]);
 
-  // Persist to AsyncStorage whenever the store updates (keeps cache fresh for
-  // next cold-start). Filter to only this ride's messages so a rideId change
-  // can never write the previous ride's messages under the new ride's key.
+  // Persist to AsyncStorage whenever the store updates. Filter to only this
+  // ride's messages to prevent cross-ride contamination when rideId changes.
+  // Guard: skip writing an empty array before the initial cache read completes
+  // to avoid clobbering a warm cache. After that, always persist — including
+  // empty arrays — so failed-send rollbacks flush stale phantom messages from cache.
   useEffect(() => {
     if (!CHAT_STORAGE_KEY || !rideId) return;
     const rideMessages = chatMessages.filter((m) => m.ride_id === rideId);
-    if (rideMessages.length === 0) return;
+    if (!cacheReadDoneRef.current && rideMessages.length === 0) return;
     AsyncStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(rideMessages)).catch(() => {});
   }, [chatMessages, CHAT_STORAGE_KEY, rideId]);
 

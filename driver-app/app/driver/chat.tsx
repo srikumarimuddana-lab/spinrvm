@@ -12,7 +12,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useDriverStore } from '../../store/driverStore';
 import type { ChatMessage } from '../../store/driverStore';
 import api from '@shared/api/client';
@@ -31,6 +31,10 @@ const QUICK_MESSAGES = [
 
 export default function ChatScreen() {
     const router = useRouter();
+    // Read rideId from the URL param first (notification-tap path), then fall
+    // back to the store so the normal in-app entry point still works even when
+    // the store hasn't finished hydrating by the time navigation completes.
+    const { rideId: paramRideId } = useLocalSearchParams<{ rideId?: string }>();
     const insets = useSafeAreaInsets();
     const { colors } = useTheme();
     const styles = useMemo(() => createStyles(colors), [colors]);
@@ -39,15 +43,20 @@ export default function ChatScreen() {
     const [showQuickReplies, setShowQuickReplies] = useState(true);
     const [sending, setSending] = useState(false);
     const flatListRef = useRef<FlatList>(null);
+    // Tracks when the initial AsyncStorage read has completed so the persist
+    // effect knows it is safe to write an empty array without clobbering a
+    // warm cache that hasn't been loaded into the store yet.
+    const cacheReadDoneRef = useRef(false);
 
     const riderName = activeRide?.rider?.first_name || (activeRide?.rider?.name as string | undefined) || 'Rider';
-    const rideId = activeRide?.ride?.id;
+    const rideId = paramRideId || activeRide?.ride?.id;
     const CHAT_STORAGE_KEY = rideId ? `spinr_chat_${rideId}` : null;
 
     // Load chat history: AsyncStorage first (instant), then backend (authoritative).
     // Real-time incoming messages are pushed via WS → useDriverDashboard → driverStore.
     useEffect(() => {
         if (!rideId) return;
+        cacheReadDoneRef.current = false;
 
         (async () => {
             // 1. Seed from local cache for instant render
@@ -57,11 +66,14 @@ export default function ChatScreen() {
                     if (saved) setChatMessages(JSON.parse(saved));
                 }
             } catch (err) { console.error('[chat]', err); }
+            cacheReadDoneRef.current = true;
 
-            // 2. Fetch authoritative history from backend
+            // 2. Fetch authoritative history from backend (always authoritative —
+            //    replace cache even when server returns empty array so stale messages
+            //    from a prior ride are not shown).
             try {
                 const res = await api.get<{ messages: ChatMessage[] }>(`/rides/${rideId}/messages`);
-                if (res.data?.messages?.length) {
+                if (res.data?.messages !== undefined) {
                     setChatMessages(res.data.messages);
                     if (CHAT_STORAGE_KEY) {
                         await AsyncStorage.setItem(
@@ -76,10 +88,14 @@ export default function ChatScreen() {
         })();
     }, [rideId]);
 
-    // Persist to AsyncStorage whenever the store updates (keeps cache fresh
-    // for the next cold-start without an extra fetch).
+    // Persist to AsyncStorage whenever the store updates. Guard: don't write an
+    // empty array before the initial cache read completes to avoid clobbering a
+    // warm cache before it has been loaded into the store. After that point,
+    // always persist — including empty arrays — so that failed-send rollbacks
+    // and ride-end clearances flush stale messages from the cache.
     useEffect(() => {
-        if (!CHAT_STORAGE_KEY || chatMessages.length === 0) return;
+        if (!CHAT_STORAGE_KEY) return;
+        if (!cacheReadDoneRef.current && chatMessages.length === 0) return;
         AsyncStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(chatMessages)).catch(() => {});
     }, [chatMessages, CHAT_STORAGE_KEY]);
 

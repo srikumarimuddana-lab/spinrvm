@@ -266,7 +266,11 @@ export default function RideDetailScreen() {
                         <View style={styles.statDivider} />
                         <View style={styles.stat}>
                             <Ionicons name="time" size={20} color="#FF9500" />
-                            <Text style={styles.statValue}>{ride.duration_minutes || 0} min</Text>
+                            <Text style={styles.statValue}>
+                                {ride.ride_started_at && ride.ride_completed_at
+                                    ? Math.round((new Date(ride.ride_completed_at).getTime() - new Date(ride.ride_started_at).getTime()) / 60000)
+                                    : (ride.duration_minutes || 0)} min
+                            </Text>
                             <Text style={styles.statLabel}>Duration</Text>
                         </View>
                         <View style={styles.statDivider} />

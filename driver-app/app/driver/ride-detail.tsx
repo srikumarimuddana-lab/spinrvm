@@ -420,30 +420,61 @@ export default function RideDetailScreen() {
                     {/* Trip Timeline */}
                     <View style={styles.card}>
                         <Text style={styles.cardTitle}>Trip Timeline</Text>
-                        {[
-                            { label: 'Ride Created', time: ride.created_at, icon: 'add-circle' },
-                            { label: 'Driver Accepted', time: ride.driver_accepted_at, icon: 'checkmark-circle' },
-                            { label: 'Driver Arrived', time: ride.driver_arrived_at, icon: 'navigate-circle' },
-                            { label: 'Ride Started', time: ride.ride_started_at, icon: 'play-circle' },
-                            { label: 'Ride Completed', time: ride.ride_completed_at, icon: 'checkmark-done-circle' },
-                            { label: 'Cancelled', time: ride.cancelled_at, icon: 'close-circle' },
-                        ]
-                            .filter((e) => e.time)
-                            .map((event, i) => (
-                                <View key={i} style={styles.timelineRow}>
-                                    <Ionicons name={event.icon as any} size={20} color={colors.primary} />
-                                    <View style={{ flex: 1 }}>
-                                        <Text style={styles.timelineLabel}>{event.label}</Text>
-                                        <Text style={styles.timelineTime}>
-                                            {new Date(event.time).toLocaleTimeString('en', {
-                                                hour: '2-digit',
-                                                minute: '2-digit',
-                                                second: '2-digit',
-                                            })}
+                        {(() => {
+                            const fmtTime = (t: string) => new Date(t).toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                            const elapsed = (a: string, b: string): string => {
+                                const secs = Math.round((new Date(b).getTime() - new Date(a).getTime()) / 1000);
+                                if (secs < 60) return `${secs}s`;
+                                const m = Math.floor(secs / 60), s = secs % 60;
+                                return s > 0 ? `${m}m ${s}s` : `${m} min`;
+                            };
+                            type TLStep = { label: string; sub: string; time: string; dot: string; isLast?: boolean; isCancelled?: boolean };
+                            const steps: TLStep[] = [
+                                ride.created_at && { label: 'Ride Requested', sub: fmtTime(ride.created_at), time: ride.created_at, dot: '#6B7280' },
+                                ride.driver_accepted_at && {
+                                    label: 'You Accepted',
+                                    sub: `${fmtTime(ride.driver_accepted_at)}${ride.created_at ? `  ·  ${elapsed(ride.created_at, ride.driver_accepted_at)} after request` : ''}`,
+                                    time: ride.driver_accepted_at, dot: '#3B82F6',
+                                },
+                                ride.driver_arrived_at && {
+                                    label: 'Arrived at Pickup',
+                                    sub: `${fmtTime(ride.driver_arrived_at)}${ride.driver_accepted_at ? `  ·  ${elapsed(ride.driver_accepted_at, ride.driver_arrived_at)} drive to pickup` : ''}`,
+                                    time: ride.driver_arrived_at, dot: '#8B5CF6',
+                                },
+                                ride.ride_started_at && {
+                                    label: 'Trip Started',
+                                    sub: `${fmtTime(ride.ride_started_at)}${ride.driver_arrived_at ? `  ·  ${elapsed(ride.driver_arrived_at, ride.ride_started_at)} wait` : ''}`,
+                                    time: ride.ride_started_at, dot: '#F59E0B',
+                                },
+                                ride.ride_completed_at && {
+                                    label: 'Trip Completed',
+                                    sub: `${fmtTime(ride.ride_completed_at)}${ride.ride_started_at ? `  ·  ${elapsed(ride.ride_started_at, ride.ride_completed_at)} trip` : ''}`,
+                                    time: ride.ride_completed_at, dot: '#10B981', isLast: true,
+                                },
+                                ride.cancelled_at && {
+                                    label: 'Cancelled',
+                                    sub: fmtTime(ride.cancelled_at),
+                                    time: ride.cancelled_at, dot: '#EF4444', isCancelled: true, isLast: true,
+                                },
+                            ].filter(Boolean) as TLStep[];
+
+                            return steps.map((step, i) => (
+                                <View key={i} style={styles.tlRow}>
+                                    {/* Left spine */}
+                                    <View style={styles.tlSpine}>
+                                        <View style={[styles.tlDot, { backgroundColor: step.dot }]} />
+                                        {!step.isLast && <View style={styles.tlLine} />}
+                                    </View>
+                                    {/* Content */}
+                                    <View style={[styles.tlContent, step.isLast ? {} : { paddingBottom: 20 }]}>
+                                        <Text style={[styles.tlLabel, step.isCancelled && { color: '#EF4444' }, step.isLast && !step.isCancelled && { color: '#10B981', fontWeight: '700' }]}>
+                                            {step.label}
                                         </Text>
+                                        <Text style={styles.tlSub}>{step.sub}</Text>
                                     </View>
                                 </View>
-                            ))}
+                            ));
+                        })()}
                     </View>
                 </View>
             </ScrollView>
@@ -577,14 +608,13 @@ function createStyles(colors: ThemeColors) {
             fontSize: 12,
             lineHeight: 18,
         },
-        timelineRow: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            gap: 12,
-            marginBottom: 12,
-        },
-        timelineLabel: { color: colors.text, fontSize: 14, fontWeight: '500' },
-        timelineTime: { color: colors.textDim, fontSize: 12, marginTop: 2 },
+        tlRow: { flexDirection: 'row', gap: 12 },
+        tlSpine: { alignItems: 'center', width: 14 },
+        tlDot: { width: 14, height: 14, borderRadius: 7, marginTop: 3 },
+        tlLine: { width: 2, flex: 1, backgroundColor: colors.border, marginTop: 4 },
+        tlContent: { flex: 1 },
+        tlLabel: { fontSize: 14, fontWeight: '600', color: colors.text },
+        tlSub: { fontSize: 12, color: colors.textDim, marginTop: 2 },
         errorText: { color: colors.textDim, fontSize: 16, marginTop: 12 },
         backLink: { marginTop: 16, padding: 10 },
         backLinkText: { color: colors.primary, fontSize: 15, fontWeight: '600' },

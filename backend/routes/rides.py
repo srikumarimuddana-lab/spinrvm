@@ -3627,17 +3627,53 @@ async def send_ride_message(
 
     await db.insert_one("ride_messages", msg_data)
 
-    # Forward to the other party via WebSocket.
+    # Forward to the other party via WebSocket + push notification (for
+    # backgrounded/offline recipients). The push fires as a background task
+    # so it never adds latency to the HTTP response.
     target = None
+    push_recipient_user_id: str | None = None
+    push_target_app: str | None = None
+    push_deeplink: str | None = None
+
     if sender == "rider" and ride.get("driver_id"):
         d = await db.find_one("drivers", {"id": ride["driver_id"]})
         if d and d.get("user_id"):
             target = f"driver_{d['user_id']}"
+            push_recipient_user_id = d["user_id"]
+            push_target_app = "driver"
+            push_deeplink = f"/driver/chat?rideId={ride_id}"
     elif sender == "driver":
         target = f"rider_{ride['rider_id']}"
+        push_recipient_user_id = ride["rider_id"]
+        push_target_app = "rider"
+        push_deeplink = f"/chat-driver?rideId={ride_id}"
 
     if target:
         await manager.send_personal_message({**msg_data, "type": "chat_message"}, target)
+
+    if push_recipient_user_id:
+        sender_name = (
+            (current_user.get("first_name") or "").strip()
+            or current_user.get("name", "").strip()
+            or ("Rider" if sender == "rider" else "Driver")
+        )
+        preview = body.text.strip()
+        if len(preview) > 100:
+            preview = preview[:97] + "…"
+        asyncio.create_task(
+            send_push_notification(
+                push_recipient_user_id,
+                f"Message from {sender_name}",
+                preview,
+                {
+                    "type": "chat_message",
+                    "ride_id": ride_id,
+                    "deeplink": push_deeplink or "",
+                },
+                priority="normal",
+                target_app=push_target_app,
+            )
+        )
 
     return {"success": True, "message": msg_data}
 

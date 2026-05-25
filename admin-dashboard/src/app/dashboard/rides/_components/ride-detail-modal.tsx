@@ -236,10 +236,55 @@ export default function RideDetailModal({ rideId, open, onClose }: Props) {
                                     <Card>
                                         <CardHead title="Trip Stats" icon={Gauge} />
                                         <div className="p-3 space-y-2">
-                                            <div className="flex gap-2">
-                                                <StatPill label="Distance" value={`${(ride.distance_km || 0).toFixed(1)} km`} icon={Route} color="bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" />
-                                                <StatPill label="Duration" value={`${ride.duration_minutes || 0} min`} icon={Clock} color="bg-violet-50 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300" />
-                                            </div>
+                                            {/* Actual GPS vs Planned estimate */}
+                                            {(() => {
+                                                const actualKm = ride.actual_distance_km ?? phaseMap.trip_in_progress ?? null;
+                                                const plannedKm = ride.planned_distance_km ?? null;
+                                                const actualSecs = ride.phase_durations?.trip_in_progress ?? null;
+                                                const actualMin = actualSecs != null ? Math.round(actualSecs / 60) : null;
+                                                const plannedMin = ride.duration_minutes ?? null;
+                                                const hasActual = actualKm != null || actualMin != null;
+                                                return (
+                                                    <>
+                                                        {hasActual && (
+                                                            <div className="rounded-lg bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-100 dark:border-emerald-900/30 px-3 py-2">
+                                                                <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400 mb-1.5">Actual (GPS)</p>
+                                                                <div className="flex gap-4">
+                                                                    <div className="flex items-center gap-1.5">
+                                                                        <Route className="h-3.5 w-3.5 text-emerald-500" />
+                                                                        <span className="text-sm font-extrabold tabular-nums text-emerald-700 dark:text-emerald-300">
+                                                                            {actualKm != null ? `${Number(actualKm).toFixed(1)} km` : "—"}
+                                                                        </span>
+                                                                    </div>
+                                                                    <div className="flex items-center gap-1.5">
+                                                                        <Clock className="h-3.5 w-3.5 text-emerald-500" />
+                                                                        <span className="text-sm font-extrabold tabular-nums text-emerald-700 dark:text-emerald-300">
+                                                                            {actualMin != null ? `${actualMin} min` : "—"}
+                                                                        </span>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        )}
+                                                        <div className="rounded-lg bg-muted/50 border border-border px-3 py-2">
+                                                            <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1.5">Estimated (Booking)</p>
+                                                            <div className="flex gap-4">
+                                                                <div className="flex items-center gap-1.5">
+                                                                    <Route className="h-3.5 w-3.5 text-muted-foreground" />
+                                                                    <span className="text-sm font-bold tabular-nums text-foreground">
+                                                                        {plannedKm != null ? `${Number(plannedKm).toFixed(1)} km` : `${(ride.distance_km || 0).toFixed(1)} km`}
+                                                                    </span>
+                                                                </div>
+                                                                <div className="flex items-center gap-1.5">
+                                                                    <Clock className="h-3.5 w-3.5 text-muted-foreground" />
+                                                                    <span className="text-sm font-bold tabular-nums text-foreground">
+                                                                        {plannedMin != null ? `${plannedMin} min` : "—"}
+                                                                    </span>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    </>
+                                                );
+                                            })()}
                                             <div className="flex gap-2">
                                                 <StatPill label="Surge" value={`${ride.surge_multiplier || 1.0}×`} icon={Percent} color="bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300" />
                                                 <StatPill label="Total Fare" value={formatCurrency(ride.total_fare || 0)} icon={DollarSign} color="bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300" />

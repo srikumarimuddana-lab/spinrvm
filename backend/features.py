@@ -1273,6 +1273,11 @@ async def send_push_notification(
 
     is_dispatch = (data or {}).get("type") == "new_ride_assignment"
 
+    # Rider app creates "ride-updates"; driver app creates "ride-offers".
+    # Android silently drops notifications to channels that don't exist on
+    # the receiving app, so we must select the channel that matches the target.
+    android_channel = "ride-updates" if target_app == "rider" else "ride-offers"
+
     try:
         # Android: data-only for dispatch so Notifee (driver app) renders the
         # rich heads-up + full-screen-intent notification with Accept/Decline
@@ -1282,7 +1287,7 @@ async def send_push_notification(
             notification=None
             if is_dispatch
             else messaging.AndroidNotification(
-                channel_id="ride-offers",
+                channel_id=android_channel,
             ),
         )
         message = messaging.Message(

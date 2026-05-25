@@ -94,10 +94,11 @@ export default function ChatScreen() {
     // always persist — including empty arrays — so that failed-send rollbacks
     // and ride-end clearances flush stale messages from the cache.
     useEffect(() => {
-        if (!CHAT_STORAGE_KEY) return;
+        if (!CHAT_STORAGE_KEY || !rideId) return;
         if (!cacheReadDoneRef.current && chatMessages.length === 0) return;
-        AsyncStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(chatMessages)).catch(() => {});
-    }, [chatMessages, CHAT_STORAGE_KEY]);
+        const rideMessages = chatMessages.filter((m) => m.ride_id === rideId);
+        AsyncStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(rideMessages)).catch(() => {});
+    }, [chatMessages, CHAT_STORAGE_KEY, rideId]);
 
     // Scroll to bottom on new messages
     useEffect(() => {

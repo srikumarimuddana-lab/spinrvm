@@ -229,6 +229,8 @@ function usePushNotificationRouter() {
         const data = response?.notification?.request?.content?.data ?? {};
         if (data?.type === 'new_ride_assignment') {
           router.push('/driver/' as any);
+        } else if (data?.type === 'chat_message' && data?.ride_id) {
+          router.push(`/driver/chat?rideId=${data.ride_id}` as any);
         } else {
           router.push('/driver/notifications');
         }
@@ -283,6 +285,8 @@ function usePushNotificationRouter() {
           timer = setTimeout(() => {
             if (data?.type === 'new_ride_assignment') {
               router.push('/driver/' as any);
+            } else if (data?.type === 'chat_message' && data?.ride_id) {
+              router.push(`/driver/chat?rideId=${data.ride_id}` as any);
             } else {
               router.push('/driver/notifications' as any);
             }

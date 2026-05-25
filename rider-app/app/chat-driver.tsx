@@ -54,10 +54,12 @@ export default function ChatDriverScreen() {
       } catch (e) {
         console.log('[Chat] Cache read failed:', e);
       }
-      // 2. Fetch authoritative history from backend
+      // 2. Fetch authoritative history from backend (always authoritative —
+      //    replace cache even when server returns empty array, so stale data
+      //    from a previous ride is not shown to the user).
       try {
         const res = await api.get<{ messages: ChatMessage[] }>(`/rides/${rideId}/messages`);
-        if (res.data?.messages?.length) {
+        if (res.data?.messages !== undefined) {
           setChatMessages(res.data.messages);
           if (CHAT_STORAGE_KEY) {
             AsyncStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(res.data.messages)).catch(() => {});
@@ -69,11 +71,15 @@ export default function ChatDriverScreen() {
     })();
   }, [rideId]);
 
-  // Persist to AsyncStorage whenever the store updates (keeps cache fresh for next cold-start).
+  // Persist to AsyncStorage whenever the store updates (keeps cache fresh for
+  // next cold-start). Filter to only this ride's messages so a rideId change
+  // can never write the previous ride's messages under the new ride's key.
   useEffect(() => {
-    if (!CHAT_STORAGE_KEY || chatMessages.length === 0) return;
-    AsyncStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(chatMessages)).catch(() => {});
-  }, [chatMessages, CHAT_STORAGE_KEY]);
+    if (!CHAT_STORAGE_KEY || !rideId) return;
+    const rideMessages = chatMessages.filter((m) => m.ride_id === rideId);
+    if (rideMessages.length === 0) return;
+    AsyncStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(rideMessages)).catch(() => {});
+  }, [chatMessages, CHAT_STORAGE_KEY, rideId]);
 
   // Scroll to bottom when new messages arrive (via WS or local send).
   useEffect(() => {

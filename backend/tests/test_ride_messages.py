@@ -164,3 +164,88 @@ class TestSendRideMessage:
 
         body = SendMessageRequest(text="a" * 500)
         assert len(body.text) == 500
+
+
+class TestChatPushNotifications:
+    """Push notification is fired as a background task after WS broadcast."""
+
+    async def _send(self, sender_user_id, ride, driver_row=None, sender_first_name="Alice", text="Hello there"):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        from backend.routes.rides import SendMessageRequest, send_ride_message
+
+        ws_calls: list = []
+        push_calls: list = []
+
+        async def _ws(msg, ch):
+            ws_calls.append((ch, msg))
+
+        async def _push(uid, title, body, data=None, priority="normal", target_app=None):
+            push_calls.append({"uid": uid, "title": title, "body": body, "data": data, "target_app": target_app})
+
+        find_sequence = [ride, driver_row]
+        if driver_row and ride.get("driver_id"):
+            find_sequence.append(driver_row)
+
+        with (
+            patch("backend.routes.rides.db.find_one", AsyncMock(side_effect=find_sequence)),
+            patch("backend.routes.rides.db.insert_one", AsyncMock()),
+            patch("backend.routes.rides.manager.send_personal_message", AsyncMock(side_effect=_ws)),
+            patch("backend.routes.rides.send_push_notification", AsyncMock(side_effect=_push)),
+            # Use ensure_future so the coroutine actually executes on the running loop.
+            patch("backend.routes.rides.asyncio.create_task", side_effect=asyncio.ensure_future),
+        ):
+            await send_ride_message(
+                "ride_1",
+                SendMessageRequest(text=text),
+                current_user={"id": sender_user_id, "first_name": sender_first_name},
+            )
+            await asyncio.sleep(0)  # yield to let the scheduled task run
+        return ws_calls, push_calls
+
+    async def test_rider_send_fires_push_to_driver(self):
+        ride = {"id": "ride_1", "rider_id": "user_1", "driver_id": "driver_1", "status": "in_progress"}
+        driver_row = {"id": "driver_1", "user_id": "user_driver_1"}
+        _, push_calls = await self._send("user_1", ride, driver_row=driver_row)
+
+        assert push_calls, "No push was fired"
+        p = push_calls[0]
+        assert p["uid"] == "user_driver_1"
+        assert p["target_app"] == "driver"
+        assert "Alice" in p["title"]
+        assert p["body"] == "Hello there"
+        assert p["data"]["type"] == "chat_message"
+        assert p["data"]["ride_id"] == "ride_1"
+        assert "driver/chat" in p["data"]["deeplink"]
+
+    async def test_driver_send_fires_push_to_rider(self):
+        ride = {"id": "ride_1", "rider_id": "user_rider_1", "driver_id": "driver_1", "status": "in_progress"}
+        driver_row = {"id": "driver_1", "user_id": "user_driver_1"}
+        _, push_calls = await self._send("user_driver_1", ride, driver_row=driver_row, sender_first_name="Bob")
+
+        assert push_calls, "No push was fired"
+        p = push_calls[0]
+        assert p["uid"] == "user_rider_1"
+        assert p["target_app"] == "rider"
+        assert "Bob" in p["title"]
+        assert "chat-driver" in p["data"]["deeplink"]
+
+    async def test_push_body_truncated_at_100_chars(self):
+        ride = {"id": "ride_1", "rider_id": "user_1", "driver_id": "driver_1", "status": "in_progress"}
+        driver_row = {"id": "driver_1", "user_id": "user_driver_1"}
+        _, push_calls = await self._send("user_1", ride, driver_row=driver_row, text="x" * 200)
+        assert push_calls
+        assert len(push_calls[0]["body"]) <= 100
+
+    async def test_no_push_when_no_driver_assigned(self):
+        """Rider sends on a searching ride — no recipient, so no push."""
+        ride = {"id": "ride_1", "rider_id": "user_1", "driver_id": None, "status": "searching"}
+        _, push_calls = await self._send("user_1", ride, driver_row=None)
+        assert not push_calls, "Push should not fire when no driver is assigned"
+
+    def test_push_data_values_are_strings(self):
+        """FCM requires all data values to be strings."""
+        data = {"type": "chat_message", "ride_id": "ride_1", "deeplink": "/chat-driver?rideId=ride_1"}
+        for k, v in data.items():
+            assert isinstance(v, str), f"data[{k!r}] must be a string for FCM, got {type(v)}"

@@ -12,7 +12,9 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRideStore } from '../store/rideStore';
+import type { ChatMessage } from '../store/rideStore';
 import api from '@shared/api/client';
 import { showToast } from '../store/toastStore';
 import { useTheme } from '@shared/theme/ThemeContext';
@@ -33,24 +35,59 @@ export default function ChatDriverScreen() {
   const scrollViewRef = useRef<ScrollView>(null);
   const [message, setMessage] = useState('');
   const [sending, setSending] = useState(false);
+  // Tracks when the initial AsyncStorage read has completed so the persist
+  // effect knows it is safe to write an empty array without clobbering a
+  // warm cache that hasn't been loaded into the store yet.
+  const cacheReadDoneRef = useRef(false);
 
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
 
-  // Load chat history from the backend on mount.
+  const CHAT_STORAGE_KEY = rideId ? `spinr_chat_rider_${rideId}` : null;
+
+  // Load chat history: AsyncStorage first (instant), then backend (authoritative).
   useEffect(() => {
     if (!rideId) { router.replace('/(tabs)' as any); return; }
+    cacheReadDoneRef.current = false;
     (async () => {
+      // 1. Seed from local cache for instant render
       try {
-        const res = await api.get<{ messages: unknown[] }>(`/rides/${rideId}/messages`);
-        if (res.data?.messages) {
-          setChatMessages(res.data.messages as import('../store/rideStore').ChatMessage[]);
+        if (CHAT_STORAGE_KEY) {
+          const saved = await AsyncStorage.getItem(CHAT_STORAGE_KEY);
+          if (saved) setChatMessages(JSON.parse(saved) as ChatMessage[]);
+        }
+      } catch (e) {
+        console.log('[Chat] Cache read failed:', e);
+      }
+      cacheReadDoneRef.current = true;
+      // 2. Fetch authoritative history from backend (always authoritative —
+      //    replace cache even when server returns empty array, so stale data
+      //    from a previous ride is not shown to the user).
+      try {
+        const res = await api.get<{ messages: ChatMessage[] }>(`/rides/${rideId}/messages`);
+        if (res.data?.messages !== undefined) {
+          setChatMessages(res.data.messages);
+          if (CHAT_STORAGE_KEY) {
+            AsyncStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(res.data.messages)).catch(() => {});
+          }
         }
       } catch (e) {
         console.log('[Chat] Failed to load history:', e);
       }
     })();
   }, [rideId]);
+
+  // Persist to AsyncStorage whenever the store updates. Filter to only this
+  // ride's messages to prevent cross-ride contamination when rideId changes.
+  // Guard: skip writing an empty array before the initial cache read completes
+  // to avoid clobbering a warm cache. After that, always persist — including
+  // empty arrays — so failed-send rollbacks flush stale phantom messages from cache.
+  useEffect(() => {
+    if (!CHAT_STORAGE_KEY || !rideId) return;
+    const rideMessages = chatMessages.filter((m) => m.ride_id === rideId);
+    if (!cacheReadDoneRef.current && rideMessages.length === 0) return;
+    AsyncStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(rideMessages)).catch(() => {});
+  }, [chatMessages, CHAT_STORAGE_KEY, rideId]);
 
   // Scroll to bottom when new messages arrive (via WS or local send).
   useEffect(() => {
@@ -97,9 +134,10 @@ export default function ChatDriverScreen() {
     setSending(true);
     setMessage('');
 
-    const optimisticId = `local-${Date.now()}`;
+    const optimisticId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     addChatMessage({
       id: optimisticId,
+      ride_id: rideId,
       text: trimmed,
       sender: 'rider',
       timestamp: new Date().toISOString(),
@@ -108,7 +146,7 @@ export default function ChatDriverScreen() {
     try {
       const res = await api.post<{ message?: unknown }>(`/rides/${rideId}/messages`, { text: trimmed });
       if (res.data?.message) {
-        const serverMsg = res.data.message as import('../store/rideStore').ChatMessage;
+        const serverMsg = res.data.message as ChatMessage;
         const current = useRideStore.getState().chatMessages;
         setChatMessages(
           current

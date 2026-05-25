@@ -163,8 +163,12 @@ export function useRiderSocket() {
 
       // Chat — push into the store so the chat screen updates live.
       case 'chat_message':
-        console.log('[WS] Chat message received:', data.text?.slice(0, 40));
-        useRideStore.getState().addChatMessage(data);
+        if (typeof data.text === 'string' && typeof data.sender === 'string') {
+          useRideStore.getState().addChatMessage(data as import('../store/rideStore').ChatMessage);
+          Vibration.vibrate(100);
+        } else {
+          console.warn('[WS] Malformed chat_message payload:', data);
+        }
         break;
 
       case 'auth_success':

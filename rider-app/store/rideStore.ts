@@ -158,9 +158,10 @@ interface Promo {
 
 export interface ChatMessage {
   id: string;
+  ride_id: string;
   text: string;
-  sender: string;
-  [key: string]: unknown;
+  sender: 'rider' | 'driver';
+  timestamp: string;
 }
 
 interface RideState {

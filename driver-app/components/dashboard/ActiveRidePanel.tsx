@@ -14,6 +14,7 @@ import {
   ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
@@ -99,6 +100,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
   distanceToPickup,
 }) => {
   // All hooks MUST be before any early return to avoid React ordering issues
+  const router = useRouter();
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
   const { t } = useLanguageStore();
@@ -288,7 +290,12 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
               </View>
             ) : null}
           </View>
-          <TouchableOpacity style={styles.chatBtn} accessibilityRole="button" accessibilityLabel={`Message ${riderName}`}>
+          <TouchableOpacity
+            style={styles.chatBtn}
+            accessibilityRole="button"
+            accessibilityLabel={`Message ${riderName}`}
+            onPress={() => router.push(`/driver/chat?rideId=${ride.id}` as any)}
+          >
             <Ionicons name="chatbubble-ellipses" size={18} color={colors.primary} />
           </TouchableOpacity>
         </View>

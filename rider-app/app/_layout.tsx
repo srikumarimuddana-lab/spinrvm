@@ -63,6 +63,11 @@ function routeFromNotificationData(data: Record<string, string> | undefined) {
     case 'ride_cancelled':
       router.replace('/(tabs)' as any);
       break;
+    case 'chat_message':
+      if (data?.ride_id) {
+        router.push({ pathname: '/chat-driver', params: { rideId: ride_id } } as any);
+      }
+      break;
     default:
       break;
   }

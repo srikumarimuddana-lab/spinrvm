@@ -4,7 +4,6 @@ P2-13: Chat E2E — rider ↔ driver messaging (R7, D11)
 Backend chat is fully implemented:
   POST /{ride_id}/messages  — persists + WS-forwards
   GET  /{ride_id}/messages  — history for participants
-  GET  /{ride_id}/chat-status — availability check
 
 These tests pin:
   - Rider sends → persisted in ride_messages, driver notified via WS
@@ -310,3 +309,224 @@ class TestGetRideMessages:
                 )
 
         assert exc_info.value.status_code == 403
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /{ride_id}/messages — driver-side parity
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestGetRideMessagesDriver:
+    """Driver can also fetch the message history for their assigned ride."""
+
+    async def test_driver_can_fetch_message_history(self):
+        from backend.routes import rides as rides_mod
+
+        ride = _ride("in_progress")
+        msgs = [
+            {
+                "id": "m1",
+                "ride_id": RIDE_ID,
+                "text": "Hello driver",
+                "sender": "rider",
+                "timestamp": "2026-05-24T10:00:00+00:00",
+            },
+            {
+                "id": "m2",
+                "ride_id": RIDE_ID,
+                "text": "On my way",
+                "sender": "driver",
+                "timestamp": "2026-05-24T10:01:00+00:00",
+            },
+        ]
+
+        async def _get_rows(table, query, **kwargs):
+            if table == "drivers":
+                return [_driver_row(user_id=DRIVER_USER_ID)]
+            if table == "ride_messages":
+                return msgs
+            return []
+
+        with (
+            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+        ):
+            result = await rides_mod.get_ride_messages(
+                ride_id=RIDE_ID,
+                current_user={"id": DRIVER_USER_ID},
+            )
+
+        assert result["success"] is True
+        assert len(result["messages"]) == 2
+        assert result["messages"][0]["sender"] == "rider"
+        assert result["messages"][1]["sender"] == "driver"
+
+    async def test_messages_returned_oldest_first(self):
+        """GET passes through db ordering (desc=False); verify list preserved."""
+        from backend.routes import rides as rides_mod
+
+        ride = _ride("in_progress")
+        msgs = [
+            {
+                "id": "a",
+                "ride_id": RIDE_ID,
+                "text": "first",
+                "sender": "rider",
+                "timestamp": "2026-05-24T09:00:00+00:00",
+            },
+            {
+                "id": "b",
+                "ride_id": RIDE_ID,
+                "text": "second",
+                "sender": "driver",
+                "timestamp": "2026-05-24T09:01:00+00:00",
+            },
+            {
+                "id": "c",
+                "ride_id": RIDE_ID,
+                "text": "third",
+                "sender": "rider",
+                "timestamp": "2026-05-24T09:02:00+00:00",
+            },
+        ]
+
+        async def _get_rows(table, query, **kwargs):
+            if table == "drivers":
+                return []
+            return msgs
+
+        with (
+            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+        ):
+            result = await rides_mod.get_ride_messages(ride_id=RIDE_ID, current_user={"id": RIDER_ID})
+
+        assert [m["text"] for m in result["messages"]] == ["first", "second", "third"]
+
+    async def test_empty_history_returns_empty_list(self):
+        from backend.routes import rides as rides_mod
+
+        ride = _ride("driver_accepted")
+
+        async def _get_rows(table, query, **kwargs):
+            return []
+
+        with (
+            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride)),
+            patch("backend.routes.rides.db_supabase.get_rows", AsyncMock(side_effect=_get_rows)),
+        ):
+            result = await rides_mod.get_ride_messages(ride_id=RIDE_ID, current_user={"id": RIDER_ID})
+
+        assert result["success"] is True
+        assert result["messages"] == []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Message text validation
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestMessageTextValidation:
+    """SendMessageRequest Pydantic model enforces 1–500 character bounds."""
+
+    def test_empty_text_rejected(self):
+        from pydantic import ValidationError
+
+        from backend.routes.rides import SendMessageRequest
+
+        with pytest.raises(ValidationError):
+            SendMessageRequest(text="")
+
+    def test_single_char_accepted(self):
+        from backend.routes.rides import SendMessageRequest
+
+        req = SendMessageRequest(text="x")
+        assert req.text == "x"
+
+    def test_500_char_text_accepted(self):
+        from backend.routes.rides import SendMessageRequest
+
+        req = SendMessageRequest(text="a" * 500)
+        assert len(req.text) == 500
+
+    def test_501_char_text_rejected(self):
+        from pydantic import ValidationError
+
+        from backend.routes.rides import SendMessageRequest
+
+        with pytest.raises(ValidationError):
+            SendMessageRequest(text="a" * 501)
+
+    def test_emoji_and_unicode_accepted(self):
+        from backend.routes.rides import SendMessageRequest
+
+        req = SendMessageRequest(text="👋 Héllo wörld — je suis là!")
+        assert "👋" in req.text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Sender identity correctness
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestRideSenderIdentity:
+    """Backend derives sender role from authenticated user identity."""
+
+    async def _send_as(self, user_id: str, ride, driver_row=None):
+        from backend.routes import rides as rides_mod
+
+        class _Body:
+            text = "test"
+
+        ws_calls: list = []
+        inserted: list = []
+
+        async def _capture_ws(message, channel):
+            ws_calls.append((channel, message))
+
+        async def _insert(table, row):
+            inserted.append(row)
+
+        find_sequence = [ride, driver_row]
+        if driver_row and ride.get("driver_id"):
+            find_sequence.append(driver_row)
+
+        with (
+            patch("backend.routes.rides.db.find_one", AsyncMock(side_effect=find_sequence)),
+            patch("backend.routes.rides.db.insert_one", AsyncMock(side_effect=_insert)),
+            patch("backend.routes.rides.manager.send_personal_message", AsyncMock(side_effect=_capture_ws)),
+        ):
+            result = await rides_mod.send_ride_message(ride_id=RIDE_ID, body=_Body(), current_user={"id": user_id})
+        return result, ws_calls, inserted
+
+    async def test_rider_identity_tagged_correctly(self):
+        ride = _ride("in_progress")
+        result, ws_calls, inserted = await self._send_as(RIDER_ID, ride, driver_row=_driver_row())
+        assert inserted[0]["sender"] == "rider"
+        assert any(f"driver_{DRIVER_USER_ID}" in str(ch) for ch, _ in ws_calls)
+
+    async def test_driver_identity_tagged_correctly(self):
+        ride = _ride("in_progress")
+        result, ws_calls, inserted = await self._send_as(
+            DRIVER_USER_ID, ride, driver_row=_driver_row(user_id=DRIVER_USER_ID)
+        )
+        assert inserted[0]["sender"] == "driver"
+        assert any(f"rider_{RIDER_ID}" in str(ch) for ch, _ in ws_calls)
+
+    async def test_message_not_forwarded_when_no_driver_assigned(self):
+        """Rider sends on a searching ride — no driver yet, so WS target is None."""
+        ride = {
+            "id": RIDE_ID,
+            "rider_id": RIDER_ID,
+            "driver_id": None,
+            "status": "searching",
+            "pickup_address": "A",
+            "dropoff_address": "B",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        result, ws_calls, inserted = await self._send_as(RIDER_ID, ride, driver_row=None)
+        assert result["success"] is True
+        assert inserted[0]["sender"] == "rider"
+        assert not any("driver_" in str(ch) for ch, _ in ws_calls)

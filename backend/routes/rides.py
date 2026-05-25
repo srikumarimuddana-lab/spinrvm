@@ -3833,6 +3833,45 @@ async def rider_complete_ride(
         driver_row = await db_supabase.get_driver_by_id(driver_id)
         driver_user_id = driver_row.get("user_id") if driver_row else None
 
+    # ── Record incentive claims (same logic as drivers.py complete_ride) ──
+    if driver_id:
+        try:
+            sa_id = ride.get("service_area_id")
+            vt_id = ride.get("vehicle_type_id")
+            iq = (
+                db_supabase.supabase.table("ride_incentives")
+                .select("id, bonus_amount, vehicle_type_id")
+                .eq("is_active", True)
+            )
+            if sa_id:
+                iq = iq.or_(f"service_area_id.is.null,service_area_id.eq.{sa_id}")
+            else:
+                iq = iq.is_("service_area_id", "null")
+            inc_result = await db_supabase.run_sync(iq.execute)
+            for inc in inc_result.data or []:
+                if inc.get("vehicle_type_id") and inc["vehicle_type_id"] != vt_id:
+                    continue
+                ba = Decimal(str(inc.get("bonus_amount") or 0))
+                if ba <= 0:
+                    continue
+                await db_supabase.insert_one(
+                    "ride_incentive_claims",
+                    {
+                        "id": str(uuid.uuid4()),
+                        "ride_id": ride_id,
+                        "driver_id": driver_id,
+                        "incentive_id": inc["id"],
+                        "bonus_amount": float(ba.quantize(Decimal("0.01"))),
+                        "claimed_at": now.isoformat(),
+                    },
+                )
+        except Exception:
+            logger.error(
+                "rider_complete_ride: incentive claim failed for ride %s",
+                ride_id,
+                exc_info=True,
+            )
+
     completed_ride = await db_supabase.get_ride(ride_id)
     total_fare = (completed_ride or {}).get("total_fare", ride.get("total_fare", 0))
     rider_bill = (completed_ride or {}).get("grand_total") or total_fare

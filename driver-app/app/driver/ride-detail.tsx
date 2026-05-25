@@ -297,41 +297,29 @@ export default function RideDetailScreen() {
                             <View style={styles.card}>
                                 <Text style={styles.cardTitle}>Your Earnings</Text>
 
-                                <View style={styles.fareRow}>
-                                    <Text style={styles.fareLabel}>Base Fare</Text>
-                                    <Text style={styles.fareValue}>
-                                        ${parseFloat(ride.base_fare || '0').toFixed(2)}
-                                    </Text>
-                                </View>
-
-                                {parseFloat(ride.distance_fare || '0') > 0 && (
-                                    <View style={styles.fareRow}>
-                                        <Text style={styles.fareLabel}>Distance</Text>
-                                        <Text style={styles.fareValue}>
-                                            ${parseFloat(ride.distance_fare || '0').toFixed(2)}
-                                        </Text>
-                                    </View>
-                                )}
-
-                                {parseFloat(ride.time_fare || '0') > 0 && (
-                                    <View style={styles.fareRow}>
-                                        <Text style={styles.fareLabel}>Time</Text>
-                                        <Text style={styles.fareValue}>
-                                            ${parseFloat(ride.time_fare || '0').toFixed(2)}
-                                        </Text>
-                                    </View>
-                                )}
-
-                                {parseFloat(ride.surge_multiplier || '1') > 1 && (
-                                    <View style={styles.fareRow}>
-                                        <Text style={[styles.fareLabel, { color: '#FF9500' }]}>
-                                            Surge ({parseFloat(ride.surge_multiplier || '1').toFixed(1)}×)
-                                        </Text>
-                                        <Text style={[styles.fareValue, { color: '#FF9500' }]}>
-                                            Included
-                                        </Text>
-                                    </View>
-                                )}
+                                {/* Ride Fare = exactly what the rider was charged for the trip
+                                    (base + distance + time, all locked at booking). This single
+                                    line matches the "Ride fare" the rider sees on their receipt
+                                    so the driver can verify they received 100% of it. */}
+                                {(() => {
+                                    const rideFare = parseFloat(ride.base_fare || '0')
+                                        + parseFloat(ride.distance_fare || '0')
+                                        + parseFloat(ride.time_fare || '0');
+                                    const distKm = parseFloat(ride.distance_km || '0').toFixed(1);
+                                    const surge = parseFloat(ride.surge_multiplier || '1');
+                                    return (
+                                        <>
+                                            <View style={styles.fareRow}>
+                                                <Text style={styles.fareLabel}>
+                                                    Ride Fare ({distKm} km){surge > 1 ? ` · ${surge.toFixed(1)}× surge` : ''}
+                                                </Text>
+                                                <Text style={styles.fareValue}>
+                                                    ${rideFare.toFixed(2)}
+                                                </Text>
+                                            </View>
+                                        </>
+                                    );
+                                })()}
 
                                 {parseFloat(ride.tip_amount || '0') > 0 && (
                                     <View style={styles.fareRow}>

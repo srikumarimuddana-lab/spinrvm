@@ -76,6 +76,7 @@
     },
     "tripCompleted": {
         "title": "Course terminée !",
+        "rideFare": "Tarif de course",
         "baseFare": "Tarif de base",
         "distanceFare": "Distance",
         "timeFare": "Temps",

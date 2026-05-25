@@ -76,6 +76,7 @@
     },
     "tripCompleted": {
         "title": "¡Viaje completado!",
+        "rideFare": "Tarifa del viaje",
         "baseFare": "Tarifa base",
         "distanceFare": "Distancia",
         "timeFare": "Tiempo",

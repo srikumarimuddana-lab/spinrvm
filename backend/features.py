@@ -1290,17 +1290,27 @@ async def send_push_notification(
                 channel_id=android_channel,
             ),
         )
+        apns_cfg = messaging.APNSConfig(
+            headers={
+                "apns-priority": "10" if not is_dispatch else "5",
+                "apns-push-type": "alert",
+            },
+            payload=messaging.APNSPayload(
+                aps=messaging.Aps(
+                    sound="default",
+                    # Dispatch is data-only on Android (Notifee); iOS still needs
+                    # an alert so the driver sees the offer on lock screen.
+                    alert=messaging.ApsAlert(title=title, body=body) if not is_dispatch else None,
+                    content_available=True,
+                ),
+            ),
+        )
         message = messaging.Message(
             notification=None if is_dispatch else messaging.Notification(title=title, body=body),
             data=data or {},
             token=token,
             android=android_cfg,
-            apns=messaging.APNSConfig(
-                headers={
-                    "apns-priority": "10",
-                    "apns-push-type": "alert",
-                },
-            ),
+            apns=apns_cfg,
         )
         response = await asyncio.to_thread(messaging.send, message)
         logger.info(f"Push notification sent to {user_id}: {response} (dispatch={is_dispatch})")

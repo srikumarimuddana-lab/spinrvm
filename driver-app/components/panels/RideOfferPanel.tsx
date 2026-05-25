@@ -212,10 +212,10 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                                     <>
                                         <View style={styles.metricItemDivider} />
                                         <View style={styles.metricItem}>
-                                            <Text style={[styles.metricValue, { color: ACCENT_DARK }]}>
-                                                ${(baseFare / incomingRide.distance_km!).toFixed(2)}
+                                            <Text style={[styles.metricValue, { color: hasBonus ? GOLD : ACCENT_DARK }]}>
+                                                ${((baseFare + totalBonus) / incomingRide.distance_km!).toFixed(2)}
                                             </Text>
-                                            <Text style={[styles.metricUnit, { color: ACCENT_DARK }]}>/km</Text>
+                                            <Text style={[styles.metricUnit, { color: hasBonus ? GOLD : ACCENT_DARK }]}>/km</Text>
                                         </View>
                                     </>
                                 )}

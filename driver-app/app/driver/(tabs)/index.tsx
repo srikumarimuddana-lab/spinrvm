@@ -759,7 +759,10 @@ function DriverDashboard() {
           isLoading={isCancellingRide}
           otpInput={otpInput}
           setOtpInput={setOtpInput}
-          onVerifyOTP={(otp) => verifyOTP(activeRide!.ride.id, otp)}
+          onVerifyOTP={async (otp) => {
+            const ok = await verifyOTP(activeRide!.ride.id, otp);
+            if (!ok) setOtpInput('');
+          }}
           onNavigate={openNavigation}
           // Pass current coordinates so driverStore.arriveAtPickup can run
           // its 100m haversine geofence check. Without the coords the check

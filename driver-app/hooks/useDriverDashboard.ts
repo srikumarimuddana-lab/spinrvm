@@ -170,6 +170,21 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
   const [location, setLocation] = useState<Location.LocationObject | null>(null);
   const [otpInput, setOtpInput] = useState('');
+
+  // Clear OTP input when ride state changes away from arrived_at_pickup
+  // (e.g. trip started, ride cancelled, new ride begins). This prevents
+  // stale digits from the previous ride lingering in the OTP boxes.
+  const prevRideStateRef = useRef(rideState);
+  useEffect(() => {
+    const prev = prevRideStateRef.current;
+    prevRideStateRef.current = rideState;
+    if (prev === 'arrived_at_pickup' && rideState !== 'arrived_at_pickup') {
+      setOtpInput('');
+    }
+    if (rideState === 'navigating_to_pickup' && prev !== 'navigating_to_pickup') {
+      setOtpInput('');
+    }
+  }, [rideState]);
   const [wsError, setWsError] = useState<string | null>(null);
   const [wsLatency, setWsLatency] = useState<number | null>(null);
 

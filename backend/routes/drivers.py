@@ -3497,9 +3497,18 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
 
     # Fire-and-forget: render the route PNG from phase_polylines and
     # upload to Supabase Storage so the admin drawer + email receipt can
-    # embed a permanent image URL. Only regenerate if we have actual GPS
-    # data — otherwise preserve the planned-route snapshot from creation.
-    has_gps_trail = bool(route_polyline) or any(bool(v) for v in phase_polylines.values())
+    # embed a permanent image URL. Only regenerate if we have enough GPS
+    # data to produce a meaningful route — otherwise preserve the planned-
+    # route snapshot from creation (which used the Google Directions polyline).
+    # Threshold mirrors the distance-calculation guard: < 5 trip_in_progress
+    # points means the breadcrumb trail is essentially a straight line and
+    # the planned-route image will be more accurate than the GPS trace.
+    trip_points_for_snapshot = sum(
+        1
+        for b in (all_breadcrumbs if "all_breadcrumbs" in locals() else [])
+        if b.get("tracking_phase") == "trip_in_progress"
+    )
+    has_gps_trail = trip_points_for_snapshot >= 5
     if has_gps_trail:
         asyncio.create_task(
             _generate_and_store_ride_snapshot(
@@ -3511,6 +3520,11 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
                 phase_polylines=phase_polylines,
                 route_polyline=route_polyline,
             )
+        )
+    else:
+        logger.info(
+            f"Ride {ride_id}: skipping completion snapshot ({trip_points_for_snapshot} GPS points) "
+            "— planned-route snapshot from creation is preserved."
         )
 
     # Fire-and-forget: validate GPS trace against road network.

@@ -775,10 +775,13 @@ function DriverDashboard() {
           )}
           onStartRide={() => startRide(activeRide!.ride.id)}
           onCompleteRide={async () => {
-            // Flush any buffered GPS points before completing so the backend
-            // has a full breadcrumb trail for accurate distance calculation.
-            await uploadLocationBatch();
-            completeRide(activeRide!.ride.id);
+            if (!activeRide) return;
+            const rideId = activeRide.ride.id;
+            // Flush buffered GPS before completing so backend has a full
+            // breadcrumb trail. Errors are swallowed — a failed upload must
+            // not block the driver from completing the ride.
+            await uploadLocationBatch().catch(() => {});
+            await completeRide(rideId);
           }}
           onCancelRide={() => cancelRide(activeRide!.ride.id)}
           routeEtaMinutes={routeEtaMinutes}

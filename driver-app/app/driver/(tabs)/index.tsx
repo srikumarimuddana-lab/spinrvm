@@ -88,6 +88,7 @@ function DriverDashboard() {
     setOtpInput,
     toggleOnline,
     openNavigation,
+    uploadLocationBatch,
     mapRef,
     currentRegionRef,
     pulseAnim,
@@ -773,7 +774,12 @@ function DriverDashboard() {
             location?.coords.longitude,
           )}
           onStartRide={() => startRide(activeRide!.ride.id)}
-          onCompleteRide={() => completeRide(activeRide!.ride.id)}
+          onCompleteRide={async () => {
+            // Flush any buffered GPS points before completing so the backend
+            // has a full breadcrumb trail for accurate distance calculation.
+            await uploadLocationBatch();
+            completeRide(activeRide!.ride.id);
+          }}
           onCancelRide={() => cancelRide(activeRide!.ride.id)}
           routeEtaMinutes={routeEtaMinutes}
           routeDistanceKm={routeDistanceKm}

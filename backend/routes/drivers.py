@@ -3190,12 +3190,19 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             # rather than showing a misleadingly short GPS value.
             trip_points_count = sum(1 for b in all_breadcrumbs if b.get("tracking_phase") == "trip_in_progress")
             actual_distance_km = round(phase_distances.get("trip_in_progress", 0.0), 2)
-            if actual_distance_km == 0 or trip_points_count < 5:
-                if trip_points_count < 5:
-                    logger.warning(
-                        f"Ride {ride_id}: only {trip_points_count} trip_in_progress GPS points "
-                        f"— GPS data too sparse for accurate distance; keeping planned={planned_distance}km"
-                    )
+            if trip_points_count < 5:
+                logger.warning(
+                    f"Ride {ride_id}: only {trip_points_count} trip_in_progress GPS points "
+                    f"— GPS data too sparse for accurate distance; keeping planned={planned_distance}km"
+                )
+                actual_distance_km = planned_distance
+            elif actual_distance_km == 0:
+                # >= 5 points recorded but every segment was rejected by the
+                # speed/distance/gap caps (e.g. GPS dead zone, spoofed trace).
+                logger.warning(
+                    f"Ride {ride_id}: {trip_points_count} trip_in_progress GPS points but all "
+                    f"segments rejected by anomaly filter — keeping planned={planned_distance}km"
+                )
                 actual_distance_km = planned_distance
 
             pickup_to_driver_km = round(phase_distances.get("navigating_to_pickup", 0.0), 2)
@@ -3442,7 +3449,10 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
 
     # ── Record incentive claims ──────────────────────────────────
     # Fetch active incentives matching this ride's service area / vehicle type
-    # and create claim records + update driver_earnings with the bonus.
+    # and insert claim records into ride_incentive_claims. driver_earnings in
+    # the rides table is NOT updated here — it holds the fare-only amount
+    # (base + distance + time). The bonus is summed from ride_incentive_claims
+    # at read time by get_ride() and exposed as incentive_amount / total_earned.
     try:
         sa_id = ride.get("service_area_id")
         vt_id = ride.get("vehicle_type_id")

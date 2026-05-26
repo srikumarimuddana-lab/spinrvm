@@ -208,14 +208,14 @@ export const RideOfferPanel: React.FC<RideOfferPanelProps> = ({
                                     <Text style={styles.metricValue}>{Math.round(incomingRide.duration_minutes || 0)}</Text>
                                     <Text style={styles.metricUnit}>min</Text>
                                 </View>
-                                {incomingRide.distance_km && incomingRide.distance_km > 0 && (
+                                {(incomingRide.distance_km ?? 0) > 0 && (
                                     <>
                                         <View style={styles.metricItemDivider} />
                                         <View style={styles.metricItem}>
-                                            <Text style={[styles.metricValue, { color: ACCENT_DARK }]}>
-                                                ${(totalEarnings / incomingRide.distance_km).toFixed(2)}
+                                            <Text style={[styles.metricValue, { color: hasBonus ? GOLD : ACCENT_DARK }]}>
+                                                ${((baseFare + totalBonus) / incomingRide.distance_km!).toFixed(2)}
                                             </Text>
-                                            <Text style={[styles.metricUnit, { color: ACCENT_DARK }]}>/km</Text>
+                                            <Text style={[styles.metricUnit, { color: hasBonus ? GOLD : ACCENT_DARK }]}>/km</Text>
                                         </View>
                                     </>
                                 )}

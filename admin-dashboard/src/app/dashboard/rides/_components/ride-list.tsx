@@ -403,9 +403,9 @@ export default function RideList({
                                         {(() => {
                                             const { toPickupKm, tripKm } = rideDistances(ride);
                                             const planned = ride.planned_distance_km != null ? Number(ride.planned_distance_km) : null;
-                                            // Three explicit numbers per SGI/ops request: planned vs
-                                            // actual driver→pickup vs actual pickup→dropoff.
-                                            // Each row falls back to "—" so missing data is obvious.
+                                            const actualSecs = ride.phase_durations?.trip_in_progress ?? null;
+                                            const actualMin = actualSecs != null ? Math.round(actualSecs / 60) : null;
+                                            const estMin = ride.duration_minutes ?? null;
                                             const Row = ({ k, label, accent }: { k: number | null; label: string; accent?: boolean }) => (
                                                 <div className="flex items-center justify-end gap-1.5 leading-tight">
                                                     <span className={`text-[10px] uppercase tracking-wide ${accent ? "text-foreground/60 font-semibold" : "text-muted-foreground"}`}>
@@ -421,6 +421,12 @@ export default function RideList({
                                                     <Row k={planned} label="Plan" />
                                                     <Row k={toPickupKm} label="Pickup" />
                                                     <Row k={tripKm} label="Trip" accent />
+                                                    <div className="flex items-center justify-end gap-1.5 leading-tight mt-0.5 pt-0.5 border-t border-border/40">
+                                                        <span className="text-[10px] uppercase tracking-wide text-emerald-600 dark:text-emerald-400 font-semibold">Time</span>
+                                                        <span className="text-xs font-bold whitespace-nowrap text-emerald-700 dark:text-emerald-300">
+                                                            {actualMin != null ? `${actualMin} min` : estMin != null ? `~${estMin} min` : "—"}
+                                                        </span>
+                                                    </div>
                                                 </div>
                                             );
                                         })()}

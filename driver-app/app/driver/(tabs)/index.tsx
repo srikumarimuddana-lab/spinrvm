@@ -88,6 +88,7 @@ function DriverDashboard() {
     setOtpInput,
     toggleOnline,
     openNavigation,
+    uploadLocationBatch,
     mapRef,
     currentRegionRef,
     pulseAnim,
@@ -773,7 +774,15 @@ function DriverDashboard() {
             location?.coords.longitude,
           )}
           onStartRide={() => startRide(activeRide!.ride.id)}
-          onCompleteRide={() => completeRide(activeRide!.ride.id)}
+          onCompleteRide={async () => {
+            if (!activeRide) return;
+            const rideId = activeRide.ride.id;
+            // Flush buffered GPS before completing so backend has a full
+            // breadcrumb trail. Errors are swallowed — a failed upload must
+            // not block the driver from completing the ride.
+            await uploadLocationBatch().catch(() => {});
+            await completeRide(rideId);
+          }}
           onCancelRide={() => cancelRide(activeRide!.ride.id)}
           routeEtaMinutes={routeEtaMinutes}
           routeDistanceKm={routeDistanceKm}

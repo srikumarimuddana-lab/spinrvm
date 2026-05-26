@@ -424,7 +424,7 @@ export default function RideDetailScreen() {
                     <View style={styles.card}>
                         <Text style={styles.cardTitle}>Trip Timeline</Text>
                         {(() => {
-                            const fmtTime = (t: string) => {
+                            const fmtTS = (t: string) => {
                                 const d = new Date(t);
                                 return isNaN(d.getTime()) ? '' : d.toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
                             };
@@ -437,30 +437,30 @@ export default function RideDetailScreen() {
                             };
                             type TLStep = { label: string; sub: string; time: string; dot: string; isCancelled?: boolean };
                             const steps: TLStep[] = [
-                                ride.created_at && { label: 'Ride Requested', sub: fmtTime(ride.created_at), time: ride.created_at, dot: '#6B7280' },
+                                ride.created_at && { label: 'Ride Requested', sub: fmtTS(ride.created_at), time: ride.created_at, dot: '#6B7280' },
                                 ride.driver_accepted_at && {
                                     label: 'You Accepted',
-                                    sub: [fmtTime(ride.driver_accepted_at), ride.created_at && elapsed(ride.created_at, ride.driver_accepted_at) && `${elapsed(ride.created_at, ride.driver_accepted_at)} after request`].filter(Boolean).join('  ·  '),
+                                    sub: [fmtTS(ride.driver_accepted_at), ride.created_at && elapsed(ride.created_at, ride.driver_accepted_at) && `${elapsed(ride.created_at, ride.driver_accepted_at)} after request`].filter(Boolean).join('  ·  '),
                                     time: ride.driver_accepted_at, dot: '#3B82F6',
                                 },
                                 ride.driver_arrived_at && {
                                     label: 'Arrived at Pickup',
-                                    sub: [fmtTime(ride.driver_arrived_at), ride.driver_accepted_at && elapsed(ride.driver_accepted_at, ride.driver_arrived_at) && `${elapsed(ride.driver_accepted_at, ride.driver_arrived_at)} drive to pickup`].filter(Boolean).join('  ·  '),
+                                    sub: [fmtTS(ride.driver_arrived_at), ride.driver_accepted_at && elapsed(ride.driver_accepted_at, ride.driver_arrived_at) && `${elapsed(ride.driver_accepted_at, ride.driver_arrived_at)} drive to pickup`].filter(Boolean).join('  ·  '),
                                     time: ride.driver_arrived_at, dot: '#8B5CF6',
                                 },
                                 ride.ride_started_at && {
                                     label: 'Trip Started',
-                                    sub: [fmtTime(ride.ride_started_at), ride.driver_arrived_at && elapsed(ride.driver_arrived_at, ride.ride_started_at) && `${elapsed(ride.driver_arrived_at, ride.ride_started_at)} wait`].filter(Boolean).join('  ·  '),
+                                    sub: [fmtTS(ride.ride_started_at), ride.driver_arrived_at && elapsed(ride.driver_arrived_at, ride.ride_started_at) && `${elapsed(ride.driver_arrived_at, ride.ride_started_at)} wait`].filter(Boolean).join('  ·  '),
                                     time: ride.ride_started_at, dot: '#F59E0B',
                                 },
                                 ride.ride_completed_at && {
                                     label: 'Trip Completed',
-                                    sub: [fmtTime(ride.ride_completed_at), ride.ride_started_at && elapsed(ride.ride_started_at, ride.ride_completed_at) && `${elapsed(ride.ride_started_at, ride.ride_completed_at)} trip`].filter(Boolean).join('  ·  '),
+                                    sub: [fmtTS(ride.ride_completed_at), ride.ride_started_at && elapsed(ride.ride_started_at, ride.ride_completed_at) && `${elapsed(ride.ride_started_at, ride.ride_completed_at)} trip`].filter(Boolean).join('  ·  '),
                                     time: ride.ride_completed_at, dot: '#10B981',
                                 },
                                 ride.cancelled_at && {
                                     label: 'Cancelled',
-                                    sub: fmtTime(ride.cancelled_at),
+                                    sub: fmtTS(ride.cancelled_at),
                                     time: ride.cancelled_at, dot: '#EF4444', isCancelled: true,
                                 },
                             ].filter(Boolean) as TLStep[];

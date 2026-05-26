@@ -266,7 +266,14 @@ export default function RideDetailScreen() {
                         <View style={styles.statDivider} />
                         <View style={styles.stat}>
                             <Ionicons name="time" size={20} color="#FF9500" />
-                            <Text style={styles.statValue}>{ride.duration_minutes || 0} min</Text>
+                            <Text style={styles.statValue}>
+                                {ride.ride_started_at && ride.ride_completed_at
+                                    ? (() => {
+                                        const m = Math.round((new Date(ride.ride_completed_at).getTime() - new Date(ride.ride_started_at).getTime()) / 60000);
+                                        return isNaN(m) || m < 1 ? '< 1' : m;
+                                    })()
+                                    : (ride.duration_minutes || 0)} min
+                            </Text>
                             <Text style={styles.statLabel}>Duration</Text>
                         </View>
                         <View style={styles.statDivider} />
@@ -297,41 +304,29 @@ export default function RideDetailScreen() {
                             <View style={styles.card}>
                                 <Text style={styles.cardTitle}>Your Earnings</Text>
 
-                                <View style={styles.fareRow}>
-                                    <Text style={styles.fareLabel}>Base Fare</Text>
-                                    <Text style={styles.fareValue}>
-                                        ${parseFloat(ride.base_fare || '0').toFixed(2)}
-                                    </Text>
-                                </View>
-
-                                {parseFloat(ride.distance_fare || '0') > 0 && (
-                                    <View style={styles.fareRow}>
-                                        <Text style={styles.fareLabel}>Distance</Text>
-                                        <Text style={styles.fareValue}>
-                                            ${parseFloat(ride.distance_fare || '0').toFixed(2)}
-                                        </Text>
-                                    </View>
-                                )}
-
-                                {parseFloat(ride.time_fare || '0') > 0 && (
-                                    <View style={styles.fareRow}>
-                                        <Text style={styles.fareLabel}>Time</Text>
-                                        <Text style={styles.fareValue}>
-                                            ${parseFloat(ride.time_fare || '0').toFixed(2)}
-                                        </Text>
-                                    </View>
-                                )}
-
-                                {parseFloat(ride.surge_multiplier || '1') > 1 && (
-                                    <View style={styles.fareRow}>
-                                        <Text style={[styles.fareLabel, { color: '#FF9500' }]}>
-                                            Surge ({parseFloat(ride.surge_multiplier || '1').toFixed(1)}×)
-                                        </Text>
-                                        <Text style={[styles.fareValue, { color: '#FF9500' }]}>
-                                            Included
-                                        </Text>
-                                    </View>
-                                )}
+                                {/* Ride Fare = exactly what the rider was charged for the trip
+                                    (base + distance + time, all locked at booking). This single
+                                    line matches the "Ride fare" the rider sees on their receipt
+                                    so the driver can verify they received 100% of it. */}
+                                {(() => {
+                                    const rideFare = parseFloat(ride.base_fare || '0')
+                                        + parseFloat(ride.distance_fare || '0')
+                                        + parseFloat(ride.time_fare || '0');
+                                    const distKm = parseFloat(ride.distance_km || '0').toFixed(1);
+                                    const surge = parseFloat(ride.surge_multiplier || '1');
+                                    return (
+                                        <>
+                                            <View style={styles.fareRow}>
+                                                <Text style={styles.fareLabel}>
+                                                    Ride Fare ({distKm} km){surge > 1 ? ` · ${surge.toFixed(1)}× surge` : ''}
+                                                </Text>
+                                                <Text style={styles.fareValue}>
+                                                    ${rideFare.toFixed(2)}
+                                                </Text>
+                                            </View>
+                                        </>
+                                    );
+                                })()}
 
                                 {parseFloat(ride.tip_amount || '0') > 0 && (
                                     <View style={styles.fareRow}>
@@ -428,30 +423,68 @@ export default function RideDetailScreen() {
                     {/* Trip Timeline */}
                     <View style={styles.card}>
                         <Text style={styles.cardTitle}>Trip Timeline</Text>
-                        {[
-                            { label: 'Ride Created', time: ride.created_at, icon: 'add-circle' },
-                            { label: 'Driver Accepted', time: ride.driver_accepted_at, icon: 'checkmark-circle' },
-                            { label: 'Driver Arrived', time: ride.driver_arrived_at, icon: 'navigate-circle' },
-                            { label: 'Ride Started', time: ride.ride_started_at, icon: 'play-circle' },
-                            { label: 'Ride Completed', time: ride.ride_completed_at, icon: 'checkmark-done-circle' },
-                            { label: 'Cancelled', time: ride.cancelled_at, icon: 'close-circle' },
-                        ]
-                            .filter((e) => e.time)
-                            .map((event, i) => (
-                                <View key={i} style={styles.timelineRow}>
-                                    <Ionicons name={event.icon as any} size={20} color={colors.primary} />
-                                    <View style={{ flex: 1 }}>
-                                        <Text style={styles.timelineLabel}>{event.label}</Text>
-                                        <Text style={styles.timelineTime}>
-                                            {new Date(event.time).toLocaleTimeString('en', {
-                                                hour: '2-digit',
-                                                minute: '2-digit',
-                                                second: '2-digit',
-                                            })}
+                        {(() => {
+                            const fmtTS = (t: string) => {
+                                const d = new Date(t);
+                                return isNaN(d.getTime()) ? '' : d.toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                            };
+                            const elapsed = (a: string, b: string): string => {
+                                const secs = Math.round((new Date(b).getTime() - new Date(a).getTime()) / 1000);
+                                if (isNaN(secs) || secs < 0) return '';
+                                if (secs < 60) return `${secs}s`;
+                                const m = Math.floor(secs / 60), s = secs % 60;
+                                return s > 0 ? `${m}m ${s}s` : `${m} min`;
+                            };
+                            type TLStep = { label: string; sub: string; time: string; dot: string; isCancelled?: boolean };
+                            const steps: TLStep[] = [
+                                ride.created_at && { label: 'Ride Requested', sub: fmtTS(ride.created_at), time: ride.created_at, dot: '#6B7280' },
+                                ride.driver_accepted_at && {
+                                    label: 'You Accepted',
+                                    sub: [fmtTS(ride.driver_accepted_at), ride.created_at && elapsed(ride.created_at, ride.driver_accepted_at) && `${elapsed(ride.created_at, ride.driver_accepted_at)} after request`].filter(Boolean).join('  ·  '),
+                                    time: ride.driver_accepted_at, dot: '#3B82F6',
+                                },
+                                ride.driver_arrived_at && {
+                                    label: 'Arrived at Pickup',
+                                    sub: [fmtTS(ride.driver_arrived_at), ride.driver_accepted_at && elapsed(ride.driver_accepted_at, ride.driver_arrived_at) && `${elapsed(ride.driver_accepted_at, ride.driver_arrived_at)} drive to pickup`].filter(Boolean).join('  ·  '),
+                                    time: ride.driver_arrived_at, dot: '#8B5CF6',
+                                },
+                                ride.ride_started_at && {
+                                    label: 'Trip Started',
+                                    sub: [fmtTS(ride.ride_started_at), ride.driver_arrived_at && elapsed(ride.driver_arrived_at, ride.ride_started_at) && `${elapsed(ride.driver_arrived_at, ride.ride_started_at)} wait`].filter(Boolean).join('  ·  '),
+                                    time: ride.ride_started_at, dot: '#F59E0B',
+                                },
+                                ride.ride_completed_at && {
+                                    label: 'Trip Completed',
+                                    sub: [fmtTS(ride.ride_completed_at), ride.ride_started_at && elapsed(ride.ride_started_at, ride.ride_completed_at) && `${elapsed(ride.ride_started_at, ride.ride_completed_at)} trip`].filter(Boolean).join('  ·  '),
+                                    time: ride.ride_completed_at, dot: '#10B981',
+                                },
+                                ride.cancelled_at && {
+                                    label: 'Cancelled',
+                                    sub: fmtTS(ride.cancelled_at),
+                                    time: ride.cancelled_at, dot: '#EF4444', isCancelled: true,
+                                },
+                            ].filter(Boolean) as TLStep[];
+
+                            return steps.map((step, i) => {
+                                const isLast = i === steps.length - 1;
+                                return (
+                                <View key={i} style={styles.tlRow}>
+                                    {/* Left spine */}
+                                    <View style={styles.tlSpine}>
+                                        <View style={[styles.tlDot, { backgroundColor: step.dot }]} />
+                                        {!isLast && <View style={styles.tlLine} />}
+                                    </View>
+                                    {/* Content */}
+                                    <View style={[styles.tlContent, isLast ? {} : { paddingBottom: 20 }]}>
+                                        <Text style={[styles.tlLabel, step.isCancelled && { color: '#EF4444' }, isLast && !step.isCancelled && { color: '#10B981', fontWeight: '700' }]}>
+                                            {step.label}
                                         </Text>
+                                        <Text style={styles.tlSub}>{step.sub}</Text>
                                     </View>
                                 </View>
-                            ))}
+                                );
+                            });
+                        })()}
                     </View>
                 </View>
             </ScrollView>
@@ -585,14 +618,13 @@ function createStyles(colors: ThemeColors) {
             fontSize: 12,
             lineHeight: 18,
         },
-        timelineRow: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            gap: 12,
-            marginBottom: 12,
-        },
-        timelineLabel: { color: colors.text, fontSize: 14, fontWeight: '500' },
-        timelineTime: { color: colors.textDim, fontSize: 12, marginTop: 2 },
+        tlRow: { flexDirection: 'row', gap: 12 },
+        tlSpine: { alignItems: 'center', width: 14 },
+        tlDot: { width: 14, height: 14, borderRadius: 7, marginTop: 3 },
+        tlLine: { width: 2, flex: 1, backgroundColor: colors.border, marginTop: 4 },
+        tlContent: { flex: 1 },
+        tlLabel: { fontSize: 14, fontWeight: '600', color: colors.text },
+        tlSub: { fontSize: 12, color: colors.textDim, marginTop: 2 },
         errorText: { color: colors.textDim, fontSize: 16, marginTop: 12 },
         backLink: { marginTop: 16, padding: 10 },
         backLinkText: { color: colors.primary, fontSize: 15, fontWeight: '600' },

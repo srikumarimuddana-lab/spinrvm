@@ -104,19 +104,15 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
           </View>
         </View>
 
-        {/* Fare breakdown */}
+        {/* Fare breakdown — Ride Fare matches exactly what the rider was charged */}
         <View style={styles.fareBreakdown}>
           <View style={styles.fareRow}>
-            <Text allowFontScaling={false} style={styles.fareItemLabel}>{t('tripCompleted.baseFare')}</Text>
-            <Text style={styles.fareItemValue}>${money(completedRide?.base_fare)}</Text>
-          </View>
-          <View style={styles.fareRow}>
-            <Text allowFontScaling={false} style={styles.fareItemLabel}>{t('tripCompleted.distanceFare')}</Text>
-            <Text style={styles.fareItemValue}>${money(completedRide?.distance_fare)}</Text>
-          </View>
-          <View style={styles.fareRow}>
-            <Text allowFontScaling={false} style={styles.fareItemLabel}>{t('tripCompleted.timeFare')}</Text>
-            <Text style={styles.fareItemValue}>${money(completedRide?.time_fare)}</Text>
+            <Text allowFontScaling={false} style={styles.fareItemLabel}>
+              {t('tripCompleted.rideFare')} ({n(completedRide?.distance_km).toFixed(1)} km)
+            </Text>
+            <Text style={styles.fareItemValue}>
+              ${money(n(completedRide?.base_fare) + n(completedRide?.distance_fare) + n(completedRide?.time_fare))}
+            </Text>
           </View>
           {n(completedRide?.tip_amount) > 0 && (
             <>

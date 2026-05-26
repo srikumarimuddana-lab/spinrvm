@@ -3181,9 +3181,28 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             phase_distances = {k: round(v, 3) for k, v in phase_totals.items()}
             phase_durations = {k: int(round(v)) for k, v in phase_secs.items()}
 
-            # Actual distance = trip_in_progress only (the paid portion)
+            # Actual distance = trip_in_progress only (the paid portion).
+            # Guard against sparse GPS: if fewer than 5 trip_in_progress
+            # points were recorded the haversine sum is essentially just
+            # a straight-line from pickup to dropoff (equivalent to the
+            # booking-time haversine). In that case keep planned_distance
+            # so the displayed km matches what the fare was calculated on,
+            # rather than showing a misleadingly short GPS value.
+            trip_points_count = sum(1 for b in all_breadcrumbs if b.get("tracking_phase") == "trip_in_progress")
             actual_distance_km = round(phase_distances.get("trip_in_progress", 0.0), 2)
-            if actual_distance_km == 0:
+            if trip_points_count < 5:
+                logger.warning(
+                    f"Ride {ride_id}: only {trip_points_count} trip_in_progress GPS points "
+                    f"— GPS data too sparse for accurate distance; keeping planned={planned_distance}km"
+                )
+                actual_distance_km = planned_distance
+            elif actual_distance_km == 0:
+                # >= 5 points recorded but every segment was rejected by the
+                # speed/distance/gap caps (e.g. GPS dead zone, spoofed trace).
+                logger.warning(
+                    f"Ride {ride_id}: {trip_points_count} trip_in_progress GPS points but all "
+                    f"segments rejected by anomaly filter — keeping planned={planned_distance}km"
+                )
                 actual_distance_km = planned_distance
 
             pickup_to_driver_km = round(phase_distances.get("navigating_to_pickup", 0.0), 2)
@@ -3430,7 +3449,10 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
 
     # ── Record incentive claims ──────────────────────────────────
     # Fetch active incentives matching this ride's service area / vehicle type
-    # and create claim records + update driver_earnings with the bonus.
+    # and insert claim records into ride_incentive_claims. driver_earnings in
+    # the rides table is NOT updated here — it holds the fare-only amount
+    # (base + distance + time). The bonus is summed from ride_incentive_claims
+    # at read time by get_ride() and exposed as incentive_amount / total_earned.
     try:
         sa_id = ride.get("service_area_id")
         vt_id = ride.get("vehicle_type_id")
@@ -3485,9 +3507,18 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
 
     # Fire-and-forget: render the route PNG from phase_polylines and
     # upload to Supabase Storage so the admin drawer + email receipt can
-    # embed a permanent image URL. Only regenerate if we have actual GPS
-    # data — otherwise preserve the planned-route snapshot from creation.
-    has_gps_trail = bool(route_polyline) or any(bool(v) for v in phase_polylines.values())
+    # embed a permanent image URL. Only regenerate if we have enough GPS
+    # data to produce a meaningful route — otherwise preserve the planned-
+    # route snapshot from creation (which used the Google Directions polyline).
+    # Threshold mirrors the distance-calculation guard: < 5 trip_in_progress
+    # points means the breadcrumb trail is essentially a straight line and
+    # the planned-route image will be more accurate than the GPS trace.
+    trip_points_for_snapshot = sum(
+        1
+        for b in (all_breadcrumbs if "all_breadcrumbs" in locals() else [])
+        if b.get("tracking_phase") == "trip_in_progress"
+    )
+    has_gps_trail = trip_points_for_snapshot >= 5
     if has_gps_trail:
         asyncio.create_task(
             _generate_and_store_ride_snapshot(
@@ -3499,6 +3530,11 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
                 phase_polylines=phase_polylines,
                 route_polyline=route_polyline,
             )
+        )
+    else:
+        logger.info(
+            f"Ride {ride_id}: skipping completion snapshot ({trip_points_for_snapshot} GPS points) "
+            "— planned-route snapshot from creation is preserved."
         )
 
     # Fire-and-forget: validate GPS trace against road network.

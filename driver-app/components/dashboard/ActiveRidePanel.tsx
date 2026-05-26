@@ -12,6 +12,7 @@ import {
   BackHandler,
   KeyboardAvoidingView,
   ScrollView,
+  Dimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -232,7 +233,17 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
 
   return (
     <Animated.View
-      style={[styles.container, { transform: [{ translateY: slideUpAnim }], opacity: fadeAnim }]}
+      style={[
+        styles.container,
+        {
+          transform: [{ translateY: slideUpAnim }],
+          opacity: fadeAnim,
+          // Cap height so the OTP keypad never pushes the panel above the
+          // safe-area top — without this the trip-info header overflows off
+          // the screen and the ScrollView has no bounded height to scroll in.
+          maxHeight: Dimensions.get('window').height - insets.top - insets.bottom - 8,
+        },
+      ]}
     >
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}

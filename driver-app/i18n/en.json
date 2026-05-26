@@ -76,6 +76,7 @@
     },
     "tripCompleted": {
         "title": "Trip Completed!",
+        "rideFare": "Ride Fare",
         "baseFare": "Base Fare",
         "distanceFare": "Distance",
         "timeFare": "Time",

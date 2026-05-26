@@ -241,7 +241,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
           // Cap height so the OTP keypad never pushes the panel above the
           // safe-area top — without this the trip-info header overflows off
           // the screen and the ScrollView has no bounded height to scroll in.
-          maxHeight: Dimensions.get('window').height - insets.top - 8,
+          maxHeight: Dimensions.get('window').height - insets.top - insets.bottom - 8,
         },
       ]}
     >

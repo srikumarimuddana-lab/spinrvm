@@ -268,7 +268,10 @@ export default function RideDetailScreen() {
                             <Ionicons name="time" size={20} color="#FF9500" />
                             <Text style={styles.statValue}>
                                 {ride.ride_started_at && ride.ride_completed_at
-                                    ? Math.round((new Date(ride.ride_completed_at).getTime() - new Date(ride.ride_started_at).getTime()) / 60000)
+                                    ? (() => {
+                                        const m = Math.round((new Date(ride.ride_completed_at).getTime() - new Date(ride.ride_started_at).getTime()) / 60000);
+                                        return isNaN(m) || m < 1 ? '< 1' : m;
+                                    })()
                                     : (ride.duration_minutes || 0)} min
                             </Text>
                             <Text style={styles.statLabel}>Duration</Text>
@@ -421,59 +424,66 @@ export default function RideDetailScreen() {
                     <View style={styles.card}>
                         <Text style={styles.cardTitle}>Trip Timeline</Text>
                         {(() => {
-                            const fmtTime = (t: string) => new Date(t).toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                            const fmtTime = (t: string) => {
+                                const d = new Date(t);
+                                return isNaN(d.getTime()) ? '' : d.toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                            };
                             const elapsed = (a: string, b: string): string => {
                                 const secs = Math.round((new Date(b).getTime() - new Date(a).getTime()) / 1000);
+                                if (isNaN(secs) || secs < 0) return '';
                                 if (secs < 60) return `${secs}s`;
                                 const m = Math.floor(secs / 60), s = secs % 60;
                                 return s > 0 ? `${m}m ${s}s` : `${m} min`;
                             };
-                            type TLStep = { label: string; sub: string; time: string; dot: string; isLast?: boolean; isCancelled?: boolean };
+                            type TLStep = { label: string; sub: string; time: string; dot: string; isCancelled?: boolean };
                             const steps: TLStep[] = [
                                 ride.created_at && { label: 'Ride Requested', sub: fmtTime(ride.created_at), time: ride.created_at, dot: '#6B7280' },
                                 ride.driver_accepted_at && {
                                     label: 'You Accepted',
-                                    sub: `${fmtTime(ride.driver_accepted_at)}${ride.created_at ? `  ·  ${elapsed(ride.created_at, ride.driver_accepted_at)} after request` : ''}`,
+                                    sub: [fmtTime(ride.driver_accepted_at), ride.created_at && elapsed(ride.created_at, ride.driver_accepted_at) && `${elapsed(ride.created_at, ride.driver_accepted_at)} after request`].filter(Boolean).join('  ·  '),
                                     time: ride.driver_accepted_at, dot: '#3B82F6',
                                 },
                                 ride.driver_arrived_at && {
                                     label: 'Arrived at Pickup',
-                                    sub: `${fmtTime(ride.driver_arrived_at)}${ride.driver_accepted_at ? `  ·  ${elapsed(ride.driver_accepted_at, ride.driver_arrived_at)} drive to pickup` : ''}`,
+                                    sub: [fmtTime(ride.driver_arrived_at), ride.driver_accepted_at && elapsed(ride.driver_accepted_at, ride.driver_arrived_at) && `${elapsed(ride.driver_accepted_at, ride.driver_arrived_at)} drive to pickup`].filter(Boolean).join('  ·  '),
                                     time: ride.driver_arrived_at, dot: '#8B5CF6',
                                 },
                                 ride.ride_started_at && {
                                     label: 'Trip Started',
-                                    sub: `${fmtTime(ride.ride_started_at)}${ride.driver_arrived_at ? `  ·  ${elapsed(ride.driver_arrived_at, ride.ride_started_at)} wait` : ''}`,
+                                    sub: [fmtTime(ride.ride_started_at), ride.driver_arrived_at && elapsed(ride.driver_arrived_at, ride.ride_started_at) && `${elapsed(ride.driver_arrived_at, ride.ride_started_at)} wait`].filter(Boolean).join('  ·  '),
                                     time: ride.ride_started_at, dot: '#F59E0B',
                                 },
                                 ride.ride_completed_at && {
                                     label: 'Trip Completed',
-                                    sub: `${fmtTime(ride.ride_completed_at)}${ride.ride_started_at ? `  ·  ${elapsed(ride.ride_started_at, ride.ride_completed_at)} trip` : ''}`,
-                                    time: ride.ride_completed_at, dot: '#10B981', isLast: true,
+                                    sub: [fmtTime(ride.ride_completed_at), ride.ride_started_at && elapsed(ride.ride_started_at, ride.ride_completed_at) && `${elapsed(ride.ride_started_at, ride.ride_completed_at)} trip`].filter(Boolean).join('  ·  '),
+                                    time: ride.ride_completed_at, dot: '#10B981',
                                 },
                                 ride.cancelled_at && {
                                     label: 'Cancelled',
                                     sub: fmtTime(ride.cancelled_at),
-                                    time: ride.cancelled_at, dot: '#EF4444', isCancelled: true, isLast: true,
+                                    time: ride.cancelled_at, dot: '#EF4444', isCancelled: true,
                                 },
                             ].filter(Boolean) as TLStep[];
 
-                            return steps.map((step, i) => (
+                            return steps.map((step, i) => {
+                                const isLast = i === steps.length - 1;
+                                return (
                                 <View key={i} style={styles.tlRow}>
                                     {/* Left spine */}
                                     <View style={styles.tlSpine}>
                                         <View style={[styles.tlDot, { backgroundColor: step.dot }]} />
-                                        {!step.isLast && <View style={styles.tlLine} />}
+                                        {!isLast && <View style={styles.tlLine} />}
                                     </View>
                                     {/* Content */}
-                                    <View style={[styles.tlContent, step.isLast ? {} : { paddingBottom: 20 }]}>
-                                        <Text style={[styles.tlLabel, step.isCancelled && { color: '#EF4444' }, step.isLast && !step.isCancelled && { color: '#10B981', fontWeight: '700' }]}>
+                                    <View style={[styles.tlContent, isLast ? {} : { paddingBottom: 20 }]}>
+                                        <Text style={[styles.tlLabel, step.isCancelled && { color: '#EF4444' }, isLast && !step.isCancelled && { color: '#10B981', fontWeight: '700' }]}>
                                             {step.label}
                                         </Text>
                                         <Text style={styles.tlSub}>{step.sub}</Text>
                                     </View>
                                 </View>
-                            ));
+                                );
+                            });
                         })()}
                     </View>
                 </View>

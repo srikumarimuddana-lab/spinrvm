@@ -3181,9 +3181,21 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             phase_distances = {k: round(v, 3) for k, v in phase_totals.items()}
             phase_durations = {k: int(round(v)) for k, v in phase_secs.items()}
 
-            # Actual distance = trip_in_progress only (the paid portion)
+            # Actual distance = trip_in_progress only (the paid portion).
+            # Guard against sparse GPS: if fewer than 5 trip_in_progress
+            # points were recorded the haversine sum is essentially just
+            # a straight-line from pickup to dropoff (equivalent to the
+            # booking-time haversine). In that case keep planned_distance
+            # so the displayed km matches what the fare was calculated on,
+            # rather than showing a misleadingly short GPS value.
+            trip_points_count = sum(1 for b in all_breadcrumbs if b.get("tracking_phase") == "trip_in_progress")
             actual_distance_km = round(phase_distances.get("trip_in_progress", 0.0), 2)
-            if actual_distance_km == 0:
+            if actual_distance_km == 0 or trip_points_count < 5:
+                if trip_points_count < 5:
+                    logger.warning(
+                        f"Ride {ride_id}: only {trip_points_count} trip_in_progress GPS points "
+                        f"— GPS data too sparse for accurate distance; keeping planned={planned_distance}km"
+                    )
                 actual_distance_km = planned_distance
 
             pickup_to_driver_km = round(phase_distances.get("navigating_to_pickup", 0.0), 2)

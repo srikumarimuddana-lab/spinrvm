@@ -913,11 +913,15 @@ async def get_driver_earnings(period: str = Query("week"), current_user: dict = 
 
     logger.info(f"Fetching earnings for driver {driver['id']} period {period}")
 
-    # Calculate date range
-    # Use Saskatchewan time (UTC-6, no DST) for day boundaries so "today" aligns
-    # with the driver's local calendar date, not midnight UTC.
-    _SK_TZ = ZoneInfo("America/Regina")
-    now = datetime.now(_SK_TZ)
+    # Calculate date range using the driver's service area timezone so "today"
+    # reflects the driver's local calendar day regardless of which province they
+    # operate in.  Falls back to America/Regina if no service area is set.
+    _tz_name = "America/Regina"
+    if driver.get("service_area_id"):
+        _sa_rows = await db_supabase.get_rows("service_areas", {"id": driver["service_area_id"]}, limit=1)
+        if _sa_rows and _sa_rows[0].get("timezone"):
+            _tz_name = _sa_rows[0]["timezone"]
+    now = datetime.now(ZoneInfo(_tz_name))
     use_date_filter = True
     if period in ("today", "day"):
         start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)

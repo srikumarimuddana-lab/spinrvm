@@ -48,10 +48,10 @@ type Period = 'today' | 'week' | 'month' | 'all';
 
 interface RiderStats {
   period: string;
-  total_spent: string;
   total_rides: number;
   total_distance_km: number;
-  average_per_ride: string;
+  total_saved: string;
+  co2_saved_kg: number;
 }
 
 const PAGE_LIMIT = 20;
@@ -64,7 +64,7 @@ export default function ActivityScreen() {
   const [vehicleTypes, setVehicleTypes] = useState<Record<string, string>>({});
   const [filter, setFilter] = useState<FilterType>('all');
   const [activeTab, setActiveTab] = useState<TabType>('history');
-  const [period, setPeriod] = useState<Period>('today');
+  const [period, setPeriod] = useState<Period>('all');
   const [stats, setStats] = useState<RiderStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -351,13 +351,13 @@ export default function ActivityScreen() {
 
       {activeTab === 'history' && (
         <>
-          {/* Period pills */}
+          {/* Period pills — ordered broadest-first so riders see lifetime impact first */}
           <View style={styles.periodPillRow}>
             {([
-              { key: 'today', label: 'Today' },
-              { key: 'week',  label: 'This Week' },
-              { key: 'month', label: 'This Month' },
               { key: 'all',   label: 'All Time' },
+              { key: 'month', label: 'This Month' },
+              { key: 'week',  label: 'This Week' },
+              { key: 'today', label: 'Today' },
             ] as { key: Period; label: string }[]).map(({ key, label }) => (
               <TouchableOpacity
                 key={key}
@@ -379,18 +379,13 @@ export default function ActivityScreen() {
               <View style={styles.statsRow}>
                 {[0, 1, 2, 3].map(i => (
                   <View key={i} style={styles.statItem}>
-                    <SkeletonBox width={48} height={18} style={{ marginBottom: 4 }} />
-                    <SkeletonBox width={36} height={12} />
+                    <SkeletonBox width={44} height={18} style={{ marginBottom: 4 }} />
+                    <SkeletonBox width={32} height={12} />
                   </View>
                 ))}
               </View>
             ) : (
               <View style={styles.statsRow}>
-                <View style={styles.statItem}>
-                  <Text style={styles.statValue}>${stats?.total_spent ?? '0.00'}</Text>
-                  <Text style={styles.statLabel}>Spent</Text>
-                </View>
-                <View style={styles.statDivider} />
                 <View style={styles.statItem}>
                   <Text style={styles.statValue}>{stats?.total_rides ?? 0}</Text>
                   <Text style={styles.statLabel}>Trips</Text>
@@ -402,8 +397,13 @@ export default function ActivityScreen() {
                 </View>
                 <View style={styles.statDivider} />
                 <View style={styles.statItem}>
-                  <Text style={styles.statValue}>${stats?.average_per_ride ?? '0.00'}</Text>
-                  <Text style={styles.statLabel}>Avg</Text>
+                  <Text style={[styles.statValue, { color: '#10B981' }]}>${stats?.total_saved ?? '0.00'}</Text>
+                  <Text style={styles.statLabel}>Saved</Text>
+                </View>
+                <View style={styles.statDivider} />
+                <View style={styles.statItem}>
+                  <Text style={[styles.statValue, { color: '#22C55E' }]}>{stats?.co2_saved_kg?.toFixed(1) ?? '0.0'}</Text>
+                  <Text style={styles.statLabel}>kg CO₂</Text>
                 </View>
               </View>
             )}

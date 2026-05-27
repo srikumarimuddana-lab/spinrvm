@@ -2189,17 +2189,18 @@ async def get_rider_stats(
 
     rides = await db_supabase.get_rows("rides", filters, limit=10000)
 
-    total_spent = sum(_d(r.get("total_fare") or 0) for r in rides)
     total_distance = sum(_d(r.get("distance_km") or 0) for r in rides)
     total_rides = len(rides)
-    avg_per_ride = _round(total_spent / total_rides) if total_rides > 0 else _d("0")
+    total_saved = sum(_d(r.get("discount_amount") or 0) for r in rides)
+    # CO2 saving vs. driving solo: 0.12 kg per km (rideshare vs. personal vehicle)
+    co2_saved_kg = round(float(total_distance) * 0.12, 2)
 
     return {
         "period": period,
-        "total_spent": str(_round(total_spent)),
         "total_rides": total_rides,
         "total_distance_km": round(float(total_distance), 1),
-        "average_per_ride": str(avg_per_ride),
+        "total_saved": str(_round(total_saved)),
+        "co2_saved_kg": co2_saved_kg,
     }
 
 

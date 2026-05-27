@@ -186,6 +186,34 @@ async def _handle_refresh_token_reuse(row: dict) -> None:
         f"row_id={row_id} user_id={user_id} audience={audience} "
         f"original_revoked_at={row.get('revoked_at')} replaced_by={row.get('replaced_by')}"
     )
+    # Explicit tagged Sentry event so the alert rule can match on
+    # tag:spinr_alert=refresh_token_reuse (PagerDuty → on-call).
+    # No-op when SENTRY_DSN is unset. Best-effort; never blocks the cascade.
+    try:
+        import sentry_sdk  # type: ignore
+
+        sentry_sdk.capture_message(
+            "REFRESH TOKEN REUSE DETECTED",
+            level="error",
+            tags={
+                "spinr_alert": "refresh_token_reuse",
+                "audience": audience or "unknown",
+                "domain": "auth",
+            },
+            contexts={
+                "refresh_token_reuse": {
+                    "row_id": row_id,
+                    "user_id": user_id,
+                    "audience": audience,
+                    "original_revoked_at": str(row.get("revoked_at")),
+                    "replaced_by": str(row.get("replaced_by")),
+                },
+            },
+        )
+    except Exception:
+        # Sentry not configured / import failed / network — the logger.error
+        # above already carries the same signal via the loguru→Sentry bridge.
+        pass
 
     # Step 2: token_version bump. Pick the right table by audience.
     new_version: Optional[int] = None

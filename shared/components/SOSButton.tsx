@@ -23,8 +23,10 @@ interface SOSButtonProps {
  * 5. While in FAILED state a single tap (no hold) retries immediately.
  */
 const SOS_HOLD_MS = 1200;
-const SOS_RETRY_DELAY_MS = 2000;
-const SOS_MAX_ATTEMPTS = 2;
+// R-P0-1 spec: 3 total attempts with 1 s / 2 s backoff between them
+// before declaring failure. The button stays amber until a backend 200.
+const SOS_MAX_ATTEMPTS = 3;
+const SOS_RETRY_DELAYS_MS = [1000, 2000];
 
 export function SOSButton({ rideId, onTrigger, size = 'small' }: SOSButtonProps) {
   const [triggered, setTriggered] = useState(false);
@@ -118,14 +120,16 @@ export function SOSButton({ rideId, onTrigger, size = 'small' }: SOSButtonProps)
         locationErr instanceof Error ? locationErr.message : String(locationErr));
     }
 
-    // Attempt backend call with one retry before declaring failure.
-    // Never treat missing rideId as success — that would show "Alert Sent"
-    // without any backend notification going out.
+    // Attempt backend call with two retries (3 total attempts) using
+    // 1 s / 2 s backoff before declaring failure. Never treat missing
+    // rideId as success — that would show "Alert Sent" without any
+    // backend notification going out.
     let backendOk = false;
     if (rideId) {
       for (let attempt = 0; attempt < SOS_MAX_ATTEMPTS && !backendOk; attempt++) {
         if (attempt > 0) {
-          await new Promise<void>((r) => setTimeout(r, SOS_RETRY_DELAY_MS));
+          const delay = SOS_RETRY_DELAYS_MS[attempt - 1] ?? SOS_RETRY_DELAYS_MS[SOS_RETRY_DELAYS_MS.length - 1];
+          await new Promise<void>((r) => setTimeout(r, delay));
         }
         try {
           await onTrigger(rideId, lat, lng);

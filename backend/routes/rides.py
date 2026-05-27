@@ -2400,20 +2400,39 @@ async def get_ride(
         logger.debug("ride incentive_claims lookup failed", exc_info=True)
         ride["incentive_amount"] = 0
 
-    tip = float(ride.get("tip_amount") or 0)
-    de = float(ride.get("driver_earnings") or 0)
-    cancel_fee = float(ride.get("cancellation_fee_driver") or 0)
-    tax = float(ride.get("tax_amount") or 0)
-    if tax == 0:
-        snap = ride.get("fare_breakdown_snapshot") or {}
-        for ln in snap.get("lines") or []:
-            if ln.get("type") in ("tax", "gst", "pst"):
-                tax += float(ln.get("amount") or 0)
-        tax = round(tax, 2)
-    ride["fare_only"] = round(de - tip, 2)
-    ride["cancel_fee_earned"] = round(cancel_fee, 2)
-    ride["tax_amount_total"] = tax
-    ride["total_earned"] = round(de + ride["incentive_amount"] + cancel_fee + tax, 2)
+    # Prefer the frozen driver_earnings_snapshot when available
+    des = ride.get("driver_earnings_snapshot")
+    if des and isinstance(des, dict) and "total" in des:
+        ride["fare_only"] = round(float(des.get("fare") or 0), 2)
+        ride["cancel_fee_earned"] = round(float(des.get("cancel_fee") or 0), 2)
+        ride["tax_amount_total"] = round(float(des.get("tax") or 0), 2)
+        _snap_incentive = float(des.get("incentive") or 0)
+        if _snap_incentive > 0:
+            ride["incentive_amount"] = round(_snap_incentive, 2)
+        tip = float(des.get("tip") or 0)
+        ride["total_earned"] = round(
+            ride["fare_only"] + tip + ride["incentive_amount"] + ride["cancel_fee_earned"] + ride["tax_amount_total"],
+            2,
+        )
+    else:
+        tip = float(ride.get("tip_amount") or 0)
+        fare_only = (
+            float(ride.get("base_fare") or 0)
+            + float(ride.get("distance_fare") or 0)
+            + float(ride.get("time_fare") or 0)
+        )
+        cancel_fee = float(ride.get("cancellation_fee_driver") or 0)
+        tax = float(ride.get("tax_amount") or 0)
+        if tax == 0:
+            snap = ride.get("fare_breakdown_snapshot") or {}
+            for ln in snap.get("lines") or []:
+                if ln.get("type") in ("tax", "gst", "pst"):
+                    tax += float(ln.get("amount") or 0)
+            tax = round(tax, 2)
+        ride["fare_only"] = round(fare_only, 2)
+        ride["cancel_fee_earned"] = round(cancel_fee, 2)
+        ride["tax_amount_total"] = tax
+        ride["total_earned"] = round(fare_only + tip + ride["incentive_amount"] + cancel_fee + tax, 2)
 
     return ride
 
@@ -2463,6 +2482,24 @@ async def add_tip(
         snapshot["lines"] = updated_lines
         snapshot["grand_total"] = _sum_fare_breakdown(updated_lines)
         update_payload["fare_breakdown_snapshot"] = snapshot
+
+    # Update driver_earnings_snapshot with the tip
+    des = ride.get("driver_earnings_snapshot")
+    if des and isinstance(des, dict):
+        des["tip"] = _f(new_tip)
+        des["total"] = round(
+            float(des.get("fare") or 0)
+            + float(new_tip)
+            + float(des.get("incentive") or 0)
+            + float(des.get("tax") or 0)
+            + float(des.get("cancel_fee") or 0),
+            2,
+        )
+        des_lines = [ln for ln in (des.get("lines") or []) if ln.get("type") != "tip"]
+        if float(new_tip) > 0:
+            des_lines.insert(1, {"label": "Tip", "amount": _f(new_tip), "type": "tip"})
+        des["lines"] = des_lines
+        update_payload["driver_earnings_snapshot"] = des
 
     await db_supabase.update_ride(ride_id, update_payload)
 
@@ -2582,13 +2619,16 @@ async def process_payment(
 
     # Persist tip and update snapshot before charging so the receipt
     # and all downstream surfaces reflect the final total.
+    # Use delta (requested - already stored) so that if /rate already
+    # wrote the tip we don't double-count in driver_earnings.
     if tip_amount > 0:
         tip_d = _round(_d(tip_amount))
-        existing_earnings = _d(ride.get("driver_earnings") or 0)
-        tip_update: dict = {
-            "tip_amount": _f(tip_d),
-            "driver_earnings": _f(_round(existing_earnings + tip_d)),
-        }
+        existing_tip = _d(ride.get("tip_amount") or 0)
+        tip_delta = tip_d - existing_tip
+        tip_update: dict = {"tip_amount": _f(tip_d)}
+        if tip_delta > 0:
+            existing_earnings = _d(ride.get("driver_earnings") or 0)
+            tip_update["driver_earnings"] = _f(_round(existing_earnings + tip_delta))
         snapshot = ride.get("fare_breakdown_snapshot")
         if snapshot and isinstance(snapshot, dict) and snapshot.get("lines") is not None:
             updated_lines = [ln for ln in snapshot["lines"] if ln.get("type") != "tip"]
@@ -2598,7 +2638,8 @@ async def process_payment(
             tip_update["fare_breakdown_snapshot"] = snapshot
         await db_supabase.update_ride(ride_id, tip_update)
         ride["tip_amount"] = _f(tip_d)
-        ride["driver_earnings"] = tip_update["driver_earnings"]
+        if "driver_earnings" in tip_update:
+            ride["driver_earnings"] = tip_update["driver_earnings"]
 
     _snap = ride.get("fare_breakdown_snapshot")
     _snap_lines = (_snap.get("lines") if isinstance(_snap, dict) else None) if _snap else None
@@ -2883,10 +2924,24 @@ async def rate_driver(
         tip_delta = _d(rating_data.tip_amount)
         new_tip = _round(_d(ride.get("tip_amount") or 0) + tip_delta)
         new_driver_earnings = _round(_d(ride.get("driver_earnings") or 0) + tip_delta)
-        await db_supabase.update_ride(
-            ride_id,
-            {"tip_amount": _f(new_tip), "driver_earnings": _f(new_driver_earnings)},
-        )
+        _rate_update: dict = {"tip_amount": _f(new_tip), "driver_earnings": _f(new_driver_earnings)}
+        des = ride.get("driver_earnings_snapshot")
+        if des and isinstance(des, dict):
+            des["tip"] = _f(new_tip)
+            des["total"] = round(
+                float(des.get("fare") or 0)
+                + float(new_tip)
+                + float(des.get("incentive") or 0)
+                + float(des.get("tax") or 0)
+                + float(des.get("cancel_fee") or 0),
+                2,
+            )
+            des_lines = [ln for ln in (des.get("lines") or []) if ln.get("type") != "tip"]
+            if float(new_tip) > 0:
+                des_lines.insert(1, {"label": "Tip", "amount": _f(new_tip), "type": "tip"})
+            des["lines"] = des_lines
+            _rate_update["driver_earnings_snapshot"] = des
+        await db_supabase.update_ride(ride_id, _rate_update)
 
     # Aggregate driver rating using rolling average to avoid O(n) ride fetch.
     driver = await db_supabase.get_driver_by_id(driver_id)
@@ -3834,6 +3889,7 @@ async def rider_complete_ride(
         driver_user_id = driver_row.get("user_id") if driver_row else None
 
     # ── Record incentive claims (same logic as drivers.py complete_ride) ──
+    _rider_incentive_total = Decimal("0")
     if driver_id:
         try:
             sa_id = ride.get("service_area_id")
@@ -3865,12 +3921,59 @@ async def rider_complete_ride(
                         "claimed_at": now.isoformat(),
                     },
                 )
+            _rider_incentive_total = sum(
+                Decimal(str(inc.get("bonus_amount") or 0))
+                for inc in (inc_result.data or [])
+                if (not inc.get("vehicle_type_id") or inc["vehicle_type_id"] == vt_id)
+                and Decimal(str(inc.get("bonus_amount") or 0)) > 0
+            )
         except Exception:
+            _rider_incentive_total = Decimal("0")
             logger.error(
                 "rider_complete_ride: incentive claim failed for ride %s",
                 ride_id,
                 exc_info=True,
             )
+
+    # ── Driver earnings snapshot ──
+    try:
+        _ib = float(_rider_incentive_total.quantize(Decimal("0.01")))
+        _fare = round(
+            float(ride.get("base_fare") or 0)
+            + float(ride.get("distance_fare") or 0)
+            + float(ride.get("time_fare") or 0),
+            2,
+        )
+        _tip = round(float(ride.get("tip_amount") or 0), 2)
+        _tax = round(float(ride.get("tax_amount") or 0), 2)
+        _cfee = round(float(ride.get("cancellation_fee_driver") or 0), 2)
+        _total = round(_fare + _tip + _ib + _tax + _cfee, 2)
+        _lines = [{"label": "Ride Fare", "amount": _fare, "type": "fare"}]
+        if _tip > 0:
+            _lines.append({"label": "Tip", "amount": _tip, "type": "tip"})
+        if _ib > 0:
+            _lines.append({"label": "Area Boost", "amount": _ib, "type": "incentive"})
+        if _tax > 0:
+            _lines.append({"label": "Tax", "amount": _tax, "type": "tax"})
+        if _cfee > 0:
+            _lines.append({"label": "Cancel Fee", "amount": _cfee, "type": "cancel_fee"})
+        await db_supabase.update_one(
+            "rides",
+            {"id": ride_id},
+            {
+                "driver_earnings_snapshot": {
+                    "fare": _fare,
+                    "tip": _tip,
+                    "incentive": _ib,
+                    "tax": _tax,
+                    "cancel_fee": _cfee,
+                    "total": _total,
+                    "lines": _lines,
+                }
+            },
+        )
+    except Exception:
+        logger.error("rider_complete_ride: driver_earnings_snapshot failed for ride %s", ride_id, exc_info=True)
 
     completed_ride = await db_supabase.get_ride(ride_id)
     total_fare = (completed_ride or {}).get("total_fare", ride.get("total_fare", 0))

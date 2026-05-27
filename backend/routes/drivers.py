@@ -863,7 +863,13 @@ async def get_driver_balance(current_user: dict = Depends(get_current_user)):
             },
             limit=10000,
         )
-        total_earnings = sum(r.get("driver_earnings", 0) or 0 for r in rides)
+        total_earnings = sum(
+            float(r.get("base_fare") or 0)
+            + float(r.get("distance_fare") or 0)
+            + float(r.get("time_fare") or 0)
+            + float(r.get("tip_amount") or 0)
+            for r in rides
+        )
         total_tips = sum(r.get("tip_amount", 0) or 0 for r in rides)
         total_rides = len(rides)
 
@@ -971,7 +977,13 @@ async def get_driver_earnings(period: str = Query("week"), current_user: dict = 
             _total_tax += _t
 
         stats = {
-            "total_earnings": sum(r.get("driver_earnings", 0) or 0 for r in rides),
+            "total_earnings": sum(
+                float(r.get("base_fare") or 0)
+                + float(r.get("distance_fare") or 0)
+                + float(r.get("time_fare") or 0)
+                + float(r.get("tip_amount") or 0)
+                for r in rides
+            ),
             "total_tips": sum(r.get("tip_amount", 0) or 0 for r in rides),
             "total_incentives": float(_incentive_total),
             "total_cancel_fees": float(_cancel_fees_total),
@@ -1049,7 +1061,12 @@ async def get_driver_daily_earnings(days: int = Query(7), current_user: dict = D
                     "rides": 0,
                     "distance_km": 0,
                 }
-            daily_data[date_str]["earnings"] += r.get("driver_earnings", 0) or 0
+            daily_data[date_str]["earnings"] += (
+                float(r.get("base_fare") or 0)
+                + float(r.get("distance_fare") or 0)
+                + float(r.get("time_fare") or 0)
+                + float(r.get("tip_amount") or 0)
+            )
             daily_data[date_str]["tips"] += r.get("tip_amount", 0) or 0
             daily_data[date_str]["rides"] += 1
             daily_data[date_str]["distance_km"] += r.get("distance_km", 0) or 0
@@ -1222,7 +1239,12 @@ async def get_driver_weekly_earnings(weeks: int = Query(4), current_user: dict =
                     "online_hours": 0,
                     "distance_km": 0,
                 }
-            weekly_data[week_key]["earnings"] += r.get("driver_earnings", 0) or 0
+            weekly_data[week_key]["earnings"] += (
+                float(r.get("base_fare") or 0)
+                + float(r.get("distance_fare") or 0)
+                + float(r.get("time_fare") or 0)
+                + float(r.get("tip_amount") or 0)
+            )
             weekly_data[week_key]["tips"] += r.get("tip_amount", 0) or 0
             weekly_data[week_key]["rides"] += 1
             weekly_data[week_key]["distance_km"] += r.get("distance_km", 0) or 0
@@ -1310,7 +1332,12 @@ async def get_driver_monthly_earnings(months: int = Query(6), current_user: dict
                     "online_hours": 0,
                     "distance_km": 0,
                 }
-            monthly_data[month_key]["earnings"] += r.get("driver_earnings", 0) or 0
+            monthly_data[month_key]["earnings"] += (
+                float(r.get("base_fare") or 0)
+                + float(r.get("distance_fare") or 0)
+                + float(r.get("time_fare") or 0)
+                + float(r.get("tip_amount") or 0)
+            )
             monthly_data[month_key]["tips"] += r.get("tip_amount", 0) or 0
             monthly_data[month_key]["rides"] += 1
             monthly_data[month_key]["distance_km"] += r.get("distance_km", 0) or 0
@@ -1367,7 +1394,13 @@ async def get_driver_earnings_comparison(period: str = Query("week"), current_us
 
     def summarize(rides):
         return {
-            "earnings": sum(r.get("driver_earnings", 0) or 0 for r in rides),
+            "earnings": sum(
+                float(r.get("base_fare") or 0)
+                + float(r.get("distance_fare") or 0)
+                + float(r.get("time_fare") or 0)
+                + float(r.get("tip_amount") or 0)
+                for r in rides
+            ),
             "rides": len(rides),
             "tips": sum(r.get("tip_amount", 0) or 0 for r in rides),
         }
@@ -1444,8 +1477,20 @@ async def get_driver_earnings_forecast(current_user: dict = Depends(get_current_
         this_week_rides = [r for r in recent_rides if (r.get("ride_completed_at") or "") >= week_start.isoformat()]
         prev_28_rides = [r for r in recent_rides if (r.get("ride_completed_at") or "") < week_start.isoformat()]
 
-        this_week_earnings = sum(Decimal(str(r.get("driver_earnings") or 0)) for r in this_week_rides)
-        prev_28_earnings = sum(Decimal(str(r.get("driver_earnings") or 0)) for r in prev_28_rides)
+        this_week_earnings = sum(
+            Decimal(str(r.get("base_fare") or 0))
+            + Decimal(str(r.get("distance_fare") or 0))
+            + Decimal(str(r.get("time_fare") or 0))
+            + Decimal(str(r.get("tip_amount") or 0))
+            for r in this_week_rides
+        )
+        prev_28_earnings = sum(
+            Decimal(str(r.get("base_fare") or 0))
+            + Decimal(str(r.get("distance_fare") or 0))
+            + Decimal(str(r.get("time_fare") or 0))
+            + Decimal(str(r.get("tip_amount") or 0))
+            for r in prev_28_rides
+        )
 
         # Daily average over the 28-day window excluding the current week
         days_in_window = 28 - now.weekday()  # days before current week in window
@@ -2186,7 +2231,15 @@ async def get_t4a_summary(year: int, current_user: dict = Depends(get_current_us
         limit=10000,
     )
 
-    total_earnings = _money_str(sum(Decimal(str(r.get("driver_earnings") or 0)) for r in rides))
+    total_earnings = _money_str(
+        sum(
+            Decimal(str(r.get("base_fare") or 0))
+            + Decimal(str(r.get("distance_fare") or 0))
+            + Decimal(str(r.get("time_fare") or 0))
+            + Decimal(str(r.get("tip_amount") or 0))
+            for r in rides
+        )
+    )
 
     driver_name = f"{current_user.get('first_name', '')} {current_user.get('last_name', '')}".strip() or None
     return {
@@ -2565,23 +2618,37 @@ async def get_ride_history(
 
     for r in rides:
         rid = str(r.get("id", ""))
-        tip = float(r.get("tip_amount") or 0)
-        de = float(r.get("driver_earnings") or 0)
-        incentive = incentive_map.get(rid, 0)
-        cancel_fee = float(r.get("cancellation_fee_driver") or 0)
-        fare_only = round(de - tip, 2)
-        tax = float(r.get("tax_amount") or 0)
-        if tax == 0:
-            snap = r.get("fare_breakdown_snapshot") or {}
-            for ln in snap.get("lines") or []:
-                if ln.get("type") in ("tax", "gst", "pst"):
-                    tax += float(ln.get("amount") or 0)
-            tax = round(tax, 2)
-        r["fare_only"] = fare_only
-        r["incentive_amount"] = round(incentive, 2)
-        r["tax_amount_total"] = tax
-        r["cancel_fee_earned"] = round(cancel_fee, 2)
-        r["total_earned"] = round(de + incentive + cancel_fee + tax, 2)
+        des = r.get("driver_earnings_snapshot")
+        if des and isinstance(des, dict) and "total" in des:
+            r["fare_only"] = round(float(des.get("fare") or 0), 2)
+            r["cancel_fee_earned"] = round(float(des.get("cancel_fee") or 0), 2)
+            r["tax_amount_total"] = round(float(des.get("tax") or 0), 2)
+            _snap_inc = float(des.get("incentive") or 0)
+            r["incentive_amount"] = round(max(_snap_inc, incentive_map.get(rid, 0)), 2)
+            tip = float(des.get("tip") or 0)
+            r["total_earned"] = round(
+                r["fare_only"] + tip + r["incentive_amount"] + r["cancel_fee_earned"] + r["tax_amount_total"],
+                2,
+            )
+        else:
+            tip = float(r.get("tip_amount") or 0)
+            fare_only = (
+                float(r.get("base_fare") or 0) + float(r.get("distance_fare") or 0) + float(r.get("time_fare") or 0)
+            )
+            incentive = incentive_map.get(rid, 0)
+            cancel_fee = float(r.get("cancellation_fee_driver") or 0)
+            tax = float(r.get("tax_amount") or 0)
+            if tax == 0:
+                snap = r.get("fare_breakdown_snapshot") or {}
+                for ln in snap.get("lines") or []:
+                    if ln.get("type") in ("tax", "gst", "pst"):
+                        tax += float(ln.get("amount") or 0)
+                tax = round(tax, 2)
+            r["fare_only"] = round(fare_only, 2)
+            r["incentive_amount"] = round(incentive, 2)
+            r["tax_amount_total"] = tax
+            r["cancel_fee_earned"] = round(cancel_fee, 2)
+            r["total_earned"] = round(fare_only + tip + incentive + cancel_fee + tax, 2)
 
     return {"total": total, "rides": [serialize_doc(r) for r in rides]}
 
@@ -3453,6 +3520,7 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
     # the rides table is NOT updated here — it holds the fare-only amount
     # (base + distance + time). The bonus is summed from ride_incentive_claims
     # at read time by get_ride() and exposed as incentive_amount / total_earned.
+    _total_bonus = Decimal("0")
     try:
         sa_id = ride.get("service_area_id")
         vt_id = ride.get("vehicle_type_id")
@@ -3466,7 +3534,6 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
         else:
             iq = iq.is_("service_area_id", "null")
         inc_result = await db_supabase.run_sync(iq.execute)
-        _total_bonus = Decimal("0")
         for inc in inc_result.data or []:
             if inc.get("vehicle_type_id") and inc["vehicle_type_id"] != vt_id:
                 continue
@@ -3499,6 +3566,46 @@ async def complete_ride(ride_id: str, current_user: dict = Depends(get_current_u
             inc_err,
             exc_info=True,
         )
+
+    # ── Driver earnings snapshot (JSONB) ───────────────────────
+    # Freeze the full breakdown so totals never drift from recomputation.
+    # _total_bonus comes from the incentive block above; default to 0 if
+    # the variable wasn't set (incentive block errored before assignment).
+    try:
+        _ib = float(_total_bonus.quantize(Decimal("0.01")))
+        _fare = round(
+            float(update_fields.get("base_fare") or ride.get("base_fare") or 0)
+            + float(update_fields.get("distance_fare") or ride.get("distance_fare") or 0)
+            + float(update_fields.get("time_fare") or ride.get("time_fare") or 0),
+            2,
+        )
+        _tip = round(float(ride.get("tip_amount") or 0), 2)
+        _tax = round(float(ride.get("tax_amount") or 0), 2)
+        _cfee = round(float(ride.get("cancellation_fee_driver") or 0), 2)
+        _total = round(_fare + _tip + _ib + _tax + _cfee, 2)
+        _lines = [
+            {"label": "Ride Fare", "amount": _fare, "type": "fare"},
+        ]
+        if _tip > 0:
+            _lines.append({"label": "Tip", "amount": _tip, "type": "tip"})
+        if _ib > 0:
+            _lines.append({"label": "Area Boost", "amount": _ib, "type": "incentive"})
+        if _tax > 0:
+            _lines.append({"label": "Tax", "amount": _tax, "type": "tax"})
+        if _cfee > 0:
+            _lines.append({"label": "Cancel Fee", "amount": _cfee, "type": "cancel_fee"})
+        _snapshot = {
+            "fare": _fare,
+            "tip": _tip,
+            "incentive": _ib,
+            "tax": _tax,
+            "cancel_fee": _cfee,
+            "total": _total,
+            "lines": _lines,
+        }
+        await db_supabase.update_one("rides", {"id": ride_id}, {"driver_earnings_snapshot": _snapshot})
+    except Exception:
+        logger.error("complete_ride: driver_earnings_snapshot failed for ride %s", ride_id, exc_info=True)
 
     # Post-ride receipt notification stub
     rider = await db_supabase.get_user_by_id(ride.get("rider_id"))
@@ -4073,7 +4180,13 @@ async def get_driver_leaderboard(
             period_rides = []
 
         total_rides = len(period_rides)
-        total_earnings = sum(Decimal(str(r.get("driver_earnings") or 0)) for r in period_rides)
+        total_earnings = sum(
+            Decimal(str(r.get("base_fare") or 0))
+            + Decimal(str(r.get("distance_fare") or 0))
+            + Decimal(str(r.get("time_fare") or 0))
+            + Decimal(str(r.get("tip_amount") or 0))
+            for r in period_rides
+        )
         total_tips = sum(Decimal(str(r.get("tip_amount") or 0)) for r in period_rides)
 
         user = await db.find_one("users", {"id": d.get("user_id")})

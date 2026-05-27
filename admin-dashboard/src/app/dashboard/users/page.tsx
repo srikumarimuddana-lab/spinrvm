@@ -65,6 +65,7 @@ export default function UsersPage() {
     const [showPii, setShowPii] = useState(false);
 
     const [pendingStatusChange, setPendingStatusChange] = useState<{ id: string; status: "suspended" | "banned"; name: string } | null>(null);
+    const [pendingWalletAction, setPendingWalletAction] = useState<{ action: "credit" | "debit"; amount: number; reason: string } | null>(null);
 
     // Wallet state for the user-details dialog
     const [walletData, setWalletData] = useState<any>(null);
@@ -90,7 +91,9 @@ export default function UsersPage() {
             .finally(() => setWalletLoading(false));
     }, [selectedUser?.id]);
 
-    const handleWalletAction = async (action: "credit" | "debit") => {
+    // Validation step — runs on button click. On pass, opens confirm dialog;
+    // actual mutation runs in confirmWalletAction below.
+    const requestWalletAction = (action: "credit" | "debit") => {
         if (!selectedUser?.id || !walletAmount || !/^\d+(\.\d{1,2})?$/.test(walletAmount.trim()) || parseFloat(walletAmount) <= 0) {
             setWalletError("Enter a positive amount");
             return;
@@ -99,11 +102,22 @@ export default function UsersPage() {
             setWalletError("Reason must be at least 3 characters");
             return;
         }
+        setWalletError("");
+        setPendingWalletAction({
+            action,
+            amount: parseFloat(walletAmount),
+            reason: walletReason.trim(),
+        });
+    };
+
+    const confirmWalletAction = async () => {
+        if (!selectedUser?.id || !pendingWalletAction) return;
+        const { action, amount, reason } = pendingWalletAction;
         setWalletSubmitting(action);
         setWalletError("");
         try {
             const fn = action === "credit" ? creditUserWallet : debitUserWallet;
-            const result = await fn(selectedUser.id, parseFloat(walletAmount), walletReason.trim()); // backend converts to Decimal
+            const result = await fn(selectedUser.id, amount, reason); // backend converts to Decimal
             const refreshed = await getUserWallet(selectedUser.id);
             setWalletData(refreshed);
             setWalletAmount("");
@@ -116,6 +130,7 @@ export default function UsersPage() {
             setWalletError(e?.message || `Failed to ${action}`);
         } finally {
             setWalletSubmitting(null);
+            setPendingWalletAction(null);
         }
     };
 
@@ -693,7 +708,7 @@ export default function UsersPage() {
                                             <Button
                                                 className="flex-1 bg-emerald-600 hover:bg-emerald-700"
                                                 disabled={walletSubmitting !== null}
-                                                onClick={() => handleWalletAction("credit")}
+                                                onClick={() => requestWalletAction("credit")}
                                             >
                                                 <Plus className="h-4 w-4 mr-1" />
                                                 {walletSubmitting === "credit" ? "Crediting..." : "Credit"}
@@ -702,7 +717,7 @@ export default function UsersPage() {
                                                 className="flex-1"
                                                 variant="outline"
                                                 disabled={walletSubmitting !== null}
-                                                onClick={() => handleWalletAction("debit")}
+                                                onClick={() => requestWalletAction("debit")}
                                             >
                                                 <Minus className="h-4 w-4 mr-1" />
                                                 {walletSubmitting === "debit" ? "Debiting..." : "Debit"}
@@ -775,6 +790,45 @@ export default function UsersPage() {
                     )}
                 </DialogContent>
             </Dialog>
+
+            <AlertDialog open={!!pendingWalletAction} onOpenChange={(open) => !open && setPendingWalletAction(null)}>
+                <AlertDialogContent>
+                    <AlertDialogHeader>
+                        <AlertDialogTitle>
+                            {pendingWalletAction?.action === "credit" ? "Credit this wallet?" : "Debit this wallet?"}
+                        </AlertDialogTitle>
+                        <AlertDialogDescription>
+                            {pendingWalletAction && selectedUser ? (
+                                <>
+                                    {pendingWalletAction.action === "credit" ? "Add" : "Remove"}{" "}
+                                    <span className="font-semibold">${pendingWalletAction.amount.toFixed(2)} CAD</span>{" "}
+                                    {pendingWalletAction.action === "credit" ? "to" : "from"}{" "}
+                                    <span className="font-semibold">{selectedUser.name}</span>&rsquo;s wallet.
+                                    <br />
+                                    Reason: <span className="italic">{pendingWalletAction.reason}</span>
+                                    <br />
+                                    This will be recorded in the audit log and cannot be undone without a reverse adjustment.
+                                </>
+                            ) : null}
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel disabled={walletSubmitting !== null}>Cancel</AlertDialogCancel>
+                        <AlertDialogAction
+                            className={pendingWalletAction?.action === "credit" ? "bg-emerald-600 hover:bg-emerald-700" : "bg-destructive text-destructive-foreground hover:bg-destructive/90"}
+                            disabled={walletSubmitting !== null}
+                            onClick={(e) => {
+                                e.preventDefault();
+                                void confirmWalletAction();
+                            }}
+                        >
+                            {pendingWalletAction?.action === "credit"
+                                ? (walletSubmitting === "credit" ? "Crediting…" : "Confirm credit")
+                                : (walletSubmitting === "debit" ? "Debiting…" : "Confirm debit")}
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
 
             <AlertDialog open={!!pendingStatusChange} onOpenChange={(open) => !open && setPendingStatusChange(null)}>
                 <AlertDialogContent>

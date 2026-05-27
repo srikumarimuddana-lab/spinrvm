@@ -118,7 +118,7 @@ Backend is a single horizontally-scalable process. All durable state lives in Su
 
 - `backend/server.py` — app factory; mounts ~25 routers
 - `backend/core/config.py` — pydantic-settings `Settings`; fails fast in production on weak secrets
-- `backend/core/lifespan.py` — startup/shutdown: DB health check + spawns 7 background asyncio loops (surge engine, scheduled dispatch, payment retry, document expiry, corporate auto-topup, low-balance nudge, allowance reset)
+- `backend/core/lifespan.py` — startup/shutdown: DB health check + spawns 16 background asyncio loops (subscription expiry, surge engine, scheduled dispatch, payment retry, document expiry, corporate auto-topup, low-balance nudge, allowance reset, safety check-in, retention purge, reconciliation, Stripe reconcile, T4A annual job, stuck-ride sweeper, push retry, loop watchdog)
 - `backend/core/middleware.py` — CORS, security headers, rate limiting (SlowAPI + Redis)
 - `backend/db_supabase.py` — ~66 helper functions wrapping `supabase-py` via `run_sync()` (thread-pool with one retry on H2 GOAWAY)
 - `backend/socket_manager.py` — `ConnectionManager` (in-process WS registry); delegates to Redis pub/sub when active
@@ -177,7 +177,7 @@ When writing code that reads `ride.status`, treat any value not in the set above
 
 **WebSocket auth** — first message must be `{"type": "auth", "token": "<jwt>"}`. Connection keys: `"driver_{user_id}"` / `"rider_{user_id}"`. 30-second ping heartbeat; 30 msg/s rate limit; 64 KB max message.
 
-**Background task safety** — the 7 startup loops run on every replica concurrently. Dispatch uses an atomic DB claim; others use `reminder_sent` flags or idempotency keys. Any new loop must be replay-safe.
+**Background task safety** — the 16 startup loops run on every replica concurrently. Dispatch uses an atomic DB claim; others use `reminder_sent` flags or idempotency keys. Any new loop must be replay-safe.
 
 **Settings in DB** — Stripe keys, Twilio credentials, and Google Maps API keys live in the `app_settings` Supabase table (managed via admin dashboard), not in `.env`. This allows rotation without redeployment.
 
@@ -230,7 +230,7 @@ Rules:
 
 Migrations live in `backend/migrations/` and are applied in filename order by `backend/migrate.py`.
 
-Naming: `NN_short_description.sql` where `NN` is a zero-padded sequence number (currently highest applied is `79_add_missing_query_indexes.sql`; **next free slot is `80`**). Pick the next available number — never reuse or reorder existing numbers. If two PRs conflict on a number, the second one renames to the next free slot before merge. Note: the runner uses the full filename as the idempotency key, so already-applied migrations must never be renamed.
+Naming: `NN_short_description.sql` where `NN` is a zero-padded sequence number (currently highest applied is `101_users_add_is_rider.sql`; **next free slot is `102`**). Pick the next available number — never reuse or reorder existing numbers. If two PRs conflict on a number, the second one renames to the next free slot before merge. Note: the runner uses the full filename as the idempotency key, so already-applied migrations must never be renamed. (Pre-existing duplicate prefixes at 08, 28, 29, 48, 50, 51, 52, 54, 55, 56, 57, 58, 91, 92, 96 are handled by full-filename keying — do not introduce new duplicates; a CI prefix-uniqueness check blocks them.)
 
 Migration rules:
 - **Append-only**: never edit a merged migration. Schema changes go in a new file.
@@ -253,7 +253,7 @@ Postgres functions for mutating money or credits: call from backend only, never 
 
 ## Background Loop Recipe
 
-The 7 startup loops in `core/lifespan.py` all run on every replica simultaneously. A new loop must satisfy the replay-safety contract or it will cause duplicate writes, charges, or notifications.
+The 16 startup loops in `core/lifespan.py` all run on every replica simultaneously. A new loop must satisfy the replay-safety contract or it will cause duplicate writes, charges, or notifications.
 
 Template for a new loop:
 

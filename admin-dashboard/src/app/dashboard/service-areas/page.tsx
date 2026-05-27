@@ -22,6 +22,15 @@ const CITY_PRESETS: Record<string, { city: string; province: string; center: { l
   winnipeg: { city: "Winnipeg", province: "MB", center: { lat: 49.90, lng: -97.14 }, polygon: [{ lat: 49.97, lng: -97.30 }, { lat: 49.97, lng: -96.98 }, { lat: 49.80, lng: -96.98 }, { lat: 49.80, lng: -97.30 }] },
 };
 
+const PROVINCE_TIMEZONE: Record<string, string> = {
+  SK: "America/Regina",   AB: "America/Edmonton", MB: "America/Winnipeg",
+  ON: "America/Toronto",  BC: "America/Vancouver", QC: "America/Toronto",
+  NS: "America/Halifax",  NB: "America/Halifax",  PE: "America/Halifax",
+  NL: "America/St_Johns", NT: "America/Yellowknife", YT: "America/Whitehorse",
+  NU: "America/Rankin_Inlet",
+};
+const CA_TIMEZONES = [...new Set(Object.values(PROVINCE_TIMEZONE))].sort();
+
 function polygonToText(polygon: any[]) { return polygon.map(p => `${p.lat}, ${p.lng}`).join("\n"); }
 
 /** Extract polygon points [{lat,lng}] from area data. Backend may store as `polygon` or `geojson`. */
@@ -84,6 +93,7 @@ export default function ServiceAreasPage() {
   // Create form
   const [createForm, setCreateForm] = useState({
     name: "", city: "", province: "SK", preset: "",
+    timezone: PROVINCE_TIMEZONE["SK"],
     polygon: [] as any[], polygonText: "",
     is_active: true, is_airport: false,
   });
@@ -122,6 +132,7 @@ export default function ServiceAreasPage() {
       setCreateForm({
         ...createForm, preset: key, name: createForm.name || p.city,
         city: p.city, province: p.province,
+        timezone: PROVINCE_TIMEZONE[p.province] ?? createForm.timezone,
         polygon: p.polygon, polygonText: polygonToText(p.polygon),
       });
       setMapKey(k => k + 1);
@@ -133,6 +144,7 @@ export default function ServiceAreasPage() {
     try {
       await createServiceArea({
         name: createForm.name, city: createForm.city, province: createForm.province,
+        timezone: createForm.timezone,
         geojson: { type: "Polygon", coordinates: [createForm.polygon.map(p => [p.lng, p.lat])] },
         is_active: createForm.is_active, is_airport: createForm.is_airport,
         // Defaults
@@ -143,7 +155,7 @@ export default function ServiceAreasPage() {
         max_pickup_radius_km: 5.0, currency: 'CAD',
       });
       setShowCreate(false);
-      setCreateForm({ name: "", city: "", province: "SK", preset: "", polygon: [], polygonText: "", is_active: true, is_airport: false });
+      setCreateForm({ name: "", city: "", province: "SK", preset: "", timezone: PROVINCE_TIMEZONE["SK"], polygon: [], polygonText: "", is_active: true, is_airport: false });
       crudToast.created("Service area");
       load();
     } catch (e) { crudToast.error("create service area", e); }
@@ -239,8 +251,17 @@ export default function ServiceAreasPage() {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-600 mb-1">Province</label>
-              <select className="w-full border rounded-xl px-4 py-2.5 text-sm" value={createForm.province} onChange={e => setCreateForm({...createForm, province: e.target.value})}>
+              <select className="w-full border rounded-xl px-4 py-2.5 text-sm" value={createForm.province} onChange={e => {
+                const prov = e.target.value;
+                setCreateForm({ ...createForm, province: prov, timezone: PROVINCE_TIMEZONE[prov] ?? createForm.timezone });
+              }}>
                 {['SK','AB','MB','ON','BC','QC','NS','NB','PE','NL','NT','YT','NU'].map(p => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-600 mb-1">Timezone</label>
+              <select className="w-full border rounded-xl px-4 py-2.5 text-sm" value={createForm.timezone} onChange={e => setCreateForm({...createForm, timezone: e.target.value})}>
+                {CA_TIMEZONES.map(tz => <option key={tz} value={tz}>{tz}</option>)}
               </select>
             </div>
           </div>
@@ -543,6 +564,7 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
     name: area.name || "",
     city: area.city || "",
     province: area.province || "SK",
+    timezone: area.timezone || PROVINCE_TIMEZONE[area.province || "SK"] || "America/Regina",
     max_pickup_radius_km: area.max_pickup_radius_km || 5,
     is_active: area.is_active !== false,
     driver_matching_algorithm: area.driver_matching_algorithm || "nearest",
@@ -583,6 +605,7 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
       name: form.name,
       city: form.city,
       province: form.province,
+      timezone: form.timezone,
       max_pickup_radius_km: parseFloat(String(form.max_pickup_radius_km)) || 5,
       is_active: form.is_active,
       driver_matching_algorithm: form.driver_matching_algorithm,
@@ -619,8 +642,17 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
         </div>
         <div>
           <label className="block text-xs font-semibold text-gray-500 mb-1">Province</label>
-          <select className="w-full border rounded-lg px-3 py-2 text-sm" value={form.province} onChange={e => setForm({ ...form, province: e.target.value })}>
+          <select className="w-full border rounded-lg px-3 py-2 text-sm" value={form.province} onChange={e => {
+            const prov = e.target.value;
+            setForm({ ...form, province: prov, timezone: PROVINCE_TIMEZONE[prov] ?? form.timezone });
+          }}>
             {['SK','AB','MB','ON','BC','QC','NS','NB','PE','NL','NT','YT','NU'].map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-gray-500 mb-1">Timezone</label>
+          <select className="w-full border rounded-lg px-3 py-2 text-sm" value={form.timezone} onChange={e => setForm({ ...form, timezone: e.target.value })}>
+            {CA_TIMEZONES.map(tz => <option key={tz} value={tz}>{tz}</option>)}
           </select>
         </div>
         <div>

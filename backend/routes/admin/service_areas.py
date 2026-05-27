@@ -27,6 +27,24 @@ router = APIRouter()
 
 _SURGE_MAX = 10.0  # absolute ceiling for manual admin override
 
+# Province code → IANA timezone.  Used when creating or updating a service
+# area so the correct local day boundary is used for earnings/stats queries.
+_PROVINCE_TZ: Dict[str, str] = {
+    "SK": "America/Regina",
+    "AB": "America/Edmonton",
+    "MB": "America/Winnipeg",
+    "ON": "America/Toronto",
+    "BC": "America/Vancouver",
+    "QC": "America/Toronto",
+    "NS": "America/Halifax",
+    "NB": "America/Halifax",
+    "PE": "America/Halifax",
+    "NL": "America/St_Johns",
+    "NT": "America/Yellowknife",
+    "YT": "America/Whitehorse",
+    "NU": "America/Rankin_Inlet",
+}
+
 # Airport zones must be small. The actual airport property is typically
 # under ~3 km on either dimension (YQR ≈ 2 km, even YVR ≈ 3 km). 10 km
 # is a generous ceiling that still blocks "Regina city limits accidentally
@@ -140,6 +158,7 @@ def _coerce_airport_fields(is_airport: Optional[bool], airport_fee: Optional[flo
 class ServiceAreaCreateRequest(BaseModel):
     name: str
     city: str = ""
+    province: Optional[str] = None
     geojson: Optional[Any] = None
     polygon: Optional[Any] = None
     is_active: bool = True
@@ -163,6 +182,7 @@ class ServiceAreaCreateRequest(BaseModel):
     max_simultaneous_offers: int = Field(default=3, ge=1, le=10)
     use_eta_ranking: bool = True
     show_demand_heatmap: bool = False
+    timezone: Optional[str] = None
 
 
 class ServiceAreaUpdateRequest(BaseModel):
@@ -206,6 +226,7 @@ class ServiceAreaUpdateRequest(BaseModel):
     free_cancel_window_seconds: Optional[int] = Field(default=None, ge=0, le=3600)
     noshow_wait_seconds: Optional[int] = Field(default=None, ge=60, le=1800)
     currency: Optional[str] = None
+    timezone: Optional[str] = None
 
 
 class SurgePricingRequest(BaseModel):
@@ -366,10 +387,15 @@ async def admin_create_service_area(area: ServiceAreaCreateRequest, admin: dict 
     effective_is_airport = bool(coerced.get("is_airport", area.is_airport))
     effective_airport_fee = coerced.get("airport_fee", area.airport_fee)
     surge_active = area.surge_active if area.surge_active is not None else (area.surge_enabled or False)
+    # Resolve timezone: explicit value wins; otherwise derive from province;
+    # fall back to Saskatchewan default so NOT NULL constraint is always met.
+    tz = area.timezone or _PROVINCE_TZ.get(area.province or "", "America/Regina")
     doc = {
         "id": str(uuid.uuid4()),
         "name": area.name,
         "city": area.city,
+        "province": area.province,
+        "timezone": tz,
         "polygon": polygon,
         "is_active": area.is_active,
         "parent_service_area_id": area.parent_service_area_id,
@@ -514,10 +540,18 @@ async def admin_update_service_area(
         "free_cancel_window_seconds",
         "noshow_wait_seconds",
         "currency",
+        "timezone",
     ]:
         val = getattr(area, field)
         if val is not None:
             update_payload[field] = val
+    # When province changes without an explicit timezone, auto-derive so the
+    # DB stays consistent (e.g. admin changes AB area from SK — timezone
+    # should follow to America/Edmonton without a manual extra step).
+    if area.province is not None and area.timezone is None:
+        derived = _PROVINCE_TZ.get(area.province)
+        if derived:
+            update_payload.setdefault("timezone", derived)
     if polygon is not None:
         update_payload["polygon"] = polygon
     if surge_active is not None:

@@ -8,7 +8,6 @@ import {
   Animated,
   Linking,
   Platform,
-  Alert,
   BackHandler,
   KeyboardAvoidingView,
   ScrollView,
@@ -20,6 +19,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useLanguageStore } from '../../store/languageStore';
+import { showAlert } from '../AlertDialog';
 
 interface Rider {
   first_name?: string;
@@ -199,7 +199,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
     title: string, message: string,
     buttons: Array<{ text: string; style?: 'default' | 'cancel' | 'destructive'; onPress?: () => void }>,
   ) => {
-    Alert.alert(title, message, buttons);
+    showAlert(title, message, buttons);
   };
 
   // ── Status config ───────────────────────────────────────────
@@ -238,10 +238,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
         {
           transform: [{ translateY: slideUpAnim }],
           opacity: fadeAnim,
-          // Cap height so the OTP keypad never pushes the panel above the
-          // safe-area top — without this the trip-info header overflows off
-          // the screen and the ScrollView has no bounded height to scroll in.
-          maxHeight: Dimensions.get('window').height - insets.top - insets.bottom - 8,
+          maxHeight: Dimensions.get('window').height * 0.65,
         },
       ]}
     >
@@ -249,7 +246,11 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={{ flex: 1 }}
       >
-        <ScrollView keyboardShouldPersistTaps="handled">
+        {/* Drag handle */}
+        <View style={styles.dragHandleContainer}>
+          <View style={styles.dragHandle} />
+        </View>
+        <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
       {/* ── Status pill (floating) ──────────────────────────── */}
       <View style={styles.statusPill} accessibilityRole="text" accessibilityLabel={`${status.label}, earnings $${earnings.toFixed(2)}`}>
         <View style={[styles.statusIconBg, { backgroundColor: `${status.color}15` }]}>
@@ -484,6 +485,20 @@ function createStyles(colors: ThemeColors) {
       left: 0,
       right: 0,
       zIndex: 100,
+    },
+    dragHandleContainer: {
+      alignItems: 'center',
+      paddingTop: 8,
+      paddingBottom: 4,
+      backgroundColor: colors.surface,
+      borderTopLeftRadius: 24,
+      borderTopRightRadius: 24,
+    },
+    dragHandle: {
+      width: 36,
+      height: 4,
+      borderRadius: 2,
+      backgroundColor: colors.border,
     },
 
     statusPill: {

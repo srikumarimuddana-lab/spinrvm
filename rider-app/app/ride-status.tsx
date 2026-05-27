@@ -42,6 +42,14 @@ export default function RideStatusScreen() {
   const [pulseAnim] = useState(new Animated.Value(1));
   const [dotAnim] = useState(new Animated.Value(0));
 
+  const [searchElapsed, setSearchElapsed] = useState(0);
+  useEffect(() => {
+    if (currentRide?.status !== 'searching') { setSearchElapsed(0); return; }
+    setSearchElapsed(0);
+    const id = setInterval(() => setSearchElapsed(s => s + 1), 1000);
+    return () => clearInterval(id);
+  }, [currentRide?.status]);
+
   // M-4: Offer acceptance countdown — derived from server-provided
   // offer_expires_at (ISO) or offer_timeout_seconds, with 15 s fallback.
   const [offerSecondsLeft, setOfferSecondsLeft] = useState<number>(15);
@@ -207,15 +215,33 @@ export default function RideStatusScreen() {
 
   // handleSimulateArrival and handleRideComplete removed for production
 
-  const renderSearching = () => (
-    <View style={styles.statusContainer}>
-      <Animated.View style={[styles.searchingCircle, { transform: [{ scale: pulseAnim }] }]}>
-        <Ionicons name="car" size={40} color="#FFFFFF" />
-      </Animated.View>
-      <Text style={styles.statusTitle}>Finding your driver</Text>
-      <Text style={styles.statusSubtitle}>This usually takes 1-3 minutes</Text>
-    </View>
-  );
+  const renderSearching = () => {
+    const mins = Math.floor(searchElapsed / 60);
+    const secs = searchElapsed % 60;
+    const timerText = mins > 0 ? `${mins}:${secs.toString().padStart(2, '0')}` : `0:${secs.toString().padStart(2, '0')}`;
+    const takingLonger = searchElapsed >= 120;
+    return (
+      <View style={styles.statusContainer}>
+        <Animated.View style={[styles.searchingCircle, { transform: [{ scale: pulseAnim }] }]}>
+          <Ionicons name="car" size={40} color="#FFFFFF" />
+        </Animated.View>
+        <Text style={styles.statusTitle}>Finding your driver</Text>
+        <Text style={styles.statusSubtitle}>
+          {takingLonger ? 'Taking longer than usual — hang tight' : 'This usually takes 1-3 minutes'}
+        </Text>
+        <Text style={styles.searchTimer}>{timerText}</Text>
+        {takingLonger && (
+          <TouchableOpacity
+            style={styles.cancelSearchBtn}
+            onPress={handleBackPress}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.cancelSearchText}>Cancel search</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+    );
+  };
 
   const renderDriverAssigned = () => (
     <View style={styles.driverContainer}>
@@ -596,6 +622,27 @@ function createStyles(colors: ThemeColors) {
       fontSize: 14,
       fontFamily: 'PlusJakartaSans_400Regular',
       color: colors.textDim,
+    },
+    searchTimer: {
+      fontSize: 22,
+      fontWeight: '700',
+      color: colors.textDim,
+      marginTop: 12,
+      letterSpacing: 1,
+    },
+    cancelSearchBtn: {
+      marginTop: 16,
+      paddingHorizontal: 24,
+      paddingVertical: 10,
+      borderRadius: 20,
+      backgroundColor: colors.error + '15',
+      borderWidth: 1,
+      borderColor: colors.error + '30',
+    },
+    cancelSearchText: {
+      fontSize: 14,
+      fontWeight: '600',
+      color: colors.error,
     },
     demoButton: {
       marginTop: 20,

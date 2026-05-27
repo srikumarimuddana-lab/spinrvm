@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, Share, Alert, BackHandler } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, TextInput, Share, BackHandler } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -7,6 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { useLanguageStore } from '../../store/languageStore';
+import { showAlert } from '../AlertDialog';
 
 const n = (v: number | string | null | undefined): number => {
   if (v == null) return 0;
@@ -180,7 +181,7 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
             try {
               await Share.share({ title: 'Spinr Trip Receipt', message: receipt });
             } catch {
-              Alert.alert('Receipt', receipt);
+              showAlert('Receipt', receipt);
             }
           }}
           activeOpacity={0.7}

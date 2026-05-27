@@ -22,7 +22,7 @@
 - [ ] **C-1** PR for `claude/code-review-ratings-grWmo` opened, reviewed, and merged to `main` (5 commits: SOS retry, wallet AlertDialog, auth logger sweep, refresh-token Sentry tag, CLAUDE.md doc drift).
 - [ ] **C-2** Railway auto-deploy from `main` completed successfully (check Railway deploy log).
 - [ ] **C-3** Mobile builds (rider + driver app) shipped via EAS — commit message contained `[build]` and the EAS build URL is in the launch ticket.
-- [ ] **C-4** Saskatoon **service-area geofence** code shipped and tested. _(See section H — this is the only remaining real implementation task, ~1 day of work. Not in the codebase as of today.)_
+- [ ] **C-4** Saskatoon active in the `service_areas` table with a correct polygon, fare config, and smoke-tested. _(See section H — code is in place; this is a seeding + verification task, not a build task.)_
 
 ### Backend infrastructure
 
@@ -379,35 +379,79 @@ Stand up a dashboard (Grafana, Datadog, or Sentry's metric explorer) showing liv
 
 ## H. Saskatoon service area geofence
 
-**Status: NOT YET CODED.** This is the only remaining real implementation task before public launch. Roughly 1 day of work.
+**Status: code is in place.** What's left for launch is configuration + smoke-test, not implementation.
 
-What's needed:
+Verified pieces already shipped (do NOT duplicate any of these):
 
-1. New migration `102_service_areas.sql` with a `service_areas` table:
+- **Schema:** `service_areas` table at `backend/supabase_schema.sql:91` — columns include `polygon JSONB`, `is_active`, plus `fare_configs` and `area_fees` foreign-keyed to `service_area_id` for per-area pricing.
+- **Postgres RPC:** `get_service_area_for_point(lat, lng)` at `backend/sql/01_postgis_schema.sql:84`, deployed via `backend/migrations/75_service_area_for_point_rpc.sql`. Returns the matching active service area (or NULL).
+- **Ride-creation enforcement:** `backend/routes/rides.py:1402-1424` — pickup must fall inside an active service area. If no match and at least one area is active, the request is rejected with `HTTP 400 {"code": "OUTSIDE_SERVICE_AREA", "message": "Sorry, your pickup location is outside our coverage area..."}`. Dropoff is intentionally not checked (riders may travel out of town).
+- **Fare-service helper:** `find_service_area_for_point` at `backend/services/fare_service.py:86`.
+- **Surge engine:** updates per service area in `backend/utils/surge_engine.py`.
+- **Admin UI:** `admin-dashboard/src/app/dashboard/service-areas/page.tsx` (~1780 lines) — create, edit, toggle active, manage polygon.
+
+### What still needs to happen for Saskatoon
+
+1. **Seed the Saskatoon service area** (admin UI is the supported path):
+   - Sign in to admin → Service Areas → New.
+   - `name`: `Saskatoon`.
+   - `polygon`: array of `{lat, lng}` points tracing Saskatoon city limits (roughly bounded by the city's TNC bylaw service area — confirm against the municipal definition before going live).
+   - `is_active`: leave **false** while you seed pricing in step 2; flip to **true** at launch (step 4).
+   - Pick a stable `id` (e.g. `sa_saskatoon`) so downstream config and analytics can reference it.
+
+2. **Seed pricing for the area** via admin → Fare Configs (and area_fees if applicable):
+   - `service_area_id` = Saskatoon id from step 1.
+   - Base fare, per-km, per-min, booking fee, surge cap 2.5×, GST 5%, PST 6% (SK rate). See section S-2 for the full list.
+   - Per CLAUDE.md, surge cap is a provincial ceiling — do not raise without legal review.
+
+3. **Verify other regions are dark** before flipping Saskatoon on:
    ```sql
-   CREATE TABLE service_areas (
-     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-     code TEXT UNIQUE NOT NULL,         -- 'saskatoon', 'regina', etc.
-     display_name TEXT NOT NULL,
-     polygon JSONB NOT NULL,             -- GeoJSON polygon
-     is_active BOOLEAN DEFAULT FALSE,
-     min_drivers_to_accept_rides INT DEFAULT 1,
-     created_at TIMESTAMPTZ DEFAULT now(),
-     updated_at TIMESTAMPTZ DEFAULT now()
-   );
-   -- Seed Saskatoon polygon (rough city limits) as is_active = true.
-   -- Other cities can be seeded as is_active = false for later activation.
+   -- In Supabase SQL editor:
+   SELECT id, name, is_active FROM service_areas;
+   -- Expect: only Saskatoon is_active = true at launch.
+   -- Anything else set to true is a leak that lets rides book outside Saskatoon.
    ```
-2. Dispatch service filter: `find_nearby_drivers` and ride-creation must reject rides whose pickup is outside any active service area.
-3. Surge engine respects service areas (already per-area in `surge_engine.py` but verify).
-4. Admin dashboard page to manage service areas (toggle active, edit polygon).
-5. Rider app: graceful "Spinr isn't available in your area yet" screen when pickup is outside the geofence.
 
-**Until this lands, launching publicly is unsafe:** a rider in Regina could book a ride that no driver is available for, dispatch loops fruitlessly, and the rider has a broken experience.
+4. **At launch:** flip Saskatoon `is_active = true` via admin UI. Audit log row is written automatically.
 
-**Workaround for invite-only soft launch:** if you must launch before this code lands, restrict the rider invite list to verified Saskatoon residents AND keep all drivers physically in Saskatoon. This is brittle and not recommended for public launch.
+### Smoke test (run before flipping is_active = true publicly)
 
-Open the implementation as a fresh ticket and PR once approved. Estimate: 1 day of backend + 0.5 day of admin UI + 0.5 day of rider app graceful-fail screen.
+Pickup inside Saskatoon — should succeed:
+
+```bash
+# Replace lat/lng with a real point inside the polygon (e.g. Midtown Plaza ≈ 52.1290, -106.6680).
+curl -X POST https://<prod-backend>/rides \
+  -H "Authorization: Bearer <rider-jwt>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "pickup_lat": 52.1290, "pickup_lng": -106.6680,
+    "dropoff_lat": 52.1322, "dropoff_lng": -106.6300,
+    "vehicle_type_id": "<id>"
+  }'
+# Expect: 200 OK, ride created with service_area_id = sa_saskatoon.
+```
+
+Pickup outside Saskatoon — should be rejected:
+
+```bash
+# A point clearly outside the polygon (e.g. Regina centre ≈ 50.4452, -104.6189).
+curl -X POST https://<prod-backend>/rides \
+  -H "Authorization: Bearer <rider-jwt>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "pickup_lat": 50.4452, "pickup_lng": -104.6189,
+    "dropoff_lat": 50.4500, "dropoff_lng": -104.6100,
+    "vehicle_type_id": "<id>"
+  }'
+# Expect: 400 with body {"code": "OUTSIDE_SERVICE_AREA", "message": "..."}.
+# Backend log will contain: [geofence] reject pickup=(50.44520,-104.61890) — outside N active service area(s)
+```
+
+Both responses, plus a backend log line containing `[geofence] reject pickup=…`, are the evidence that the enforcement is live and Saskatoon is correctly scoped.
+
+### Rider app graceful failure
+
+Confirm the rider app surfaces the `OUTSIDE_SERVICE_AREA` 400 cleanly — not as a generic "something went wrong" toast. If the current handling is generic, file a small follow-up to map the error code to a dedicated "Spinr isn't in your area yet" screen with a "Notify me when available" capture. Not launch-blocking, but a poor first impression for riders who try outside Saskatoon.
 
 ---
 
@@ -644,7 +688,7 @@ For a critical native bug:
 If a critical issue affects the entire platform, the fastest stop is:
 
 - Set every driver in Saskatoon to `is_online = false` via admin dashboard bulk action (script in `backend/scripts/`).
-- Or set the Saskatoon service area `is_active = false` (once H is implemented) — instantly stops new rides without disrupting in-flight ones.
+- Or set the Saskatoon service area `is_active = false` via admin → Service Areas — instantly stops new rides (ride creation will 400 with `OUTSIDE_SERVICE_AREA`) without disrupting in-flight ones.
 - Riders see "Spinr is temporarily unavailable" screen.
 - In-flight rides complete normally.
 

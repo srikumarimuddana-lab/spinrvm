@@ -2430,9 +2430,38 @@ async def get_active_ride(current_user: dict = Depends(get_current_user)):
     )
 
     if not ride:
-        # Help diagnose: list the driver's most recent rides regardless of
-        # status so we can see whether the $in filter missed something, or
-        # the driver_id on the latest ride doesn't match.
+        # Batch dispatch keeps rides in 'searching' without setting driver_id.
+        # Check ride_offers for a pending offer so the driver app can recover
+        # the offer state after restart/reconnect.
+        try:
+            pending_offer = await db_supabase.run_sync(
+                lambda: (
+                    db_supabase.supabase.table("ride_offers")
+                    .select("ride_id")
+                    .eq("driver_id", driver["id"])
+                    .eq("status", "pending")
+                    .limit(1)
+                    .execute()
+                )
+            )
+            if pending_offer.data:
+                offer_ride_id = pending_offer.data[0]["ride_id"]
+                ride = await db_supabase.get_ride(offer_ride_id)
+                if ride and ride.get("status") == RideStatus.SEARCHING:
+                    diag_logger.info(
+                        f"[ACTIVE] found pending batch offer ride_id={offer_ride_id} for driver_id={driver['id']}"
+                    )
+                    # Mark as driver_assigned for the client — the offer is
+                    # logically assigned even though the ride row isn't updated
+                    # until acceptance.
+                    ride["status"] = RideStatus.DRIVER_ASSIGNED
+                else:
+                    ride = None
+        except Exception as e:
+            diag_logger.warning(f"[ACTIVE] ride_offers lookup failed: {e}")
+            ride = None
+
+    if not ride:
         try:
             recent = await db_supabase.get_rows("rides", {"driver_id": driver["id"]}, limit=5)
             recent_summary = [

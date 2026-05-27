@@ -28,7 +28,7 @@ SET driver_earnings_snapshot = jsonb_build_object(
 )
 WHERE status = 'completed' AND driver_earnings_snapshot IS NULL;
 
--- Also fix the double-counted driver_earnings column for existing rides
+-- Fix double-counted driver_earnings for existing rides
 UPDATE rides
 SET driver_earnings = COALESCE(base_fare, 0) + COALESCE(distance_fare, 0) + COALESCE(time_fare, 0) + COALESCE(tip_amount, 0)
 WHERE status = 'completed'

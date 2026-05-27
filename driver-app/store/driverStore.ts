@@ -733,11 +733,14 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                 });
                 _persistDriverState(rideState, res.data);
             } else {
-                // No active ride on the server — reset everything including
-                // rideState so a stale AsyncStorage restore (from hydrateDriverRideState)
-                // doesn't leave the idle panel hidden indefinitely.
-                set({ activeRide: null, rideState: 'idle', incomingRide: null, countdownSeconds: 0 });
-                AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
+                // No active ride on the server. With batch dispatch the ride
+                // stays in 'searching' (no driver_id set), so the API returns
+                // null even though a live WS offer is counting down. Don't
+                // nuke a ride_offered state — the WS/timeout handler manages it.
+                if (get().rideState !== 'ride_offered') {
+                    set({ activeRide: null, rideState: 'idle', incomingRide: null, countdownSeconds: 0 });
+                    AsyncStorage.removeItem(DRIVER_RIDE_KEY).catch(() => {});
+                }
             }
         } catch {
             // On network errors, don't wipe a live offer — the driver is

@@ -92,6 +92,7 @@ class FareConfigUpdateRequest(BaseModel):
 
 class LostAndFoundRequest(BaseModel):
     item_description: str
+    service_area_id: Optional[str] = None
 
 
 class LostAndFoundUpdateRequest(BaseModel):
@@ -384,7 +385,7 @@ async def admin_report_lost_item(ride_id: str, req: LostAndFoundRequest):
     if not driver_id:
         raise HTTPException(status_code=400, detail="No driver assigned to this ride")
 
-    item_data = {
+    item_data: Dict[str, Any] = {
         "id": str(uuid.uuid4()),
         "ride_id": ride_id,
         "reporter_id": rider_id,
@@ -392,6 +393,8 @@ async def admin_report_lost_item(ride_id: str, req: LostAndFoundRequest):
         "item_description": req.item_description,
         "status": "reported",
     }
+    if req.service_area_id:
+        item_data["service_area_id"] = req.service_area_id
 
     item = await db_supabase.create_lost_and_found(item_data)
 
@@ -497,7 +500,8 @@ async def admin_update_lost_item(item_id: str, req: LostAndFoundUpdateRequest):
 @router.delete("/lost-and-found/{item_id}")
 async def admin_delete_lost_item(item_id: str):
     """Delete a lost and found item."""
-    deleted = await db_supabase.delete_one("lost_and_found", {"id": item_id})
-    if not deleted:
+    existing = await db_supabase.get_rows("lost_and_found", {"id": item_id}, limit=1)
+    if not existing:
         raise HTTPException(status_code=404, detail="Item not found")
+    await db_supabase.delete_one("lost_and_found", {"id": item_id})
     return {"message": "Item deleted"}

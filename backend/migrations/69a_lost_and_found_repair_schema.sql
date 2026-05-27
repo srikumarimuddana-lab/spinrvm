@@ -64,9 +64,12 @@ END $$;
 
 ALTER TABLE lost_and_found
     ADD COLUMN IF NOT EXISTS reporter_id     TEXT,
+    ADD COLUMN IF NOT EXISTS driver_id       TEXT,
     ADD COLUMN IF NOT EXISTS contact_method  TEXT,
     ADD COLUMN IF NOT EXISTS item_category   TEXT,
+    ADD COLUMN IF NOT EXISTS admin_notes     TEXT,
     ADD COLUMN IF NOT EXISTS driver_note     TEXT,
+    ADD COLUMN IF NOT EXISTS notified_at     TIMESTAMPTZ,
     ADD COLUMN IF NOT EXISTS service_area_id TEXT REFERENCES service_areas(id) ON DELETE SET NULL;
 
 ALTER TABLE lost_and_found DROP CONSTRAINT IF EXISTS lost_and_found_status_check;

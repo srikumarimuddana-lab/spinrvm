@@ -6,6 +6,7 @@ import socket
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Union
+from zoneinfo import ZoneInfo
 
 import stripe
 from fastapi import (
@@ -913,9 +914,10 @@ async def get_driver_earnings(period: str = Query("week"), current_user: dict = 
     logger.info(f"Fetching earnings for driver {driver['id']} period {period}")
 
     # Calculate date range
-    now = datetime.now(timezone.utc)
-    # 'today' and 'day' both mean since midnight today
-    # 'all' means no date restriction — fetch all-time
+    # Use Saskatchewan time (UTC-6, no DST) for day boundaries so "today" aligns
+    # with the driver's local calendar date, not midnight UTC.
+    _SK_TZ = ZoneInfo("America/Regina")
+    now = datetime.now(_SK_TZ)
     use_date_filter = True
     if period in ("today", "day"):
         start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)

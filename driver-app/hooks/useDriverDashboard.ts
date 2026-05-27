@@ -577,11 +577,15 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         });
         break;
       }
-      case 'ride_offer_expired':
+      case 'ride_offer_expired': {
+        const hadVisibleOffer = useDriverStore.getState().rideState === 'ride_offered';
         offerSound.stop();
         resetRideState();
-        showToast('info', 'Offer expired', 'Looking for the next ride...');
+        if (hadVisibleOffer) {
+          showToast('info', 'Offer expired', 'Looking for the next ride...');
+        }
         break;
+      }
       case 'ride_taken':
         offerSound.stop();
         resetRideState();

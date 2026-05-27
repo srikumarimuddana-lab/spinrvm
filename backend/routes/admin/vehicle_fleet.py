@@ -29,9 +29,7 @@ except ImportError:
 # meant to render in a 72×48 dp card on the rider app.
 _MAX_ILLUSTRATION_BYTES = 500 * 1024
 _ILLUSTRATION_BUCKET = "vehicle-illustrations"
-_ILLUSTRATION_MIME_TYPES = frozenset(
-    {"image/png", "image/jpeg", "image/jpg", "image/webp"}
-)
+_ILLUSTRATION_MIME_TYPES = frozenset({"image/png", "image/jpeg", "image/jpg", "image/webp"})
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +92,7 @@ class FareConfigUpdateRequest(BaseModel):
 
 class LostAndFoundRequest(BaseModel):
     item_description: str
+    service_area_id: Optional[str] = None
 
 
 class LostAndFoundUpdateRequest(BaseModel):
@@ -181,9 +180,7 @@ async def admin_upload_vehicle_illustration(
     load it without an auth header.
     """
     # Verify the vehicle type exists before consuming the upload.
-    vt = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows("vehicle_types", {"id": type_id}, limit=1)
-    )
+    vt = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("vehicle_types", {"id": type_id}, limit=1))
     if not vt:
         raise HTTPException(status_code=404, detail="Vehicle type not found")
 
@@ -218,24 +215,16 @@ async def admin_upload_vehicle_illustration(
         raise HTTPException(status_code=502, detail="Storage upload failed") from e
 
     # Public URL — bucket is public-read so no signed URL needed.
-    public_url_res = supabase.storage.from_(_ILLUSTRATION_BUCKET).get_public_url(
-        object_path
-    )
+    public_url_res = supabase.storage.from_(_ILLUSTRATION_BUCKET).get_public_url(object_path)
     # supabase-py returns either a string or an object with a publicUrl attr
-    public_url = (
-        public_url_res
-        if isinstance(public_url_res, str)
-        else getattr(public_url_res, "public_url", None)
-    )
+    public_url = public_url_res if isinstance(public_url_res, str) else getattr(public_url_res, "public_url", None)
     if not public_url:
         raise HTTPException(
             status_code=502,
             detail="Could not resolve public URL for uploaded illustration",
         )
 
-    await db_supabase.update_one(
-        "vehicle_types", {"id": type_id}, {"illustration_url": public_url}
-    )
+    await db_supabase.update_one("vehicle_types", {"id": type_id}, {"illustration_url": public_url})
     await invalidate_fare_cache()
 
     logger.info(
@@ -266,17 +255,13 @@ async def admin_delete_vehicle_type(type_id: str):
     Service Areas → <area> → Vehicle Pricing, then re-tries the
     delete.
     """
-    vt = (lambda _r: _r[0] if _r else None)(
-        await db_supabase.get_rows("vehicle_types", {"id": type_id}, limit=1)
-    )
+    vt = (lambda _r: _r[0] if _r else None)(await db_supabase.get_rows("vehicle_types", {"id": type_id}, limit=1))
     if not vt:
         raise HTTPException(status_code=404, detail="Vehicle type not found")
     vt_name = vt.get("name") or ""
 
     # fare_configs referencing this type
-    fare_cfg_rows = await db_supabase.get_rows(
-        "fare_configs", {"vehicle_type_id": type_id}, limit=500
-    )
+    fare_cfg_rows = await db_supabase.get_rows("fare_configs", {"vehicle_type_id": type_id}, limit=500)
     fare_cfg_count = len(fare_cfg_rows or [])
 
     # service_areas whose vehicle_pricing JSONB array contains a row
@@ -298,11 +283,7 @@ async def admin_delete_vehicle_type(type_id: str):
         parts = []
         if area_names_using_it:
             preview = ", ".join(area_names_using_it[:5])
-            more = (
-                f" and {len(area_names_using_it) - 5} more"
-                if len(area_names_using_it) > 5
-                else ""
-            )
+            more = f" and {len(area_names_using_it) - 5} more" if len(area_names_using_it) > 5 else ""
             parts.append(f"{len(area_names_using_it)} service area(s): {preview}{more}")
         if fare_cfg_count > 0:
             parts.append(f"{fare_cfg_count} fare config(s)")
@@ -327,9 +308,7 @@ async def admin_delete_vehicle_type(type_id: str):
 @router.get("/fare-configs")
 async def admin_get_fare_configs():
     """Get all fare configurations."""
-    configs = await db_supabase.get_rows(
-        "fare_configs", order="created_at", desc=True, limit=200
-    )
+    configs = await db_supabase.get_rows("fare_configs", order="created_at", desc=True, limit=200)
     return configs
 
 
@@ -341,15 +320,9 @@ async def admin_create_fare_config(config: FareConfigCreateRequest):
         "service_area_id": config.service_area_id,
         "vehicle_type_id": config.vehicle_type_id,
         "base_fare": config.base_fare,
-        "per_km_rate": (
-            config.per_km_rate
-            if config.per_km_rate is not None
-            else config.price_per_km or 0
-        ),
+        "per_km_rate": (config.per_km_rate if config.per_km_rate is not None else config.price_per_km or 0),
         "per_minute_rate": (
-            config.per_minute_rate
-            if config.per_minute_rate is not None
-            else config.price_per_minute or 0
+            config.per_minute_rate if config.per_minute_rate is not None else config.price_per_minute or 0
         ),
         "minimum_fare": config.minimum_fare,
         "booking_fee": config.booking_fee,
@@ -370,16 +343,10 @@ async def admin_update_fare_config(config_id: str, config: FareConfigUpdateReque
         updates["name"] = config.name
     if config.base_fare is not None:
         updates["base_fare"] = config.base_fare
-    per_km = (
-        config.per_km_rate if config.per_km_rate is not None else config.price_per_km
-    )
+    per_km = config.per_km_rate if config.per_km_rate is not None else config.price_per_km
     if per_km is not None:
         updates["per_km_rate"] = per_km
-    per_min = (
-        config.per_minute_rate
-        if config.per_minute_rate is not None
-        else config.price_per_minute
-    )
+    per_min = config.per_minute_rate if config.per_minute_rate is not None else config.price_per_minute
     if per_min is not None:
         updates["per_minute_rate"] = per_min
     if config.area_geojson is not None:
@@ -418,15 +385,16 @@ async def admin_report_lost_item(ride_id: str, req: LostAndFoundRequest):
     if not driver_id:
         raise HTTPException(status_code=400, detail="No driver assigned to this ride")
 
-    item_data = {
+    item_data: Dict[str, Any] = {
         "id": str(uuid.uuid4()),
         "ride_id": ride_id,
-        "rider_id": rider_id or "",
+        "reporter_id": rider_id,
         "driver_id": driver_id,
         "item_description": req.item_description,
         "status": "reported",
-        "created_by": "admin",
     }
+    if req.service_area_id:
+        item_data["service_area_id"] = req.service_area_id
 
     item = await db_supabase.create_lost_and_found(item_data)
 
@@ -455,7 +423,7 @@ async def admin_report_lost_item(ride_id: str, req: LostAndFoundRequest):
                     },
                 )
     except Exception as e:
-        logger.warning(f"Failed to send lost item notification: {e}")
+        logger.error(f"Failed to send lost item notification for ride {ride_id}: {e}", exc_info=True)
 
     return item
 
@@ -463,6 +431,8 @@ async def admin_report_lost_item(ride_id: str, req: LostAndFoundRequest):
 @router.put("/lost-and-found/{item_id}/resolve")
 async def admin_resolve_lost_item(item_id: str, req: LostAndFoundResolveRequest):
     """Resolve or mark a lost and found item as unresolved."""
+    if req.status not in ("resolved", "unresolved"):
+        raise HTTPException(status_code=422, detail="status must be 'resolved' or 'unresolved'")
     update_data: Dict[str, Any] = {
         "status": req.status,
         "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -502,9 +472,17 @@ async def admin_list_lost_and_found(
     return items
 
 
+_VALID_STATUSES = frozenset({"reported", "driver_notified", "found", "returned", "unclaimed", "resolved", "unresolved"})
+
+
 @router.put("/lost-and-found/{item_id}")
 async def admin_update_lost_item(item_id: str, req: LostAndFoundUpdateRequest):
     """Update a lost and found item."""
+    if req.status is not None and req.status not in _VALID_STATUSES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid status. Must be one of: {', '.join(sorted(_VALID_STATUSES))}",
+        )
     update: Dict[str, Any] = {}
     if req.item_description is not None:
         update["item_description"] = req.item_description
@@ -522,5 +500,8 @@ async def admin_update_lost_item(item_id: str, req: LostAndFoundUpdateRequest):
 @router.delete("/lost-and-found/{item_id}")
 async def admin_delete_lost_item(item_id: str):
     """Delete a lost and found item."""
+    existing = await db_supabase.get_rows("lost_and_found", {"id": item_id}, limit=1)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Item not found")
     await db_supabase.delete_one("lost_and_found", {"id": item_id})
     return {"message": "Item deleted"}

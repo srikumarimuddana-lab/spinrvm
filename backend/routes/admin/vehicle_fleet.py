@@ -425,17 +425,13 @@ async def admin_report_lost_item(ride_id: str, req: LostAndFoundRequest):
     return item
 
 
-_RESOLVE_STATUS_MAP = {"resolved": "returned", "unresolved": "reported"}
-
-
 @router.put("/lost-and-found/{item_id}/resolve")
 async def admin_resolve_lost_item(item_id: str, req: LostAndFoundResolveRequest):
     """Resolve or mark a lost and found item as unresolved."""
-    if req.status not in _RESOLVE_STATUS_MAP:
+    if req.status not in ("resolved", "unresolved"):
         raise HTTPException(status_code=422, detail="status must be 'resolved' or 'unresolved'")
-    db_status = _RESOLVE_STATUS_MAP[req.status]
     update_data: Dict[str, Any] = {
-        "status": db_status,
+        "status": req.status,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     if req.admin_notes:
@@ -473,7 +469,7 @@ async def admin_list_lost_and_found(
     return items
 
 
-_VALID_STATUSES = frozenset({"reported", "driver_notified", "found", "returned", "unclaimed"})
+_VALID_STATUSES = frozenset({"reported", "driver_notified", "found", "returned", "unclaimed", "resolved", "unresolved"})
 
 
 @router.put("/lost-and-found/{item_id}")

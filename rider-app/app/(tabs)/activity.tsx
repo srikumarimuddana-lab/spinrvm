@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback, useRef } from 'react';
+import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -44,6 +44,15 @@ interface RideHistory {
 
 type FilterType = 'all' | 'personal' | 'business';
 type TabType = 'history' | 'upcoming';
+type Period = 'today' | 'week' | 'month' | 'all';
+
+interface RiderStats {
+  period: string;
+  total_rides: number;
+  total_distance_km: number;
+  total_saved: string;
+  co2_saved_kg: number;
+}
 
 const PAGE_LIMIT = 20;
 
@@ -55,6 +64,9 @@ export default function ActivityScreen() {
   const [vehicleTypes, setVehicleTypes] = useState<Record<string, string>>({});
   const [filter, setFilter] = useState<FilterType>('all');
   const [activeTab, setActiveTab] = useState<TabType>('history');
+  const [period, setPeriod] = useState<Period>('all');
+  const [stats, setStats] = useState<RiderStats | null>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
@@ -70,6 +82,18 @@ export default function ActivityScreen() {
       : `/rides/history?limit=${PAGE_LIMIT}`;
     const res = await api.get<{ rides: RideHistory[]; next_cursor: string | null }>(url);
     return { rides: res.data?.rides ?? [], next_cursor: res.data?.next_cursor ?? null };
+  }, []);
+
+  const fetchStats = useCallback(async (p: Period) => {
+    setStatsLoading(true);
+    try {
+      const res = await api.get<RiderStats>(`/rides/stats?period=${p}`);
+      setStats(res.data);
+    } catch {
+      // non-fatal — stats card simply stays empty
+    } finally {
+      setStatsLoading(false);
+    }
   }, []);
 
   const fetchData = useCallback(async () => {
@@ -107,6 +131,9 @@ export default function ActivityScreen() {
     }
   }, [loadingMore, nextCursor, fetchPage]);
 
+  // Re-fetch stats whenever period pill changes
+  useEffect(() => { fetchStats(period); }, [period, fetchStats]);
+
   const lastFetchedAt = useRef<number>(0);
   const ACTIVITY_TTL_MS = 30 * 1000;
 
@@ -116,6 +143,7 @@ export default function ActivityScreen() {
       if (now - lastFetchedAt.current > ACTIVITY_TTL_MS) {
         lastFetchedAt.current = now;
         fetchData();
+        fetchStats(period);
         fetchScheduledRides();
       }
     }, [fetchData, fetchScheduledRides])
@@ -323,6 +351,64 @@ export default function ActivityScreen() {
 
       {activeTab === 'history' && (
         <>
+          {/* Period pills — ordered broadest-first so riders see lifetime impact first */}
+          <View style={styles.periodPillRow}>
+            {([
+              { key: 'all',   label: 'All Time' },
+              { key: 'month', label: 'This Month' },
+              { key: 'week',  label: 'This Week' },
+              { key: 'today', label: 'Today' },
+            ] as { key: Period; label: string }[]).map(({ key, label }) => (
+              <TouchableOpacity
+                key={key}
+                style={[styles.periodPill, period === key && styles.periodPillActive]}
+                onPress={() => setPeriod(key)}
+                accessibilityRole="radio"
+                accessibilityState={{ checked: period === key }}
+              >
+                <Text style={[styles.periodPillText, period === key && styles.periodPillTextActive]}>
+                  {label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          {/* Stats summary card */}
+          <View style={styles.statsCard}>
+            {statsLoading ? (
+              <View style={styles.statsRow}>
+                {[0, 1, 2, 3].map(i => (
+                  <View key={i} style={styles.statItem}>
+                    <SkeletonBox width={44} height={18} style={{ marginBottom: 4 }} />
+                    <SkeletonBox width={32} height={12} />
+                  </View>
+                ))}
+              </View>
+            ) : (
+              <View style={styles.statsRow}>
+                <View style={styles.statItem}>
+                  <Text style={styles.statValue}>{stats?.total_rides ?? 0}</Text>
+                  <Text style={styles.statLabel}>Trips</Text>
+                </View>
+                <View style={styles.statDivider} />
+                <View style={styles.statItem}>
+                  <Text style={styles.statValue}>{stats?.total_distance_km?.toFixed(1) ?? '0.0'}</Text>
+                  <Text style={styles.statLabel}>km</Text>
+                </View>
+                <View style={styles.statDivider} />
+                <View style={styles.statItem}>
+                  <Text style={[styles.statValue, { color: '#10B981' }]}>${stats?.total_saved ?? '0.00'}</Text>
+                  <Text style={styles.statLabel}>Saved</Text>
+                </View>
+                <View style={styles.statDivider} />
+                <View style={styles.statItem}>
+                  <Text style={[styles.statValue, { color: '#22C55E' }]}>{stats?.co2_saved_kg?.toFixed(1) ?? '0.0'}</Text>
+                  <Text style={styles.statLabel}>kg CO₂</Text>
+                </View>
+              </View>
+            )}
+          </View>
+
           <View style={styles.filterTabs}>
             {(['all', 'personal', 'business'] as FilterType[]).map(f => (
               <TouchableOpacity
@@ -469,6 +555,30 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
   tabActive: { borderBottomColor: colors.primary },
   tabText: { fontSize: 15, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.textDim },
   tabTextActive: { color: colors.primary },
+  periodPillRow: {
+    flexDirection: 'row', paddingHorizontal: 20, paddingTop: 12, gap: 8, flexWrap: 'wrap',
+  },
+  periodPill: {
+    paddingHorizontal: 14, paddingVertical: 7,
+    borderRadius: 20, borderWidth: 1.5, borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  periodPillActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  periodPillText: {
+    fontSize: 13, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.text,
+  },
+  periodPillTextActive: { color: '#fff' },
+  statsCard: {
+    marginHorizontal: 20, marginTop: 12, marginBottom: 4,
+    backgroundColor: colors.surfaceLight ?? colors.surface,
+    borderRadius: 16, padding: 16,
+    borderWidth: 1, borderColor: colors.border,
+  },
+  statsRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around' },
+  statItem: { flex: 1, alignItems: 'center' },
+  statValue: { fontSize: 17, fontFamily: 'PlusJakartaSans_700Bold', color: colors.primary, marginBottom: 2 },
+  statLabel: { fontSize: 11, fontFamily: 'PlusJakartaSans_500Medium', color: colors.textDim },
+  statDivider: { width: 1, height: 32, backgroundColor: colors.border },
   filterTabs: {
     flexDirection: 'row', paddingHorizontal: 20, marginBottom: 8, gap: 8,
   },

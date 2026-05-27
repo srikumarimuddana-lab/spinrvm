@@ -150,7 +150,10 @@ async def _record_otp_failure(phone: str) -> None:
                 "1",
                 settings.OTP_LOCKOUT_DURATION_SECONDS,
             )
-            logger.warning(f"OTP_LOCKOUT_TRIGGERED phone=...{phone[-4:]} after {count} failures")
+            # Security-relevant event: brute-force lockout fired. Route to Sentry
+            # via logger.error so on-call can correlate spikes to potential
+            # credential-stuffing campaigns. Audit row also written below.
+            logger.error(f"OTP_LOCKOUT_TRIGGERED phone=...{phone[-4:]} after {count} failures")
             try:
                 import asyncio
 
@@ -379,8 +382,11 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
         try:
             await db_supabase.delete_otp_record(otp_record["id"])
         except Exception:
-            # Non-fatal: OTP expiry cleanup failure does not block the error response
-            logger.warning(
+            # DB write failure on cleanup path — surface to Sentry per
+            # CLAUDE.md "Do not silently swallow errors" rule. Non-fatal for
+            # the request (we still return ERR_OTP_EXPIRED below) but the
+            # backlog of orphaned OTP rows needs operator attention.
+            logger.error(
                 "Failed to delete expired OTP record %s",
                 otp_record["id"],
                 exc_info=True,

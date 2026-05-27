@@ -552,6 +552,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         }
         Vibration.vibrate([0, 500, 200, 500]);
         offerSound.play();
+        router.replace('/driver/' as any);
         setIncomingRide({
           ride_id: data.ride_id,
           pickup_address: data.pickup_address,
@@ -768,7 +769,13 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
 
         lastServerMsgRef.current = Date.now();
         if (data.type === 'error') {
-          setWsError(data.message || 'Connection error');
+          const msg = data.message || '';
+          // Auth errors (expired/invalid token) are handled by reconnect —
+          // don't scare the driver with technical messages.
+          if (msg.includes('token') || msg.includes('auth') || msg.includes('user_not_found')) {
+            return;
+          }
+          setWsError(t('dashboard.connectionLost'));
           return;
         }
         // auth_success is the definitive signal that the backend accepted
@@ -1196,6 +1203,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         if (!isUpdate) {
           Vibration.vibrate([0, 500, 200, 500]);
           offerSound.play();
+          router.replace('/driver/' as any);
         }
         // FCM values are all strings. Parse JSON for arrays/objects.
         const safeParse = (v: unknown) => {

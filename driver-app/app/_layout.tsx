@@ -94,14 +94,24 @@ if (!isExpoGo && Platform.OS !== 'web') {
 //    play a sound, so the driver silently misses ride offers.
 if (Notifications) {
   Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldShowBanner: true,
-      shouldShowList: true,
-      shouldPlaySound: true,
-      shouldSetBadge: true,
-      // Legacy (SDK <53) — harmless on newer SDKs.
-      shouldShowAlert: true,
-    }),
+    handleNotification: async (notification: any) => {
+      const data = notification?.request?.content?.data ?? {};
+      // Ride offers are surfaced via Notifee full-screen intent — suppress
+      // the plain native banner so the driver doesn't see both.
+      // Ride status changes (completed, cancelled, etc.) are handled in-app
+      // via WS + the dashboard panels — no native notification needed.
+      const suppressTypes = ['new_ride_assignment', 'ride_completed', 'ride_cancelled', 'ride_status_changed'];
+      if (suppressTypes.includes(data?.type)) {
+        return { shouldShowBanner: false, shouldShowList: false, shouldPlaySound: false, shouldSetBadge: false, shouldShowAlert: false };
+      }
+      return {
+        shouldShowBanner: true,
+        shouldShowList: true,
+        shouldPlaySound: true,
+        shouldSetBadge: true,
+        shouldShowAlert: true,
+      };
+    },
   });
 }
 

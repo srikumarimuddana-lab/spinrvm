@@ -3134,47 +3134,66 @@ async def cancel_ride_rider(
 
     total_cancel_fee = _round(charged_admin + charged_driver)
 
-    # Charge the rider the cancellation fee before paying the driver.
-    if total_cancel_fee > 0:
-        payment_method = (ride.get("payment_method") or "card").lower()
-        if payment_method == "wallet":
-            rider_wallet = await db_supabase.find_one("wallets", {"user_id": current_user["id"]})
-            if rider_wallet:
-                old_balance = _round(_d(rider_wallet.get("balance", 0)))
-                new_balance = max(_round(old_balance - total_cancel_fee), Decimal("0"))
-                actual_charge = _round(old_balance - new_balance)
-                if actual_charge > 0:
-                    await db_supabase.update_one(
-                        "wallets",
-                        {"id": rider_wallet["id"]},
-                        {
-                            "balance": _f(new_balance),
-                            "updated_at": datetime.now(timezone.utc).isoformat(),
-                        },
-                    )
-                    await db_supabase.insert_one(
-                        "wallet_transactions",
-                        {
-                            "id": str(uuid.uuid4()),
-                            "wallet_id": rider_wallet["id"],
-                            "user_id": current_user["id"],
-                            "type": "cancellation_fee",
-                            "amount": -_f(actual_charge),
-                            "balance_after": _f(new_balance),
-                            "reference_id": ride_id,
-                            "description": f"Cancellation fee for ride {ride_id[:8]}",
-                            "metadata": {"ride_id": ride_id},
-                            "created_at": datetime.now(timezone.utc).isoformat(),
-                        },
-                    )
+    # The cancel is already persisted by the atomic claim above, so the
+    # assigned driver MUST be released, transitioned back to Period 1, and
+    # notified regardless of what happens while charging the fee. If a wallet
+    # write or the driver payout raises here, we cannot exit before the
+    # set_driver_available / insurance / notification cleanup below — that
+    # would strand the driver as unavailable and uninformed on a ride that is
+    # already cancelled. So the fee writes are best-effort after the claim:
+    # surface the failure loudly (error + traceback, per repo policy) for
+    # reconciliation, then fall through to driver cleanup.
+    try:
+        # Charge the rider the cancellation fee before paying the driver.
+        if total_cancel_fee > 0:
+            payment_method = (ride.get("payment_method") or "card").lower()
+            if payment_method == "wallet":
+                rider_wallet = await db_supabase.find_one("wallets", {"user_id": current_user["id"]})
+                if rider_wallet:
+                    old_balance = _round(_d(rider_wallet.get("balance", 0)))
+                    new_balance = max(_round(old_balance - total_cancel_fee), Decimal("0"))
+                    actual_charge = _round(old_balance - new_balance)
+                    if actual_charge > 0:
+                        await db_supabase.update_one(
+                            "wallets",
+                            {"id": rider_wallet["id"]},
+                            {
+                                "balance": _f(new_balance),
+                                "updated_at": datetime.now(timezone.utc).isoformat(),
+                            },
+                        )
+                        await db_supabase.insert_one(
+                            "wallet_transactions",
+                            {
+                                "id": str(uuid.uuid4()),
+                                "wallet_id": rider_wallet["id"],
+                                "user_id": current_user["id"],
+                                "type": "cancellation_fee",
+                                "amount": -_f(actual_charge),
+                                "balance_after": _f(new_balance),
+                                "reference_id": ride_id,
+                                "description": f"Cancellation fee for ride {ride_id[:8]}",
+                                "metadata": {"ride_id": ride_id},
+                                "created_at": datetime.now(timezone.utc).isoformat(),
+                            },
+                        )
 
-    if driver_id and charged_driver > 0:
-        await pay_driver_cancellation_fee(
-            ride_id=ride_id,
-            driver_id=driver_id,
-            fee=charged_driver,
-            actor_user_id=current_user["id"],
-            ride_status_at_cancel=ride.get("status"),
+        if driver_id and charged_driver > 0:
+            await pay_driver_cancellation_fee(
+                ride_id=ride_id,
+                driver_id=driver_id,
+                fee=charged_driver,
+                actor_user_id=current_user["id"],
+                ride_status_at_cancel=ride.get("status"),
+            )
+    except Exception as _fee_exc:
+        logger.error(
+            "[CANCEL] cancellation-fee write failed after the cancel was "
+            "persisted for ride %s; releasing the driver anyway — fee needs "
+            "reconciliation: %s",
+            ride_id,
+            getattr(_fee_exc, "details", {}).get("original", _fee_exc) if hasattr(_fee_exc, "details") else _fee_exc,
+            exc_info=True,
         )
 
     _now = datetime.now(timezone.utc)

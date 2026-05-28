@@ -495,8 +495,22 @@ async def admin_update_surge(area_id: str, req: UpdateSurgeRequest):
     if req.surge_active is not None:
         update_data["surge_active"] = req.surge_active
     if req.surge_multiplier is not None:
-        if req.surge_multiplier < 1.0 or req.surge_multiplier > 10.0:
-            raise HTTPException(status_code=400, detail="Multiplier must be between 1.0 and 10.0")
+        # This endpoint has no written-justification field and writes no
+        # audit-log row, so it must not be a path to exceed the surge cap.
+        # Above-cap (> 2.5x) overrides are a regulatory + reputational risk and
+        # are only permitted via the canonical admin endpoint
+        # (PUT /api/admin/service-areas/{id}/surge), which requires a
+        # justification string and records a "surge_override_above_cap" audit
+        # entry. Hard-reject anything above SURGE_CAP here.
+        if req.surge_multiplier < 1.0 or req.surge_multiplier > SURGE_CAP:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"surge_multiplier must be between 1.0 and {SURGE_CAP}. "
+                    "Above-cap overrides require the audited admin endpoint "
+                    "with a written justification."
+                ),
+            )
         update_data["surge_multiplier"] = req.surge_multiplier
 
     if update_data:

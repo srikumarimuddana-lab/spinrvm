@@ -181,22 +181,41 @@ class AppCache {
     }
 
     /**
-     * Clear user-specific cache (on logout)
+     * Clear user-specific cache (on logout).
+     *
+     * Explicitly removes every known sensitive key from persistent storage,
+     * not only keys that happen to be in the current in-memory map. If a
+     * prior session wrote profile/document/image data and the app was killed
+     * before the next login, the in-memory map would be empty while the
+     * AsyncStorage/localStorage entries persisted — leaving PII recoverable
+     * on a shared or rooted device.
      */
     async clearUserCache(): Promise<void> {
-        try {
-            const keysToRemove: string[] = [];
+        const SENSITIVE_STATIC_KEYS = [
+            CACHE_KEYS.USER_PROFILE,
+            CACHE_KEYS.DRIVER_PROFILE,
+            CACHE_KEYS.DOCUMENT_REQUIREMENTS,
+            CACHE_KEYS.VEHICLE_TYPES,
+            CACHE_KEYS.PRICING_RULES,
+            CACHE_KEYS.SERVICE_AREAS,
+        ];
 
-            // Collect keys to remove from memory
+        try {
+            // 1. Flush memory entries that match user/driver prefixes.
+            const memKeysToRemove: string[] = [];
             for (const key of this.memoryCache.keys()) {
                 if (key.startsWith('cache:user_') || key.startsWith('cache:driver_')) {
-                    keysToRemove.push(key);
+                    memKeysToRemove.push(key);
                 }
             }
+            for (const key of memKeysToRemove) {
+                this.memoryCache.delete(key);
+            }
 
-            // Remove from memory and storage
-            for (const key of keysToRemove) {
-                await this.remove(key);
+            // 2. Unconditionally purge every known sensitive key from persistent
+            //    storage so stale entries from previous sessions are wiped too.
+            for (const key of SENSITIVE_STATIC_KEYS) {
+                await storage.removeItem(key).catch(() => {});
             }
 
             console.log('[Cache] Cleared user cache');

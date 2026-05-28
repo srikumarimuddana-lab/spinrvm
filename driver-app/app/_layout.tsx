@@ -39,7 +39,9 @@ import {
   requestPushPermissionAndGetToken,
   setBackgroundMessageHandler,
   onTokenRefresh,
+  getAppCheckToken,
 } from '@shared/services/firebase';
+import { setAppCheckTokenProvider } from '@shared/api/client';
 // Notifee — rich notifications (heads-up + full-screen intent + Accept/Decline
 // action buttons). Lazy-required because the native module isn't linked in
 // Expo Go / web; we treat the import failure the same as Expo Go: no-op.
@@ -371,6 +373,7 @@ export default function RootLayout() {
         // registration is deferred to a separate effect that waits for
         // an authenticated session (below).
         await initFirebaseServices();
+        setAppCheckTokenProvider(getAppCheckToken);
         await requestNotificationPermission();
 
         captureMessage('driver-app cold start', 'log');

@@ -164,6 +164,28 @@ export async function ensureFreshToken(): Promise<void> {
   }
 }
 
+// ── Firebase App Check token injection ──────────────────────────────
+// The mobile apps call setAppCheckTokenProvider() at startup after
+// initializing Firebase so every API request carries X-Firebase-AppCheck.
+// The provider is a zero-arg async fn that returns the token or null —
+// null means "App Check not available on this device/env" and the header
+// is simply omitted (backend enforcement decides whether to accept or reject).
+let _appCheckTokenProvider: (() => Promise<string | null>) | null = null;
+
+export function setAppCheckTokenProvider(fn: () => Promise<string | null>): void {
+  _appCheckTokenProvider = fn;
+}
+
+async function appCheckHeader(): Promise<Record<string, string>> {
+  if (!_appCheckTokenProvider) return {};
+  try {
+    const token = await _appCheckTokenProvider();
+    return token ? { 'X-Firebase-AppCheck': token } : {};
+  } catch {
+    return {};
+  }
+}
+
 // ── Phase 4 (P1-9): outgoing W3C traceparent header ─────────────────
 // Callers that have started a trace span (e.g. screen-level RUM) can
 // register the active trace ID here; the request methods forward it as
@@ -733,6 +755,7 @@ const client = {
       'X-Request-ID': generateRequestId(),
       ...deadlineHeader(),
       ...traceparentHeader(),
+      ...(await appCheckHeader()),
       ...config?.headers,
     };
     if (token) {
@@ -757,6 +780,7 @@ const client = {
       'X-Request-ID': generateRequestId(),
       ...deadlineHeader(),
       ...traceparentHeader(),
+      ...(await appCheckHeader()),
       ...config?.headers,
     };
     if (token) {
@@ -786,6 +810,7 @@ const client = {
       'X-Request-ID': generateRequestId(),
       ...deadlineHeader(),
       ...traceparentHeader(),
+      ...(await appCheckHeader()),
       ...config?.headers,
     };
     // Strip any Content-Type for FormData so fetch can set the multipart boundary itself.
@@ -818,6 +843,7 @@ const client = {
       'X-Request-ID': generateRequestId(),
       ...deadlineHeader(),
       ...traceparentHeader(),
+      ...(await appCheckHeader()),
       ...config?.headers,
     };
     if (token) {
@@ -846,6 +872,7 @@ const client = {
       'X-Request-ID': generateRequestId(),
       ...deadlineHeader(),
       ...traceparentHeader(),
+      ...(await appCheckHeader()),
       ...config?.headers,
     };
     if (token) {

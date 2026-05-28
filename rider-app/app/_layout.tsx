@@ -38,7 +38,9 @@ import {
   onForegroundMessage,
   setBackgroundMessageHandler,
   onTokenRefresh,
+  getAppCheckToken,
 } from '@shared/services/firebase';
+import { setAppCheckTokenProvider } from '@shared/api/client';
 import { handleScheduledRideReminderFCM } from '../hooks/useScheduledRideReminder';
 import { useRideStatusNotification } from '../hooks/useRideStatusNotification';
 import ConfirmSheet from '../components/ConfirmSheet';
@@ -181,6 +183,7 @@ export default function RootLayout() {
 
         await useRideStore.getState().hydrateActiveRide();
         await initFirebaseServices();
+        setAppCheckTokenProvider(getAppCheckToken);
         await requestNotificationPermission();
         captureMessage('rider-app cold start', 'log');
 

@@ -2719,12 +2719,25 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
 
     # Verify this driver was assigned
     if ride.get("driver_id") != driver["id"]:
-        # Check if it's open (searching) and we can claim it?
-        # For now assume mostly assigned flow.
-        # If status is searching, we might allow claim if using broadcast.
+        # Broadcast/searching path: only allow if a pending ride_offers row
+        # exists for this driver. Without this check, any driver who learns a
+        # ride_id (from WS, logs, or guessing) can bypass dispatch rules —
+        # proximity, WAV eligibility, verification status, fraud filters.
         if ride["status"] == RideStatus.SEARCHING:
-            # Allow claim
-            pass
+            pending_offer = None
+            try:
+                offer_rows = await db_supabase.get_rows(
+                    "ride_offers",
+                    {"ride_id": ride_id, "driver_id": driver["id"], "status": "pending"},
+                    limit=1,
+                )
+                pending_offer = offer_rows[0] if offer_rows else None
+            except Exception:
+                logger.error(
+                    "accept_ride: ride_offers lookup failed ride=%s driver=%s", ride_id, driver["id"], exc_info=True
+                )
+            if not pending_offer:
+                raise HTTPException(status_code=403, detail="No active offer for this ride")
         else:
             diag_logger.info(
                 f"[ACCEPT] ride_id={ride_id} not assigned to this driver: "
@@ -3135,7 +3148,22 @@ async def verify_pickup_otp(
 
 @api_router.post("/rides/{ride_id}/start")
 async def start_ride(ride_id: str, current_user: dict = Depends(get_current_user)):
-    """Start ride without OTP (if configured) or fallback."""
+    """Start ride without OTP — disabled in production.
+
+    In production all trip starts must go through POST /rides/{id}/verify-otp
+    so the rider's presence is confirmed before the meter starts. The no-OTP
+    path exists only as a dev/staging fallback (e.g. automated E2E tests).
+    """
+    try:
+        from ..core.config import settings as _settings
+    except ImportError:
+        from core.config import settings as _settings  # type: ignore
+
+    if _settings.ENV.lower() == "production":
+        raise HTTPException(
+            status_code=410,
+            detail="Use POST /rides/{ride_id}/verify-otp to start a ride in production.",
+        )
     driver = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
     )
@@ -4274,7 +4302,42 @@ async def get_driver(driver_id: str, current_user: dict = Depends(get_current_us
     driver = await db_supabase.get_driver_by_id(driver_id)
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
-    return serialize_doc(await _decrypt_driver_pii(driver))
+
+    requester_role = current_user.get("role", "")
+    is_admin = requester_role in {"admin", "super_admin", "operations", "support"}
+    is_self = driver.get("user_id") == current_user["id"]
+
+    if is_admin or is_self:
+        return serialize_doc(await _decrypt_driver_pii(driver))
+
+    # Rider with an active ride assigned to this driver gets a safe public projection.
+    active_ride = None
+    try:
+        rides = await db_supabase.get_rows(
+            "rides",
+            {
+                "driver_id": driver_id,
+                "rider_id": current_user["id"],
+                "status": {"$in": list(RideStatus.active_statuses())},
+            },
+            limit=1,
+        )
+        active_ride = rides[0] if rides else None
+    except Exception:
+        logger.error("get_driver: active-ride check failed driver=%s", driver_id, exc_info=True)
+
+    if not active_ride:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    return {
+        "id": driver["id"],
+        "name": driver.get("name"),
+        "rating": driver.get("rating"),
+        "vehicle_make": driver.get("vehicle_make"),
+        "vehicle_model": driver.get("vehicle_model"),
+        "vehicle_color": driver.get("vehicle_color"),
+        "license_plate": driver.get("license_plate"),
+    }
 
 
 @api_router.put("/{driver_id}/status")

@@ -203,3 +203,23 @@ export function recordError(error: Error) {
   if (!crashlytics) return;
   crashlytics().recordError(error);
 }
+
+
+/**
+ * Fetch a fresh Firebase App Check token.
+ *
+ * Returns null when App Check is not initialized (Expo Go, unit tests, devices
+ * without Play Integrity / DeviceCheck). The API client treats a null as
+ * "omit the header" rather than blocking the request, so the backend's
+ * enforcement mode determines whether the call succeeds.
+ */
+export async function getAppCheckToken(): Promise<string | null> {
+  if (!appCheck) return null;
+  try {
+    const result = await appCheck().getToken(false);
+    return result?.token ?? null;
+  } catch (e) {
+    console.log('[Firebase] App Check token fetch error:', e);
+    return null;
+  }
+}

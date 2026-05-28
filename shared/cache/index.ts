@@ -63,6 +63,14 @@ const createStorage = (): CacheStorage => {
 
 const storage = createStorage();
 
+// Cache keys embed user/driver IDs (e.g. cache:user_image:<userId>). Logging
+// them in production would leak identifiers into device logs / crash reports.
+// Gate the verbose cache trace behind __DEV__; errors still log everywhere.
+const _isDev = typeof __DEV__ !== 'undefined' ? __DEV__ : false;
+const clog = (...args: unknown[]): void => {
+  if (_isDev) console.log(...args);
+};
+
 // Cache entry structure
 interface CacheEntry<T> {
     data: T;
@@ -95,7 +103,7 @@ class AppCache {
             // First try memory cache (fastest)
             const memoryEntry = this.memoryCache.get(key);
             if (memoryEntry && memoryEntry.expiry > Date.now()) {
-                console.log(`[Cache] Memory hit: ${key}`);
+                clog(`[Cache] Memory hit: ${key}`);
                 return memoryEntry.data as T;
             }
 
@@ -106,12 +114,12 @@ class AppCache {
 
                 // Check if expired
                 if (entry.timestamp + entry.ttl < Date.now()) {
-                    console.log(`[Cache] Expired: ${key}`);
+                    clog(`[Cache] Expired: ${key}`);
                     await this.remove(key);
                     return null;
                 }
 
-                console.log(`[Cache] Storage hit: ${key}`);
+                clog(`[Cache] Storage hit: ${key}`);
                 // Restore to memory cache
                 this.memoryCache.set(key, {
                     data: entry.data,
@@ -120,7 +128,7 @@ class AppCache {
                 return entry.data as T;
             }
 
-            console.log(`[Cache] Miss: ${key}`);
+            clog(`[Cache] Miss: ${key}`);
             return null;
         } catch (error) {
             console.error(`[Cache] Error getting ${key}:`, error);
@@ -147,7 +155,7 @@ class AppCache {
 
             // Store in persistent storage
             await storage.setItem(key, JSON.stringify(entry));
-            console.log(`[Cache] Set: ${key} (TTL: ${entry.ttl}ms)`);
+            clog(`[Cache] Set: ${key} (TTL: ${entry.ttl}ms)`);
         } catch (error) {
             console.error(`[Cache] Error setting ${key}:`, error);
         }
@@ -160,7 +168,7 @@ class AppCache {
         try {
             this.memoryCache.delete(key);
             await storage.removeItem(key);
-            console.log(`[Cache] Removed: ${key}`);
+            clog(`[Cache] Removed: ${key}`);
         } catch (error) {
             console.error(`[Cache] Error removing ${key}:`, error);
         }
@@ -174,7 +182,7 @@ class AppCache {
             this.memoryCache.clear();
             // Note: For full clear, we'd need to iterate through all keys
             // This is handled by logout which removes specific keys
-            console.log('[Cache] Cleared memory cache');
+            clog('[Cache] Cleared memory cache');
         } catch (error) {
             console.error('[Cache] Error clearing cache:', error);
         }
@@ -218,7 +226,7 @@ class AppCache {
                 await storage.removeItem(key).catch(() => {});
             }
 
-            console.log('[Cache] Cleared user cache');
+            clog('[Cache] Cleared user cache');
         } catch (error) {
             console.error('[Cache] Error clearing user cache:', error);
         }

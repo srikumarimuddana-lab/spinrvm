@@ -1,3 +1,4 @@
+import hmac
 import logging as _logging
 import os
 import sys
@@ -166,8 +167,32 @@ async def health():
 from fastapi import Response as _MetricsResponse  # noqa: E402
 
 
+def _metrics_token() -> str:
+    """Bearer token required to scrape /metrics, from METRICS_AUTH_TOKEN env.
+
+    Empty = unauthenticated scrape allowed (preserves existing Grafana/Railway
+    setups). Set the env var to lock the endpoint down — recommended before
+    launch so operational signal (error rates, Redis health, traffic) isn't
+    readable by anyone on the internet.
+    """
+    return os.getenv("METRICS_AUTH_TOKEN", "").strip()
+
+
 @app.get("/metrics")
-async def metrics() -> _MetricsResponse:
+async def metrics(request: _Request) -> _MetricsResponse:
+    from fastapi import HTTPException
+
+    _token = _metrics_token()
+    if _token:
+        auth = request.headers.get("authorization", "")
+        presented = auth[7:].strip() if auth.lower().startswith("bearer ") else request.query_params.get("token", "")
+        if not hmac.compare_digest(presented, _token):
+            raise HTTPException(status_code=401, detail="Unauthorized")
+    elif settings.ENV.lower() == "production":
+        _logging.getLogger("spinr.metrics").warning(
+            "/metrics is exposed without authentication in production — set METRICS_AUTH_TOKEN to restrict it."
+        )
+
     from utils.metrics import render_prometheus, set_gauge
     from utils.redis_client import get_redis_stats
 

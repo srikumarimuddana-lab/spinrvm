@@ -72,8 +72,26 @@ const getBackendUrl = () => {
   return 'http://localhost:8000';
 };
 
+// HTTPS-only enforcement for production builds. A non-dev build must never
+// talk to the backend over cleartext HTTP — that would expose live location,
+// trip state, payment, and identity-document traffic to any on-path attacker
+// (rogue Wi-Fi, captive portal, proxy). If the resolved URL is somehow http://
+// in a release build, fall back to the known production HTTPS endpoint rather
+// than sending sensitive traffic in the clear.
+// (Certificate pinning is a native-build concern handled via the @react-native
+// networking config; this guard covers the transport-scheme half.)
+const enforceHttps = (url: string): string => {
+  if (__DEV__) return url;
+  if (url.startsWith('https://')) return url;
+  console.error(
+    `[SpinrConfig] Refusing cleartext backend URL in production build: ${url} ` +
+    `— falling back to ${PRODUCTION_BACKEND_URL}`,
+  );
+  return PRODUCTION_BACKEND_URL;
+};
+
 export const SpinrConfig = {
-  backendUrl: getBackendUrl(),
+  backendUrl: enforceHttps(getBackendUrl()),
   // App Info
   app: {
     name: 'Spinr',

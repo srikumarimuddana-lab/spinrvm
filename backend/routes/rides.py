@@ -3093,21 +3093,37 @@ async def cancel_ride_rider(
 
     diag_logger.info(f"[CANCEL] called ride_id={ride_id} user_id={current_user.get('id')}")
 
-    ride = await _require_ride_in_state_rider(
-        ride_id,
-        current_user["id"],
-        (
-            "requested",
-            RideStatus.SEARCHING,
-            RideStatus.DRIVER_ASSIGNED,
-            RideStatus.DRIVER_ACCEPTED,
-            "en_route",
-            RideStatus.DRIVER_ARRIVED,
-        ),
+    _cancellable_states = (
+        "requested",
+        RideStatus.SEARCHING,
+        RideStatus.DRIVER_ASSIGNED,
+        RideStatus.DRIVER_ACCEPTED,
+        "en_route",
+        RideStatus.DRIVER_ARRIVED,
     )
+    ride = await _require_ride_in_state_rider(ride_id, current_user["id"], _cancellable_states)
     diag_logger.info(
         f"[CANCEL] entry ride_id={ride_id} pre_status={ride.get('status')} driver_id={ride.get('driver_id')}"
     )
+
+    # Atomically claim the cancel BEFORE charging any fee. _require_ride_in_state_rider
+    # only read+validated the status; in the window before the write the driver could
+    # call verify-otp/start and flip the ride to in_progress. A non-atomic cancel would
+    # then overwrite in_progress -> cancelled (violating "never cancel after trip start")
+    # AND charge a cancellation fee on a ride that actually began. The $in guard matches
+    # zero rows once the ride has left the pre-trip states -> 409, nothing charged.
+    _cancel_now = datetime.now(timezone.utc)
+    _cancel_claim = await db_supabase.update_one(
+        "rides",
+        {"id": ride_id, "status": {"$in": list(_cancellable_states)}},
+        {"status": RideStatus.CANCELLED, "cancelled_at": _cancel_now, "updated_at": _cancel_now},
+    )
+    if _cancel_claim is None:
+        diag_logger.info(f"[CANCEL] claim rejected ride_id={ride_id} — ride left pre-trip state")
+        raise HTTPException(
+            status_code=409,
+            detail="Ride can no longer be cancelled (it has started or already ended)",
+        )
 
     driver_id = ride.get("driver_id")
     settings = await get_app_settings()
@@ -3982,9 +3998,7 @@ async def rider_start_ride(
     # this the rider's client stays on "driver arrived" until its next poll.
     rider_id = ride.get("rider_id")
     if rider_id:
-        await manager.send_personal_message(
-            {"type": "ride_started", "ride_id": ride_id}, f"rider_{rider_id}"
-        )
+        await manager.send_personal_message({"type": "ride_started", "ride_id": ride_id}, f"rider_{rider_id}")
         asyncio.create_task(
             send_push_notification(
                 rider_id,
@@ -4028,9 +4042,7 @@ async def rider_complete_ride(
     # Atomic transition: only complete from in_progress. Guards against a
     # concurrent driver-side complete double-running the settlement/incentive
     # logic below. update_one returns None when zero rows matched.
-    guard = await db_supabase.update_one(
-        "rides", {"id": ride_id, "status": RideStatus.IN_PROGRESS}, update_fields
-    )
+    guard = await db_supabase.update_one("rides", {"id": ride_id, "status": RideStatus.IN_PROGRESS}, update_fields)
     if guard is None:
         raise HTTPException(status_code=409, detail="Ride is not in progress")
 

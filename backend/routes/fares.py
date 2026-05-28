@@ -187,14 +187,13 @@ async def build_fares_for_area(matched_area, vehicle_types):
     if not matched_area:
         return _build_default_fares(vehicle_types)
 
-    # Surge is gated on surge_active so an operator can park a
-    # multiplier > 1.0 without having it silently applied when the
-    # toggle is off. Matches surge_engine.py's convention (only
-    # writes multiplier when active) and the admin UI toggle under
-    # Service Areas → General.
+    # Surge is gated on the per-area admin master toggle (surge_enabled) AND the
+    # current surge_active flag. Until an operator enables surge for this area in
+    # the admin panel it never applies — no multiplier, no rider-facing surge —
+    # even if a stale multiplier or surge_active=True is left on the row.
     surge = (
         min(matched_area.get("surge_multiplier", 1.0), SURGE_CAP)
-        if matched_area.get("surge_active", False)
+        if matched_area.get("surge_enabled", False) and matched_area.get("surge_active", False)
         else 1.0
     )
 

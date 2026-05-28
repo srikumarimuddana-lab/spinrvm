@@ -33,6 +33,9 @@ _AREA_ROW = {
     "search_radius_km": 10.0,
     # surge_multiplier + surge_active are intentionally public (rider/driver
     # surge badge; surge must be visible before booking per regulatory rules).
+    # surge_enabled is the per-area admin master gate — only when it is on does
+    # the public endpoint report a live multiplier/active flag.
+    "surge_enabled": True,
     "surge_multiplier": 1.5,
     "surge_active": True,
     # Admin-only fields that must NOT leak to the public endpoint:
@@ -80,6 +83,18 @@ class TestPublicServiceAreas:
         assert "gst_rate" not in area
         assert "pst_rate" not in area
         assert "driver_matching_algorithm" not in area
+
+    def test_surge_suppressed_when_not_enabled(self, client):
+        """A stale multiplier/active flag must not surface unless surge_enabled."""
+        from backend.routes import service_areas as mod
+
+        stale = {**_AREA_ROW, "surge_enabled": False, "surge_active": True, "surge_multiplier": 2.0}
+        with patch.object(mod.db_supabase, "get_rows", AsyncMock(return_value=[stale])):
+            r = client.get("/api/v1/service-areas")
+
+        area = r.json()[0]
+        assert area["surge_active"] is False
+        assert area["surge_multiplier"] == 1.0
 
     def test_only_active_filter_passed_to_db(self, client):
         from backend.routes import service_areas as mod

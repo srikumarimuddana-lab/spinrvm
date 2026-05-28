@@ -251,7 +251,21 @@ async def send_otp(request: Request, body: SendOTPRequest):
     #                          would let anyone log in as any phone number, so we
     #                          fail loudly instead of silently bypassing auth.
     is_production = settings.ENV.lower() == "production"
-    if twilio_configured:
+    review_otp = settings.review_login_map().get(phone)
+    deliver_via_sms = True
+    if review_otp is not None:
+        # App Store / Play reviewer account: issue the pre-shared fixed code and
+        # never send an SMS — the reviewer gets the code from the store-console
+        # review notes, not a text. Permitted in every ENV (including production)
+        # but ONLY for the explicit numbers in REVIEW_LOGIN_ACCOUNTS.
+        otp_code = review_otp
+        deliver_via_sms = False
+        logger.info(
+            "Reviewer-account OTP issued without SMS for ...%s (ENV=%s)",
+            phone[-4:],
+            settings.ENV,
+        )
+    elif twilio_configured:
         otp_code = generate_otp()
     elif not is_production:
         otp_code = "1234"
@@ -293,22 +307,24 @@ async def send_otp(request: Request, body: SendOTPRequest):
             message_key=ErrorKeys.SYSTEM_DATABASE,
         ) from e
 
-    # Send OTP via SMS (Twilio when configured, console log otherwise)
-    sms_result = await send_otp_sms(
-        phone,
-        otp_code,
-        twilio_sid=app_settings.get("twilio_account_sid", "") if app_settings else "",
-        twilio_token=app_settings.get("twilio_auth_token", "") if app_settings else "",
-        twilio_from=app_settings.get("twilio_from_number", "") if app_settings else "",
-    )
-    if not sms_result.get("success"):
-        logger.error(f"Failed to send OTP SMS: {sms_result.get('error')}")
-        raise SpinrException(
-            message="Failed to send verification code",
-            error_code=ErrorCode.SERVICE_UNAVAILABLE,
-            status_code=503,
-            message_key=ErrorKeys.SYSTEM_SERVICE_UNAVAILABLE,
+    # Send OTP via SMS (Twilio when configured, console log otherwise).
+    # Reviewer accounts skip SMS entirely — the code is pre-shared out of band.
+    if deliver_via_sms:
+        sms_result = await send_otp_sms(
+            phone,
+            otp_code,
+            twilio_sid=app_settings.get("twilio_account_sid", "") if app_settings else "",
+            twilio_token=app_settings.get("twilio_auth_token", "") if app_settings else "",
+            twilio_from=app_settings.get("twilio_from_number", "") if app_settings else "",
         )
+        if not sms_result.get("success"):
+            logger.error(f"Failed to send OTP SMS: {sms_result.get('error')}")
+            raise SpinrException(
+                message="Failed to send verification code",
+                error_code=ErrorCode.SERVICE_UNAVAILABLE,
+                status_code=503,
+                message_key=ErrorKeys.SYSTEM_SERVICE_UNAVAILABLE,
+            )
 
     response = {"success": True, "message": f"OTP sent to ***{phone[-4:]}"}
     # Dev OTP is logged to server console via sms_service.py — never return it

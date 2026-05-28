@@ -271,14 +271,18 @@ async def confirm_payment(
     payment_intent_id = body.get("payment_intent_id")
     ride_id = body.get("ride_id")
 
-    # Mock-payment shortcut is allowed only outside production. Reject it up front
-    # — before claiming the ride into payment_status=processing — so a rejected
-    # request can't strand the ride. In production any authenticated rider could
-    # otherwise send "pi_mock_*" and settle their own ride for free.
+    # Mock-payment shortcut is allowed only outside production, OR for an
+    # allow-listed app-store reviewer account (so a reviewer can reach a "paid"
+    # confirmation without a real charge). Reject everyone else up front —
+    # before claiming the ride into payment_status=processing — so a rejected
+    # request can't strand the ride. In production any other authenticated rider
+    # could otherwise send "pi_mock_*" and settle their own ride for free.
+    _is_reviewer = current_user.get("phone") in core_settings.review_login_map()
     if (
         payment_intent_id
         and payment_intent_id.startswith("pi_mock_")
         and core_settings.ENV.lower() == "production"
+        and not _is_reviewer
     ):
         logger.error(
             "Rejected mock payment intent %s in production for ride %s",

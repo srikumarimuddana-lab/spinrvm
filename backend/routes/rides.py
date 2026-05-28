@@ -518,9 +518,16 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
     #
     # We also require user_id IS NOT NULL to skip legacy "demo" driver rows
     # that lack a real user and can never be notified.
+    # Mirror DispatchService.find_candidate_drivers: is_verified + status='active'
+    # keep unverified / suspended / needs_review drivers out of dispatch even if
+    # their is_online flag was left on (e.g. status flipped server-side after
+    # they toggled online). Without these, accept_ride blocks them at accept time
+    # but they still receive — and can see — offers they can never fulfil.
     _dispatch_filter: dict = {
         "is_online": True,
         "is_available": True,
+        "is_verified": True,
+        "status": "active",
         "vehicle_type_id": ride["vehicle_type_id"],
     }
     if ride.get("requires_wav"):

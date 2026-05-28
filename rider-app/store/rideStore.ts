@@ -554,7 +554,16 @@ export const useRideStore = create<RideState>((set, get) => ({
     }
 
     try {
-      set({ isLoading: true, error: null });
+      // Clear any cached route coords from the previous ride so the new
+      // ride's map screens always fetch a fresh route rather than skipping
+      // MapViewDirections because the cache is non-null.
+      set({
+        isLoading: true,
+        error: null,
+        activeRideRouteCoords: null,
+        activeDriverRouteCoords: null,
+        lastEtaMin: null,
+      });
       // P0-4: echo back the estimate_token from the currently-selected
       // vehicle's estimate so the backend can reuse the surge we showed
       // in the UI (instead of re-reading current surge and bait-and-switching).
@@ -704,7 +713,12 @@ export const useRideStore = create<RideState>((set, get) => ({
 
     try {
       const response = await api.post<Ride>(`/rides/${currentRide.id}/complete`);
-      set({ currentRide: response.data });
+      set({
+        currentRide: response.data,
+        activeRideRouteCoords: null,
+        activeDriverRouteCoords: null,
+        lastEtaMin: null,
+      });
       AsyncStorage.removeItem(ACTIVE_RIDE_KEY).catch(() => {});
       return response.data;
     } catch (error: unknown) {
@@ -939,7 +953,14 @@ export const useRideStore = create<RideState>((set, get) => ({
     // The receipt screen reads driver info from currentRide.driver, not
     // currentDriver, so clearing here doesn't break the post-trip flow.
     if (TERMINAL_STATUSES.has(status)) {
-      set({ currentRide: updated, currentDriver: null, driverEtaSeconds: null });
+      set({
+        currentRide: updated,
+        currentDriver: null,
+        driverEtaSeconds: null,
+        activeRideRouteCoords: null,
+        activeDriverRouteCoords: null,
+        lastEtaMin: null,
+      });
       _persistRide(updated, null);
     } else {
       set({ currentRide: updated });

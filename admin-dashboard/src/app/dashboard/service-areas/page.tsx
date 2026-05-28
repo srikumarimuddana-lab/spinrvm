@@ -551,10 +551,11 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
     max_simultaneous_offers: area.max_simultaneous_offers || 3,
     use_eta_ranking: area.use_eta_ranking !== false,
     show_demand_heatmap: area.show_demand_heatmap || false,
-    // Surge is per-area now — no separate Pricing page. surge_active
-    // gates whether build_fares_for_area multiplies the fare;
-    // surge_multiplier is the factor (1.0 = off, 1.5 = +50%, etc.).
-    surge_active: area.surge_active !== undefined ? area.surge_active : !!area.surge_enabled,
+    // Surge is per-area and admin-gated. The toggle below is the master
+    // enable (surge_enabled): until it's on, the backend prices every ride at
+    // 1.0× and the surge engine skips this area entirely. surge_multiplier is
+    // the manual factor applied once enabled (1.0 = off, 1.5 = +50%, etc.).
+    surge_enabled: area.surge_enabled !== undefined ? !!area.surge_enabled : !!area.surge_active,
     surge_multiplier: area.surge_multiplier ?? 1.0,
     surge_justification: "",
   });
@@ -563,7 +564,7 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
   const [saved, setSaved] = useState(false);
 
   const surgeValue = parseFloat(String(form.surge_multiplier)) || 1.0;
-  const needsJustification = form.surge_active && surgeValue > 2.5;
+  const needsJustification = form.surge_enabled && surgeValue > 2.5;
 
   const handleSave = async () => {
     if (needsJustification && !form.surge_justification.trim()) {
@@ -577,7 +578,7 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
     // running against this area. This lets admins save unrelated
     // fields (name, radius, etc.) without freezing auto-surge.
     const surgeTouched =
-      form.surge_active !== (area.surge_active !== undefined ? area.surge_active : !!area.surge_enabled) ||
+      form.surge_enabled !== (area.surge_enabled !== undefined ? !!area.surge_enabled : !!area.surge_active) ||
       parseFloat(String(form.surge_multiplier)) !== parseFloat(String(area.surge_multiplier ?? 1.0));
     const updates: any = {
       name: form.name,
@@ -591,7 +592,12 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
       max_simultaneous_offers: Math.max(1, Math.min(10, parseInt(String(form.max_simultaneous_offers)) || 3)),
       use_eta_ranking: form.use_eta_ranking,
       show_demand_heatmap: form.show_demand_heatmap,
-      surge_active: form.surge_active,
+      // surge_enabled is the master gate; keep surge_active in sync so a
+      // manual multiplier takes effect immediately once enabled. Disabling
+      // sends surge_enabled=false and the backend clears surge_active +
+      // resets the multiplier so no parked surge can keep pricing rides.
+      surge_enabled: form.surge_enabled,
+      surge_active: form.surge_enabled,
       surge_multiplier: surgeValue,
     };
     if (surgeTouched) updates.surge_source = "manual";
@@ -672,14 +678,14 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
           )}
         </p>
         <div className="flex items-center gap-2 pt-1">
-          <button type="button" onClick={() => setForm({ ...form, surge_active: !form.surge_active })}>
-            {form.surge_active ? <ToggleRight className="h-6 w-6 text-green-500" /> : <ToggleLeft className="h-6 w-6 text-gray-300" />}
+          <button type="button" onClick={() => setForm({ ...form, surge_enabled: !form.surge_enabled })}>
+            {form.surge_enabled ? <ToggleRight className="h-6 w-6 text-green-500" /> : <ToggleLeft className="h-6 w-6 text-gray-300" />}
           </button>
           <label className="text-xs font-semibold text-gray-500">
-            Surge {form.surge_active ? "ON" : "off"}
+            Surge {form.surge_enabled ? "ON" : "off"}
           </label>
         </div>
-        {form.surge_active && (
+        {form.surge_enabled && (
           <>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end mt-3">
               <div>

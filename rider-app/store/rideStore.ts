@@ -223,7 +223,7 @@ interface RideState {
   clearRide: () => void;
   clearError: () => void;
   setActiveRideRouteCoords: (coords: { latitude: number; longitude: number }[]) => void;
-  setActiveDriverRouteCoords: (coords: { latitude: number; longitude: number }[]) => void;
+  setActiveDriverRouteCoords: (coords: { latitude: number; longitude: number }[] | null) => void;
   setLastEtaMin: (min: number) => void;
   rateRide: (rideId: string, rating: number, comment?: string, tipAmount?: number) => Promise<void>;
   hydrateActiveRide: () => Promise<void>;

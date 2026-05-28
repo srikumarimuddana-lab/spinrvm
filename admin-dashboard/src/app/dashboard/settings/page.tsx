@@ -401,11 +401,11 @@ export default function SettingsPage() {
                                     <Label>Offer timeout (s)</Label>
                                     <Input
                                         type="number"
-                                        min={5} max={120}
+                                        min={5} max={60}
                                         value={settings.ride_offer_timeout_seconds ?? 15}
                                         onChange={(e) => update("ride_offer_timeout_seconds", parseInt(e.target.value))}
                                     />
-                                    <p className="text-xs text-muted-foreground">Seconds before offer expires</p>
+                                    <p className="text-xs text-muted-foreground">Seconds before offer expires (5–60)</p>
                                 </div>
                             </div>
                             <div className="grid grid-cols-2 gap-4">

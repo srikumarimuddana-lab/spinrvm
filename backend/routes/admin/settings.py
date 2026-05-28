@@ -135,7 +135,7 @@ class SettingsUpdateRequest(BaseModel):
     safety_alert_emails: Optional[str] = None
     # Dispatch & matching — also configurable per service area (area overrides global).
     max_simultaneous_offers: Optional[int] = Field(default=None, ge=1, le=10)
-    ride_offer_timeout_seconds: Optional[int] = Field(default=None, ge=5, le=120)
+    ride_offer_timeout_seconds: Optional[int] = Field(default=None, ge=5, le=60)
     use_eta_ranking: Optional[bool] = None
 
 

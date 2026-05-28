@@ -18,8 +18,13 @@
 --
 -- Fields added:
 --   max_simultaneous_offers  INT            — drivers offered per ride (1-10, default 3)
---   ride_offer_timeout_seconds INT          — seconds before a pending offer expires (default 15)
+--   ride_offer_timeout_seconds INT          — seconds before a pending offer expires (5-60, default 15)
 --   use_eta_ranking          BOOLEAN        — rank by Distance Matrix ETA vs haversine (default true)
+--
+-- Upper bound for ride_offer_timeout_seconds is 60 (not 120) because
+-- GET /drivers/config already clamps the value at 60 s and the driver-app
+-- timer-bar computes progress against that config value; accepting >60 here
+-- would cause the countdown to start above the driver's configured max.
 --
 -- Rollback:
 --   ALTER TABLE settings DROP COLUMN IF EXISTS max_simultaneous_offers;
@@ -30,7 +35,7 @@ ALTER TABLE public.settings
     ADD COLUMN IF NOT EXISTS max_simultaneous_offers    INT     DEFAULT 3
         CONSTRAINT settings_max_simultaneous_offers_range CHECK (max_simultaneous_offers BETWEEN 1 AND 10),
     ADD COLUMN IF NOT EXISTS ride_offer_timeout_seconds INT     DEFAULT 15
-        CONSTRAINT settings_ride_offer_timeout_range    CHECK (ride_offer_timeout_seconds BETWEEN 5 AND 120),
+        CONSTRAINT settings_ride_offer_timeout_range    CHECK (ride_offer_timeout_seconds BETWEEN 5 AND 60),
     ADD COLUMN IF NOT EXISTS use_eta_ranking            BOOLEAN DEFAULT TRUE;
 
 COMMENT ON COLUMN public.settings.max_simultaneous_offers IS

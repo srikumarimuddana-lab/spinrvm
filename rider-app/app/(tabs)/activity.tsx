@@ -84,15 +84,19 @@ export default function ActivityScreen() {
     return { rides: res.data?.rides ?? [], next_cursor: res.data?.next_cursor ?? null };
   }, []);
 
+  const statsGenRef = useRef(0);
+
   const fetchStats = useCallback(async (p: Period) => {
+    const gen = ++statsGenRef.current;
     setStatsLoading(true);
     try {
       const res = await api.get<RiderStats>(`/rides/stats?period=${p}`);
+      if (gen !== statsGenRef.current) return; // superseded by a newer request
       setStats(res.data);
     } catch {
       // non-fatal — stats card simply stays empty
     } finally {
-      setStatsLoading(false);
+      if (gen === statsGenRef.current) setStatsLoading(false);
     }
   }, []);
 
@@ -146,7 +150,7 @@ export default function ActivityScreen() {
         fetchStats(period);
         fetchScheduledRides();
       }
-    }, [fetchData, fetchScheduledRides])
+    }, [fetchData, fetchStats, fetchScheduledRides, period])
   );
 
   const onRefresh = () => {

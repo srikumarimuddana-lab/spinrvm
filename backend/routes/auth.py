@@ -333,14 +333,22 @@ async def send_otp(request: Request, body: SendOTPRequest):
     import hashlib
 
     _ph = hashlib.sha256(phone.encode()).hexdigest()[:16]
+    # Tag the reviewer-bypass path distinctly so operators can query audit_logs
+    # for fixed-code issuance separately from ordinary SMS OTP sends (e.g. to
+    # confirm the allow-list was cleared after a review, or investigate abuse).
+    _is_reviewer = review_otp is not None
+    _audit_action = "otp_sent_reviewer_bypass" if _is_reviewer else "otp_sent"
+    _audit_meta = {"phone_last4": phone[-4:]}
+    if _is_reviewer:
+        _audit_meta["reviewer_bypass"] = True
     try:
         asyncio.create_task(
             _audit_log_user(
                 {"id": f"phone_hash:{_ph}", "role": "anonymous"},
-                "otp_sent",
+                _audit_action,
                 "users",
                 _ph,
-                {"phone_last4": phone[-4:]},
+                _audit_meta,
             )
         )
     except Exception:
@@ -358,6 +366,10 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
     # Normalize to E.164 so it matches what send-otp stored
     _, normalized = validate_phone(phone)
     phone = normalized or phone
+
+    # Reviewer-bypass accounts log in with a fixed code; tag their audit rows so
+    # operators can distinguish reviewer logins from real SMS verifications.
+    _is_reviewer = settings.review_login_map().get(phone) is not None
 
     # SEC-008: Reject locked-out phones before touching the DB
     await _check_otp_lockout(phone)
@@ -549,7 +561,7 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
                         "otp_verify_success",
                         "users",
                         user_id,
-                        {"is_new_user": False},
+                        {"is_new_user": False, **({"reviewer_bypass": True} if _is_reviewer else {})},
                     )
                 )
             except Exception:
@@ -622,7 +634,7 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
                         "otp_verify_success",
                         "users",
                         user_id,
-                        {"is_new_user": True},
+                        {"is_new_user": True, **({"reviewer_bypass": True} if _is_reviewer else {})},
                     )
                 )
             except Exception:

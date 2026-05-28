@@ -1,9 +1,22 @@
+import logging
 import os
 from typing import Optional
 
 import bcrypt
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
+
+# Reviewer OTP codes must match the verify-otp schema constraint exactly
+# (VerifyOTPRequest.code is `^\d{4}$`). A code that doesn't satisfy this can be
+# issued by send-otp but never accepted by verify-otp, silently breaking the
+# reviewer login. Validate against the same rule before allow-listing.
+_REVIEW_OTP_LEN = 4
+
+
+def _is_valid_review_otp(otp: str) -> bool:
+    return otp.isascii() and otp.isdigit() and len(otp) == _REVIEW_OTP_LEN
 
 
 class Settings(BaseSettings):
@@ -200,8 +213,12 @@ class Settings(BaseSettings):
     def review_login_map(self) -> dict[str, str]:
         """Parse REVIEW_LOGIN_ACCOUNTS into {phone: fixed_otp}.
 
-        Malformed entries are skipped. Returns an empty dict when unset, which
-        disables the reviewer-login path entirely.
+        Only entries whose OTP satisfies the verify-otp constraint (exactly 4
+        numeric digits) are included — a malformed code is skipped rather than
+        allow-listed, so send-otp never issues a code that verify-otp can't
+        accept. Returns an empty dict when unset, which disables the
+        reviewer-login path entirely. Malformed entries are surfaced once at
+        startup by ``_validate_review_accounts``.
         """
         out: dict[str, str] = {}
         raw = (self.REVIEW_LOGIN_ACCOUNTS or "").strip()
@@ -212,9 +229,44 @@ class Settings(BaseSettings):
             if not sep:
                 continue
             phone, otp = phone.strip(), otp.strip()
-            if phone and otp:
+            if phone and _is_valid_review_otp(otp):
                 out[phone] = otp
         return out
+
+    @model_validator(mode="after")
+    def _validate_review_accounts(self) -> "Settings":
+        """Surface a misconfigured REVIEW_LOGIN_ACCOUNTS at startup.
+
+        We do not raise — a typo in this optional reviewer secret must not take
+        down the API — but we log loudly (ERROR → Sentry via the loguru bridge)
+        so the operator catches it at deploy time instead of discovering it when
+        a store reviewer can't log in. Each malformed entry names the offending
+        phone's last 4 digits only (never the full number or the code).
+        """
+        raw = (self.REVIEW_LOGIN_ACCOUNTS or "").strip()
+        if not raw:
+            return self
+        valid = 0
+        for pair in raw.split(","):
+            entry = pair.strip()
+            if not entry:
+                continue
+            phone, sep, otp = entry.partition(":")
+            phone, otp = phone.strip(), otp.strip()
+            if not sep or not phone:
+                logger.error("REVIEW_LOGIN_ACCOUNTS: malformed entry (expected 'phone:otp') — skipped")
+            elif not _is_valid_review_otp(otp):
+                logger.error(
+                    "REVIEW_LOGIN_ACCOUNTS: OTP for ...%s is not %d digits — entry skipped, "
+                    "reviewer login will NOT work for this number",
+                    phone[-4:],
+                    _REVIEW_OTP_LEN,
+                )
+            else:
+                valid += 1
+        if valid:
+            logger.info("REVIEW_LOGIN_ACCOUNTS: %d reviewer login account(s) active", valid)
+        return self
 
 
 settings = Settings()

@@ -105,6 +105,7 @@ function RideOptionsScreenContent() {
   const [showPromoSheet, setShowPromoSheet] = useState(false);
   const [promoInput, setPromoInput] = useState('');
   const [promoError, setPromoError] = useState('');
+  const [fareBreakdownOpen, setFareBreakdownOpen] = useState(false);
   const [confirmSheet, setConfirmSheet] = useState<{
     visible: boolean; title: string; message: string;
     variant: 'info' | 'warning' | 'danger' | 'success';
@@ -114,6 +115,7 @@ function RideOptionsScreenContent() {
   const mapRef = useRef<MapView>(null);
   const sheetRef = useRef<BottomSheet>(null);
   const snapPoints = useMemo(() => ['40%', '68%'], []);
+  const fareChevronAnim = useRef(new Animated.Value(0)).current;
   const { scheduleReminder } = useScheduledRideReminder();
 
   // ── Derived values ──
@@ -349,6 +351,20 @@ function RideOptionsScreenContent() {
     setTempDate(date);
     setScheduledTime(date);
   };
+
+  const toggleFareBreakdown = useCallback(() => {
+    const next = !fareBreakdownOpen;
+    setFareBreakdownOpen(next);
+    Animated.spring(fareChevronAnim, {
+      toValue: next ? 1 : 0,
+      tension: 120, friction: 14, useNativeDriver: true,
+    }).start();
+  }, [fareBreakdownOpen, fareChevronAnim]);
+
+  const fareChevronRotation = fareChevronAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '180deg'],
+  });
 
   const handleManualPromo = () => {
     const code = promoInput.trim().toUpperCase();
@@ -636,35 +652,53 @@ function RideOptionsScreenContent() {
               accessibilityLabel="Request quiet ride" />
           </View>
 
-          {/* Fare breakdown — rendered dynamically from API */}
+          {/* Fare breakdown — collapsible, collapsed by default */}
           {selectedEstimate?.fare_breakdown && selectedEstimate.fare_breakdown.length > 0 && (
             <View style={styles.fareBreakdownCard}>
-              <Text style={styles.fareBreakdownTitle}>Fare breakdown</Text>
-              {selectedEstimate.fare_breakdown.map((line, i) => (
-                line.amount != null ? (
-                  <View key={i} style={[styles.fareBreakdownRow, line.type === 'ride' && { alignItems: 'flex-start' }]}>
-                    {line.type === 'ride' ? (
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.fareBreakdownLabel}>{line.label}</Text>
-                        <Text style={styles.fareBreakdownDriverBadge}>100% goes to your driver · ride local, support local</Text>
+              <TouchableOpacity
+                style={styles.fareBreakdownHeader}
+                onPress={toggleFareBreakdown}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel={fareBreakdownOpen ? 'Collapse fare breakdown' : 'Expand fare breakdown'}
+              >
+                <Text style={styles.fareBreakdownTitle}>Fare breakdown</Text>
+                <View style={styles.fareBreakdownHeaderRight}>
+                  <Text style={styles.fareBreakdownTotalValue}>${totalFare.toFixed(2)}</Text>
+                  <Animated.View style={{ transform: [{ rotate: fareChevronRotation }] }}>
+                    <Ionicons name="chevron-down" size={16} color={colors.textDim} />
+                  </Animated.View>
+                </View>
+              </TouchableOpacity>
+              {fareBreakdownOpen && (
+                <View style={{ marginTop: 8 }}>
+                  {selectedEstimate.fare_breakdown.map((line, i) => (
+                    line.amount != null ? (
+                      <View key={i} style={[styles.fareBreakdownRow, line.type === 'ride' && { alignItems: 'flex-start' }]}>
+                        {line.type === 'ride' ? (
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.fareBreakdownLabel}>{line.label}</Text>
+                            <Text style={styles.fareBreakdownDriverBadge}>100% goes to your driver · ride local, support local</Text>
+                          </View>
+                        ) : (
+                          <Text style={[styles.fareBreakdownLabel, line.type === 'tax' && { color: '#6B7280' }]}>{line.label}</Text>
+                        )}
+                        <Text style={styles.fareBreakdownValue}>${parseFloat(String(line.amount)).toFixed(2)}</Text>
                       </View>
-                    ) : (
-                      <Text style={[styles.fareBreakdownLabel, line.type === 'tax' && { color: '#6B7280' }]}>{line.label}</Text>
-                    )}
-                    <Text style={styles.fareBreakdownValue}>${parseFloat(String(line.amount)).toFixed(2)}</Text>
+                    ) : null
+                  ))}
+                  {appliedPromo && promoDiscount > 0 && (
+                    <View style={[styles.fareBreakdownRow, { marginTop: 2 }]}>
+                      <Text style={[styles.fareBreakdownLabel, { color: '#10B981' }]}>Promo ({appliedPromo.code})</Text>
+                      <Text style={[styles.fareBreakdownValue, { color: '#10B981' }]}>-${promoDiscount.toFixed(2)}</Text>
+                    </View>
+                  )}
+                  <View style={[styles.fareBreakdownRow, styles.fareBreakdownTotal]}>
+                    <Text style={styles.fareBreakdownTotalLabel}>Total</Text>
+                    <Text style={styles.fareBreakdownTotalValue}>${totalFare.toFixed(2)}</Text>
                   </View>
-                ) : null
-              ))}
-              {appliedPromo && promoDiscount > 0 && (
-                <View style={[styles.fareBreakdownRow, { marginTop: 2 }]}>
-                  <Text style={[styles.fareBreakdownLabel, { color: '#10B981' }]}>Promo ({appliedPromo.code})</Text>
-                  <Text style={[styles.fareBreakdownValue, { color: '#10B981' }]}>-${promoDiscount.toFixed(2)}</Text>
                 </View>
               )}
-              <View style={[styles.fareBreakdownRow, styles.fareBreakdownTotal]}>
-                <Text style={styles.fareBreakdownTotalLabel}>Total</Text>
-                <Text style={styles.fareBreakdownTotalValue}>${totalFare.toFixed(2)}</Text>
-              </View>
             </View>
           )}
 
@@ -1485,11 +1519,20 @@ function createStyles(colors: ThemeColors, sf: (size: number) => number, insets:
       borderWidth: 1,
       borderColor: colors.border,
     },
+    fareBreakdownHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+    },
+    fareBreakdownHeaderRight: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 6,
+    },
     fareBreakdownTitle: {
       fontSize: sf(12),
       fontFamily: 'PlusJakartaSans_600SemiBold',
       color: colors.textDim,
-      marginBottom: 8,
       textTransform: 'uppercase',
       letterSpacing: 0.5,
     },

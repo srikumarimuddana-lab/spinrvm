@@ -16,18 +16,23 @@ push / asyncio.create_task machinery in the tests.
 """
 
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+STALE_LOCATION_THRESHOLD = timedelta(seconds=30)
 
 try:
     from ..geo_utils import calculate_distance
     from ..settings_loader import get_app_settings
     from ..utils.driver_presence import present_driver_ids
+    from ..utils.redis_client import geo_search_drivers
 except ImportError:  # pragma: no cover - allow direct module imports in tests
     from geo_utils import calculate_distance
     from settings_loader import get_app_settings
     from utils.driver_presence import present_driver_ids
+    from utils.redis_client import geo_search_drivers
 
 
 # Valid algorithm values. ``nearest`` is the production default.
@@ -129,9 +134,26 @@ def filter_and_rank_drivers(
 
     wav_required = bool(ride.get("requires_wav"))
 
+    now = datetime.now(timezone.utc)
+    total_before = len(candidate_drivers)
+    stale_count = 0
+
     result: List[Tuple[Dict[str, Any], float]] = []
     for d in candidate_drivers:
         if not _is_dispatchable_driver(d):
+            continue
+        loc_ts = d.get("location_updated_at")
+        if loc_ts:
+            try:
+                ts = datetime.fromisoformat(str(loc_ts).replace("Z", "+00:00"))
+                if (now - ts) > STALE_LOCATION_THRESHOLD:
+                    stale_count += 1
+                    continue
+            except (ValueError, TypeError):
+                stale_count += 1
+                continue
+        else:
+            stale_count += 1
             continue
         if needs_rating and float(d.get("rating") or 5.0) < min_rating:
             continue
@@ -147,6 +169,12 @@ def filter_and_rank_drivers(
         dist_km = calculate_distance(pickup_lat, pickup_lng, d["lat"], d["lng"])
         if dist_km <= search_radius_km:
             result.append((d, dist_km))
+
+    if total_before > 0 and stale_count > total_before * 0.5:
+        logger.warning(
+            "Over 50%% of nearby drivers have stale location data",
+            extra={"stale_count": stale_count, "total": total_before},
+        )
     return result
 
 
@@ -246,6 +274,9 @@ class DispatchService:
     async def find_candidate_drivers(self, ride: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Online + available + verified + *present* drivers for this ride.
 
+        Tries the Redis geo index first (O(log N) GEOSEARCH). Falls back to
+        the Postgres query if Redis is unavailable or returns no results.
+
         is_verified + status='active' gate unverified / suspended / needs_review
         drivers out of dispatch even if their is_online flag got left on (e.g.
         status flipped server-side after they toggled online).
@@ -263,6 +294,18 @@ class DispatchService:
         prefer dispatching to "online-per-DB" drivers over dispatching to
         nobody.
         """
+        pickup_lat = ride.get("pickup_lat")
+        pickup_lng = ride.get("pickup_lng")
+
+        if pickup_lat is not None and pickup_lng is not None:
+            try:
+                redis_drivers = await geo_search_drivers(pickup_lat, pickup_lng, 15.0, count=50)
+                if redis_drivers:
+                    logger.info(f"[DISPATCH] Redis geo returned {len(redis_drivers)} candidates")
+                    return redis_drivers
+            except Exception as exc:
+                logger.warning("Redis geo search failed — falling back to Postgres", exc_info=exc)
+
         driver_filter: Dict[str, Any] = {
             "is_online": True,
             "is_available": True,

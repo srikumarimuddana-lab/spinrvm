@@ -121,7 +121,8 @@ async def update_driver_location(driver_id: str, lat: float, lng: float):
         return None
 
     def _update():
-        data = {"lat": lat, "lng": lng, "updated_at": datetime.now(timezone.utc).isoformat()}
+        _now = datetime.now(timezone.utc).isoformat()
+        data = {"lat": lat, "lng": lng, "updated_at": _now, "location_updated_at": _now}
         supabase.table("drivers").update(data).eq("id", str(driver_id)).execute()
         return True
 

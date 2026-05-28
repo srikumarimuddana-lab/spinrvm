@@ -571,6 +571,18 @@ async def websocket_endpoint(
 
                     await manager.update_driver_location(driver_id, lat, lng)
                     await db_supabase.update_driver_location(driver_id, lat, lng)
+                    try:
+                        from ..utils.redis_client import geo_add_driver
+                    except ImportError:
+                        from utils.redis_client import geo_add_driver
+                    await geo_add_driver(
+                        driver_id,
+                        lat,
+                        lng,
+                        {
+                            "location_updated_at": datetime.now(timezone.utc).isoformat(),
+                        },
+                    )
                     # Location pings are an even stronger liveness signal
                     # than pongs — fresh GPS proves the app is running and
                     # foregrounded, not just that TCP is open.

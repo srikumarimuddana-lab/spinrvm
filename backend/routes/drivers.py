@@ -4590,6 +4590,7 @@ async def update_driver_status(
     if is_online and lat is not None and lng is not None and (lat != 0 or lng != 0):
         _base["lat"] = lat
         _base["lng"] = lng
+        _base["location_updated_at"] = _now_iso
     # Invariant guardrail: is_available => is_online (see handler docstring).
     # This is a sanity check on the payload we are about to write — never
     # gate user behaviour on the assert; if it ever trips, the bug is in the
@@ -4685,6 +4686,11 @@ async def update_driver_status(
         await reset_miss_streak(driver_id)
     else:
         await clear_presence(driver_id)
+        try:
+            from ..utils.redis_client import geo_remove_driver
+        except ImportError:
+            from utils.redis_client import geo_remove_driver
+        await geo_remove_driver(driver_id)
 
     return {"success": True, "is_online": is_online}
 

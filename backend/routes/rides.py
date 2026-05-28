@@ -536,6 +536,26 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
         f"matching vehicle_type_id + online + available"
     )
 
+    # Presence filter: only dispatch to drivers whose WebSocket heartbeat is
+    # still alive (Uber/Lyft-style). Matches the filter applied in the rider-
+    # facing /drivers/nearby endpoint so the cars a rider sees on the map are
+    # exactly the drivers who can receive an offer.
+    # Safe fallback: if Redis returns an empty set (outage, cold start, dev
+    # without REDIS_URL), dispatch to all DB-online drivers so a Redis failure
+    # can't halt dispatching entirely.
+    try:
+        try:
+            from ..utils.driver_presence import present_driver_ids as _present_ids  # type: ignore
+        except ImportError:
+            from utils.driver_presence import present_driver_ids as _present_ids  # type: ignore
+        _present_ids_set = await _present_ids([d["id"] for d in all_drivers])
+        if _present_ids_set:
+            before_presence = len(all_drivers)
+            all_drivers = [d for d in all_drivers if d["id"] in _present_ids_set]
+            logger.info(f"[DISPATCH] presence filter: {len(all_drivers)}/{before_presence} driver(s) reachable")
+    except Exception as _pres_exc:
+        logger.warning(f"[DISPATCH] presence filter failed, using all DB-online drivers: {_pres_exc}")
+
     # Skip drivers who recently timed out or declined this specific offer
     # so the same driver is not hammered with repeat notifications.
     try:

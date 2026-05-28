@@ -16,7 +16,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // @ts-expect-error newArchEnabled is valid Expo config but not yet typed in ExpoConfig
     newArchEnabled: false, // disabled: pre-launch stability over perf; re-enable post go-live as a planned migration
     updates: {
-        url: 'https://u.expo.dev/1ed02cf4-97cb-4678-b5a2-0881f89abaa8',
+        url: 'https://u.expo.dev/9fb3b288-3036-442c-98aa-d18987008cef',
     },
     // Bare workflow requires a literal string runtimeVersion (policies like
     // 'fingerprint'/'appVersion' rejected by EAS CLI). Bump manually when
@@ -248,7 +248,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     },
     extra: {
         eas: {
-            projectId: "1ed02cf4-97cb-4678-b5a2-0881f89abaa8"
+            projectId: "9fb3b288-3036-442c-98aa-d18987008cef"
         },
         EXPO_PUBLIC_BACKEND_URL: process.env.EXPO_PUBLIC_BACKEND_URL,
         backendUrl: process.env.EXPO_PUBLIC_BACKEND_URL,

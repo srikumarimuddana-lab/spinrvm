@@ -131,7 +131,9 @@ export async function requestPushPermissionAndGetToken(): Promise<string | null>
 
     // Get FCM token
     const token = await messaging().getToken();
-    console.log('[Firebase] FCM Token:', token?.substring(0, 20) + '...');
+    // A token prefix is still a device-routable identifier — keep it out of
+    // production logs. In dev we log only whether one was obtained.
+    if (__DEV__) console.log('[Firebase] FCM token obtained:', token ? 'yes' : 'no');
     return token;
   } catch (e) {
     console.log('[Firebase] FCM token error:', e);

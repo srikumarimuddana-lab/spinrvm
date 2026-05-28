@@ -1,20 +1,13 @@
-name: EAS Mobile (Build + Update)
+name: EAS Mobile Update
 
 # ─── What this does ────────────────────────────────────────────────────────
 # On every push to main that touches rider-app / driver-app / shared:
 #   → Publishes an OTA JS-only update to the `production` channel for the
 #     affected app. Phones on that channel pick it up on next launch.
 #
-# Only when the commit message contains `[build]` OR when dispatched manually
-# with action=build:
-#   → Runs `eas build` to produce a new native binary. Required for changes
-#     that touch native modules, plugins, Info.plist, permissions, or the
-#     `version` / `runtimeVersion` in app.config.ts.
-#
 # OTA updates are JS-only. Native changes (new deps with native side, plugin
 # changes, Info.plist, permission additions, runtimeVersion bumps) still
-# require a full build. Rule of thumb: if you only edited .ts/.tsx/.js under
-# rider-app/ or driver-app/, an OTA update is enough.
+# require a full EAS build run separately.
 
 on:
   push:
@@ -26,29 +19,17 @@ on:
   workflow_dispatch:
     inputs:
       app:
-        description: "Which app"
+        description: "Which app to update"
         required: true
         default: "both"
         type: choice
         options: [rider-app, driver-app, both]
-      action:
-        description: "update = OTA JS-only (fast), build = native binary (slow)"
-        required: true
-        default: "update"
-        type: choice
-        options: [update, build]
       profile:
-        description: "Build profile / OTA channel"
+        description: "OTA channel"
         required: true
         default: "production"
         type: choice
         options: [test, preview, production]
-      platform:
-        description: "Native build platform — pick `android` if iOS submission slot / Apple credentials aren't ready yet"
-        required: true
-        default: "all"
-        type: choice
-        options: [all, ios, android]
 
 # Detect which app(s) changed so push-triggered runs only process the affected
 # app. Shared changes hit both.
@@ -59,7 +40,7 @@ jobs:
       rider: ${{ steps.filter.outputs.rider }}
       driver: ${{ steps.filter.outputs.driver }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v4
         id: filter
         with:
@@ -81,8 +62,8 @@ jobs:
       run:
         working-directory: rider-app
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
       - uses: expo/expo-github-action@v8
@@ -91,12 +72,7 @@ jobs:
           token: ${{ secrets.EXPO_TOKEN }}
       - run: yarn install --frozen-lockfile
 
-      # OTA update — runs on every qualifying push, and on manual dispatch
-      # when action=update. Channel mirrors the profile name.
       - name: Publish OTA update
-        if: |
-          github.event_name == 'push' ||
-          github.event.inputs.action == 'update'
         env:
           CHANNEL: ${{ github.event.inputs.profile || 'production' }}
           MSG: ${{ github.event.head_commit.message }}
@@ -105,49 +81,6 @@ jobs:
           # eas update truncates at 1024 chars; keep just the first line.
           MESSAGE=$(echo "$MESSAGE" | head -1 | cut -c1-1000)
           eas update --channel "$CHANNEL" --auto --non-interactive --message "$MESSAGE"
-
-      # Pre-build gate (strict). TypeScript compile is the only thing that
-      # actually has to pass — if tsc fails, Metro bundling will fail at EAS
-      # runtime and the build burns credits for nothing. Lint, doctor, and
-      # Jest are run separately as advisory below; their failures are
-      # surfaced but do not block the native build.
-      - name: Pre-build TypeScript check (BLOCKING)
-        if: |
-          (github.event_name == 'push' && contains(github.event.head_commit.message, '[build]')) ||
-          (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'build')
-        run: yarn tsc --noEmit
-
-      # Advisory checks. expo-doctor's schema fetch is unreliable behind
-      # corporate proxies / when the Expo schema service is degraded, and
-      # lint/test failures should be visible without blocking a build that
-      # would otherwise compile and run. Output goes to the job log; CI
-      # green doesn't depend on these passing.
-      - name: Pre-build advisory checks (doctor + lint + tests)
-        if: |
-          (github.event_name == 'push' && contains(github.event.head_commit.message, '[build]')) ||
-          (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'build')
-        continue-on-error: true
-        run: |
-          echo "::group::expo-doctor (advisory)"
-          yarn doctor || echo "advisory: expo-doctor failed (remote schema/registry calls are flaky)"
-          echo "::endgroup::"
-          echo "::group::lint (advisory)"
-          yarn lint --max-warnings 0 || echo "advisory: lint failed"
-          echo "::endgroup::"
-          echo "::group::tests (advisory)"
-          yarn test --ci --passWithNoTests || echo "advisory: tests failed"
-          echo "::endgroup::"
-
-      # Native build — only on explicit opt-in via `[build]` commit marker or
-      # manual dispatch. Expensive (~20min) and queues against EAS credits.
-      - name: Native build
-        if: |
-          (github.event_name == 'push' && contains(github.event.head_commit.message, '[build]')) ||
-          (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'build')
-        env:
-          PROFILE: ${{ github.event.inputs.profile || 'production' }}
-          PLATFORM: ${{ github.event.inputs.platform || 'all' }}
-        run: eas build --platform "$PLATFORM" --non-interactive --profile "$PROFILE"
 
   driver:
     needs: detect
@@ -159,8 +92,8 @@ jobs:
       run:
         working-directory: driver-app
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 20
       - uses: expo/expo-github-action@v8
@@ -170,9 +103,6 @@ jobs:
       - run: yarn install --frozen-lockfile
 
       - name: Publish OTA update
-        if: |
-          github.event_name == 'push' ||
-          github.event.inputs.action == 'update'
         env:
           CHANNEL: ${{ github.event.inputs.profile || 'production' }}
           MSG: ${{ github.event.head_commit.message }}
@@ -180,22 +110,3 @@ jobs:
           MESSAGE="${MSG:-manual update}"
           MESSAGE=$(echo "$MESSAGE" | head -1 | cut -c1-1000)
           eas update --channel "$CHANNEL" --auto --non-interactive --message "$MESSAGE"
-
-      - name: Pre-build validation (doctor + lint + type-check + tests)
-        if: |
-          (github.event_name == 'push' && contains(github.event.head_commit.message, '[build]')) ||
-          (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'build')
-        run: |
-          yarn doctor
-          yarn tsc --noEmit
-          yarn lint --max-warnings 0
-          yarn test --ci --passWithNoTests
-
-      - name: Native build
-        if: |
-          (github.event_name == 'push' && contains(github.event.head_commit.message, '[build]')) ||
-          (github.event_name == 'workflow_dispatch' && github.event.inputs.action == 'build')
-        env:
-          PROFILE: ${{ github.event.inputs.profile || 'production' }}
-          PLATFORM: ${{ github.event.inputs.platform || 'all' }}
-        run: eas build --platform "$PLATFORM" --non-interactive --profile "$PROFILE"

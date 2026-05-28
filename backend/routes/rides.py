@@ -3959,14 +3959,41 @@ async def rider_start_ride(
             detail=f"Cannot start ride with status: {ride.get('status')}",
         )
 
-    await db_supabase.update_ride(
-        ride_id,
+    # Atomic transition guards against duplicate taps / a concurrent driver-side
+    # start. update_one returns None when zero rows matched (status already moved).
+    guard = await db_supabase.update_one(
+        "rides",
+        {"id": ride_id, "driver_id": driver_row["id"], "status": RideStatus.DRIVER_ARRIVED},
         {
             "status": RideStatus.IN_PROGRESS,
             "ride_started_at": datetime.now(timezone.utc),
             "updated_at": datetime.now(timezone.utc),
         },
     )
+    if guard is None:
+        raise HTTPException(status_code=409, detail="Ride is not in driver_arrived state")
+
+    # Insurance Period 3 (passenger aboard — full TNC commercial coverage).
+    # Only recorded once the transition actually took effect. Compliance-grade:
+    # record_period_transition logs+swallows on failure, never blocks the start.
+    await record_period_transition(driver_row["id"], 3, ride_id=ride_id)
+
+    # Every state change must emit a WS event to both parties (CLAUDE.md). Without
+    # this the rider's client stays on "driver arrived" until its next poll.
+    rider_id = ride.get("rider_id")
+    if rider_id:
+        await manager.send_personal_message(
+            {"type": "ride_started", "ride_id": ride_id}, f"rider_{rider_id}"
+        )
+        asyncio.create_task(
+            send_push_notification(
+                rider_id,
+                "Ride Started! ▶️",
+                "Your ride has started. Have a safe trip!",
+                data={"type": "ride_started", "ride_id": str(ride_id)},
+            )
+        )
+    await manager.broadcast_ride_status(ride_id, RideStatus.IN_PROGRESS, rider_id=rider_id)
     return {"success": True}
 
 
@@ -3998,7 +4025,14 @@ async def rider_complete_ride(
         "ride_completed_at": now,
         "updated_at": now,
     }
-    await db_supabase.update_one("rides", {"id": ride_id}, update_fields)
+    # Atomic transition: only complete from in_progress. Guards against a
+    # concurrent driver-side complete double-running the settlement/incentive
+    # logic below. update_one returns None when zero rows matched.
+    guard = await db_supabase.update_one(
+        "rides", {"id": ride_id, "status": RideStatus.IN_PROGRESS}, update_fields
+    )
+    if guard is None:
+        raise HTTPException(status_code=409, detail="Ride is not in progress")
 
     driver_id = ride.get("driver_id")
     driver_user_id = None

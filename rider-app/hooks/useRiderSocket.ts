@@ -50,6 +50,15 @@ export function useRiderSocket() {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectAttemptRef = useRef(0);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Generation counter to serialise connect() attempts. connect() awaits
+  // ensureFreshToken() before creating the socket, so wsRef.current stays null
+  // across that await window — two near-simultaneous triggers (mount effect +
+  // AppState foreground during a token-expiry reconnect) could otherwise both
+  // pass the OPEN/CONNECTING check and open duplicate sockets. Each connect()
+  // claims a generation up front and only proceeds if it's still the latest
+  // after the await; disconnect() bumps the counter to cancel any in-flight
+  // attempt.
+  const connectGenRef = useRef(0);
   // Refs to avoid stale closures inside callbacks. Updated via effects.
   const userIdRef = useRef<string | null>(null);
   const rideIdRef = useRef<string | null>(null);
@@ -190,6 +199,15 @@ export function useRiderSocket() {
 
   // ── Connect / disconnect ────────────────────────────────────────
   const connect = useCallback(async () => {
+    // Bail synchronously if a socket is already live or connecting.
+    if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+    // Claim a generation. If a newer connect() or a disconnect() bumps this
+    // before our await resolves, we abort instead of opening a stale/duplicate
+    // socket.
+    const myGen = ++connectGenRef.current;
+
     // Refresh the access token proactively before opening the socket.
     // Without this, a reconnect after token expiry (~15 min) sends the
     // old JWT — the server rejects auth, onclose fires immediately, and
@@ -202,6 +220,10 @@ export function useRiderSocket() {
       console.warn('[WS] ensureFreshToken failed, proceeding with current token:', err);
     }
 
+    // Superseded by a newer connect() or cancelled by disconnect() during the
+    // token refresh above — abort.
+    if (myGen !== connectGenRef.current) return;
+
     const userId = userIdRef.current;
     const rideId = rideIdRef.current;
     if (!userId || !rideId) return;
@@ -209,10 +231,6 @@ export function useRiderSocket() {
     const token = useAuthStore.getState().token;
     if (!token) {
       console.log('[WS] Cannot connect: no auth token');
-      return;
-    }
-
-    if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
       return;
     }
 
@@ -280,6 +298,9 @@ export function useRiderSocket() {
       clearTimeout(reconnectTimeoutRef.current);
       reconnectTimeoutRef.current = null;
     }
+    // Bump the generation so any connect() awaiting ensureFreshToken (no socket
+    // created yet, so closing wsRef wouldn't reach it) aborts when it resumes.
+    connectGenRef.current++;
     if (wsRef.current) {
       wsRef.current.close();
       wsRef.current = null;

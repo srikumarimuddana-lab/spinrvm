@@ -41,6 +41,6 @@ ALTER TABLE public.settings
 COMMENT ON COLUMN public.settings.max_simultaneous_offers IS
     'Global default: number of drivers offered a ride simultaneously. Service-area override takes precedence. Clamped 1-10 in resolve_matching_config.';
 COMMENT ON COLUMN public.settings.ride_offer_timeout_seconds IS
-    'Global default: seconds a pending offer stays open before the batch-timeout handler expires it. Range 5-120.';
+    'Global default: seconds a pending offer stays open before the batch-timeout handler expires it. Range 5-60.';
 COMMENT ON COLUMN public.settings.use_eta_ranking IS
     'Global default: when true, dispatch uses the Distance Matrix API to rank candidates by real ETA. Requires Distance Matrix API enabled on the Maps key. Falls back to haversine when false or when the API call fails.';

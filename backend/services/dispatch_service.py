@@ -236,11 +236,16 @@ class DispatchService:
             or app_settings.get("max_simultaneous_offers", DEFAULT_MAX_SIMULTANEOUS_OFFERS)
         )
         max_offers = max(1, min(max_offers, 10))
-        use_eta = bool(
-            area_settings.get("use_eta_ranking")
-            if area_settings.get("use_eta_ranking") is not None
-            else app_settings.get("use_eta_ranking", True)
-        )
+        # Global false always wins: an operator disabling ETA ranking globally
+        # must not have service-area DEFAULT true (set by migration 100) silently
+        # re-enable it. Only a service-area explicit true can override a global true.
+        global_eta = app_settings.get("use_eta_ranking")
+        if global_eta is False:
+            use_eta = False
+        elif area_settings.get("use_eta_ranking") is not None:
+            use_eta = bool(area_settings["use_eta_ranking"])
+        else:
+            use_eta = bool(global_eta) if global_eta is not None else True
         return algorithm, min_rating, search_radius_km, max_offers, use_eta
 
     async def find_candidate_drivers(self, ride: Dict[str, Any]) -> List[Dict[str, Any]]:

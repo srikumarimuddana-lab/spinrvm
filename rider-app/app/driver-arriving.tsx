@@ -85,18 +85,27 @@ function DriverArrivingScreenContent() {
 
   const cancellationFee = (currentRide as any)?.cancellation_fee ?? 3.0;
 
-  // Snapshot driver's position the first time we see coords for this driver.
-  // Passing a new {lat,lng} object on every GPS ping would cause MapViewDirections
-  // to re-call the Directions API on each update; the backend already sends
-  // driverEtaSeconds for the countdown, so we only need the route shape once.
-  const driverOriginSnapshot = useMemo(
-    () =>
-      currentDriver?.lat && currentDriver?.lng
-        ? { latitude: currentDriver.lat, longitude: currentDriver.lng }
-        : null,
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [currentDriver?.id], // re-snapshot only if a different driver is assigned
-  );
+  // Capture the driver's position the first time valid coords arrive.
+  // useMemo([currentDriver.id]) would miss late-arriving GPS: if the driver is
+  // assigned before their app sends a location ping, lat/lng are null on first
+  // render and useMemo never re-runs for the same driver ID.
+  // useState + useEffect fires whenever coords change and latches on first hit.
+  const [driverOriginSnapshot, setDriverOriginSnapshot] = useState<{
+    latitude: number;
+    longitude: number;
+  } | null>(null);
+  useEffect(() => {
+    if (
+      driverOriginSnapshot === null &&
+      currentDriver?.lat != null &&
+      currentDriver?.lng != null
+    ) {
+      setDriverOriginSnapshot({
+        latitude: currentDriver.lat,
+        longitude: currentDriver.lng,
+      });
+    }
+  }, [currentDriver?.lat, currentDriver?.lng]);
 
   // Stable pickup→dropoff refs — ride endpoints never change mid-ride.
   const rideRouteOrigin = useMemo(
@@ -170,7 +179,7 @@ function DriverArrivingScreenContent() {
   // ── Map fitting ──
   useEffect(() => {
     if (currentRide && mapRef.current) {
-      if (currentDriver?.lat && currentDriver?.lng) {
+      if (currentDriver?.lat != null && currentDriver?.lng != null) {
         mapRef.current.fitToCoordinates(
           [
             { latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng },
@@ -307,6 +316,7 @@ function DriverArrivingScreenContent() {
               apikey={process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || ''}
               strokeWidth={0} strokeColor="transparent"
               onReady={(r: any) => {
+                if (!r.coordinates?.length) return;
                 const etaMin = Math.ceil(r.duration);
                 setMapEtaMinutes(etaMin);
                 setLastEtaMin(etaMin);
@@ -325,6 +335,7 @@ function DriverArrivingScreenContent() {
               apikey={process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || ''}
               strokeWidth={0} strokeColor="transparent"
               onReady={(r: any) => {
+                if (!r.coordinates?.length) return;
                 setRideRouteCoords(r.coordinates);
                 setActiveRideRouteCoords(r.coordinates);
               }}
@@ -343,7 +354,7 @@ function DriverArrivingScreenContent() {
           </Marker>
 
           {/* Driver car */}
-          {currentDriver?.lat && currentDriver?.lng && (
+          {currentDriver?.lat != null && currentDriver?.lng != null && (
             <CarMarker coordinate={{ latitude: currentDriver.lat, longitude: currentDriver.lng }}
               heading={(currentDriver as any).heading} size={44} zIndex={105} />
           )}

@@ -195,6 +195,7 @@ function RideInProgressScreenContent() {
     const dLng = currentDriver?.lng;
     const dropLat = currentRide?.dropoff_lat;
     const dropLng = currentRide?.dropoff_lng;
+    // Use != null (not !dLat) so coords of exactly 0 are treated as valid.
     if (dLat == null || dLng == null || dropLat == null || dropLng == null) return;
     const etaMin = _haversineEtaMin(dLat, dLng, dropLat, dropLng);
     setEta(etaMin);
@@ -592,6 +593,7 @@ I've shared my live location with you for safety.
                 strokeWidth={0}
                 strokeColor="transparent"
                 onReady={(result: any) => {
+                  if (!result.coordinates?.length) return;
                   routeFetchedRef.current = true;
                   const etaMin = Math.ceil(result.duration);
                   setEta(etaMin);
@@ -655,7 +657,7 @@ I've shared my live location with you for safety.
             </Marker>
 
             {/* Driver Car Marker */}
-            {currentDriver?.lat && currentDriver?.lng && (
+            {currentDriver?.lat != null && currentDriver?.lng != null && (
               <CarMarker
                 coordinate={{ latitude: currentDriver.lat, longitude: currentDriver.lng }}
                 heading={(currentDriver as any).heading}

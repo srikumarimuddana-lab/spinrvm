@@ -79,6 +79,7 @@ class TestProductionStartupGuards:
             "ADMIN_PASSWORD": "StrongPass123!",
             "FIREBASE_DRIVER_APP_ID": "driver-app-id",
             "FIREBASE_RIDER_APP_ID": "rider-app-id",
+            "SUPABASE_REGION": "ca-central-1",
             "ENV": "production",
         }
         base.update(overrides)
@@ -122,6 +123,20 @@ class TestProductionStartupGuards:
         """Empty FIREBASE_RIDER_APP_ID must raise in production."""
         with pytest.raises(Exception, match="FIREBASE_RIDER_APP_ID"):
             self._make_settings(FIREBASE_RIDER_APP_ID="")
+
+    def test_missing_supabase_region_raises(self):
+        """Unset SUPABASE_REGION must raise in production (PIPEDA residency)."""
+        with pytest.raises(Exception, match="SUPABASE_REGION"):
+            self._make_settings(SUPABASE_REGION="")
+
+    def test_non_canadian_region_raises(self):
+        """A non-Canadian SUPABASE_REGION must raise in production."""
+        with pytest.raises(Exception, match="Canadian region"):
+            self._make_settings(SUPABASE_REGION="us-east-1")
+
+    def test_canadian_region_passes(self):
+        """A ca-* region is accepted."""
+        self._make_settings(SUPABASE_REGION="ca-central-1")  # must not raise
 
     def test_development_allows_short_secret(self):
         """Short JWT_SECRET is permitted outside production (dev/test)."""

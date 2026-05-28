@@ -352,3 +352,25 @@ class TestServiceAreaValidation:
             json={"multiplier": 0.5, "is_active": True},
         )
         assert resp.status_code == 422
+
+    def test_disabling_surge_clears_active_and_multiplier(self, client):
+        """Turning surge_enabled off must zero any parked surge on the area."""
+        captured: dict = {}
+
+        async def _capture(table, filt, payload):
+            captured.update(payload)
+
+        with (
+            patch("db_supabase.update_one", new=AsyncMock(side_effect=_capture)),
+            patch("routes.admin.service_areas.invalidate_fare_cache", new=AsyncMock()),
+            patch("routes.admin.service_areas.log_admin_action", new=AsyncMock()),
+        ):
+            resp = client.put(
+                "/api/admin/service-areas/area-1",
+                json={"surge_enabled": False, "surge_multiplier": 2.0, "surge_active": True},
+            )
+
+        assert resp.status_code == 200
+        assert captured["surge_enabled"] is False
+        assert captured["surge_active"] is False
+        assert captured["surge_multiplier"] == 1.0

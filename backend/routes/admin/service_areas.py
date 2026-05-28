@@ -375,7 +375,8 @@ async def admin_create_service_area(area: ServiceAreaCreateRequest, admin: dict 
         "parent_service_area_id": area.parent_service_area_id,
         "is_airport": effective_is_airport,
         "airport_fee": effective_airport_fee,
-        "surge_active": surge_active,
+        "surge_enabled": bool(area.surge_enabled),
+        "surge_active": surge_active if area.surge_enabled else False,
         "surge_multiplier": area.surge_multiplier,
         "gst_enabled": area.gst_enabled,
         "gst_rate": area.gst_rate,
@@ -522,6 +523,16 @@ async def admin_update_service_area(
         update_payload["polygon"] = polygon
     if surge_active is not None:
         update_payload["surge_active"] = surge_active
+
+    # Per-area surge master toggle. Persist it explicitly (it is not in the
+    # allow-list above). Disabling surge must immediately clear any live surge
+    # so a parked multiplier / surge_active flag can't keep pricing rides while
+    # the area is "off"; the surge engine also skips disabled areas.
+    if area.surge_enabled is not None:
+        update_payload["surge_enabled"] = area.surge_enabled
+        if area.surge_enabled is False:
+            update_payload["surge_active"] = False
+            update_payload["surge_multiplier"] = 1.0
 
     # Keep is_airport <-> airport_fee consistent: deleting the fee turns the
     # zone off; turning the zone off zeroes the fee. Operators can do either

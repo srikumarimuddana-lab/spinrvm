@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 try:
     from .. import db_supabase
+    from ..core.config import settings as core_settings
     from ..dependencies import get_current_user
     from ..settings_loader import get_app_settings
     from ..utils.audit_logger import log_user_action as _audit_log_user
@@ -22,6 +23,7 @@ try:
     from ..utils.rate_limiter import payment_action_limit
 except ImportError:
     import db_supabase
+    from core.config import settings as core_settings
     from dependencies import get_current_user
     from settings_loader import get_app_settings
     from utils.audit_logger import log_user_action as _audit_log_user
@@ -269,6 +271,29 @@ async def confirm_payment(
     payment_intent_id = body.get("payment_intent_id")
     ride_id = body.get("ride_id")
 
+    # Mock-payment shortcut is allowed only outside production, OR for an
+    # allow-listed app-store reviewer account (so a reviewer can reach a "paid"
+    # confirmation without a real charge). Reject everyone else up front —
+    # before claiming the ride into payment_status=processing — so a rejected
+    # request can't strand the ride. In production any other authenticated rider
+    # could otherwise send "pi_mock_*" and settle their own ride for free.
+    _is_reviewer = current_user.get("phone") in core_settings.review_login_map()
+    if (
+        payment_intent_id
+        and payment_intent_id.startswith("pi_mock_")
+        and core_settings.ENV.lower() == "production"
+        and not _is_reviewer
+    ):
+        logger.error(
+            "Rejected mock payment intent %s in production for ride %s",
+            payment_intent_id,
+            ride_id,
+        )
+        raise HTTPException(
+            status_code=400,
+            detail="Mock payments are not supported in production",
+        )
+
     if ride_id:
         ride = await db_supabase.get_ride(ride_id)
         if not ride:
@@ -294,6 +319,7 @@ async def confirm_payment(
         if not claimed:
             raise HTTPException(status_code=409, detail="payment_already_processing")
 
+    # Mock-payment shortcut (non-production only; production rejected above).
     if payment_intent_id and payment_intent_id.startswith("pi_mock_"):
         if ride_id:
             _ride = await db_supabase.get_ride(ride_id)

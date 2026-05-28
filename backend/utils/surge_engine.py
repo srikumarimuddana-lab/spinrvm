@@ -62,9 +62,7 @@ def ratio_to_multiplier(ratio: float) -> float:
 
 async def _count_demand_in_area(area_id: str) -> int:
     """Count active/recent ride requests in a service area."""
-    cutoff = (
-        datetime.now(timezone.utc) - timedelta(minutes=DEMAND_WINDOW_MINUTES)
-    ).isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=DEMAND_WINDOW_MINUTES)).isoformat()
     try:
         rides = await db.get_rows(
             "rides",
@@ -84,9 +82,7 @@ async def _count_demand_in_area(area_id: str) -> int:
         }
         return sum(1 for r in rides if r.get("status") in active_statuses)
     except Exception as e:
-        logger.error(
-            f"Surge: failed to count demand for area {area_id}: {e}", exc_info=True
-        )
+        logger.error(f"Surge: failed to count demand for area {area_id}: {e}", exc_info=True)
         return 0
 
 
@@ -97,9 +93,7 @@ async def _count_supply_in_area(area: Dict[str, Any]) -> int:
         return 0
 
     try:
-        drivers = await db.get_rows(
-            "drivers", {"is_online": True, "is_available": True}, limit=500
-        )
+        drivers = await db.get_rows("drivers", {"is_online": True, "is_available": True}, limit=500)
 
         # Presence filter: ghost-online drivers (app force-killed, phone dead)
         # shouldn't count as "supply" or we'd compute a lower surge than the
@@ -164,9 +158,7 @@ async def recalculate_all_surges() -> List[Dict[str, Any]]:
     try:
         areas = await db.get_rows("service_areas", {"is_active": True}, limit=100)
     except Exception as e:
-        original = (
-            getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
-        )
+        original = getattr(e, "details", {}).get("original") if hasattr(e, "details") else None
         logger.error(f"Surge: failed to fetch service areas: {e} | original={original}")
         return results
 
@@ -178,6 +170,14 @@ async def recalculate_all_surges() -> List[Dict[str, Any]]:
         # Skip manually overridden areas
         surge_source = area.get("surge_source", "auto")
         if surge_source == "manual":
+            continue
+
+        # Per-area admin master gate: never auto-activate surge for an area the
+        # operator hasn't explicitly enabled (surge_enabled defaults FALSE). The
+        # fare paths also refuse to apply surge for disabled areas, but skipping
+        # here keeps surge_active/multiplier from ever being written in the first
+        # place, so nothing stale lingers if the area is later enabled.
+        if not area.get("surge_enabled", False):
             continue
 
         try:
@@ -221,9 +221,7 @@ async def recalculate_all_surges() -> List[Dict[str, Any]]:
 
             results.append(metrics)
         except Exception as e:
-            logger.error(
-                f"Surge: failed to update area {area.get('id')}: {e}", exc_info=True
-            )
+            logger.error(f"Surge: failed to update area {area.get('id')}: {e}", exc_info=True)
 
     return results
 
@@ -270,9 +268,7 @@ async def surge_recalculation_loop():
             results = await recalculate_all_surges()
             if results:
                 active = sum(1 for r in results if r["multiplier"] > 1.0)
-                logger.debug(
-                    f"Surge recalc complete: {len(results)} areas, {active} surging"
-                )
+                logger.debug(f"Surge recalc complete: {len(results)} areas, {active} surging")
         except Exception as e:
             logger.error(f"Surge recalculation loop error: {e}")
         _record_heartbeat("surge_engine (2min)")

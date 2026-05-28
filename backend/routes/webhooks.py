@@ -1,4 +1,4 @@
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -149,8 +149,6 @@ async def stripe_webhook(request: Request):
             wallet_id = meta.get("wallet_id")
             user_id = meta.get("user_id")
             amount_cad_str = meta.get("amount_cad", "0")
-            from decimal import ROUND_HALF_UP, Decimal
-
             amount = Decimal(amount_cad_str).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
             new_balance = await wallet_increment_balance(wallet_id, amount)
 

@@ -151,25 +151,29 @@ async def settle_wallet(
             status_code=403,
         )
 
-    old_balance = _round(_d(wallet.get("balance", 0)))
     debit = _round(total_charge)
-    if old_balance < debit:
+    # Atomic debit + mark-paid via the wallet_pay_for_ride RPC (migration 50):
+    # it locks the wallet row FOR UPDATE, re-checks the balance, debits, and sets
+    # the ride's payment_status='paid' in one transaction, returning the new
+    # balance. Replaces the previous read-compute-write (a TOCTOU race plus a
+    # float-rounded balance written straight to the wallets NUMERIC column).
+    try:
+        new_balance = await db_supabase.wallet_pay_for_ride(wallet["id"], ride_id, debit)
+    except ValueError as exc:
         await db_supabase.update_ride(ride_id, {"payment_status": "pending"})
-        return PaymentResult(
-            success=False,
-            error=f"Insufficient wallet balance. Need ${debit}, have ${old_balance}",
-            status_code=400,
+        if "insufficient_funds" in str(exc):
+            current = _round(
+                _d((await db_supabase.find_one("wallets", {"id": wallet["id"]}) or {}).get("balance", 0))
+            )
+            return PaymentResult(
+                success=False,
+                error=f"Insufficient wallet balance. Need ${debit}, have ${current}",
+                status_code=400,
+            )
+        logger.error(
+            "settle_wallet: wallet_pay_for_ride failed for ride %s: %s", ride_id, exc, exc_info=True
         )
-
-    new_balance = old_balance - debit
-    await db_supabase.update_one(
-        "wallets",
-        {"id": wallet["id"]},
-        {
-            "balance": _f(new_balance),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        },
-    )
+        return PaymentResult(success=False, error="Wallet payment failed", status_code=400)
     grand_total = _round(_d(ride.get("grand_total") or ride.get("total_fare", 0) or 0))
     ride_fare = _round(
         _d(ride.get("base_fare") or 0) + _d(ride.get("distance_fare") or 0) + _d(ride.get("time_fare") or 0)

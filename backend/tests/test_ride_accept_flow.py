@@ -156,6 +156,51 @@ class TestAcceptRideFlipsStatus:
         # 3) Push notification too so a backgrounded rider app still gets it.
         assert send_push_mock.await_count >= 1
 
+    def test_accept_records_insurance_period_2(self):
+        """Accepting a ride must open insurance Period 2 (en route to pickup —
+        TNC primary commercial coverage) for the winning driver. Misclassifying
+        this window as Period 1 (contingent liability) is a regulatory/insurance
+        liability — a pickup-drive collision would be filed under the wrong layer.
+        """
+        from backend.routes import drivers as drivers_mod
+
+        pre_ride = _ride_row("driver_assigned", driver_id=DRIVER_ID)
+        post_ride = _ride_row(
+            "driver_accepted",
+            driver_id=DRIVER_ID,
+            driver_accepted_at=datetime.now(timezone.utc).isoformat(),
+        )
+        guard_ok = type("_Guard", (), {"modified_count": 1})()
+        period_mock = AsyncMock()
+
+        with (
+            patch("backend.routes.drivers.db_supabase.get_ride", AsyncMock(return_value=pre_ride)),
+            patch("backend.routes.drivers.db_supabase.get_rows", AsyncMock(return_value=[_driver_row()])),
+            patch("backend.routes.drivers.db.update_one", AsyncMock(return_value=guard_ok)),
+            patch("backend.routes.drivers.db.find_one", AsyncMock(return_value=post_ride)),
+            patch("backend.routes.drivers.manager.send_personal_message", AsyncMock()),
+            patch("backend.routes.drivers.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.drivers.send_push_notification", AsyncMock()),
+            patch("backend.routes.drivers.record_period_transition", period_mock),
+        ):
+            asyncio.run(
+                drivers_mod.accept_ride(
+                    ride_id=RIDE_ID,
+                    current_user={"id": DRIVER_USER_ID},
+                )
+            )
+
+        # The winning driver must transition to Period 2, linked to this ride.
+        period_2_calls = [
+            c for c in period_mock.call_args_list
+            if len(c.args) >= 2 and c.args[0] == DRIVER_ID and c.args[1] == 2
+        ]
+        assert period_2_calls, (
+            "accept_ride must record insurance Period 2 for the winning driver; "
+            f"got calls: {period_mock.call_args_list}"
+        )
+        assert period_2_calls[0].kwargs.get("ride_id") == RIDE_ID
+
     def test_double_accept_rejected_by_guard(self):
         """When the atomic guard returns None (ride already taken by concurrent request),
         accept_ride must raise 409 — never return {success: True}."""

@@ -22,6 +22,7 @@ async def test_fare_estimate_surge_capped_at_2_5x():
     matched_area = {
         "id": "area_test_1",
         "name": "Test Area",
+        "surge_enabled": True,
         "surge_active": True,
         "surge_multiplier": 5.0,
         "vehicle_pricing": [

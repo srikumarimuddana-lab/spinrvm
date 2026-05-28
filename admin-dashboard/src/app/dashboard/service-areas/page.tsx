@@ -551,10 +551,11 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
     max_simultaneous_offers: area.max_simultaneous_offers || 3,
     use_eta_ranking: area.use_eta_ranking !== false,
     show_demand_heatmap: area.show_demand_heatmap || false,
-    // Surge is per-area now — no separate Pricing page. surge_active
-    // gates whether build_fares_for_area multiplies the fare;
-    // surge_multiplier is the factor (1.0 = off, 1.5 = +50%, etc.).
-    surge_active: area.surge_active !== undefined ? area.surge_active : !!area.surge_enabled,
+    // Surge is per-area and admin-gated. The toggle below is the master
+    // enable (surge_enabled): until it's on, the backend prices every ride at
+    // 1.0× and the surge engine skips this area entirely. surge_multiplier is
+    // the manual factor applied once enabled (1.0 = off, 1.5 = +50%, etc.).
+    surge_enabled: area.surge_enabled !== undefined ? !!area.surge_enabled : !!area.surge_active,
     surge_multiplier: area.surge_multiplier ?? 1.0,
     surge_justification: "",
   });
@@ -563,22 +564,24 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
   const [saved, setSaved] = useState(false);
 
   const surgeValue = parseFloat(String(form.surge_multiplier)) || 1.0;
-  const needsJustification = form.surge_active && surgeValue > 2.5;
+  const needsJustification = form.surge_enabled && surgeValue > 2.5;
 
   const handleSave = async () => {
-    if (needsJustification && !form.surge_justification.trim()) {
+    // Did the operator actually change surge since load? Unrelated saves
+    // (name, radius, etc.) must leave every surge field untouched so we
+    // neither freeze auto-surge nor flip a not-currently-surging area active.
+    const surgeTouched =
+      form.surge_enabled !== (area.surge_enabled !== undefined ? !!area.surge_enabled : !!area.surge_active) ||
+      parseFloat(String(form.surge_multiplier)) !== parseFloat(String(area.surge_multiplier ?? 1.0));
+
+    // Only require (and only block on) justification when the operator is
+    // actually applying an above-cap surge — not when saving an unrelated
+    // field on an already-justified above-cap area.
+    if (surgeTouched && needsJustification && !form.surge_justification.trim()) {
       alert("A written justification is required for surge multipliers above 2.5× (regulatory + reputational risk).");
       return;
     }
     setSaving(true);
-    // Only stamp surge_source="manual" if the operator actually
-    // changed one of the surge fields since load. If they didn't
-    // touch surge we leave surge_source alone so surge_engine keeps
-    // running against this area. This lets admins save unrelated
-    // fields (name, radius, etc.) without freezing auto-surge.
-    const surgeTouched =
-      form.surge_active !== (area.surge_active !== undefined ? area.surge_active : !!area.surge_enabled) ||
-      parseFloat(String(form.surge_multiplier)) !== parseFloat(String(area.surge_multiplier ?? 1.0));
     const updates: any = {
       name: form.name,
       city: form.city,
@@ -591,11 +594,27 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
       max_simultaneous_offers: Math.max(1, Math.min(10, parseInt(String(form.max_simultaneous_offers)) || 3)),
       use_eta_ranking: form.use_eta_ranking,
       show_demand_heatmap: form.show_demand_heatmap,
-      surge_active: form.surge_active,
-      surge_multiplier: surgeValue,
     };
-    if (surgeTouched) updates.surge_source = "manual";
-    if (needsJustification) updates.surge_justification = form.surge_justification.trim();
+    // Touch surge only when it actually changed. Sending surge_active on every
+    // save would flip an enabled-but-idle auto area (surge_enabled=true,
+    // surge_active=false) to active, making the public API advertise surge the
+    // engine never triggered; and resending a parked multiplier on disable
+    // would keep it in optimistic local state and resurrect it on re-enable.
+    if (surgeTouched) {
+      updates.surge_source = "manual";
+      updates.surge_enabled = form.surge_enabled;
+      if (form.surge_enabled) {
+        // Enabling / changing the multiplier — apply it immediately.
+        updates.surge_active = true;
+        updates.surge_multiplier = surgeValue;
+        if (needsJustification) updates.surge_justification = form.surge_justification.trim();
+      } else {
+        // Disabling — mirror the backend's reset so optimistic local state
+        // drops the parked multiplier instead of holding it for a re-enable.
+        updates.surge_active = false;
+        updates.surge_multiplier = 1.0;
+      }
+    }
     if (pendingPolygon) {
       updates.polygon = pendingPolygon;
     }
@@ -672,14 +691,14 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
           )}
         </p>
         <div className="flex items-center gap-2 pt-1">
-          <button type="button" onClick={() => setForm({ ...form, surge_active: !form.surge_active })}>
-            {form.surge_active ? <ToggleRight className="h-6 w-6 text-green-500" /> : <ToggleLeft className="h-6 w-6 text-gray-300" />}
+          <button type="button" onClick={() => setForm({ ...form, surge_enabled: !form.surge_enabled })}>
+            {form.surge_enabled ? <ToggleRight className="h-6 w-6 text-green-500" /> : <ToggleLeft className="h-6 w-6 text-gray-300" />}
           </button>
           <label className="text-xs font-semibold text-gray-500">
-            Surge {form.surge_active ? "ON" : "off"}
+            Surge {form.surge_enabled ? "ON" : "off"}
           </label>
         </div>
-        {form.surge_active && (
+        {form.surge_enabled && (
           <>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end mt-3">
               <div>

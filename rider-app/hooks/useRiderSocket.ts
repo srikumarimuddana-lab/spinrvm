@@ -189,7 +189,19 @@ export function useRiderSocket() {
   }, []);
 
   // ── Connect / disconnect ────────────────────────────────────────
-  const connect = useCallback(() => {
+  const connect = useCallback(async () => {
+    // Refresh the access token proactively before opening the socket.
+    // Without this, a reconnect after token expiry (~15 min) sends the
+    // old JWT — the server rejects auth, onclose fires immediately, and
+    // the reconnect loop spins forever with a stale token, freezing the
+    // live driver position on the rider's map.
+    try {
+      const { ensureFreshToken } = require('@shared/api/client');
+      await ensureFreshToken();
+    } catch (err) {
+      console.warn('[WS] ensureFreshToken failed, proceeding with current token:', err);
+    }
+
     const userId = userIdRef.current;
     const rideId = rideIdRef.current;
     if (!userId || !rideId) return;
@@ -204,7 +216,8 @@ export function useRiderSocket() {
       return;
     }
 
-    const wsUrl = `${API_URL.replace('http', 'ws')}/ws/rider/${userId}`;
+    const wsScheme = API_URL.startsWith('https') ? 'wss' : 'ws';
+    const wsUrl = `${API_URL.replace(/^https?/, wsScheme)}/ws/rider/${userId}`;
     console.log('[WS] Rider connecting:', wsUrl);
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;

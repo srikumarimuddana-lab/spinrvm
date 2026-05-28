@@ -51,6 +51,8 @@ function DriverArrivingScreenContent() {
     currentRide, currentDriver, fetchRide, triggerEmergency,
     isLoading, error, driverEtaSeconds, cancelRide, clearRide,
     wsConnected,
+    activeRideRouteCoords, activeDriverRouteCoords,
+    setActiveRideRouteCoords, setActiveDriverRouteCoords, setLastEtaMin,
   } = useRideStore();
   const mapRef = useRef<MapView>(null);
   const bottomSheetRef = useRef<any>(null);
@@ -59,8 +61,10 @@ function DriverArrivingScreenContent() {
 
   const [mapEtaMinutes, setMapEtaMinutes] = useState<number | null>(null);
   const [countdownSeconds, setCountdownSeconds] = useState<number | null>(null);
-  const [driverRouteCoords, setDriverRouteCoords] = useState<any[]>([]);
-  const [rideRouteCoords, setRideRouteCoords] = useState<any[]>([]);
+  // Seed from store so returning to this screen after a brief navigation
+  // (e.g. opening chat) shows the already-fetched route immediately.
+  const [driverRouteCoords, setDriverRouteCoords] = useState<any[]>(activeDriverRouteCoords ?? []);
+  const [rideRouteCoords, setRideRouteCoords] = useState<any[]>(activeRideRouteCoords ?? []);
   const [isCancelling, setIsCancelling] = useState(false);
   const cancelInitiatedRef = useRef(false);
   const [confirmSheet, setConfirmSheet] = useState<{
@@ -295,26 +299,35 @@ function DriverArrivingScreenContent() {
               The car marker updates live; re-fetching the route on every GPS ping
               would cost ~$0.10 extra per pickup phase for no visible benefit since
               driverEtaSeconds from the backend already drives the ETA countdown. */}
-          {driverOriginSnapshot && (
+          {/* Only fetch if we don't already have coords from a previous screen visit */}
+          {driverOriginSnapshot && activeDriverRouteCoords === null && (
             <MapViewDirections
               origin={driverOriginSnapshot}
               destination={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }}
               apikey={process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || ''}
               strokeWidth={0} strokeColor="transparent"
-              onReady={(r: any) => { setMapEtaMinutes(Math.ceil(r.duration)); setDriverRouteCoords(r.coordinates); }}
+              onReady={(r: any) => {
+                const etaMin = Math.ceil(r.duration);
+                setMapEtaMinutes(etaMin);
+                setLastEtaMin(etaMin);
+                setDriverRouteCoords(r.coordinates);
+                setActiveDriverRouteCoords(r.coordinates);
+              }}
             />
           )}
           {driverRouteCoords.length > 1 && renderGradientPolyline(driverRouteCoords, true)}
 
-          {/* Pickup → dropoff route: both endpoints are stable; useMemo prevents
-              new object refs on re-renders from triggering redundant API calls. */}
-          {rideRouteOrigin && rideRouteDestination && (
+          {/* Pickup → dropoff route: only fetch once; reuse cached coords on return */}
+          {rideRouteOrigin && rideRouteDestination && activeRideRouteCoords === null && (
             <MapViewDirections
               origin={rideRouteOrigin}
               destination={rideRouteDestination}
               apikey={process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || ''}
               strokeWidth={0} strokeColor="transparent"
-              onReady={(r: any) => setRideRouteCoords(r.coordinates)}
+              onReady={(r: any) => {
+                setRideRouteCoords(r.coordinates);
+                setActiveRideRouteCoords(r.coordinates);
+              }}
             />
           )}
           {rideRouteCoords.length > 1 && renderGradientPolyline(rideRouteCoords, false)}

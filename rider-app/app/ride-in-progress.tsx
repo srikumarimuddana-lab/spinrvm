@@ -50,12 +50,20 @@ function RideInProgressScreenContent() {
   const router = useRouter();
   const { rideId } = useLocalSearchParams<{ rideId: string }>();
   const trackBaseUrl = useContext(TrackBaseUrlContext);
-  const { currentRide, currentDriver, fetchRide, cancelRide, clearRide, triggerEmergency, isLoading, error, wsConnected } = useRideStore();
-  const [eta, setEta] = useState(15);
+  const {
+    currentRide, currentDriver, fetchRide, cancelRide, clearRide,
+    triggerEmergency, isLoading, error, wsConnected,
+    activeRideRouteCoords, lastEtaMin,
+    setActiveRideRouteCoords, setLastEtaMin,
+  } = useRideStore();
+  // Seed ETA and route from store so this screen shows correct values
+  // immediately even before the first Directions fetch completes — and
+  // skips the fetch entirely if driver-arriving already retrieved the route.
+  const [eta, setEta] = useState(lastEtaMin ?? 15);
   const [estimatedTime, setEstimatedTime] = useState('12:45 PM');
   const [currentLocation, setCurrentLocation] = useState('4th Avenue North');
   const [isSharingLocation, setIsSharingLocation] = useState(false);
-  const [tripRouteCoords, setTripRouteCoords] = useState<any[]>([]);
+  const [tripRouteCoords, setTripRouteCoords] = useState<any[]>(activeRideRouteCoords ?? []);
 
   // Source-of-truth rider bill. The API computes grand_total as the sum of
   // the fare_breakdown line items (see backend/routes/rides.py::
@@ -171,8 +179,16 @@ function RideInProgressScreenContent() {
   // off ETA ownership to the haversine estimator below.
   const routeFetchedRef = useRef(false);
 
-  // After the first Directions fetch sets the initial ETA, update it from
-  // the driver's live position using haversine — no Maps API call needed.
+  // If the store already has coords (from driver-arriving), mark fetch done
+  // so haversine starts immediately rather than waiting for a re-fetch.
+  useEffect(() => {
+    if (activeRideRouteCoords && activeRideRouteCoords.length > 1) {
+      routeFetchedRef.current = true;
+    }
+  }, []);
+
+  // After route is known, update ETA from driver's live position via haversine
+  // (no Maps API call) and persist it to the store as a fallback value.
   useEffect(() => {
     if (!routeFetchedRef.current) return;
     const dLat = currentDriver?.lat;
@@ -180,7 +196,9 @@ function RideInProgressScreenContent() {
     const dropLat = currentRide?.dropoff_lat;
     const dropLng = currentRide?.dropoff_lng;
     if (dLat == null || dLng == null || dropLat == null || dropLng == null) return;
-    setEta(_haversineEtaMin(dLat, dLng, dropLat, dropLng));
+    const etaMin = _haversineEtaMin(dLat, dLng, dropLat, dropLng);
+    setEta(etaMin);
+    setLastEtaMin(etaMin);
   }, [currentDriver?.lat, currentDriver?.lng]);
 
   useEffect(() => {
@@ -559,11 +577,14 @@ I've shared my live location with you for safety.
             showsMyLocationButton={false}
             userInterfaceStyle={isDark ? "dark" : "light"}
           >
-            {/* Route: fetched once on mount using stable pickup→dropoff coords.
-                origin is NOT the live driver position — that would trigger a
-                Directions API call on every GPS ping (~60 calls / 15-min ride).
-                ETA is refreshed via haversine after this initial fetch. */}
-            {routeOrigin && routeDestination && process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY && (
+            {/* Route: reuse coords from store if driver-arriving already fetched
+                them. Only call Directions API when this is the first screen in
+                the ride flow (store is empty). Either way, origin is the stable
+                pickup location — never the live driver position — so MapViewDirections
+                fires at most once per ride. */}
+            {routeOrigin && routeDestination &&
+              process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY &&
+              activeRideRouteCoords === null && (
               <MapViewDirections
                 origin={routeOrigin}
                 destination={routeDestination}
@@ -572,8 +593,11 @@ I've shared my live location with you for safety.
                 strokeColor="transparent"
                 onReady={(result: any) => {
                   routeFetchedRef.current = true;
-                  setEta(Math.ceil(result.duration));
+                  const etaMin = Math.ceil(result.duration);
+                  setEta(etaMin);
+                  setLastEtaMin(etaMin);
                   setTripRouteCoords(result.coordinates);
+                  setActiveRideRouteCoords(result.coordinates);
                   if (mapRef.current && result.coordinates?.length > 1) {
                     mapRef.current.fitToCoordinates(result.coordinates, {
                       edgePadding: { top: 80, right: 50, bottom: 280, left: 50 },

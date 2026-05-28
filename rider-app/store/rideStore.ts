@@ -192,6 +192,12 @@ interface RideState {
   quietMode: boolean;
   riderNotes: string;
   routePolyline: [number, number][];
+  // Route coords cached across screen transitions so each phase reuses the
+  // already-fetched Directions result instead of making a new API call.
+  activeRideRouteCoords: { latitude: number; longitude: number }[] | null;
+  activeDriverRouteCoords: { latitude: number; longitude: number }[] | null;
+  // Last ETA in minutes — shown as fallback when WebSocket updates stop.
+  lastEtaMin: number | null;
   isLoading: boolean;
   error: string | null;
 
@@ -216,6 +222,9 @@ interface RideState {
   completeRide: () => Promise<Ride | undefined>;
   clearRide: () => void;
   clearError: () => void;
+  setActiveRideRouteCoords: (coords: { latitude: number; longitude: number }[]) => void;
+  setActiveDriverRouteCoords: (coords: { latitude: number; longitude: number }[]) => void;
+  setLastEtaMin: (min: number) => void;
   rateRide: (rideId: string, rating: number, comment?: string, tipAmount?: number) => Promise<void>;
   hydrateActiveRide: () => Promise<void>;
   triggerEmergency: (rideId: string, latitude?: number, longitude?: number) => Promise<void>;
@@ -278,6 +287,9 @@ export const useRideStore = create<RideState>((set, get) => ({
   quietMode: false,
   riderNotes: '',
   routePolyline: [],
+  activeRideRouteCoords: null,
+  activeDriverRouteCoords: null,
+  lastEtaMin: null,
   scheduledTime: null,
   scheduledRides: [],
   userLocation: null,
@@ -794,11 +806,24 @@ export const useRideStore = create<RideState>((set, get) => ({
   // re-populated) traps the rider on ride-completed after paying.
   clearRide: () => {
     const clearedId = get().currentRide?.id;
-    set({ currentRide: null, currentDriver: null, chatMessages: [], error: null, _clearedRideId: clearedId ?? null });
+    set({
+      currentRide: null,
+      currentDriver: null,
+      chatMessages: [],
+      error: null,
+      _clearedRideId: clearedId ?? null,
+      activeRideRouteCoords: null,
+      activeDriverRouteCoords: null,
+      lastEtaMin: null,
+    });
     AsyncStorage.removeItem(ACTIVE_RIDE_KEY).catch(() => {});
   },
 
   clearError: () => set({ error: null }),
+
+  setActiveRideRouteCoords: (coords) => set({ activeRideRouteCoords: coords }),
+  setActiveDriverRouteCoords: (coords) => set({ activeDriverRouteCoords: coords }),
+  setLastEtaMin: (min) => set({ lastEtaMin: min }),
 
   addRecentSearch: (location) => {
     const { recentSearches } = get();
@@ -982,6 +1007,9 @@ registerLogoutCallback(() => {
     nearbyDrivers: [],
     appliedPromo: null,
     error: null,
+    activeRideRouteCoords: null,
+    activeDriverRouteCoords: null,
+    lastEtaMin: null,
   });
   AsyncStorage.removeItem(ACTIVE_RIDE_KEY).catch(() => {});
 });

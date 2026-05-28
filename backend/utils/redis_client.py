@@ -196,6 +196,124 @@ async def redis_delete_pattern(pattern: str) -> int:
     return len(keys)
 
 
+# ── Geo index for dispatch (GEOADD / GEOSEARCH) ─────────────────────────
+#
+# Driver locations are written on every WS location update and read by the
+# dispatch path. Postgres remains the source of truth; the Redis geo index
+# is a read-through cache that eliminates N+1 queries during matching.
+
+GEO_KEY = "spinr:driver_locations"
+DRIVER_HASH_PREFIX = "spinr:driver:"
+DRIVER_HASH_TTL = 120  # 2× the presence key TTL
+
+
+async def geo_add_driver(driver_id: str, lat: float, lng: float, profile: dict) -> None:
+    r = await _get_redis()
+    if r is None:
+        return
+    try:
+        await r.geoadd(GEO_KEY, (lng, lat, driver_id))
+        mapping = {
+            "lat": str(lat),
+            "lng": str(lng),
+            "rating": str(profile.get("average_rating") or profile.get("rating") or 0),
+            "is_wav": "1" if profile.get("is_wav") else "0",
+            "vehicle_class": profile.get("vehicle_class") or profile.get("vehicle_type_id") or "standard",
+            "is_online": "1",
+            "location_updated_at": profile.get("location_updated_at") or "",
+        }
+        await r.hset(f"{DRIVER_HASH_PREFIX}{driver_id}", mapping=mapping)
+        await r.expire(f"{DRIVER_HASH_PREFIX}{driver_id}", DRIVER_HASH_TTL)
+    except Exception as e:
+        logger.warning(f"[REDIS-GEO] geo_add_driver failed for {driver_id}: {e}")
+
+
+async def geo_remove_driver(driver_id: str) -> None:
+    r = await _get_redis()
+    if r is None:
+        return
+    try:
+        await r.zrem(GEO_KEY, driver_id)
+        await r.delete(f"{DRIVER_HASH_PREFIX}{driver_id}")
+    except Exception as e:
+        logger.warning(f"[REDIS-GEO] geo_remove_driver failed for {driver_id}: {e}")
+
+
+async def geo_search_drivers(lat: float, lng: float, radius_km: float, count: int = 25) -> list | None:
+    r = await _get_redis()
+    if r is None:
+        return None
+    try:
+        candidates = await r.geosearch(
+            GEO_KEY,
+            longitude=lng,
+            latitude=lat,
+            radius=radius_km,
+            unit="km",
+            withcoord=True,
+            withdist=True,
+            sort="ASC",
+            count=count,
+        )
+        if not candidates:
+            return None
+
+        profiles = []
+        for item in candidates:
+            driver_id = item[0] if isinstance(item, (list, tuple)) else item
+            dist_km = float(item[1]) if isinstance(item, (list, tuple)) and len(item) > 1 else 0
+
+            profile = await r.hgetall(f"{DRIVER_HASH_PREFIX}{driver_id}")
+            if not profile or profile.get("is_online") != "1":
+                continue
+            profiles.append(
+                {
+                    "id": driver_id,
+                    "lat": float(profile.get("lat", 0)),
+                    "lng": float(profile.get("lng", 0)),
+                    "distance_km": dist_km,
+                    "average_rating": float(profile.get("rating", 0)),
+                    "rating": float(profile.get("rating", 0)),
+                    "is_wav": profile.get("is_wav") == "1",
+                    "vehicle_class": profile.get("vehicle_class", "standard"),
+                    "location_updated_at": profile.get("location_updated_at") or None,
+                }
+            )
+        return profiles if profiles else None
+    except Exception as e:
+        logger.warning(f"[REDIS-GEO] geo_search_drivers failed: {e}")
+        return None
+
+
+async def geo_warmup_from_rows(driver_rows: list) -> int:
+    r = await _get_redis()
+    if r is None:
+        return 0
+    count = 0
+    for d in driver_rows:
+        lat = d.get("lat")
+        lng = d.get("lng")
+        if lat is None or lng is None:
+            continue
+        try:
+            await r.geoadd(GEO_KEY, (lng, lat, d["id"]))
+            mapping = {
+                "lat": str(lat),
+                "lng": str(lng),
+                "rating": str(d.get("rating") or d.get("average_rating") or 0),
+                "is_wav": "1" if d.get("is_wav") else "0",
+                "vehicle_class": d.get("vehicle_class") or d.get("vehicle_type_id") or "standard",
+                "is_online": "1",
+                "location_updated_at": d.get("location_updated_at") or d.get("updated_at") or "",
+            }
+            await r.hset(f"{DRIVER_HASH_PREFIX}{d['id']}", mapping=mapping)
+            await r.expire(f"{DRIVER_HASH_PREFIX}{d['id']}", DRIVER_HASH_TTL)
+            count += 1
+        except Exception as e:
+            logger.warning(f"[REDIS-GEO] warmup failed for driver {d.get('id')}: {e}")
+    return count
+
+
 # ── Observability helpers ─────────────────────────────────────────────────────
 #
 # Two functions for monitoring how much of Redis we're using:

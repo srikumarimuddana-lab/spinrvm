@@ -175,22 +175,19 @@ function RideInProgressScreenContent() {
     [currentRide?.id],
   );
 
-  // Track whether the initial Directions fetch has completed so we can hand
-  // off ETA ownership to the haversine estimator below.
-  const routeFetchedRef = useRef(false);
+  // Reactive flag: true once the pickup→dropoff route is known (either from the
+  // store or from a fresh Directions fetch). Using state instead of a ref so
+  // the haversine effect below re-runs immediately when the flag flips — a ref
+  // change is invisible to React's dependency tracking.
+  const [routeFetched, setRouteFetched] = useState(
+    !!(activeRideRouteCoords && activeRideRouteCoords.length > 1),
+  );
 
-  // If the store already has coords (from driver-arriving), mark fetch done
-  // so haversine starts immediately rather than waiting for a re-fetch.
+  // Update ETA from driver's live position via haversine — no Maps API call.
+  // Fires immediately on mount when routeFetched is already true (store hit),
+  // and again on every subsequent GPS update.
   useEffect(() => {
-    if (activeRideRouteCoords && activeRideRouteCoords.length > 1) {
-      routeFetchedRef.current = true;
-    }
-  }, []);
-
-  // After route is known, update ETA from driver's live position via haversine
-  // (no Maps API call) and persist it to the store as a fallback value.
-  useEffect(() => {
-    if (!routeFetchedRef.current) return;
+    if (!routeFetched) return;
     const dLat = currentDriver?.lat;
     const dLng = currentDriver?.lng;
     const dropLat = currentRide?.dropoff_lat;
@@ -200,7 +197,7 @@ function RideInProgressScreenContent() {
     const etaMin = _haversineEtaMin(dLat, dLng, dropLat, dropLng);
     setEta(etaMin);
     setLastEtaMin(etaMin);
-  }, [currentDriver?.lat, currentDriver?.lng]);
+  }, [routeFetched, currentDriver?.lat, currentDriver?.lng]);
 
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
@@ -594,12 +591,24 @@ I've shared my live location with you for safety.
                 strokeColor="transparent"
                 onReady={(result: any) => {
                   if (!result.coordinates?.length) return;
-                  routeFetchedRef.current = true;
-                  const etaMin = Math.ceil(result.duration);
-                  setEta(etaMin);
-                  setLastEtaMin(etaMin);
                   setTripRouteCoords(result.coordinates);
                   setActiveRideRouteCoords(result.coordinates);
+                  // Prefer haversine from the driver's current position rather
+                  // than the Directions total duration (pickup→dropoff), which
+                  // overstates remaining time if the driver has already moved.
+                  const dLat = currentDriver?.lat;
+                  const dLng = currentDriver?.lng;
+                  const dropLat = currentRide?.dropoff_lat;
+                  const dropLng = currentRide?.dropoff_lng;
+                  const etaMin =
+                    dLat != null && dLng != null && dropLat != null && dropLng != null
+                      ? _haversineEtaMin(dLat, dLng, dropLat, dropLng)
+                      : Math.ceil(result.duration);
+                  setEta(etaMin);
+                  setLastEtaMin(etaMin);
+                  // Flip the reactive flag last so the haversine effect sees
+                  // the correct ETA state rather than overwriting it immediately.
+                  setRouteFetched(true);
                   if (mapRef.current && result.coordinates?.length > 1) {
                     mapRef.current.fitToCoordinates(result.coordinates, {
                       edgePadding: { top: 80, right: 50, bottom: 280, left: 50 },

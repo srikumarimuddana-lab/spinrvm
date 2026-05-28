@@ -86,14 +86,23 @@ function DriverArrivingScreenContent() {
   const cancellationFee = (currentRide as any)?.cancellation_fee ?? 3.0;
 
   // Capture the driver's position the first time valid coords arrive.
-  // useMemo([currentDriver.id]) would miss late-arriving GPS: if the driver is
-  // assigned before their app sends a location ping, lat/lng are null on first
-  // render and useMemo never re-runs for the same driver ID.
-  // useState + useEffect fires whenever coords change and latches on first hit.
+  // Latches on first non-null GPS so MapViewDirections only fetches once per
+  // driver assignment. Reset when the driver changes (reassignment after a
+  // cancel) so the new driver's route is fetched from scratch.
   const [driverOriginSnapshot, setDriverOriginSnapshot] = useState<{
     latitude: number;
     longitude: number;
   } | null>(null);
+  const prevDriverIdRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const newId = currentDriver?.id;
+    if (prevDriverIdRef.current !== undefined && prevDriverIdRef.current !== newId) {
+      // Driver was reassigned — discard the cached route for the old driver.
+      setDriverOriginSnapshot(null);
+      setActiveDriverRouteCoords(null);
+    }
+    prevDriverIdRef.current = newId;
+  }, [currentDriver?.id]);
   useEffect(() => {
     if (
       driverOriginSnapshot === null &&
@@ -317,9 +326,10 @@ function DriverArrivingScreenContent() {
               strokeWidth={0} strokeColor="transparent"
               onReady={(r: any) => {
                 if (!r.coordinates?.length) return;
-                const etaMin = Math.ceil(r.duration);
-                setMapEtaMinutes(etaMin);
-                setLastEtaMin(etaMin);
+                setMapEtaMinutes(Math.ceil(r.duration));
+                // Intentionally NOT writing lastEtaMin here: that value is the
+                // driver→pickup duration and must not seed the in-trip ETA on
+                // the next screen (ride-in-progress reads lastEtaMin on mount).
                 setDriverRouteCoords(r.coordinates);
                 setActiveDriverRouteCoords(r.coordinates);
               }}

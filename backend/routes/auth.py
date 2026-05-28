@@ -241,14 +241,49 @@ async def send_otp(request: Request, body: SendOTPRequest):
         and app_settings.get("twilio_from_number")
     )
 
-    # If Twilio is configured, send a real OTP via SMS.
-    # If not configured, fall back to the fixed code "1234" so testing works
-    # without SMS delivery — regardless of ENV.
-    otp_code = generate_otp() if twilio_configured else "1234"
-    if not twilio_configured:
+    # OTP code selection:
+    #  - Twilio configured  → real random OTP delivered via SMS.
+    #  - Twilio NOT configured + non-production (development/preview/staging)
+    #                        → fixed code "1234" so testing works without SMS.
+    #  - Twilio NOT configured + production
+    #                        → refuse. A missing Twilio config in production is a
+    #                          misconfiguration; falling back to a static "1234"
+    #                          would let anyone log in as any phone number, so we
+    #                          fail loudly instead of silently bypassing auth.
+    is_production = settings.ENV.lower() == "production"
+    review_otp = settings.review_login_map().get(phone)
+    deliver_via_sms = True
+    if review_otp is not None:
+        # App Store / Play reviewer account: issue the pre-shared fixed code and
+        # never send an SMS — the reviewer gets the code from the store-console
+        # review notes, not a text. Permitted in every ENV (including production)
+        # but ONLY for the explicit numbers in REVIEW_LOGIN_ACCOUNTS.
+        otp_code = review_otp
+        deliver_via_sms = False
         logger.info(
-            "Twilio not configured — OTP bypass active (code=1234) for ...%s",
+            "Reviewer-account OTP issued without SMS for ...%s (ENV=%s)",
             phone[-4:],
+            settings.ENV,
+        )
+    elif twilio_configured:
+        otp_code = generate_otp()
+    elif not is_production:
+        otp_code = "1234"
+        logger.info(
+            "Twilio not configured — OTP bypass active (code=1234) for ...%s (ENV=%s)",
+            phone[-4:],
+            settings.ENV,
+        )
+    else:
+        logger.error(
+            "Twilio not configured in production — refusing to issue OTP "
+            "(static-code bypass is disabled in production)"
+        )
+        raise SpinrException(
+            message="Verification is temporarily unavailable, please try again later",
+            error_code=ErrorCode.SERVICE_UNAVAILABLE,
+            status_code=503,
+            message_key=ErrorKeys.SYSTEM_SERVICE_UNAVAILABLE,
         )
 
     otp_record = OTPRecord(
@@ -272,22 +307,24 @@ async def send_otp(request: Request, body: SendOTPRequest):
             message_key=ErrorKeys.SYSTEM_DATABASE,
         ) from e
 
-    # Send OTP via SMS (Twilio when configured, console log otherwise)
-    sms_result = await send_otp_sms(
-        phone,
-        otp_code,
-        twilio_sid=app_settings.get("twilio_account_sid", "") if app_settings else "",
-        twilio_token=app_settings.get("twilio_auth_token", "") if app_settings else "",
-        twilio_from=app_settings.get("twilio_from_number", "") if app_settings else "",
-    )
-    if not sms_result.get("success"):
-        logger.error(f"Failed to send OTP SMS: {sms_result.get('error')}")
-        raise SpinrException(
-            message="Failed to send verification code",
-            error_code=ErrorCode.SERVICE_UNAVAILABLE,
-            status_code=503,
-            message_key=ErrorKeys.SYSTEM_SERVICE_UNAVAILABLE,
+    # Send OTP via SMS (Twilio when configured, console log otherwise).
+    # Reviewer accounts skip SMS entirely — the code is pre-shared out of band.
+    if deliver_via_sms:
+        sms_result = await send_otp_sms(
+            phone,
+            otp_code,
+            twilio_sid=app_settings.get("twilio_account_sid", "") if app_settings else "",
+            twilio_token=app_settings.get("twilio_auth_token", "") if app_settings else "",
+            twilio_from=app_settings.get("twilio_from_number", "") if app_settings else "",
         )
+        if not sms_result.get("success"):
+            logger.error(f"Failed to send OTP SMS: {sms_result.get('error')}")
+            raise SpinrException(
+                message="Failed to send verification code",
+                error_code=ErrorCode.SERVICE_UNAVAILABLE,
+                status_code=503,
+                message_key=ErrorKeys.SYSTEM_SERVICE_UNAVAILABLE,
+            )
 
     response = {"success": True, "message": f"OTP sent to ***{phone[-4:]}"}
     # Dev OTP is logged to server console via sms_service.py — never return it
@@ -296,14 +333,22 @@ async def send_otp(request: Request, body: SendOTPRequest):
     import hashlib
 
     _ph = hashlib.sha256(phone.encode()).hexdigest()[:16]
+    # Tag the reviewer-bypass path distinctly so operators can query audit_logs
+    # for fixed-code issuance separately from ordinary SMS OTP sends (e.g. to
+    # confirm the allow-list was cleared after a review, or investigate abuse).
+    _is_reviewer = review_otp is not None
+    _audit_action = "otp_sent_reviewer_bypass" if _is_reviewer else "otp_sent"
+    _audit_meta = {"phone_last4": phone[-4:]}
+    if _is_reviewer:
+        _audit_meta["reviewer_bypass"] = True
     try:
         asyncio.create_task(
             _audit_log_user(
                 {"id": f"phone_hash:{_ph}", "role": "anonymous"},
-                "otp_sent",
+                _audit_action,
                 "users",
                 _ph,
-                {"phone_last4": phone[-4:]},
+                _audit_meta,
             )
         )
     except Exception:
@@ -321,6 +366,10 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
     # Normalize to E.164 so it matches what send-otp stored
     _, normalized = validate_phone(phone)
     phone = normalized or phone
+
+    # Reviewer-bypass accounts log in with a fixed code; tag their audit rows so
+    # operators can distinguish reviewer logins from real SMS verifications.
+    _is_reviewer = settings.review_login_map().get(phone) is not None
 
     # SEC-008: Reject locked-out phones before touching the DB
     await _check_otp_lockout(phone)
@@ -512,7 +561,7 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
                         "otp_verify_success",
                         "users",
                         user_id,
-                        {"is_new_user": False},
+                        {"is_new_user": False, **({"reviewer_bypass": True} if _is_reviewer else {})},
                     )
                 )
             except Exception:
@@ -585,7 +634,7 @@ async def verify_otp(request: Request, response: Response, body: VerifyOTPReques
                         "otp_verify_success",
                         "users",
                         user_id,
-                        {"is_new_user": True},
+                        {"is_new_user": True, **({"reviewer_bypass": True} if _is_reviewer else {})},
                     )
                 )
             except Exception:

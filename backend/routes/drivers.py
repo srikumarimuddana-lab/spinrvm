@@ -2784,6 +2784,15 @@ async def accept_ride(ride_id: str, current_user: dict = Depends(get_current_use
 
     await reset_miss_streak(driver["id"])
 
+    # Insurance Period 2 (en route to pickup — TNC primary commercial coverage).
+    # In the batch-offer dispatch model the driver becomes obligated to the ride
+    # at acceptance (searching/driver_assigned → driver_accepted), so Period 2
+    # begins here, not at a separate driver_assigned step. It stays open through
+    # driver_arrived until verify-otp/start flips the driver to Period 3
+    # (passenger aboard). record_period_transition is compliance-grade — it logs
+    # at ERROR and swallows on failure so it never blocks acceptance.
+    await record_period_transition(driver["id"], 2, ride_id=ride_id)
+
     # ── Batch dispatch: resolve offers for this ride ──────────────
     try:
         from ..repositories.driver_repo import update_acceptance_rate

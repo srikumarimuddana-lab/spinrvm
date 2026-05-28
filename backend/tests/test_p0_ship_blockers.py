@@ -631,6 +631,9 @@ class TestPaymentFailureAtComplete:
             patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=completed)),
             patch("backend.routes.rides.db.update_one", AsyncMock(return_value=update_one_mock)),
             patch("backend.routes.rides.db_supabase.update_ride", AsyncMock()),
+            # settle_wallet now debits atomically via the wallet_pay_for_ride RPC
+            # (returns the new balance) instead of a read-compute-write.
+            patch("backend.db_supabase.wallet_pay_for_ride", AsyncMock(return_value=Decimal("79.50"))),
             patch(
                 "backend.routes.rides.db_supabase.get_user_by_id",
                 AsyncMock(return_value={"id": RIDER_ID, "email": "r@s.ca"}),
@@ -671,6 +674,12 @@ class TestPaymentFailureAtComplete:
             patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=completed)),
             patch("backend.routes.rides.db.update_one", AsyncMock(return_value=update_one_mock)),
             patch("backend.routes.rides.db_supabase.update_ride", AsyncMock(side_effect=_capture_update)),
+            # The atomic RPC raises ValueError('insufficient_funds') when the
+            # balance can't cover the charge; settle_wallet must release the lock.
+            patch(
+                "backend.db_supabase.wallet_pay_for_ride",
+                AsyncMock(side_effect=ValueError("insufficient_funds")),
+            ),
             patch("backend.routes.wallet.get_or_create_wallet", AsyncMock(return_value=wallet)),
             patch("backend.routes.wallet._record_transaction", AsyncMock()),
         ):

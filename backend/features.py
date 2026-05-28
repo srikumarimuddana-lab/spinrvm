@@ -495,8 +495,22 @@ async def admin_update_surge(area_id: str, req: UpdateSurgeRequest):
     if req.surge_active is not None:
         update_data["surge_active"] = req.surge_active
     if req.surge_multiplier is not None:
-        if req.surge_multiplier < 1.0 or req.surge_multiplier > 10.0:
-            raise HTTPException(status_code=400, detail="Multiplier must be between 1.0 and 10.0")
+        # This endpoint has no written-justification field and writes no
+        # audit-log row, so it must not be a path to exceed the surge cap.
+        # Above-cap (> 2.5x) overrides are a regulatory + reputational risk and
+        # are only permitted via the canonical admin endpoint
+        # (PUT /api/admin/service-areas/{id}/surge), which requires a
+        # justification string and records a "surge_override_above_cap" audit
+        # entry. Hard-reject anything above SURGE_CAP here.
+        if req.surge_multiplier < 1.0 or req.surge_multiplier > SURGE_CAP:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"surge_multiplier must be between 1.0 and {SURGE_CAP}. "
+                    "Above-cap overrides require the audited admin endpoint "
+                    "with a written justification."
+                ),
+            )
         update_data["surge_multiplier"] = req.surge_multiplier
 
     if update_data:
@@ -514,10 +528,15 @@ async def admin_reset_surge_to_auto(area_id: str):
     area = await db.find_one("service_areas", {"id": area_id})
     if not area:
         raise HTTPException(status_code=404, detail="Service area not found")
+    # Reset-to-auto is an explicit operator intent to have surge running on
+    # automatic tiers for this area, so it must also flip the surge_enabled
+    # gate on. Without this, an area that was previously disabled would stay
+    # gated off: the surge engine would keep skipping it and fare calc would
+    # keep ignoring surge, even though this endpoint returned success.
     await db.update_one(
         "service_areas",
         {"id": area_id},
-        {"$set": {"surge_source": "auto", "surge_active": True}},
+        {"$set": {"surge_source": "auto", "surge_active": True, "surge_enabled": True}},
     )
     updated = await db.find_one("service_areas", {"id": area_id})
     return updated
@@ -818,9 +837,11 @@ async def calculate_all_fees(
     result["fees_total"] = float(_q2(fees_total))
 
     # Calculate taxes — Decimal end-to-end so the receipt line items
-    # reconcile to the cent. SK is GST 5% + PST 6%; HST provinces use the
-    # combined rate. Each tax is quantized independently before summing
-    # so the breakdown matches the displayed total.
+    # reconcile to the cent. Saskatchewan rideshare is GST 5% only — PST does
+    # NOT apply to rideshare here, so pst_enabled defaults off. PST/HST remain
+    # per-area configurable from the admin panel for future markets/cohorts:
+    # GST + optional PST, or a combined HST rate. Each tax is quantized
+    # independently before summing so the breakdown matches the displayed total.
     taxable_amount = subtotal_d + fees_total
     tax_breakdown: Dict[str, Dict[str, float]] = {}
     tax_total = Decimal("0")
@@ -868,7 +889,12 @@ async def fare_estimate(
     for area in all_areas:
         poly = get_service_area_polygon(area)
         if poly and point_in_polygon(pickup_lat, pickup_lng, poly):
-            if area.get("surge_active") and area.get("surge_multiplier", 1.0) > 1.0:
+            # Gate on the per-area surge master toggle, same as the main fare
+            # builders (fare_service / routes.fares). Without this, a stale
+            # surge_active flag or parked multiplier on a disabled area would
+            # surge this estimate while the booking path prices at 1.0x —
+            # inconsistent rider estimates for the same area.
+            if area.get("surge_enabled") and area.get("surge_active") and area.get("surge_multiplier", 1.0) > 1.0:
                 surge = min(_fare_d(area["surge_multiplier"]), _fare_d(SURGE_CAP))
             break
 

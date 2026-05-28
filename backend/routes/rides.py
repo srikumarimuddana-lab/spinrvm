@@ -518,9 +518,16 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
     #
     # We also require user_id IS NOT NULL to skip legacy "demo" driver rows
     # that lack a real user and can never be notified.
+    # Mirror DispatchService.find_candidate_drivers: is_verified + status='active'
+    # keep unverified / suspended / needs_review drivers out of dispatch even if
+    # their is_online flag was left on (e.g. status flipped server-side after
+    # they toggled online). Without these, accept_ride blocks them at accept time
+    # but they still receive — and can see — offers they can never fulfil.
     _dispatch_filter: dict = {
         "is_online": True,
         "is_available": True,
+        "is_verified": True,
+        "status": "active",
         "vehicle_type_id": ride["vehicle_type_id"],
     }
     if ride.get("requires_wav"):
@@ -3086,21 +3093,37 @@ async def cancel_ride_rider(
 
     diag_logger.info(f"[CANCEL] called ride_id={ride_id} user_id={current_user.get('id')}")
 
-    ride = await _require_ride_in_state_rider(
-        ride_id,
-        current_user["id"],
-        (
-            "requested",
-            RideStatus.SEARCHING,
-            RideStatus.DRIVER_ASSIGNED,
-            RideStatus.DRIVER_ACCEPTED,
-            "en_route",
-            RideStatus.DRIVER_ARRIVED,
-        ),
+    _cancellable_states = (
+        "requested",
+        RideStatus.SEARCHING,
+        RideStatus.DRIVER_ASSIGNED,
+        RideStatus.DRIVER_ACCEPTED,
+        "en_route",
+        RideStatus.DRIVER_ARRIVED,
     )
+    ride = await _require_ride_in_state_rider(ride_id, current_user["id"], _cancellable_states)
     diag_logger.info(
         f"[CANCEL] entry ride_id={ride_id} pre_status={ride.get('status')} driver_id={ride.get('driver_id')}"
     )
+
+    # Atomically claim the cancel BEFORE charging any fee. _require_ride_in_state_rider
+    # only read+validated the status; in the window before the write the driver could
+    # call verify-otp/start and flip the ride to in_progress. A non-atomic cancel would
+    # then overwrite in_progress -> cancelled (violating "never cancel after trip start")
+    # AND charge a cancellation fee on a ride that actually began. The $in guard matches
+    # zero rows once the ride has left the pre-trip states -> 409, nothing charged.
+    _cancel_now = datetime.now(timezone.utc)
+    _cancel_claim = await db_supabase.update_one(
+        "rides",
+        {"id": ride_id, "status": {"$in": list(_cancellable_states)}},
+        {"status": RideStatus.CANCELLED, "cancelled_at": _cancel_now, "updated_at": _cancel_now},
+    )
+    if _cancel_claim is None:
+        diag_logger.info(f"[CANCEL] claim rejected ride_id={ride_id} — ride left pre-trip state")
+        raise HTTPException(
+            status_code=409,
+            detail="Ride can no longer be cancelled (it has started or already ended)",
+        )
 
     driver_id = ride.get("driver_id")
     settings = await get_app_settings()
@@ -3111,47 +3134,66 @@ async def cancel_ride_rider(
 
     total_cancel_fee = _round(charged_admin + charged_driver)
 
-    # Charge the rider the cancellation fee before paying the driver.
-    if total_cancel_fee > 0:
-        payment_method = (ride.get("payment_method") or "card").lower()
-        if payment_method == "wallet":
-            rider_wallet = await db_supabase.find_one("wallets", {"user_id": current_user["id"]})
-            if rider_wallet:
-                old_balance = _round(_d(rider_wallet.get("balance", 0)))
-                new_balance = max(_round(old_balance - total_cancel_fee), Decimal("0"))
-                actual_charge = _round(old_balance - new_balance)
-                if actual_charge > 0:
-                    await db_supabase.update_one(
-                        "wallets",
-                        {"id": rider_wallet["id"]},
-                        {
-                            "balance": _f(new_balance),
-                            "updated_at": datetime.now(timezone.utc).isoformat(),
-                        },
-                    )
-                    await db_supabase.insert_one(
-                        "wallet_transactions",
-                        {
-                            "id": str(uuid.uuid4()),
-                            "wallet_id": rider_wallet["id"],
-                            "user_id": current_user["id"],
-                            "type": "cancellation_fee",
-                            "amount": -_f(actual_charge),
-                            "balance_after": _f(new_balance),
-                            "reference_id": ride_id,
-                            "description": f"Cancellation fee for ride {ride_id[:8]}",
-                            "metadata": {"ride_id": ride_id},
-                            "created_at": datetime.now(timezone.utc).isoformat(),
-                        },
-                    )
+    # The cancel is already persisted by the atomic claim above, so the
+    # assigned driver MUST be released, transitioned back to Period 1, and
+    # notified regardless of what happens while charging the fee. If a wallet
+    # write or the driver payout raises here, we cannot exit before the
+    # set_driver_available / insurance / notification cleanup below — that
+    # would strand the driver as unavailable and uninformed on a ride that is
+    # already cancelled. So the fee writes are best-effort after the claim:
+    # surface the failure loudly (error + traceback, per repo policy) for
+    # reconciliation, then fall through to driver cleanup.
+    try:
+        # Charge the rider the cancellation fee before paying the driver.
+        if total_cancel_fee > 0:
+            payment_method = (ride.get("payment_method") or "card").lower()
+            if payment_method == "wallet":
+                rider_wallet = await db_supabase.find_one("wallets", {"user_id": current_user["id"]})
+                if rider_wallet:
+                    old_balance = _round(_d(rider_wallet.get("balance", 0)))
+                    new_balance = max(_round(old_balance - total_cancel_fee), Decimal("0"))
+                    actual_charge = _round(old_balance - new_balance)
+                    if actual_charge > 0:
+                        await db_supabase.update_one(
+                            "wallets",
+                            {"id": rider_wallet["id"]},
+                            {
+                                "balance": _f(new_balance),
+                                "updated_at": datetime.now(timezone.utc).isoformat(),
+                            },
+                        )
+                        await db_supabase.insert_one(
+                            "wallet_transactions",
+                            {
+                                "id": str(uuid.uuid4()),
+                                "wallet_id": rider_wallet["id"],
+                                "user_id": current_user["id"],
+                                "type": "cancellation_fee",
+                                "amount": -_f(actual_charge),
+                                "balance_after": _f(new_balance),
+                                "reference_id": ride_id,
+                                "description": f"Cancellation fee for ride {ride_id[:8]}",
+                                "metadata": {"ride_id": ride_id},
+                                "created_at": datetime.now(timezone.utc).isoformat(),
+                            },
+                        )
 
-    if driver_id and charged_driver > 0:
-        await pay_driver_cancellation_fee(
-            ride_id=ride_id,
-            driver_id=driver_id,
-            fee=charged_driver,
-            actor_user_id=current_user["id"],
-            ride_status_at_cancel=ride.get("status"),
+        if driver_id and charged_driver > 0:
+            await pay_driver_cancellation_fee(
+                ride_id=ride_id,
+                driver_id=driver_id,
+                fee=charged_driver,
+                actor_user_id=current_user["id"],
+                ride_status_at_cancel=ride.get("status"),
+            )
+    except Exception as _fee_exc:
+        logger.error(
+            "[CANCEL] cancellation-fee write failed after the cancel was "
+            "persisted for ride %s; releasing the driver anyway — fee needs "
+            "reconciliation: %s",
+            ride_id,
+            getattr(_fee_exc, "details", {}).get("original", _fee_exc) if hasattr(_fee_exc, "details") else _fee_exc,
+            exc_info=True,
         )
 
     _now = datetime.now(timezone.utc)
@@ -3952,14 +3994,39 @@ async def rider_start_ride(
             detail=f"Cannot start ride with status: {ride.get('status')}",
         )
 
-    await db_supabase.update_ride(
-        ride_id,
+    # Atomic transition guards against duplicate taps / a concurrent driver-side
+    # start. update_one returns None when zero rows matched (status already moved).
+    guard = await db_supabase.update_one(
+        "rides",
+        {"id": ride_id, "driver_id": driver_row["id"], "status": RideStatus.DRIVER_ARRIVED},
         {
             "status": RideStatus.IN_PROGRESS,
             "ride_started_at": datetime.now(timezone.utc),
             "updated_at": datetime.now(timezone.utc),
         },
     )
+    if guard is None:
+        raise HTTPException(status_code=409, detail="Ride is not in driver_arrived state")
+
+    # Insurance Period 3 (passenger aboard — full TNC commercial coverage).
+    # Only recorded once the transition actually took effect. Compliance-grade:
+    # record_period_transition logs+swallows on failure, never blocks the start.
+    await record_period_transition(driver_row["id"], 3, ride_id=ride_id)
+
+    # Every state change must emit a WS event to both parties (CLAUDE.md). Without
+    # this the rider's client stays on "driver arrived" until its next poll.
+    rider_id = ride.get("rider_id")
+    if rider_id:
+        await manager.send_personal_message({"type": "ride_started", "ride_id": ride_id}, f"rider_{rider_id}")
+        asyncio.create_task(
+            send_push_notification(
+                rider_id,
+                "Ride Started! ▶️",
+                "Your ride has started. Have a safe trip!",
+                data={"type": "ride_started", "ride_id": str(ride_id)},
+            )
+        )
+    await manager.broadcast_ride_status(ride_id, RideStatus.IN_PROGRESS, rider_id=rider_id)
     return {"success": True}
 
 
@@ -3991,7 +4058,12 @@ async def rider_complete_ride(
         "ride_completed_at": now,
         "updated_at": now,
     }
-    await db_supabase.update_one("rides", {"id": ride_id}, update_fields)
+    # Atomic transition: only complete from in_progress. Guards against a
+    # concurrent driver-side complete double-running the settlement/incentive
+    # logic below. update_one returns None when zero rows matched.
+    guard = await db_supabase.update_one("rides", {"id": ride_id, "status": RideStatus.IN_PROGRESS}, update_fields)
+    if guard is None:
+        raise HTTPException(status_code=409, detail="Ride is not in progress")
 
     driver_id = ride.get("driver_id")
     driver_user_id = None

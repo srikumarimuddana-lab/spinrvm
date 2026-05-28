@@ -33,7 +33,19 @@ _PUBLIC_FIELDS = (
     "search_radius_km",
     "surge_multiplier",
     "surge_active",
+    "surge_enabled",
 )
+
+
+def _project_public(r: dict) -> dict:
+    out = {k: r[k] for k in _PUBLIC_FIELDS if k in r}
+    # Surge is per-area admin-gated. A stale surge_active flag or multiplier > 1
+    # must never surface to clients (or drive rider/driver surge UI) unless an
+    # operator has enabled surge for this area via the admin panel.
+    if not r.get("surge_enabled"):
+        out["surge_active"] = False
+        out["surge_multiplier"] = 1.0
+    return out
 
 
 @api_router.get("/service-areas")
@@ -45,4 +57,4 @@ async def get_service_areas():
         order="name",
         limit=200,
     )
-    return [{k: r[k] for k in _PUBLIC_FIELDS if k in r} for r in (rows or [])]
+    return [_project_public(r) for r in (rows or [])]

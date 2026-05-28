@@ -340,7 +340,13 @@ class FareService:
         if not matching_area:
             return build_default_fares(vehicle_types)
 
-        surge = min(_d(matching_area.get("surge_multiplier", 1)), _d(SURGE_CAP))
+        # Surge gated on the per-area admin master toggle + current active flag
+        # (see routes/fares.py). Disabled areas always price at 1.0×.
+        surge = (
+            min(_d(matching_area.get("surge_multiplier", 1)), _d(SURGE_CAP))
+            if matching_area.get("surge_enabled", False) and matching_area.get("surge_active", False)
+            else _d(1)
+        )
         fare_configs = await self.db.get_rows(
             "fare_configs",
             {"service_area_id": matching_area["id"], "is_active": True},

@@ -308,7 +308,9 @@ async def test_recalculate_skips_sub_areas():
 @pytest.mark.asyncio
 async def test_recalculate_does_not_update_db_when_multiplier_unchanged():
     """If new multiplier equals current, no DB update_one call."""
-    areas = [{"id": "a1", "surge_source": "auto", "surge_multiplier": 1.0, "is_active": True}]
+    areas = [
+        {"id": "a1", "surge_source": "auto", "surge_enabled": True, "surge_multiplier": 1.0, "is_active": True}
+    ]
     db_mock = MagicMock()
     db_mock.get_rows = AsyncMock(return_value=areas)
     db_mock.update_one = AsyncMock()
@@ -331,7 +333,9 @@ async def test_recalculate_does_not_update_db_when_multiplier_unchanged():
 @pytest.mark.asyncio
 async def test_recalculate_updates_db_when_multiplier_changes():
     """When new multiplier differs from stored, update_one IS called."""
-    areas = [{"id": "a1", "surge_source": "auto", "surge_multiplier": 1.0, "is_active": True}]
+    areas = [
+        {"id": "a1", "surge_source": "auto", "surge_enabled": True, "surge_multiplier": 1.0, "is_active": True}
+    ]
     db_mock = MagicMock()
     db_mock.get_rows = AsyncMock(return_value=areas)
     db_mock.update_one = AsyncMock()
@@ -354,11 +358,35 @@ async def test_recalculate_updates_db_when_multiplier_changes():
 
 
 @pytest.mark.asyncio
+async def test_recalculate_skips_surge_disabled_areas():
+    """Areas without surge_enabled are never auto-activated, even under load."""
+    areas = [{"id": "a1", "surge_source": "auto", "surge_enabled": False, "surge_multiplier": 1.0, "is_active": True}]
+    db_mock = MagicMock()
+    db_mock.get_rows = AsyncMock(return_value=areas)
+    db_mock.update_one = AsyncMock()
+    db_mock.insert_one = AsyncMock(return_value={"id": "row1"})
+
+    with (
+        patch("utils.surge_engine.db", db_mock),
+        # High demand that would otherwise push surge to the cap.
+        patch("utils.surge_engine._count_demand_in_area", AsyncMock(return_value=50)),
+        patch("utils.surge_engine._count_supply_in_area", AsyncMock(return_value=1)),
+    ):
+        from utils.surge_engine import recalculate_all_surges
+
+        results = await recalculate_all_surges()
+
+    # Disabled area is skipped entirely: no multiplier write, no history row.
+    db_mock.update_one.assert_not_awaited()
+    assert results == []
+
+
+@pytest.mark.asyncio
 async def test_recalculate_area_failure_does_not_abort_remaining():
     """An exception processing one area logs error but continues to next area."""
     areas = [
-        {"id": "a1", "surge_source": "auto", "surge_multiplier": 1.0, "is_active": True},
-        {"id": "a2", "surge_source": "auto", "surge_multiplier": 1.0, "is_active": True},
+        {"id": "a1", "surge_source": "auto", "surge_enabled": True, "surge_multiplier": 1.0, "is_active": True},
+        {"id": "a2", "surge_source": "auto", "surge_enabled": True, "surge_multiplier": 1.0, "is_active": True},
     ]
     db_mock = MagicMock()
     db_mock.get_rows = AsyncMock(return_value=areas)
@@ -405,7 +433,9 @@ async def test_recalculate_service_areas_db_failure_returns_empty():
 @pytest.mark.asyncio
 async def test_recalculate_inserts_surge_pricing_history_row():
     """Every processed area gets a surge_pricing history row inserted."""
-    areas = [{"id": "a1", "surge_source": "auto", "surge_multiplier": 1.0, "is_active": True}]
+    areas = [
+        {"id": "a1", "surge_source": "auto", "surge_enabled": True, "surge_multiplier": 1.0, "is_active": True}
+    ]
     db_mock = MagicMock()
     db_mock.get_rows = AsyncMock(return_value=areas)
     db_mock.update_one = AsyncMock()

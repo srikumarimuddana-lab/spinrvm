@@ -455,7 +455,12 @@ async def admin_update_service_area(
                 status_code=400,
                 detail=f"surge_multiplier must be between 1.0 and {_SURGE_MAX}",
             )
-        if sm > SURGE_CAP:
+        # Disabling surge clears the multiplier to 1.0 below, so an above-cap
+        # value is being turned off, not applied. Don't trap operators behind a
+        # justification requirement just to switch off a risky >2.5x surge from
+        # the normal form — the justification gate only guards applying an
+        # above-cap multiplier while surge stays on.
+        if sm > SURGE_CAP and area.surge_enabled is not False:
             justification = (area.surge_justification or "").strip()
             if not justification:
                 raise HTTPException(

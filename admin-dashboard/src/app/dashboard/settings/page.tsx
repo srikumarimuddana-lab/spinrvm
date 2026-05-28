@@ -231,6 +231,35 @@ export default function SettingsPage() {
                         </CardContent>
                     </Card>
 
+                    {/* Google Maps */}
+                    <Card className="border-border/50">
+                        <CardHeader>
+                            <CardTitle className="text-base">Google Maps</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-4">
+                            <p className="text-xs text-muted-foreground">
+                                Used by the backend proxy for Places autocomplete, geocoding, and
+                                route distance/duration. Restrict the key to the Maps JavaScript API,
+                                Places API, Geocoding API, and Directions API in GCP Console.
+                            </p>
+                            <div className="space-y-2">
+                                <Label>API Key</Label>
+                                <Input
+                                    type="password"
+                                    value={settings.google_maps_api_key || ""}
+                                    onChange={(e) =>
+                                        update("google_maps_api_key", e.target.value)
+                                    }
+                                    placeholder="AIza..."
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    GCP Console &rarr; APIs &amp; Services &rarr; Credentials
+                                </p>
+                            </div>
+                        </CardContent>
+                    </Card>
+
                     {/* Safety — distribution list for SOS / safety-incident
                         alert emails. Empty disables outbound email cleanly;
                         WS broadcast + critical log line still fire so

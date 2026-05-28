@@ -80,6 +80,37 @@ function DriverArrivingScreenContent() {
   }, [currentRide?.status]);
 
   const cancellationFee = (currentRide as any)?.cancellation_fee ?? 3.0;
+
+  // Snapshot driver's position the first time we see coords for this driver.
+  // Passing a new {lat,lng} object on every GPS ping would cause MapViewDirections
+  // to re-call the Directions API on each update; the backend already sends
+  // driverEtaSeconds for the countdown, so we only need the route shape once.
+  const driverOriginSnapshot = useMemo(
+    () =>
+      currentDriver?.lat && currentDriver?.lng
+        ? { latitude: currentDriver.lat, longitude: currentDriver.lng }
+        : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [currentDriver?.id], // re-snapshot only if a different driver is assigned
+  );
+
+  // Stable pickup→dropoff refs — ride endpoints never change mid-ride.
+  const rideRouteOrigin = useMemo(
+    () =>
+      currentRide
+        ? { latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }
+        : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [currentRide?.id],
+  );
+  const rideRouteDestination = useMemo(
+    () =>
+      currentRide
+        ? { latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }
+        : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [currentRide?.id],
+  );
   const freeCancelWindowSeconds = (currentRide as any)?.free_cancel_window_seconds ?? 120;
 
   // ── ETA logic ──
@@ -259,10 +290,14 @@ function DriverArrivingScreenContent() {
             latitudeDelta: 0.02, longitudeDelta: 0.02,
           }}
         >
-          {/* Driver → pickup route */}
-          {currentDriver?.lat && currentDriver?.lng && (
+          {/* Driver → pickup route: origin is snapshotted on first driver fix so
+              MapViewDirections only calls Directions API once per assigned driver.
+              The car marker updates live; re-fetching the route on every GPS ping
+              would cost ~$0.10 extra per pickup phase for no visible benefit since
+              driverEtaSeconds from the backend already drives the ETA countdown. */}
+          {driverOriginSnapshot && (
             <MapViewDirections
-              origin={{ latitude: currentDriver.lat, longitude: currentDriver.lng }}
+              origin={driverOriginSnapshot}
               destination={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }}
               apikey={process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || ''}
               strokeWidth={0} strokeColor="transparent"
@@ -271,14 +306,17 @@ function DriverArrivingScreenContent() {
           )}
           {driverRouteCoords.length > 1 && renderGradientPolyline(driverRouteCoords, true)}
 
-          {/* Pickup → dropoff route */}
-          <MapViewDirections
-            origin={{ latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }}
-            destination={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }}
-            apikey={process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || ''}
-            strokeWidth={0} strokeColor="transparent"
-            onReady={(r: any) => setRideRouteCoords(r.coordinates)}
-          />
+          {/* Pickup → dropoff route: both endpoints are stable; useMemo prevents
+              new object refs on re-renders from triggering redundant API calls. */}
+          {rideRouteOrigin && rideRouteDestination && (
+            <MapViewDirections
+              origin={rideRouteOrigin}
+              destination={rideRouteDestination}
+              apikey={process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || ''}
+              strokeWidth={0} strokeColor="transparent"
+              onReady={(r: any) => setRideRouteCoords(r.coordinates)}
+            />
+          )}
           {rideRouteCoords.length > 1 && renderGradientPolyline(rideRouteCoords, false)}
 
           {/* Pickup marker */}

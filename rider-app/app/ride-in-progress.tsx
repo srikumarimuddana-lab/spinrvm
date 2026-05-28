@@ -1,4 +1,18 @@
-import React, { useEffect, useState, useMemo, useContext } from 'react';
+import React, { useEffect, useState, useMemo, useRef, useContext } from 'react';
+
+// Straight-line ETA at urban speed — used during trip so we don't re-call
+// the Directions API on every GPS ping (that would be ~60 calls / 15-min ride).
+function _haversineEtaMin(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dlat = toRad(lat2 - lat1);
+  const dlng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dlat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dlng / 2) ** 2;
+  const km = R * 2 * Math.asin(Math.sqrt(a));
+  return Math.max(1, Math.round((km / 30) * 60)); // 30 km/h urban average
+}
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import {
   View,
@@ -133,6 +147,41 @@ function RideInProgressScreenContent() {
       router.replace({ pathname: '/ride-completed', params: { rideId } });
     }
   }, [currentRide?.status]);
+
+  // Stable objects keyed to ride ID so MapViewDirections only calls the
+  // Directions API once per ride instead of once per driver GPS ping.
+  const routeOrigin = useMemo(
+    () =>
+      currentRide
+        ? { latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }
+        : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [currentRide?.id],
+  );
+  const routeDestination = useMemo(
+    () =>
+      currentRide
+        ? { latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }
+        : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [currentRide?.id],
+  );
+
+  // Track whether the initial Directions fetch has completed so we can hand
+  // off ETA ownership to the haversine estimator below.
+  const routeFetchedRef = useRef(false);
+
+  // After the first Directions fetch sets the initial ETA, update it from
+  // the driver's live position using haversine — no Maps API call needed.
+  useEffect(() => {
+    if (!routeFetchedRef.current) return;
+    const dLat = currentDriver?.lat;
+    const dLng = currentDriver?.lng;
+    const dropLat = currentRide?.dropoff_lat;
+    const dropLng = currentRide?.dropoff_lng;
+    if (dLat == null || dLng == null || dropLat == null || dropLng == null) return;
+    setEta(_haversineEtaMin(dLat, dLng, dropLat, dropLng));
+  }, [currentDriver?.lat, currentDriver?.lng]);
 
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
@@ -510,22 +559,21 @@ I've shared my live location with you for safety.
             showsMyLocationButton={false}
             userInterfaceStyle={isDark ? "dark" : "light"}
           >
-            {/* Route: pickup → dropoff (always show, even without driver coords) */}
-            {process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY && (
+            {/* Route: fetched once on mount using stable pickup→dropoff coords.
+                origin is NOT the live driver position — that would trigger a
+                Directions API call on every GPS ping (~60 calls / 15-min ride).
+                ETA is refreshed via haversine after this initial fetch. */}
+            {routeOrigin && routeDestination && process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY && (
               <MapViewDirections
-                origin={
-                  currentDriver?.lat && currentDriver?.lng
-                    ? { latitude: currentDriver.lat, longitude: currentDriver.lng }
-                    : { latitude: currentRide.pickup_lat, longitude: currentRide.pickup_lng }
-                }
-                destination={{ latitude: currentRide.dropoff_lat, longitude: currentRide.dropoff_lng }}
+                origin={routeOrigin}
+                destination={routeDestination}
                 apikey={process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY}
                 strokeWidth={0}
                 strokeColor="transparent"
                 onReady={(result: any) => {
+                  routeFetchedRef.current = true;
                   setEta(Math.ceil(result.duration));
                   setTripRouteCoords(result.coordinates);
-                  // Fit map to route
                   if (mapRef.current && result.coordinates?.length > 1) {
                     mapRef.current.fitToCoordinates(result.coordinates, {
                       edgePadding: { top: 80, right: 50, bottom: 280, left: 50 },

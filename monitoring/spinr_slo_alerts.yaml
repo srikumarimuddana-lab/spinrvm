@@ -1,0 +1,132 @@
+apiVersion: 1
+groups:
+  - orgId: 1
+    name: spinr_slo
+    folder: Spinr
+    interval: 1m
+    rules:
+      - uid: spinr-payment-success-rate
+        title: "Payment success rate below 99% SLO"
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: >-
+                rate(spinr_payment_success_total[5m]) /
+                (rate(spinr_payment_success_total[5m]) + rate(spinr_payment_failure_total[5m]))
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [0.99]
+        for: 5m
+        labels:
+          severity: critical
+          domain: payments
+        annotations:
+          summary: "Payment success rate below 99% SLO"
+
+      - uid: spinr-db-pool-saturation
+        title: "DB executor queue depth high"
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 120
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: spinr_db_executor_queue_depth
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 120
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [20]
+        for: 2m
+        labels:
+          severity: warning
+          domain: backend
+        annotations:
+          summary: "DB executor queue depth high — thread pool near saturation"
+
+      - uid: spinr-ws-fanout-latency
+        title: "WS fan-out P95 latency exceeds 300ms SLO"
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: histogram_quantile(0.95, spinr_ws_fanout_duration_seconds_bucket)
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0.3]
+        for: 5m
+        labels:
+          severity: warning
+          domain: websocket
+        annotations:
+          summary: "WS fan-out P95 latency exceeds 300ms SLO"
+
+      - uid: spinr-dispatch-error-spike
+        title: "Dispatch error rate spike"
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 60
+              to: 0
+            datasourceUid: prometheus
+            model:
+              expr: 'rate(spinr_errors_total{domain="dispatch"}[1m])'
+              refId: A
+          - refId: C
+            relativeTimeRange:
+              from: 60
+              to: 0
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [10]
+        for: 1m
+        labels:
+          severity: critical
+          domain: dispatch
+        annotations:
+          summary: "Dispatch error rate spike — possible matching engine failure"

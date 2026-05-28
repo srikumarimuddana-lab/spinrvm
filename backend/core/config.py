@@ -106,6 +106,18 @@ class Settings(BaseSettings):
     # Environment
     ENV: str = "development"
 
+    # App Store / Google Play reviewer login accounts. Comma-separated
+    # "phone:otp" pairs — E.164 phone and a 4-digit numeric OTP (must match
+    # OTP_LENGTH). For these numbers, /auth/send-otp stores the fixed code and
+    # never sends an SMS — even in production — so store reviewers can sign in
+    # without receiving a text (they get the code from App Store Connect notes).
+    # Leave EMPTY except while an app review is in flight; clear it once the
+    # build is approved. Use of these accounts is audit-logged. Kept as an env
+    # secret (not in app_settings) so it can't be edited from the admin
+    # dashboard — a compromised admin cannot add an auth-bypass number.
+    #   Example: "+13065550100:4821,+13065550101:4821"
+    REVIEW_LOGIN_ACCOUNTS: str = ""
+
     # Observability — optional; Sentry only initialises when this is set
     sentry_dsn: Optional[str] = None
 
@@ -184,6 +196,25 @@ class Settings(BaseSettings):
     @property
     def debug(self) -> bool:
         return self.ENV.lower() == "development"
+
+    def review_login_map(self) -> dict[str, str]:
+        """Parse REVIEW_LOGIN_ACCOUNTS into {phone: fixed_otp}.
+
+        Malformed entries are skipped. Returns an empty dict when unset, which
+        disables the reviewer-login path entirely.
+        """
+        out: dict[str, str] = {}
+        raw = (self.REVIEW_LOGIN_ACCOUNTS or "").strip()
+        if not raw:
+            return out
+        for pair in raw.split(","):
+            phone, sep, otp = pair.strip().partition(":")
+            if not sep:
+                continue
+            phone, otp = phone.strip(), otp.strip()
+            if phone and otp:
+                out[phone] = otp
+        return out
 
 
 settings = Settings()

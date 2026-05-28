@@ -206,6 +206,12 @@ class AppCache {
             CACHE_KEYS.VEHICLE_TYPES,
             CACHE_KEYS.PRICING_RULES,
             CACHE_KEYS.SERVICE_AREAS,
+            // Driver-app location traces — written directly to AsyncStorage by
+            // useDriverDashboard (not via this cache), but purged here on logout
+            // so a signed-out / shared device retains no recent GPS breadcrumbs
+            // or last-known position.
+            'spinr_location_buffer',
+            'spinr_driver_last_location',
         ];
 
         try {

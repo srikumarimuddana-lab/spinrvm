@@ -427,6 +427,20 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
         try { locationSubRef.current.remove(); } catch (e) { console.log('[Location] subscription remove error:', e); }
         locationSubRef.current = null;
       }
+      // Privacy: when the driver goes offline, stop collecting AND purge any
+      // residual location state from device storage. Best-effort final flush
+      // first so we don't drop breadcrumbs the regulator audit expects, then
+      // wipe the in-memory buffer and both persisted keys so a stolen/offline
+      // phone can't yield recent location traces.
+      (async () => {
+        try { await uploadLocationBatch(); } catch {}
+        locationBufferRef.current = [];
+        try {
+          const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+          await AsyncStorage.removeItem(LOCATION_BUFFER_KEY);
+          await AsyncStorage.removeItem('spinr_driver_last_location');
+        } catch {}
+      })();
       return;
     }
     const config = LOCATION_CONFIGS[rideState] ?? LOCATION_CONFIGS.idle;

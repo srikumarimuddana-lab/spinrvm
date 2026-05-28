@@ -889,7 +889,12 @@ async def fare_estimate(
     for area in all_areas:
         poly = get_service_area_polygon(area)
         if poly and point_in_polygon(pickup_lat, pickup_lng, poly):
-            if area.get("surge_active") and area.get("surge_multiplier", 1.0) > 1.0:
+            # Gate on the per-area surge master toggle, same as the main fare
+            # builders (fare_service / routes.fares). Without this, a stale
+            # surge_active flag or parked multiplier on a disabled area would
+            # surge this estimate while the booking path prices at 1.0x —
+            # inconsistent rider estimates for the same area.
+            if area.get("surge_enabled") and area.get("surge_active") and area.get("surge_multiplier", 1.0) > 1.0:
                 surge = min(_fare_d(area["surge_multiplier"]), _fare_d(SURGE_CAP))
             break
 

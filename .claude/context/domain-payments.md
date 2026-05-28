@@ -23,12 +23,15 @@ _Load when working on: fare calculation, surge, Stripe, wallets, corporate billi
 ## Fare breakdown
 
 ```
-subtotal     = base_fare + (per_km * distance_km) + (per_min * duration_min) + booking_fee
-subtotal     = max(subtotal, minimum_fare)
-surged       = subtotal * surge_multiplier         # except corporate (policy)
-taxed        = surged + gst + pst
-total        = taxed + tip
-driver_payout = total - booking_fee - platform_share  # platform_share = 0 for Spinr
+# Surge multiplies the distance and time components ONLY — never the base
+# fare, booking fee, or airport fee (see services/fare_service.py::calculate_fare).
+distance_fare = (per_km  * distance_km)  * surge_multiplier
+time_fare     = (per_min * duration_min) * surge_multiplier
+subtotal      = base_fare + distance_fare + time_fare + booking_fee + airport_fee
+subtotal      = max(subtotal, minimum_fare)        # minimum floor applied AFTER surge
+taxed         = subtotal + gst + pst               # corporate-paid rides: surge never applies
+total         = taxed + tip
+driver_payout = base_fare + distance_fare + time_fare   # 100% to driver; booking/airport are platform
 ```
 
 - Spinr driver share: **100%** of fare (minus Stripe processing). Driver sees gross, platform takes 0%.
@@ -38,7 +41,13 @@ driver_payout = total - booking_fee - platform_share  # platform_share = 0 for S
 
 See CLAUDE.md for the auto-mode tier table. Additional payment rules:
 
-- Surge is applied **before** tax, **not** to booking fee
+- **Per-area admin gate:** surge applies (pricing or UI) only when `service_areas.surge_enabled`
+  is true for that area — default **off**. The surge engine skips areas that aren't enabled, the
+  fare paths price at 1.0× regardless of any parked multiplier, and the public `/service-areas`
+  read reports `surge_active=false` / `surge_multiplier=1.0` so no client renders a surge badge.
+  Disabling surge in the admin panel clears `surge_active` and resets the multiplier to 1.0.
+- Surge multiplies distance + time only — **not** base fare, booking fee, or airport fee
+- Surge is applied **before** tax
 - Surge never applies to corporate-paid rides (policy)
 - Surge never applies retroactively — it's locked at fare estimate time
 - `SURGE_CAP = 2.5` is the auto cap; manual admin override up to 10× requires documented justification

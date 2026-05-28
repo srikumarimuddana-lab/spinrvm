@@ -669,10 +669,15 @@ function GeneralTabForm({ area, onSave, onDelete }: { area: any; onSave: (update
             <button
               type="button"
               onClick={async () => {
-                // Hand this area back to surge_engine. The engine
-                // will recompute a multiplier on its next tick
-                // based on demand vs available drivers.
-                await onSave({ surge_source: "auto" });
+                // Hand this area back to surge_engine. The engine will
+                // recompute a multiplier on its next tick based on demand vs
+                // available drivers. Send surge_enabled + surge_active too:
+                // both fare calculation and recalculate_all_surges() are
+                // gated on surge_enabled, so resetting source alone would
+                // leave a previously-disabled area skipped by the engine and
+                // priced at 1.0× despite the UI saying it's back on auto.
+                // Mirrors the backend /surge/auto reset endpoint.
+                await onSave({ surge_source: "auto", surge_enabled: true, surge_active: true });
               }}
               className="text-[11px] text-blue-600 hover:underline font-semibold"
             >

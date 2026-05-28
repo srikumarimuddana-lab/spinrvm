@@ -49,7 +49,10 @@ _maps_key_cache: str = ""
 _maps_key_fetched_at: float = 0.0
 _MAPS_KEY_CACHE_TTL = 60.0  # seconds
 
-# Ride statuses where the driver is en-route to pickup — ETA to pickup point.
+# Statuses where Distance Matrix ETA is sent to the rider (driver en-route to
+# pickup only). "in_progress" is intentionally excluded: during the trip the
+# rider app computes ETA client-side via haversine, saving ~60 Maps API calls
+# per 15-minute ride. Do not add "in_progress" here without adjusting billing.
 _ETA_PICKUP_STATUSES = {"driver_assigned", "driver_accepted", "driver_arrived"}
 
 # Note: WebSocket routes are usually attached directly to the app, but APIRouter supports them too.

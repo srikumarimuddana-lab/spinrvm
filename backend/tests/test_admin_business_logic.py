@@ -374,3 +374,31 @@ class TestServiceAreaValidation:
         assert captured["surge_enabled"] is False
         assert captured["surge_active"] is False
         assert captured["surge_multiplier"] == 1.0
+
+    def test_disabling_above_cap_surge_needs_no_justification(self, client):
+        """Switching off a parked >2.5x surge must not require a justification.
+
+        The form re-sends the current above-cap multiplier alongside
+        surge_enabled=false. Since disabling clears the multiplier to 1.0, the
+        above-cap value is being turned off, not applied — so the justification
+        gate must not block it.
+        """
+        captured: dict = {}
+
+        async def _capture(table, filt, payload):
+            captured.update(payload)
+
+        with (
+            patch("db_supabase.update_one", new=AsyncMock(side_effect=_capture)),
+            patch("routes.admin.service_areas.invalidate_fare_cache", new=AsyncMock()),
+            patch("routes.admin.service_areas.log_admin_action", new=AsyncMock()),
+        ):
+            resp = client.put(
+                "/api/admin/service-areas/area-1",
+                json={"surge_enabled": False, "surge_multiplier": 3.0, "surge_active": True},
+            )
+
+        assert resp.status_code == 200
+        assert captured["surge_enabled"] is False
+        assert captured["surge_active"] is False
+        assert captured["surge_multiplier"] == 1.0

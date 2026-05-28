@@ -528,10 +528,15 @@ async def admin_reset_surge_to_auto(area_id: str):
     area = await db.find_one("service_areas", {"id": area_id})
     if not area:
         raise HTTPException(status_code=404, detail="Service area not found")
+    # Reset-to-auto is an explicit operator intent to have surge running on
+    # automatic tiers for this area, so it must also flip the surge_enabled
+    # gate on. Without this, an area that was previously disabled would stay
+    # gated off: the surge engine would keep skipping it and fare calc would
+    # keep ignoring surge, even though this endpoint returned success.
     await db.update_one(
         "service_areas",
         {"id": area_id},
-        {"$set": {"surge_source": "auto", "surge_active": True}},
+        {"$set": {"surge_source": "auto", "surge_active": True, "surge_enabled": True}},
     )
     updated = await db.find_one("service_areas", {"id": area_id})
     return updated

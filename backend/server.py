@@ -199,6 +199,23 @@ async def metrics() -> _MetricsResponse:
         # have been recorded so far.
         set_gauge("spinr_redis_connected", 0)
 
+    try:
+        from repositories._base import _DB_EXECUTOR, _DB_THREAD_POOL_SIZE
+
+        try:
+            queue_depth = _DB_EXECUTOR._work_queue.qsize()
+        except AttributeError:
+            queue_depth = -1
+        set_gauge("spinr_db_executor_queue_depth", queue_depth)
+        try:
+            active_workers = len(_DB_EXECUTOR._threads)
+        except AttributeError:
+            active_workers = -1
+        set_gauge("spinr_db_executor_active_workers", active_workers)
+        set_gauge("spinr_db_executor_pool_size", _DB_THREAD_POOL_SIZE)
+    except Exception:
+        _logging.getLogger(__name__).debug("DB executor metrics collection failed", exc_info=True)
+
     return _MetricsResponse(
         content=render_prometheus(),
         media_type="text/plain; version=0.0.4; charset=utf-8",

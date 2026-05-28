@@ -53,9 +53,11 @@ from typing import Any, Dict, Optional, Union
 
 try:
     from ..settings_loader import get_app_settings
+    from .metrics import inc as _metric_inc
     from .money import dollars_to_cents
 except ImportError:
     from settings_loader import get_app_settings
+    from utils.metrics import inc as _metric_inc
     from utils.money import dollars_to_cents
 
 try:
@@ -126,9 +128,7 @@ async def charge_ride(
 
     if stripe is None:
         logger.error("stripe package not installed; cannot charge card")
-        return ChargeOutcome(
-            status="unconfigured", error_message="stripe not installed"
-        )
+        return ChargeOutcome(status="unconfigured", error_message="stripe not installed")
 
     settings = await get_app_settings()
     stripe_secret = settings.get("stripe_secret_key", "") or ""
@@ -163,13 +163,9 @@ async def charge_ride(
     # return the original PI on matching idempotency_key.
     idempotency_key = f"ride-charge-{ride_id}"
 
-    fare_amount = Decimal(str(ride.get("total_fare", 0) or 0)).quantize(
-        Decimal("0.01"), rounding=ROUND_HALF_UP
-    )
+    fare_amount = Decimal(str(ride.get("total_fare", 0) or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     tip = Decimal(str(total_amount)) - fare_amount
-    tip_str = str(
-        max(tip, Decimal("0")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-    )
+    tip_str = str(max(tip, Decimal("0")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
     params: Dict[str, Any] = {
         "amount": amount_cents,
@@ -220,6 +216,7 @@ async def charge_ride(
             decline_code,
             e,
         )
+        _metric_inc("spinr_payment_failure_total", {"reason": decline_code or "card_declined"})
         return ChargeOutcome(
             status="declined",
             decline_code=decline_code,
@@ -229,12 +226,14 @@ async def charge_ride(
         # Non-decline Stripe error (api_connection_error, authentication_error,
         # invalid_request_error, rate_limit_error, etc.). Not the rider's fault.
         logger.error("Stripe error charging ride=%s rider=%s: %s", ride_id, rider_id, e)
+        _metric_inc("spinr_payment_failure_total", {"reason": "stripe_error"})
         return ChargeOutcome(
             status="failed",
             error_message=str(e),
         )
     except Exception as e:  # pragma: no cover — defence-in-depth
         logger.exception("Unexpected error charging ride=%s: %s", ride_id, e)
+        _metric_inc("spinr_payment_failure_total", {"reason": "unexpected"})
         return ChargeOutcome(status="failed", error_message=str(e))
 
     # Stripe returned without raising. Branch on the intent status.
@@ -243,12 +242,11 @@ async def charge_ride(
     client_secret = getattr(intent, "client_secret", None)
 
     if status == "succeeded":
+        _metric_inc("spinr_payment_success_total")
         return ChargeOutcome(
             status="succeeded",
             payment_intent_id=pi_id,
-            charged_amount=Decimal(str(total_amount)).quantize(
-                Decimal("0.01"), rounding=ROUND_HALF_UP
-            ),
+            charged_amount=Decimal(str(total_amount)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
         )
 
     if status == "requires_action" or status == "requires_source_action":

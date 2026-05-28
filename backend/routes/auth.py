@@ -241,14 +241,35 @@ async def send_otp(request: Request, body: SendOTPRequest):
         and app_settings.get("twilio_from_number")
     )
 
-    # If Twilio is configured, send a real OTP via SMS.
-    # If not configured, fall back to the fixed code "1234" so testing works
-    # without SMS delivery — regardless of ENV.
-    otp_code = generate_otp() if twilio_configured else "1234"
-    if not twilio_configured:
+    # OTP code selection:
+    #  - Twilio configured  → real random OTP delivered via SMS.
+    #  - Twilio NOT configured + non-production (development/preview/staging)
+    #                        → fixed code "1234" so testing works without SMS.
+    #  - Twilio NOT configured + production
+    #                        → refuse. A missing Twilio config in production is a
+    #                          misconfiguration; falling back to a static "1234"
+    #                          would let anyone log in as any phone number, so we
+    #                          fail loudly instead of silently bypassing auth.
+    is_production = settings.ENV.lower() == "production"
+    if twilio_configured:
+        otp_code = generate_otp()
+    elif not is_production:
+        otp_code = "1234"
         logger.info(
-            "Twilio not configured — OTP bypass active (code=1234) for ...%s",
+            "Twilio not configured — OTP bypass active (code=1234) for ...%s (ENV=%s)",
             phone[-4:],
+            settings.ENV,
+        )
+    else:
+        logger.error(
+            "Twilio not configured in production — refusing to issue OTP "
+            "(static-code bypass is disabled in production)"
+        )
+        raise SpinrException(
+            message="Verification is temporarily unavailable, please try again later",
+            error_code=ErrorCode.SERVICE_UNAVAILABLE,
+            status_code=503,
+            message_key=ErrorKeys.SYSTEM_SERVICE_UNAVAILABLE,
         )
 
     otp_record = OTPRecord(

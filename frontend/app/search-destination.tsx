@@ -130,6 +130,7 @@ export default function SearchDestinationScreen() {
               placeholder="Pickup location"
               minLength={2}
               fetchDetails={true}
+              GooglePlacesDetailsQuery={{ fields: 'geometry,formatted_address' }}
               onPress={(data, details = null) => {
                 if (details) {
                   const location = { address: data.description, lat: details.geometry.location.lat, lng: details.geometry.location.lng };
@@ -168,6 +169,7 @@ export default function SearchDestinationScreen() {
               placeholder="Where to?"
               minLength={2}
               fetchDetails={true}
+              GooglePlacesDetailsQuery={{ fields: 'geometry,formatted_address' }}
               onPress={(data, details = null) => {
                 if (details) {
                   const location = { address: data.description, lat: details.geometry.location.lat, lng: details.geometry.location.lng };

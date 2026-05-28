@@ -440,6 +440,19 @@ async def create_demo_drivers(vehicle_type_id: str, lat: float, lng: float):
     return
 
 
+async def _dispatch_retry(ride_id: str, delay: int = 10) -> None:
+    """Re-attempt dispatch after a delay. Stops if the ride left searching."""
+    await asyncio.sleep(delay)
+    try:
+        ride = await db_supabase.get_ride(ride_id)
+        if not ride or ride.get("status") != RideStatus.SEARCHING:
+            return
+        logger.info(f"[DISPATCH] retry for ride {ride_id}")
+        await match_driver_to_ride(ride_id, ride=ride)
+    except Exception as e:
+        logger.error(f"[DISPATCH] retry failed for {ride_id}: {e}", exc_info=True)
+
+
 async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
     """Dispatch a driver for ``ride_id``.
 
@@ -547,7 +560,8 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
     )
 
     if not drivers_with_distance:
-        logger.info(f"[DISPATCH] no eligible drivers for ride {ride_id} — ride stays in searching")
+        logger.info(f"[DISPATCH] no eligible drivers for ride {ride_id} — scheduling retry in 10s")
+        asyncio.create_task(_dispatch_retry(ride_id, delay=10))
         return
 
     # ── ETA ranking ───────────────────────────────────────────────
@@ -3217,6 +3231,47 @@ async def cancel_ride_rider(
                 },
                 f"driver_{driver['user_id']}",
             )
+
+    # Batch dispatch: cancel pending ride_offers and notify those drivers.
+    # With batch dispatch driver_id is NOT set on the ride row — offers
+    # live in ride_offers. Without this block, drivers keep showing a
+    # stale offer panel for a ride the rider already cancelled.
+    try:
+        pending_offers = await db_supabase.run_sync(
+            lambda: (
+                db_supabase.supabase.table("ride_offers")
+                .select("driver_id")
+                .eq("ride_id", ride_id)
+                .eq("status", "pending")
+                .execute()
+            )
+        )
+        if pending_offers.data:
+            _cancel_now = datetime.now(timezone.utc).isoformat()
+            await db_supabase.run_sync(
+                lambda: (
+                    db_supabase.supabase.table("ride_offers")
+                    .update({"status": "cancelled", "responded_at": _cancel_now})
+                    .eq("ride_id", ride_id)
+                    .eq("status", "pending")
+                    .execute()
+                )
+            )
+            for offer_row in pending_offers.data:
+                _offer_did = offer_row["driver_id"]
+                await db_supabase.set_driver_available(_offer_did, True)
+                try:
+                    _drv = await db_supabase.get_driver_by_id(_offer_did)
+                    _uid = (_drv or {}).get("user_id")
+                    if _uid:
+                        await manager.send_personal_message(
+                            {"type": "ride_cancelled", "ride_id": ride_id, "reason": "Rider cancelled"},
+                            f"driver_{_uid}",
+                        )
+                except Exception as _e:
+                    logger.warning(f"[CANCEL] failed to notify batch-offer driver {_offer_did}: {_e}")
+    except Exception as _batch_exc:
+        logger.warning(f"[CANCEL] batch offer cleanup failed for ride {ride_id}: {_batch_exc}")
 
     # Notify the rider's own connection — broadcast_ride_status only fans
     # out to the rider when rider_id is passed, but an explicit message

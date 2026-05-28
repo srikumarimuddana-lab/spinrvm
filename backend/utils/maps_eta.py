@@ -1,9 +1,15 @@
-"""Google Maps Distance Matrix ETA helper (Feature A — P3).
+"""Google Maps Distance Matrix ETA helper.
 
 Computes the road-network ETA from a driver's current location to a destination
-(pickup or dropoff point). Results are cached in Redis for 15 seconds so the
-hot GPS-ping loop (60 pings/min/driver) triggers at most ~4 Maps API calls per
-minute per active ride.
+(pickup point only — NOT dropoff). Results are cached in Redis for 15 seconds so
+the hot GPS-ping loop triggers at most ~4 Maps API calls per minute per active ride.
+
+IMPORTANT — call scope:
+  This helper must only be called during the pre-pickup phases:
+  ``driver_assigned``, ``driver_accepted``, ``driver_arrived``.
+  The gating set ``_ETA_PICKUP_STATUSES`` in ``websocket.py`` enforces this.
+  During ``in_progress`` the rider app computes ETA client-side via haversine
+  so we do not re-call Maps on every GPS ping for the full trip duration.
 
 Failure modes are soft:
   - Redis unavailable → no caching, Maps called every ping (acceptable for

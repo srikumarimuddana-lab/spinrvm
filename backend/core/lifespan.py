@@ -382,7 +382,7 @@ async def lifespan(app: FastAPI):
             # hazard, but not a boot-blocker — a single-machine prod
             # deploy is still coherent. Log at WARNING so the operator
             # sees it in the boot logs.
-            logger.warning(
+            logger.info(
                 "WS pub/sub did NOT start — WebSocket fan-out will be "
                 "limited to the current machine. Set WS_REDIS_URL (or "
                 "RATE_LIMIT_REDIS_URL, which will be reused) to enable "
@@ -390,6 +390,23 @@ async def lifespan(app: FastAPI):
             )
     except Exception as e:
         logger.error(f"Failed to start WS pub/sub: {e}", exc_info=True)
+
+    # Warm up Redis geo index from Postgres so dispatch can use GEOSEARCH
+    # immediately without waiting for drivers to send location updates.
+    try:
+        import db_supabase
+        from utils.redis_client import geo_warmup_from_rows
+
+        online_drivers = await db_supabase.get_rows(
+            "drivers",
+            {"is_online": True, "is_available": True, "status": "active"},
+            limit=1000,
+        )
+        if online_drivers:
+            warmed = await geo_warmup_from_rows(online_drivers)
+            logger.info(f"Redis geo index warm-up: {warmed}/{len(online_drivers)} drivers indexed")
+    except Exception as e:
+        logger.error(f"Redis geo warm-up failed (Postgres fallback will cover): {e}")
 
     # Perform startup checks
     logger.info(f"Spinr API startup complete ({len(background_tasks)} background tasks running)")

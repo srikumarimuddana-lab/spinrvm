@@ -175,6 +175,14 @@ class Settings(BaseSettings):
                         "every database call, producing a misleading 500 at runtime "
                         "rather than a clean startup error."
                     )
+
+            if not self.WS_REDIS_URL and not self.RATE_LIMIT_REDIS_URL:
+                raise ValueError(
+                    "WS_REDIS_URL is required in production. Without it, WebSocket "
+                    "events will not fan out across replicas and riders will see "
+                    "stale ride state. Set WS_REDIS_URL or RATE_LIMIT_REDIS_URL "
+                    "(which is reused as a fallback)."
+                )
         return self
 
     @property

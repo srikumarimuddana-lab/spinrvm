@@ -245,6 +245,7 @@ register_exception_handlers(app)
 # Create v1 API router
 v1_api_router = APIRouter()
 v1_api_router.include_router(rides_router)
+v1_api_router.include_router(lost_and_found_router)
 # documents_router MUST be included before drivers_router so that its specific
 # paths (/drivers/requirements, /drivers/documents) are matched before the
 # catch-all wildcard GET /drivers/{driver_id} in drivers_router.

@@ -2740,27 +2740,34 @@ async def process_payment(
     # updated_at — /rate bumps updated_at immediately before /process-payment,
     # so an age filter never fires and the ride stays stuck forever.
     _wallet_redrive_lock_key: str | None = None
+    _redis_del = None
     _claim_states = ["pending", "failed"]
-    if _pmethod == "wallet":
-        _claim_states.append("processing")
-        if _pstatus == "processing":
-            # 'processing → processing' UPDATE is not exclusive: both concurrent
-            # re-drives match the WHERE clause and both enter settlement. The
-            # idempotent RPC prevents the double-debit but post-RPC side effects
-            # (ledger write, receipt email) would still run twice. Acquire a
-            # short-lived Redis NX lock so only one re-drive proceeds at a time.
-            try:
-                from ..utils.redis_client import redis_delete as _redis_del
-                from ..utils.redis_client import redis_set_nx as _redis_nx
-            except ImportError:
-                from utils.redis_client import redis_delete as _redis_del  # type: ignore
-                from utils.redis_client import redis_set_nx as _redis_nx  # type: ignore
-            _wallet_redrive_lock_key = f"spinr:wallet_settle:{ride_id}"
-            if not await _redis_nx(_wallet_redrive_lock_key, "1", 30):
-                raise HTTPException(
-                    status_code=409,
-                    detail="Payment retry already in progress. Please try again in a moment.",
-                )
+    if _pmethod == "wallet" and _pstatus == "processing":
+        # Recovery re-drive of a stuck wallet 'processing' ride.
+        #
+        # DO NOT add 'processing' to _claim_states unconditionally — that makes
+        # the claim non-exclusive. A double-tap on a first payment (ride at
+        # 'pending') would have Call B see 'processing' after Call A commits and
+        # still match the WHERE clause, so both calls would enter settlement.
+        #
+        # Instead: gate the 'processing' claim state behind a Redis NX lock so
+        # exactly one re-drive holds the gate. Only after acquiring the lock is
+        # 'processing' added to _claim_states, making the DB update a no-op
+        # marker (the row is already 'processing') rather than an exclusive
+        # transition. Subsequent concurrent re-drives get 409 before the DB.
+        try:
+            from ..utils.redis_client import redis_delete as _redis_del
+            from ..utils.redis_client import redis_set_nx as _redis_nx
+        except ImportError:
+            from utils.redis_client import redis_delete as _redis_del  # type: ignore
+            from utils.redis_client import redis_set_nx as _redis_nx  # type: ignore
+        _wallet_redrive_lock_key = f"spinr:wallet_settle:{ride_id}"
+        if not await _redis_nx(_wallet_redrive_lock_key, "1", 30):
+            raise HTTPException(
+                status_code=409,
+                detail="Payment retry already in progress. Please try again in a moment.",
+            )
+        _claim_states.append("processing")  # only added after the lock is held
     guard_row = await db_supabase.update_one(
         "rides",
         {"id": ride_id, "payment_status": {"$in": _claim_states}},

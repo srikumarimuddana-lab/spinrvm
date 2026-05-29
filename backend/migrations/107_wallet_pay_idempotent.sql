@@ -55,7 +55,7 @@ BEGIN
     -- concurrent caller serializes behind us.
     SELECT payment_status INTO v_status
       FROM rides
-     WHERE id = p_ride_id
+     WHERE id = p_ride_id::text  -- rides.id is TEXT; see migration 108
        FOR UPDATE;
 
     IF v_status = 'paid' THEN
@@ -76,7 +76,7 @@ BEGIN
     UPDATE rides
        SET payment_status = 'paid',
            updated_at     = NOW()
-     WHERE id = p_ride_id;
+     WHERE id = p_ride_id::text;  -- rides.id is TEXT; see migration 108
 
     RETURN v_new_balance;
 END;

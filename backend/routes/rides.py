@@ -2121,6 +2121,41 @@ async def get_active_ride(request: Request = None, current_user: dict = Depends(
     return {"active": True, "ride": ride_data}
 
 
+_RIDE_HISTORY_VISIBLE_OR = (
+    f"status.eq.{RideStatus.COMPLETED.value},and(status.eq.{RideStatus.CANCELLED.value},driver_id.not.is.null)"
+)
+
+
+def _ride_history_cursor_or(cursor_ts: Optional[str], before: Optional[str]) -> Optional[str]:
+    if not cursor_ts or not before:
+        return None
+    return f"created_at.lt.{cursor_ts},and(created_at.eq.{cursor_ts},id.lt.{before})"
+
+
+async def _fetch_ride_history_page(
+    *,
+    rider_id: str,
+    limit: int,
+    cursor_ts: Optional[str],
+    before: Optional[str],
+) -> list[dict]:
+    """Fetch one stable ride-history page, including one extra row for has-more."""
+    if not db_supabase.supabase:
+        return []
+
+    cursor_clause = _ride_history_cursor_or(cursor_ts, before)
+
+    def _fn():
+        q = db_supabase.supabase.table("rides").select("*").eq("rider_id", rider_id).or_(_RIDE_HISTORY_VISIBLE_OR)
+        if cursor_clause:
+            q = q.or_(cursor_clause)
+        q = q.order("created_at", desc=True).order("id", desc=True).limit(limit + 1)
+        res = q.execute()
+        return getattr(res, "data", None) or []
+
+    return await db_supabase.run_sync(_fn)
+
+
 @ride_read_limit
 @api_router.get("/history")
 async def get_ride_history(
@@ -2143,30 +2178,14 @@ async def get_ride_history(
         if cursor_ride:
             cursor_ts = cursor_ride.get("created_at")
 
-    filters: dict = {
-        "rider_id": current_user["id"],
-        "status": {"$in": list(RideStatus.terminal_statuses())},
-    }
-    if cursor_ts:
-        filters["created_at"] = {"$lt": cursor_ts}
-
-    # Fetch limit+1 so we know whether a next page exists without an extra
-    # count query. We then post-filter for meaningful rides (driver_id set
-    # on cancellations) and slice to limit.
-    candidates = await db_supabase.get_rows(
-        "rides",
-        filters,
-        order="created_at",
-        desc=True,
-        limit=limit + 10,  # small buffer for the post-filter
+    candidates = await _fetch_ride_history_page(
+        rider_id=current_user["id"],
+        limit=limit,
+        cursor_ts=cursor_ts,
+        before=before,
     )
-
-    # Exclude cancelled rides where no driver was ever matched
-    rides = [
-        r
-        for r in candidates
-        if r.get("status") == RideStatus.COMPLETED or (r.get("status") == RideStatus.CANCELLED and r.get("driver_id"))
-    ][:limit]
+    rides = candidates[:limit]
+    has_more = len(candidates) > limit
 
     try:
         _settings = await get_app_settings()
@@ -2191,7 +2210,7 @@ async def get_ride_history(
             r["fare_locked"] = False
         r["actual_duration_minutes"] = _actual_duration_minutes(r)
 
-    next_cursor = rides[-1]["id"] if len(rides) == limit else None
+    next_cursor = rides[-1]["id"] if has_more and rides else None
 
     return {"rides": rides, "limit": limit, "next_cursor": next_cursor}
 

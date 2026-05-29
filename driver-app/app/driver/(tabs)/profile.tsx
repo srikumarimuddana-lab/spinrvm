@@ -526,7 +526,7 @@ export default function ProfileScreen() {
             <View style={styles.section}>
             <Text style={styles.sectionTitle}>Settings</Text>
             <View style={styles.card}>
-                <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => router.push('/driver/notifications' as any)}>
+                <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => router.push('/driver/faq' as any)}>
                     <View style={[styles.iconBox, { backgroundColor: colors.surfaceLight }]}>
                         <Ionicons name="help-circle" size={18} color={colors.textDim} />
                     </View>

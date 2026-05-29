@@ -887,11 +887,10 @@ async def _offer_timeout_handler(
             await record_period_transition(driver_id, 0)
         else:
             # Normal timeout — release driver back to the available pool.
-            await db.update_one(
-                "drivers",
-                {"id": driver_id},
-                {"$set": {"is_available": True}},
-            )
+            # Use set_driver_available() so the is_available ⇒ is_online
+            # invariant is enforced (clamps to False if driver went offline
+            # between the offer being sent and the timeout firing).
+            await db_supabase.set_driver_available(driver_id, available=True)
             # Period 1: online, no ride.
             await record_period_transition(driver_id, 1)
 

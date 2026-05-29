@@ -2740,27 +2740,34 @@ async def process_payment(
     # updated_at — /rate bumps updated_at immediately before /process-payment,
     # so an age filter never fires and the ride stays stuck forever.
     _wallet_redrive_lock_key: str | None = None
+    _redis_del = None
     _claim_states = ["pending", "failed"]
-    if _pmethod == "wallet":
-        _claim_states.append("processing")
-        if _pstatus == "processing":
-            # 'processing → processing' UPDATE is not exclusive: both concurrent
-            # re-drives match the WHERE clause and both enter settlement. The
-            # idempotent RPC prevents the double-debit but post-RPC side effects
-            # (ledger write, receipt email) would still run twice. Acquire a
-            # short-lived Redis NX lock so only one re-drive proceeds at a time.
-            try:
-                from ..utils.redis_client import redis_delete as _redis_del
-                from ..utils.redis_client import redis_set_nx as _redis_nx
-            except ImportError:
-                from utils.redis_client import redis_delete as _redis_del  # type: ignore
-                from utils.redis_client import redis_set_nx as _redis_nx  # type: ignore
-            _wallet_redrive_lock_key = f"spinr:wallet_settle:{ride_id}"
-            if not await _redis_nx(_wallet_redrive_lock_key, "1", 30):
-                raise HTTPException(
-                    status_code=409,
-                    detail="Payment retry already in progress. Please try again in a moment.",
-                )
+    if _pmethod == "wallet" and _pstatus == "processing":
+        # Recovery re-drive of a stuck wallet 'processing' ride.
+        #
+        # DO NOT add 'processing' to _claim_states unconditionally — that makes
+        # the claim non-exclusive. A double-tap on a first payment (ride at
+        # 'pending') would have Call B see 'processing' after Call A commits and
+        # still match the WHERE clause, so both calls would enter settlement.
+        #
+        # Instead: gate the 'processing' claim state behind a Redis NX lock so
+        # exactly one re-drive holds the gate. Only after acquiring the lock is
+        # 'processing' added to _claim_states, making the DB update a no-op
+        # marker (the row is already 'processing') rather than an exclusive
+        # transition. Subsequent concurrent re-drives get 409 before the DB.
+        try:
+            from ..utils.redis_client import redis_delete as _redis_del
+            from ..utils.redis_client import redis_set_nx as _redis_nx
+        except ImportError:
+            from utils.redis_client import redis_delete as _redis_del  # type: ignore
+            from utils.redis_client import redis_set_nx as _redis_nx  # type: ignore
+        _wallet_redrive_lock_key = f"spinr:wallet_settle:{ride_id}"
+        if not await _redis_nx(_wallet_redrive_lock_key, "1", 30):
+            raise HTTPException(
+                status_code=409,
+                detail="Payment retry already in progress. Please try again in a moment.",
+            )
+        _claim_states.append("processing")  # only added after the lock is held
     guard_row = await db_supabase.update_one(
         "rides",
         {"id": ride_id, "payment_status": {"$in": _claim_states}},
@@ -2794,24 +2801,22 @@ async def process_payment(
     _grand = ride.get("grand_total")
     if _grand is None:
         _grand = ride.get("total_fare", 0)
-    total_charge = _q(_grand) + _q(tip_amount)
+    tip_rounded = _q(tip_amount)  # canonical 2dp value passed to all settle fns
+    total_charge = _q(_grand) + tip_rounded
     payment_method = (ride.get("payment_method") or "card").lower()
 
-    # Compute tip delta and prepare the DB payload, but do NOT write yet.
-    # The DB write is deferred until after settlement confirms money moved.
-    # A wallet idempotent no-op (ride already paid, RPC returned None) must
-    # not leave tip_amount or driver_earnings persisted when nothing was charged.
-    # The local ride dict is updated in-memory so total_charge and the fare
-    # breakdown snapshot passed to settle_* are correct.
+    # _tip_db_update carries only the fare_breakdown_snapshot (cosmetic display
+    # update, written best-effort after settlement). tip_amount and
+    # driver_earnings are written atomically:
+    #   - wallet:    inside wallet_pay_for_ride RPC (migration 110)
+    #   - card/corp: inside settle_card / settle_corporate via _tip_ride_update
+    # The in-memory ride dict is still updated so the receipt email sees the
+    # correct totals without a DB re-fetch.
     _tip_db_update: dict = {}
-    if tip_amount > 0:
-        tip_d = _round(_d(tip_amount))
+    if tip_rounded > 0:
+        tip_d = tip_rounded
         existing_tip = _d(ride.get("tip_amount") or 0)
         tip_delta = tip_d - existing_tip
-        _tip_db_update = {"tip_amount": _f(tip_d)}
-        if tip_delta > 0:
-            existing_earnings = _d(ride.get("driver_earnings") or 0)
-            _tip_db_update["driver_earnings"] = _f(_round(existing_earnings + tip_delta))
         snapshot = ride.get("fare_breakdown_snapshot")
         if snapshot and isinstance(snapshot, dict) and snapshot.get("lines") is not None:
             updated_lines = [ln for ln in snapshot["lines"] if ln.get("type") != "tip"]
@@ -2820,8 +2825,8 @@ async def process_payment(
             snapshot["grand_total"] = _sum_fare_breakdown(updated_lines)
             _tip_db_update["fare_breakdown_snapshot"] = snapshot
         ride["tip_amount"] = _f(tip_d)
-        if "driver_earnings" in _tip_db_update:
-            ride["driver_earnings"] = _tip_db_update["driver_earnings"]
+        if tip_delta > 0:
+            ride["driver_earnings"] = _f(_round(_d(ride.get("driver_earnings") or 0) + tip_delta))
 
     _snap = ride.get("fare_breakdown_snapshot")
     _snap_lines = (_snap.get("lines") if isinstance(_snap, dict) else None) if _snap else None
@@ -2832,13 +2837,13 @@ async def process_payment(
             ride_id,
             current_user["id"],
             total_charge,
-            tip_amount,
+            tip_rounded,
             fare_breakdown=_snap_lines or _build_fare_breakdown(ride),
         )
     elif payment_method == "company_allowance":
-        result = await settle_corporate(ride, ride_id, total_charge, tip_amount)
+        result = await settle_corporate(ride, ride_id, total_charge, tip_rounded)
     else:
-        result = await settle_card(ride, ride_id, current_user["id"], total_charge, tip_amount)
+        result = await settle_card(ride, ride_id, current_user["id"], total_charge, tip_rounded)
 
     if not result.success:
         detail = result.error or "Payment failed"
@@ -2865,8 +2870,16 @@ async def process_payment(
     email_sent = False
     if not result.already_paid:
         if _tip_db_update:
-            await db_supabase.update_ride(ride_id, _tip_db_update)
-        email_sent = await send_ride_receipt(ride, current_user["id"], tip_amount)
+            try:
+                await db_supabase.update_ride(ride_id, _tip_db_update)
+            except Exception as _snap_err:
+                logger.error(
+                    "[PAYMENT] fare_breakdown_snapshot write failed for ride %s — "
+                    "payment succeeded, snapshot will be stale: %s",
+                    ride_id,
+                    _snap_err,
+                )
+        email_sent = await send_ride_receipt(ride, current_user["id"], tip_rounded)
     return {
         "success": True,
         "charged_amount": _money_str(result.charged_amount),

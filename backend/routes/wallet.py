@@ -229,22 +229,28 @@ async def wallet_pay(req: WalletPayRequest, current_user: dict = Depends(get_cur
     if not wallet.get("is_active", True):
         raise HTTPException(status_code=403, detail="Your wallet is suspended")
 
-    # R-P1-19: Validate client-supplied amount against the server-stored ride fare
-    # to prevent a malicious caller from paying less than the actual fare.
+    # Validate the ride exists, belongs to this rider, and is in a payable state.
+    # Also validate the client-supplied amount is within [server_fare, server_fare+0.01]
+    # so neither underpayment nor overpayment is possible via this endpoint.
     ride = await db.find_one("rides", {"id": req.ride_id})
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
     if ride.get("rider_id") != current_user["id"]:
         raise HTTPException(status_code=403, detail="ERR_FORBIDDEN")
+    if ride.get("status") != "completed":
+        raise HTTPException(status_code=400, detail="ERR_RIDE_NOT_PAYABLE")
     server_fare = _d(ride.get("total_fare", 0))
     debit_amount = _d(req.amount)
     if debit_amount > server_fare + _d("0.01"):
         raise HTTPException(status_code=400, detail="ERR_FARE_EXCEEDED")
+    if debit_amount < server_fare - _d("0.01"):
+        raise HTTPException(status_code=400, detail="ERR_FARE_UNDERPAID")
 
     try:
         new_balance = await wallet_pay_for_ride(wallet["id"], req.ride_id, debit_amount)
     except ValueError as exc:
-        if "insufficient_funds" in str(exc):
+        err = str(exc)
+        if "insufficient_funds" in err:
             raise SpinrException(
                 message="Insufficient wallet balance",
                 error_code=ErrorCode.PAYMENT_INSUFFICIENT_FUNDS,
@@ -252,16 +258,24 @@ async def wallet_pay(req: WalletPayRequest, current_user: dict = Depends(get_cur
                 message_key=ErrorKeys.PAYMENT_INSUFFICIENT_FUNDS,
                 action_hint="Top up your wallet",
             ) from exc
+        if "fare_underpaid" in err:
+            raise HTTPException(status_code=400, detail="ERR_FARE_UNDERPAID") from exc
+        if "ride_not_payable" in err:
+            raise HTTPException(status_code=400, detail="ERR_RIDE_NOT_PAYABLE") from exc
         raise HTTPException(status_code=503, detail="Wallet payment failed — please retry") from exc
 
     # wallet_pay_for_ride returns None when the ride is already paid (idempotent
     # no-op from migration 107 — no money moved, wallet balance unchanged).
-    # Return the stale balance without appending a ledger row; a None balance
-    # passed to _money_str or _record_transaction would corrupt wallet history.
+    # Re-fetch the wallet so the balance we return is post-debit (a concurrent
+    # first request may have already debited while we were waiting inside the RPC
+    # FOR UPDATE lock — returning the pre-RPC snapshot would show an inflated
+    # balance to the client).
     if new_balance is None:
+        fresh = await db.find_one("wallets", {"id": wallet["id"]})
+        current_balance = _money_str(_d((fresh or wallet).get("balance", 0)))
         logger.info("[WALLET] /pay ride %s already paid — no-op, skipping ledger write", req.ride_id)
         return {
-            "balance": _money_str(_d(wallet.get("balance", 0))),
+            "balance": current_balance,
             "transaction_id": None,
             "already_paid": True,
         }

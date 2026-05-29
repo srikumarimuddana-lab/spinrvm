@@ -60,9 +60,11 @@ class TestScheduledDispatch:
 
         with (
             patch.object(sr.db, "update_one", AsyncMock(side_effect=_update_one)),
+            patch.object(sr.db, "get_user_by_id", AsyncMock(return_value={"id": RIDER_ID, "first_name": "Ada"})),
             patch("backend.routes.rides.match_driver_to_ride", match_mock),
             patch("backend.routes.rides.ride_search_timeout", _timeout),
             patch.object(sr.manager, "broadcast_ride_status", AsyncMock()) as bcast,
+            patch.object(sr.manager, "broadcast_to_admins", AsyncMock()) as admin_bcast,
             patch.object(sr, "send_push_notification", AsyncMock()),
             # Swallow the fire-and-forget ride_search_timeout task without leaking
             # an un-awaited coroutine.
@@ -79,6 +81,13 @@ class TestScheduledDispatch:
         match_mock.assert_awaited_once_with(RIDE_ID)
         # State-change WS event emitted to rider + admins.
         bcast.assert_awaited_once()
+        # A full ride_requested event is emitted so admin monitoring adds the
+        # newly-live ride as a new row (nested MonitoringRide contract).
+        admin_bcast.assert_awaited_once()
+        admin_payload = admin_bcast.await_args.args[0]
+        assert admin_payload["type"] == "ride_requested"
+        assert admin_payload["ride"]["id"] == RIDE_ID
+        assert admin_payload["ride"]["status"] == "searching"
 
     async def test_dispatch_aborts_when_claim_lost(self):
         """If another replica already flipped the row, update_one returns None

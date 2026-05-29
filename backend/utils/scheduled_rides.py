@@ -73,10 +73,9 @@ async def _dispatch_scheduled_ride(ride: dict):
 
         logger.info(f"Dispatched scheduled ride {ride_id}: scheduled → searching")
 
-        # Mandatory state-change WS event (rider + admins). This also surfaces
-        # the ride in admin live-monitoring now that it is a real in-flight
-        # request — the create_ride path skips the ride_requested broadcast for
-        # deferred scheduled rides precisely so this is the single source.
+        # Mandatory state-change WS event (rider + admins). Drives the rider
+        # app's status update and patches any admin dashboard that already has
+        # this ride in its map.
         try:
             await manager.broadcast_ride_status(
                 ride_id,
@@ -86,6 +85,30 @@ async def _dispatch_scheduled_ride(ride: dict):
             )
         except Exception as ws_err:
             logger.warning(f"scheduled dispatch: WS broadcast failed for {ride_id}: {ws_err}")
+
+        # Surface the now-live ride to admin monitoring as a NEW row. The
+        # dashboard's ride_status_changed handler only patches an existing
+        # entry; ride_requested is the path that calls applyRide() to add a
+        # row. The create_ride path skips ride_requested for deferred rides,
+        # so without this a scheduled ride going live is invisible to an
+        # already-open dashboard until the next snapshot refresh. Payload must
+        # match the MonitoringRide contract (nested ``ride`` object).
+        try:
+            try:
+                from ..routes.admin.monitoring import build_monitoring_ride
+            except ImportError:
+                from routes.admin.monitoring import build_monitoring_ride
+            rider = None
+            if rider_id:
+                rider = await db.get_user_by_id(rider_id)
+            await manager.broadcast_to_admins(
+                {
+                    "type": "ride_requested",
+                    "ride": build_monitoring_ride(claimed, rider=rider),
+                }
+            )
+        except Exception as admin_err:
+            logger.warning(f"scheduled dispatch: admin ride_requested broadcast failed for {ride_id}: {admin_err}")
 
         # Import and run driver matching. We do NOT pass ride= so the dispatch
         # path re-fetches the freshly-claimed 'searching' row.

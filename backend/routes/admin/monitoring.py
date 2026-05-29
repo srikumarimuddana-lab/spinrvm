@@ -41,6 +41,50 @@ router = APIRouter(prefix="/monitoring", tags=["Monitoring"])
 ACTIVE_RIDE_STATUSES = ["searching", "driver_assigned", "driver_arrived", "in_progress"]
 ON_RIDE_STATUSES = ["driver_assigned", "driver_arrived", "in_progress"]
 
+
+def build_monitoring_ride(
+    ride: Dict[str, Any],
+    rider: Optional[Dict[str, Any]] = None,
+    driver_user: Optional[Dict[str, Any]] = None,
+    driver_row: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Shape a ride row into the MonitoringRide payload the admin dashboard expects.
+
+    Single source of truth for the dashboard ride shape: the snapshot fetcher,
+    the live ``ride_requested`` broadcast in create_ride, and the scheduled-ride
+    dispatcher all build through here so the contract in
+    admin-dashboard/.../monitoring/types.ts (``MonitoringRide``) cannot drift
+    between them.
+    """
+    rider = rider or {}
+    driver_user = driver_user or {}
+    driver_row = driver_row or {}
+    created = ride.get("created_at", "")
+    return {
+        "id": ride.get("id"),
+        "status": ride.get("status"),
+        "rider_id": ride.get("rider_id"),
+        "rider_name": f"{rider.get('first_name', '')} {rider.get('last_name', '')}".strip() or "Unknown",
+        "rider_phone": rider.get("phone"),
+        "rider_photo": rider.get("profile_image"),
+        "driver_id": ride.get("driver_id"),
+        "driver_name": f"{driver_user.get('first_name', '')} {driver_user.get('last_name', '')}".strip() or None,
+        "driver_phone": driver_user.get("phone"),
+        "pickup_lat": ride.get("pickup_lat"),
+        "pickup_lng": ride.get("pickup_lng"),
+        "pickup_address": ride.get("pickup_address"),
+        "dropoff_lat": ride.get("dropoff_lat"),
+        "dropoff_lng": ride.get("dropoff_lng"),
+        "dropoff_address": ride.get("dropoff_address"),
+        "driver_lat": ride.get("driver_current_lat") or driver_row.get("lat"),
+        "driver_lng": ride.get("driver_current_lng") or driver_row.get("lng"),
+        "total_fare": ride.get("total_fare"),
+        "distance_km": ride.get("distance_km"),
+        "created_at": (created.isoformat() if hasattr(created, "isoformat") else str(created)),
+        "is_corporate": bool(ride.get("corporate_account_id")),
+    }
+
+
 # Process start time, captured once at import so uptime calc is O(1).
 _PROCESS_START_TIME = _time.monotonic()
 
@@ -188,32 +232,7 @@ async def fetch_monitoring_rides() -> List[Dict[str, Any]]:
         rider = riders_by_id.get(r.get("rider_id", ""), {})
         drv_row = drivers_by_id.get(r.get("driver_id", ""), {})
         drv_user = driver_users_by_id.get(drv_row.get("user_id", ""), {})
-        created = r.get("created_at", "")
-        result.append(
-            {
-                "id": r["id"],
-                "status": r["status"],
-                "rider_id": r.get("rider_id"),
-                "rider_name": f"{rider.get('first_name', '')} {rider.get('last_name', '')}".strip() or "Unknown",
-                "rider_phone": rider.get("phone"),
-                "rider_photo": rider.get("profile_image"),
-                "driver_id": r.get("driver_id"),
-                "driver_name": f"{drv_user.get('first_name', '')} {drv_user.get('last_name', '')}".strip() or None,
-                "driver_phone": drv_user.get("phone"),
-                "pickup_lat": r.get("pickup_lat"),
-                "pickup_lng": r.get("pickup_lng"),
-                "pickup_address": r.get("pickup_address"),
-                "dropoff_lat": r.get("dropoff_lat"),
-                "dropoff_lng": r.get("dropoff_lng"),
-                "dropoff_address": r.get("dropoff_address"),
-                "driver_lat": r.get("driver_current_lat") or drv_row.get("lat"),
-                "driver_lng": r.get("driver_current_lng") or drv_row.get("lng"),
-                "total_fare": r.get("total_fare"),
-                "distance_km": r.get("distance_km"),
-                "created_at": (created.isoformat() if hasattr(created, "isoformat") else str(created)),
-                "is_corporate": bool(r.get("corporate_account_id")),
-            }
-        )
+        result.append(build_monitoring_ride(r, rider=rider, driver_user=drv_user, driver_row=drv_row))
     return result
 
 

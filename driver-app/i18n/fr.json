@@ -60,6 +60,7 @@
         "rider": "Passager",
         "verifyRiderPin": "Vérifier le NIP du passager",
         "askRiderForCode": "Demandez au passager son code à 4 chiffres",
+        "incorrectPin": "NIP incorrect. Demandez au passager de le relire.",
         "startWithoutPin": "Démarrer sans NIP",
         "navigateToPickup": "Naviguer vers le passager",
         "arrivedAtPickup": "Je suis arrivé",

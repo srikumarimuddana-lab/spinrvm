@@ -60,6 +60,7 @@
         "rider": "Pasajero",
         "verifyRiderPin": "Verificar PIN del pasajero",
         "askRiderForCode": "Pide al pasajero su código de 4 dígitos",
+        "incorrectPin": "PIN incorrecto. Pídele al pasajero que lo lea de nuevo.",
         "startWithoutPin": "Iniciar sin PIN",
         "navigateToPickup": "Navegar a recogida",
         "arrivedAtPickup": "He llegado a la recogida",

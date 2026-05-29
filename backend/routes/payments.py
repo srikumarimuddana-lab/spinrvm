@@ -281,6 +281,7 @@ async def create_payment_intent(
 
 @api_router.post("/confirm")
 @payment_action_limit
+@idempotent_endpoint(scope="payment_confirm")
 async def confirm_payment(
     body: Dict[str, Any],
     request: Request = None,
@@ -767,11 +768,23 @@ async def create_payment_sheet(
     # fees or GST/PST. `amount` is advisory only when ride_id is present.
     charge_amount = Decimal(str(body.amount))
     if body.ride_id:
-        charge_amount = await _authoritative_ride_charge(body.ride_id, current_user["id"], body.tip_amount)
+        ride = await db_supabase.get_ride(body.ride_id)
+        if not ride:
+            raise HTTPException(status_code=404, detail="Ride not found")
+        if ride.get("rider_id") != current_user["id"]:
+            raise HTTPException(status_code=403, detail="Not authorized to pay for this ride")
+        ride_fare = Decimal(str(ride.get("total_fare", 0)))
+        requested = Decimal(str(body.amount))
+        if requested != ride_fare:
+            raise PaymentException(
+                message=f"Payment amount {requested} does not match ride fare {ride_fare}",
+                message_key=ErrorKeys.RIDE_PRICE_MISMATCH,
+                action_hint="Refresh the fare estimate",
+            )
 
     try:
         customer_id = await get_or_create_stripe_customer(current_user["id"], stripe_secret)
-        amount_cents = dollars_to_cents(charge_amount)
+        amount_cents = dollars_to_cents(body.amount)
 
         # EphemeralKey lets the PaymentSheet modal manage the customer's
         # saved cards. api_version must match the version configured on the

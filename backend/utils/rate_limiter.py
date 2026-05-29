@@ -43,21 +43,35 @@ if _rate_limit_storage_uri == "memory://":
         "replicas. Set RATE_LIMIT_REDIS_URL for production deployments."
     )
 else:
-    # Verify Redis is reachable at startup; fall back to memory if not (P2-4).
-    # This prevents the rate limiter from becoming a hard failure when Redis
-    # is misconfigured or temporarily unavailable during a cold start.
-    try:
-        import redis as _redis_sync
+    # Verify Redis is reachable at startup with retry. A cold-start race
+    # (Redis container still booting) previously caused a permanent fallback
+    # to memory:// — weakening OTP brute-force protection for the entire
+    # process lifetime. Three attempts with backoff cover typical container
+    # orchestration delays.
+    _redis_connected = False
+    for _attempt in range(3):
+        try:
+            import redis as _redis_sync
 
-        _probe = _redis_sync.from_url(_rate_limit_storage_uri, socket_connect_timeout=2)
-        _probe.ping()
-        _probe.close()
-        scheme = _rate_limit_storage_uri.split("://", 1)[0]
-        logger.info(f"Rate limiter using distributed storage backend: {scheme}://…")
-    except Exception as _redis_err:
-        logger.error(
-            f"Redis unavailable — rate limiter degraded to in-memory fallback ({_redis_err}); OTP brute-force protection weakened on multi-replica deployments"
-        )
+            _probe = _redis_sync.from_url(_rate_limit_storage_uri, socket_connect_timeout=2)
+            _probe.ping()
+            _probe.close()
+            scheme = _rate_limit_storage_uri.split("://", 1)[0]
+            logger.info(f"Rate limiter using distributed storage backend: {scheme}://…")
+            _redis_connected = True
+            break
+        except Exception as _redis_err:
+            if _attempt < 2:
+                logger.warning(
+                    f"Redis not ready (attempt {_attempt + 1}/3): {_redis_err} — retrying in {(_attempt + 1) * 2}s"
+                )
+                time.sleep((_attempt + 1) * 2)
+            else:
+                logger.error(
+                    f"Redis unavailable after 3 attempts — rate limiter degraded to in-memory fallback ({_redis_err}); "
+                    "OTP brute-force protection weakened on multi-replica deployments"
+                )
+    if not _redis_connected:
         _rate_limit_storage_uri = "memory://"
 
 # ---------------------------------------------------------------------------

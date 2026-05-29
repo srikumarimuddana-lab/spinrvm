@@ -1,6 +1,11 @@
 bugreport-*.zip
 play-service-account.json
 
+# local env files — never commit real API keys
+.env
+.env.local
+.env.*.local
+
 # Jest coverage output
 coverage/
 

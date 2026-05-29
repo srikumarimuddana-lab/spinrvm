@@ -193,4 +193,43 @@ describe('useRiderSocket — reconnect state preservation (P1-6)', () => {
     // After timer, reconnect attempted
     expect(instances.length).toBeGreaterThanOrEqual(2);
   });
+
+  it('opens only one socket when connect races during the token-refresh await', async () => {
+    // connect() awaits ensureFreshToken() before creating the socket. The
+    // generation guard must ensure a second trigger during that await window
+    // (e.g. AppState foreground while the mount effect is still refreshing)
+    // does not open a duplicate socket. We make the refresh resolve on a
+    // controllable promise so we can fire a second connect mid-await.
+    const { ensureFreshToken } = require('@shared/api/client');
+    let releaseRefresh: () => void = () => {};
+    (ensureFreshToken as jest.Mock).mockImplementationOnce(
+      () => new Promise<void>((res) => { releaseRefresh = res; }),
+    );
+
+    // Grab the AppState 'active' callback so we can simulate a foreground event.
+    const { AppState } = require('react-native');
+    const addListener = AppState.addEventListener as jest.Mock;
+
+    renderHook(() => useRiderSocket());
+    // Mount effect's connect() is now parked on the pending ensureFreshToken.
+    const appStateCb = addListener.mock.calls.at(-1)?.[1] as ((s: string) => void) | undefined;
+
+    // Fire a foreground event mid-await — this triggers a second connect().
+    await act(async () => {
+      appStateCb?.('active');
+    });
+
+    // Release the parked refresh so both connect() attempts resume.
+    await act(async () => {
+      releaseRefresh();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Exactly one socket — the superseded attempt aborted at the gen check.
+    expect(instances).toHaveLength(1);
+
+    // Reset for other tests.
+    (ensureFreshToken as jest.Mock).mockResolvedValue(undefined);
+  });
 });

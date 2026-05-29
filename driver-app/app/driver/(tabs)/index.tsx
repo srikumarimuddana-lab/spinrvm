@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { View, Text, StyleSheet, Platform, Linking, Animated, TouchableOpacity, ActivityIndicator, AppState } from 'react-native';
-import MapView, { Marker, Polyline, Heatmap, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Marker, Polyline, Polygon, Heatmap, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -719,6 +719,23 @@ function DriverDashboard() {
                 );
               })()}
             </React.Fragment>
+          );
+        })()}
+
+        {/* Service area boundary polygon */}
+        {(() => {
+          const rawPoly: Array<{ lat: number; lng: number }> | null | undefined =
+            rideState === 'ride_offered'
+              ? (incomingRide as any)?.service_area_polygon
+              : (activeRide as any)?.service_area_polygon;
+          if (!rawPoly || rawPoly.length < 3) return null;
+          return (
+            <Polygon
+              coordinates={rawPoly.map(p => ({ latitude: p.lat, longitude: p.lng }))}
+              strokeColor="rgba(0,212,170,0.65)"
+              fillColor="rgba(0,212,170,0.07)"
+              strokeWidth={2}
+            />
           );
         })()}
 

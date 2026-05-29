@@ -1156,10 +1156,20 @@ async def estimate_ride(
     # This keeps Redis work O(nearby candidates) rather than O(all online
     # drivers globally) — list_present_ids() uses SCAN which is documented
     # for sweepers/admin dashboards, not per-request hot paths.
+    # Sort by went_online_at DESC so recently-toggled-online drivers appear
+    # first in the page. Ghost drivers (is_available=True in DB but no Redis
+    # presence key) tend to have stale went_online_at values and naturally
+    # fall toward the end of the result, reducing — though not eliminating —
+    # the chance that ghosts fill the cap before real drivers are included.
+    # Full elimination requires either a geo-index (query by radius first) or
+    # a background sweeper that writes is_available=False back to DB on TTL
+    # expiry; tracked as a follow-up task.
     all_drivers = await db_supabase.get_rows(
         "drivers",
         {"is_online": True, "is_available": True},
         limit=200,
+        order="went_online_at",
+        desc=True,
     )
     try:
         try:

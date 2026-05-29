@@ -166,13 +166,13 @@ function DriverDashboard() {
     }
   }, [location]);
 
-  // Force MapViewDirections to re-compute by changing a key prop. The bare
-  // 30s ticker was the dominant Maps-API burn on long trips; bumped to 60s
-  // and gated on driver movement (>= 100 m since last fetch) with a 5-min
-  // safety floor so traffic shifts still surface for a stationary driver.
+  // Force MapViewDirections to re-compute by changing a key prop. Only
+  // runs for navigating_to_pickup (driver → pickup needs live Directions).
+  // ride_offered and trip_in_progress use the saved planned_route_polyline
+  // instead — zero Directions API calls for those phases.
   const [directionsKey, setDirectionsKey] = useState(0);
   useEffect(() => {
-    if (rideState !== 'navigating_to_pickup' && rideState !== 'trip_in_progress') return;
+    if (rideState !== 'navigating_to_pickup') return;
     const interval = setInterval(() => {
       const now = Date.now();
       const last = lastDirectionsFetchRef.current;
@@ -249,16 +249,43 @@ function DriverDashboard() {
   }, [rideState]);
 
   // Clear route + ETA when ride state changes (new phase = new route).
+  // For ride_offered and trip_in_progress, reuse the saved polyline from
+  // ride creation instead of calling the Directions API — the planned
+  // route (pickup → dropoff) is already computed and stored server-side.
+  // This eliminates ~90% of Directions API calls during active rides.
   // Additionally, when transitioning back to idle (ride cancelled / completed),
   // re-center the map on the driver's current location — otherwise the map
   // stays framed on the pickup/dropoff bounding box from the previous ride
   // and the driver marker ends up off-screen.
   useEffect(() => {
-    setRouteCoords([]);
     setDirectionsFailed(false);
     setRouteEtaMinutes(null);
     setRouteDistanceKm(null);
     setDirectionsKey(0);
+
+    const savedPoly = (ride as any)?.planned_route_polyline || (ride as any)?.route_polyline;
+    const canUseSaved = (rideState === 'ride_offered' || rideState === 'trip_in_progress')
+      && Array.isArray(savedPoly) && savedPoly.length >= 2;
+
+    if (canUseSaved) {
+      const coords = savedPoly
+        .filter((p: any) => Array.isArray(p) && p.length >= 2)
+        .map((p: any) => ({ latitude: p[0], longitude: p[1] }));
+      if (coords.length >= 2) {
+        setRouteCoords(coords);
+        if (mapRef.current) {
+          mapRef.current.fitToCoordinates(coords, {
+            edgePadding: { top: 100, right: 60, bottom: 300, left: 60 },
+            animated: true,
+          });
+        }
+      } else {
+        setRouteCoords([]);
+      }
+    } else {
+      setRouteCoords([]);
+    }
+
     if (rideState === 'idle' && mapRef.current && location?.coords) {
       mapRef.current.animateToRegion(
         {
@@ -553,18 +580,18 @@ function DriverDashboard() {
         {mapMarkers}
 
         {/* Route polyline.
-            - ride_offered: pickup → dropoff, so the driver previews the
-              actual trip they'd be accepting.
-            - active phases: driver → pickup, then pickup → dropoff once
-              the trip starts.
-            Snap the driver's GPS to a 4-decimal grid (~11 m) so small
-            jitter doesn't refetch the Directions API and flicker the
-            polyline every render. */}
-        {GOOGLE_MAPS_API_KEY && ride && (rideState === 'ride_offered' || rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup' || rideState === 'trip_in_progress') && (() => {
-          // Round to 3 decimals (~110 m) so micro-movements during normal
-          // driving don't churn the origin prop and trigger a Directions
-          // refetch on every GPS tick. The interval below + onReady record
-          // are the canonical refetch triggers.
+            - ride_offered / trip_in_progress: reuse planned_route_polyline
+              saved at ride creation (pickup → dropoff). Zero API calls.
+            - navigating_to_pickup / arrived_at_pickup: driver → pickup,
+              needs a live Directions call (not in saved polyline).
+            Snap the driver's GPS to a 3-decimal grid (~110 m) so small
+            jitter doesn't refetch the Directions API. */}
+        {ride && (rideState === 'ride_offered' || rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup' || rideState === 'trip_in_progress') && (() => {
+          const savedPoly = (ride as any)?.planned_route_polyline || (ride as any)?.route_polyline;
+          const hasSavedRoute = Array.isArray(savedPoly) && savedPoly.length >= 2;
+          const useSavedRoute = hasSavedRoute && (rideState === 'ride_offered' || rideState === 'trip_in_progress');
+          const needsDirections = GOOGLE_MAPS_API_KEY && !useSavedRoute;
+
           const driverLat = location?.coords?.latitude != null ? Math.round(location.coords.latitude * 1000) / 1000 : null;
           const driverLng = location?.coords?.longitude != null ? Math.round(location.coords.longitude * 1000) / 1000 : null;
 
@@ -586,10 +613,8 @@ function DriverDashboard() {
           }
 
           return (
-            // Key the entire route subtree on rideState so Android's native
-            // map layer fully drops the old polyline (trace artifact) when
-            // the ride ends or transitions to a new phase.
             <React.Fragment key={`route-${rideState}`}>
+              {needsDirections && (
               <MapViewDirections
                 key={directionsKey}
                 origin={origin}
@@ -625,6 +650,7 @@ function DriverDashboard() {
                   }
                 }}
               />
+              )}
               {/* Fallback polyline: a dashed straight line drawn when the
                   Directions API can't return a route (no network, quota
                   exceeded, invalid key). Better than a blank map — the

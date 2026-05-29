@@ -573,7 +573,7 @@ async def websocket_endpoint(
                         continue
 
                     await manager.update_driver_location(driver_id, lat, lng)
-                    await db_supabase.update_driver_location(driver_id, lat, lng)
+                    await db_supabase.update_driver_location(driver_id, lat, lng, heading=data.get("heading"))
                     # Location pings are an even stronger liveness signal
                     # than pongs — fresh GPS proves the app is running and
                     # foregrounded, not just that TCP is open.
@@ -773,7 +773,9 @@ async def websocket_endpoint(
                         last = docs[-1]
                         if last.get("lat") is not None and last.get("lng") is not None:
                             await manager.update_driver_location(driver_id, last["lat"], last["lng"])
-                            await db_supabase.update_driver_location(driver_id, last["lat"], last["lng"])
+                            await db_supabase.update_driver_location(
+                                driver_id, last["lat"], last["lng"], heading=last.get("heading")
+                            )
                             await mark_present(driver_id)
                     await websocket.send_json({"type": "location_batch_ack", "count": len(docs)})
 

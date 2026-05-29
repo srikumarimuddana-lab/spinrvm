@@ -568,14 +568,14 @@ function createStyles(colors: ThemeColors) {
       left: 0,
       right: 0,
       zIndex: 100,
+      backgroundColor: colors.surface,
+      borderTopLeftRadius: 24,
+      borderTopRightRadius: 24,
     },
     dragHandleContainer: {
       alignItems: 'center',
       paddingTop: 8,
       paddingBottom: 4,
-      backgroundColor: colors.surface,
-      borderTopLeftRadius: 24,
-      borderTopRightRadius: 24,
     },
     dragHandle: {
       width: 36,

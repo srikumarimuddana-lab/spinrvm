@@ -1212,6 +1212,51 @@ async def _send_expo_push(token: str, title: str, body: str, data: Dict[str, str
         return False
 
 
+# Real-time / interactive push types that should NOT land in the persistent
+# in-app inbox. Ride offers are time-boxed (~15s) and meaningless once stale;
+# the dispatch payload is data-only and rendered by Notifee on the device.
+# Everything else (ride status, receipts, payouts, promos, document expiry,
+# safety) is user-facing history worth keeping.
+_EPHEMERAL_PUSH_TYPES = {"new_ride_assignment", "new_ride_offer", "ride_offer"}
+
+
+async def _persist_inbox_notification(
+    user_id: str,
+    title: str,
+    body: str,
+    data: Dict[str, str] | None,
+) -> None:
+    """Persist a push to the `notifications` table so it shows in the in-app
+    inbox (the bell icon) for later viewing. Best-effort: a failure here must
+    not block push delivery, but it's logged loudly (not swallowed) so a broken
+    inbox surfaces rather than silently leaving the bell empty.
+    """
+    notif_type = (data or {}).get("type", "general")
+    if notif_type in _EPHEMERAL_PUSH_TYPES:
+        return
+    try:
+        await db_supabase.insert_one(
+            "notifications",
+            {
+                "id": str(uuid.uuid4()),
+                "user_id": user_id,
+                "title": title,
+                "body": body,
+                "type": notif_type,
+                "data": dict(data or {}),
+                "is_read": False,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+    except Exception:
+        logger.error(
+            "Failed to persist notification to inbox for user %s (type=%s)",
+            user_id,
+            notif_type,
+            exc_info=True,
+        )
+
+
 async def send_push_notification(
     user_id: str,
     title: str,
@@ -1237,6 +1282,10 @@ async def send_push_notification(
             return True
         except Exception:
             logger.error("push enqueue failed, falling back to direct send", exc_info=True)
+
+    # Save to the in-app inbox before attempting delivery, so the bell icon
+    # reflects the message even when the device has no push token registered.
+    await _persist_inbox_notification(user_id, title, body, data)
 
     user = await db.find_one("users", {"id": user_id})
     if not user or not user.get("fcm_token"):

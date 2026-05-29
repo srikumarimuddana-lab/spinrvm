@@ -419,3 +419,82 @@ class TestNativePushDelivery:
         msg_arg = mock_messaging.Message.call_args
         assert msg_arg is not None
         assert msg_arg.kwargs.get("token") == android_token or (msg_arg.args and android_token in str(msg_arg.args))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Inbox persistence — send_push_notification mirrors user-facing pushes into
+# the `notifications` table so the in-app bell icon populates for later viewing.
+# Code under test: backend/features.py::_persist_inbox_notification
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+class TestInboxPersistence:
+    async def test_normal_push_persists_to_inbox(self):
+        """A user-facing push is written to the notifications table even when
+        the device has no token on file (so the inbox is the source of truth)."""
+        inserted: list = []
+        with (
+            patch(
+                "backend.features.db_supabase.insert_one",
+                AsyncMock(side_effect=lambda table, row: inserted.append((table, row))),
+            ),
+            patch("backend.features.db_supabase.find_one", AsyncMock(return_value=None)),
+        ):
+            from backend import features as features_mod
+
+            result = await features_mod.send_push_notification(
+                user_id=USER_ID,
+                title="Receipt ready",
+                body="Your trip receipt is ready",
+                data={"type": "receipt"},
+            )
+
+        assert result is False  # no token -> delivery dropped
+        assert len(inserted) == 1  # ...but inbox row still written
+        table, row = inserted[0]
+        assert table == "notifications"
+        assert row["user_id"] == USER_ID
+        assert row["type"] == "receipt"
+        assert row["is_read"] is False
+
+    async def test_ephemeral_ride_offer_not_persisted(self):
+        """Time-boxed dispatch offers must not clutter the persistent inbox."""
+        inserted: list = []
+        with (
+            patch(
+                "backend.features.db_supabase.insert_one",
+                AsyncMock(side_effect=lambda table, row: inserted.append(row)),
+            ),
+            patch("backend.features.db_supabase.find_one", AsyncMock(return_value=None)),
+        ):
+            from backend import features as features_mod
+
+            await features_mod.send_push_notification(
+                user_id=USER_ID,
+                title="New ride offer",
+                body="Pickup 2 min away",
+                data={"type": "new_ride_offer"},
+            )
+
+        assert inserted == []
+
+    async def test_inbox_failure_does_not_block_delivery(self):
+        """A failed inbox write is logged, not raised — push delivery proceeds."""
+        with (
+            patch(
+                "backend.features.db_supabase.insert_one",
+                AsyncMock(side_effect=RuntimeError("db down")),
+            ),
+            patch("backend.features.db_supabase.find_one", AsyncMock(return_value=None)),
+        ):
+            from backend import features as features_mod
+
+            result = await features_mod.send_push_notification(
+                user_id=USER_ID,
+                title="Promo",
+                body="20% off your next ride",
+                data={"type": "promo"},
+            )
+
+        assert result is False  # no exception bubbled up

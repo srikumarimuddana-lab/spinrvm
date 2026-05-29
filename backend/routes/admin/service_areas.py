@@ -366,6 +366,16 @@ async def admin_create_service_area(area: ServiceAreaCreateRequest, admin: dict 
     effective_is_airport = bool(coerced.get("is_airport", area.is_airport))
     effective_airport_fee = coerced.get("airport_fee", area.airport_fee)
     surge_active = area.surge_active if area.surge_active is not None else (area.surge_enabled or False)
+    # Derive the surge gate from any explicit active-surge intent, not only the
+    # new surge_enabled flag. Legacy admin/API clients that still send
+    # surge_active=true (or a >1.0 multiplier) without surge_enabled would
+    # otherwise create an area with surge_enabled=false, and fares now gate on
+    # surge_enabled — silently producing a non-surging area despite the request.
+    surge_enabled = (
+        bool(area.surge_enabled)
+        or bool(area.surge_active)
+        or (area.surge_multiplier is not None and area.surge_multiplier > 1.0)
+    )
     doc = {
         "id": str(uuid.uuid4()),
         "name": area.name,
@@ -375,8 +385,8 @@ async def admin_create_service_area(area: ServiceAreaCreateRequest, admin: dict 
         "parent_service_area_id": area.parent_service_area_id,
         "is_airport": effective_is_airport,
         "airport_fee": effective_airport_fee,
-        "surge_enabled": bool(area.surge_enabled),
-        "surge_active": surge_active if area.surge_enabled else False,
+        "surge_enabled": surge_enabled,
+        "surge_active": surge_active if surge_enabled else False,
         "surge_multiplier": area.surge_multiplier,
         "gst_enabled": area.gst_enabled,
         "gst_rate": area.gst_rate,

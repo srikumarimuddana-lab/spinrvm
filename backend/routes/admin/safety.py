@@ -88,7 +88,7 @@ async def admin_list_safety_incidents(
         )
     except Exception:
         logger.error("safety_incidents list query failed", exc_info=True)
-        raise HTTPException(status_code=503, detail="Could not load safety queue.")
+        raise HTTPException(status_code=503, detail="Could not load safety queue.") from None
 
     page = rows[offset : offset + limit]
 
@@ -242,7 +242,7 @@ async def admin_update_safety_incident(
         await db_supabase.update_one("safety_incidents", {"id": incident_id}, updates)
     except Exception:
         logger.error("safety_incident update failed", exc_info=True, extra={"incident_id": incident_id})
-        raise HTTPException(status_code=503, detail="Could not update incident.")
+        raise HTTPException(status_code=503, detail="Could not update incident.") from None
 
     # Audit log — never persist the description here (PII), only the
     # field-level diff so we can answer "who set this to closed".

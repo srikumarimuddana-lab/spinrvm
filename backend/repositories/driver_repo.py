@@ -137,24 +137,34 @@ async def set_driver_available(driver_id: str, available: bool = True, total_rid
 
     def _update():
         payload: Dict[str, Any] = {"is_available": available}
+
+        # Enforce the invariant is_available ⇒ is_online. is_online is
+        # driver-toggled, so we must NOT flip it on here; instead, when asked
+        # to make a driver available we clamp to their current online state —
+        # an offline driver can never be marked available. Releasing
+        # (available=False) is always safe and needs no read. A read is needed
+        # when we're making the driver available or incrementing total_rides.
+        needs_read = available or total_rides_inc != 0
+        cur_val = 0
+        if needs_read:
+            cur = supabase.table("drivers").select("total_rides, is_online").eq("id", driver_id).execute()
+            cur_data = _rows_from_res(cur)
+            row = cur_data[0] if cur_data else {}
+            cur_val = row.get("total_rides", 0) or 0
+            if available and not row.get("is_online", False):
+                payload["is_available"] = False
+
+        if total_rides_inc != 0:
+            payload["total_rides"] = cur_val + total_rides_inc
+
         logger.info(
             f"[GO-ONLINE] set_driver_available CALLED driver_id={driver_id} "
             f"available={available} total_rides_inc={total_rides_inc} "
-            f"payload={payload} (NOTE: only writes is_available, drops any "
-            f"other fields the caller may have passed)"
+            f"payload={payload} (is_available clamped to is_online; is_online "
+            f"is never written here)"
         )
-        if total_rides_inc == 0:
-            res = supabase.table("drivers").update(payload).eq("id", driver_id).execute()
-            logger.info(f"[GO-ONLINE] set_driver_available executed, res.data={getattr(res, 'data', None)}")
-            return _single_row_from_res(res)
-
-        # If increment needed, read then write (simulated atomic)
-        cur = supabase.table("drivers").select("total_rides").eq("id", driver_id).execute()
-        cur_data = _rows_from_res(cur)
-        cur_val = cur_data[0].get("total_rides", 0) if cur_data else 0
-
-        payload["total_rides"] = cur_val + total_rides_inc
         res = supabase.table("drivers").update(payload).eq("id", driver_id).execute()
+        logger.info(f"[GO-ONLINE] set_driver_available executed, res.data={getattr(res, 'data', None)}")
         return _single_row_from_res(res)
 
     result = await run_sync(_update)

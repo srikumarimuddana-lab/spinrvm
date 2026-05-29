@@ -628,7 +628,13 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
             break
         if await db_supabase.claim_driver_atomic(driver["id"]):
             fresh = await db_supabase.get_driver_by_id(driver["id"])
-            if fresh and fresh.get("is_online"):
+            # Revalidate the FULL eligibility set on the freshly-read row, not
+            # just is_online. claim_driver_atomic only guards id + is_available,
+            # so an admin who suspended the driver or flipped them back to
+            # needs_review between the candidate read and the claim would
+            # otherwise still get offered — the exact stale-status case the
+            # candidate filter (is_verified + status='active') is meant to stop.
+            if fresh and fresh.get("is_online") and fresh.get("is_verified") and fresh.get("status") == "active":
                 claimed_drivers.append((fresh, eta_sec))
             else:
                 await db_supabase.set_driver_available(driver["id"], True)
@@ -3154,24 +3160,28 @@ async def cancel_ride_rider(
         )
 
     driver_id = ride.get("driver_id")
-    settings = await get_app_settings()
-    area = None
-    if ride.get("service_area_id"):
-        area = await db_supabase.find_one("service_areas", {"id": ride["service_area_id"]})
-    charged_admin, charged_driver = calculate_cancellation_fee(ride, settings, area)
-
-    total_cancel_fee = _round(charged_admin + charged_driver)
 
     # The cancel is already persisted by the atomic claim above, so the
     # assigned driver MUST be released, transitioned back to Period 1, and
-    # notified regardless of what happens while charging the fee. If a wallet
-    # write or the driver payout raises here, we cannot exit before the
-    # set_driver_available / insurance / notification cleanup below — that
-    # would strand the driver as unavailable and uninformed on a ride that is
-    # already cancelled. So the fee writes are best-effort after the claim:
-    # surface the failure loudly (error + traceback, per repo policy) for
-    # reconciliation, then fall through to driver cleanup.
+    # notified regardless of what happens while computing or charging the fee.
+    # EVERYTHING from the settings/area lookup through the fee writes is
+    # best-effort after the claim: the settings read, the service-area read,
+    # the fee calculation, and the wallet/driver-payout writes can each raise,
+    # and if any does we must not exit before the set_driver_available /
+    # insurance / notification cleanup below — that would strand the driver as
+    # unavailable and uninformed on a ride that is already cancelled. Surface
+    # failures loudly (error + traceback, per repo policy) for reconciliation,
+    # then fall through to driver cleanup. charged_* default to 0 so a failed
+    # fee computation records no fee rather than a stale/partial one.
+    charged_admin = charged_driver = Decimal("0")
     try:
+        settings = await get_app_settings()
+        area = None
+        if ride.get("service_area_id"):
+            area = await db_supabase.find_one("service_areas", {"id": ride["service_area_id"]})
+        charged_admin, charged_driver = calculate_cancellation_fee(ride, settings, area)
+        total_cancel_fee = _round(charged_admin + charged_driver)
+
         # Charge the rider the cancellation fee before paying the driver.
         if total_cancel_fee > 0:
             payment_method = (ride.get("payment_method") or "card").lower()

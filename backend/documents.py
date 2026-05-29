@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 try:
     from . import db_supabase
-    from .dependencies import get_current_user
+    from .dependencies import get_admin_user, get_current_user
     from .supabase_client import supabase
 except ImportError:
     import db_supabase
@@ -94,7 +94,11 @@ def _validate_file_type(content: bytes, declared_type: str) -> None:
 # Routers
 # Routers
 documents_router = APIRouter(prefix="/drivers", tags=["Driver Documents"])
-admin_documents_router = APIRouter(prefix="/documents", tags=["Admin Documents"])
+admin_documents_router = APIRouter(
+    prefix="/documents",
+    tags=["Admin Documents"],
+    dependencies=[Depends(get_admin_user)],
+)
 
 # --- Models ---
 
@@ -525,12 +529,23 @@ async def link_driver_document(doc_data: LinkDocumentRequest, current_user: dict
 @documents_router.post("/documents/upload")
 async def upload_driver_document(
     file: UploadFile = File(...),
-    driver_id: str = Form(...),
     requirement_id: str = Form(...),
     side: Optional[str] = Form(None),  # 'front' or 'back'
     expiry_date: Optional[str] = Form(None),
+    current_user: dict = Depends(get_current_user),
 ):
-    """Upload a specific document linked to a requirement."""
+    """Upload a specific document linked to a requirement.
+
+    driver_id is derived from the authenticated user — clients must not
+    supply it. Accepting a caller-supplied driver_id would allow any
+    authenticated user to attach documents to arbitrary driver accounts.
+    """
+    drv_rows = await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
+    drv_profile = drv_rows[0] if drv_rows else None
+    if not drv_profile:
+        raise HTTPException(status_code=404, detail="Driver profile not found")
+    driver_id = drv_profile["id"]
+
     # storage logic
     url = await save_upload(file)
 
@@ -541,7 +556,7 @@ async def upload_driver_document(
     if not req:
         area_req = None
         if driver_id:
-            drv = await db_supabase.get_driver_by_id(driver_id)
+            drv = drv_profile
             if drv and drv.get("service_area_id"):
                 area = (lambda _r: _r[0] if _r else None)(
                     await db_supabase.get_rows("service_areas", {"id": drv["service_area_id"]}, limit=1)

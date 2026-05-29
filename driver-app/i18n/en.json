@@ -60,6 +60,7 @@
         "rider": "Rider",
         "verifyRiderPin": "Verify Rider's PIN",
         "askRiderForCode": "Ask rider for their 4-digit code",
+        "incorrectPin": "Incorrect PIN. Ask the rider to read it again.",
         "startWithoutPin": "Start Without PIN",
         "navigateToPickup": "Navigate to Pickup",
         "arrivedAtPickup": "I've Arrived at Pickup",

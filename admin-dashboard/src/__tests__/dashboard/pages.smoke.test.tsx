@@ -34,15 +34,19 @@ vi.mock("next/image", () => ({
   default: (props: React.ImgHTMLAttributes<HTMLImageElement>) => <img {...props} />,
 }));
 
-vi.mock("@/store/authStore", () => ({
-  useAuthStore: () => ({
+vi.mock("@/store/authStore", () => {
+  const state = {
     token: "fake-token",
     user: { id: "admin-001", email: "admin@spinr.ca", role: "super_admin", modules: ["dashboard"] },
     setToken: vi.fn(),
     setUser: vi.fn(),
     logout: vi.fn(),
-  }),
-}));
+  };
+  return {
+    useAuthStore: (selector?: (s: typeof state) => unknown) =>
+      typeof selector === "function" ? selector(state) : state,
+  };
+});
 
 // Stub every API function to avoid real network calls.
 // importOriginal enumerates the real module's exports so Vitest 4 strict-ESM

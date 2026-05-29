@@ -487,6 +487,20 @@ export default function RideDetailScreen() {
                         })()}
                     </View>
                 </View>
+                {isCompleted && (
+                    <TouchableOpacity
+                        style={styles.foundItemBtn}
+                        onPress={() => router.push({
+                            pathname: '/driver/lost-and-found-chat',
+                            params: { rideId: id },
+                        } as any)}
+                        activeOpacity={0.7}
+                    >
+                        <Ionicons name="bag-handle-outline" size={18} color="#F97316" />
+                        <Text style={styles.foundItemText}>Found an item on this ride?</Text>
+                        <Ionicons name="chevron-forward" size={16} color="#F97316" />
+                    </TouchableOpacity>
+                )}
             </ScrollView>
         </View>
     );
@@ -495,6 +509,23 @@ export default function RideDetailScreen() {
 function createStyles(colors: ThemeColors) {
     return StyleSheet.create({
         container: { flex: 1, backgroundColor: colors.background },
+        foundItemBtn: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 10,
+            margin: 16,
+            padding: 14,
+            backgroundColor: 'rgba(249, 115, 22, 0.08)',
+            borderRadius: 14,
+            borderWidth: 1,
+            borderColor: 'rgba(249, 115, 22, 0.3)',
+        },
+        foundItemText: {
+            flex: 1,
+            fontSize: 14,
+            fontFamily: 'PlusJakartaSans_600SemiBold',
+            color: '#F97316',
+        },
         mapContainer: { height: 220, position: 'relative' },
         map: { ...StyleSheet.absoluteFill },
         backBtn: {

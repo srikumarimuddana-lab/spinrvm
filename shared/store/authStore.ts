@@ -155,6 +155,7 @@ export interface User {
   created_at: string;
   profile_complete: boolean;
   is_driver?: boolean;
+  is_rider?: boolean;
   profile_image?: string;  // Base64 data URI
   profile_image_status?: 'pending_review' | 'approved' | 'rejected' | null;
   rating?: number;

@@ -4546,7 +4546,9 @@ async def rider_report_lost_item(
         "id": str(uuid.uuid4()),
         "ride_id": ride_id,
         "reporter_id": current_user["id"],
+        "rider_user_id": current_user["id"],
         "driver_id": driver_id,
+        "reporter_type": "rider",
         "item_description": req.item_description,
         "item_category": category,
         "status": "reported",
@@ -4560,15 +4562,12 @@ async def rider_report_lost_item(
         if driver and driver.get("user_id"):
             driver_user = await db_supabase.get_user_by_id(driver["user_id"])
             if driver_user:
-                try:
-                    from ..features import send_push_notification
-                except ImportError:
-                    from features import send_push_notification  # type: ignore
                 await send_push_notification(
                     driver_user["id"],
                     "Lost Item Report",
                     f"A rider reported a lost item: {req.item_description}. Please check your vehicle.",
-                    {"type": "lost_and_found", "ride_id": ride_id},
+                    {"type": "lost_and_found", "case_id": item["id"], "ride_id": ride_id},
+                    target_app="driver",
                 )
                 await db_supabase.update_lost_and_found(
                     item["id"],

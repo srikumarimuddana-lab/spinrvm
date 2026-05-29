@@ -472,7 +472,21 @@ async def admin_list_lost_and_found(
     return items
 
 
-_VALID_STATUSES = frozenset({"reported", "driver_notified", "found", "returned", "unclaimed", "resolved", "unresolved"})
+_VALID_STATUSES = frozenset(
+    {
+        "reported",
+        "driver_notified",
+        "driver_found",
+        "admin_created",
+        "found",
+        "not_found",
+        "returned",
+        "unclaimed",
+        "resolved",
+        "unresolved",
+        "closed",
+    }
+)
 
 
 @router.put("/lost-and-found/{item_id}")

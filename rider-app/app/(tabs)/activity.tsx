@@ -290,14 +290,6 @@ export default function ActivityScreen() {
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
         <Text style={styles.title}>{t('activity.title')}</Text>
-        <TouchableOpacity
-          style={styles.filterIcon}
-          accessibilityRole="button"
-          accessibilityLabel="Filter rides"
-          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-        >
-          <Ionicons name="options-outline" size={24} color={colors.text} />
-        </TouchableOpacity>
       </View>
 
       <View style={styles.tabRow} accessibilityRole="tablist">
@@ -452,7 +444,6 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
     paddingHorizontal: 24, paddingVertical: 16,
   },
   title: { fontSize: 28, fontFamily: 'PlusJakartaSans_700Bold', color: colors.text },
-  filterIcon: { padding: 4 },
   tabRow: {
     flexDirection: 'row',
     paddingHorizontal: 20,

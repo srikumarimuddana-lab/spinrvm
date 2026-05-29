@@ -302,6 +302,8 @@ async def list_messages(
     await _require_participant(case_id, current_user["id"], driver["id"] if driver else None)
 
     filters: dict = {"lost_and_found_id": case_id}
+    if before:
+        filters["created_at"] = {"$lt": before}
     # Fetch newest `limit` messages, then reverse so clients receive them
     # in ascending (oldest-first) order for display.
     rows = await db_supabase.get_rows(
@@ -328,7 +330,7 @@ async def send_message(
     driver = await _driver_for_user(user_id)
     case = await _require_participant(case_id, user_id, driver["id"] if driver else None)
 
-    if case.get("status") in ("not_found", "returned", "resolved", "closed"):
+    if case.get("status") in ("not_found", "returned", "resolved", "unresolved", "closed"):
         raise HTTPException(status_code=400, detail="This case is closed")
 
     is_driver_sender = driver and case.get("driver_id") == driver["id"]

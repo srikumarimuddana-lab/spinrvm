@@ -49,7 +49,7 @@ const STATUS_LABELS: Record<string, string> = {
   admin_created: 'Case opened by support',
 };
 
-const CLOSED_STATUSES = new Set(['not_found', 'returned', 'resolved', 'closed']);
+const CLOSED_STATUSES = new Set(['not_found', 'returned', 'resolved', 'unresolved', 'closed']);
 
 export default function LostAndFoundChatScreen() {
   const router = useRouter();

@@ -49,26 +49,28 @@ import Toast from '../components/Toast';
 
 
 function routeFromNotificationData(data: Record<string, string> | undefined) {
-  if (!data?.type || !data?.ride_id) return;
-  const { type, ride_id } = data;
+  if (!data?.type) return;
+  const { type, ride_id, case_id } = data;
   switch (type) {
     case 'driver_accepted':
     case 'driver_arrived':
-      router.push({ pathname: '/driver-arriving', params: { rideId: ride_id } } as any);
+      if (ride_id) router.push({ pathname: '/driver-arriving', params: { rideId: ride_id } } as any);
       break;
     case 'ride_started':
-      router.push({ pathname: '/ride-in-progress', params: { rideId: ride_id } } as any);
+      if (ride_id) router.push({ pathname: '/ride-in-progress', params: { rideId: ride_id } } as any);
       break;
     case 'ride_completed':
-      router.push({ pathname: '/ride-completed', params: { rideId: ride_id } } as any);
+      if (ride_id) router.push({ pathname: '/ride-completed', params: { rideId: ride_id } } as any);
       break;
     case 'ride_cancelled':
       router.replace('/(tabs)' as any);
       break;
     case 'chat_message':
-      if (data?.ride_id) {
-        router.push({ pathname: '/chat-driver', params: { rideId: ride_id } } as any);
-      }
+      if (ride_id) router.push({ pathname: '/chat-driver', params: { rideId: ride_id } } as any);
+      break;
+    case 'lost_and_found':
+    case 'lost_and_found_message':
+      if (case_id) router.push({ pathname: '/lost-and-found-chat', params: { caseId: case_id } } as any);
       break;
     default:
       break;
@@ -609,6 +611,8 @@ function RootLayoutInner({
             <Stack.Screen name="work-profile" />
             <Stack.Screen name="work-allowance-request" />
             <Stack.Screen name="become-driver" />
+            <Stack.Screen name="lost-and-found" />
+            <Stack.Screen name="lost-and-found-chat" />
           </Stack>
           </MaybeStripeProvider>
           </TrackBaseUrlContext.Provider>

@@ -324,7 +324,9 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
       {/* ── Main card ───────────────────────────────────────── */}
       <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 12) + 10 }]}>
 
-        {/* ── Trip info row: earnings, distance, time ────── */}
+        {/* ── Trip info row: earnings, distance, time. Hidden while the PIN
+            keypad is up so verification is the focus. ────── */}
+        {rideState !== 'arrived_at_pickup' && (
         <View style={styles.tripInfoRow}>
           <View style={styles.tripInfoItem}>
             <Text style={styles.tripInfoValue}>${earnings.toFixed(2)}</Text>
@@ -347,6 +349,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
             <Text allowFontScaling={false} style={styles.tripInfoLabel}>{t('activeRide.estTime')}</Text>
           </View>
         </View>
+        )}
 
         {/* ── Rider info ─────────────────────────────────── */}
         <View style={styles.riderRow}>
@@ -372,7 +375,9 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
           </TouchableOpacity>
         </View>
 
-        {/* ── Route addresses ────────────────────────────── */}
+        {/* ── Route addresses. Hidden during PIN entry to keep the keypad
+            the hero; the full route returns once the trip starts. ────── */}
+        {rideState !== 'arrived_at_pickup' && (
         <View style={styles.routeCard}>
           <View style={styles.routeRow}>
             <View style={[styles.dot, { backgroundColor: colors.primary }]} />
@@ -392,6 +397,7 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
             </View>
           </View>
         </View>
+        )}
 
         {/* ── OTP section (arrived_at_pickup) ─────────────── */}
         {rideState === 'arrived_at_pickup' ? (

@@ -56,6 +56,14 @@ function routeFromNotificationData(data: Record<string, string> | undefined) {
     case 'driver_arrived':
       router.push({ pathname: '/driver-arriving', params: { rideId: ride_id } } as any);
       break;
+    case 'scheduled_ride_dispatched':
+      // A scheduled ride just went live: the dispatcher flipped it
+      // scheduled→searching and is now finding a driver. The rider app cleared
+      // its currentRide once /(tabs) reloaded (/rides/active excludes
+      // 'scheduled'), so route to the finding-driver screen, which fetches the
+      // ride by id and re-establishes the live connection.
+      router.push({ pathname: '/driver-arriving', params: { rideId: ride_id } } as any);
+      break;
     case 'ride_started':
       router.push({ pathname: '/ride-in-progress', params: { rideId: ride_id } } as any);
       break;
@@ -311,6 +319,21 @@ export default function RootLayout() {
             },
             trigger: null,
           }).catch(() => {});
+        }
+        return;
+      }
+
+      // Scheduled ride going live while the app is foregrounded. The rider's
+      // currentRide was cleared after booking (/rides/active excludes
+      // 'scheduled'), so proactively reload it and route to the finding-driver
+      // screen instead of leaving the rider stranded on home with only a banner.
+      if (remoteMessage?.data?.type === 'scheduled_ride_dispatched') {
+        const dispatchedRideId = remoteMessage?.data?.ride_id as string | undefined;
+        if (dispatchedRideId) {
+          useRideStore.getState().fetchRide(dispatchedRideId).catch((e) =>
+            console.warn('[Layout] fetchRide on scheduled dispatch failed:', e?.message ?? e),
+          );
+          router.push({ pathname: '/driver-arriving', params: { rideId: dispatchedRideId } } as any);
         }
         return;
       }

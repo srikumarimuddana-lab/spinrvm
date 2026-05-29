@@ -37,6 +37,34 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+async def _notify_schedule_delayed(ride_id: str, rider_id, ride: dict) -> None:
+    """Tell the rider their scheduled ride is waiting on their current trip.
+
+    De-duped via a Redis NX key (1h TTL) so a rider on a long trip isn't pinged
+    every 60-second dispatcher tick. Best-effort — a notification failure must
+    never break the retry loop.
+    """
+    if not rider_id:
+        return
+    try:
+        # redis_set_nx returns True only for the first caller within the TTL.
+        if not await redis_set_nx(f"spinr:sched_delay_notified:{ride_id}", "1", ttl=3600):
+            return
+    except Exception as dedup_err:
+        # Redis unavailable — fall through and notify (worst case: a duplicate
+        # push), rather than swallow the alert entirely.
+        logger.debug(f"scheduled dispatch: delay-notice dedup check failed for {ride_id}: {dedup_err}")
+    try:
+        await send_push_notification(
+            rider_id,
+            "Your scheduled ride is waiting",
+            "We'll start finding a driver as soon as your current trip ends.",
+            data={"type": "scheduled_ride_delayed", "ride_id": ride_id},
+        )
+    except Exception as e:
+        logger.warning(f"scheduled dispatch: delayed-notice push failed for {ride_id}: {e}")
+
+
 async def _dispatch_scheduled_ride(ride: dict):
     """Transition a scheduled ride from 'scheduled' to 'searching' and start driver matching.
 
@@ -52,20 +80,39 @@ async def _dispatch_scheduled_ride(ride: dict):
     try:
         now_iso = datetime.now(timezone.utc).isoformat()
         # Atomic claim: only the caller that flips scheduled→searching proceeds.
-        claimed = await db.update_one(
-            "rides",
-            {"id": ride_id, "status": "scheduled"},
-            {
-                "$set": {
-                    "status": "searching",
-                    "scheduled_dispatched": True,
-                    # Mark the moment dispatch actually began so downstream
-                    # latency metrics measure from real request time, not booking.
-                    "ride_requested_at": now_iso,
-                    "updated_at": now_iso,
-                }
-            },
-        )
+        try:
+            claimed = await db.update_one(
+                "rides",
+                {"id": ride_id, "status": "scheduled"},
+                {
+                    "$set": {
+                        "status": "searching",
+                        "scheduled_dispatched": True,
+                        # Mark the moment dispatch actually began so downstream
+                        # latency metrics measure from real request time, not booking.
+                        "ride_requested_at": now_iso,
+                        "updated_at": now_iso,
+                    }
+                },
+            )
+        except Exception as claim_exc:
+            # rides_one_active_per_rider (migration 53) is a partial unique
+            # index over the active statuses. 'scheduled' sits outside that set,
+            # so if the rider already has a live trip when their scheduled
+            # pickup time arrives, flipping to 'searching' collides with it and
+            # the UPDATE raises. That is an expected, recoverable conflict — not
+            # a dispatch failure: leave the ride in 'scheduled' so a later tick
+            # retries once the rider is free, and tell the rider once (Redis-
+            # deduped) so the delay isn't silent. Any other error bubbles up.
+            msg = str(claim_exc).lower()
+            if "rides_one_active_per_rider" in msg or "23505" in msg or "duplicate" in msg or "unique" in msg:
+                logger.warning(
+                    "scheduled dispatch deferred: rider has an active ride; "
+                    f"ride {ride_id} stays 'scheduled' for retry"
+                )
+                await _notify_schedule_delayed(ride_id, rider_id, ride)
+                return
+            raise
         if not claimed:
             # Another replica/tick won the claim, or the ride was cancelled or
             # already dispatched. Nothing to do.

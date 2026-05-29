@@ -11,6 +11,41 @@ import maplibregl from "maplibre-gl";
 export const MAP_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
 export const MAP_STYLE_POSITRON = "https://tiles.openfreemap.org/styles/positron";
 
+// Protomaps hosted basemap. The API key is a *public*, domain-restricted key
+// (like a Google Maps JS key) and is meant to ship in the browser, so it lives
+// in a NEXT_PUBLIC_ env var rather than the backend app_settings table.
+// The hosted style endpoint returns a full MapLibre style with the vector tile
+// source + glyphs/sprite already wired to the key, so we just hand MapLibre the
+// URL. Flavor is configurable (light / dark / white / grayscale / black).
+const PROTOMAPS_KEY = process.env.NEXT_PUBLIC_PROTOMAPS_API_KEY?.trim() || "";
+const PROTOMAPS_FLAVOR = process.env.NEXT_PUBLIC_PROTOMAPS_FLAVOR?.trim() || "light";
+
+/** Hosted Protomaps style URL for the given flavor, or null if no key is set. */
+export function protomapsStyleUrl(flavor: string = PROTOMAPS_FLAVOR): string | null {
+    if (!PROTOMAPS_KEY) return null;
+    return `https://api.protomaps.com/styles/v5/${flavor}/en.json?key=${PROTOMAPS_KEY}`;
+}
+
+/**
+ * Basemap style for the public ride-tracking page. Resolution order:
+ *   1. NEXT_PUBLIC_MAP_STYLE_URL — explicit style.json (e.g. a self-hosted
+ *      PMTiles server we stand up later; swapping providers is a pure env
+ *      change, no code edit).
+ *   2. Protomaps hosted (when NEXT_PUBLIC_PROTOMAPS_API_KEY is set).
+ *   3. OpenFreeMap (free, keyless, labeled vector tiles).
+ * Either way the rider gets a proper labeled basemap — never the raw OSM raster
+ * tiles, which OSM's tile-usage policy forbids for app use and which load
+ * blank/throttled in the field.
+ */
+export function trackBaseMapStyle(): string {
+    const override = process.env.NEXT_PUBLIC_MAP_STYLE_URL?.trim();
+    if (override) return override;
+    return protomapsStyleUrl() ?? MAP_STYLE_POSITRON;
+}
+
+/** Keyless fallback style, used if the primary style fails to load at runtime. */
+export const MAP_STYLE_FALLBACK = MAP_STYLE_POSITRON;
+
 // Saskatoon by default — Spinr is a Saskatchewan-first service, so maps
 // should land somewhere operational even before service areas load or
 // the user's geolocation resolves. MapLibre uses [lng, lat] ordering.

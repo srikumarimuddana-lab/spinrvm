@@ -89,6 +89,10 @@ async def wallet_pay_for_ride(
                 raise ValueError("insufficient_funds") from exc
             if "wallet not found" in msg:
                 raise ValueError("wallet_not_found") from exc
+            if "fare_underpaid" in msg:
+                raise ValueError("fare_underpaid") from exc
+            if "ride_not_payable" in msg:
+                raise ValueError("ride_not_payable") from exc
             raise
         data = getattr(res, "data", None)
         if data is None:

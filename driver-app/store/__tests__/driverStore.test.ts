@@ -387,11 +387,15 @@ describe('driverStore — ride state machine', () => {
   });
 
   test('fetchActiveRide transitions to navigating_to_pickup when status is driver_accepted', async () => {
-    // Pre-seed a stale incomingRide — the fetch should clear it.
+    // Start from idle. fetchActiveRide deliberately short-circuits when a live
+    // offer is counting down (rideState 'ride_offered' + incomingRide +
+    // countdownSeconds > 2) so a racing HTTP poll can't clobber a live WS
+    // offer — see the guard in fetchActiveRide. This test exercises the
+    // status→state mapping, so it must not pre-seed a protected live offer.
     useDriverStore.setState({
-      rideState: 'ride_offered',
-      incomingRide: makeMockRide(),
-      countdownSeconds: 10,
+      rideState: 'idle',
+      incomingRide: null,
+      countdownSeconds: 0,
     });
     mockApi.get.mockResolvedValueOnce(makeActiveRideResponse('driver_accepted') as any);
 

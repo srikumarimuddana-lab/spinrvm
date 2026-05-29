@@ -95,7 +95,7 @@ export const TripCompletedPanel: React.FC<TripCompletedPanelProps> = ({
 
         {/* Hero earnings */}
         <View style={styles.earningsHero}>
-          <Text style={styles.earningsHeroLabel}>YOUR EARNINGS</Text>
+          <Text style={styles.earningsHeroLabel}>{t('tripCompleted.yourEarnings')}</Text>
           <Text style={styles.earningsHeroAmount} allowFontScaling={false}>
             ${money(completedRide?.driver_earnings)}
           </Text>

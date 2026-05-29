@@ -90,7 +90,10 @@ describe('TripCompletedPanel', () => {
 
   it('shows fare breakdown labels', () => {
     const { getByText } = renderWithSafeArea(<TripCompletedPanel {...defaultProps} />);
-    expect(getByText('tripCompleted.baseFare')).toBeTruthy();
+    // The breakdown consolidates base/distance/time into a single "Ride Fare"
+    // line (rendered as "tripCompleted.rideFare (5.2 km)") to mirror exactly
+    // what the rider was charged.
+    expect(getByText(/tripCompleted\.rideFare/)).toBeTruthy();
     expect(getByText('tripCompleted.yourEarnings')).toBeTruthy();
   });
 

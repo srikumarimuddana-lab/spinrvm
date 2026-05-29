@@ -762,29 +762,20 @@ async def create_payment_sheet(
             detail="Payment processing is not configured. Please contact support.",
         )
 
-    # For ride payments the server computes the authoritative charge
-    # (grand_total + tip) rather than trusting the client `amount`, so the
-    # Google Pay / PaymentSheet path can never undercharge by omitting area
-    # fees or GST/PST. `amount` is advisory only when ride_id is present.
-    charge_amount = Decimal(str(body.amount))
+    # CS-002: For ride payments use the server-authoritative charge
+    # (grand_total + tip) rather than trusting body.amount. body.amount is
+    # advisory only — a client can send a lower value to underpay area fees,
+    # GST/PST, or tip. _authoritative_ride_charge enforces ownership (403 on
+    # rider mismatch) and falls back to total_fare for legacy rides predating
+    # grand_total. Non-ride PaymentSheet flows keep using body.amount.
     if body.ride_id:
-        ride = await db_supabase.get_ride(body.ride_id)
-        if not ride:
-            raise HTTPException(status_code=404, detail="Ride not found")
-        if ride.get("rider_id") != current_user["id"]:
-            raise HTTPException(status_code=403, detail="Not authorized to pay for this ride")
-        ride_fare = Decimal(str(ride.get("total_fare", 0)))
-        requested = Decimal(str(body.amount))
-        if requested != ride_fare:
-            raise PaymentException(
-                message=f"Payment amount {requested} does not match ride fare {ride_fare}",
-                message_key=ErrorKeys.RIDE_PRICE_MISMATCH,
-                action_hint="Refresh the fare estimate",
-            )
+        charge_amount = await _authoritative_ride_charge(body.ride_id, current_user["id"], body.tip_amount)
+    else:
+        charge_amount = Decimal(str(body.amount))
 
     try:
         customer_id = await get_or_create_stripe_customer(current_user["id"], stripe_secret)
-        amount_cents = dollars_to_cents(body.amount)
+        amount_cents = dollars_to_cents(charge_amount)
 
         # EphemeralKey lets the PaymentSheet modal manage the customer's
         # saved cards. api_version must match the version configured on the

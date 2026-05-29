@@ -136,6 +136,65 @@ def _token_version_mismatch(payload: dict, user_row: dict) -> bool:
     return claim < stored
 
 
+async def _verify_admin_payload(payload: dict) -> "dict | None":
+    """Full admin verification: aud, JTI revocation, staff active, token_version, idle timeout.
+
+    Returns the admin user dict on success. Returns None when the payload is not an admin
+    token. Raises HTTPException when the token looks admin but fails a security check.
+    Shared by the HTTP path (get_current_user) and the WebSocket auth path so the two
+    can never diverge.
+    """
+    _admin_roles = {"admin", "super_admin", "operations", "support", "finance", "custom"}
+    _token_aud = payload.get("aud")
+    # Admin token: aud == JWT_AUD_ADMIN, or (legacy) no aud + role/email present.
+    _is_admin_payload = _token_aud == JWT_AUD_ADMIN or (
+        _token_aud is None and payload.get("role") in _admin_roles and bool(payload.get("email"))
+    )
+    _expected_aud = JWT_AUD_ADMIN if _is_admin_payload else JWT_AUD_MOBILE
+    if _token_aud is not None and _token_aud != _expected_aud:
+        raise HTTPException(status_code=401, detail="ERR_TOKEN_AUDIENCE")
+    if not (_is_admin_payload and payload.get("role") in _admin_roles and payload.get("email")):
+        return None
+    user_id = payload["user_id"]
+    jti = payload.get("jti")
+    if jti and await redis_get(f"admin:revoked:{jti}"):
+        raise HTTPException(status_code=401, detail="ERR_TOKEN_REVOKED")
+    if user_id != "admin-001":
+        staff_rows = await db_supabase.get_rows("admin_staff", {"id": user_id}, limit=1)
+        staff = staff_rows[0] if staff_rows else None
+        if not staff or not staff.get("is_active", True):
+            raise HTTPException(status_code=401, detail="ERR_ACCOUNT_INACTIVE")
+        if _token_version_mismatch(payload, staff):
+            raise HTTPException(status_code=401, detail="ERR_SESSION_REVOKED")
+        _IDLE_SECONDS = 30 * 60
+        last_active_raw = staff.get("last_activity_at")
+        if last_active_raw:
+            try:
+                last_active = datetime.fromisoformat(last_active_raw.replace("Z", "+00:00"))
+                if (datetime.now(timezone.utc) - last_active).total_seconds() > _IDLE_SECONDS:
+                    raise HTTPException(status_code=401, detail="ERR_IDLE_TIMEOUT")
+            except HTTPException:
+                raise
+            except Exception as _ts_err:
+                logger.warning(f"Malformed last_activity_at for staff {user_id} — letting through: {_ts_err}")
+        try:
+            await db_supabase.update_one(
+                "admin_staff", {"id": user_id}, {"last_activity_at": datetime.now(timezone.utc).isoformat()}
+            )
+        except Exception as _upd_err:
+            logger.warning(f"Could not update last_activity_at for staff {user_id}: {_upd_err}")
+    return {
+        "id": user_id,
+        "email": payload.get("email"),
+        "phone": payload.get("phone", ""),
+        "role": payload["role"],
+        "modules": payload.get("modules", []),
+        "token_version": int(payload.get("token_version") or 0),
+        "profile_complete": True,
+        "is_driver": False,
+    }
+
+
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
     """Resolve the current user using Firebase ID token (preferred) or fallback to legacy JWT."""
     if not credentials:
@@ -212,70 +271,12 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         logger.error(f"JWT verification failed: {e}")
         raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}") from e
 
-    # Audience enforcement — reject cross-environment token reuse.
-    # Tokens minted before this fix carry no 'aud' claim; allow them through
-    # for one 15-minute TTL window, then they naturally expire and new tokens
-    # carry the claim. A present-but-wrong aud is always rejected immediately.
-    #
-    # S-3: Admin status is determined by the 'aud' claim, not the 'role' claim.
-    # Trusting payload.get("role") to route the token was the legacy path that
-    # allowed a crafted mobile JWT with an admin role claim to enter the admin
-    # code path. aud=JWT_AUD_ADMIN is the canonical signal; role claims in
-    # admin tokens are still trusted (per CLAUDE.md) but only after aud is confirmed.
-    _admin_roles = {"admin", "super_admin", "operations", "support", "finance", "custom"}
-    _token_aud = payload.get("aud")
-    # A token is admin only when aud explicitly says so, or (legacy: no aud present)
-    # when both role and email admin claims are present. Once all tokens carry aud
-    # (after one 15-min TTL window) the legacy branch is unreachable.
-    _is_admin_payload = _token_aud == JWT_AUD_ADMIN or (
-        _token_aud is None and payload.get("role") in _admin_roles and bool(payload.get("email"))
-    )
-    _expected_aud = JWT_AUD_ADMIN if _is_admin_payload else JWT_AUD_MOBILE
-    if _token_aud is not None and _token_aud != _expected_aud:
-        raise HTTPException(status_code=401, detail="ERR_TOKEN_AUDIENCE")
-    if _is_admin_payload and payload.get("role") in _admin_roles and payload.get("email"):
-        user_id = payload["user_id"]
-        jti = payload.get("jti")
-        if jti and await redis_get(f"admin:revoked:{jti}"):
-            raise HTTPException(status_code=401, detail="ERR_TOKEN_REVOKED")
-        if user_id != "admin-001":
-            staff_rows = await db_supabase.get_rows("admin_staff", {"id": user_id}, limit=1)
-            staff = staff_rows[0] if staff_rows else None
-            if not staff or not staff.get("is_active", True):
-                raise HTTPException(status_code=401, detail="ERR_ACCOUNT_INACTIVE")
-            if _token_version_mismatch(payload, staff):
-                raise HTTPException(status_code=401, detail="ERR_SESSION_REVOKED")
-            # Server-side idle timeout: 30 min of inactivity → force re-login
-            # (audit A-P2-2). admin-001 has no DB row so this only runs for
-            # staff accounts.
-            _IDLE_SECONDS = 30 * 60
-            last_active_raw = staff.get("last_activity_at")
-            if last_active_raw:
-                try:
-                    last_active = datetime.fromisoformat(last_active_raw.replace("Z", "+00:00"))
-                    if (datetime.now(timezone.utc) - last_active).total_seconds() > _IDLE_SECONDS:
-                        raise HTTPException(status_code=401, detail="ERR_IDLE_TIMEOUT")
-                except HTTPException:
-                    raise
-                except Exception as _ts_err:
-                    logger.warning(f"Malformed last_activity_at for staff {user_id} — letting through: {_ts_err}")
-            # Fire-and-forget activity timestamp update (best-effort; auth must not fail here)
-            try:
-                await db_supabase.update_one(
-                    "admin_staff", {"id": user_id}, {"last_activity_at": datetime.now(timezone.utc).isoformat()}
-                )
-            except Exception as _upd_err:
-                logger.warning(f"Could not update last_activity_at for staff {user_id}: {_upd_err}")
-        return {
-            "id": user_id,
-            "email": payload.get("email"),
-            "phone": payload.get("phone", ""),
-            "role": payload["role"],
-            "modules": payload.get("modules", []),
-            "token_version": int(payload.get("token_version") or 0),
-            "profile_complete": True,
-            "is_driver": False,
-        }
+    # Full admin verification (aud, JTI revocation, staff active/version/idle) is
+    # delegated to _verify_admin_payload — the WS path calls the same function so
+    # the checks can never diverge.
+    admin_user = await _verify_admin_payload(payload)
+    if admin_user is not None:
+        return admin_user
 
     # Look up the user row. A transient Supabase failure here MUST surface
     # as a 503 so the client retries — not be silently swallowed, which

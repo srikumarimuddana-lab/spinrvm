@@ -22,6 +22,7 @@ import {
     TableRow,
 } from "@/components/ui/table";
 import { Download } from "lucide-react";
+import { sanitizeCsvCell } from "@/lib/export-csv";
 
 function monthOptions(): string[] {
     const out: string[] = [];
@@ -41,7 +42,7 @@ function formatCAD(n: number | undefined) {
 }
 
 function toCSV(statement: BillingStatement): string {
-    const header = [
+    const cols = [
         "ride_id",
         "member_id",
         "source_type",
@@ -49,7 +50,13 @@ function toCSV(statement: BillingStatement): string {
         "master_fallback_amount",
         "policy_check_result",
         "created_at",
-    ].join(",");
+    ];
+    const serializeCell = (cell: unknown): string => {
+        let val = cell === null || cell === undefined ? "" : String(cell);
+        val = sanitizeCsvCell(val);
+        return `"${val.replace(/"/g, '""')}"`;
+    };
+    const header = cols.map((h) => `"${h}"`).join(",");
     const body = statement.line_items
         .map((r) =>
             [
@@ -60,7 +67,9 @@ function toCSV(statement: BillingStatement): string {
                 r.master_fallback_amount,
                 r.policy_check_result ?? "",
                 r.created_at,
-            ].join(",")
+            ]
+                .map(serializeCell)
+                .join(","),
         )
         .join("\n");
     return `${header}\n${body}`;

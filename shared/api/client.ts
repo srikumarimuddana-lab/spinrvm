@@ -547,6 +547,12 @@ export const setApiErrorSurface = (surface: ApiErrorLogEntry['surface']): void =
 
 export const getApiErrorLog = (): ApiErrorLogEntry[] => [..._errorLog];
 export const clearApiErrorLog = (): void => { _errorLog.length = 0; };
+
+// Strip GPS coordinate values from URL query strings before logging or
+// persisting — raw lat/lng must never appear in console output or AsyncStorage.
+const _redactGpsUrl = (url: string): string =>
+  url.replace(/([?&](?:lat|lng|latitude|longitude))=[^&#]*/gi, '$1=[redacted]');
+
 const recordApiError = (entry: ApiErrorLogEntry) => {
   if (entry.surface === undefined && _defaultSurface !== undefined) {
     entry.surface = _defaultSurface;
@@ -556,7 +562,7 @@ const recordApiError = (entry: ApiErrorLogEntry) => {
   // Also console.log so it shows up in Metro / Railway mirror. Tagged so
   // it's easy to grep. Keep this concise — full data is in the buffer.
   console.log(
-    `[API-ERR] ${entry.method} ${entry.url} → ${entry.status} | ${entry.message}` +
+    `[API-ERR] ${entry.method} ${_redactGpsUrl(entry.url)} → ${entry.status} | ${entry.message}` +
     (entry.request_id ? ` | req=${entry.request_id}` : '') +
     (entry.surface ? ` | surface=${entry.surface}` : '') +
     (entry.screen ? ` | screen=${entry.screen}` : ''),
@@ -577,7 +583,7 @@ const recordApiError = (entry: ApiErrorLogEntry) => {
       const redacted = _errorLog.map((e): Omit<ApiErrorLogEntry, 'data'> => ({
         ts: e.ts,
         method: e.method,
-        url: e.url,
+        url: _redactGpsUrl(e.url),
         status: e.status,
         message: e.message,
         request_id: e.request_id,

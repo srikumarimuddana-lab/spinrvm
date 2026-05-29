@@ -13,6 +13,18 @@ export type CsvColumn = {
     value?: (row: Record<string, any>) => unknown;
 };
 
+/**
+ * Neutralize spreadsheet formula injection (OWASP CSV Injection prevention).
+ * Excel / Sheets / LibreOffice treat cells starting with =, +, -, @, tab, or
+ * CR as formulas. Prefix with a literal apostrophe to force text interpretation.
+ */
+export function sanitizeCsvCell(val: string): string {
+    if (val.length > 0 && /^[=+\-@\t\r]/.test(val)) {
+        return `'${val}`;
+    }
+    return val;
+}
+
 export function exportToCsv(
     filename: string,
     rows: Record<string, any>[],
@@ -31,7 +43,8 @@ export function exportToCsv(
                 let val = c.value ? c.value(row) : c.key ? row[c.key] : "";
                 if (val === null || val === undefined) val = "";
                 if (typeof val === "object") val = JSON.stringify(val);
-                val = String(val).replace(/"/g, '""');
+                val = sanitizeCsvCell(String(val));
+                val = val.replace(/"/g, '""');
                 return `"${val}"`;
             })
             .join(","),

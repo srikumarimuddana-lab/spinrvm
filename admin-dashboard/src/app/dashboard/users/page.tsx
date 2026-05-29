@@ -39,6 +39,7 @@ import {
 } from "@/components/ui/select";
 import { Pagination } from "@/components/ui/pagination";
 import { Users, Search, Mail, Phone, MapPin, Star, Calendar, Car, ShieldCheck, Download, RefreshCw, Ban, CheckCircle, AlertTriangle, Wallet, Plus, Minus, Eye, EyeOff } from "lucide-react";
+import { exportToCsv } from "@/lib/export-csv";
 import { formatDate } from "@/lib/utils";
 import { getUsersPaginated, updateUserStatus, updateUserFlags, getStats, getUserWallet, creditUserWallet, debitUserWallet, exportUsers, logPiiReveal } from "@/lib/api";
 import { maskEmail, maskPhone } from "@/lib/pii";
@@ -198,26 +199,17 @@ export default function UsersPage() {
     const handleExport = async () => {
         try {
             const res = await exportUsers();
-            const headers = ["ID", "Name", "Email", "Phone", "City", "Total Rides", "Rating", "Verified", "Joined Date"];
-            const rows = (res.users || []).map((u: any) => [
-                u.id,
-                u.name,
-                u.email,
-                u.phone,
-                u.city || "N/A",
-                u.total_rides || 0,
-                u.rating || "N/A",
-                u.is_verified ? "Yes" : "No",
-                formatDate(u.created_at),
+            exportToCsv('users', res.users || [], [
+                { key: 'id', label: 'ID' },
+                { key: 'name', label: 'Name' },
+                { key: 'email', label: 'Email' },
+                { key: 'phone', label: 'Phone' },
+                { value: (u: any) => u.city || 'N/A', label: 'City' },
+                { value: (u: any) => u.total_rides || 0, label: 'Total Rides' },
+                { value: (u: any) => u.rating || 'N/A', label: 'Rating' },
+                { value: (u: any) => u.is_verified ? 'Yes' : 'No', label: 'Verified' },
+                { value: (u: any) => formatDate(u.created_at), label: 'Joined Date' },
             ]);
-            const csv = [headers, ...rows].map(row => row.join(",")).join("\n");
-            const blob = new Blob([csv], { type: "text/csv" });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = `users-${new Date().toISOString().split("T")[0]}.csv`;
-            a.click();
-            URL.revokeObjectURL(url);
             toast({ title: "Export complete", description: `${res.count ?? 0} users exported.` });
         } catch {
             toast({ title: "Export failed", variant: "destructive" });

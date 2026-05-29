@@ -58,11 +58,15 @@ class TestScheduledDispatch:
         async def _timeout(*_a, **_k):  # stand-in for ride_search_timeout
             return None
 
+        # Patch the exact module path the dispatcher imports from. conftest
+        # puts backend/ on sys.path, so `from routes.rides import ...` (the
+        # first branch in _dispatch_scheduled_ride) resolves to the `routes.rides`
+        # module — patch there, not the `backend.`-qualified alias.
         with (
             patch.object(sr.db, "update_one", AsyncMock(side_effect=_update_one)),
             patch.object(sr.db, "get_user_by_id", AsyncMock(return_value={"id": RIDER_ID, "first_name": "Ada"})),
-            patch("backend.routes.rides.match_driver_to_ride", match_mock),
-            patch("backend.routes.rides.ride_search_timeout", _timeout),
+            patch("routes.rides.match_driver_to_ride", match_mock),
+            patch("routes.rides.ride_search_timeout", _timeout),
             patch.object(sr.manager, "broadcast_ride_status", AsyncMock()) as bcast,
             patch.object(sr.manager, "broadcast_to_admins", AsyncMock()) as admin_bcast,
             patch.object(sr, "send_push_notification", AsyncMock()),
@@ -99,7 +103,7 @@ class TestScheduledDispatch:
 
         with (
             patch.object(sr.db, "update_one", AsyncMock(return_value=None)),
-            patch("backend.routes.rides.match_driver_to_ride", match_mock),
+            patch("routes.rides.match_driver_to_ride", match_mock),
             patch.object(sr.manager, "broadcast_ride_status", AsyncMock()) as bcast,
             patch.object(sr, "send_push_notification", AsyncMock()),
         ):
@@ -107,6 +111,35 @@ class TestScheduledDispatch:
 
         match_mock.assert_not_awaited()
         bcast.assert_not_awaited()
+
+    async def test_dispatch_defers_on_active_ride_conflict(self):
+        """If the rider has a live trip, the scheduled→searching claim collides
+        with rides_one_active_per_rider. That conflict must be handled
+        gracefully: no driver matching, ride left for retry, rider notified once
+        — and the exception must NOT bubble out of the dispatcher."""
+        from backend.utils import scheduled_rides as sr
+
+        ride = _scheduled_row()
+        match_mock = AsyncMock()
+
+        def _raise_conflict(*_a, **_k):
+            raise RuntimeError('duplicate key value violates unique constraint "rides_one_active_per_rider"')
+
+        with (
+            patch.object(sr.db, "update_one", AsyncMock(side_effect=_raise_conflict)),
+            patch("routes.rides.match_driver_to_ride", match_mock),
+            patch.object(sr.manager, "broadcast_ride_status", AsyncMock()) as bcast,
+            patch.object(sr, "redis_set_nx", AsyncMock(return_value=True)),
+            patch.object(sr, "send_push_notification", AsyncMock()) as push,
+        ):
+            # Must not raise.
+            await sr._dispatch_scheduled_ride(ride)
+
+        match_mock.assert_not_awaited()
+        bcast.assert_not_awaited()
+        # Rider told once that the ride is waiting on their current trip.
+        push.assert_awaited_once()
+        assert push.await_args.args[0] == RIDER_ID
 
     async def test_check_queries_scheduled_status(self):
         """check_scheduled_rides must read rows in status='scheduled'."""

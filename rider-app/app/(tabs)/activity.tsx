@@ -72,6 +72,7 @@ export default function ActivityScreen() {
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const { colors } = useTheme();
   const { width } = useWindowDimensions();
@@ -108,6 +109,7 @@ export default function ActivityScreen() {
 
   const fetchData = useCallback(async () => {
     setFetchError(null);
+    setLoadMoreError(null);
     try {
       const [pageResult, typesRes] = await Promise.all([
         fetchPage(),
@@ -129,17 +131,20 @@ export default function ActivityScreen() {
     }
   }, [fetchPage]);
 
-  const loadMore = useCallback(async () => {
-    if (loadingMore || !nextCursor) return;
+  const loadMore = useCallback(async (forceRetry = false) => {
+    if (loadingMore || !nextCursor || (loadMoreError && !forceRetry)) return;
     setLoadingMore(true);
+    setLoadMoreError(null);
     try {
       const pageResult = await fetchPage(nextCursor);
       setRides(prev => [...prev, ...pageResult.rides]);
       setNextCursor(pageResult.next_cursor);
+    } catch {
+      setLoadMoreError('Could not load more rides.');
     } finally {
       setLoadingMore(false);
     }
-  }, [loadingMore, nextCursor, fetchPage]);
+  }, [loadingMore, nextCursor, loadMoreError, fetchPage]);
 
   // Re-fetch stats whenever period pill changes
   useEffect(() => { fetchStats(period); }, [period, fetchStats]);
@@ -321,7 +326,24 @@ export default function ActivityScreen() {
   }, [styles, colors, vehicleTypes]);
 
   const ListFooter = loadingMore ? (
-    <ActivityIndicator size="small" color={colors.primary} style={{ padding: 16 }} />
+    <View style={styles.listFooter}>
+      <ActivityIndicator size="small" color={colors.primary} />
+      <Text style={styles.listFooterText}>Loading more rides...</Text>
+    </View>
+  ) : loadMoreError ? (
+    <TouchableOpacity
+      style={styles.listFooter}
+      onPress={() => loadMore(true)}
+      accessibilityRole="button"
+      accessibilityLabel="Retry loading more rides"
+    >
+      <Text style={[styles.listFooterText, { color: '#EF4444' }]}>{loadMoreError}</Text>
+      <Text style={styles.listFooterAction}>Tap to retry</Text>
+    </TouchableOpacity>
+  ) : !nextCursor && rides.length > 0 ? (
+    <View style={styles.listFooter}>
+      <Text style={styles.listFooterText}>No more rides</Text>
+    </View>
   ) : null;
 
   return (
@@ -482,7 +504,7 @@ export default function ActivityScreen() {
               style={styles.content}
               contentContainerStyle={styles.contentContainer}
               showsVerticalScrollIndicator={false}
-              onEndReached={loadMore}
+              onEndReached={() => loadMore()}
               onEndReachedThreshold={0.3}
               ListFooterComponent={ListFooter}
               refreshControl={
@@ -614,6 +636,16 @@ function createStyles(colors: ThemeColors, isCompactFilterLayout: boolean) { ret
   filterTabTextActive: { color: colors.surface },
   content: { flex: 1 },
   contentContainer: { padding: 20, paddingTop: 12 },
+  listFooter: {
+    alignItems: 'center', justifyContent: 'center',
+    paddingTop: 16, paddingBottom: 28, gap: 6,
+  },
+  listFooterText: {
+    fontSize: 13, fontFamily: 'PlusJakartaSans_500Medium', color: colors.textDim,
+  },
+  listFooterAction: {
+    fontSize: 13, fontFamily: 'PlusJakartaSans_700Bold', color: colors.primary,
+  },
   monthHeader: {
     fontSize: 12, fontFamily: 'PlusJakartaSans_700Bold', color: colors.textDim,
     letterSpacing: 0.5, marginTop: 16, marginBottom: 12,

@@ -5,12 +5,20 @@ Before this fix, drivers with is_online=True in the DB but no active
 Redis presence key (app crashed / network lost) were counted in the
 driver_count returned by the estimate endpoint. This produced counts
 like "2 drivers nearby" when only 1 was actually reachable by dispatch.
+
+These tests exercise the real production helper
+``backend.routes.rides._filter_reachable_drivers``. Only the presence
+store is mocked (at its source module, which the helper's inline import
+resolves to); ``intent_online`` runs for real.
 """
 
 from __future__ import annotations
 
-import pytest
 from unittest.mock import AsyncMock, patch
+
+import pytest
+
+from backend.routes.rides import _filter_reachable_drivers
 
 
 def _make_driver(driver_id: str, vehicle_type_id: str = "economy", lat: float = 52.13, lng: float = -106.67) -> dict:
@@ -27,75 +35,102 @@ def _make_driver(driver_id: str, vehicle_type_id: str = "economy", lat: float = 
     }
 
 
-PICKUP_LAT, PICKUP_LNG = 52.13, -106.67
+@pytest.mark.anyio
+async def test_ghost_driver_excluded_when_presence_reachable():
+    """A driver that is DB-online but has no presence key is excluded."""
+    all_db_drivers = [_make_driver("d_real"), _make_driver("d_ghost")]
+
+    # Redis reachable; only d_real has a live heartbeat.
+    async def _pdc(candidate_ids):
+        return {cid for cid in candidate_ids if cid == "d_real"}, True
+
+    with patch(
+        "backend.utils.driver_presence.present_driver_ids_checked",
+        new=AsyncMock(side_effect=_pdc),
+    ):
+        result = await _filter_reachable_drivers(all_db_drivers)
+
+    assert [d["id"] for d in result] == ["d_real"]
 
 
 @pytest.mark.anyio
-async def test_ghost_driver_excluded_when_presence_reachable():
-    """A driver that is DB-online but has no presence key is excluded from the count."""
-    real_driver = _make_driver("d_real")
-    ghost_driver = _make_driver("d_ghost")
-    all_db_drivers = [real_driver, ghost_driver]
+async def test_empty_present_set_yields_empty_when_reachable():
+    """Redis reachable but nobody present → empty count is correct, not a bug."""
+    all_db_drivers = [_make_driver("d1"), _make_driver("d2")]
 
-    # Only d_real is present in Redis
-    async def _pdc_only_real(candidate_ids):
-        present = {cid for cid in candidate_ids if cid == "d_real"}
-        return present, True  # reachable=True
+    async def _pdc(candidate_ids):
+        return set(), True
 
-    with (
-        patch("backend.db_supabase.get_rows", new_callable=AsyncMock) as mock_get_rows,
-        patch("backend.routes.rides.present_driver_ids_checked", new=_pdc_only_real),
-        patch("backend.routes.rides.intent_online", return_value=True),
+    with patch(
+        "backend.utils.driver_presence.present_driver_ids_checked",
+        new=AsyncMock(side_effect=_pdc),
     ):
-        # Import inline so the patches are in scope
-        from backend.utils.driver_presence import present_driver_ids_checked as _pdc
-        from backend.utils.driver_online import intent_online
+        result = await _filter_reachable_drivers(all_db_drivers)
 
-        driver_ids = [d["id"] for d in all_db_drivers if d.get("id")]
-        present, reachable = await _pdc_only_real(driver_ids)
-
-        assert reachable is True
-        # Ghost driver not in present set
-        visible = [d for d in all_db_drivers if d.get("id") in present and intent_online(d)]
-        assert len(visible) == 1
-        assert visible[0]["id"] == "d_real"
+    assert result == []
 
 
 @pytest.mark.anyio
 async def test_presence_fallback_keeps_db_drivers_when_redis_unreachable():
-    """When Redis is configured but down (reachable=False), DB state is used as fallback."""
-    real_driver = _make_driver("d_real")
-    ghost_driver = _make_driver("d_ghost")
-    all_db_drivers = [real_driver, ghost_driver]
+    """Redis configured but down (reachable=False) → fall back to DB state."""
+    all_db_drivers = [_make_driver("d_real"), _make_driver("d_ghost")]
 
-    async def _pdc_redis_down(candidate_ids):
-        return set(), False  # reachable=False → Redis unavailable
+    async def _pdc(candidate_ids):
+        return set(), False  # reachable=False
 
-    from backend.utils.driver_online import intent_online
+    with patch(
+        "backend.utils.driver_presence.present_driver_ids_checked",
+        new=AsyncMock(side_effect=_pdc),
+    ):
+        result = await _filter_reachable_drivers(all_db_drivers)
 
-    driver_ids = [d["id"] for d in all_db_drivers if d.get("id")]
-    present, reachable = await _pdc_redis_down(driver_ids)
-
-    assert reachable is False
-    # Fall back to DB state — keep both drivers (only intent_online filters)
-    visible = [d for d in all_db_drivers if intent_online(d)]
-    assert len(visible) == 2
+    # Both kept — only intent_online filters in the fallback path.
+    assert {d["id"] for d in result} == {"d_real", "d_ghost"}
 
 
 @pytest.mark.anyio
-async def test_intent_online_filters_stale_is_online_column():
-    """A driver marked is_online=True but went_offline_at > went_online_at is excluded."""
-    from backend.utils.driver_online import intent_online
+async def test_presence_exception_falls_back_to_db_state():
+    """An unexpected presence error degrades to DB state, never blanks the count."""
+    all_db_drivers = [_make_driver("d1"), _make_driver("d2")]
 
-    # Went online then went offline — is_online column is stale
-    stale_driver = _make_driver("d_stale")
-    stale_driver["went_online_at"] = "2026-01-01T10:00:00Z"
-    stale_driver["went_offline_at"] = "2026-01-01T11:00:00Z"  # offline after online
+    with patch(
+        "backend.utils.driver_presence.present_driver_ids_checked",
+        new=AsyncMock(side_effect=RuntimeError("boom")),
+    ):
+        result = await _filter_reachable_drivers(all_db_drivers)
 
-    # Genuinely online — went_offline_at before went_online_at
-    online_driver = _make_driver("d_online")
-    online_driver["went_online_at"] = "2026-01-01T12:00:00Z"
-    online_driver["went_offline_at"] = "2026-01-01T11:00:00Z"  # offline was earlier
+    assert {d["id"] for d in result} == {"d1", "d2"}
 
-    assert intent_online(stale_driver) is False
-    assert intent_online(online_driver) is True
+
+@pytest.mark.anyio
+async def test_stale_is_online_driver_excluded_even_when_present():
+    """A present driver whose went_offline_at is newer than went_online_at is dropped."""
+    fresh = _make_driver("d_fresh")
+    fresh["went_online_at"] = "2026-01-01T12:00:00Z"
+    fresh["went_offline_at"] = "2026-01-01T11:00:00Z"  # online is more recent → online
+    stale = _make_driver("d_stale")
+    stale["went_online_at"] = "2026-01-01T10:00:00Z"
+    stale["went_offline_at"] = "2026-01-01T11:00:00Z"  # offline is more recent → offline
+
+    async def _pdc(candidate_ids):
+        return set(candidate_ids), True  # both present in Redis
+
+    with patch(
+        "backend.utils.driver_presence.present_driver_ids_checked",
+        new=AsyncMock(side_effect=_pdc),
+    ):
+        result = await _filter_reachable_drivers([fresh, stale])
+
+    assert [d["id"] for d in result] == ["d_fresh"]
+
+
+@pytest.mark.anyio
+async def test_empty_input_short_circuits():
+    """No drivers in → no drivers out, without touching the presence store."""
+    with patch(
+        "backend.utils.driver_presence.present_driver_ids_checked",
+        new=AsyncMock(side_effect=AssertionError("should not be called")),
+    ):
+        result = await _filter_reachable_drivers([])
+
+    assert result == []

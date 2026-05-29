@@ -162,17 +162,13 @@ async def settle_wallet(
     except ValueError as exc:
         await db_supabase.update_ride(ride_id, {"payment_status": "pending"})
         if "insufficient_funds" in str(exc):
-            current = _round(
-                _d((await db_supabase.find_one("wallets", {"id": wallet["id"]}) or {}).get("balance", 0))
-            )
+            current = _round(_d((await db_supabase.find_one("wallets", {"id": wallet["id"]}) or {}).get("balance", 0)))
             return PaymentResult(
                 success=False,
                 error=f"Insufficient wallet balance. Need ${debit}, have ${current}",
                 status_code=400,
             )
-        logger.error(
-            "settle_wallet: wallet_pay_for_ride failed for ride %s: %s", ride_id, exc, exc_info=True
-        )
+        logger.error("settle_wallet: wallet_pay_for_ride failed for ride %s: %s", ride_id, exc, exc_info=True)
         return PaymentResult(success=False, error="Wallet payment failed", status_code=400)
     grand_total = _round(_d(ride.get("grand_total") or ride.get("total_fare", 0) or 0))
     ride_fare = _round(
@@ -385,8 +381,10 @@ async def settle_card(
 
     outcome = await charge_ride(
         ride=ride,
+        # Pass the Decimal straight through — charge_ride does the cents
+        # conversion via dollars_to_cents. Never coerce money to float.
+        total_amount=total_charge,
         rider_id=rider_id,
-        total_amount=_f(total_charge),
         payment_method_id=payment_method_id,
         stripe_customer_id=stripe_customer_id,
         payment_intent_id=ride.get("payment_intent_id"),

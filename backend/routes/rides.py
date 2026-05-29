@@ -1201,13 +1201,23 @@ async def estimate_ride(
             body.pickup_lng,
         )
 
-    # Fetch all nearby online+available drivers once
+    # Fetch nearby online+available drivers once. Order by went_online_at DESC
+    # so recently-toggled-online drivers fill the 200-row page first. Ghost
+    # drivers (is_available=True in DB but heartbeat expired) tend to carry
+    # stale went_online_at values and fall toward the tail, so they are less
+    # likely to crowd real drivers out of the cap before the presence filter
+    # below runs. This mitigates — but does not fully eliminate — the
+    # capped-page ghost leak; full elimination needs a geo-index (query by
+    # radius first) or a sweeper that writes is_available=False back on TTL
+    # expiry. Tracked as a follow-up.
     all_drivers = await db_supabase.get_rows(
         "drivers",
         {
             "is_online": True,
             "is_available": True,
         },
+        order="went_online_at",
+        desc=True,
         limit=200,
     )
 

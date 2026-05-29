@@ -14,7 +14,7 @@ try:
     from .supabase_client import supabase
 except ImportError:
     import db_supabase
-    from dependencies import get_current_user
+    from dependencies import get_admin_user, get_current_user
     from supabase_client import supabase
 
 db = db_supabase  # legacy alias

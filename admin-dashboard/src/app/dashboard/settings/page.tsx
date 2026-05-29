@@ -231,6 +231,39 @@ export default function SettingsPage() {
                         </CardContent>
                     </Card>
 
+                    {/* Google Maps */}
+                    <Card className="border-border/50">
+                        <CardHeader>
+                            <CardTitle className="text-base">Google Maps</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-4">
+                            <p className="text-xs text-muted-foreground">
+                                Used by the backend proxy for Places autocomplete, geocoding, and
+                                route distance/duration, and driver ETA ranking. Restrict the key to
+                                these five APIs in GCP Console: <strong>Maps JavaScript API</strong>,{" "}
+                                <strong>Places API</strong>, <strong>Geocoding API</strong>,{" "}
+                                <strong>Directions API</strong>, and{" "}
+                                <strong>Distance Matrix API</strong>. Omitting Distance Matrix causes
+                                ETA-based driver ranking to fall back to straight-line distance.
+                            </p>
+                            <div className="space-y-2">
+                                <Label>API Key</Label>
+                                <Input
+                                    type="password"
+                                    value={settings.google_maps_api_key || ""}
+                                    onChange={(e) =>
+                                        update("google_maps_api_key", e.target.value)
+                                    }
+                                    placeholder="AIza..."
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                    GCP Console &rarr; APIs &amp; Services &rarr; Credentials
+                                </p>
+                            </div>
+                        </CardContent>
+                    </Card>
+
                     {/* Safety — distribution list for SOS / safety-incident
                         alert emails. Empty disables outbound email cleanly;
                         WS broadcast + critical log line still fire so
@@ -324,6 +357,89 @@ export default function SettingsPage() {
                                 <p className="text-xs text-muted-foreground">
                                     From Twilio Console &rarr; Proxy &rarr; Services
                                 </p>
+                            </div>
+                        </CardContent>
+                    </Card>
+
+                    {/* Dispatch & Matching */}
+                    <Card className="border-border/50">
+                        <CardHeader>
+                            <CardTitle className="text-base">Dispatch &amp; Matching</CardTitle>
+                        </CardHeader>
+                        <Separator />
+                        <CardContent className="pt-4 space-y-4">
+                            <p className="text-xs text-muted-foreground">
+                                Global defaults. Per-service-area overrides take precedence when set.
+                            </p>
+                            <div className="space-y-2">
+                                <Label>Driver matching algorithm</Label>
+                                <Select
+                                    value={settings.driver_matching_algorithm || "nearest"}
+                                    onValueChange={(v) => update("driver_matching_algorithm", v)}
+                                >
+                                    <SelectTrigger><SelectValue /></SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="nearest">Nearest</SelectItem>
+                                        <SelectItem value="rating_based">Highest rated</SelectItem>
+                                        <SelectItem value="combined">Combined (nearest + rating)</SelectItem>
+                                        <SelectItem value="round_robin">Round robin</SelectItem>
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="space-y-2">
+                                    <Label>Simultaneous offers</Label>
+                                    <Input
+                                        type="number"
+                                        min={1} max={10}
+                                        value={settings.max_simultaneous_offers ?? 3}
+                                        onChange={(e) => update("max_simultaneous_offers", parseInt(e.target.value))}
+                                    />
+                                    <p className="text-xs text-muted-foreground">Drivers offered per ride (1–10)</p>
+                                </div>
+                                <div className="space-y-2">
+                                    <Label>Offer timeout (s)</Label>
+                                    <Input
+                                        type="number"
+                                        min={5} max={60}
+                                        value={settings.ride_offer_timeout_seconds ?? 15}
+                                        onChange={(e) => update("ride_offer_timeout_seconds", parseInt(e.target.value))}
+                                    />
+                                    <p className="text-xs text-muted-foreground">Seconds before offer expires (5–60)</p>
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="space-y-2">
+                                    <Label>Search radius (km)</Label>
+                                    <Input
+                                        type="number"
+                                        min={1} max={100}
+                                        value={settings.search_radius_km ?? 10}
+                                        onChange={(e) => update("search_radius_km", parseFloat(e.target.value))}
+                                    />
+                                </div>
+                                <div className="space-y-2">
+                                    <Label>Min driver rating</Label>
+                                    <Input
+                                        type="number"
+                                        min={1} max={5} step={0.1}
+                                        value={settings.min_driver_rating ?? 4.0}
+                                        onChange={(e) => update("min_driver_rating", parseFloat(e.target.value))}
+                                    />
+                                </div>
+                            </div>
+                            <div className="flex items-center justify-between">
+                                <div className="space-y-0.5">
+                                    <Label htmlFor="use_eta_ranking">ETA-based ranking</Label>
+                                    <p className="text-xs text-muted-foreground">
+                                        Use Google Distance Matrix to rank by real ETA instead of straight-line distance.
+                                    </p>
+                                </div>
+                                <Switch
+                                    id="use_eta_ranking"
+                                    checked={settings.use_eta_ranking ?? true}
+                                    onCheckedChange={(v) => update("use_eta_ranking", v)}
+                                />
                             </div>
                         </CardContent>
                     </Card>

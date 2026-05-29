@@ -8,7 +8,6 @@ import {
   TouchableOpacity,
   RefreshControl,
   ActivityIndicator,
-  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -76,12 +75,6 @@ export default function ActivityScreen() {
   const { colors } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const { t } = useTranslation();
-  // Small phones (≈320–360 dp wide: iPhone SE, older/compact Androids) can't
-  // fit the four period pills + three filter tabs at full size — they clip or
-  // wrap awkwardly. Scale the pill chrome down past a width breakpoint and let
-  // the rows scroll horizontally so every pill stays reachable on any screen.
-  const { width } = useWindowDimensions();
-  const compact = width < 360;
 
   const fetchPage = useCallback(async (cursor?: string) => {
     const url = cursor
@@ -363,11 +356,7 @@ export default function ActivityScreen() {
       {activeTab === 'history' && (
         <>
           {/* Period pills — ordered broadest-first so riders see lifetime impact first */}
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={[styles.periodPillRow, compact && styles.pillRowCompact]}
-          >
+          <View style={styles.periodPillRow}>
             {([
               { key: 'all',   label: 'All Time' },
               { key: 'month', label: 'This Month' },
@@ -376,17 +365,17 @@ export default function ActivityScreen() {
             ] as { key: Period; label: string }[]).map(({ key, label }) => (
               <TouchableOpacity
                 key={key}
-                style={[styles.periodPill, compact && styles.pillCompact, period === key && styles.periodPillActive]}
+                style={[styles.periodPill, period === key && styles.periodPillActive]}
                 onPress={() => setPeriod(key)}
                 accessibilityRole="radio"
                 accessibilityState={{ checked: period === key }}
               >
-                <Text style={[styles.periodPillText, compact && styles.pillTextCompact, period === key && styles.periodPillTextActive]}>
+                <Text style={[styles.periodPillText, period === key && styles.periodPillTextActive]}>
                   {label}
                 </Text>
               </TouchableOpacity>
             ))}
-          </ScrollView>
+          </View>
 
           {/* Stats summary card */}
           <View style={styles.statsCard}>
@@ -424,25 +413,21 @@ export default function ActivityScreen() {
             )}
           </View>
 
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={[styles.filterTabs, compact && styles.pillRowCompact]}
-          >
+          <View style={styles.filterTabs}>
             {(['all', 'personal', 'business'] as FilterType[]).map(f => (
               <TouchableOpacity
                 key={f}
-                style={[styles.filterTab, compact && styles.filterTabCompact, filter === f && styles.filterTabActive]}
+                style={[styles.filterTab, filter === f && styles.filterTabActive]}
                 onPress={() => setFilter(f as FilterType)}
                 accessibilityRole="radio"
                 accessibilityState={{ checked: filter === f }}
               >
-                <Text style={[styles.filterTabText, compact && styles.pillTextCompact, filter === f && styles.filterTabTextActive]}>
+                <Text style={[styles.filterTabText, filter === f && styles.filterTabTextActive]}>
                   {f.charAt(0).toUpperCase() + f.slice(1)}
                 </Text>
               </TouchableOpacity>
             ))}
-          </ScrollView>
+          </View>
 
           {fetchError ? (
             <ScrollView
@@ -575,15 +560,8 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
   tabText: { fontSize: 15, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.textDim },
   tabTextActive: { color: colors.primary },
   periodPillRow: {
-    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingTop: 12, gap: 8,
+    flexDirection: 'row', paddingHorizontal: 20, paddingTop: 12, gap: 8, flexWrap: 'wrap',
   },
-  // Compact overrides for small screens (width < 360 dp). Tighter padding/gap
-  // so more pills fit before the row needs to scroll; smaller text keeps the
-  // labels legible without dominating the viewport.
-  pillRowCompact: { paddingHorizontal: 14, gap: 6 },
-  pillCompact: { paddingHorizontal: 11, paddingVertical: 6 },
-  filterTabCompact: { paddingHorizontal: 14, paddingVertical: 8 },
-  pillTextCompact: { fontSize: 12 },
   periodPill: {
     paddingHorizontal: 14, paddingVertical: 7,
     borderRadius: 20, borderWidth: 1.5, borderColor: colors.border,

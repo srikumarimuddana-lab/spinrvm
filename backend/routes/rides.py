@@ -2682,20 +2682,35 @@ async def process_payment(
             "already_paid": True,
         }
 
+    # Atomic claim. Allow re-driving a previously FAILED charge (e.g. the rider
+    # updated a declined card and retried), not just a fresh 'pending'. Without
+    # 'failed' here, a retry after a decline fell through to the guard-None
+    # branch below and was wrongly reported as already-paid — leaving the fare
+    # uncollected while the rider saw "Paid".
     guard_row = await db_supabase.update_one(
         "rides",
-        {"id": ride_id, "payment_status": "pending"},
+        {"id": ride_id, "payment_status": {"$in": ["pending", "failed"]}},
         {
             "payment_status": "processing",
             "updated_at": datetime.now(timezone.utc).isoformat(),
         },
     )
     if guard_row is None:
-        return {
-            "success": True,
-            "already_paid": True,
-            "charged_amount": _money_str(_d(ride.get("grand_total") or ride.get("total_fare", 0) or 0)),
-        }
+        # Lost the claim race (concurrent attempt grabbed it). Re-read to see
+        # the real state — only report already-paid when the ride is genuinely
+        # paid or mid-charge (processing). A still-unpaid state must surface as
+        # a retryable 409, never a false success.
+        fresh = await db_supabase.get_ride(ride_id) or ride
+        if fresh.get("payment_status") in ("paid", "processing"):
+            return {
+                "success": True,
+                "already_paid": True,
+                "charged_amount": _money_str(
+                    _d(fresh.get("grand_total") or fresh.get("total_fare", 0) or 0)
+                    + _d(fresh.get("tip_amount", 0) or 0)
+                ),
+            }
+        raise HTTPException(status_code=409, detail="Could not start payment; please retry.")
 
     if tip_amount < 0:
         raise HTTPException(status_code=400, detail="Tip amount cannot be negative")

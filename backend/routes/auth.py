@@ -6,7 +6,6 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
-from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 try:
@@ -36,6 +35,7 @@ try:
         TokenExpiredException,
     )
     from ..utils.error_keys import ErrorKeys
+    from ..utils.rate_limiter import default_limiter as limiter
     from ..utils.redis_client import (
         redis_delete,
         redis_expire,
@@ -77,6 +77,7 @@ except ImportError:
         TokenExpiredException,
     )
     from utils.error_keys import ErrorKeys
+    from utils.rate_limiter import default_limiter as limiter
     from utils.redis_client import (
         redis_delete,
         redis_expire,
@@ -95,7 +96,6 @@ except ImportError:
 db = db_supabase  # legacy alias
 
 logger = logging.getLogger(__name__)
-limiter = Limiter(key_func=get_remote_address)
 api_router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 # ── OTP brute-force lockout (SEC-008) ───────────────────────────────────
@@ -276,8 +276,7 @@ async def send_otp(request: Request, body: SendOTPRequest):
         )
     else:
         logger.error(
-            "Twilio not configured in production — refusing to issue OTP "
-            "(static-code bypass is disabled in production)"
+            "Twilio not configured in production — refusing to issue OTP (static-code bypass is disabled in production)"
         )
         raise SpinrException(
             message="Verification is temporarily unavailable, please try again later",

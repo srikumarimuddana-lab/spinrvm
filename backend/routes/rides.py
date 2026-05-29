@@ -777,6 +777,7 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
             "total_bonus": _total_bonus if _total_bonus > 0 else None,
             "quest_hint": _quest_hint,
             "payment_method": ride.get("payment_method"),
+            "planned_route_polyline": ride.get("planned_route_polyline") or None,
         }
 
         if driver.get("user_id"):
@@ -2752,6 +2753,7 @@ async def process_payment(
                 from ..utils.redis_client import redis_delete as _redis_del
                 from ..utils.redis_client import redis_set_nx as _redis_nx
             except ImportError:
+                from utils.redis_client import redis_delete as _redis_del  # type: ignore
                 from utils.redis_client import redis_set_nx as _redis_nx  # type: ignore
             _wallet_redrive_lock_key = f"spinr:wallet_settle:{ride_id}"
             if not await _redis_nx(_wallet_redrive_lock_key, "1", 30):
@@ -2795,29 +2797,31 @@ async def process_payment(
     total_charge = _q(_grand) + _q(tip_amount)
     payment_method = (ride.get("payment_method") or "card").lower()
 
-    # Persist tip and update snapshot before charging so the receipt
-    # and all downstream surfaces reflect the final total.
-    # Use delta (requested - already stored) so that if /rate already
-    # wrote the tip we don't double-count in driver_earnings.
+    # Compute tip delta and prepare the DB payload, but do NOT write yet.
+    # The DB write is deferred until after settlement confirms money moved.
+    # A wallet idempotent no-op (ride already paid, RPC returned None) must
+    # not leave tip_amount or driver_earnings persisted when nothing was charged.
+    # The local ride dict is updated in-memory so total_charge and the fare
+    # breakdown snapshot passed to settle_* are correct.
+    _tip_db_update: dict = {}
     if tip_amount > 0:
         tip_d = _round(_d(tip_amount))
         existing_tip = _d(ride.get("tip_amount") or 0)
         tip_delta = tip_d - existing_tip
-        tip_update: dict = {"tip_amount": _f(tip_d)}
+        _tip_db_update = {"tip_amount": _f(tip_d)}
         if tip_delta > 0:
             existing_earnings = _d(ride.get("driver_earnings") or 0)
-            tip_update["driver_earnings"] = _f(_round(existing_earnings + tip_delta))
+            _tip_db_update["driver_earnings"] = _f(_round(existing_earnings + tip_delta))
         snapshot = ride.get("fare_breakdown_snapshot")
         if snapshot and isinstance(snapshot, dict) and snapshot.get("lines") is not None:
             updated_lines = [ln for ln in snapshot["lines"] if ln.get("type") != "tip"]
             updated_lines.append({"label": "Tip", "amount": _f(tip_d), "type": "tip"})
             snapshot["lines"] = updated_lines
             snapshot["grand_total"] = _sum_fare_breakdown(updated_lines)
-            tip_update["fare_breakdown_snapshot"] = snapshot
-        await db_supabase.update_ride(ride_id, tip_update)
+            _tip_db_update["fare_breakdown_snapshot"] = snapshot
         ride["tip_amount"] = _f(tip_d)
-        if "driver_earnings" in tip_update:
-            ride["driver_earnings"] = tip_update["driver_earnings"]
+        if "driver_earnings" in _tip_db_update:
+            ride["driver_earnings"] = _tip_db_update["driver_earnings"]
 
     _snap = ride.get("fare_breakdown_snapshot")
     _snap_lines = (_snap.get("lines") if isinstance(_snap, dict) else None) if _snap else None
@@ -2855,11 +2859,13 @@ async def process_payment(
         except Exception as _lock_err:
             logger.debug("wallet redrive lock release failed (TTL will expire): %s", _lock_err)
 
-    # Skip receipt on already_paid — a previous attempt already paid and
-    # (presumably) sent a receipt; we avoid the duplicate without losing the
-    # financial record (ledger write was also skipped by settle_wallet).
+    # Skip tip persistence and receipt on already_paid: no money moved, so we
+    # must not mutate tip_amount/driver_earnings in the DB or send a duplicate
+    # receipt. The ledger write was also skipped by settle_wallet on this path.
     email_sent = False
     if not result.already_paid:
+        if _tip_db_update:
+            await db_supabase.update_ride(ride_id, _tip_db_update)
         email_sent = await send_ride_receipt(ride, current_user["id"], tip_amount)
     return {
         "success": True,

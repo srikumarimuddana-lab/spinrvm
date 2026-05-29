@@ -282,6 +282,7 @@ interface IncomingRide {
         reward_amount: number;
     } | null;
     payment_method?: string;
+    planned_route_polyline?: Array<[number, number]> | null;
 }
 
 interface DriverState {
@@ -710,6 +711,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                             payment_method: ride.payment_method ?? existing?.payment_method,
                             offer_expires_at: ride.offer_expires_at ?? existing?.offer_expires_at,
                             requires_wav: ride.requires_wav ?? existing?.requires_wav,
+                            planned_route_polyline: (ride as any).planned_route_polyline ?? undefined,
                         },
                         countdownSeconds: countdown,
                     });

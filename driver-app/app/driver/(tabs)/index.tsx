@@ -249,6 +249,22 @@ function DriverDashboard() {
   }, [rideState]);
 
   // Clear route + ETA when ride state changes (new phase = new route).
+  // Stable boolean: true when the store already holds a saved polyline for the
+  // current ride. Declared here (before the useEffect) because dep arrays are
+  // evaluated at call time — can't reference a variable that's declared later
+  // in the function body. Uses incomingRide / activeRide directly rather than
+  // the `ride` alias (which is declared further down the component) for the
+  // same reason. The effect re-fires when this transitions false → true, which
+  // covers cold-start fetches and hydration-then-freshen sequences where
+  // rideState stays unchanged but the ride object gains polyline data.
+  const _hasRidePolyline = (() => {
+    const poly =
+      incomingRide?.planned_route_polyline ??
+      (activeRide?.ride as any)?.planned_route_polyline ??
+      (activeRide?.ride as any)?.route_polyline;
+    return Array.isArray(poly) && poly.length >= 2;
+  })();
+
   // For ride_offered and trip_in_progress, reuse the saved polyline from
   // ride creation instead of calling the Directions API — the planned
   // route (pickup → dropoff) is already computed and stored server-side.
@@ -299,8 +315,10 @@ function DriverDashboard() {
     }
     // location intentionally excluded — we only want to re-center on state
     // transition, not on every GPS tick.
+    // _hasRidePolyline: re-fires when polyline data arrives after a cold-start
+    // fetch or a hydration-then-freshen (rideState unchanged, ride updates).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rideState]);
+  }, [rideState, _hasRidePolyline]);
 
   // When the app comes back to the foreground, arm a one-shot re-center
   // for the next location update. `initialRegion` above is one-shot, so

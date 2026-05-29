@@ -2810,15 +2810,16 @@ async def process_payment(
     # not leave tip_amount or driver_earnings persisted when nothing was charged.
     # The local ride dict is updated in-memory so total_charge and the fare
     # breakdown snapshot passed to settle_* are correct.
+    # tip_amount and driver_earnings are written atomically inside
+    # wallet_pay_for_ride (migration 110). _tip_db_update carries only the
+    # fare_breakdown_snapshot (cosmetic display update, best-effort).
+    # The in-memory ride dict is still updated so the receipt email sees the
+    # correct totals without a DB re-fetch.
     _tip_db_update: dict = {}
     if tip_amount > 0:
         tip_d = _round(_d(tip_amount))
         existing_tip = _d(ride.get("tip_amount") or 0)
         tip_delta = tip_d - existing_tip
-        _tip_db_update = {"tip_amount": _f(tip_d)}
-        if tip_delta > 0:
-            existing_earnings = _d(ride.get("driver_earnings") or 0)
-            _tip_db_update["driver_earnings"] = _f(_round(existing_earnings + tip_delta))
         snapshot = ride.get("fare_breakdown_snapshot")
         if snapshot and isinstance(snapshot, dict) and snapshot.get("lines") is not None:
             updated_lines = [ln for ln in snapshot["lines"] if ln.get("type") != "tip"]
@@ -2827,8 +2828,8 @@ async def process_payment(
             snapshot["grand_total"] = _sum_fare_breakdown(updated_lines)
             _tip_db_update["fare_breakdown_snapshot"] = snapshot
         ride["tip_amount"] = _f(tip_d)
-        if "driver_earnings" in _tip_db_update:
-            ride["driver_earnings"] = _tip_db_update["driver_earnings"]
+        if tip_delta > 0:
+            ride["driver_earnings"] = _f(_round(_d(ride.get("driver_earnings") or 0) + tip_delta))
 
     _snap = ride.get("fare_breakdown_snapshot")
     _snap_lines = (_snap.get("lines") if isinstance(_snap, dict) else None) if _snap else None

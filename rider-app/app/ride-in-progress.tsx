@@ -63,7 +63,16 @@ function RideInProgressScreenContent() {
   const [estimatedTime, setEstimatedTime] = useState('12:45 PM');
   const [currentLocation, setCurrentLocation] = useState('4th Avenue North');
   const [isSharingLocation, setIsSharingLocation] = useState(false);
-  const [tripRouteCoords, setTripRouteCoords] = useState<any[]>(activeRideRouteCoords ?? []);
+  const [tripRouteCoords, setTripRouteCoords] = useState<any[]>(() => {
+    if (activeRideRouteCoords && activeRideRouteCoords.length > 1) return activeRideRouteCoords;
+    const savedPoly = (currentRide as any)?.planned_route_polyline || (currentRide as any)?.route_polyline;
+    if (Array.isArray(savedPoly) && savedPoly.length >= 2) {
+      return savedPoly
+        .filter((p: any) => Array.isArray(p) && p.length >= 2)
+        .map((p: any) => ({ latitude: p[0], longitude: p[1] }));
+    }
+    return [];
+  });
 
   // Source-of-truth rider bill. The API computes grand_total as the sum of
   // the fare_breakdown line items (see backend/routes/rides.py::
@@ -575,14 +584,13 @@ I've shared my live location with you for safety.
             showsMyLocationButton={false}
             userInterfaceStyle={isDark ? "dark" : "light"}
           >
-            {/* Route: reuse coords from store if driver-arriving already fetched
-                them. Only call Directions API when this is the first screen in
-                the ride flow (store is empty). Either way, origin is the stable
-                pickup location — never the live driver position — so MapViewDirections
-                fires at most once per ride. */}
+            {/* Route: reuse saved polyline or store coords if available.
+                Only call Directions API when no cached route exists at all.
+                Origin is the stable pickup — never the live driver position —
+                so MapViewDirections fires at most once per ride. */}
             {routeOrigin && routeDestination &&
               process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY &&
-              activeRideRouteCoords === null && (
+              activeRideRouteCoords === null && tripRouteCoords.length < 2 && (
               <MapViewDirections
                 origin={routeOrigin}
                 destination={routeDestination}

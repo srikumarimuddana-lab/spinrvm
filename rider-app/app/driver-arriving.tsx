@@ -64,7 +64,17 @@ function DriverArrivingScreenContent() {
   // Seed from store so returning to this screen after a brief navigation
   // (e.g. opening chat) shows the already-fetched route immediately.
   const [driverRouteCoords, setDriverRouteCoords] = useState<any[]>(activeDriverRouteCoords ?? []);
-  const [rideRouteCoords, setRideRouteCoords] = useState<any[]>(activeRideRouteCoords ?? []);
+  const [rideRouteCoords, setRideRouteCoords] = useState<any[]>(() => {
+    if (activeRideRouteCoords && activeRideRouteCoords.length > 1) return activeRideRouteCoords;
+    const savedPoly = (currentRide as any)?.planned_route_polyline || (currentRide as any)?.route_polyline;
+    if (Array.isArray(savedPoly) && savedPoly.length >= 2) {
+      const coords = savedPoly
+        .filter((p: any) => Array.isArray(p) && p.length >= 2)
+        .map((p: any) => ({ latitude: p[0], longitude: p[1] }));
+      if (coords.length >= 2) return coords;
+    }
+    return [];
+  });
   const [isCancelling, setIsCancelling] = useState(false);
   const cancelInitiatedRef = useRef(false);
   const [confirmSheet, setConfirmSheet] = useState<{
@@ -337,8 +347,9 @@ function DriverArrivingScreenContent() {
           )}
           {driverRouteCoords.length > 1 && renderGradientPolyline(driverRouteCoords, true)}
 
-          {/* Pickup → dropoff route: only fetch once; reuse cached coords on return */}
-          {rideRouteOrigin && rideRouteDestination && activeRideRouteCoords === null && (
+          {/* Pickup → dropoff route: use saved polyline or cached coords first;
+              only call Directions API as a last resort. */}
+          {rideRouteOrigin && rideRouteDestination && activeRideRouteCoords === null && rideRouteCoords.length < 2 && (
             <MapViewDirections
               origin={rideRouteOrigin}
               destination={rideRouteDestination}

@@ -588,6 +588,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           total_bonus: typeof data.total_bonus === 'number' ? data.total_bonus : undefined,
           quest_hint: data.quest_hint || undefined,
           payment_method: data.payment_method || undefined,
+          planned_route_polyline: Array.isArray(data.planned_route_polyline) ? data.planned_route_polyline : undefined,
         });
         break;
       }
@@ -1254,6 +1255,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           total_bonus: toNum(data.total_bonus) ?? existing?.total_bonus,
           quest_hint: safeParse(data.quest_hint) ?? existing?.quest_hint,
           payment_method: data.payment_method || existing?.payment_method || undefined,
+          planned_route_polyline: safeParse(data.planned_route_polyline) ?? existing?.planned_route_polyline,
         });
       } else if (data?.type === 'auto_offline') {
         offerSound.stop();

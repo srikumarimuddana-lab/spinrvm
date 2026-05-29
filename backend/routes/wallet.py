@@ -218,15 +218,11 @@ async def top_up_wallet(
         }
     except stripe.error.StripeError as e:
         logger.error("Stripe wallet top-up error", exc_info=True)
-        raise HTTPException(
-            status_code=502, detail="Payment provider error. Please try again."
-        ) from e
+        raise HTTPException(status_code=502, detail="Payment provider error. Please try again.") from e
 
 
 @api_router.post("/pay")
-async def wallet_pay(
-    req: WalletPayRequest, current_user: dict = Depends(get_current_user)
-):
+async def wallet_pay(req: WalletPayRequest, current_user: dict = Depends(get_current_user)):
     """Pay for a ride using wallet balance."""
     wallet = await get_or_create_wallet(current_user["id"])
 
@@ -256,9 +252,19 @@ async def wallet_pay(
                 message_key=ErrorKeys.PAYMENT_INSUFFICIENT_FUNDS,
                 action_hint="Top up your wallet",
             ) from exc
-        raise HTTPException(
-            status_code=503, detail="Wallet payment failed — please retry"
-        ) from exc
+        raise HTTPException(status_code=503, detail="Wallet payment failed — please retry") from exc
+
+    # wallet_pay_for_ride returns None when the ride is already paid (idempotent
+    # no-op from migration 107 — no money moved, wallet balance unchanged).
+    # Return the stale balance without appending a ledger row; a None balance
+    # passed to _money_str or _record_transaction would corrupt wallet history.
+    if new_balance is None:
+        logger.info("[WALLET] /pay ride %s already paid — no-op, skipping ledger write", req.ride_id)
+        return {
+            "balance": _money_str(_d(wallet.get("balance", 0))),
+            "transaction_id": None,
+            "already_paid": True,
+        }
 
     # Mark the ride payment method (the RPC already set payment_status='paid')
     await db.update_one(

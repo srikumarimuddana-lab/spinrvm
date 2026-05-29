@@ -1151,71 +1151,35 @@ async def estimate_ride(
             body.pickup_lng,
         )
 
-    # Fetch nearby online+available drivers, presence-first so the DB limit
-    # is never applied to a pool that still contains ghost drivers.
-    #
-    # Pattern: ask Redis for present IDs first, then query Supabase for only
-    # those rows. This way the limit=200 cap applies to genuinely reachable
-    # drivers, not to a mixed DB page that might be dominated by ghosts.
-    #
-    # Fallback: if Redis is unconfigured (dev) or unavailable (outage), skip
-    # the presence pre-filter and query DB directly — same safe-degradation
-    # semantics used in /drivers/nearby and the dispatch path.
+    # DB-first: fetch candidate drivers from Supabase, then filter to only
+    # the present ones via a batched MGET against their specific IDs.
+    # This keeps Redis work O(nearby candidates) rather than O(all online
+    # drivers globally) — list_present_ids() uses SCAN which is documented
+    # for sweepers/admin dashboards, not per-request hot paths.
+    all_drivers = await db_supabase.get_rows(
+        "drivers",
+        {"is_online": True, "is_available": True},
+        limit=200,
+    )
     try:
         try:
-            from ..utils.driver_presence import list_present_ids as _list_present  # type: ignore
+            from ..utils.driver_presence import present_driver_ids_checked as _pdc  # type: ignore
         except ImportError:
-            from utils.driver_presence import list_present_ids as _list_present  # type: ignore
-        _present_ids = await _list_present()
-        if _present_ids:
-            # Redis answered with a non-empty pool — query only those drivers.
-            all_drivers = await db_supabase.get_rows(
-                "drivers",
-                {
-                    "id": {"$in": _present_ids},
-                    "is_available": True,
-                },
-                limit=200,
-            )
-            logger.info(
-                "[estimate] presence-first: %d present IDs → %d is_available DB rows",
-                len(_present_ids),
-                len(all_drivers),
-            )
-        else:
-            # Redis returned empty — either all drivers are genuinely offline
-            # (correct: show no availability) or Redis is unconfigured/down.
-            # Distinguish via a quick reachability probe.
-            try:
-                from ..utils.redis_client import _get_redis as _check_redis  # type: ignore
-            except ImportError:
-                from utils.redis_client import _get_redis as _check_redis  # type: ignore
-            _redis_live = await _check_redis() is not None
-            if _redis_live:
-                # Redis is up and returned an empty set → every driver is
-                # genuinely offline. Return no drivers so estimates show
-                # "unavailable" correctly.
-                all_drivers = []
-                logger.info("[estimate] presence-first: Redis up, zero present drivers")
-            else:
-                # Redis is down — fall back to DB query so a Redis outage
-                # doesn't blank all vehicle types for every rider.
-                all_drivers = await db_supabase.get_rows(
-                    "drivers",
-                    {"is_online": True, "is_available": True},
-                    limit=200,
-                )
-                logger.warning(
-                    "[estimate] Redis unavailable — fell back to DB query (%d rows)",
+            from utils.driver_presence import present_driver_ids_checked as _pdc  # type: ignore
+        _d_ids = [d["id"] for d in all_drivers if d.get("id")]
+        if _d_ids:
+            _present_set, _reachable = await _pdc(_d_ids)
+            if _reachable:
+                all_drivers = [d for d in all_drivers if d["id"] in _present_set]
+                logger.info(
+                    "[estimate] presence filter: %d candidates → %d present",
+                    len(_d_ids),
                     len(all_drivers),
                 )
+            else:
+                logger.warning("[estimate] presence store unreachable — using DB state (%d rows)", len(all_drivers))
     except Exception as _pres_exc:
-        logger.warning("[estimate] presence pre-filter failed, falling back to DB: %s", _pres_exc)
-        all_drivers = await db_supabase.get_rows(
-            "drivers",
-            {"is_online": True, "is_available": True},
-            limit=200,
-        )
+        logger.warning("[estimate] presence filter failed, using DB state: %s", _pres_exc)
 
     logger.info("[estimate] %d driver(s) in pool after presence gating", len(all_drivers))
 

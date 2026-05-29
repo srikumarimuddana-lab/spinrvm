@@ -8,9 +8,9 @@ filtered for completed / cancelled-with-driver in Python.  For riders with
 long history this meant reading megabytes of data from Supabase on every
 page load.
 
-Fix: push `status IN [completed, cancelled]` and `ORDER BY created_at DESC`
-to the DB query; cap at 500 rows.  Python only post-filters the
-cancelled-without-driver subset, which is now a tiny fraction of results.
+Fix: push completed / cancelled-with-driver filtering to the DB query and use
+`ORDER BY created_at DESC, id DESC` so cursor pagination remains stable when
+many rides share the same timestamp.
 
 Test layers
 -----------
@@ -33,7 +33,7 @@ _MOCK_REQUEST = StarletteRequest(
 
 
 def _apply_history_filter(rides):
-    """Mirror of the Python post-filter in get_ride_history."""
+    """Mirror of the visible history predicate pushed into the DB query."""
     return [
         r for r in rides if r.get("status") == "completed" or (r.get("status") == "cancelled" and r.get("driver_id"))
     ]
@@ -91,21 +91,6 @@ def test_next_cursor_is_none_on_last_page():
     assert next_cursor is None
 
 
-def test_db_query_uses_status_in_filter():
-    """Verify the filter dict passed to get_rows includes status $in."""
-    filters = {
-        "rider_id": "user-1",
-        "status": {"$in": ["completed", "cancelled"]},
-    }
-    assert filters["status"] == {"$in": ["completed", "cancelled"]}
-
-
-def test_db_limit_is_capped_at_500():
-    """Confirm the per-request DB cap is 500, not the old 2000."""
-    db_limit = 500
-    assert db_limit <= 500, "must not re-introduce unbounded DB reads"
-
-
 # ---------------------------------------------------------------------------
 # Layer 2 — integration (require backend deps; skipped if unavailable)
 # ---------------------------------------------------------------------------
@@ -122,45 +107,109 @@ _skip_no_deps = pytest.mark.skipif(not _HAS_BACKEND_DEPS, reason="backend deps n
 
 
 @_skip_no_deps
-@pytest.mark.anyio
-async def test_get_ride_history_calls_get_rows_with_status_filter():
-    """
-    get_ride_history must call db_supabase.get_rows with
-    status=$in[completed,cancelled] so filtering happens DB-side.
-    """
-    mock_rides = [
-        {"id": "r1", "status": "completed", "driver_id": "d1", "created_at": "2024-01-02"},
-        {"id": "r2", "status": "cancelled", "driver_id": "d1", "created_at": "2024-01-01"},
-    ]
-    get_rows_mock = AsyncMock(return_value=mock_rides)
+def test_cursor_clause_uses_id_tiebreaker():
+    clause = "created_at.lt.2026-05-29T10:00:00Z,and(created_at.eq.2026-05-29T10:00:00Z,id.lt.r20)"
+    assert clause == _rides_module._ride_history_cursor_or("2026-05-29T10:00:00Z", "r20")
 
-    with patch("backend.routes.rides.db_supabase.get_rows", get_rows_mock):
-        result = await _rides_module.get_ride_history(
-            request=_MOCK_REQUEST,
-            limit=20,
-            before=None,
-            current_user={"id": "user-1"},
-        )
 
-    get_rows_mock.assert_called_once()
-    _, filters, *_ = get_rows_mock.call_args.args
-    assert filters.get("status") == {"$in": ["completed", "cancelled"]}
-    assert result["rides"] == mock_rides
-    assert result["next_cursor"] is None
+@_skip_no_deps
+def test_visible_history_clause_excludes_unmatched_cancellations():
+    clause = _rides_module._RIDE_HISTORY_VISIBLE_OR
+    assert "status.eq.completed" in clause
+    assert "status.eq.cancelled" in clause
+    assert "driver_id.not.is.null" in clause
+
+
+class _FakeResult:
+    def __init__(self, data):
+        self.data = data
+
+
+class _FakeQuery:
+    def __init__(self, rows):
+        self.rows = rows
+        self.calls = []
+        self.limit_value = None
+
+    def select(self, columns):
+        self.calls.append(("select", columns))
+        return self
+
+    def eq(self, column, value):
+        self.calls.append(("eq", column, value))
+        return self
+
+    def or_(self, clause):
+        self.calls.append(("or", clause))
+        return self
+
+    def order(self, column, desc=False):
+        self.calls.append(("order", column, desc))
+        return self
+
+    def limit(self, value):
+        self.calls.append(("limit", value))
+        self.limit_value = value
+        return self
+
+    def execute(self):
+        return _FakeResult(self.rows[: self.limit_value])
+
+
+class _FakeSupabase:
+    def __init__(self, rows):
+        self.query = _FakeQuery(rows)
+
+    def table(self, table_name):
+        self.query.calls.append(("table", table_name))
+        return self.query
+
+
+async def _run_sync_now(fn):
+    return fn()
 
 
 @_skip_no_deps
 @pytest.mark.anyio
-async def test_get_ride_history_excludes_cancelled_without_driver():
-    """Cancelled rides with no driver_id must be filtered out in Python."""
-    mock_rides = [
-        {"id": "r1", "status": "completed", "driver_id": "d1", "created_at": "2024-01-03"},
-        {"id": "r2", "status": "cancelled", "driver_id": None, "created_at": "2024-01-02"},
-        {"id": "r3", "status": "cancelled", "driver_id": "d1", "created_at": "2024-01-01"},
-    ]
-    get_rows_mock = AsyncMock(return_value=mock_rides)
+async def test_fetch_ride_history_page_uses_stable_cursor_query():
+    rows = [{"id": f"r{i}", "status": "completed", "created_at": "2026-05-29T10:00:00Z"} for i in range(21)]
+    fake_supabase = _FakeSupabase(rows)
 
-    with patch("backend.routes.rides.db_supabase.get_rows", get_rows_mock):
+    with (
+        patch("backend.routes.rides.db_supabase.supabase", fake_supabase),
+        patch("backend.routes.rides.db_supabase.run_sync", _run_sync_now),
+    ):
+        result = await _rides_module._fetch_ride_history_page(
+            rider_id="user-1",
+            limit=20,
+            cursor_ts="2026-05-29T10:00:00Z",
+            before="r20",
+        )
+
+    assert len(result) == 21
+    assert ("eq", "rider_id", "user-1") in fake_supabase.query.calls
+    assert ("or", _rides_module._RIDE_HISTORY_VISIBLE_OR) in fake_supabase.query.calls
+    assert (
+        "or",
+        "created_at.lt.2026-05-29T10:00:00Z,and(created_at.eq.2026-05-29T10:00:00Z,id.lt.r20)",
+    ) in fake_supabase.query.calls
+    assert ("order", "created_at", True) in fake_supabase.query.calls
+    assert ("order", "id", True) in fake_supabase.query.calls
+    assert ("limit", 21) in fake_supabase.query.calls
+
+
+@_skip_no_deps
+@pytest.mark.anyio
+async def test_get_ride_history_returns_next_cursor_when_extra_row_exists():
+    mock_rides = [
+        {"id": f"r{i:02d}", "status": "completed", "driver_id": "d1", "created_at": "2026-05-29T10:00:00Z"}
+        for i in range(21)
+    ]
+
+    with (
+        patch("backend.routes.rides._fetch_ride_history_page", AsyncMock(return_value=mock_rides)),
+        patch("backend.routes.rides.get_app_settings", AsyncMock(return_value={})),
+    ):
         result = await _rides_module.get_ride_history(
             request=_MOCK_REQUEST,
             limit=20,
@@ -168,7 +217,6 @@ async def test_get_ride_history_excludes_cancelled_without_driver():
             current_user={"id": "user-1"},
         )
 
-    returned_ids = [r["id"] for r in result["rides"]]
-    assert "r2" not in returned_ids, "cancelled without driver_id must be excluded"
-    assert "r1" in returned_ids
-    assert "r3" in returned_ids
+    assert len(result["rides"]) == 20
+    assert result["rides"][-1]["id"] == "r19"
+    assert result["next_cursor"] == "r19"

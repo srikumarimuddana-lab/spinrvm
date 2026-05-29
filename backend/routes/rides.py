@@ -1166,6 +1166,27 @@ async def estimate_ride(
         len(all_drivers),
     )
 
+    # Presence filter — same logic as /drivers/nearby and the dispatch path.
+    # Without this, ghost drivers (is_online=True in DB but app dead/backgrounded)
+    # inflate driver_count and mark vehicle types as available when no real
+    # driver will ever receive the offer.
+    try:
+        try:
+            from ..utils.driver_presence import present_driver_ids_checked as _pdc  # type: ignore
+        except ImportError:
+            from utils.driver_presence import present_driver_ids_checked as _pdc  # type: ignore
+        _d_ids = [d["id"] for d in all_drivers if d.get("id")]
+        if _d_ids:
+            _present_set, _reachable = await _pdc(_d_ids)
+            if _reachable:
+                before_pres = len(all_drivers)
+                all_drivers = [d for d in all_drivers if d["id"] in _present_set]
+                logger.info("[estimate] presence filter: %d/%d driver(s) reachable", len(all_drivers), before_pres)
+            else:
+                logger.warning("[estimate] presence store unreachable — using DB state for estimates")
+    except Exception as _pres_exc:
+        logger.warning("[estimate] presence filter failed, using DB state: %s", _pres_exc)
+
     # Filter to drivers within 10km radius and group by vehicle_type_id.
     # Exclude drivers without a user_id — those are orphan/demo rows that
     # cannot be dispatched to, and counting them would inflate the rider's

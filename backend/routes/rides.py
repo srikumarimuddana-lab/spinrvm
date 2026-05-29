@@ -1660,10 +1660,14 @@ async def create_ride(
 
     # CR-1: a ride booked for a future time must NOT dispatch a live driver now.
     # It is parked in SCHEDULED and the scheduled-ride dispatcher loop flips it
-    # to SEARCHING at its scheduled_time. Treated as deferred only when
-    # is_scheduled is set AND a scheduled_time is present (validator guarantees
-    # that time is ≥5 min in the future).
-    _is_deferred_schedule = bool(body.is_scheduled and body.scheduled_time is not None)
+    # to SEARCHING at its scheduled_time. A request is deferred whenever a
+    # future scheduled_time is present — the CreateRideRequest validator
+    # guarantees that time is ≥5 min out. We key off scheduled_time (not the
+    # is_scheduled flag) because a client can send scheduled_time while leaving
+    # is_scheduled at its False default; the surge/fare logic above already
+    # treats scheduled_time presence as scheduled, and dispatching such a ride
+    # immediately would route a live driver hours early.
+    _is_deferred_schedule = body.scheduled_time is not None
     # Corporate time-window policy is enforced against the *pickup* time, so a
     # deferred ride must be evaluated against its scheduled_time, not the moment
     # of booking — otherwise a rider booking inside company hours for an
@@ -1738,7 +1742,11 @@ async def create_ride(
         surge_multiplier=round(float(surge), 2),
         total_fare=_f(total_fare),
         stops=body.stops,
-        is_scheduled=body.is_scheduled,
+        # Persist is_scheduled=True for any deferred ride even if the client
+        # left the flag at its default — the scheduled-ride dispatcher filters
+        # on {is_scheduled: True, status: 'scheduled'}, so a scheduled_time-only
+        # request must carry the flag or it would never be picked up.
+        is_scheduled=bool(body.is_scheduled or _is_deferred_schedule),
         requires_wav=body.requires_wav,
         quiet_mode=body.quiet_mode,
         rider_notes=body.rider_notes,

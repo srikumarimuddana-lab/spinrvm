@@ -1165,6 +1165,42 @@ async def estimate_ride(
         len(all_drivers),
     )
 
+    # Presence filter: strip drivers whose heartbeat has expired (app crashed /
+    # network lost). Mirrors the same guard in /drivers/nearby and dispatch so
+    # the rider's "X drivers" badge matches what dispatch can actually reach.
+    # On Redis outage (reachable=False) we fall back to DB state rather than
+    # blanking the count entirely — dispatch still presence-filters before any
+    # offer is sent, so a ghost driver that slips through cannot accept a ride.
+    try:
+        try:
+            from ..utils.driver_online import intent_online as _intent_online  # type: ignore
+            from ..utils.driver_presence import present_driver_ids_checked as _pdc  # type: ignore
+        except ImportError:
+            from utils.driver_online import intent_online as _intent_online  # type: ignore
+            from utils.driver_presence import present_driver_ids_checked as _pdc  # type: ignore
+
+        _driver_ids = [d["id"] for d in all_drivers if d.get("id")]
+        if _driver_ids:
+            _present, _reachable = await _pdc(_driver_ids)
+            if _reachable:
+                _before = len(all_drivers)
+                all_drivers = [d for d in all_drivers if d.get("id") in _present and _intent_online(d)]
+                logger.info(
+                    "[estimate] presence filter: %d/%d driver(s) reachable",
+                    len(all_drivers),
+                    _before,
+                )
+            else:
+                # Redis configured but unreachable — keep DB state, log warning.
+                # intent_online still applied to catch stale is_online column.
+                all_drivers = [d for d in all_drivers if _intent_online(d)]
+                logger.warning(
+                    "[estimate] presence store unreachable, using DB state (%d drivers after intent_online filter)",
+                    len(all_drivers),
+                )
+    except Exception as _exc:
+        logger.warning("[estimate] presence filter error, using DB state: %s", _exc)
+
     # Filter to drivers within 10km radius and group by vehicle_type_id.
     # Exclude drivers without a user_id — those are orphan/demo rows that
     # cannot be dispatched to, and counting them would inflate the rider's

@@ -589,6 +589,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           quest_hint: data.quest_hint || undefined,
           payment_method: data.payment_method || undefined,
           planned_route_polyline: Array.isArray(data.planned_route_polyline) ? data.planned_route_polyline : undefined,
+          service_area_polygon: Array.isArray(data.service_area_polygon) ? data.service_area_polygon : undefined,
         });
         break;
       }
@@ -1256,6 +1257,7 @@ export const useDriverDashboard = (): UseDriverDashboardReturn => {
           quest_hint: safeParse(data.quest_hint) ?? existing?.quest_hint,
           payment_method: data.payment_method || existing?.payment_method || undefined,
           planned_route_polyline: safeParse(data.planned_route_polyline) ?? existing?.planned_route_polyline,
+          service_area_polygon: safeParse(data.service_area_polygon) ?? existing?.service_area_polygon,
         });
       } else if (data?.type === 'auto_offline') {
         offerSound.stop();

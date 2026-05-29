@@ -4,28 +4,18 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'next/navigation';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import { DEFAULT_CENTER, addStandardControls } from '@/lib/map/maplibre-base';
+import {
+  DEFAULT_CENTER,
+  addStandardControls,
+  trackBaseMapStyle,
+  MAP_STYLE_FALLBACK,
+} from '@/lib/map/maplibre-base';
 
-// Inline raster style — no remote style.json fetch, no CSP surprises.
-// Works on any mobile browser as long as OSM raster tiles are reachable
-// (which they are from every modern carrier). Falls back gracefully even
-// if the page is opened on a flaky network.
-const RASTER_STYLE = {
-  version: 8 as const,
-  sources: {
-    osm: {
-      type: 'raster' as const,
-      tiles: [
-        'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png',
-        'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png',
-        'https://c.tile.openstreetmap.org/{z}/{x}/{y}.png',
-      ],
-      tileSize: 256,
-      attribution: '© OpenStreetMap contributors',
-    },
-  },
-  layers: [{ id: 'osm-tiles', type: 'raster' as const, source: 'osm' }],
-};
+// Labeled vector basemap (Protomaps when a key is configured, otherwise the
+// keyless OpenFreeMap fallback). We deliberately do NOT use raw OSM raster
+// tiles here: OSM's tile-usage policy forbids using them as an app basemap and
+// they load blank/throttled in the field, which is what left the tracking map
+// showing pins floating over grey with no street detail.
 
 interface RideInfo {
   status: string;
@@ -77,6 +67,7 @@ export default function TrackRide() {
   const dropoffMarkerRef = useRef<maplibregl.Marker | null>(null);
   const didFitRef = useRef(false);
   const routeFetchedRef = useRef(false);
+  const didFallbackRef = useRef(false);
   const ROUTE_SOURCE_ID = 'spinr-route';
   const ROUTE_LAYER_ID = 'spinr-route-line';
 
@@ -121,18 +112,27 @@ export default function TrackRide() {
   // Initialise the map once when the container mounts.
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current) return;
+    const primaryStyle = trackBaseMapStyle();
     const map = new maplibregl.Map({
       container: mapContainerRef.current,
-      style: RASTER_STYLE as unknown as maplibregl.StyleSpecification,
+      style: primaryStyle,
       center: DEFAULT_CENTER,
       zoom: 11,
       attributionControl: { compact: true },
     });
     map.on('error', (e) => {
-      // Surface tile/style load failures so they don't fail silently in
-      // the field — the screen would otherwise just stay blank.
-      // eslint-disable-next-line no-console
-      console.warn('[track-map] map error:', e?.error?.message || e);
+      // Surface tile/style load failures so they don't fail silently in the
+      // field — the screen would otherwise just stay blank. If the primary
+      // (Protomaps) style itself failed to load, fall back once to the keyless
+      // OpenFreeMap style so a misconfigured/over-quota key never leaves the
+      // rider with a blank map.
+      const msg = e?.error?.message || String(e);
+      console.warn('[track-map] map error:', msg);
+      if (!didFallbackRef.current && primaryStyle !== MAP_STYLE_FALLBACK && !map.isStyleLoaded()) {
+        didFallbackRef.current = true;
+        routeFetchedRef.current = false; // re-add the route layer onto the new style
+        map.setStyle(MAP_STYLE_FALLBACK);
+      }
     });
     addStandardControls(map);
     mapRef.current = map;

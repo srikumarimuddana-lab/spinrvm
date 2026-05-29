@@ -162,6 +162,8 @@ def _decode_polyline(encoded: str) -> list:
             result = 0
             shift = 0
             while True:
+                if index >= len(encoded):
+                    raise ValueError("Truncated encoded polyline at index %d" % index)
                 b = ord(encoded[index]) - 63
                 index += 1
                 result |= (b & 0x1F) << shift
@@ -202,7 +204,7 @@ async def _fetch_directions_polyline(
                     "key": api_key,
                 },
             )
-        data = resp.json()
+            data = resp.json()
         if data.get("status") != "OK" or not data.get("routes"):
             logger.warning(
                 "_fetch_directions_polyline: status=%s — no route returned",
@@ -784,8 +786,8 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
             return None
         try:
             sa = await db_supabase.find_one("service_areas", {"id": sa_id})
-            poly = (sa or {}).get("polygon")
-            return poly if isinstance(poly, list) and len(poly) >= 3 else None
+            poly = get_service_area_polygon(sa or {})
+            return poly or None
         except Exception as e:
             logger.warning("[DISPATCH] service_area polygon fetch failed: %s", e)
             return None

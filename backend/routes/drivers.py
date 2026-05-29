@@ -24,7 +24,7 @@ try:
     from .. import db_supabase
     from ..dependencies import get_admin_user, get_current_user
     from ..features import send_email, send_push_notification
-    from ..geo_utils import calculate_distance
+    from ..geo_utils import calculate_distance, get_service_area_polygon
     from ..logging_utils import diag_logger
     from ..models.ride_status import RideStatus
     from ..schemas import Driver, RideRatingRequest
@@ -2624,9 +2624,7 @@ async def get_active_ride(current_user: dict = Depends(get_current_user)):
     if sa_id:
         try:
             sa = await db_supabase.find_one("service_areas", {"id": sa_id})
-            poly = (sa or {}).get("polygon")
-            if isinstance(poly, list) and len(poly) >= 3:
-                service_area_polygon = poly
+            service_area_polygon = get_service_area_polygon(sa or {}) or None
         except Exception as e:
             logger.warning(f"get_active_ride: service_area polygon fetch non-fatal: {e}")
 

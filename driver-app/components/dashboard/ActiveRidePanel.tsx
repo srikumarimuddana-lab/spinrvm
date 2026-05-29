@@ -9,7 +9,6 @@ import {
   Linking,
   Platform,
   BackHandler,
-  KeyboardAvoidingView,
   ScrollView,
   Dimensions,
 } from 'react-native';
@@ -57,7 +56,7 @@ interface ActiveRidePanelProps {
   isLoading: boolean;
   otpInput: string;
   setOtpInput: (value: string) => void;
-  onVerifyOTP: (otp: string) => void;
+  onVerifyOTP: (otp: string) => Promise<boolean>;
   onNavigate: (lat: number, lng: number, label: string) => void;
   onArriveAtPickup: () => void;
   onStartRide: () => void;
@@ -115,6 +114,12 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
   const lastLocRef = useRef<{ lat: number; lng: number } | null>(null);
   const jitterBufferRef = useRef(0);
 
+  // PIN entry feedback state — spinner while verifying, shake + error on a
+  // wrong code. Reset whenever the ride phase or ride id changes.
+  const shakeAnim = useRef(new Animated.Value(0)).current;
+  const [verifying, setVerifying] = useState(false);
+  const [pinError, setPinError] = useState(false);
+
   // Reset distance when ride phase OR ride id changes — prevents stale
   // accumulation carrying over to a different ride if the panel is recycled.
   useEffect(() => {
@@ -122,6 +127,8 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
     setHasLiveData(false);
     lastLocRef.current = null;
     jitterBufferRef.current = 0;
+    setVerifying(false);
+    setPinError(false);
   }, [rideState, ride?.id]);
 
   // Accumulate distance from GPS updates during trip_in_progress.
@@ -160,12 +167,59 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
     }
   }, [rideState]);
 
+  // Hardware back during an active ride must never pop the screen away (that
+  // would strand the driver on a blank map mid-trip). Instead of a dead no-op,
+  // in the pre-trip phases it opens the same Cancel-Ride confirm the on-screen
+  // link uses, so back feels responsive and gives a real exit path. During
+  // trip_in_progress it's consumed silently — a started trip can't be cancelled.
   useEffect(() => {
-    const sub = BackHandler.addEventListener('hardwareBackPress', () => true);
+    const onBack = () => {
+      if (rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup') {
+        showAlert(
+          t('activeRide.cancelRide'),
+          t('activeRide.cancelRideWarning'),
+          [
+            { text: t('activeRide.keepRide'), style: 'cancel' },
+            { text: t('activeRide.yesCancel'), style: 'destructive', onPress: onCancelRide },
+          ],
+        );
+      }
+      return true;
+    };
+    const sub = BackHandler.addEventListener('hardwareBackPress', onBack);
     return () => sub.remove();
-  }, []);
+  }, [rideState, onCancelRide, t]);
 
   if (!ride) return null;
+
+  // ── PIN verification ────────────────────────────────────────
+  const triggerShake = () => {
+    Animated.sequence([
+      Animated.timing(shakeAnim, { toValue: 10, duration: 50, useNativeDriver: true }),
+      Animated.timing(shakeAnim, { toValue: -10, duration: 50, useNativeDriver: true }),
+      Animated.timing(shakeAnim, { toValue: 6, duration: 50, useNativeDriver: true }),
+      Animated.timing(shakeAnim, { toValue: -6, duration: 50, useNativeDriver: true }),
+      Animated.timing(shakeAnim, { toValue: 0, duration: 50, useNativeDriver: true }),
+    ]).start();
+  };
+
+  // Auto-submit when the 4th digit lands. On a wrong code: shake, surface an
+  // inline error and clear the boxes so the driver can retry. On success the
+  // store advances to trip_in_progress and this whole OTP card unmounts.
+  const submitOtp = async (otp: string) => {
+    setVerifying(true);
+    setPinError(false);
+    try {
+      const ok = await onVerifyOTP(otp);
+      if (!ok) {
+        triggerShake();
+        setPinError(true);
+        setOtpInput('');
+      }
+    } finally {
+      setVerifying(false);
+    }
+  };
 
   // ── Helpers ─────────────────────────────────────────────────
   const riderName = rider?.first_name
@@ -231,6 +285,12 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
   };
   const status = statusMap[rideState];
 
+  // Give the sheet more room while the PIN keypad is showing so the full
+  // keypad (incl. the 0 / delete row) is reachable instead of falling below
+  // the fold. Other phases stay compact so the map stays visible.
+  const maxPanelHeight =
+    Dimensions.get('window').height * (rideState === 'arrived_at_pickup' ? 0.9 : 0.65);
+
   return (
     <Animated.View
       style={[
@@ -238,19 +298,19 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
         {
           transform: [{ translateY: slideUpAnim }],
           opacity: fadeAnim,
-          maxHeight: Dimensions.get('window').height * 0.65,
+          maxHeight: maxPanelHeight,
         },
       ]}
     >
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={{ flex: 1 }}
-      >
         {/* Drag handle */}
         <View style={styles.dragHandleContainer}>
           <View style={styles.dragHandle} />
         </View>
-        <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+        <ScrollView
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ paddingBottom: insets.bottom + 16 }}
+        >
       {/* ── Status pill (floating) ──────────────────────────── */}
       <View style={styles.statusPill} accessibilityRole="text" accessibilityLabel={`${status.label}, earnings $${earnings.toFixed(2)}`}>
         <View style={[styles.statusIconBg, { backgroundColor: `${status.color}15` }]}>
@@ -340,30 +400,48 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
               <Ionicons name="shield-checkmark" size={18} color={colors.primary} />
               <Text allowFontScaling={false} style={styles.otpTitle}>{t('activeRide.verifyRiderPin')}</Text>
             </View>
-            <Text allowFontScaling={false} style={styles.otpSub}>Ask rider for their 4-digit code</Text>
-            <View style={styles.otpBoxRow}>
+            <Text allowFontScaling={false} style={styles.otpSub}>{t('activeRide.askRiderForCode')}</Text>
+            <Animated.View style={[styles.otpBoxRow, { transform: [{ translateX: shakeAnim }] }]}>
               {[0, 1, 2, 3].map(i => (
-                <View key={i} style={[styles.otpBox, otpInput.length > i && styles.otpBoxFilled]}>
+                <View
+                  key={i}
+                  style={[
+                    styles.otpBox,
+                    otpInput.length > i && styles.otpBoxFilled,
+                    pinError && styles.otpBoxError,
+                  ]}
+                >
                   <Text style={styles.otpDigit}>{otpInput[i] || ''}</Text>
                 </View>
               ))}
-            </View>
+            </Animated.View>
+            {verifying ? (
+              <View style={styles.otpStatusRow}>
+                <ActivityIndicator size="small" color={colors.primary} />
+              </View>
+            ) : pinError ? (
+              <Text allowFontScaling={false} style={styles.otpErrorText}>{t('activeRide.incorrectPin')}</Text>
+            ) : null}
             <View style={styles.keypad}>
               {[1, 2, 3, 4, 5, 6, 7, 8, 9, null, 0, 'del'].map((key, idx) => (
                 <TouchableOpacity
                   key={idx}
                   style={[styles.kpBtn, key === null && { backgroundColor: 'transparent', elevation: 0 }]}
-                  disabled={key === null}
+                  disabled={key === null || verifying}
                   activeOpacity={0.6}
                   hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                   accessibilityRole="button"
                   accessibilityLabel={key === 'del' ? 'Delete' : key !== null ? `${key}` : undefined}
                   onPress={() => {
-                    if (key === 'del') setOtpInput(otpInput.slice(0, -1));
-                    else if (key !== null && otpInput.length < 4) {
+                    if (verifying) return;
+                    if (key === 'del') {
+                      setPinError(false);
+                      setOtpInput(otpInput.slice(0, -1));
+                    } else if (key !== null && otpInput.length < 4) {
                       const next = otpInput + String(key);
+                      setPinError(false);
                       setOtpInput(next);
-                      if (next.length === 4) onVerifyOTP(next);
+                      if (next.length === 4) submitOtp(next);
                     }
                   }}
                 >
@@ -471,7 +549,6 @@ export const ActiveRidePanel: React.FC<ActiveRidePanelProps> = ({
         ) : null}
       </View>
         </ScrollView>
-      </KeyboardAvoidingView>
 
     </Animated.View>
   );
@@ -617,6 +694,9 @@ function createStyles(colors: ThemeColors) {
       alignItems: 'center',
     },
     otpBoxFilled: { borderColor: colors.primary, backgroundColor: `${colors.primary}08` },
+    otpBoxError: { borderColor: colors.error, backgroundColor: `${colors.error}08` },
+    otpStatusRow: { height: 20, justifyContent: 'center', alignItems: 'center', marginBottom: 8 },
+    otpErrorText: { fontSize: 12, color: colors.error, fontWeight: '600', marginBottom: 8, textAlign: 'center' },
     otpDigit: { fontSize: 32, fontWeight: '800', color: colors.text },
     keypad: {
       flexDirection: 'row',

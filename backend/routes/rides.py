@@ -185,24 +185,29 @@ async def _fetch_directions_polyline(
     dropoff_lat: float,
     dropoff_lng: float,
     api_key: str,
+    waypoints: Optional[list] = None,
 ) -> Optional[list]:
     """Call Google Directions API and return [[lat, lng], ...] overview polyline.
 
     Returns None on any failure — callers must treat this as a soft error and
     fall back to the client-computed polyline or the Directions API on-device.
     Timeout is 3 s, well within the ride-creation SLA.
+    waypoints is an optional list of {lat, lng} stop dicts (multi-stop rides).
     """
     if not api_key:
         return None
     try:
+        params: dict = {
+            "origin": f"{pickup_lat},{pickup_lng}",
+            "destination": f"{dropoff_lat},{dropoff_lng}",
+            "key": api_key,
+        }
+        if waypoints:
+            params["waypoints"] = "|".join(f"{w['lat']},{w['lng']}" for w in waypoints)
         async with _httpx.AsyncClient(timeout=3.0) as client:
             resp = await client.get(
                 "https://maps.googleapis.com/maps/api/directions/json",
-                params={
-                    "origin": f"{pickup_lat},{pickup_lng}",
-                    "destination": f"{dropoff_lat},{dropoff_lng}",
-                    "key": api_key,
-                },
+                params=params,
             )
             data = resp.json()
         if data.get("status") != "OK" or not data.get("routes"):
@@ -868,9 +873,15 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
         if driver.get("user_id"):
             await manager.send_personal_message(dispatch_payload, f"driver_{driver['user_id']}")
             try:
+                # Exclude large spatial fields from FCM data payload — FCM
+                # enforces a 4 KB data-message limit and detailed polygons/
+                # polylines can easily blow it. Drivers receive these via the
+                # WebSocket message (dispatch_payload) which has no size cap.
+                _FCM_SPATIAL_EXCLUDE = {"service_area_polygon", "planned_route_polyline"}
                 fcm_data = {
                     k: json.dumps(v) if isinstance(v, (dict, list)) else str(v) if v is not None else ""
                     for k, v in dispatch_payload.items()
+                    if k not in _FCM_SPATIAL_EXCLUDE
                 }
                 fcm_data["deeplink"] = "/driver/"
                 await send_push_notification(
@@ -2218,6 +2229,7 @@ async def create_ride(
                     fresh_ride["dropoff_lat"],
                     fresh_ride["dropoff_lng"],
                     _maps_key,
+                    waypoints=body.stops or [],
                 )
                 if _computed:
                     await db_supabase.update_ride(ride.id, {"planned_route_polyline": _computed})

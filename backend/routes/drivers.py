@@ -2616,6 +2616,20 @@ async def get_active_ride(current_user: dict = Depends(get_current_user)):
         except Exception as e:
             logger.warning(f"get_active_ride: quest hint lookup non-fatal: {e}")
 
+    # Include service area polygon so the driver-app can render the zone
+    # boundary overlay on the map — fetched once on every active-ride load
+    # (cold start / reconnect path). The polygon is non-sensitive geodata.
+    service_area_polygon = None
+    sa_id = ride.get("service_area_id")
+    if sa_id:
+        try:
+            sa = await db_supabase.find_one("service_areas", {"id": sa_id})
+            poly = (sa or {}).get("polygon")
+            if isinstance(poly, list) and len(poly) >= 3:
+                service_area_polygon = poly
+        except Exception as e:
+            logger.warning(f"get_active_ride: service_area polygon fetch non-fatal: {e}")
+
     return {
         "ride": serialize_doc(ride),
         "rider": safe_rider,
@@ -2623,6 +2637,7 @@ async def get_active_ride(current_user: dict = Depends(get_current_user)):
         "incentives": incentives,
         "total_bonus": total_bonus,
         "quest_hint": quest_hint,
+        "service_area_polygon": service_area_polygon,
     }
 
 

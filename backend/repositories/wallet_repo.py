@@ -48,8 +48,18 @@ async def wallet_increment_balance(wallet_id: str, amount: "Decimal") -> "Decima
     return await run_sync(_fn)
 
 
-async def wallet_pay_for_ride(wallet_id: str, ride_id: str, amount: "Decimal") -> "Optional[Decimal]":
-    """Atomically debit wallet and mark ride paid.
+async def wallet_pay_for_ride(
+    wallet_id: str,
+    ride_id: str,
+    amount: "Decimal",
+    tip_amount: "Decimal" = Decimal("0"),
+) -> "Optional[Decimal]":
+    """Atomically debit wallet, mark ride paid, and credit tip to driver_earnings.
+
+    tip_amount is written to rides.tip_amount and added (delta-style) to
+    rides.driver_earnings inside the same Postgres transaction as the wallet
+    debit, so a post-settlement Python crash cannot leave tip money collected
+    but missing from driver earnings.
 
     Returns the new balance after debit, or None if the ride was already paid
     (idempotent no-op — the RPC returned NULL, no money moved, no ledger entry
@@ -66,7 +76,12 @@ async def wallet_pay_for_ride(wallet_id: str, ride_id: str, amount: "Decimal") -
         try:
             res = supabase.rpc(
                 "wallet_pay_for_ride",
-                {"p_wallet_id": wallet_id, "p_ride_id": ride_id, "p_amount": str(amount)},
+                {
+                    "p_wallet_id": wallet_id,
+                    "p_ride_id": ride_id,
+                    "p_amount": str(amount),
+                    "p_tip_amount": str(tip_amount),
+                },
             ).execute()
         except Exception as exc:
             msg = str(exc).lower()
@@ -74,6 +89,10 @@ async def wallet_pay_for_ride(wallet_id: str, ride_id: str, amount: "Decimal") -
                 raise ValueError("insufficient_funds") from exc
             if "wallet not found" in msg:
                 raise ValueError("wallet_not_found") from exc
+            if "fare_underpaid" in msg:
+                raise ValueError("fare_underpaid") from exc
+            if "ride_not_payable" in msg:
+                raise ValueError("ride_not_payable") from exc
             raise
         data = getattr(res, "data", None)
         if data is None:

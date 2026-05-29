@@ -48,6 +48,22 @@ def _money_str(v: Decimal) -> str:
     return f"{_round(v):.2f}"
 
 
+def _tip_ride_update(ride: dict, tip_amount: Decimal) -> dict:
+    """Fields to merge into an update_ride call when a tip is being settled.
+
+    Applies the delta (new tip - already-stored tip) to driver_earnings so
+    the call is idempotent: re-running with the same tip amount leaves
+    driver_earnings unchanged (delta = 0).
+    """
+    tip_d = _round(tip_amount)
+    existing_tip = _round(_d(ride.get("tip_amount") or 0))
+    tip_delta = tip_d - existing_tip
+    fields: dict = {"tip_amount": _f(tip_d)}
+    if tip_delta > 0:
+        fields["driver_earnings"] = _f(_round(_d(ride.get("driver_earnings") or 0) + tip_delta))
+    return fields
+
+
 # ── Result types ─────────────────────────────────────────────────────
 
 
@@ -152,13 +168,13 @@ async def settle_wallet(
         )
 
     debit = _round(total_charge)
-    # Atomic debit + mark-paid via the wallet_pay_for_ride RPC (migration 50):
-    # it locks the wallet row FOR UPDATE, re-checks the balance, debits, and sets
-    # the ride's payment_status='paid' in one transaction, returning the new
-    # balance. Replaces the previous read-compute-write (a TOCTOU race plus a
-    # float-rounded balance written straight to the wallets NUMERIC column).
+    # Atomic debit + mark-paid + tip credit via wallet_pay_for_ride RPC
+    # (migration 110): locks wallet FOR UPDATE, checks balance, debits,
+    # sets payment_status='paid', writes tip_amount and driver_earnings delta
+    # — all in one Postgres transaction. A Python crash after this call
+    # cannot leave tip money collected but missing from driver earnings.
     try:
-        new_balance = await db_supabase.wallet_pay_for_ride(wallet["id"], ride_id, debit)
+        new_balance = await db_supabase.wallet_pay_for_ride(wallet["id"], ride_id, debit, tip_amount)
     except ValueError as exc:
         await db_supabase.update_ride(ride_id, {"payment_status": "pending"})
         if "insufficient_funds" in str(exc):
@@ -210,14 +226,8 @@ async def settle_wallet(
             "created_at": datetime.now(timezone.utc).isoformat(),
         },
     )
-    await db_supabase.update_ride(
-        ride_id,
-        {
-            "payment_status": "paid",
-            "tip_amount": _f(tip_amount),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        },
-    )
+    # payment_status, tip_amount, and driver_earnings are already written
+    # atomically by the RPC above — no separate update_ride needed here.
     return PaymentResult(success=True, charged_amount=_money_str(total_charge))
 
 
@@ -356,8 +366,8 @@ async def settle_corporate(
         ride_id,
         {
             "payment_status": "paid",
-            "tip_amount": _f(tip_amount),
             "updated_at": datetime.now(timezone.utc).isoformat(),
+            **_tip_ride_update(ride, tip_amount),
         },
     )
     return PaymentResult(success=True, charged_amount=_money_str(total_charge))
@@ -412,8 +422,8 @@ async def settle_card(
                 {
                     "payment_status": "paid",
                     "payment_intent_id": outcome.payment_intent_id,
-                    "tip_amount": _f(tip_amount),
                     "updated_at": datetime.now(timezone.utc).isoformat(),
+                    **_tip_ride_update(ride, tip_amount),
                 },
             )
         except Exception as db_err:

@@ -11,6 +11,8 @@ import { Ionicons, MaterialCommunityIcons, FontAwesome5 } from '@expo/vector-ico
 import { useRouter } from 'expo-router';
 import { useFocusEffect } from '@react-navigation/native';
 import { useDriverStore } from '../../store/driverStore';
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
 
 const toMoney = (s: string | number | null | undefined): string => {
   const n = Math.round((parseFloat(String(s ?? '0')) || 0) * 100) / 100;
@@ -24,6 +26,8 @@ type StatusFilter = 'all' | 'completed' | 'cancelled' | 'scheduled';
 
 export default function ActivityView() {
   const router = useRouter();
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
   const {
     earnings,
     rideHistory,
@@ -333,7 +337,7 @@ export default function ActivityView() {
   );
 }
 
-const styles = StyleSheet.create({
+function createStyles(colors: ThemeColors) { return StyleSheet.create({
   container: {
     flex: 1,
   },
@@ -355,16 +359,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     paddingVertical: 8,
     borderRadius: 24,
-    backgroundColor: '#f3f4f6',
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: '#e5e7eb',
+    borderColor: colors.border,
   },
   pillActive: {
-    backgroundColor: '#ef4444',
-    borderColor: '#ef4444',
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
   },
   pillText: {
-    color: '#6b7280',
+    color: colors.textDim,
     fontSize: 13,
     fontWeight: '600',
   },
@@ -492,20 +496,20 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   statusPill: {
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 20,
-    backgroundColor: '#f3f4f6',
+    paddingHorizontal: 18,
+    paddingVertical: 8,
+    borderRadius: 24,
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: '#e5e7eb',
+    borderColor: colors.border,
   },
   statusPillActive: {
-    backgroundColor: '#1f2937',
-    borderColor: '#1f2937',
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
   },
   statusPillText: {
-    color: '#6b7280',
-    fontSize: 12,
+    color: colors.textDim,
+    fontSize: 13,
     fontWeight: '600',
   },
   statusPillTextActive: {
@@ -654,4 +658,4 @@ const styles = StyleSheet.create({
     color: '#9ca3af',
     textAlign: 'center',
   },
-});
+}); }

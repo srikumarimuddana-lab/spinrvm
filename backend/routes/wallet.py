@@ -256,12 +256,16 @@ async def wallet_pay(req: WalletPayRequest, current_user: dict = Depends(get_cur
 
     # wallet_pay_for_ride returns None when the ride is already paid (idempotent
     # no-op from migration 107 — no money moved, wallet balance unchanged).
-    # Return the stale balance without appending a ledger row; a None balance
-    # passed to _money_str or _record_transaction would corrupt wallet history.
+    # Re-fetch the wallet so the balance we return is post-debit (a concurrent
+    # first request may have already debited while we were waiting inside the RPC
+    # FOR UPDATE lock — returning the pre-RPC snapshot would show an inflated
+    # balance to the client).
     if new_balance is None:
+        fresh = await db.find_one("wallets", {"id": wallet["id"]})
+        current_balance = _money_str(_d((fresh or wallet).get("balance", 0)))
         logger.info("[WALLET] /pay ride %s already paid — no-op, skipping ledger write", req.ride_id)
         return {
-            "balance": _money_str(_d(wallet.get("balance", 0))),
+            "balance": current_balance,
             "transaction_id": None,
             "already_paid": True,
         }

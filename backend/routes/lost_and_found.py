@@ -302,14 +302,16 @@ async def list_messages(
     await _require_participant(case_id, current_user["id"], driver["id"] if driver else None)
 
     filters: dict = {"lost_and_found_id": case_id}
-    messages = await db_supabase.get_rows(
+    # Fetch newest `limit` messages, then reverse so clients receive them
+    # in ascending (oldest-first) order for display.
+    rows = await db_supabase.get_rows(
         "lost_and_found_messages",
         filters,
         order="created_at",
-        desc=False,
+        desc=True,
         limit=limit,
     )
-    return {"messages": messages}
+    return {"messages": list(reversed(rows))}
 
 
 class SendMessageRequest(BaseModel):

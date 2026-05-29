@@ -26,7 +26,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import api from '@shared/api/client';
-import { showToast } from '../../../store/toastStore';
+import { showToast } from '../../../hooks/useToast';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 
@@ -93,7 +93,7 @@ export default function DriverLostAndFoundChatScreen() {
       setLostCase(caseRes.data?.case ?? null);
       setMessages(msgRes.data?.messages ?? []);
     } catch {
-      showToast('Error', 'Could not load case.', 'danger');
+      showToast('error', 'Could not load case.', 'Pull to refresh.');
     } finally {
       setLoading(false);
     }
@@ -126,7 +126,7 @@ export default function DriverLostAndFoundChatScreen() {
         await loadCase(newCase.id);
       }
     } catch (e: any) {
-      showToast('Error', e?.response?.data?.detail || 'Could not submit report.', 'danger');
+      showToast('error', 'Submit Failed', e?.response?.data?.detail || 'Could not submit report.');
     } finally {
       setSubmitting(false);
     }
@@ -149,7 +149,7 @@ export default function DriverLostAndFoundChatScreen() {
               await api.put(`/lost-and-found/${lostCase.id}/respond`, { found });
               await loadCase(lostCase.id);
             } catch (e: any) {
-              showToast('Error', e?.response?.data?.detail || 'Could not update status.', 'danger');
+              showToast('error', 'Update Failed', e?.response?.data?.detail || 'Could not update status.');
             } finally {
               setResponding(false);
             }
@@ -185,7 +185,7 @@ export default function DriverLostAndFoundChatScreen() {
     } catch (e: any) {
       setMessages(prev => prev.filter(m => m.id !== optimistic.id));
       setText(trimmed);
-      showToast('Send Failed', e?.response?.data?.detail || 'Could not send message.', 'danger');
+      showToast('error', 'Send Failed', e?.response?.data?.detail || 'Could not send message.');
     } finally {
       setSending(false);
     }

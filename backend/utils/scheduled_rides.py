@@ -24,11 +24,13 @@ except ImportError:
 try:
     from ..db import db
     from ..features import send_push_notification
+    from ..socket_manager import manager
     from .datetime_utils import parse_iso_utc
     from .redis_client import redis_set_nx
 except ImportError:
     from db import db
     from features import send_push_notification
+    from socket_manager import manager  # type: ignore[no-redef]
     from utils.datetime_utils import parse_iso_utc
     from utils.redis_client import redis_set_nx  # type: ignore[no-redef]
 
@@ -36,41 +38,70 @@ logger = logging.getLogger(__name__)
 
 
 async def _dispatch_scheduled_ride(ride: dict):
-    """Transition a scheduled ride from 'scheduled' to 'searching' and start driver matching."""
-    ride_id = ride["id"]
-    try:
-        # Only dispatch if still in scheduled state
-        current = await db.find_one("rides", {"id": ride_id})
-        if not current or current.get("status") != "searching":
-            # Already dispatched, cancelled, or status changed
-            if current and current.get("is_scheduled") and current.get("status") == "searching":
-                pass  # Already searching — proceed to match
-            else:
-                return
+    """Transition a scheduled ride from 'scheduled' to 'searching' and start driver matching.
 
-        # Mark as dispatched so we don't process it again
-        await db.update_one(
+    The scheduled→searching transition is an atomic DB claim: the update filters
+    on ``status='scheduled'`` so exactly one caller (across replicas and loop
+    ticks) wins. A claim returning no row means the ride was already dispatched,
+    cancelled, or otherwise moved on — we return without acting. This satisfies
+    the Background Loop Recipe replay-safety contract (atomic DB claim) without
+    relying on the Redis leader lock, which may be unavailable in dev fallback.
+    """
+    ride_id = ride["id"]
+    rider_id = ride.get("rider_id")
+    try:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        # Atomic claim: only the caller that flips scheduled→searching proceeds.
+        claimed = await db.update_one(
             "rides",
-            {"id": ride_id},
+            {"id": ride_id, "status": "scheduled"},
             {
                 "$set": {
+                    "status": "searching",
                     "scheduled_dispatched": True,
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                    # Mark the moment dispatch actually began so downstream
+                    # latency metrics measure from real request time, not booking.
+                    "ride_requested_at": now_iso,
+                    "updated_at": now_iso,
                 }
             },
         )
+        if not claimed:
+            # Another replica/tick won the claim, or the ride was cancelled or
+            # already dispatched. Nothing to do.
+            return
 
-        # Import and run driver matching
+        logger.info(f"Dispatched scheduled ride {ride_id}: scheduled → searching")
+
+        # Mandatory state-change WS event (rider + admins). This also surfaces
+        # the ride in admin live-monitoring now that it is a real in-flight
+        # request — the create_ride path skips the ride_requested broadcast for
+        # deferred scheduled rides precisely so this is the single source.
         try:
-            from routes.rides import match_driver_to_ride
+            await manager.broadcast_ride_status(
+                ride_id,
+                "searching",
+                rider_id=rider_id,
+                is_scheduled=True,
+            )
+        except Exception as ws_err:
+            logger.warning(f"scheduled dispatch: WS broadcast failed for {ride_id}: {ws_err}")
+
+        # Import and run driver matching. We do NOT pass ride= so the dispatch
+        # path re-fetches the freshly-claimed 'searching' row.
+        try:
+            from routes.rides import match_driver_to_ride, ride_search_timeout
         except ImportError:
-            from ..routes.rides import match_driver_to_ride
+            from ..routes.rides import match_driver_to_ride, ride_search_timeout
 
         await match_driver_to_ride(ride_id)
-        logger.info(f"Dispatched scheduled ride {ride_id}")
+
+        # Arm the no-drivers-found timeout exactly as the live booking path does,
+        # so a scheduled ride that finds no driver auto-cancels instead of
+        # hanging in 'searching' indefinitely.
+        asyncio.create_task(ride_search_timeout(ride_id))
 
         # Notify rider
-        rider_id = ride.get("rider_id")
         if rider_id:
             await send_push_notification(
                 rider_id,
@@ -124,12 +155,15 @@ async def check_scheduled_rides():
     ten_min_from_now = now + timedelta(minutes=10)
 
     try:
-        # Get all pending scheduled rides
+        # Get all pending scheduled rides. These sit in status 'scheduled'
+        # (set by create_ride for deferred bookings) until their scheduled_time
+        # arrives — querying 'searching' here meant the loop never saw a
+        # correctly-stored scheduled ride (CR-2).
         scheduled = await db.get_rows(
             "rides",
             {
                 "is_scheduled": True,
-                "status": "searching",
+                "status": "scheduled",
             },
             limit=100,
             order="scheduled_time",

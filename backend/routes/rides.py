@@ -1701,6 +1701,17 @@ async def create_ride(
         if _corp_members:
             _corp_member_id = _corp_members[0]["id"]
 
+    # CR-1: a ride booked for a future time must NOT dispatch a live driver
+    # now. It is parked in SCHEDULED and the scheduled-ride dispatcher loop
+    # (utils/scheduled_rides.py) flips it to SEARCHING and runs driver
+    # matching when the scheduled_time arrives. We treat a ride as deferred
+    # only when is_scheduled is set AND a scheduled_time is present — the
+    # CreateRideRequest validator already guarantees that time is ≥5 min in
+    # the future. A ride with is_scheduled but no time falls through to an
+    # immediate dispatch (legacy behaviour) rather than getting stuck.
+    _is_deferred_schedule = bool(body.is_scheduled and body.scheduled_time is not None)
+    _initial_status = RideStatus.SCHEDULED if _is_deferred_schedule else RideStatus.SEARCHING
+
     pickup_otp_plain = generate_pickup_otp()
     ride = Ride(
         rider_id=current_user["id"],
@@ -1732,7 +1743,7 @@ async def create_ride(
         # NOTE: ``requires_wav`` was passed twice (once at line ~1090, again
         # here) — Python 3.11+ raises SyntaxError, blocking module import
         # and the entire test suite. Drop-in fix unblocks Audit-17 Phase 1c.
-        status=RideStatus.SEARCHING,
+        status=_initial_status,
         pickup_otp=pickup_otp_plain,
         ride_requested_at=datetime.now(timezone.utc),
     )
@@ -1996,28 +2007,42 @@ async def create_ride(
     # Let admin live-monitoring see the request before dispatch starts —
     # previously the dashboard only observed a ride once a driver accepted,
     # which made it impossible to watch an unassigned ride sit in queue.
-    try:
-        await manager.broadcast_to_admins(
-            {
-                "type": "ride_requested",
-                "ride_id": ride.id,
-                "rider_id": fresh_ride.get("rider_id"),
-                "pickup_address": fresh_ride.get("pickup_address"),
-                "dropoff_address": fresh_ride.get("dropoff_address"),
-                "pickup_lat": fresh_ride.get("pickup_lat"),
-                "pickup_lng": fresh_ride.get("pickup_lng"),
-                "dropoff_lat": fresh_ride.get("dropoff_lat"),
-                "dropoff_lng": fresh_ride.get("dropoff_lng"),
-                "fare": fresh_ride.get("grand_total") or fresh_ride.get("total_fare"),
-                "status": fresh_ride.get("status"),
-            }
-        )
-    except Exception as _exc:  # pragma: no cover - best effort
-        logger.warning(f"create_ride: admin broadcast failed: {_exc}")
+    # Deferred scheduled rides are NOT live requests yet; the scheduler
+    # broadcasts ride_requested when it flips them to SEARCHING.
+    if not _is_deferred_schedule:
+        try:
+            await manager.broadcast_to_admins(
+                {
+                    "type": "ride_requested",
+                    "ride_id": ride.id,
+                    "rider_id": fresh_ride.get("rider_id"),
+                    "pickup_address": fresh_ride.get("pickup_address"),
+                    "dropoff_address": fresh_ride.get("dropoff_address"),
+                    "pickup_lat": fresh_ride.get("pickup_lat"),
+                    "pickup_lng": fresh_ride.get("pickup_lng"),
+                    "dropoff_lat": fresh_ride.get("dropoff_lat"),
+                    "dropoff_lng": fresh_ride.get("dropoff_lng"),
+                    "fare": fresh_ride.get("grand_total") or fresh_ride.get("total_fare"),
+                    "status": fresh_ride.get("status"),
+                }
+            )
+        except Exception as _exc:  # pragma: no cover - best effort
+            logger.warning(f"create_ride: admin broadcast failed: {_exc}")
 
     # Match driver — pass the fresh ride through so the dispatch path
     # doesn't re-fetch the row we just inserted.
-    await match_driver_to_ride(ride.id, ride=fresh_ride)
+    #
+    # CR-1: skip immediate dispatch for deferred scheduled rides. They stay
+    # in SCHEDULED until scheduled_ride_dispatcher_loop transitions them to
+    # SEARCHING at their scheduled_time. Dispatching here would route a real
+    # driver to a pickup that is hours or days away.
+    if not _is_deferred_schedule:
+        await match_driver_to_ride(ride.id, ride=fresh_ride)
+    else:
+        logger.info(
+            f"create_ride: ride {ride.id} scheduled for {body.scheduled_time} — "
+            "parked in 'scheduled', deferring dispatch to scheduler loop"
+        )
 
     # Dispatch may have set driver_id / status; read the current state
     # for the response. Skipping this extra fetch would mean the rider

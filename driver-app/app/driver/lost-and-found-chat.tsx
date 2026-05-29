@@ -26,7 +26,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import api from '@shared/api/client';
-import { showToast } from '../../../hooks/useToast';
+import { showToast } from '../../hooks/useToast';
 import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 

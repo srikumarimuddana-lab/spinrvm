@@ -32,7 +32,7 @@ def _q2(v: Decimal) -> Decimal:
 
 try:
     from . import db_supabase
-    from .dependencies import get_current_user
+    from .dependencies import get_admin_user, get_current_user
     from .geo_utils import get_service_area_polygon
     from .models.ride_status import RideStatus
     from .services.fare_service import DEFAULT_FARE, calculate_fare
@@ -41,7 +41,7 @@ try:
     from .utils.surge_engine import SURGE_CAP
 except ImportError:
     import db_supabase
-    from dependencies import get_current_user
+    from dependencies import get_admin_user, get_current_user
     from geo_utils import get_service_area_polygon
     from models.ride_status import RideStatus
     from services.fare_service import DEFAULT_FARE, calculate_fare
@@ -54,13 +54,10 @@ db = db_supabase
 
 # ============ Routers ============
 support_router = APIRouter(tags=["Support"])
-admin_support_router = APIRouter(tags=["Admin Support"])
-
-# ... (rest of file)
-
-# ============ Admin: Area Fees (Pricing) ============
-
-pricing_router = APIRouter(tags=["Pricing"])
+# CS-001: router-level guard — every endpoint on this router requires a valid
+# admin JWT. Previously bare (no auth), exposing surge, FAQ, ticket, and
+# notification mutations to unauthenticated callers.
+admin_support_router = APIRouter(tags=["Admin Support"], dependencies=[Depends(get_admin_user)])
 
 
 # ============ Geometry Helpers ============
@@ -305,11 +302,11 @@ async def check_airport_fee(
 
 
 @support_router.post("/tickets")
-async def create_ticket(req: CreateTicketRequest, user_id: str = Query(...)):
+async def create_ticket(req: CreateTicketRequest, current_user: dict = Depends(get_current_user)):
     """Create a new support ticket."""
     ticket = {
         "id": str(uuid.uuid4()),
-        "user_id": user_id,
+        "user_id": current_user["id"],
         "subject": req.subject,
         "message": req.message,
         "category": req.category,
@@ -327,11 +324,11 @@ class SafetyReportRequest(BaseModel):
 
 
 @support_router.post("/tickets/safety-report")
-async def create_safety_report(req: SafetyReportRequest, user_id: str = Depends(get_current_user)):
+async def create_safety_report(req: SafetyReportRequest, current_user: dict = Depends(get_current_user)):
     """Create a new safety report ticket (high priority)."""
     ticket = {
         "id": str(uuid.uuid4()),
-        "user_id": user_id,
+        "user_id": current_user["id"],
         "subject": "SAFETY INCIDENT REPORT",
         "message": req.description,
         "category": "safety",
@@ -346,22 +343,24 @@ async def create_safety_report(req: SafetyReportRequest, user_id: str = Depends(
 
 
 @support_router.get("/tickets")
-async def get_user_tickets(user_id: str = Query(...)):
-    """Get all tickets for a specific user."""
+async def get_user_tickets(current_user: dict = Depends(get_current_user)):
+    """Get all tickets for the authenticated user."""
     tickets = await db_supabase.get_rows(
-        "support_tickets", {"user_id": user_id}, limit=100, order="created_at", desc=True
+        "support_tickets", {"user_id": current_user["id"]}, limit=100, order="created_at", desc=True
     )
     return tickets
 
 
 @support_router.get("/tickets/{ticket_id}")
-async def get_ticket(ticket_id: str):
+async def get_ticket(ticket_id: str, current_user: dict = Depends(get_current_user)):
     """Get a specific ticket by ID."""
     ticket = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("support_tickets", {"id": ticket_id}, limit=1)
     )
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
+    if ticket["user_id"] != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to view this ticket")
     return ticket
 
 
@@ -554,8 +553,10 @@ async def admin_reset_surge_to_auto(area_id: str):
 
 
 # ============ Admin: Area Fees (Pricing) ============
-
-pricing_router = APIRouter(tags=["Pricing"])
+# CS-001: router-level guard — every endpoint on this router requires a valid
+# admin JWT. Previously bare (no auth), exposing area-fee, tax-rate, and
+# driver-area mutations to unauthenticated callers.
+pricing_router = APIRouter(tags=["Pricing"], dependencies=[Depends(get_admin_user)])
 
 
 class CreateAreaFeeRequest(BaseModel):
@@ -1006,7 +1007,7 @@ async def get_area_config(
 
 
 @support_router.post("/rides/schedule")
-async def schedule_ride(req: ScheduleRideRequest):
+async def schedule_ride(req: ScheduleRideRequest, current_user: dict = Depends(get_current_user)):
     """Schedule a ride for a future time."""
     try:
         scheduled_dt = datetime.fromisoformat(req.scheduled_time.replace("Z", "+00:00"))
@@ -1032,7 +1033,7 @@ async def schedule_ride(req: ScheduleRideRequest):
 
     ride = {
         "id": str(uuid.uuid4()),
-        "rider_id": req.rider_id,
+        "rider_id": current_user["id"],
         "vehicle_type_id": req.vehicle_type_id,
         "pickup_address": req.pickup_address,
         "pickup_lat": req.pickup_lat,
@@ -1065,18 +1066,20 @@ async def schedule_ride(req: ScheduleRideRequest):
 
 
 @support_router.get("/rides/scheduled")
-async def get_scheduled_rides(user_id: str = Query(...)):
-    """Get all scheduled rides for a user."""
-    rides = await db_supabase.get_rides_for_user(user_id, limit=50)
+async def get_scheduled_rides(current_user: dict = Depends(get_current_user)):
+    """Get all scheduled rides for the authenticated user."""
+    rides = await db_supabase.get_rides_for_user(current_user["id"], limit=50)
     return rides
 
 
 @support_router.delete("/rides/scheduled/{ride_id}")
-async def cancel_scheduled_ride(ride_id: str):
+async def cancel_scheduled_ride(ride_id: str, current_user: dict = Depends(get_current_user)):
     """Cancel a scheduled ride."""
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
+    if ride.get("rider_id") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to cancel this ride")
     if ride.get("status") != RideStatus.SCHEDULED:
         raise HTTPException(status_code=400, detail="Only scheduled rides can be cancelled this way")
 
@@ -1088,11 +1091,13 @@ async def cancel_scheduled_ride(ride_id: str):
 
 
 @support_router.post("/rides/{ride_id}/stops")
-async def add_stop(ride_id: str, req: AddStopRequest):
+async def add_stop(ride_id: str, req: AddStopRequest, current_user: dict = Depends(get_current_user)):
     """Add a stop to an existing ride."""
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
+    if ride.get("rider_id") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to modify this ride")
     if ride.get("status") in RideStatus.terminal_statuses():
         raise HTTPException(status_code=400, detail="Cannot add stops to completed/cancelled rides")
 
@@ -1114,11 +1119,13 @@ async def add_stop(ride_id: str, req: AddStopRequest):
 
 
 @support_router.put("/rides/{ride_id}/stops/{stop_id}/complete")
-async def complete_stop(ride_id: str, stop_id: str):
+async def complete_stop(ride_id: str, stop_id: str, current_user: dict = Depends(get_current_user)):
     """Mark a stop as completed."""
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
+    if ride.get("rider_id") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to update this ride")
 
     stops = ride.get("stops", [])
     for stop in stops:
@@ -1137,11 +1144,13 @@ async def complete_stop(ride_id: str, stop_id: str):
 
 
 @support_router.post("/rides/{ride_id}/share")
-async def share_trip(ride_id: str, req: ShareTripRequest):
+async def share_trip(ride_id: str, req: ShareTripRequest, current_user: dict = Depends(get_current_user)):
     """Share a live trip link with a contact."""
     ride = await db_supabase.get_ride(ride_id)
     if not ride:
         raise HTTPException(status_code=404, detail="Ride not found")
+    if ride.get("rider_id") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to share this ride")
 
     # Generate or reuse the share token
     token = ride.get("shared_trip_token") or secrets.token_urlsafe(32)
@@ -1202,9 +1211,9 @@ async def get_shared_trip(token: str):
 
 
 @support_router.post("/users/fcm-token")
-async def register_fcm_token(req: RegisterFcmTokenRequest, user_id: str = Query(...)):
-    """Register/update the user's FCM token for push notifications."""
-    await db_supabase.update_one("users", {"id": user_id}, {"fcm_token": req.token})
+async def register_fcm_token(req: RegisterFcmTokenRequest, current_user: dict = Depends(get_current_user)):
+    """Register/update the authenticated user's FCM token for push notifications."""
+    await db_supabase.update_one("users", {"id": current_user["id"]}, {"fcm_token": req.token})
     return {"registered": True}
 
 

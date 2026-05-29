@@ -9,7 +9,7 @@ from loguru import logger
 try:
     from .. import db_supabase
     from ..core.config import settings
-    from ..dependencies import verify_jwt_token
+    from ..dependencies import _verify_admin_payload, verify_jwt_token
     from ..settings_loader import get_app_settings
     from ..socket_manager import manager
     from ..utils.driver_presence import clear_presence, mark_present
@@ -18,7 +18,7 @@ try:
 except ImportError:
     import db_supabase
     from core.config import settings
-    from dependencies import verify_jwt_token
+    from dependencies import _verify_admin_payload, verify_jwt_token
     from socket_manager import manager
     from utils.driver_presence import clear_presence, mark_present
 
@@ -369,13 +369,14 @@ async def websocket_endpoint(
                 # the repeating "WebSocket failed" loop seen in the admin
                 # live-monitoring console. Mirrors get_current_user() in
                 # dependencies/__init__.py.
-                if payload.get("role") in _ADMIN_ROLES and payload.get("email"):
-                    user = {
-                        "id": payload["user_id"],
-                        "email": payload.get("email"),
-                        "phone": payload.get("phone", ""),
-                        "role": payload["role"],
-                    }
+                # Run the same full admin checks as the HTTP path (aud, JTI
+                # revocation, staff active, token_version, idle timeout). Any
+                # HTTPException is caught by the outer `except Exception` which
+                # sets user=None and closes the socket — correct behaviour for
+                # a revoked / expired / disabled admin token.
+                admin_user = await _verify_admin_payload(payload)
+                if admin_user is not None:
+                    user = admin_user
                 else:
                     user = await db_supabase.get_user_by_id(payload["user_id"])
             except Exception:

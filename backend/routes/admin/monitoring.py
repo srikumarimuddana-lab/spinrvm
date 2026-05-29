@@ -36,7 +36,7 @@ except ImportError:
         redis_delete_pattern,
     )
 
-router = APIRouter(prefix="/admin/monitoring", tags=["Monitoring"])
+router = APIRouter(prefix="/monitoring", tags=["Monitoring"])
 
 ACTIVE_RIDE_STATUSES = ["searching", "driver_assigned", "driver_arrived", "in_progress"]
 ON_RIDE_STATUSES = ["driver_assigned", "driver_arrived", "in_progress"]

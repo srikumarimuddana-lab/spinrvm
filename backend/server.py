@@ -112,7 +112,6 @@ from features import admin_support_router, pricing_router, support_router
 from routes.addresses import api_router as addresses_router
 from routes.admin import admin_auth_router
 from routes.admin import admin_router as admin_router
-from routes.admin.monitoring import router as monitoring_router
 from routes.auth import api_router as auth_router
 from routes.corporate_accounts import router as corporate_accounts_router
 from routes.corporate_company import router as corporate_company_router
@@ -312,7 +311,6 @@ app.include_router(corporate_rider_router, prefix="/api/v1")
 # written as /api/v1/documents/{id} by the old base64-in-DB upload path keep resolving.
 app.include_router(files_router, prefix="/api")
 app.include_router(files_router, prefix="/api/v1")
-app.include_router(monitoring_router, prefix="/api")
 
 # Configure structured logging with Loguru
 import sys  # noqa: E402

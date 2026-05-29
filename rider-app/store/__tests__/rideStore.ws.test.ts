@@ -107,22 +107,22 @@ describe('rideStore — WebSocket-driven updates', () => {
 
   describe('addChatMessage', () => {
     it('should append a message', () => {
-      useRideStore.getState().addChatMessage({ id: 'm1', text: 'Hello', sender: 'rider' });
+      useRideStore.getState().addChatMessage({ id: 'm1', ride_id: 'ride_1', text: 'Hello', sender: 'rider', timestamp: '' });
 
       expect(useRideStore.getState().chatMessages).toHaveLength(1);
       expect(useRideStore.getState().chatMessages[0].text).toBe('Hello');
     });
 
     it('should deduplicate by id', () => {
-      useRideStore.getState().addChatMessage({ id: 'm1', text: 'Hello', sender: 'rider' });
-      useRideStore.getState().addChatMessage({ id: 'm1', text: 'Hello', sender: 'rider' });
+      useRideStore.getState().addChatMessage({ id: 'm1', ride_id: 'ride_1', text: 'Hello', sender: 'rider', timestamp: '' });
+      useRideStore.getState().addChatMessage({ id: 'm1', ride_id: 'ride_1', text: 'Hello', sender: 'rider', timestamp: '' });
 
       expect(useRideStore.getState().chatMessages).toHaveLength(1);
     });
 
     it('should allow different ids', () => {
-      useRideStore.getState().addChatMessage({ id: 'm1', text: 'Hello', sender: 'rider' });
-      useRideStore.getState().addChatMessage({ id: 'm2', text: 'Hi back', sender: 'driver' });
+      useRideStore.getState().addChatMessage({ id: 'm1', ride_id: 'ride_1', text: 'Hello', sender: 'rider', timestamp: '' });
+      useRideStore.getState().addChatMessage({ id: 'm2', ride_id: 'ride_1', text: 'Hi back', sender: 'driver', timestamp: '' });
 
       expect(useRideStore.getState().chatMessages).toHaveLength(2);
     });
@@ -132,7 +132,7 @@ describe('rideStore — WebSocket-driven updates', () => {
     it('should clear chatMessages on clearRide', () => {
       useRideStore.setState({
         currentRide: { id: 'ride_1' } as any,
-        chatMessages: [{ id: 'm1', text: 'test', sender: 'rider' }],
+        chatMessages: [{ id: 'm1', ride_id: 'ride_1', text: 'test', sender: 'rider', timestamp: '' }],
       });
 
       useRideStore.getState().clearRide();
@@ -170,7 +170,7 @@ describe('rideStore — WebSocket-driven updates', () => {
       useRideStore.setState({
         currentRide: { id: 'ride_1', status: 'driver_assigned' } as any,
         currentDriver: { id: 'driver_1', name: 'Jane' } as any,
-        chatMessages: [{ id: 'm1', text: 'On my way', sender: 'driver' }],
+        chatMessages: [{ id: 'm1', ride_id: 'ride_1', text: 'On my way', sender: 'driver', timestamp: '' }],
       });
 
       useRideStore.getState().clearRide();

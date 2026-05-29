@@ -24,6 +24,8 @@ api_router = APIRouter(tags=["Service Areas"])
 # Fields safe to expose to unauthenticated clients.
 # surge_multiplier is already visible to riders before booking, so it is not a
 # pricing secret — drivers see it here to decide when to go online.
+# polygon is the service-area boundary as [{lat, lng}, ...] — needed by all map
+# surfaces (driver idle map, rider booking map, ride offer overlay).
 _PUBLIC_FIELDS = (
     "id",
     "name",
@@ -34,6 +36,7 @@ _PUBLIC_FIELDS = (
     "surge_multiplier",
     "surge_active",
     "surge_enabled",
+    "polygon",
 )
 
 

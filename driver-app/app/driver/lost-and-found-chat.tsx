@@ -60,7 +60,7 @@ const CATEGORY_LABELS: Record<Category, string> = {
 };
 
 const AWAITING_RESPONSE = new Set(['reported', 'driver_notified']);
-const CLOSED = new Set(['not_found', 'returned', 'resolved', 'closed']);
+const CLOSED = new Set(['not_found', 'returned', 'resolved', 'unresolved', 'closed']);
 
 export default function DriverLostAndFoundChatScreen() {
   const router = useRouter();

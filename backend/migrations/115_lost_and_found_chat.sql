@@ -58,7 +58,7 @@ CREATE POLICY lfm_select ON lost_and_found_messages
     FOR SELECT USING (
         EXISTS (
             SELECT 1 FROM lost_and_found lf
-            WHERE lf.id = lost_and_found_id
+            WHERE lf.id::text = lost_and_found_id
               AND (
                   auth.uid()::text = lf.reporter_id::text
                OR auth.uid()::text = lf.driver_id::text
@@ -75,7 +75,7 @@ CREATE POLICY lfm_insert ON lost_and_found_messages
         AND sender_role != 'system'
         AND EXISTS (
             SELECT 1 FROM lost_and_found lf
-            WHERE lf.id = lost_and_found_id
+            WHERE lf.id::text = lost_and_found_id
               AND (
                   auth.uid()::text = lf.reporter_id::text
                OR auth.uid()::text = lf.driver_id::text

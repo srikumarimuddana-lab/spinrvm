@@ -1113,6 +1113,57 @@ class RideEstimateRequest(BaseModel):
     requires_wav: bool = False
 
 
+async def _filter_reachable_drivers(all_drivers: list) -> list:
+    """Drop ghost drivers from a DB-online pool for rider-facing counts.
+
+    A driver is kept iff their Redis presence key is still alive (heartbeat
+    within the TTL) AND their durable intent is online. Mirrors the guard in
+    /drivers/nearby and dispatch so the estimate "X drivers" badge matches
+    what dispatch can actually reach.
+
+    Redis-outage policy (matches /drivers/nearby):
+      * reachable + present set → filter to truly reachable drivers
+      * reachable + empty set   → everyone is offline; an empty result is
+        correct, not a bug
+      * NOT reachable (Redis configured but down) → presence is unknowable,
+        so fall back to DB state (still applying intent_online to catch a
+        stale is_online column). Dispatch presence-filters before any offer,
+        so a ghost that slips through here cannot actually accept a ride.
+
+    Any unexpected error degrades to DB state rather than blanking the count.
+    """
+    try:
+        from ..utils.driver_online import intent_online
+        from ..utils.driver_presence import present_driver_ids_checked
+    except ImportError:  # pragma: no cover - dual import path
+        from utils.driver_online import intent_online  # type: ignore
+        from utils.driver_presence import present_driver_ids_checked  # type: ignore
+
+    driver_ids = [d["id"] for d in all_drivers if d.get("id")]
+    if not driver_ids:
+        return all_drivers
+
+    try:
+        present, reachable = await present_driver_ids_checked(driver_ids)
+    except Exception as exc:
+        logger.warning("[estimate] presence filter error, using DB state: %s", exc)
+        return [d for d in all_drivers if intent_online(d)]
+
+    if reachable:
+        before = len(all_drivers)
+        filtered = [d for d in all_drivers if d.get("id") in present and intent_online(d)]
+        logger.info("[estimate] presence filter: %d/%d driver(s) reachable", len(filtered), before)
+        return filtered
+
+    # Redis configured but unreachable — keep DB state, log warning.
+    filtered = [d for d in all_drivers if intent_online(d)]
+    logger.warning(
+        "[estimate] presence store unreachable, using DB state (%d drivers after intent_online filter)",
+        len(filtered),
+    )
+    return filtered
+
+
 @api_router.post("/estimate")
 @api_rate_limit
 async def estimate_ride(
@@ -1150,13 +1201,23 @@ async def estimate_ride(
             body.pickup_lng,
         )
 
-    # Fetch all nearby online+available drivers once
+    # Fetch nearby online+available drivers once. Order by went_online_at DESC
+    # so recently-toggled-online drivers fill the 200-row page first. Ghost
+    # drivers (is_available=True in DB but heartbeat expired) tend to carry
+    # stale went_online_at values and fall toward the tail, so they are less
+    # likely to crowd real drivers out of the cap before the presence filter
+    # below runs. This mitigates — but does not fully eliminate — the
+    # capped-page ghost leak; full elimination needs a geo-index (query by
+    # radius first) or a sweeper that writes is_available=False back on TTL
+    # expiry. Tracked as a follow-up.
     all_drivers = await db_supabase.get_rows(
         "drivers",
         {
             "is_online": True,
             "is_available": True,
         },
+        order="went_online_at",
+        desc=True,
         limit=200,
     )
 
@@ -1164,6 +1225,11 @@ async def estimate_ride(
         "[estimate] fetched %d online+available drivers from DB",
         len(all_drivers),
     )
+
+    # Presence filter: strip drivers whose heartbeat has expired (app crashed /
+    # network lost) so the rider's "X drivers" badge matches what dispatch can
+    # actually reach. See _filter_reachable_drivers for the Redis-outage policy.
+    all_drivers = await _filter_reachable_drivers(all_drivers)
 
     # Filter to drivers within 10km radius and group by vehicle_type_id.
     # Exclude drivers without a user_id — those are orphan/demo rows that

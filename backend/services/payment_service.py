@@ -48,6 +48,22 @@ def _money_str(v: Decimal) -> str:
     return f"{_round(v):.2f}"
 
 
+def _tip_ride_update(ride: dict, tip_amount: Decimal) -> dict:
+    """Fields to merge into an update_ride call when a tip is being settled.
+
+    Applies the delta (new tip - already-stored tip) to driver_earnings so
+    the call is idempotent: re-running with the same tip amount leaves
+    driver_earnings unchanged (delta = 0).
+    """
+    tip_d = _round(tip_amount)
+    existing_tip = _round(_d(ride.get("tip_amount") or 0))
+    tip_delta = tip_d - existing_tip
+    fields: dict = {"tip_amount": _f(tip_d)}
+    if tip_delta > 0:
+        fields["driver_earnings"] = _f(_round(_d(ride.get("driver_earnings") or 0) + tip_delta))
+    return fields
+
+
 # ── Result types ─────────────────────────────────────────────────────
 
 
@@ -350,8 +366,8 @@ async def settle_corporate(
         ride_id,
         {
             "payment_status": "paid",
-            "tip_amount": _f(tip_amount),
             "updated_at": datetime.now(timezone.utc).isoformat(),
+            **_tip_ride_update(ride, tip_amount),
         },
     )
     return PaymentResult(success=True, charged_amount=_money_str(total_charge))
@@ -406,8 +422,8 @@ async def settle_card(
                 {
                     "payment_status": "paid",
                     "payment_intent_id": outcome.payment_intent_id,
-                    "tip_amount": _f(tip_amount),
                     "updated_at": datetime.now(timezone.utc).isoformat(),
+                    **_tip_ride_update(ride, tip_amount),
                 },
             )
         except Exception as db_err:

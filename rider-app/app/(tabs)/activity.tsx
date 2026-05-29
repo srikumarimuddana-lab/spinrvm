@@ -167,6 +167,7 @@ export default function ActivityScreen() {
   const onRefresh = () => {
     setRefreshing(true);
     fetchData();
+    fetchStats(period);
     fetchScheduledRides();
   };
 
@@ -350,14 +351,6 @@ export default function ActivityScreen() {
     <SafeAreaView style={styles.container} edges={['top']}>
       <View style={styles.header}>
         <Text style={styles.title}>{t('activity.title')}</Text>
-        <TouchableOpacity
-          style={styles.filterIcon}
-          accessibilityRole="button"
-          accessibilityLabel="Filter rides"
-          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-        >
-          <Ionicons name="options-outline" size={24} color={colors.text} />
-        </TouchableOpacity>
       </View>
 
       <View style={styles.tabRow} accessibilityRole="tablist">
@@ -489,13 +482,17 @@ export default function ActivityScreen() {
               ))}
             </View>
           ) : rides.length === 0 && !loading ? (
-            <View style={styles.emptyState}>
+            <ScrollView
+              style={styles.content}
+              contentContainerStyle={styles.emptyState}
+              refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+            >
               <View style={styles.emptyIconContainer}>
                 <Ionicons name="car-outline" size={48} color="#CCC" />
               </View>
               <Text style={styles.emptyTitle}>{t('activity.no_rides')}</Text>
               <Text style={styles.emptyText}>{t('activity.no_rides_subtitle')}</Text>
-            </View>
+            </ScrollView>
           ) : (
             <FlatList
               data={listItems}
@@ -575,7 +572,6 @@ function createStyles(colors: ThemeColors, isCompactFilterLayout: boolean) { ret
     paddingHorizontal: 24, paddingVertical: 16,
   },
   title: { fontSize: 28, fontFamily: 'PlusJakartaSans_700Bold', color: colors.text },
-  filterIcon: { padding: 4 },
   tabRow: {
     flexDirection: 'row',
     paddingHorizontal: 20,

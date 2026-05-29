@@ -83,6 +83,8 @@ class UserProfile(BaseModel):
     # + documents rows. One of: profile_incomplete | vehicle_required |
     # documents_required | documents_rejected | documents_expired |
     # pending_review | verified | suspended. None for non-drivers.
+    rating: Optional[float] = None
+    total_rides: Optional[int] = None
     driver_onboarding_status: Optional[str] = None
     driver_onboarding_detail: Optional[str] = None  # human-readable explanation
     driver_onboarding_next_screen: Optional[str] = None  # route hint for the app

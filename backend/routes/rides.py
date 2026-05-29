@@ -2801,23 +2801,20 @@ async def process_payment(
     _grand = ride.get("grand_total")
     if _grand is None:
         _grand = ride.get("total_fare", 0)
-    total_charge = _q(_grand) + _q(tip_amount)
+    tip_rounded = _q(tip_amount)  # canonical 2dp value passed to all settle fns
+    total_charge = _q(_grand) + tip_rounded
     payment_method = (ride.get("payment_method") or "card").lower()
 
-    # Compute tip delta and prepare the DB payload, but do NOT write yet.
-    # The DB write is deferred until after settlement confirms money moved.
-    # A wallet idempotent no-op (ride already paid, RPC returned None) must
-    # not leave tip_amount or driver_earnings persisted when nothing was charged.
-    # The local ride dict is updated in-memory so total_charge and the fare
-    # breakdown snapshot passed to settle_* are correct.
-    # tip_amount and driver_earnings are written atomically inside
-    # wallet_pay_for_ride (migration 110). _tip_db_update carries only the
-    # fare_breakdown_snapshot (cosmetic display update, best-effort).
+    # _tip_db_update carries only the fare_breakdown_snapshot (cosmetic display
+    # update, written best-effort after settlement). tip_amount and
+    # driver_earnings are written atomically:
+    #   - wallet:    inside wallet_pay_for_ride RPC (migration 110)
+    #   - card/corp: inside settle_card / settle_corporate via _tip_ride_update
     # The in-memory ride dict is still updated so the receipt email sees the
     # correct totals without a DB re-fetch.
     _tip_db_update: dict = {}
-    if tip_amount > 0:
-        tip_d = _round(_d(tip_amount))
+    if tip_rounded > 0:
+        tip_d = tip_rounded
         existing_tip = _d(ride.get("tip_amount") or 0)
         tip_delta = tip_d - existing_tip
         snapshot = ride.get("fare_breakdown_snapshot")
@@ -2840,13 +2837,13 @@ async def process_payment(
             ride_id,
             current_user["id"],
             total_charge,
-            tip_amount,
+            tip_rounded,
             fare_breakdown=_snap_lines or _build_fare_breakdown(ride),
         )
     elif payment_method == "company_allowance":
-        result = await settle_corporate(ride, ride_id, total_charge, tip_amount)
+        result = await settle_corporate(ride, ride_id, total_charge, tip_rounded)
     else:
-        result = await settle_card(ride, ride_id, current_user["id"], total_charge, tip_amount)
+        result = await settle_card(ride, ride_id, current_user["id"], total_charge, tip_rounded)
 
     if not result.success:
         detail = result.error or "Payment failed"
@@ -2873,8 +2870,16 @@ async def process_payment(
     email_sent = False
     if not result.already_paid:
         if _tip_db_update:
-            await db_supabase.update_ride(ride_id, _tip_db_update)
-        email_sent = await send_ride_receipt(ride, current_user["id"], tip_amount)
+            try:
+                await db_supabase.update_ride(ride_id, _tip_db_update)
+            except Exception as _snap_err:
+                logger.error(
+                    "[PAYMENT] fare_breakdown_snapshot write failed for ride %s — "
+                    "payment succeeded, snapshot will be stale: %s",
+                    ride_id,
+                    _snap_err,
+                )
+        email_sent = await send_ride_receipt(ride, current_user["id"], tip_rounded)
     return {
         "success": True,
         "charged_amount": _money_str(result.charged_amount),

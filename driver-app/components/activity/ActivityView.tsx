@@ -87,7 +87,12 @@ export default function ActivityView() {
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       {/* Period pills */}
-      <View style={styles.pillRow}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.pillScroll}
+        contentContainerStyle={styles.pillRow}
+      >
         {(['today', 'week', 'month', 'all'] as Period[]).map((item) => (
           <TouchableOpacity
             key={item}
@@ -99,7 +104,7 @@ export default function ActivityView() {
             </Text>
           </TouchableOpacity>
         ))}
-      </View>
+      </ScrollView>
 
       {loading ? (
         <ActivityIndicator color="#ef4444" style={{ marginTop: 60 }} />
@@ -336,12 +341,15 @@ const styles = StyleSheet.create({
     paddingBottom: 40,
   },
   // Period pills
+  pillScroll: {
+    marginTop: 12,
+    marginBottom: 4,
+    flexGrow: 0,
+  },
   pillRow: {
     flexDirection: 'row',
     paddingHorizontal: 16,
     gap: 10,
-    marginTop: 12,
-    marginBottom: 4,
   },
   pill: {
     paddingHorizontal: 18,

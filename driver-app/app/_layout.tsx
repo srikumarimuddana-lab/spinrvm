@@ -243,6 +243,8 @@ function usePushNotificationRouter() {
           router.push('/driver/' as any);
         } else if (data?.type === 'chat_message' && data?.ride_id) {
           router.push(`/driver/chat?rideId=${data.ride_id}` as any);
+        } else if ((data?.type === 'lost_and_found' || data?.type === 'lost_and_found_message') && data?.case_id) {
+          router.push({ pathname: '/driver/lost-and-found-chat', params: { caseId: data.case_id } } as any);
         } else {
           router.push('/driver/notifications');
         }
@@ -299,6 +301,8 @@ function usePushNotificationRouter() {
               router.push('/driver/' as any);
             } else if (data?.type === 'chat_message' && data?.ride_id) {
               router.push(`/driver/chat?rideId=${data.ride_id}` as any);
+            } else if ((data?.type === 'lost_and_found' || data?.type === 'lost_and_found_message') && data?.case_id) {
+              router.push({ pathname: '/driver/lost-and-found-chat', params: { caseId: data.case_id } } as any);
             } else {
               router.push('/driver/notifications' as any);
             }

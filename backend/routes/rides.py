@@ -148,6 +148,83 @@ except ImportError:
 
 db = db_supabase  # legacy alias
 
+import httpx as _httpx  # noqa: E402 — late import to avoid circular at module load
+
+
+def _decode_polyline(encoded: str) -> list:
+    """Decode a Google encoded polyline string to [[lat, lng], ...] list."""
+    coords: list = []
+    index = 0
+    lat = 0
+    lng = 0
+    while index < len(encoded):
+        for is_lng in (False, True):
+            result = 0
+            shift = 0
+            while True:
+                if index >= len(encoded):
+                    raise ValueError("Truncated encoded polyline at index %d" % index)
+                b = ord(encoded[index]) - 63
+                index += 1
+                result |= (b & 0x1F) << shift
+                shift += 5
+                if b < 32:
+                    break
+            value = ~(result >> 1) if (result & 1) else (result >> 1)
+            if is_lng:
+                lng += value
+            else:
+                lat += value
+        coords.append([lat / 1e5, lng / 1e5])
+    return coords
+
+
+async def _fetch_directions_polyline(
+    pickup_lat: float,
+    pickup_lng: float,
+    dropoff_lat: float,
+    dropoff_lng: float,
+    api_key: str,
+    waypoints: Optional[list] = None,
+) -> Optional[list]:
+    """Call Google Directions API and return [[lat, lng], ...] overview polyline.
+
+    Returns None on any failure — callers must treat this as a soft error and
+    fall back to the client-computed polyline or the Directions API on-device.
+    Timeout is 3 s, well within the ride-creation SLA.
+    waypoints is an optional list of {lat, lng} stop dicts (multi-stop rides).
+    """
+    if not api_key:
+        return None
+    try:
+        params: dict = {
+            "origin": f"{pickup_lat},{pickup_lng}",
+            "destination": f"{dropoff_lat},{dropoff_lng}",
+            "key": api_key,
+        }
+        if waypoints:
+            params["waypoints"] = "|".join(f"{w['lat']},{w['lng']}" for w in waypoints)
+        async with _httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(
+                "https://maps.googleapis.com/maps/api/directions/json",
+                params=params,
+            )
+            data = resp.json()
+        if data.get("status") != "OK" or not data.get("routes"):
+            logger.warning(
+                "_fetch_directions_polyline: status=%s — no route returned",
+                data.get("status"),
+            )
+            return None
+        encoded = data["routes"][0].get("overview_polyline", {}).get("points", "")
+        if not encoded:
+            return None
+        pts = _decode_polyline(encoded)
+        return pts if len(pts) >= 2 else None
+    except Exception as exc:
+        logger.warning("_fetch_directions_polyline failed (non-fatal): %s", exc)
+        return None
+
 
 async def _require_ride_in_state_rider(ride_id: str, rider_id: str, allowed_states: tuple) -> dict:
     """Load a rider's ride only if it is in one of allowed_states.
@@ -708,9 +785,22 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
             logger.error(f"[DISPATCH] incentive lookup failed: {e}", exc_info=True)
             return [], 0.0
 
-    rider_user, (_incentives, _total_bonus) = await asyncio.gather(
+    async def _fetch_service_area_polygon() -> Optional[list]:
+        sa_id = ride.get("service_area_id")
+        if not sa_id:
+            return None
+        try:
+            sa = await db_supabase.find_one("service_areas", {"id": sa_id})
+            poly = get_service_area_polygon(sa or {})
+            return poly or None
+        except Exception as e:
+            logger.warning("[DISPATCH] service_area polygon fetch failed: %s", e)
+            return None
+
+    rider_user, (_incentives, _total_bonus), _service_area_polygon = await asyncio.gather(
         _fetch_rider(),
         _fetch_incentives(),
+        _fetch_service_area_polygon(),
     )
 
     rider_display_name = None
@@ -777,14 +867,21 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
             "quest_hint": _quest_hint,
             "payment_method": ride.get("payment_method"),
             "planned_route_polyline": ride.get("planned_route_polyline") or None,
+            "service_area_polygon": _service_area_polygon,
         }
 
         if driver.get("user_id"):
             await manager.send_personal_message(dispatch_payload, f"driver_{driver['user_id']}")
             try:
+                # Exclude large spatial fields from FCM data payload — FCM
+                # enforces a 4 KB data-message limit and detailed polygons/
+                # polylines can easily blow it. Drivers receive these via the
+                # WebSocket message (dispatch_payload) which has no size cap.
+                _FCM_SPATIAL_EXCLUDE = {"service_area_polygon", "planned_route_polyline"}
                 fcm_data = {
                     k: json.dumps(v) if isinstance(v, (dict, list)) else str(v) if v is not None else ""
                     for k, v in dispatch_payload.items()
+                    if k not in _FCM_SPATIAL_EXCLUDE
                 }
                 fcm_data["deeplink"] = "/driver/"
                 await send_push_notification(
@@ -2113,6 +2210,37 @@ async def create_ride(
             )
         except Exception as _exc:  # pragma: no cover - best effort
             logger.warning(f"create_ride: admin broadcast failed: {_exc}")
+
+    # Server-side planned_route_polyline computation.
+    # If the rider-app didn't send one (race between booking tap and
+    # Directions finishing, or no Maps key on client), compute it here
+    # using the Google Directions API before dispatch so every offer
+    # carries a road-following polyline instead of falling back to the
+    # dashed straight-line in the driver-app.
+    _existing_poly = fresh_ride.get("planned_route_polyline")
+    if not _existing_poly or (isinstance(_existing_poly, list) and len(_existing_poly) < 2):
+        try:
+            _s = await get_app_settings()
+            _maps_key = (_s or {}).get("google_maps_api_key", "")
+            if _maps_key:
+                _computed = await _fetch_directions_polyline(
+                    fresh_ride["pickup_lat"],
+                    fresh_ride["pickup_lng"],
+                    fresh_ride["dropoff_lat"],
+                    fresh_ride["dropoff_lng"],
+                    _maps_key,
+                    waypoints=body.stops or [],
+                )
+                if _computed:
+                    await db_supabase.update_ride(ride.id, {"planned_route_polyline": _computed})
+                    fresh_ride["planned_route_polyline"] = _computed
+                    logger.info(
+                        "create_ride: server-computed polyline (%d pts) stored for ride %s",
+                        len(_computed),
+                        ride.id,
+                    )
+        except Exception as _poly_err:
+            logger.warning("create_ride: polyline computation failed (non-fatal): %s", _poly_err)
 
     # Match driver — pass the fresh ride through so the dispatch path
     # doesn't re-fetch the row we just inserted.

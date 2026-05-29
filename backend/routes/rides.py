@@ -2699,14 +2699,6 @@ async def process_payment(
             detail=f"Ride is in status '{_ride_status}'; payment requires completed state.",
         )
 
-    # A wallet ride stuck in 'processing' for longer than this is treated as a
-    # crashed settlement and recovered. Wallet settlement is a single atomic RPC
-    # (wallet_pay_for_ride debits AND marks paid in one txn, migration 50/107),
-    # so a wallet ride still at 'processing' was provably NEVER debited — safe to
-    # re-drive. Kept short so the rider isn't stuck in a "complete → pay" loop,
-    # but long enough that a genuinely in-flight settle on another replica wins.
-    _STALE_PROCESSING_SECONDS = 90
-
     def _charged(r: dict) -> str:
         _g = r.get("grand_total")
         if _g is None:
@@ -2723,8 +2715,12 @@ async def process_payment(
     # 'processing' for a CARD/corporate ride may mean the charge was CAPTURED
     # with the DB write lost (settle_card's captured-but-unconfirmed path), so
     # reporting already-paid avoids a double charge; the reconcile/retry loop
-    # reconciles the truth. WALLET 'processing' is never a captured state (see
-    # above) and falls through to the stale-recovery claim below.
+    # reconciles the truth. WALLET 'processing' is different: settlement is a
+    # single atomic RPC (wallet_pay_for_ride debits AND marks paid in one txn,
+    # migration 50/107), so a wallet ride still at 'processing' was provably
+    # NEVER debited — it's a crashed/timed-out settle that must be RE-DRIVEN,
+    # not reported as paid. The RPC is idempotent (107: no-op if already paid),
+    # so re-driving cannot double-charge even under a concurrent retry.
     if _pstatus == "processing" and _pmethod != "wallet":
         logger.info(f"[PAYMENT] Ride {ride_id} processing ({_pmethod}) — skipping duplicate charge")
         return {"success": True, "charged_amount": _charged(ride), "already_paid": True}
@@ -2736,39 +2732,49 @@ async def process_payment(
     if tip_amount > 500:
         raise HTTPException(status_code=400, detail="Tip amount exceeds maximum ($500)")
 
-    # Atomic claim. Allow re-driving a previously FAILED charge (e.g. the rider
-    # updated a declined card and retried), not just a fresh 'pending'. Without
-    # 'failed' here, a retry after a decline fell through to the guard-None
-    # branch below and was wrongly reported as already-paid — leaving the fare
-    # uncollected while the rider saw "Paid".
+    # Atomic claim. 'pending' is the normal first payment; 'failed' lets a retry
+    # after a decline re-drive; for WALLET we also re-claim 'processing' so a
+    # crashed/stuck settlement is recovered on the rider's next attempt (the
+    # idempotent RPC is the double-charge guard). We do NOT gate this on
+    # updated_at — /rate bumps updated_at immediately before /process-payment,
+    # so an age filter never fires and the ride stays stuck forever.
+    _wallet_redrive_lock_key: str | None = None
+    _claim_states = ["pending", "failed"]
+    if _pmethod == "wallet":
+        _claim_states.append("processing")
+        if _pstatus == "processing":
+            # 'processing → processing' UPDATE is not exclusive: both concurrent
+            # re-drives match the WHERE clause and both enter settlement. The
+            # idempotent RPC prevents the double-debit but post-RPC side effects
+            # (ledger write, receipt email) would still run twice. Acquire a
+            # short-lived Redis NX lock so only one re-drive proceeds at a time.
+            try:
+                from ..utils.redis_client import redis_delete as _redis_del
+                from ..utils.redis_client import redis_set_nx as _redis_nx
+            except ImportError:
+                from utils.redis_client import redis_set_nx as _redis_nx  # type: ignore
+            _wallet_redrive_lock_key = f"spinr:wallet_settle:{ride_id}"
+            if not await _redis_nx(_wallet_redrive_lock_key, "1", 30):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Payment retry already in progress. Please try again in a moment.",
+                )
     guard_row = await db_supabase.update_one(
         "rides",
-        {"id": ride_id, "payment_status": {"$in": ["pending", "failed"]}},
+        {"id": ride_id, "payment_status": {"$in": _claim_states}},
         {
             "payment_status": "processing",
             "updated_at": datetime.now(timezone.utc).isoformat(),
         },
     )
-
-    # Stale wallet-'processing' recovery: a crashed settlement left the ride
-    # claimed but never debited. Reclaim atomically on the updated_at age filter
-    # so only one replica wins the recovery (and wallet_pay_for_ride is
-    # idempotent, so even a lost race cannot double-debit).
-    if guard_row is None and _pstatus == "processing" and _pmethod == "wallet":
-        _stale_before = (datetime.now(timezone.utc) - timedelta(seconds=_STALE_PROCESSING_SECONDS)).isoformat()
-        guard_row = await db_supabase.update_one(
-            "rides",
-            {"id": ride_id, "payment_status": "processing", "updated_at": {"$lt": _stale_before}},
-            {"payment_status": "processing", "updated_at": datetime.now(timezone.utc).isoformat()},
-        )
-        if guard_row is not None:
-            logger.warning(f"[PAYMENT] Recovered stale wallet 'processing' ride {ride_id} for re-settlement")
+    if guard_row is not None and _pstatus == "processing":
+        logger.warning(f"[PAYMENT] Re-driving stuck wallet 'processing' ride {ride_id} for re-settlement")
 
     if guard_row is None:
-        # Lost the claim race (concurrent attempt grabbed it). Re-read to see
-        # the real state — only report already-paid when the ride is genuinely
-        # paid. A still-processing state is reported as a retryable 409 (the
-        # client backs off and retries) rather than a false "Paid".
+        # Couldn't claim. Re-read the real state — only report already-paid when
+        # the ride is genuinely paid (or a captured-card 'processing'); a wallet
+        # state we couldn't claim returns a retryable 409 rather than a false
+        # "Paid".
         fresh = await db_supabase.get_ride(ride_id) or ride
         if fresh.get("payment_status") == "paid":
             return {"success": True, "already_paid": True, "charged_amount": _charged(fresh)}
@@ -2840,7 +2846,21 @@ async def process_payment(
                 detail.update(result.extra)
         raise HTTPException(status_code=result.status_code, detail=detail)
 
-    email_sent = await send_ride_receipt(ride, current_user["id"], tip_amount)
+    # Release the wallet re-drive lock now that settlement is complete so any
+    # subsequent legitimate retry sees the paid status immediately rather than
+    # waiting 30 s for the TTL to expire.
+    if _wallet_redrive_lock_key:
+        try:
+            await _redis_del(_wallet_redrive_lock_key)
+        except Exception as _lock_err:
+            logger.debug("wallet redrive lock release failed (TTL will expire): %s", _lock_err)
+
+    # Skip receipt on already_paid — a previous attempt already paid and
+    # (presumably) sent a receipt; we avoid the duplicate without losing the
+    # financial record (ledger write was also skipped by settle_wallet).
+    email_sent = False
+    if not result.already_paid:
+        email_sent = await send_ride_receipt(ride, current_user["id"], tip_amount)
     return {
         "success": True,
         "charged_amount": _money_str(result.charged_amount),

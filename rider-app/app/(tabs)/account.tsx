@@ -235,7 +235,7 @@ export default function AccountScreen() {
             <View style={styles.ratingDivider} />
             <View style={styles.ratingBox}>
               <Text style={styles.ratingNumber}>{user?.total_rides || 0}</Text>
-              <Text style={styles.ratingLabel}>Trips</Text>
+              <Text style={styles.ratingLabel}>Rides</Text>
             </View>
           </View>
         </LinearGradient>

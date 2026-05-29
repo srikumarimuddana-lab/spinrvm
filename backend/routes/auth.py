@@ -874,6 +874,13 @@ async def get_me(current_user: dict = Depends(get_current_user)):
             )
         current_user["profile_complete"] = True
 
+    # Rider stats: completed ride count for the profile hero card.
+    try:
+        ride_count = await db_supabase.count_documents("rides", {"rider_id": current_user["id"], "status": "completed"})
+        current_user["total_rides"] = ride_count
+    except Exception:
+        logger.error("Could not fetch rider ride count", exc_info=True)
+
     # Derive driver onboarding status (None for non-drivers).
     try:
         from onboarding_status import derive_driver_onboarding_status  # type: ignore

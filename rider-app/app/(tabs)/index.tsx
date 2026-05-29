@@ -42,6 +42,19 @@ export default function HomeScreen() {
 
   const mapRef = useRef<any>(null);
   const bottomSheetRef = useRef<BottomSheet>(null);
+  // On a fresh install the screen can mount before Reanimated's UI thread is
+  // warm and before the container reports a real height, so the bottom sheet's
+  // mount animation (animateOnMount) is computed against a 0-height container
+  // and the sheet never appears — until the app is killed and reopened warm.
+  // Imperatively snap to index 0 the first time the container measures a real
+  // height so the sheet reliably shows on the very first launch too.
+  const didInitSheet = useRef(false);
+  const handleContainerLayout = useCallback((e: { nativeEvent: { layout: { height: number } } }) => {
+    if (didInitSheet.current || e.nativeEvent.layout.height <= 0) return;
+    didInitSheet.current = true;
+    // Defer one frame so the sheet's own internal measurement has settled.
+    requestAnimationFrame(() => bottomSheetRef.current?.snapToIndex(0));
+  }, []);
   const lastFetchedAt = useRef<number>(0);
   const snapPoints = useMemo(() => ['28%', '45%'], []);
 
@@ -184,6 +197,40 @@ export default function HomeScreen() {
     return () => clearInterval(interval);
   }, [location]);
 
+  // Two drivers at (nearly) the same point — common when several cars idle
+  // at one lot, or when testing with phones side-by-side — render as a single
+  // overlapping marker. Spread co-located drivers onto a small ring (~8 m) so
+  // each car is individually visible, and supply a deterministic heading
+  // fallback when the backend has no heading yet so they don't all point the
+  // same way. Deterministic (index-based, not Math.random) so markers don't
+  // jitter on every re-render.
+  const displayDrivers = useMemo(() => {
+    const PRECISION = 1e4; // ~11 m grid — drivers within this bucket collide
+    const RING_METERS = 8;
+    const groups = new Map<string, typeof nearbyDrivers>();
+    for (const d of nearbyDrivers) {
+      const key = `${Math.round(d.lat * PRECISION)}:${Math.round(d.lng * PRECISION)}`;
+      const g = groups.get(key);
+      if (g) g.push(d); else groups.set(key, [d]);
+    }
+    const out: { id: string; lat: number; lng: number; heading: number }[] = [];
+    for (const group of groups.values()) {
+      group.forEach((d, i) => {
+        let { lat, lng } = d;
+        if (group.length > 1) {
+          const angle = (2 * Math.PI * i) / group.length;
+          const dLat = (RING_METERS / 111320) * Math.cos(angle);
+          const dLng = (RING_METERS / (111320 * Math.cos((lat * Math.PI) / 180))) * Math.sin(angle);
+          lat += dLat;
+          lng += dLng;
+        }
+        const heading = d.heading ?? (group.length > 1 ? (360 / group.length) * i : 0);
+        out.push({ id: d.id, lat, lng, heading });
+      });
+    }
+    return out;
+  }, [nearbyDrivers]);
+
   const hasCenteredRef = useRef(false);
   const regionRef = useRef(region);
   useEffect(() => { regionRef.current = region; }, [region]);
@@ -253,7 +300,7 @@ export default function HomeScreen() {
   };
 
   return (
-    <View style={[styles.container, isTablet && { flexDirection: 'row' as const }]}>
+    <View style={[styles.container, isTablet && { flexDirection: 'row' as const }]} onLayout={handleContainerLayout}>
       <View style={styles.mapContainer}>
         <SafeAreaView edges={['top']} style={styles.headerSafeArea}>
           <View style={styles.header}>
@@ -312,7 +359,7 @@ export default function HomeScreen() {
             userInterfaceStyle={isDark ? 'dark' : 'light'}
             onRegionChangeComplete={setRegion}
           >
-            {nearbyDrivers.map((driver) => (
+            {displayDrivers.map((driver) => (
               <CarMarker
                 key={driver.id}
                 identifier={`nearby-${driver.id}`}

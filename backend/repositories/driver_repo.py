@@ -116,12 +116,21 @@ async def find_nearby_drivers(lat: float, lng: float, radius_meters: float) -> L
     return await run_sync(_fn)
 
 
-async def update_driver_location(driver_id: str, lat: float, lng: float):
+async def update_driver_location(driver_id: str, lat: float, lng: float, heading=None):
     if not supabase:
         return None
 
     def _update():
         data = {"lat": lat, "lng": lng, "updated_at": datetime.now(timezone.utc).isoformat()}
+        # Persist heading (migration 113) so /drivers/nearby can rotate the
+        # rider map marker. Normalise to 0–359 and only write when the device
+        # sent a usable number, so a fix with no bearing doesn't wipe the last
+        # good heading. Mirrors the REST /location-batch path.
+        if heading is not None:
+            try:
+                data["heading"] = float(heading) % 360
+            except (TypeError, ValueError):
+                pass
         supabase.table("drivers").update(data).eq("id", str(driver_id)).execute()
         return True
 

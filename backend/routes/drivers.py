@@ -1658,7 +1658,7 @@ async def update_location_batch(batch: Union[List[dict], dict], current_user: di
     latest = points[-1]
     lat = latest.get("latitude") or latest.get("lat")
     lng = latest.get("longitude") or latest.get("lng")
-    latest.get("heading", 0)
+    heading = latest.get("heading")
 
     if lat and lng:
         # GPS spoofing check
@@ -1674,12 +1674,19 @@ async def update_location_batch(batch: Union[List[dict], dict], current_user: di
         )
         if not trusted:
             return {"success": False, "reason": "location_rejected"}
-        # Update via Supabase wrapper which now handles casting
-        # Note: 'heading' column might not exist in Supabase 'drivers' table yet.
+        # Update via Supabase wrapper which now handles casting. `heading`
+        # column added in migration 113 — persist it so rider/admin map
+        # markers can rotate the car icon to the real direction of travel
+        # (and so two drivers at the same point don't render as one).
         update_data = {"lat": lat, "lng": lng, "updated_at": datetime.now(timezone.utc)}
-        # If heading is supported later, add it back. Currently causing 500 error if column missing.
-        # if heading:
-        #    update_data['heading'] = heading
+        # Normalise to 0–359 and skip clearly-invalid values. We deliberately
+        # only write heading when the device sent a usable number, so a
+        # stationary fix with no bearing doesn't wipe the last good heading.
+        if heading is not None:
+            try:
+                update_data["heading"] = float(heading) % 360
+            except (TypeError, ValueError):
+                pass
 
         await db_supabase.update_one("drivers", {"user_id": current_user["id"]}, update_data)
         # Also sync to generic lat/lng fields if they exist to support legacy queries

@@ -19,7 +19,7 @@ import * as Clipboard from 'expo-clipboard';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Marker, Polyline, Polygon, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import { useRideStore } from '../store/rideStore';
 import { RideStatus } from '../constants/rideStatus';
@@ -61,6 +61,16 @@ function DriverArrivingScreenContent() {
 
   const [mapEtaMinutes, setMapEtaMinutes] = useState<number | null>(null);
   const [countdownSeconds, setCountdownSeconds] = useState<number | null>(null);
+  const [serviceAreaPolygons, setServiceAreaPolygons] = useState<Array<Array<{ latitude: number; longitude: number }>>>([]);
+  useEffect(() => {
+    api.get('/service-areas').then((res: any) => {
+      const areas: any[] = res.data || [];
+      const polys = areas
+        .filter((a: any) => Array.isArray(a.polygon) && a.polygon.length >= 3)
+        .map((a: any) => a.polygon.map((p: any) => ({ latitude: p.lat, longitude: p.lng })));
+      setServiceAreaPolygons(polys);
+    }).catch(() => {});
+  }, []);
   // Seed from store so returning to this screen after a brief navigation
   // (e.g. opening chat) shows the already-fetched route immediately.
   const [driverRouteCoords, setDriverRouteCoords] = useState<any[]>(activeDriverRouteCoords ?? []);
@@ -379,6 +389,15 @@ function DriverArrivingScreenContent() {
             <CarMarker coordinate={{ latitude: currentDriver.lat, longitude: currentDriver.lng }}
               heading={(currentDriver as any).heading} size={44} zIndex={105} />
           )}
+          {serviceAreaPolygons.map((coords, idx) => (
+            <Polygon
+              key={`sa-poly-${idx}`}
+              coordinates={coords}
+              strokeColor="rgba(0,212,170,0.65)"
+              fillColor="rgba(0,212,170,0.07)"
+              strokeWidth={2}
+            />
+          ))}
         </MapView>
       ) : (
         <View style={styles.mapPlaceholder}>

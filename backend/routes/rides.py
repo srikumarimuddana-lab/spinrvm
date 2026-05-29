@@ -1298,6 +1298,43 @@ async def estimate_ride(
             body.pickup_lng,
         )
 
+    # Geofence gates — both pickup and dropoff must be inside an active
+    # service area before we show any prices. Fail-open when no areas are
+    # configured so a DB outage doesn't block all estimates.
+    if _est_all_areas:
+        if _est_matched_area is None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "OUTSIDE_SERVICE_AREA",
+                    "message": (
+                        "Sorry, your pickup location is outside our coverage area. "
+                        "Please choose a pickup within a serviced zone."
+                    ),
+                },
+            )
+        _dropoff_in_area = any(
+            (poly := get_service_area_polygon(a)) and point_in_polygon(body.dropoff_lat, body.dropoff_lng, poly)
+            for a in _est_all_areas
+        )
+        if not _dropoff_in_area:
+            logger.info(
+                "[estimate] reject dropoff=(%.5f,%.5f) — outside %d active service area(s)",
+                body.dropoff_lat,
+                body.dropoff_lng,
+                len(_est_all_areas),
+            )
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "OUTSIDE_SERVICE_AREA",
+                    "message": (
+                        "Sorry, your dropoff location is outside our coverage area. "
+                        "Please choose a dropoff within a serviced zone."
+                    ),
+                },
+            )
+
     # Fetch nearby online+available drivers once. Order by went_online_at DESC
     # so recently-toggled-online drivers fill the 200-row page first. Ghost
     # drivers (is_available=True in DB but heartbeat expired) tend to carry
@@ -1698,6 +1735,32 @@ async def create_ride(
                 ),
             },
         )
+
+    # Geofence gate: dropoff must also fall inside an active service area.
+    # Rides that start within coverage but end in an unserviced zone are
+    # rejected here so dispatch never runs for out-of-area trips.
+    if all_areas:
+        _dropoff_in_area = any(
+            (poly := get_service_area_polygon(a)) and point_in_polygon(body.dropoff_lat, body.dropoff_lng, poly)
+            for a in all_areas
+        )
+        if not _dropoff_in_area:
+            logger.info(
+                "[geofence] reject dropoff=(%.5f,%.5f) — outside %d active service area(s)",
+                body.dropoff_lat,
+                body.dropoff_lng,
+                len(all_areas),
+            )
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "OUTSIDE_SERVICE_AREA",
+                    "message": (
+                        "Sorry, your dropoff location is outside our coverage area. "
+                        "Please choose a dropoff within a serviced zone."
+                    ),
+                },
+            )
 
     # Vehicle types are also needed by fare building — fetch once, reuse.
     vehicle_types = await db_supabase.get_rows("vehicle_types", {"is_active": True}, limit=100)

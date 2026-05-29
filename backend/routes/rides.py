@@ -2682,6 +2682,13 @@ async def process_payment(
             "already_paid": True,
         }
 
+    # Validate the tip BEFORE the atomic claim — raising after the claim would
+    # leave payment_status stuck at 'processing' with no charge ever attempted.
+    if tip_amount < 0:
+        raise HTTPException(status_code=400, detail="Tip amount cannot be negative")
+    if tip_amount > 500:
+        raise HTTPException(status_code=400, detail="Tip amount exceeds maximum ($500)")
+
     # Atomic claim. Allow re-driving a previously FAILED charge (e.g. the rider
     # updated a declined card and retried), not just a fresh 'pending'. Without
     # 'failed' here, a retry after a decline fell through to the guard-None
@@ -2702,25 +2709,27 @@ async def process_payment(
         # a retryable 409, never a false success.
         fresh = await db_supabase.get_ride(ride_id) or ride
         if fresh.get("payment_status") in ("paid", "processing"):
+            _fresh_grand = fresh.get("grand_total")
+            if _fresh_grand is None:
+                _fresh_grand = fresh.get("total_fare", 0)
             return {
                 "success": True,
                 "already_paid": True,
-                "charged_amount": _money_str(
-                    _d(fresh.get("grand_total") or fresh.get("total_fare", 0) or 0)
-                    + _d(fresh.get("tip_amount", 0) or 0)
-                ),
+                "charged_amount": _money_str(_d(_fresh_grand) + _d(fresh.get("tip_amount", 0) or 0)),
             }
         raise HTTPException(status_code=409, detail="Could not start payment; please retry.")
 
-    if tip_amount < 0:
-        raise HTTPException(status_code=400, detail="Tip amount cannot be negative")
-    if tip_amount > 500:
-        raise HTTPException(status_code=400, detail="Tip amount exceeds maximum ($500)")
-
     def _q(v) -> Decimal:
-        return Decimal(str(v)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        return Decimal(str(v or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
-    total_charge = _q(ride.get("grand_total") or ride.get("total_fare", 0) or 0) + _q(tip_amount)
+    # Explicit None check, not truthiness: a legitimate $0 grand_total (comp /
+    # fully-covered ride) must charge $0, not fall through to a non-zero
+    # total_fare and overcharge. Fall back to total_fare only when grand_total
+    # was never written (legacy rides predating the column).
+    _grand = ride.get("grand_total")
+    if _grand is None:
+        _grand = ride.get("total_fare", 0)
+    total_charge = _q(_grand) + _q(tip_amount)
     payment_method = (ride.get("payment_method") or "card").lower()
 
     # Persist tip and update snapshot before charging so the receipt

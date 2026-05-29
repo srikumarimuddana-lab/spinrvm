@@ -38,6 +38,11 @@ export function useSpinrPaymentSheet() {
     async ({ rideId, amount, tipAmount = 0 }: PresentSheetOptions): Promise<PaymentSheetResult> => {
       setIsLoading(true);
       try {
+        // The server is authoritative for ride payments: it charges
+        // grand_total + tip computed from the ride row (incl. fees + GST/PST),
+        // and treats `amount` as advisory. We still send `amount` (fare + tip)
+        // for display/fallback, but `tip_amount` is what the server adds on top
+        // of grand_total — so it must be sent explicitly.
         const total = amount + tipAmount;
         const res = await api.post<{
           paymentIntent: string;
@@ -47,6 +52,7 @@ export function useSpinrPaymentSheet() {
         }>('/payments/payment-sheet', {
           amount: total,
           ride_id: rideId,
+          tip_amount: tipAmount,
         });
 
         const { paymentIntent, ephemeralKey, customer } = res.data;

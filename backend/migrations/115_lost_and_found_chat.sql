@@ -39,7 +39,7 @@ ALTER TABLE lost_and_found
 -- 3. Per-case chat thread
 CREATE TABLE IF NOT EXISTS lost_and_found_messages (
     id                UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    lost_and_found_id TEXT        NOT NULL REFERENCES lost_and_found(id) ON DELETE CASCADE,
+    lost_and_found_id TEXT        NOT NULL,
     sender_id         TEXT,
     sender_role       TEXT        NOT NULL
                                       CHECK (sender_role IN ('rider', 'driver', 'admin', 'system')),

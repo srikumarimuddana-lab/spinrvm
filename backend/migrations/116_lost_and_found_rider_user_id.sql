@@ -12,7 +12,7 @@
 --   NOTIFY pgrst, 'reload schema';
 
 ALTER TABLE lost_and_found
-    ADD COLUMN IF NOT EXISTS rider_user_id TEXT REFERENCES users(id) ON DELETE SET NULL;
+    ADD COLUMN IF NOT EXISTS rider_user_id TEXT;
 
 CREATE INDEX IF NOT EXISTS lost_and_found_rider_user_id_idx
     ON lost_and_found (rider_user_id);

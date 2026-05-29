@@ -126,9 +126,7 @@ async def charge_ride(
 
     if stripe is None:
         logger.error("stripe package not installed; cannot charge card")
-        return ChargeOutcome(
-            status="unconfigured", error_message="stripe not installed"
-        )
+        return ChargeOutcome(status="unconfigured", error_message="stripe not installed")
 
     settings = await get_app_settings()
     stripe_secret = settings.get("stripe_secret_key", "") or ""
@@ -157,19 +155,17 @@ async def charge_ride(
     ride_id = ride.get("id") or ""
     amount_cents = dollars_to_cents(total_amount)
 
-    # Idempotency: the same ride can only be charged once within 24h
-    # regardless of how many retries the client makes. If an existing
-    # PaymentIntent exists for this ride, pass it through — Stripe will
-    # return the original PI on matching idempotency_key.
-    idempotency_key = f"ride-charge-{ride_id}"
+    # Idempotency: a retry of the SAME ride for the SAME amount must not
+    # double-charge — same key → Stripe returns the original PaymentIntent.
+    # The amount (cents) is part of the key so that a legitimate re-charge at a
+    # DIFFERENT total (e.g. the rider updated their tip after a declined
+    # attempt) gets a fresh key instead of an IdempotencyError, which would
+    # otherwise leave the ride stuck in 'processing'.
+    idempotency_key = f"ride-charge-{ride_id}-{amount_cents}"
 
-    fare_amount = Decimal(str(ride.get("total_fare", 0) or 0)).quantize(
-        Decimal("0.01"), rounding=ROUND_HALF_UP
-    )
+    fare_amount = Decimal(str(ride.get("total_fare", 0) or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     tip = Decimal(str(total_amount)) - fare_amount
-    tip_str = str(
-        max(tip, Decimal("0")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-    )
+    tip_str = str(max(tip, Decimal("0")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
     params: Dict[str, Any] = {
         "amount": amount_cents,
@@ -246,9 +242,7 @@ async def charge_ride(
         return ChargeOutcome(
             status="succeeded",
             payment_intent_id=pi_id,
-            charged_amount=Decimal(str(total_amount)).quantize(
-                Decimal("0.01"), rounding=ROUND_HALF_UP
-            ),
+            charged_amount=Decimal(str(total_amount)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
         )
 
     if status == "requires_action" or status == "requires_source_action":

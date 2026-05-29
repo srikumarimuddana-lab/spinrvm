@@ -63,7 +63,13 @@ async def _authoritative_ride_charge(ride_id: str, rider_id: str, tip_amount: De
         raise HTTPException(status_code=404, detail="Ride not found")
     if ride.get("rider_id") != rider_id:
         raise HTTPException(status_code=403, detail="Not authorized to pay for this ride")
-    grand = _q2(ride.get("grand_total") or ride.get("total_fare", 0))
+    # Explicit None check, not truthiness: a legitimate $0 grand_total (comp /
+    # fully-covered ride) must NOT fall through to a non-zero total_fare and
+    # overcharge. Only fall back when grand_total was never written (legacy).
+    grand_raw = ride.get("grand_total")
+    if grand_raw is None:
+        grand_raw = ride.get("total_fare", 0)
+    grand = _q2(grand_raw)
     return _q2(grand + _q2(tip_amount))
 
 
@@ -186,7 +192,11 @@ async def create_payment_intent(
         if body.client_idempotency_key:
             idempotency_key = body.client_idempotency_key
         elif body.ride_id:
-            idempotency_key = f"ride-{body.ride_id}-{current_user['id']}"
+            # Include the charge amount (cents) so that if the rider changes
+            # their tip and retries, Stripe sees a distinct key and creates a
+            # fresh PaymentIntent instead of raising IdempotencyError on the
+            # amount mismatch. Same amount → same key → still idempotent.
+            idempotency_key = f"ride-{body.ride_id}-{current_user['id']}-{amount}"
         else:
             idempotency_key = f"intent-{current_user['id']}-{int(_time.time() // 60)}"
         intent = stripe.PaymentIntent.create(
@@ -780,7 +790,10 @@ async def create_payment_sheet(
         if body.client_idempotency_key:
             idempotency_key = body.client_idempotency_key
         elif body.ride_id:
-            idempotency_key = f"ps-{body.ride_id}-{current_user['id']}"
+            # Include the charge amount (cents) so a changed-tip retry gets a
+            # distinct key (fresh PI) rather than an IdempotencyError. Same
+            # amount → same key → still idempotent.
+            idempotency_key = f"ps-{body.ride_id}-{current_user['id']}-{amount_cents}"
         else:
             idempotency_key = f"ps-{current_user['id']}-{int(_time.time() // 60)}"
 

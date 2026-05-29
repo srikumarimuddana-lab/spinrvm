@@ -3,7 +3,6 @@ import json
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
-from datetime import timezone as _tz
 from decimal import ROUND_HALF_UP, Decimal
 from typing import List, Optional
 
@@ -1664,6 +1663,22 @@ async def create_ride(
                 detail=f"Insufficient wallet balance. Estimated fare is ${grand_total}, wallet has ${_f(wallet_balance)}. Please top up your wallet or switch to card payment.",
             )
 
+    # CR-1: a ride booked for a future time must NOT dispatch a live driver now.
+    # It is parked in SCHEDULED and the scheduled-ride dispatcher loop flips it
+    # to SEARCHING at its scheduled_time. A request is deferred whenever a
+    # future scheduled_time is present — the CreateRideRequest validator
+    # guarantees that time is ≥5 min out. We key off scheduled_time (not the
+    # is_scheduled flag) because a client can send scheduled_time while leaving
+    # is_scheduled at its False default; the surge/fare logic above already
+    # treats scheduled_time presence as scheduled, and dispatching such a ride
+    # immediately would route a live driver hours early.
+    _is_deferred_schedule = body.scheduled_time is not None
+    # Corporate time-window policy is enforced against the *pickup* time, so a
+    # deferred ride must be evaluated against its scheduled_time, not the moment
+    # of booking — otherwise a rider booking inside company hours for an
+    # out-of-hours pickup (or vice-versa) is wrongly allowed/blocked.
+    _policy_pickup_time = body.scheduled_time if _is_deferred_schedule else datetime.now(timezone.utc)
+
     # Pre-dispatch corporate policy check (spec §4 — booking phase).
     # Only runs when rider explicitly books with company_allowance payment method.
     _corp_member_id: Optional[str] = None
@@ -1673,7 +1688,7 @@ async def create_ride(
             rider_id=current_user["id"],
             estimated_fare=total_fare,
             ride_type="standard",
-            pickup_time=datetime.now(timezone.utc),
+            pickup_time=_policy_pickup_time,
         )
         if not _policy_result.passed:
             reasons = []
@@ -1706,6 +1721,13 @@ async def create_ride(
         if _corp_members:
             _corp_member_id = _corp_members[0]["id"]
 
+    # _is_deferred_schedule is computed above (before the corporate policy
+    # check). Deferred rides are parked in SCHEDULED; the scheduled-ride
+    # dispatcher loop (utils/scheduled_rides.py) flips them to SEARCHING and
+    # runs driver matching when scheduled_time arrives. A ride with
+    # is_scheduled but no time falls through to immediate dispatch.
+    _initial_status = RideStatus.SCHEDULED if _is_deferred_schedule else RideStatus.SEARCHING
+
     pickup_otp_plain = generate_pickup_otp()
     ride = Ride(
         rider_id=current_user["id"],
@@ -1725,7 +1747,11 @@ async def create_ride(
         surge_multiplier=round(float(surge), 2),
         total_fare=_f(total_fare),
         stops=body.stops,
-        is_scheduled=body.is_scheduled,
+        # Persist is_scheduled=True for any deferred ride even if the client
+        # left the flag at its default — the scheduled-ride dispatcher filters
+        # on {is_scheduled: True, status: 'scheduled'}, so a scheduled_time-only
+        # request must carry the flag or it would never be picked up.
+        is_scheduled=bool(body.is_scheduled or _is_deferred_schedule),
         requires_wav=body.requires_wav,
         quiet_mode=body.quiet_mode,
         rider_notes=body.rider_notes,
@@ -1737,7 +1763,7 @@ async def create_ride(
         # NOTE: ``requires_wav`` was passed twice (once at line ~1090, again
         # here) — Python 3.11+ raises SyntaxError, blocking module import
         # and the entire test suite. Drop-in fix unblocks Audit-17 Phase 1c.
-        status=RideStatus.SEARCHING,
+        status=_initial_status,
         pickup_otp=pickup_otp_plain,
         ride_requested_at=datetime.now(timezone.utc),
     )
@@ -1790,7 +1816,7 @@ async def create_ride(
             rider_id=current_user["id"],
             estimated_fare=total_fare,
             ride_type=body.vehicle_type_id or "standard",
-            pickup_time=datetime.now(_tz.utc),
+            pickup_time=_policy_pickup_time,
             policy_override=_membership.get("policy_override", False),
         )
         if not _policy_result.passed:
@@ -2001,28 +2027,41 @@ async def create_ride(
     # Let admin live-monitoring see the request before dispatch starts —
     # previously the dashboard only observed a ride once a driver accepted,
     # which made it impossible to watch an unassigned ride sit in queue.
-    try:
-        await manager.broadcast_to_admins(
-            {
-                "type": "ride_requested",
-                "ride_id": ride.id,
-                "rider_id": fresh_ride.get("rider_id"),
-                "pickup_address": fresh_ride.get("pickup_address"),
-                "dropoff_address": fresh_ride.get("dropoff_address"),
-                "pickup_lat": fresh_ride.get("pickup_lat"),
-                "pickup_lng": fresh_ride.get("pickup_lng"),
-                "dropoff_lat": fresh_ride.get("dropoff_lat"),
-                "dropoff_lng": fresh_ride.get("dropoff_lng"),
-                "fare": fresh_ride.get("grand_total") or fresh_ride.get("total_fare"),
-                "status": fresh_ride.get("status"),
-            }
-        )
-    except Exception as _exc:  # pragma: no cover - best effort
-        logger.warning(f"create_ride: admin broadcast failed: {_exc}")
+    # Deferred scheduled rides are NOT live requests yet; the scheduler
+    # broadcasts ride_requested when it flips them to SEARCHING.
+    #
+    # The payload must match the dashboard's MonitoringRide contract (a nested
+    # ``ride`` object — see admin-dashboard/.../monitoring/types.ts); the
+    # handler calls applyRide(event.ride) to add the new row.
+    if not _is_deferred_schedule:
+        try:
+            from .admin.monitoring import build_monitoring_ride
+        except ImportError:
+            from routes.admin.monitoring import build_monitoring_ride
+        try:
+            await manager.broadcast_to_admins(
+                {
+                    "type": "ride_requested",
+                    "ride": build_monitoring_ride(fresh_ride, rider=current_user),
+                }
+            )
+        except Exception as _exc:  # pragma: no cover - best effort
+            logger.warning(f"create_ride: admin broadcast failed: {_exc}")
 
     # Match driver — pass the fresh ride through so the dispatch path
     # doesn't re-fetch the row we just inserted.
-    await match_driver_to_ride(ride.id, ride=fresh_ride)
+    #
+    # CR-1: skip immediate dispatch for deferred scheduled rides. They stay
+    # in SCHEDULED until scheduled_ride_dispatcher_loop transitions them to
+    # SEARCHING at their scheduled_time. Dispatching here would route a real
+    # driver to a pickup that is hours or days away.
+    if not _is_deferred_schedule:
+        await match_driver_to_ride(ride.id, ride=fresh_ride)
+    else:
+        logger.info(
+            f"create_ride: ride {ride.id} scheduled for {body.scheduled_time} — "
+            "parked in 'scheduled', deferring dispatch to scheduler loop"
+        )
 
     # Dispatch may have set driver_id / status; read the current state
     # for the response. Skipping this extra fetch would mean the rider

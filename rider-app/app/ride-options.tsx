@@ -50,6 +50,12 @@ interface SavedCard {
 
 function RideOptionsScreenContent() {
   const { height: SCREEN_HEIGHT } = useWindowDimensions();
+  // The pricing sheet opens at its first snap point (40% — see `snapPoints`
+  // and `index={0}` below), so the map must only reserve that much space at
+  // the bottom when fitting the route. Reserving the fully-expanded 68% height
+  // instead crammed the whole pickup→dropoff route into the top ~32% strip,
+  // which pushed the rider's pickup pin into the top-left corner.
+  const mapBottomInset = SCREEN_HEIGHT * 0.4 + 30;
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
   const { sf } = useResponsive();
@@ -198,7 +204,7 @@ function RideOptionsScreenContent() {
       if (markers.length >= 2) {
         setTimeout(() => {
           mapRef.current?.fitToCoordinates(markers, {
-            edgePadding: { top: 60, right: 50, bottom: SCREEN_HEIGHT * 0.68 + 30, left: 50 },
+            edgePadding: { top: 60, right: 50, bottom: mapBottomInset, left: 50 },
             animated: true,
           });
         }, 300);
@@ -233,7 +239,7 @@ function RideOptionsScreenContent() {
     if (result.coordinates) setRouteCoordinates(result.coordinates);
     if (mapRef.current && mapReady) {
       mapRef.current.fitToCoordinates(result.coordinates, {
-        edgePadding: { top: 60, right: 50, bottom: SCREEN_HEIGHT * 0.68 + 30, left: 50 },
+        edgePadding: { top: 60, right: 50, bottom: mapBottomInset, left: 50 },
         animated: true,
       });
     }

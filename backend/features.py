@@ -513,6 +513,17 @@ async def admin_update_surge(area_id: str, req: UpdateSurgeRequest):
             )
         update_data["surge_multiplier"] = req.surge_multiplier
 
+    # This v1 endpoint predates the per-area surge_enabled gate. Fares and the
+    # surge engine now require surge_enabled, so activating surge here without
+    # also setting the gate would return success yet leave every ride priced at
+    # 1.0x. Mirror the activation intent onto surge_enabled: turning surge on
+    # (active, or a >1.0 multiplier) enables the gate; an explicit
+    # surge_active=false disables it so this endpoint can also turn surge off.
+    if req.surge_active is True or (req.surge_multiplier is not None and req.surge_multiplier > 1.0):
+        update_data["surge_enabled"] = True
+    if req.surge_active is False:
+        update_data["surge_enabled"] = False
+
     if update_data:
         await db_supabase.update_one("service_areas", {"id": area_id}, update_data)
 

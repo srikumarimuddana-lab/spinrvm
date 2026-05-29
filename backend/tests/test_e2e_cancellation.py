@@ -276,3 +276,73 @@ class TestDriverCancelNotifiesRider:
         assert any(e.get("type") == "ride_cancelled" for e in events_to_rider), (
             "Driver cancel must push ride_cancelled to the rider WS channel"
         )
+
+
+@pytest.mark.e2e
+@pytest.mark.asyncio
+class TestRiderCancelFeeWriteFailureReleasesDriver:
+    """Regression: a fee-write failure after the cancel is claimed must NOT
+    strand the assigned driver. The cancel is already persisted by the atomic
+    claim, so set_driver_available / the Period-1 insurance transition / the
+    driver notification must still run even when the wallet write raises."""
+
+    async def test_wallet_write_failure_still_releases_and_notifies_driver(self):
+        from backend.routes import rides as rides_mod
+
+        ride_arrived = _ride(
+            status="driver_arrived",
+            driver_id=DRIVER_ID,
+            payment_method="wallet",
+            service_area_id=None,
+        )
+        ride_cancelled = _ride(status="cancelled", driver_id=DRIVER_ID)
+        driver = _driver()
+        settings = {"cancellation_fee_admin": 0.50, "cancellation_fee_driver": 2.50}
+        wallet = {"id": "wallet_1", "balance": 100.0}
+
+        set_avail = AsyncMock()
+        period = AsyncMock()
+        ws = AsyncMock()
+
+        with (
+            # require-state check → ride; then the wallet lookup → wallet
+            patch("backend.routes.rides.db.find_one", AsyncMock(side_effect=[ride_arrived, wallet])),
+            patch("backend.routes.rides.get_app_settings", AsyncMock(return_value=settings)),
+            patch("backend.routes.rides.db_supabase.get_driver_by_id", AsyncMock(return_value=driver)),
+            # claim + wallet-balance update both go through update_one and succeed
+            patch("backend.routes.rides.db.update_one", AsyncMock()),
+            # the wallet_transactions insert is the fee write that fails
+            patch("backend.routes.rides.db.insert_one", AsyncMock(side_effect=RuntimeError("db down"))),
+            patch("backend.routes.rides.pay_driver_cancellation_fee", AsyncMock()),
+            patch("backend.routes.rides.db_supabase.update_ride", AsyncMock()),
+            patch("backend.routes.rides.db_supabase.get_ride", AsyncMock(return_value=ride_cancelled)),
+            patch("backend.routes.rides.db_supabase.set_driver_available", set_avail),
+            patch("backend.routes.rides.record_period_transition", period),
+            patch("backend.routes.rides.manager.send_personal_message", ws),
+            patch("backend.routes.rides.manager.broadcast_ride_status", AsyncMock()),
+            patch("backend.routes.rides.manager.broadcast_to_admins", AsyncMock()),
+            patch("backend.routes.rides.send_push_notification", AsyncMock()),
+        ):
+            fn = getattr(rides_mod.cancel_ride_rider, "__wrapped__", rides_mod.cancel_ride_rider)
+            result = await fn(
+                request=MagicMock(),
+                ride_id=RIDE_ID,
+                current_user={"id": RIDER_ID},
+            )
+
+        # The cancel still succeeds (the ride is already persisted as cancelled).
+        assert result["success"] is True
+        # Driver is released back to available despite the fee-write failure.
+        set_avail.assert_any_await(DRIVER_ID, True)
+        # SGI Period-1 transition is recorded for the released driver.
+        period.assert_any_await(DRIVER_ID, 1)
+        # Driver is notified of the cancellation.
+        driver_channel = f"driver_{DRIVER_USER_ID}"
+        notified = [
+            call.args[0]
+            for call in ws.call_args_list
+            if len(call.args) > 1 and call.args[1] == driver_channel
+        ]
+        assert any(e.get("type") == "ride_cancelled" for e in notified), (
+            "Driver must be notified of the cancel even when the fee write fails"
+        )

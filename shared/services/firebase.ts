@@ -131,7 +131,9 @@ export async function requestPushPermissionAndGetToken(): Promise<string | null>
 
     // Get FCM token
     const token = await messaging().getToken();
-    console.log('[Firebase] FCM Token:', token?.substring(0, 20) + '...');
+    // A token prefix is still a device-routable identifier — keep it out of
+    // production logs. In dev we log only whether one was obtained.
+    if (__DEV__) console.log('[Firebase] FCM token obtained:', token ? 'yes' : 'no');
     return token;
   } catch (e) {
     console.log('[Firebase] FCM token error:', e);
@@ -202,4 +204,24 @@ export function setCrashlyticsUser(userId: string) {
 export function recordError(error: Error) {
   if (!crashlytics) return;
   crashlytics().recordError(error);
+}
+
+
+/**
+ * Fetch a fresh Firebase App Check token.
+ *
+ * Returns null when App Check is not initialized (Expo Go, unit tests, devices
+ * without Play Integrity / DeviceCheck). The API client treats a null as
+ * "omit the header" rather than blocking the request, so the backend's
+ * enforcement mode determines whether the call succeeds.
+ */
+export async function getAppCheckToken(): Promise<string | null> {
+  if (!appCheck) return null;
+  try {
+    const result = await appCheck().getToken(false);
+    return result?.token ?? null;
+  } catch (e) {
+    console.log('[Firebase] App Check token fetch error:', e);
+    return null;
+  }
 }

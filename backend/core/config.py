@@ -200,6 +200,26 @@ class Settings(BaseSettings):
                         "every database call, producing a misleading 500 at runtime "
                         "rather than a clean startup error."
                     )
+
+            # PIPEDA data residency: primary storage must be in a Canadian
+            # region (ca-central-1 or equivalent). An unset or non-Canadian
+            # region in production is a hard compliance boundary — fail fast
+            # at startup rather than silently storing PII offshore. Relaxing
+            # this requires legal sign-off (CLAUDE.md "Data residency").
+            region = (self.SUPABASE_REGION or "").strip().lower()
+            if not region:
+                raise ValueError(
+                    "SUPABASE_REGION must be set in production for PIPEDA data "
+                    "residency. Set it to the Supabase project's Canadian region "
+                    "(e.g. ca-central-1). Changing regions is a compliance event."
+                )
+            if not region.startswith("ca-"):
+                raise ValueError(
+                    f"SUPABASE_REGION='{self.SUPABASE_REGION}' is not a Canadian "
+                    "region. PIPEDA requires primary storage in Canada "
+                    "(ca-central-1 or equivalent). Do not relax this without "
+                    "legal sign-off."
+                )
         return self
 
     @property

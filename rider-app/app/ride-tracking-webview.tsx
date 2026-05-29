@@ -11,6 +11,22 @@ import { useTheme } from '@shared/theme/ThemeContext';
 import type { ThemeColors } from '@shared/theme/index';
 import { TrackBaseUrlContext } from './_layout';
 
+// Hosts that are allowed to load inside the in-app WebView.
+// spinr-track.app is the Spinr-controlled live-tracking domain; the backend's
+// app_settings.track_base_url is validated against this same set at render time.
+// Any other origin — including attacker-controlled deep-link injections — is
+// rejected with an error state before the WebView loads.
+const ALLOWED_TRACKING_HOSTS = new Set(['spinr-track.app', 'www.spinr-track.app']);
+
+function isAllowedTrackingUrl(raw: string): boolean {
+  try {
+    const u = new URL(raw);
+    return u.protocol === 'https:' && ALLOWED_TRACKING_HOSTS.has(u.hostname);
+  } catch {
+    return false;
+  }
+}
+
 export default function RideTrackingWebviewScreen() {
   const { trackingUrl, rideId } = useLocalSearchParams<{ trackingUrl?: string; rideId?: string }>();
   const router = useRouter();
@@ -20,10 +36,19 @@ export default function RideTrackingWebviewScreen() {
 
   const trackBaseUrl = useContext(TrackBaseUrlContext);
 
-  const [resolvedUrl, setResolvedUrl] = useState<string | null>(trackingUrl ?? null);
-  const [loading, setLoading] = useState(!trackingUrl);
+  // Validate any caller-supplied trackingUrl before trusting it. Deep links
+  // include broad path patterns (/ride, /promo, /join, spinr-track.app root)
+  // so an attacker could craft spinr-user://ride-tracking-webview?trackingUrl=
+  // https://evil.example/... and render a phishing page inside Spinr's chrome.
+  const sanitizedInitialUrl =
+    trackingUrl && isAllowedTrackingUrl(trackingUrl) ? trackingUrl : null;
+
+  const [resolvedUrl, setResolvedUrl] = useState<string | null>(sanitizedInitialUrl);
+  const [loading, setLoading] = useState(!sanitizedInitialUrl && !trackingUrl);
   const [webLoading, setWebLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(
+    trackingUrl && !sanitizedInitialUrl ? 'Invalid tracking link.' : null,
+  );
 
   useEffect(() => {
     if (!trackingUrl && rideId) {

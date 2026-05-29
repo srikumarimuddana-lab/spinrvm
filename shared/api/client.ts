@@ -4,9 +4,11 @@ import SpinrConfig from '../config/spinr.config';
 
 const API_URL = SpinrConfig.backendUrl;
 
-// Always log the resolved URL — in production this line is the first clue
-// when an OTA update ships with a wrong/missing EXPO_PUBLIC_BACKEND_URL.
-console.log('[API] Backend URL:', API_URL);
+// Resolved URL log is gated to dev builds — it's operational metadata that
+// doesn't need to land in production device logs / crash reports. The
+// local-fallback warning stays in all builds because a prod build pointed at
+// localhost is a launch-breaking misconfig worth surfacing everywhere.
+if (__DEV__) console.log('[API] Backend URL:', API_URL);
 if (!API_URL || API_URL.includes('localhost') || API_URL.includes('10.0.2.2')) {
   console.warn(
     '[API] ⚠ Backend URL looks like a local dev fallback. ' +
@@ -161,6 +163,28 @@ export async function ensureFreshToken(): Promise<void> {
     // Proactive refresh failed — the reactive 401 handler will catch it.
   } finally {
     _refreshPromise = null;
+  }
+}
+
+// ── Firebase App Check token injection ──────────────────────────────
+// The mobile apps call setAppCheckTokenProvider() at startup after
+// initializing Firebase so every API request carries X-Firebase-AppCheck.
+// The provider is a zero-arg async fn that returns the token or null —
+// null means "App Check not available on this device/env" and the header
+// is simply omitted (backend enforcement decides whether to accept or reject).
+let _appCheckTokenProvider: (() => Promise<string | null>) | null = null;
+
+export function setAppCheckTokenProvider(fn: () => Promise<string | null>): void {
+  _appCheckTokenProvider = fn;
+}
+
+async function appCheckHeader(): Promise<Record<string, string>> {
+  if (!_appCheckTokenProvider) return {};
+  try {
+    const token = await _appCheckTokenProvider();
+    return token ? { 'X-Firebase-AppCheck': token } : {};
+  } catch {
+    return {};
   }
 }
 
@@ -540,11 +564,29 @@ const recordApiError = (entry: ApiErrorLogEntry) => {
   // Debounced flush to AsyncStorage so a burst of 4xx responses doesn't
   // hammer the disk. 1s window collapses bursts but still survives a
   // crash within seconds of the last error.
+  //
+  // PII discipline: the in-memory buffer keeps the full `data` body for live
+  // on-device debugging, but the PERSISTED copy strips it — raw backend error
+  // bodies can echo addresses, phone fragments, or other context that must not
+  // sit at rest in AsyncStorage where a stolen/rooted device could recover it.
+  // We keep only request_id/status/endpoint/redacted message for the trail.
   if (_asyncStorage) {
     if (_persistTimer) clearTimeout(_persistTimer);
     _persistTimer = setTimeout(() => {
+      // Persist everything except the raw `data` body (drop it on disk).
+      const redacted = _errorLog.map((e): Omit<ApiErrorLogEntry, 'data'> => ({
+        ts: e.ts,
+        method: e.method,
+        url: e.url,
+        status: e.status,
+        message: e.message,
+        request_id: e.request_id,
+        exception_type: e.exception_type,
+        surface: e.surface,
+        screen: e.screen,
+      }));
       void _asyncStorage!
-        .setItem(ERROR_LOG_STORAGE_KEY, JSON.stringify(_errorLog))
+        .setItem(ERROR_LOG_STORAGE_KEY, JSON.stringify(redacted))
         .catch(() => {});
     }, 1000);
   }
@@ -733,6 +775,7 @@ const client = {
       'X-Request-ID': generateRequestId(),
       ...deadlineHeader(),
       ...traceparentHeader(),
+      ...(await appCheckHeader()),
       ...config?.headers,
     };
     if (token) {
@@ -757,6 +800,7 @@ const client = {
       'X-Request-ID': generateRequestId(),
       ...deadlineHeader(),
       ...traceparentHeader(),
+      ...(await appCheckHeader()),
       ...config?.headers,
     };
     if (token) {
@@ -786,6 +830,7 @@ const client = {
       'X-Request-ID': generateRequestId(),
       ...deadlineHeader(),
       ...traceparentHeader(),
+      ...(await appCheckHeader()),
       ...config?.headers,
     };
     // Strip any Content-Type for FormData so fetch can set the multipart boundary itself.
@@ -818,6 +863,7 @@ const client = {
       'X-Request-ID': generateRequestId(),
       ...deadlineHeader(),
       ...traceparentHeader(),
+      ...(await appCheckHeader()),
       ...config?.headers,
     };
     if (token) {
@@ -846,6 +892,7 @@ const client = {
       'X-Request-ID': generateRequestId(),
       ...deadlineHeader(),
       ...traceparentHeader(),
+      ...(await appCheckHeader()),
       ...config?.headers,
     };
     if (token) {

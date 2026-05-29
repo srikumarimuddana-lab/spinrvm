@@ -32,7 +32,12 @@ try:
     from ..socket_manager import manager
     from ..utils.datetime_utils import parse_iso_utc
     from ..utils.driver_online import intent_online
-    from ..utils.driver_presence import clear_presence, mark_present, present_driver_ids, reset_miss_streak
+    from ..utils.driver_presence import (
+        clear_presence,
+        mark_present,
+        present_driver_ids_checked,
+        reset_miss_streak,
+    )
     from ..utils.error_handling import (
         AccountDisabledException,
         ErrorCode,
@@ -56,7 +61,12 @@ except ImportError:
     from socket_manager import manager
     from utils.datetime_utils import parse_iso_utc
     from utils.driver_online import intent_online  # type: ignore
-    from utils.driver_presence import clear_presence, mark_present, present_driver_ids, reset_miss_streak
+    from utils.driver_presence import (
+        clear_presence,
+        mark_present,
+        present_driver_ids_checked,
+        reset_miss_streak,
+    )
     from utils.error_handling import (
         AccountDisabledException,
         ErrorCode,
@@ -1557,18 +1567,25 @@ async def get_nearby_drivers_public(
     # ghost cars on the map and tries to book someone who will never receive
     # the offer.
     #
-    # IMPORTANT: always apply the filter when driver_ids is non-empty.
-    # present_driver_ids() swallows its own Redis errors and returns an empty
-    # set in two cases: (a) Redis is down, (b) all drivers are genuinely
-    # offline. The old `if present:` guard treated both identically and
-    # bypassed the filter — turning every Redis hiccup or mass-offline event
-    # into ghost drivers on the rider map. An empty map is a better UX than
-    # ghost cars that can never receive an offer.
+    # Three cases, distinguished via present_driver_ids_checked():
+    #   * reachable + non-empty → filter normally (ghost drivers removed).
+    #   * reachable + empty     → every candidate is genuinely offline; hide
+    #     them all (an empty map is correct here, not a bug).
+    #   * NOT reachable (Redis configured but down) → presence is unknowable,
+    #     so fall back to DB state rather than blanking the map during a
+    #     failover. Dispatch still presence-filters, so a ghost booking that
+    #     slips onto the map cannot actually complete an offer.
     try:
         driver_ids = [d["id"] for d in drivers if d.get("id")]
         if driver_ids:
-            present = await present_driver_ids(driver_ids)
-            drivers = [d for d in drivers if d["id"] in present]
+            present, reachable = await present_driver_ids_checked(driver_ids)
+            if reachable:
+                drivers = [d for d in drivers if d["id"] in present]
+            else:
+                logger.warning(
+                    "/drivers/nearby: presence store unreachable, showing DB "
+                    "state (dispatch still presence-filters before any offer)"
+                )
     except Exception as exc:
         logger.warning(f"/drivers/nearby presence filter failed, using DB state: {exc}")
 

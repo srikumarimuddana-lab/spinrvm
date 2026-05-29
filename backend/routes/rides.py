@@ -890,9 +890,15 @@ async def _offer_timeout_handler(
             # Use set_driver_available() so the is_available ⇒ is_online
             # invariant is enforced (clamps to False if driver went offline
             # between the offer being sent and the timeout firing).
-            await db_supabase.set_driver_available(driver_id, available=True)
-            # Period 1: online, no ride.
-            await record_period_transition(driver_id, 1)
+            released = await db_supabase.set_driver_available(driver_id, available=True)
+            # Only record Period 1 (online, no ride) if the release actually
+            # made the driver available. If they went offline between offer
+            # dispatch and this timeout, set_driver_available clamps
+            # is_available→False; their go-offline already logged Period 0, so
+            # opening a Period 1 audit row here would falsely reopen an
+            # online/commercial-insurance window for an offline driver.
+            if isinstance(released, dict) and released.get("is_available"):
+                await record_period_transition(driver_id, 1)
 
         # Put the ride back in the searching state so it can be
         # re-dispatched or picked up by the next dispatch cycle.

@@ -12,9 +12,10 @@
 -- debit. This adds an explicit paid-guard so recovery of a stuck 'processing'
 -- ride (see routes/rides.py process_payment) is double-charge-proof.
 --
--- Idempotency: if the ride is already 'paid', return the current balance
--- unchanged without debiting. Lock ordering preserved (wallet row first, then
--- ride row) to match wallet_transfer and avoid deadlocks.
+-- Idempotency: if the ride is already 'paid', return NULL (not the current
+-- balance) so the caller can distinguish a no-op from a real debit and skip
+-- the wallet_transactions ledger write. Lock ordering preserved (wallet row
+-- first, then ride row) to match wallet_transfer and avoid deadlocks.
 --
 -- Forward-compatible: CREATE OR REPLACE only; no schema change, no data
 -- migration, safe to run against live traffic.
@@ -58,7 +59,7 @@ BEGIN
        FOR UPDATE;
 
     IF v_status = 'paid' THEN
-        RETURN v_balance;
+        RETURN NULL;  -- NULL signals caller: ride already paid, no money moved
     END IF;
 
     IF v_balance < p_amount THEN

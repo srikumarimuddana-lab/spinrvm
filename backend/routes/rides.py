@@ -2738,9 +2738,27 @@ async def process_payment(
     # idempotent RPC is the double-charge guard). We do NOT gate this on
     # updated_at — /rate bumps updated_at immediately before /process-payment,
     # so an age filter never fires and the ride stays stuck forever.
+    _wallet_redrive_lock_key: str | None = None
     _claim_states = ["pending", "failed"]
     if _pmethod == "wallet":
         _claim_states.append("processing")
+        if _pstatus == "processing":
+            # 'processing → processing' UPDATE is not exclusive: both concurrent
+            # re-drives match the WHERE clause and both enter settlement. The
+            # idempotent RPC prevents the double-debit but post-RPC side effects
+            # (ledger write, receipt email) would still run twice. Acquire a
+            # short-lived Redis NX lock so only one re-drive proceeds at a time.
+            try:
+                from ..utils.redis_client import redis_delete as _redis_del
+                from ..utils.redis_client import redis_set_nx as _redis_nx
+            except ImportError:
+                from utils.redis_client import redis_set_nx as _redis_nx  # type: ignore
+            _wallet_redrive_lock_key = f"spinr:wallet_settle:{ride_id}"
+            if not await _redis_nx(_wallet_redrive_lock_key, "1", 30):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Payment retry already in progress. Please try again in a moment.",
+                )
     guard_row = await db_supabase.update_one(
         "rides",
         {"id": ride_id, "payment_status": {"$in": _claim_states}},
@@ -2828,7 +2846,21 @@ async def process_payment(
                 detail.update(result.extra)
         raise HTTPException(status_code=result.status_code, detail=detail)
 
-    email_sent = await send_ride_receipt(ride, current_user["id"], tip_amount)
+    # Release the wallet re-drive lock now that settlement is complete so any
+    # subsequent legitimate retry sees the paid status immediately rather than
+    # waiting 30 s for the TTL to expire.
+    if _wallet_redrive_lock_key:
+        try:
+            await _redis_del(_wallet_redrive_lock_key)
+        except Exception as _lock_err:
+            logger.debug("wallet redrive lock release failed (TTL will expire): %s", _lock_err)
+
+    # Skip receipt on already_paid — a previous attempt already paid and
+    # (presumably) sent a receipt; we avoid the duplicate without losing the
+    # financial record (ledger write was also skipped by settle_wallet).
+    email_sent = False
+    if not result.already_paid:
+        email_sent = await send_ride_receipt(ride, current_user["id"], tip_amount)
     return {
         "success": True,
         "charged_amount": _money_str(result.charged_amount),

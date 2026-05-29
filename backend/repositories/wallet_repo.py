@@ -5,7 +5,7 @@ Extracted from db_supabase.py (Phase 4 of god-object decomposition).
 
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from loguru import logger
 
@@ -48,8 +48,12 @@ async def wallet_increment_balance(wallet_id: str, amount: "Decimal") -> "Decima
     return await run_sync(_fn)
 
 
-async def wallet_pay_for_ride(wallet_id: str, ride_id: str, amount: "Decimal") -> "Decimal":
-    """Atomically debit wallet and mark ride paid. Returns the new balance.
+async def wallet_pay_for_ride(wallet_id: str, ride_id: str, amount: "Decimal") -> "Optional[Decimal]":
+    """Atomically debit wallet and mark ride paid.
+
+    Returns the new balance after debit, or None if the ride was already paid
+    (idempotent no-op — the RPC returned NULL, no money moved, no ledger entry
+    should be written by the caller).
 
     Raises ValueError('insufficient_funds') if balance < amount.
     """
@@ -58,7 +62,7 @@ async def wallet_pay_for_ride(wallet_id: str, ride_id: str, amount: "Decimal") -
     if not supabase:
         raise DatabaseError(details={"original": "supabase not initialised"})
 
-    def _fn():
+    def _fn() -> "Optional[_Decimal]":
         try:
             res = supabase.rpc(
                 "wallet_pay_for_ride",
@@ -73,7 +77,8 @@ async def wallet_pay_for_ride(wallet_id: str, ride_id: str, amount: "Decimal") -
             raise
         data = getattr(res, "data", None)
         if data is None:
-            raise DatabaseError(details={"original": "wallet_pay_for_ride: no data returned"})
+            # NULL from the RPC means ride already paid — idempotent no-op.
+            return None
         return _Decimal(str(data))
 
     return await run_sync(_fn)

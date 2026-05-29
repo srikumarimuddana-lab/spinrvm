@@ -170,6 +170,13 @@ async def settle_wallet(
             )
         logger.error("settle_wallet: wallet_pay_for_ride failed for ride %s: %s", ride_id, exc, exc_info=True)
         return PaymentResult(success=False, error="Wallet payment failed", status_code=400)
+
+    # None means the RPC fired its idempotent no-op (ride already paid in a
+    # previous attempt). No money moved, so we must NOT append a ledger row.
+    if new_balance is None:
+        logger.info("settle_wallet: ride %s already paid — idempotent no-op, skipping ledger write", ride_id)
+        return PaymentResult(success=True, already_paid=True, charged_amount=_money_str(total_charge))
+
     grand_total = _round(_d(ride.get("grand_total") or ride.get("total_fare", 0) or 0))
     ride_fare = _round(
         _d(ride.get("base_fare") or 0) + _d(ride.get("distance_fare") or 0) + _d(ride.get("time_fare") or 0)

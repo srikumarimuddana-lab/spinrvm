@@ -8,6 +8,7 @@ import {
   TouchableOpacity,
   RefreshControl,
   ActivityIndicator,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -44,7 +45,7 @@ interface RideHistory {
 
 type FilterType = 'all' | 'personal' | 'business';
 type TabType = 'history' | 'upcoming';
-type Period = 'today' | 'week' | 'month' | 'all';
+type Period = 'week' | 'month' | 'all';
 
 interface RiderStats {
   period: string;
@@ -73,7 +74,12 @@ export default function ActivityScreen() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
+  const { width } = useWindowDimensions();
+  const isCompactFilterLayout = width < 380;
+  const styles = useMemo(
+    () => createStyles(colors, isCompactFilterLayout),
+    [colors, isCompactFilterLayout]
+  );
   const { t } = useTranslation();
 
   const fetchPage = useCallback(async (cursor?: string) => {
@@ -361,7 +367,6 @@ export default function ActivityScreen() {
               { key: 'all',   label: 'All Time' },
               { key: 'month', label: 'This Month' },
               { key: 'week',  label: 'This Week' },
-              { key: 'today', label: 'Today' },
             ] as { key: Period; label: string }[]).map(({ key, label }) => (
               <TouchableOpacity
                 key={key}
@@ -370,7 +375,10 @@ export default function ActivityScreen() {
                 accessibilityRole="radio"
                 accessibilityState={{ checked: period === key }}
               >
-                <Text style={[styles.periodPillText, period === key && styles.periodPillTextActive]}>
+                <Text
+                  style={[styles.periodPillText, period === key && styles.periodPillTextActive]}
+                  numberOfLines={1}
+                >
                   {label}
                 </Text>
               </TouchableOpacity>
@@ -422,7 +430,10 @@ export default function ActivityScreen() {
                 accessibilityRole="radio"
                 accessibilityState={{ checked: filter === f }}
               >
-                <Text style={[styles.filterTabText, filter === f && styles.filterTabTextActive]}>
+                <Text
+                  style={[styles.filterTabText, filter === f && styles.filterTabTextActive]}
+                  numberOfLines={1}
+                >
                   {f.charAt(0).toUpperCase() + f.slice(1)}
                 </Text>
               </TouchableOpacity>
@@ -535,7 +546,7 @@ export default function ActivityScreen() {
   );
 }
 
-function createStyles(colors: ThemeColors) { return StyleSheet.create({
+function createStyles(colors: ThemeColors, isCompactFilterLayout: boolean) { return StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.surface },
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
@@ -563,13 +574,15 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
     flexDirection: 'row', paddingHorizontal: 20, paddingTop: 12, gap: 8, flexWrap: 'wrap',
   },
   periodPill: {
-    paddingHorizontal: 14, paddingVertical: 7,
+    paddingHorizontal: isCompactFilterLayout ? 10 : 14, paddingVertical: 7,
     borderRadius: 20, borderWidth: 1.5, borderColor: colors.border,
-    backgroundColor: colors.surface,
+    backgroundColor: colors.surface, flexShrink: 0,
+    minHeight: 36, justifyContent: 'center', alignItems: 'center',
   },
   periodPillActive: { backgroundColor: colors.primary, borderColor: colors.primary },
   periodPillText: {
-    fontSize: 13, fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.text,
+    fontSize: isCompactFilterLayout ? 12 : 13,
+    fontFamily: 'PlusJakartaSans_600SemiBold', color: colors.text, textAlign: 'center',
   },
   periodPillTextActive: { color: '#fff' },
   statsCard: {
@@ -584,12 +597,15 @@ function createStyles(colors: ThemeColors) { return StyleSheet.create({
   statLabel: { fontSize: 11, fontFamily: 'PlusJakartaSans_500Medium', color: colors.textDim },
   statDivider: { width: 1, height: 32, backgroundColor: colors.border },
   filterTabs: {
-    flexDirection: 'row', paddingHorizontal: 20, marginBottom: 8, gap: 8,
+    flexDirection: 'row', paddingHorizontal: 20, marginBottom: 8, gap: 8, flexWrap: 'wrap',
   },
   filterTab: {
-    paddingHorizontal: 20, paddingVertical: 10,
+    paddingHorizontal: isCompactFilterLayout ? 14 : 20, paddingVertical: 10,
     borderRadius: 24, borderWidth: 1.5, borderColor: colors.border,
-    backgroundColor: colors.surface,
+    backgroundColor: colors.surface, flexShrink: 0,
+    minWidth: isCompactFilterLayout ? 92 : undefined,
+    flexGrow: isCompactFilterLayout ? 1 : 0,
+    minHeight: 42, justifyContent: 'center', alignItems: 'center',
   },
   filterTabActive: { backgroundColor: colors.text, borderColor: colors.text },
   filterTabText: {

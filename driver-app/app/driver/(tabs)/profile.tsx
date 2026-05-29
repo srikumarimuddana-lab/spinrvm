@@ -522,10 +522,18 @@ export default function ProfileScreen() {
             </TouchableOpacity>
             </View>
 
-            {/* Quick Actions */}
+            {/* Support */}
             <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Settings</Text>
+            <Text style={styles.sectionTitle}>Support</Text>
             <View style={styles.card}>
+                <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => router.push('/driver/lost-and-found' as any)}>
+                    <View style={[styles.iconBox, { backgroundColor: 'rgba(249, 115, 22, 0.1)' }]}>
+                        <Ionicons name="bag-handle" size={18} color="#F97316" />
+                    </View>
+                    <Text style={styles.actionText}>Lost & Found</Text>
+                    <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
+                </TouchableOpacity>
+                <View style={styles.cardDivider} />
                 <TouchableOpacity style={styles.actionRow} activeOpacity={0.7} onPress={() => router.push('/driver/notifications' as any)}>
                     <View style={[styles.iconBox, { backgroundColor: colors.surfaceLight }]}>
                         <Ionicons name="help-circle" size={18} color={colors.textDim} />

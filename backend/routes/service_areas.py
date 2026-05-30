@@ -14,8 +14,10 @@ from fastapi import APIRouter
 
 try:
     from .. import db_supabase
+    from ..geo_utils import get_service_area_polygon
 except ImportError:
     import db_supabase
+    from geo_utils import get_service_area_polygon
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +44,9 @@ _PUBLIC_FIELDS = (
 
 def _project_public(r: dict) -> dict:
     out = {k: r[k] for k in _PUBLIC_FIELDS if k in r}
+    # Normalize polygon to [{lat, lng}, ...] regardless of storage format
+    # (admin dashboard saves GeoJSON dicts; older rows may have plain arrays).
+    out["polygon"] = get_service_area_polygon(r)
     # Surge is per-area admin-gated. A stale surge_active flag or multiplier > 1
     # must never surface to clients (or drive rider/driver surge UI) unless an
     # operator has enabled surge for this area via the admin panel.

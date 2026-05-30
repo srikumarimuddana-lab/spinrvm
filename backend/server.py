@@ -124,6 +124,7 @@ from routes.fare_split import api_router as fare_split_router
 from routes.fares import api_router as fares_router
 from routes.favorites import api_router as favorites_router
 from routes.legal_documents import api_router as legal_documents_router
+from routes.lost_and_found import api_router as lost_and_found_router
 from routes.loyalty import api_router as loyalty_router
 from routes.maps_proxy import api_router as maps_router
 from routes.notifications import api_router as notifications_router
@@ -245,6 +246,7 @@ register_exception_handlers(app)
 # Create v1 API router
 v1_api_router = APIRouter()
 v1_api_router.include_router(rides_router)
+v1_api_router.include_router(lost_and_found_router)
 # documents_router MUST be included before drivers_router so that its specific
 # paths (/drivers/requirements, /drivers/documents) are matched before the
 # catch-all wildcard GET /drivers/{driver_id} in drivers_router.

@@ -283,6 +283,7 @@ interface IncomingRide {
     } | null;
     payment_method?: string;
     planned_route_polyline?: Array<[number, number]> | null;
+    service_area_polygon?: Array<{ lat: number; lng: number }> | null;
 }
 
 interface DriverState {
@@ -712,6 +713,7 @@ export const useDriverStore = create<DriverState>((set, get) => ({
                             offer_expires_at: ride.offer_expires_at ?? existing?.offer_expires_at,
                             requires_wav: ride.requires_wav ?? existing?.requires_wav,
                             planned_route_polyline: (ride as any).planned_route_polyline ?? undefined,
+                            service_area_polygon: (res.data as any).service_area_polygon ?? existing?.service_area_polygon ?? undefined,
                         },
                         countdownSeconds: countdown,
                     });

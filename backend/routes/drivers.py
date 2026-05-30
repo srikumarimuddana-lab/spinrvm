@@ -24,7 +24,7 @@ try:
     from .. import db_supabase
     from ..dependencies import get_admin_user, get_current_user
     from ..features import send_email, send_push_notification
-    from ..geo_utils import calculate_distance
+    from ..geo_utils import calculate_distance, get_service_area_polygon
     from ..logging_utils import diag_logger
     from ..models.ride_status import RideStatus
     from ..schemas import Driver, RideRatingRequest
@@ -32,7 +32,12 @@ try:
     from ..socket_manager import manager
     from ..utils.datetime_utils import parse_iso_utc
     from ..utils.driver_online import intent_online
-    from ..utils.driver_presence import clear_presence, mark_present, present_driver_ids, reset_miss_streak
+    from ..utils.driver_presence import (
+        clear_presence,
+        mark_present,
+        present_driver_ids_checked,
+        reset_miss_streak,
+    )
     from ..utils.error_handling import (
         AccountDisabledException,
         ErrorCode,
@@ -56,7 +61,12 @@ except ImportError:
     from socket_manager import manager
     from utils.datetime_utils import parse_iso_utc
     from utils.driver_online import intent_online  # type: ignore
-    from utils.driver_presence import clear_presence, mark_present, present_driver_ids, reset_miss_streak
+    from utils.driver_presence import (
+        clear_presence,
+        mark_present,
+        present_driver_ids_checked,
+        reset_miss_streak,
+    )
     from utils.error_handling import (
         AccountDisabledException,
         ErrorCode,
@@ -1555,13 +1565,27 @@ async def get_nearby_drivers_public(
     # Presence filter: hide drivers whose app is not reachable (force-killed,
     # phone dead, backgrounded past the TTL). Without this, the rider sees
     # ghost cars on the map and tries to book someone who will never receive
-    # the offer. Safe-fallback: if presence lookup fails, show DB state —
-    # dispatch still filters on presence so a ghost booking cannot complete.
+    # the offer.
+    #
+    # Three cases, distinguished via present_driver_ids_checked():
+    #   * reachable + non-empty → filter normally (ghost drivers removed).
+    #   * reachable + empty     → every candidate is genuinely offline; hide
+    #     them all (an empty map is correct here, not a bug).
+    #   * NOT reachable (Redis configured but down) → presence is unknowable,
+    #     so fall back to DB state rather than blanking the map during a
+    #     failover. Dispatch still presence-filters, so a ghost booking that
+    #     slips onto the map cannot actually complete an offer.
     try:
         driver_ids = [d["id"] for d in drivers if d.get("id")]
-        present = await present_driver_ids(driver_ids) if driver_ids else set()
-        if present:
-            drivers = [d for d in drivers if d["id"] in present]
+        if driver_ids:
+            present, reachable = await present_driver_ids_checked(driver_ids)
+            if reachable:
+                drivers = [d for d in drivers if d["id"] in present]
+            else:
+                logger.warning(
+                    "/drivers/nearby: presence store unreachable, showing DB "
+                    "state (dispatch still presence-filters before any offer)"
+                )
     except Exception as exc:
         logger.warning(f"/drivers/nearby presence filter failed, using DB state: {exc}")
 
@@ -2592,6 +2616,18 @@ async def get_active_ride(current_user: dict = Depends(get_current_user)):
         except Exception as e:
             logger.warning(f"get_active_ride: quest hint lookup non-fatal: {e}")
 
+    # Include service area polygon so the driver-app can render the zone
+    # boundary overlay on the map — fetched once on every active-ride load
+    # (cold start / reconnect path). The polygon is non-sensitive geodata.
+    service_area_polygon = None
+    sa_id = ride.get("service_area_id")
+    if sa_id:
+        try:
+            sa = await db_supabase.find_one("service_areas", {"id": sa_id})
+            service_area_polygon = get_service_area_polygon(sa or {}) or None
+        except Exception as e:
+            logger.warning(f"get_active_ride: service_area polygon fetch non-fatal: {e}")
+
     return {
         "ride": serialize_doc(ride),
         "rider": safe_rider,
@@ -2599,6 +2635,7 @@ async def get_active_ride(current_user: dict = Depends(get_current_user)):
         "incentives": incentives,
         "total_bonus": total_bonus,
         "quest_hint": quest_hint,
+        "service_area_polygon": service_area_polygon,
     }
 
 

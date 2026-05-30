@@ -22,6 +22,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Batch size rule
 - Limit each commit to one logical change. If a diff exceeds ~200 lines, split it.
 
+### PR review handling (Codex auto-review)
+- When subscribed to a PR (or asked to look at one), **do not chase CI checks** — skip `yarn audit` / `npm audit` / lint / deploy status unless the user explicitly asks. Pre-existing dependency-audit failures on surfaces a PR doesn't touch are not this PR's job.
+- **Always** check the PR's review comments from Codex (`chatgpt-codex-connector`) and act on them without being reminded:
+  1. For each unresolved Codex comment, verify the claim against the actual code — confirm it's true, partially true, or wrong.
+  2. If true (or partially), fix it. If it's wrong or not applicable, leave it and say why in the reply.
+  3. Reply to each thread (via `mcp__github__add_reply_to_pull_request_comment`) noting the fix commit SHA or the reason it needs no action.
+  4. Commit + push fixes to the PR's feature branch; the PR updates automatically.
+- Treat a verified Codex finding the same as any task: write/extend a regression test for it, run the affected tests, and keep the commit scoped to one logical change.
+- Only escalate via `AskUserQuestion` when a fix is architecturally significant or genuinely ambiguous; otherwise just do it.
+
 ## Context Imports
 
 Sprint-scoped and domain-deep context is loaded on demand, not baked into this file. Reference these when the task enters the relevant area:

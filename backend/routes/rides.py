@@ -3,7 +3,6 @@ import json
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
-from datetime import timezone as _tz
 from decimal import ROUND_HALF_UP, Decimal
 from typing import List, Optional
 
@@ -148,6 +147,83 @@ except ImportError:
     from services.payment_service import send_ride_receipt, settle_card, settle_corporate, settle_wallet  # type: ignore
 
 db = db_supabase  # legacy alias
+
+import httpx as _httpx  # noqa: E402 — late import to avoid circular at module load
+
+
+def _decode_polyline(encoded: str) -> list:
+    """Decode a Google encoded polyline string to [[lat, lng], ...] list."""
+    coords: list = []
+    index = 0
+    lat = 0
+    lng = 0
+    while index < len(encoded):
+        for is_lng in (False, True):
+            result = 0
+            shift = 0
+            while True:
+                if index >= len(encoded):
+                    raise ValueError("Truncated encoded polyline at index %d" % index)
+                b = ord(encoded[index]) - 63
+                index += 1
+                result |= (b & 0x1F) << shift
+                shift += 5
+                if b < 32:
+                    break
+            value = ~(result >> 1) if (result & 1) else (result >> 1)
+            if is_lng:
+                lng += value
+            else:
+                lat += value
+        coords.append([lat / 1e5, lng / 1e5])
+    return coords
+
+
+async def _fetch_directions_polyline(
+    pickup_lat: float,
+    pickup_lng: float,
+    dropoff_lat: float,
+    dropoff_lng: float,
+    api_key: str,
+    waypoints: Optional[list] = None,
+) -> Optional[list]:
+    """Call Google Directions API and return [[lat, lng], ...] overview polyline.
+
+    Returns None on any failure — callers must treat this as a soft error and
+    fall back to the client-computed polyline or the Directions API on-device.
+    Timeout is 3 s, well within the ride-creation SLA.
+    waypoints is an optional list of {lat, lng} stop dicts (multi-stop rides).
+    """
+    if not api_key:
+        return None
+    try:
+        params: dict = {
+            "origin": f"{pickup_lat},{pickup_lng}",
+            "destination": f"{dropoff_lat},{dropoff_lng}",
+            "key": api_key,
+        }
+        if waypoints:
+            params["waypoints"] = "|".join(f"{w['lat']},{w['lng']}" for w in waypoints)
+        async with _httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(
+                "https://maps.googleapis.com/maps/api/directions/json",
+                params=params,
+            )
+            data = resp.json()
+        if data.get("status") != "OK" or not data.get("routes"):
+            logger.warning(
+                "_fetch_directions_polyline: status=%s — no route returned",
+                data.get("status"),
+            )
+            return None
+        encoded = data["routes"][0].get("overview_polyline", {}).get("points", "")
+        if not encoded:
+            return None
+        pts = _decode_polyline(encoded)
+        return pts if len(pts) >= 2 else None
+    except Exception as exc:
+        logger.warning("_fetch_directions_polyline failed (non-fatal): %s", exc)
+        return None
 
 
 async def _require_ride_in_state_rider(ride_id: str, rider_id: str, allowed_states: tuple) -> dict:
@@ -709,9 +785,22 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
             logger.error(f"[DISPATCH] incentive lookup failed: {e}", exc_info=True)
             return [], 0.0
 
-    rider_user, (_incentives, _total_bonus) = await asyncio.gather(
+    async def _fetch_service_area_polygon() -> Optional[list]:
+        sa_id = ride.get("service_area_id")
+        if not sa_id:
+            return None
+        try:
+            sa = await db_supabase.find_one("service_areas", {"id": sa_id})
+            poly = get_service_area_polygon(sa or {})
+            return poly or None
+        except Exception as e:
+            logger.warning("[DISPATCH] service_area polygon fetch failed: %s", e)
+            return None
+
+    rider_user, (_incentives, _total_bonus), _service_area_polygon = await asyncio.gather(
         _fetch_rider(),
         _fetch_incentives(),
+        _fetch_service_area_polygon(),
     )
 
     rider_display_name = None
@@ -778,14 +867,21 @@ async def match_driver_to_ride(ride_id: str, *, ride: Optional[dict] = None):
             "quest_hint": _quest_hint,
             "payment_method": ride.get("payment_method"),
             "planned_route_polyline": ride.get("planned_route_polyline") or None,
+            "service_area_polygon": _service_area_polygon,
         }
 
         if driver.get("user_id"):
             await manager.send_personal_message(dispatch_payload, f"driver_{driver['user_id']}")
             try:
+                # Exclude large spatial fields from FCM data payload — FCM
+                # enforces a 4 KB data-message limit and detailed polygons/
+                # polylines can easily blow it. Drivers receive these via the
+                # WebSocket message (dispatch_payload) which has no size cap.
+                _FCM_SPATIAL_EXCLUDE = {"service_area_polygon", "planned_route_polyline"}
                 fcm_data = {
                     k: json.dumps(v) if isinstance(v, (dict, list)) else str(v) if v is not None else ""
                     for k, v in dispatch_payload.items()
+                    if k not in _FCM_SPATIAL_EXCLUDE
                 }
                 fcm_data["deeplink"] = "/driver/"
                 await send_push_notification(
@@ -887,13 +983,18 @@ async def _offer_timeout_handler(
             await record_period_transition(driver_id, 0)
         else:
             # Normal timeout — release driver back to the available pool.
-            await db.update_one(
-                "drivers",
-                {"id": driver_id},
-                {"$set": {"is_available": True}},
-            )
-            # Period 1: online, no ride.
-            await record_period_transition(driver_id, 1)
+            # Use set_driver_available() so the is_available ⇒ is_online
+            # invariant is enforced (clamps to False if driver went offline
+            # between the offer being sent and the timeout firing).
+            released = await db_supabase.set_driver_available(driver_id, available=True)
+            # Only record Period 1 (online, no ride) if the release actually
+            # made the driver available. If they went offline between offer
+            # dispatch and this timeout, set_driver_available clamps
+            # is_available→False; their go-offline already logged Period 0, so
+            # opening a Period 1 audit row here would falsely reopen an
+            # online/commercial-insurance window for an offline driver.
+            if isinstance(released, dict) and released.get("is_available"):
+                await record_period_transition(driver_id, 1)
 
         # Put the ride back in the searching state so it can be
         # re-dispatched or picked up by the next dispatch cycle.
@@ -1109,6 +1210,57 @@ class RideEstimateRequest(BaseModel):
     requires_wav: bool = False
 
 
+async def _filter_reachable_drivers(all_drivers: list) -> list:
+    """Drop ghost drivers from a DB-online pool for rider-facing counts.
+
+    A driver is kept iff their Redis presence key is still alive (heartbeat
+    within the TTL) AND their durable intent is online. Mirrors the guard in
+    /drivers/nearby and dispatch so the estimate "X drivers" badge matches
+    what dispatch can actually reach.
+
+    Redis-outage policy (matches /drivers/nearby):
+      * reachable + present set → filter to truly reachable drivers
+      * reachable + empty set   → everyone is offline; an empty result is
+        correct, not a bug
+      * NOT reachable (Redis configured but down) → presence is unknowable,
+        so fall back to DB state (still applying intent_online to catch a
+        stale is_online column). Dispatch presence-filters before any offer,
+        so a ghost that slips through here cannot actually accept a ride.
+
+    Any unexpected error degrades to DB state rather than blanking the count.
+    """
+    try:
+        from ..utils.driver_online import intent_online
+        from ..utils.driver_presence import present_driver_ids_checked
+    except ImportError:  # pragma: no cover - dual import path
+        from utils.driver_online import intent_online  # type: ignore
+        from utils.driver_presence import present_driver_ids_checked  # type: ignore
+
+    driver_ids = [d["id"] for d in all_drivers if d.get("id")]
+    if not driver_ids:
+        return all_drivers
+
+    try:
+        present, reachable = await present_driver_ids_checked(driver_ids)
+    except Exception as exc:
+        logger.warning("[estimate] presence filter error, using DB state: %s", exc)
+        return [d for d in all_drivers if intent_online(d)]
+
+    if reachable:
+        before = len(all_drivers)
+        filtered = [d for d in all_drivers if d.get("id") in present and intent_online(d)]
+        logger.info("[estimate] presence filter: %d/%d driver(s) reachable", len(filtered), before)
+        return filtered
+
+    # Redis configured but unreachable — keep DB state, log warning.
+    filtered = [d for d in all_drivers if intent_online(d)]
+    logger.warning(
+        "[estimate] presence store unreachable, using DB state (%d drivers after intent_online filter)",
+        len(filtered),
+    )
+    return filtered
+
+
 @api_router.post("/estimate")
 @api_rate_limit
 async def estimate_ride(
@@ -1146,13 +1298,60 @@ async def estimate_ride(
             body.pickup_lng,
         )
 
-    # Fetch all nearby online+available drivers once
+    # Geofence gates — both pickup and dropoff must be inside an active
+    # service area before we show any prices. Fail-open when no areas are
+    # configured so a DB outage doesn't block all estimates.
+    if _est_all_areas:
+        if _est_matched_area is None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "OUTSIDE_SERVICE_AREA",
+                    "message": (
+                        "Sorry, your pickup location is outside our coverage area. "
+                        "Please choose a pickup within a serviced zone."
+                    ),
+                },
+            )
+        _dropoff_in_area = any(
+            (poly := get_service_area_polygon(a)) and point_in_polygon(body.dropoff_lat, body.dropoff_lng, poly)
+            for a in _est_all_areas
+        )
+        if not _dropoff_in_area:
+            logger.info(
+                "[estimate] reject dropoff=(%.5f,%.5f) — outside %d active service area(s)",
+                body.dropoff_lat,
+                body.dropoff_lng,
+                len(_est_all_areas),
+            )
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "OUTSIDE_SERVICE_AREA",
+                    "message": (
+                        "Sorry, your dropoff location is outside our coverage area. "
+                        "Please choose a dropoff within a serviced zone."
+                    ),
+                },
+            )
+
+    # Fetch nearby online+available drivers once. Order by went_online_at DESC
+    # so recently-toggled-online drivers fill the 200-row page first. Ghost
+    # drivers (is_available=True in DB but heartbeat expired) tend to carry
+    # stale went_online_at values and fall toward the tail, so they are less
+    # likely to crowd real drivers out of the cap before the presence filter
+    # below runs. This mitigates — but does not fully eliminate — the
+    # capped-page ghost leak; full elimination needs a geo-index (query by
+    # radius first) or a sweeper that writes is_available=False back on TTL
+    # expiry. Tracked as a follow-up.
     all_drivers = await db_supabase.get_rows(
         "drivers",
         {
             "is_online": True,
             "is_available": True,
         },
+        order="went_online_at",
+        desc=True,
         limit=200,
     )
 
@@ -1160,6 +1359,11 @@ async def estimate_ride(
         "[estimate] fetched %d online+available drivers from DB",
         len(all_drivers),
     )
+
+    # Presence filter: strip drivers whose heartbeat has expired (app crashed /
+    # network lost) so the rider's "X drivers" badge matches what dispatch can
+    # actually reach. See _filter_reachable_drivers for the Redis-outage policy.
+    all_drivers = await _filter_reachable_drivers(all_drivers)
 
     # Filter to drivers within 10km radius and group by vehicle_type_id.
     # Exclude drivers without a user_id — those are orphan/demo rows that
@@ -1532,6 +1736,32 @@ async def create_ride(
             },
         )
 
+    # Geofence gate: dropoff must also fall inside an active service area.
+    # Rides that start within coverage but end in an unserviced zone are
+    # rejected here so dispatch never runs for out-of-area trips.
+    if all_areas:
+        _dropoff_in_area = any(
+            (poly := get_service_area_polygon(a)) and point_in_polygon(body.dropoff_lat, body.dropoff_lng, poly)
+            for a in all_areas
+        )
+        if not _dropoff_in_area:
+            logger.info(
+                "[geofence] reject dropoff=(%.5f,%.5f) — outside %d active service area(s)",
+                body.dropoff_lat,
+                body.dropoff_lng,
+                len(all_areas),
+            )
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "OUTSIDE_SERVICE_AREA",
+                    "message": (
+                        "Sorry, your dropoff location is outside our coverage area. "
+                        "Please choose a dropoff within a serviced zone."
+                    ),
+                },
+            )
+
     # Vehicle types are also needed by fare building — fetch once, reuse.
     vehicle_types = await db_supabase.get_rows("vehicle_types", {"is_active": True}, limit=100)
 
@@ -1659,6 +1889,22 @@ async def create_ride(
                 detail=f"Insufficient wallet balance. Estimated fare is ${grand_total}, wallet has ${_f(wallet_balance)}. Please top up your wallet or switch to card payment.",
             )
 
+    # CR-1: a ride booked for a future time must NOT dispatch a live driver now.
+    # It is parked in SCHEDULED and the scheduled-ride dispatcher loop flips it
+    # to SEARCHING at its scheduled_time. A request is deferred whenever a
+    # future scheduled_time is present — the CreateRideRequest validator
+    # guarantees that time is ≥5 min out. We key off scheduled_time (not the
+    # is_scheduled flag) because a client can send scheduled_time while leaving
+    # is_scheduled at its False default; the surge/fare logic above already
+    # treats scheduled_time presence as scheduled, and dispatching such a ride
+    # immediately would route a live driver hours early.
+    _is_deferred_schedule = body.scheduled_time is not None
+    # Corporate time-window policy is enforced against the *pickup* time, so a
+    # deferred ride must be evaluated against its scheduled_time, not the moment
+    # of booking — otherwise a rider booking inside company hours for an
+    # out-of-hours pickup (or vice-versa) is wrongly allowed/blocked.
+    _policy_pickup_time = body.scheduled_time if _is_deferred_schedule else datetime.now(timezone.utc)
+
     # Pre-dispatch corporate policy check (spec §4 — booking phase).
     # Only runs when rider explicitly books with company_allowance payment method.
     _corp_member_id: Optional[str] = None
@@ -1668,7 +1914,7 @@ async def create_ride(
             rider_id=current_user["id"],
             estimated_fare=total_fare,
             ride_type="standard",
-            pickup_time=datetime.now(timezone.utc),
+            pickup_time=_policy_pickup_time,
         )
         if not _policy_result.passed:
             reasons = []
@@ -1701,6 +1947,13 @@ async def create_ride(
         if _corp_members:
             _corp_member_id = _corp_members[0]["id"]
 
+    # _is_deferred_schedule is computed above (before the corporate policy
+    # check). Deferred rides are parked in SCHEDULED; the scheduled-ride
+    # dispatcher loop (utils/scheduled_rides.py) flips them to SEARCHING and
+    # runs driver matching when scheduled_time arrives. A ride with
+    # is_scheduled but no time falls through to immediate dispatch.
+    _initial_status = RideStatus.SCHEDULED if _is_deferred_schedule else RideStatus.SEARCHING
+
     pickup_otp_plain = generate_pickup_otp()
     ride = Ride(
         rider_id=current_user["id"],
@@ -1720,7 +1973,11 @@ async def create_ride(
         surge_multiplier=round(float(surge), 2),
         total_fare=_f(total_fare),
         stops=body.stops,
-        is_scheduled=body.is_scheduled,
+        # Persist is_scheduled=True for any deferred ride even if the client
+        # left the flag at its default — the scheduled-ride dispatcher filters
+        # on {is_scheduled: True, status: 'scheduled'}, so a scheduled_time-only
+        # request must carry the flag or it would never be picked up.
+        is_scheduled=bool(body.is_scheduled or _is_deferred_schedule),
         requires_wav=body.requires_wav,
         quiet_mode=body.quiet_mode,
         rider_notes=body.rider_notes,
@@ -1732,7 +1989,7 @@ async def create_ride(
         # NOTE: ``requires_wav`` was passed twice (once at line ~1090, again
         # here) — Python 3.11+ raises SyntaxError, blocking module import
         # and the entire test suite. Drop-in fix unblocks Audit-17 Phase 1c.
-        status=RideStatus.SEARCHING,
+        status=_initial_status,
         pickup_otp=pickup_otp_plain,
         ride_requested_at=datetime.now(timezone.utc),
     )
@@ -1785,7 +2042,7 @@ async def create_ride(
             rider_id=current_user["id"],
             estimated_fare=total_fare,
             ride_type=body.vehicle_type_id or "standard",
-            pickup_time=datetime.now(_tz.utc),
+            pickup_time=_policy_pickup_time,
             policy_override=_membership.get("policy_override", False),
         )
         if not _policy_result.passed:
@@ -1996,28 +2253,72 @@ async def create_ride(
     # Let admin live-monitoring see the request before dispatch starts —
     # previously the dashboard only observed a ride once a driver accepted,
     # which made it impossible to watch an unassigned ride sit in queue.
-    try:
-        await manager.broadcast_to_admins(
-            {
-                "type": "ride_requested",
-                "ride_id": ride.id,
-                "rider_id": fresh_ride.get("rider_id"),
-                "pickup_address": fresh_ride.get("pickup_address"),
-                "dropoff_address": fresh_ride.get("dropoff_address"),
-                "pickup_lat": fresh_ride.get("pickup_lat"),
-                "pickup_lng": fresh_ride.get("pickup_lng"),
-                "dropoff_lat": fresh_ride.get("dropoff_lat"),
-                "dropoff_lng": fresh_ride.get("dropoff_lng"),
-                "fare": fresh_ride.get("grand_total") or fresh_ride.get("total_fare"),
-                "status": fresh_ride.get("status"),
-            }
-        )
-    except Exception as _exc:  # pragma: no cover - best effort
-        logger.warning(f"create_ride: admin broadcast failed: {_exc}")
+    # Deferred scheduled rides are NOT live requests yet; the scheduler
+    # broadcasts ride_requested when it flips them to SEARCHING.
+    #
+    # The payload must match the dashboard's MonitoringRide contract (a nested
+    # ``ride`` object — see admin-dashboard/.../monitoring/types.ts); the
+    # handler calls applyRide(event.ride) to add the new row.
+    if not _is_deferred_schedule:
+        try:
+            from .admin.monitoring import build_monitoring_ride
+        except ImportError:
+            from routes.admin.monitoring import build_monitoring_ride
+        try:
+            await manager.broadcast_to_admins(
+                {
+                    "type": "ride_requested",
+                    "ride": build_monitoring_ride(fresh_ride, rider=current_user),
+                }
+            )
+        except Exception as _exc:  # pragma: no cover - best effort
+            logger.warning(f"create_ride: admin broadcast failed: {_exc}")
+
+    # Server-side planned_route_polyline computation.
+    # If the rider-app didn't send one (race between booking tap and
+    # Directions finishing, or no Maps key on client), compute it here
+    # using the Google Directions API before dispatch so every offer
+    # carries a road-following polyline instead of falling back to the
+    # dashed straight-line in the driver-app.
+    _existing_poly = fresh_ride.get("planned_route_polyline")
+    if not _existing_poly or (isinstance(_existing_poly, list) and len(_existing_poly) < 2):
+        try:
+            _s = await get_app_settings()
+            _maps_key = (_s or {}).get("google_maps_api_key", "")
+            if _maps_key:
+                _computed = await _fetch_directions_polyline(
+                    fresh_ride["pickup_lat"],
+                    fresh_ride["pickup_lng"],
+                    fresh_ride["dropoff_lat"],
+                    fresh_ride["dropoff_lng"],
+                    _maps_key,
+                    waypoints=body.stops or [],
+                )
+                if _computed:
+                    await db_supabase.update_ride(ride.id, {"planned_route_polyline": _computed})
+                    fresh_ride["planned_route_polyline"] = _computed
+                    logger.info(
+                        "create_ride: server-computed polyline (%d pts) stored for ride %s",
+                        len(_computed),
+                        ride.id,
+                    )
+        except Exception as _poly_err:
+            logger.warning("create_ride: polyline computation failed (non-fatal): %s", _poly_err)
 
     # Match driver — pass the fresh ride through so the dispatch path
     # doesn't re-fetch the row we just inserted.
-    await match_driver_to_ride(ride.id, ride=fresh_ride)
+    #
+    # CR-1: skip immediate dispatch for deferred scheduled rides. They stay
+    # in SCHEDULED until scheduled_ride_dispatcher_loop transitions them to
+    # SEARCHING at their scheduled_time. Dispatching here would route a real
+    # driver to a pickup that is hours or days away.
+    if not _is_deferred_schedule:
+        await match_driver_to_ride(ride.id, ride=fresh_ride)
+    else:
+        logger.info(
+            f"create_ride: ride {ride.id} scheduled for {body.scheduled_time} — "
+            "parked in 'scheduled', deferring dispatch to scheduler loop"
+        )
 
     # Dispatch may have set driver_id / status; read the current state
     # for the response. Skipping this extra fetch would mean the rider
@@ -4521,7 +4822,9 @@ async def rider_report_lost_item(
         "id": str(uuid.uuid4()),
         "ride_id": ride_id,
         "reporter_id": current_user["id"],
+        "rider_user_id": current_user["id"],
         "driver_id": driver_id,
+        "reporter_type": "rider",
         "item_description": req.item_description,
         "item_category": category,
         "status": "reported",
@@ -4535,15 +4838,12 @@ async def rider_report_lost_item(
         if driver and driver.get("user_id"):
             driver_user = await db_supabase.get_user_by_id(driver["user_id"])
             if driver_user:
-                try:
-                    from ..features import send_push_notification
-                except ImportError:
-                    from features import send_push_notification  # type: ignore
                 await send_push_notification(
                     driver_user["id"],
                     "Lost Item Report",
                     f"A rider reported a lost item: {req.item_description}. Please check your vehicle.",
-                    {"type": "lost_and_found", "ride_id": ride_id},
+                    {"type": "lost_and_found", "case_id": item["id"], "ride_id": ride_id},
+                    target_app="driver",
                 )
                 await db_supabase.update_lost_and_found(
                     item["id"],

@@ -96,31 +96,62 @@ async def clear_presence(driver_id: str) -> None:
         logger.error(f"[presence] clear_presence({driver_id}) failed: {exc}", exc_info=True)
 
 
-async def present_driver_ids(candidate_ids: List[str]) -> set:
-    """Return the subset of ``candidate_ids`` that are currently present.
+async def present_driver_ids_checked(candidate_ids: List[str]) -> tuple[set, bool]:
+    """Return ``(present_ids, reachable)`` for ``candidate_ids``.
 
-    Batched so dispatch and admin monitoring can filter a driver pool
-    without issuing N sequential round-trips. Falls back to per-key reads
-    if MGET is unavailable (in-process dict fallback).
+    ``reachable`` lets a caller distinguish "the presence store says nobody
+    is present" from "the presence store could not be consulted":
+
+      * ``reachable=True``  — the set is authoritative. Either Redis answered,
+        or Redis is unconfigured and the in-process dict (dev / single
+        replica) is the source of truth. An empty set here genuinely means
+        every candidate is offline.
+      * ``reachable=False`` — Redis is *configured but unavailable* (failover,
+        network blip). The set is unreliable and MUST NOT be treated as
+        "everyone offline"; callers should fall back to durable DB state.
+
+    Without this distinction the old ``present_driver_ids`` returned an empty
+    set for both cases, so a Redis outage looked identical to a genuinely
+    empty pool — blanking the rider map during failover.
+
+    Batched (single MGET) so dispatch and admin monitoring filter a driver
+    pool without N sequential round-trips.
     """
     if not candidate_ids:
-        return set()
+        return set(), True
 
     r = await _get_redis()
     if r is not None:
         try:
             keys = [_key(i) for i in candidate_ids]
             vals = await r.mget(*keys)
-            return {cid for cid, v in zip(candidate_ids, vals, strict=False) if v is not None}
+            return {cid for cid, v in zip(candidate_ids, vals, strict=False) if v is not None}, True
         except Exception as exc:
-            logger.error(f"[presence] MGET failed, falling back to per-key reads: {exc}", exc_info=True)
+            # Configured-but-down: the result is unknowable, not "all offline".
+            logger.error(
+                f"[presence] MGET failed — Redis configured but unavailable; "
+                f"presence is unreliable: {exc}",
+                exc_info=True,
+            )
+            return set(), False
 
-    # In-process fallback (single replica, dev/test).
+    # Redis unconfigured — in-process dict is authoritative (single replica, dev/test).
     result = set()
     for cid in candidate_ids:
         if await is_present(cid):
             result.add(cid)
-    return result
+    return result, True
+
+
+async def present_driver_ids(candidate_ids: List[str]) -> set:
+    """Return the subset of ``candidate_ids`` that are currently present.
+
+    Thin wrapper over :func:`present_driver_ids_checked` that drops the
+    reachability flag. Callers that must survive a Redis outage without
+    over-filtering should use the ``_checked`` variant directly.
+    """
+    present, _reachable = await present_driver_ids_checked(candidate_ids)
+    return present
 
 
 async def list_present_ids() -> List[str]:

@@ -37,7 +37,9 @@ function ActivityScreen() {
         </View>
       </LinearGradient>
 
-      <ActivityView />
+      <View style={styles.body}>
+        <ActivityView />
+      </View>
     </View>
   );
 }
@@ -47,6 +49,10 @@ function createStyles(colors: ThemeColors) {
     container: {
       flex: 1,
       backgroundColor: colors.background,
+    },
+    body: {
+      flex: 1,
+      minHeight: 0,
     },
     header: {
       paddingHorizontal: 20,

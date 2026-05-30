@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, waitFor } from '@testing-library/react-native';
+import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import ActivityView from '../../components/activity/ActivityView';
 import api from '@shared/api/client';
 import { useDriverStore } from '../../store/driverStore';
@@ -109,5 +109,20 @@ describe('ActivityView', () => {
 
     await waitFor(() => expect(getByText('123 Main St')).toBeTruthy());
     expect(getByText('1 rides')).toBeTruthy();
+  });
+
+  it('keeps history unfiltered by period when the stats period changes', async () => {
+    mockApiGet.mockResolvedValue({ data: { rides: [makeRide()], total: 1 } });
+
+    const { getByText } = render(<ActivityView />);
+
+    await waitFor(() => expect(getByText('123 Main St')).toBeTruthy());
+    mockApiGet.mockClear();
+
+    fireEvent.press(getByText('Today'));
+
+    await waitFor(() => expect(mockStore.fetchEarnings).toHaveBeenLastCalledWith('today'));
+    expect(mockApiGet).toHaveBeenCalledWith('/drivers/rides/history?limit=20');
+    expect(mockApiGet).not.toHaveBeenCalledWith(expect.stringContaining('period=today'));
   });
 });

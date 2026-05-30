@@ -71,14 +71,13 @@ export default function ActivityView() {
     if (options?.cursor) params.set('before', options.cursor);
     else if ((options?.offset ?? 0) > 0) params.set('offset', String(options?.offset ?? 0));
     if (statusFilter !== 'all') params.set('status', statusFilter);
-    if (period !== 'all') params.set('period', period);
     const url = `/drivers/rides/history?${params.toString()}`;
-    console.log('[Activity] fetch:', params.toString(), '| period state:', period);
+    if (__DEV__) console.log('[Activity] fetchPage ->', url);
     const res = await api.get<RideHistoryResponse>(url);
     const page = normalizeRideHistory(res.data);
-    console.log('[Activity] result:', page.total, 'total,', page.rides.length, 'rides');
+    if (__DEV__) console.log('[Activity] result:', page.total, 'total,', page.rides.length, 'rides');
     return page;
-  }, [period, statusFilter]);
+  }, [statusFilter]);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -92,8 +91,7 @@ export default function ActivityView() {
     ]);
 
     const historyResult = results[0];
-    console.log('[Activity] history:', historyResult.status,
-      historyResult.status === 'rejected' ? String((historyResult as any).reason).slice(0, 100) : '');
+    if (__DEV__) console.log('[Activity] history status:', historyResult.status);
 
     if (historyResult.status === 'fulfilled') {
       const pageResult = historyResult.value;

@@ -13,6 +13,7 @@ jest.mock('@g4rb4g3/react-native-carplay', () => {
   }
   return {
     CarPlay: {
+      connected: false,
       registerOnConnect: jest.fn(),
       registerOnDisconnect: jest.fn(),
       unregisterOnConnect: jest.fn(),
@@ -38,6 +39,7 @@ const configOf = (t: unknown) => (t as { config: AnyConfig }).config;
 
 beforeEach(() => {
   jest.clearAllMocks();
+  (CarPlay as unknown as { connected: boolean }).connected = false;
 });
 
 describe('buildSpikeTemplate', () => {
@@ -66,6 +68,8 @@ describe('initCarSpike', () => {
   it('registers connect + disconnect handlers and sets the root template on connect', () => {
     const cleanup = initCarSpike();
 
+    // Not connected at init → template is NOT set until the connect event fires.
+    expect(CarPlay.setRootTemplate).not.toHaveBeenCalled();
     expect(CarPlay.registerOnConnect).toHaveBeenCalledTimes(1);
     expect(CarPlay.registerOnDisconnect).toHaveBeenCalledTimes(1);
 
@@ -81,6 +85,18 @@ describe('initCarSpike', () => {
     cleanup();
     expect(CarPlay.unregisterOnConnect).toHaveBeenCalledTimes(1);
     expect(CarPlay.unregisterOnDisconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it('sets the root template immediately when a head unit is already connected at init', () => {
+    // App cold-started while already connected: registerOnConnect won't replay the
+    // past connect event, so initCarSpike must set the template right away.
+    (CarPlay as unknown as { connected: boolean }).connected = true;
+
+    initCarSpike();
+
+    expect(CarPlay.setRootTemplate).toHaveBeenCalledTimes(1);
+    const rootArg = (CarPlay.setRootTemplate as jest.Mock).mock.calls[0][0];
+    expect(rootArg).toBeInstanceOf(ListTemplate);
   });
 
   it('is enabled for the spike (guard flag is on)', () => {

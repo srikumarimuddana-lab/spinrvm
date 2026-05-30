@@ -1,69 +1,102 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, FlatList, ActivityIndicator, StyleSheet } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import api from '@shared/api/client';
+import React, { useMemo } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useRouter } from 'expo-router';
+import { useTheme } from '@shared/theme/ThemeContext';
+import type { ThemeColors } from '@shared/theme/index';
+import { useLanguageStore } from '../../../store/languageStore';
+import { ErrorBoundary } from '@shared/components/ErrorBoundary';
+import ActivityView from '../../../components/activity/ActivityView';
 
-export default function ActivityScreen() {
-  const [rides, setRides] = useState<any[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    api.get('/drivers/rides/history?limit=20&offset=0')
-      .then(res => {
-        const data = res.data as any;
-        setRides(Array.isArray(data) ? data : (data?.rides ?? []));
-        setTotal(data?.total ?? 0);
-      })
-      .catch(e => setError(String(e)))
-      .finally(() => setLoading(false));
-  }, []);
-
-  if (loading) {
-    return (
-      <SafeAreaView style={s.center} edges={['top']}>
-        <ActivityIndicator size="large" />
-        <Text>Loading...</Text>
-      </SafeAreaView>
-    );
-  }
-
-  if (error) {
-    return (
-      <SafeAreaView style={s.center} edges={['top']}>
-        <Text style={s.error}>Error: {error}</Text>
-      </SafeAreaView>
-    );
-  }
+function ActivityScreen() {
+  const insets = useSafeAreaInsets();
+  const router = useRouter();
+  const { colors } = useTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+  const { t } = useLanguageStore();
 
   return (
-    <SafeAreaView style={s.container} edges={['top']}>
-      <Text style={s.title}>Activity — {total} rides</Text>
-      <FlatList
-        data={rides}
-        keyExtractor={item => item.id}
-        renderItem={({ item }) => (
-          <View style={s.row}>
-            <Text style={s.status}>{item.status}</Text>
-            <Text style={s.addr} numberOfLines={1}>{item.pickup_address ?? 'No address'}</Text>
-            <Text style={s.date}>{item.created_at?.slice(0, 10)}</Text>
-          </View>
-        )}
-        ListEmptyComponent={<Text style={s.empty}>No rides returned</Text>}
-      />
-    </SafeAreaView>
+    <View style={styles.container}>
+      <LinearGradient
+        colors={[colors.primary, colors.primaryDark]}
+        style={[styles.header, { paddingTop: insets.top + 12 }]}
+      >
+        <View style={styles.headerRow}>
+          <Text style={styles.headerTitle}>Activity</Text>
+          <TouchableOpacity
+            style={styles.payoutBtn}
+            onPress={() => router.push('/driver/payout' as any)}
+            accessibilityRole="button"
+            accessibilityLabel={t('earnings.payout')}
+          >
+            <Ionicons name="wallet-outline" size={16} color={colors.primaryDark} />
+            <Text style={styles.payoutBtnText}>{t('earnings.payout')}</Text>
+          </TouchableOpacity>
+        </View>
+      </LinearGradient>
+
+      <ActivityView />
+    </View>
   );
 }
 
-const s = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8 },
-  title: { fontSize: 20, fontWeight: '700', padding: 16 },
-  row: { padding: 14, borderBottomWidth: 1, borderBottomColor: '#eee' },
-  status: { fontSize: 12, fontWeight: '700', color: '#555', marginBottom: 2 },
-  addr: { fontSize: 15, color: '#111' },
-  date: { fontSize: 12, color: '#999', marginTop: 2 },
-  error: { color: 'red', padding: 16, textAlign: 'center' },
-  empty: { padding: 32, textAlign: 'center', color: '#999' },
-});
+function createStyles(colors: ThemeColors) {
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+    },
+    header: {
+      paddingHorizontal: 20,
+      paddingBottom: 16,
+      borderBottomLeftRadius: 28,
+      borderBottomRightRadius: 28,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 8 },
+      shadowOpacity: 0.15,
+      shadowRadius: 16,
+      elevation: 8,
+      zIndex: 10,
+    },
+    headerRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+    },
+    headerTitle: {
+      color: '#fff',
+      fontSize: 24,
+      fontWeight: '800',
+      letterSpacing: 0.3,
+    },
+    payoutBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: '#fff',
+      paddingHorizontal: 14,
+      paddingVertical: 8,
+      borderRadius: 20,
+      gap: 6,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.1,
+      shadowRadius: 4,
+      elevation: 3,
+    },
+    payoutBtnText: {
+      color: colors.primaryDark,
+      fontSize: 13,
+      fontWeight: '700',
+    },
+  });
+}
+
+export default function ActivityScreenWithBoundary() {
+  return (
+    <ErrorBoundary>
+      <ActivityScreen />
+    </ErrorBoundary>
+  );
+}

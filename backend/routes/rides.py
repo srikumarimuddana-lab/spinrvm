@@ -1277,16 +1277,21 @@ async def estimate_ride(
 
     # Resolve service area once for fees/taxes — shared across all vehicle-type iterations
     # so calculate_all_fees doesn't re-fetch service_areas N times.
-    _est_all_areas = await db_supabase.get_rows("service_areas", {"is_active": True}, limit=100)
-    _est_matched_area = next(
-        (
-            a
-            for a in _est_all_areas
-            if get_service_area_polygon(a)
-            and point_in_polygon(body.pickup_lat, body.pickup_lng, get_service_area_polygon(a))
-        ),
-        None,
-    )
+    _est_all_areas = await db_supabase.get_rows("service_areas", {"is_active": True}, limit=500)
+
+    # Use PostGIS RPC for geofence checks — the capped list above is for fee
+    # resolution only and must not be treated as authoritative for coverage.
+    _est_matched_area = await db_supabase.get_service_area_for_point(body.pickup_lat, body.pickup_lng)
+    if _est_matched_area is None and _est_all_areas:
+        _est_matched_area = next(
+            (
+                a
+                for a in _est_all_areas
+                if get_service_area_polygon(a)
+                and point_in_polygon(body.pickup_lat, body.pickup_lng, get_service_area_polygon(a))
+            ),
+            None,
+        )
     if _est_matched_area:
         logger.info(
             "[estimate] matched service area '%s' for fees",
@@ -1299,9 +1304,11 @@ async def estimate_ride(
             body.pickup_lng,
         )
 
-    # Geofence gates — both pickup and dropoff must be inside an active
-    # service area before we show any prices. Fail-open when no areas are
-    # configured so a DB outage doesn't block all estimates.
+    # Geofence gates — pickup, dropoff, and every stop must be inside an
+    # active service area before we show prices. Uses PostGIS point lookup
+    # so the check is authoritative regardless of how many areas exist.
+    # Fail-open when the RPC returns None AND no areas are configured (DB
+    # outage or fresh install).
     if _est_all_areas:
         if _est_matched_area is None:
             raise HTTPException(
@@ -1314,16 +1321,12 @@ async def estimate_ride(
                     ),
                 },
             )
-        _dropoff_in_area = any(
-            (poly := get_service_area_polygon(a)) and point_in_polygon(body.dropoff_lat, body.dropoff_lng, poly)
-            for a in _est_all_areas
-        )
-        if not _dropoff_in_area:
+        _dropoff_area = await db_supabase.get_service_area_for_point(body.dropoff_lat, body.dropoff_lng)
+        if _dropoff_area is None:
             logger.info(
-                "[estimate] reject dropoff=(%.5f,%.5f) — outside %d active service area(s)",
+                "[estimate] reject dropoff=(%.5f,%.5f) — outside service areas",
                 body.dropoff_lat,
                 body.dropoff_lng,
-                len(_est_all_areas),
             )
             raise HTTPException(
                 status_code=400,
@@ -1335,6 +1338,28 @@ async def estimate_ride(
                     ),
                 },
             )
+        for idx, stop in enumerate(body.stops or []):
+            s_lat, s_lng = stop.get("lat"), stop.get("lng")
+            if s_lat is None or s_lng is None:
+                continue
+            _stop_area = await db_supabase.get_service_area_for_point(s_lat, s_lng)
+            if _stop_area is None:
+                logger.info(
+                    "[estimate] reject stop[%d]=(%.5f,%.5f) — outside service areas",
+                    idx,
+                    s_lat,
+                    s_lng,
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "code": "OUTSIDE_SERVICE_AREA",
+                        "message": (
+                            "Sorry, one of your stops is outside our coverage area. "
+                            "Please choose stops within a serviced zone."
+                        ),
+                    },
+                )
 
     # Fetch nearby online+available drivers once. Order by went_online_at DESC
     # so recently-toggled-online drivers fill the 200-row page first. Ghost
@@ -1716,7 +1741,7 @@ async def create_ride(
     # table independently — 3-4 full scans per POST /rides.
     all_areas = []
     try:
-        all_areas = await db_supabase.get_rows("service_areas", {"is_active": True}, limit=100)
+        all_areas = await db_supabase.get_rows("service_areas", {"is_active": True}, limit=500)
     except Exception as e:
         logger.error(f"Failed to fetch service areas: {e}", exc_info=True)
 
@@ -1759,19 +1784,14 @@ async def create_ride(
         )
 
     # Geofence gate: dropoff must also fall inside an active service area.
-    # Rides that start within coverage but end in an unserviced zone are
-    # rejected here so dispatch never runs for out-of-area trips.
+    # Uses PostGIS RPC so the check is authoritative regardless of list size.
     if all_areas:
-        _dropoff_in_area = any(
-            (poly := get_service_area_polygon(a)) and point_in_polygon(body.dropoff_lat, body.dropoff_lng, poly)
-            for a in all_areas
-        )
-        if not _dropoff_in_area:
+        _dropoff_area = await db_supabase.get_service_area_for_point(body.dropoff_lat, body.dropoff_lng)
+        if _dropoff_area is None:
             logger.info(
-                "[geofence] reject dropoff=(%.5f,%.5f) — outside %d active service area(s)",
+                "[geofence] reject dropoff=(%.5f,%.5f) — outside service areas",
                 body.dropoff_lat,
                 body.dropoff_lng,
-                len(all_areas),
             )
             raise HTTPException(
                 status_code=400,
@@ -1783,6 +1803,31 @@ async def create_ride(
                     ),
                 },
             )
+
+    # Geofence gate: every intermediate stop must also be in coverage.
+    if all_areas:
+        for idx, stop in enumerate(body.stops or []):
+            s_lat, s_lng = stop.get("lat"), stop.get("lng")
+            if s_lat is None or s_lng is None:
+                continue
+            _stop_area = await db_supabase.get_service_area_for_point(s_lat, s_lng)
+            if _stop_area is None:
+                logger.info(
+                    "[geofence] reject stop[%d]=(%.5f,%.5f) — outside service areas",
+                    idx,
+                    s_lat,
+                    s_lng,
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "code": "OUTSIDE_SERVICE_AREA",
+                        "message": (
+                            "Sorry, one of your stops is outside our coverage area. "
+                            "Please choose stops within a serviced zone."
+                        ),
+                    },
+                )
 
     # Vehicle types are also needed by fare building — fetch once, reuse.
     vehicle_types = await db_supabase.get_rows("vehicle_types", {"is_active": True}, limit=100)

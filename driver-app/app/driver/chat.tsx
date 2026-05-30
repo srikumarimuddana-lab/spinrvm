@@ -42,6 +42,9 @@ export default function ChatScreen() {
     const [inputText, setInputText] = useState('');
     const [showQuickReplies, setShowQuickReplies] = useState(true);
     const [sending, setSending] = useState(false);
+    const riderTyping = useDriverStore(s => s.riderTyping);
+    const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const lastTypingSentRef = useRef(0);
     const flatListRef = useRef<FlatList>(null);
     // Tracks when the initial AsyncStorage read has completed so the persist
     // effect knows it is safe to write an empty array without clobbering a
@@ -107,6 +110,28 @@ export default function ChatScreen() {
         }
     }, [chatMessages.length]);
 
+    // Auto-clear typing indicator after 4s of no new typing events
+    useEffect(() => {
+        if (!riderTyping) return;
+        if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+        typingTimeoutRef.current = setTimeout(() => {
+            useDriverStore.getState().setRiderTyping(false);
+        }, 4000);
+        return () => { if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current); };
+    }, [riderTyping]);
+
+    const sendTypingIndicator = useCallback(() => {
+        const now = Date.now();
+        if (now - lastTypingSentRef.current < 3000 || !rideId) return;
+        lastTypingSentRef.current = now;
+        api.post(`/rides/${rideId}/typing`, { sender: 'driver' }).catch(() => {});
+    }, [rideId]);
+
+    const handleTextChange = useCallback((text: string) => {
+        setInputText(text);
+        if (text.trim()) sendTypingIndicator();
+    }, [sendTypingIndicator]);
+
     const sendMessage = useCallback(async (text: string) => {
         if (!text.trim() || !rideId || sending) return;
         setSending(true);
@@ -146,9 +171,19 @@ export default function ChatScreen() {
                 )}
                 <View style={[styles.bubble, isMe ? styles.myBubble : styles.theirBubble]}>
                     <Text style={[styles.bubbleText, isMe && styles.myBubbleText]}>{item.text}</Text>
-                    <Text style={[styles.bubbleTime, isMe && styles.myBubbleTime]}>
-                        {formatTime(item.timestamp)}
-                    </Text>
+                    <View style={styles.bubbleFooter}>
+                        <Text style={[styles.bubbleTime, isMe && styles.myBubbleTime]}>
+                            {formatTime(item.timestamp)}
+                        </Text>
+                        {isMe && (
+                            <Ionicons
+                                name={item.read ? 'checkmark-done' : 'checkmark'}
+                                size={14}
+                                color={item.read ? '#34D399' : 'rgba(255,255,255,0.5)'}
+                                style={{ marginLeft: 4 }}
+                            />
+                        )}
+                    </View>
                 </View>
             </View>
         );
@@ -213,6 +248,18 @@ export default function ChatScreen() {
                 }
             />
 
+            {/* Typing Indicator */}
+            {riderTyping && (
+                <View style={styles.typingRow}>
+                    <View style={styles.avatarSmall}>
+                        <Ionicons name="person" size={14} color={colors.textDim} />
+                    </View>
+                    <View style={styles.typingBubble}>
+                        <Text style={styles.typingDots}>•••</Text>
+                    </View>
+                </View>
+            )}
+
             {/* Quick Replies */}
             {showQuickReplies && (
                 <View style={styles.quickReplies}>
@@ -252,7 +299,7 @@ export default function ChatScreen() {
                     placeholder="Type a message..."
                     placeholderTextColor={colors.textDim}
                     value={inputText}
-                    onChangeText={setInputText}
+                    onChangeText={handleTextChange}
                     onFocus={() => setShowQuickReplies(false)}
                 />
                 <TouchableOpacity
@@ -341,8 +388,28 @@ function createStyles(colors: ThemeColors) {
         },
         bubbleText: { color: colors.text, fontSize: 14, lineHeight: 20 },
         myBubbleText: { color: '#fff' },
-        bubbleTime: { color: colors.textDim, fontSize: 10, marginTop: 4, textAlign: 'right' },
+        bubbleFooter: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', marginTop: 4 },
+        bubbleTime: { color: colors.textDim, fontSize: 10 },
         myBubbleTime: { color: 'rgba(255,255,255,0.6)' },
+        typingRow: {
+            flexDirection: 'row',
+            alignItems: 'flex-end',
+            paddingHorizontal: 16,
+            paddingBottom: 4,
+            gap: 8,
+        },
+        typingBubble: {
+            backgroundColor: colors.surfaceLight,
+            borderRadius: 18,
+            borderBottomLeftRadius: 4,
+            paddingHorizontal: 16,
+            paddingVertical: 8,
+        },
+        typingDots: {
+            color: colors.textDim,
+            fontSize: 18,
+            letterSpacing: 2,
+        },
         emptyChat: {
             alignItems: 'center',
             justifyContent: 'center',

@@ -2654,6 +2654,37 @@ async def get_ride_history(
     if not driver:
         raise HTTPException(status_code=404, detail="Driver not found")
 
+    def history_start_for_period(period_value: Optional[str]) -> Optional[datetime]:
+        if not period_value or period_value == "all":
+            return None
+
+        now = datetime.now(timezone.utc)
+        if period_value == "today":
+            return now.replace(hour=0, minute=0, second=0, microsecond=0)
+        if period_value == "week":
+            return now - timedelta(days=7)
+        if period_value == "month":
+            return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        return None
+
+    def history_date_field(status_value: str) -> str:
+        if status_value == RideStatus.COMPLETED.value:
+            return "ride_completed_at"
+        if status_value == RideStatus.CANCELLED.value:
+            return "cancelled_at"
+        if status_value == RideStatus.SCHEDULED.value:
+            return "scheduled_time"
+        return "created_at"
+
+    def history_sort_key(ride: Dict[str, Any]) -> datetime:
+        value = (
+            ride.get("ride_completed_at")
+            or ride.get("cancelled_at")
+            or ride.get("scheduled_time")
+            or ride.get("created_at")
+        )
+        return parse_iso_utc(value) or datetime.min.replace(tzinfo=timezone.utc)
+
     if status and status in ("completed", "cancelled", "scheduled"):
         status_filter = status
     else:
@@ -2663,30 +2694,50 @@ async def get_ride_history(
         "driver_id": driver["id"],
         "status": status_filter,
     }
+    period_start = history_start_for_period(period)
 
-    if period and period != "all":
-        now = datetime.now(timezone.utc)
-        if period == "today":
-            start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        elif period == "week":
-            start = now - timedelta(days=7)
-        elif period == "month":
-            start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        else:
-            start = None
-        if start:
-            history_filter["created_at"] = {"$gte": start.isoformat()}
+    if period_start and isinstance(status_filter, dict):
+        total = 0
+        rides = []
+        page_limit = min(limit, 500)
+        fetch_limit = offset + page_limit
+        for terminal_status in (RideStatus.COMPLETED.value, RideStatus.CANCELLED.value):
+            date_field = history_date_field(terminal_status)
+            status_history_filter = {
+                "driver_id": driver["id"],
+                "status": terminal_status,
+                date_field: {"$gte": period_start.isoformat()},
+            }
+            logger.info(f"[ride-history] driver={driver['id']} filter={status_history_filter}")
+            total += await db_supabase.count_documents("rides", status_history_filter)
+            rides.extend(
+                await db_supabase.get_rows(
+                    "rides",
+                    status_history_filter,
+                    order=date_field,
+                    desc=True,
+                    limit=fetch_limit,
+                    offset=0,
+                )
+            )
+        rides = sorted(rides, key=history_sort_key, reverse=True)[offset : offset + page_limit]
+    else:
+        order_field = "created_at"
+        if isinstance(status_filter, str):
+            order_field = history_date_field(status_filter)
+            if period_start:
+                history_filter[order_field] = {"$gte": period_start.isoformat()}
 
-    logger.info(f"[ride-history] driver={driver['id']} filter={history_filter}")
-    total = await db_supabase.count_documents("rides", history_filter)
-    rides = await db_supabase.get_rows(
-        "rides",
-        history_filter,
-        order="created_at",
-        desc=True,
-        limit=min(limit, 500),
-        offset=offset,
-    )
+        logger.info(f"[ride-history] driver={driver['id']} filter={history_filter}")
+        total = await db_supabase.count_documents("rides", history_filter)
+        rides = await db_supabase.get_rows(
+            "rides",
+            history_filter,
+            order=order_field,
+            desc=True,
+            limit=min(limit, 500),
+            offset=offset,
+        )
     logger.info(f"[ride-history] total={total} returned={len(rides)}")
 
     try:

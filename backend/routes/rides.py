@@ -1520,12 +1520,33 @@ async def estimate_ride(
             }
         )
 
+    # Fetch the road-following route polyline from Google Directions API.
+    # Same for all vehicle types, so called once. Returned as [[lat, lng], ...]
+    # so the rider app can render the gradient route line without a client-side
+    # Directions call (which requires the rider's own Google Maps API key).
+    route_polyline = None
+    try:
+        _settings = await get_app_settings()
+        _maps_key = (_settings or {}).get("google_maps_api_key", "")
+        if _maps_key:
+            route_polyline = await _fetch_directions_polyline(
+                body.pickup_lat,
+                body.pickup_lng,
+                body.dropoff_lat,
+                body.dropoff_lng,
+                _maps_key,
+                waypoints=body.stops or [],
+            )
+    except Exception as _poly_err:
+        logger.warning("[estimate] polyline fetch failed (non-fatal): %s", _poly_err)
+
     logger.info(
-        "[estimate] returning %d estimates: %s",
+        "[estimate] returning %d estimates (polyline=%d pts): %s",
         len(estimates),
+        len(route_polyline) if route_polyline else 0,
         [(e["vehicle_type"].get("name", "?"), e["available"], e["driver_count"]) for e in estimates],
     )
-    return estimates
+    return {"estimates": estimates, "route_polyline": route_polyline}
 
 
 async def ride_search_timeout(r_id: str, timeout_seconds: int = 300):

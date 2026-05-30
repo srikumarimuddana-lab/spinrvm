@@ -1,81 +1,69 @@
-import React, { useMemo } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, FlatList, ActivityIndicator, StyleSheet } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
-import { useTheme } from '@shared/theme/ThemeContext';
-import type { ThemeColors } from '@shared/theme/index';
-import { useLanguageStore } from '../../../store/languageStore';
-import { ErrorBoundary } from '@shared/components/ErrorBoundary';
-import ActivityView from '../../../components/activity/ActivityView';
+import api from '@shared/api/client';
 
-function ActivityScreen() {
-  const router = useRouter();
-  const { colors } = useTheme();
-  const styles = useMemo(() => createStyles(colors), [colors]);
-  const { t } = useLanguageStore();
+export default function ActivityScreen() {
+  const [rides, setRides] = useState<any[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.get('/drivers/rides/history?limit=20&offset=0')
+      .then(res => {
+        const data = res.data as any;
+        setRides(Array.isArray(data) ? data : (data?.rides ?? []));
+        setTotal(data?.total ?? 0);
+      })
+      .catch(e => setError(String(e)))
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) {
+    return (
+      <SafeAreaView style={s.center} edges={['top']}>
+        <ActivityIndicator size="large" />
+        <Text>Loading...</Text>
+      </SafeAreaView>
+    );
+  }
+
+  if (error) {
+    return (
+      <SafeAreaView style={s.center} edges={['top']}>
+        <Text style={s.error}>Error: {error}</Text>
+      </SafeAreaView>
+    );
+  }
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>Activity</Text>
-        <TouchableOpacity
-          style={styles.payoutBtn}
-          onPress={() => router.push('/driver/payout' as any)}
-          accessibilityRole="button"
-          accessibilityLabel={t('earnings.payout')}
-        >
-          <Ionicons name="wallet-outline" size={16} color={colors.primary} />
-          <Text style={styles.payoutBtnText}>{t('earnings.payout')}</Text>
-        </TouchableOpacity>
-      </View>
-
-      <ActivityView />
+    <SafeAreaView style={s.container} edges={['top']}>
+      <Text style={s.title}>Activity — {total} rides</Text>
+      <FlatList
+        data={rides}
+        keyExtractor={item => item.id}
+        renderItem={({ item }) => (
+          <View style={s.row}>
+            <Text style={s.status}>{item.status}</Text>
+            <Text style={s.addr} numberOfLines={1}>{item.pickup_address ?? 'No address'}</Text>
+            <Text style={s.date}>{item.created_at?.slice(0, 10)}</Text>
+          </View>
+        )}
+        ListEmptyComponent={<Text style={s.empty}>No rides returned</Text>}
+      />
     </SafeAreaView>
   );
 }
 
-function createStyles(colors: ThemeColors) {
-  return StyleSheet.create({
-    container: {
-      flex: 1,
-      backgroundColor: colors.surface,
-    },
-    header: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      paddingHorizontal: 24,
-      paddingVertical: 16,
-    },
-    headerTitle: {
-      fontSize: 28,
-      fontWeight: '800',
-      color: colors.text,
-    },
-    payoutBtn: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      backgroundColor: colors.surfaceLight,
-      paddingHorizontal: 14,
-      paddingVertical: 8,
-      borderRadius: 20,
-      gap: 6,
-      borderWidth: 1,
-      borderColor: colors.border,
-    },
-    payoutBtnText: {
-      color: colors.primary,
-      fontSize: 13,
-      fontWeight: '700',
-    },
-  });
-}
-
-export default function ActivityScreenWithBoundary() {
-  return (
-    <ErrorBoundary>
-      <ActivityScreen />
-    </ErrorBoundary>
-  );
-}
+const s = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#fff' },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8 },
+  title: { fontSize: 20, fontWeight: '700', padding: 16 },
+  row: { padding: 14, borderBottomWidth: 1, borderBottomColor: '#eee' },
+  status: { fontSize: 12, fontWeight: '700', color: '#555', marginBottom: 2 },
+  addr: { fontSize: 15, color: '#111' },
+  date: { fontSize: 12, color: '#999', marginTop: 2 },
+  error: { color: 'red', padding: 16, textAlign: 'center' },
+  empty: { padding: 32, textAlign: 'center', color: '#999' },
+});

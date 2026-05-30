@@ -68,11 +68,10 @@ export default function ActivityView() {
     });
     if (statusFilter !== 'all') params.set('status', statusFilter);
     const url = `/drivers/rides/history?${params.toString()}`;
-    console.log('[Activity] fetchPage →', url);
+    if (__DEV__) console.log('[Activity] fetchPage →', url);
     const res = await api.get<RideHistoryResponse>(url);
-    console.log('[Activity] raw response:', JSON.stringify(res.data).slice(0, 300));
     const page = normalizeRideHistory(res.data);
-    console.log('[Activity] normalized:', page.total, 'total,', page.rides.length, 'rides');
+    if (__DEV__) console.log('[Activity] result:', page.total, 'total,', page.rides.length, 'rides');
     return page;
   }, [period, statusFilter]);
 
@@ -88,8 +87,7 @@ export default function ActivityView() {
     ]);
 
     const historyResult = results[0];
-    console.log('[Activity] history status:', historyResult.status,
-      historyResult.status === 'rejected' ? (historyResult as any).reason : '');
+    if (__DEV__) console.log('[Activity] history status:', historyResult.status);
 
     if (historyResult.status === 'fulfilled') {
       const pageResult = historyResult.value;

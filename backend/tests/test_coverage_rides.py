@@ -164,6 +164,7 @@ async def test_estimate_ride_returns_estimates():
         patch("backend.routes.rides.db_supabase") as mock_db,
         patch("backend.routes.rides.calculate_airport_fee", new_callable=AsyncMock, return_value={"airport_fee": 0.0}),
         patch("backend.routes.rides.sign_estimate_token", return_value="tok"),
+        patch("backend.routes.rides.get_app_settings", new_callable=AsyncMock, return_value={}),
     ):
         mock_db.get_rows = AsyncMock(return_value=[])
 
@@ -172,9 +173,9 @@ async def test_estimate_ride_returns_estimates():
             current_user=_USER,
         )
 
-    assert len(result) == 1
-    assert result[0]["vehicle_type"]["id"] == "vt-1"
-    assert result[0]["estimate_token"] == "tok"
+    assert len(result["estimates"]) == 1
+    assert result["estimates"][0]["vehicle_type"]["id"] == "vt-1"
+    assert result["estimates"][0]["estimate_token"] == "tok"
 
 
 @pytest.mark.anyio
@@ -207,16 +208,19 @@ async def test_estimate_ride_includes_nearby_drivers():
         patch("backend.routes.rides.db_supabase") as mock_db,
         patch("backend.routes.rides.calculate_airport_fee", new_callable=AsyncMock, return_value={"airport_fee": 0.0}),
         patch("backend.routes.rides.sign_estimate_token", return_value="tok2"),
+        patch("backend.routes.rides.get_app_settings", new_callable=AsyncMock, return_value={}),
     ):
-        mock_db.get_rows = AsyncMock(return_value=[nearby_driver])
+        # First get_rows call fetches service_areas (return empty to skip geofence),
+        # second fetches nearby drivers.
+        mock_db.get_rows = AsyncMock(side_effect=[[], [nearby_driver]])
 
         result = await estimate_ride(
             body=RideEstimateRequest(pickup_lat=52.1, pickup_lng=-106.6, dropoff_lat=52.2, dropoff_lng=-106.7),
             current_user=_USER,
         )
 
-    assert result[0]["driver_count"] == 1
-    assert result[0]["available"] is True
+    assert result["estimates"][0]["driver_count"] == 1
+    assert result["estimates"][0]["available"] is True
 
 
 # ── get_active_ride ───────────────────────────────────────────────────────────

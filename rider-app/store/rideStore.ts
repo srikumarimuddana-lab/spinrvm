@@ -373,21 +373,26 @@ export const useRideStore = create<RideState>((set, get) => ({
       if (existing.length === 0) {
         set({ isLoading: true, error: null });
       }
-      const response = await api.post<RideEstimate[]>('/rides/estimate', {
+      const response = await api.post<{ estimates: RideEstimate[]; route_polyline?: number[][] } | RideEstimate[]>('/rides/estimate', {
         pickup_lat: pickup.lat,
         pickup_lng: pickup.lng,
         dropoff_lat: dropoff.lat,
         dropoff_lng: dropoff.lng,
         stops: stops,
       });
-      const fresh = Array.isArray(response.data) ? response.data as RideEstimate[] : [];
+      // Backend returns {estimates, route_polyline} — handle both old (array) and new (object) shapes.
+      const raw = response.data;
+      const fresh = Array.isArray(raw) ? raw as RideEstimate[] : (raw?.estimates ?? []) as RideEstimate[];
+      const polyline = !Array.isArray(raw) && raw?.route_polyline
+        ? raw.route_polyline.map((p: number[]) => [p[0], p[1]] as [number, number])
+        : undefined;
       // Never replace a populated list with an empty one during a background
       // refresh — the rider should always see vehicle types even when the
       // backend returns none transiently (cache miss, rate-limit, etc.).
       if (fresh.length > 0 || existing.length === 0) {
-        set({ estimates: fresh, isLoading: false });
+        set({ estimates: fresh, isLoading: false, ...(polyline ? { routePolyline: polyline } : {}) });
       } else {
-        set({ isLoading: false });
+        set({ isLoading: false, ...(polyline ? { routePolyline: polyline } : {}) });
       }
     } catch (error: unknown) {
       console.error('fetchEstimates error:', error);

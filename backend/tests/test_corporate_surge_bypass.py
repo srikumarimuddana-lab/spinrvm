@@ -157,6 +157,7 @@ def _patch_estimate_deps():
         "routes.rides.get_fares_for_location": AsyncMock(return_value=[_surged_fare_info(1.5)]),
         "routes.rides.calculate_airport_fee": AsyncMock(return_value={"airport_fee": 0.0}),
         "routes.rides.db_supabase.get_rows": AsyncMock(return_value=[]),
+        "routes.rides.get_app_settings": AsyncMock(return_value={}),
     }
 
 
@@ -188,8 +189,8 @@ class TestEstimateSurgeBypass:
             _stop_patches(patches)
         assert resp.status_code == 200
         body = resp.json()
-        assert body, "expected at least one estimate"
-        assert body[0]["surge_multiplier"] == 1.5
+        assert body["estimates"], "expected at least one estimate"
+        assert body["estimates"][0]["surge_multiplier"] == 1.5
 
     def test_company_allowance_estimate_drops_surge_to_one(self, test_client, rider_override):
         """payment_method=company_allowance + corp id → surge masked to 1.0."""
@@ -204,11 +205,8 @@ class TestEstimateSurgeBypass:
         finally:
             _stop_patches(patches)
         assert resp.status_code == 200
-        out = resp.json()[0]
+        out = resp.json()["estimates"][0]
         assert out["surge_multiplier"] == 1.0
-        # Distance fare must reflect the un-surged rate (1.20 × distance × 1.0)
-        # not the surged rate. The exact distance is geo-computed; we only
-        # verify surge multiplier here — fare rounding is covered elsewhere.
 
     def test_work_profile_estimate_drops_surge_to_one(self, test_client, rider_override):
         """work_profile=True + corp id (the toggle path) → surge masked."""
@@ -223,7 +221,7 @@ class TestEstimateSurgeBypass:
         finally:
             _stop_patches(patches)
         assert resp.status_code == 200
-        assert resp.json()[0]["surge_multiplier"] == 1.0
+        assert resp.json()["estimates"][0]["surge_multiplier"] == 1.0
 
     def test_estimate_request_omitting_corporate_fields_still_works(self, test_client, rider_override):
         """Backwards compatibility — old clients that don't send the fields
@@ -238,7 +236,7 @@ class TestEstimateSurgeBypass:
         finally:
             _stop_patches(patches)
         assert resp.status_code == 200
-        assert resp.json()[0]["surge_multiplier"] == 1.5
+        assert resp.json()["estimates"][0]["surge_multiplier"] == 1.5
 
 
 # ── Booking endpoint — surge masked at persist time ──────────────────

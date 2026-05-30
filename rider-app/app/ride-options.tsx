@@ -70,7 +70,7 @@ function RideOptionsScreenContent() {
     requiresWav, setRequiresWav, showWavOption,
     scheduledTime, setScheduledTime, quietMode, setQuietMode,
     availablePromos, appliedPromo, fetchAvailablePromos, applyPromo,
-    setRoutePolyline,
+    setRoutePolyline, routePolyline,
   } = useRideStore();
 
   // ── Payment state ──
@@ -249,6 +249,16 @@ function RideOptionsScreenContent() {
     }
   }, [workModeEnabled, corporateAccounts.length]);
 
+  // Populate route coordinates from the server-provided polyline (returned
+  // with the estimate response). Falls back to MapViewDirections on-device
+  // if the backend didn't return one.
+  useEffect(() => {
+    if (routePolyline && routePolyline.length >= 2 && routeCoordinates.length === 0) {
+      const coords = routePolyline.map(([lat, lng]: [number, number]) => ({ latitude: lat, longitude: lng }));
+      setRouteCoordinates(coords);
+    }
+  }, [routePolyline]);
+
   // ── Handlers ──
 
   const onReadyDirections = (result: any) => {
@@ -426,7 +436,9 @@ function RideOptionsScreenContent() {
             latitudeDelta: 0.05, longitudeDelta: 0.05,
           }}
         >
-          {GOOGLE_MAPS_API_KEY && (
+          {/* Fallback: only call Google Directions client-side if the backend
+              didn't return a route_polyline with the estimate response. */}
+          {GOOGLE_MAPS_API_KEY && routeCoordinates.length === 0 && (
             <MapViewDirections
               origin={{ latitude: pickup.lat, longitude: pickup.lng }}
               destination={{ latitude: dropoff.lat, longitude: dropoff.lng }}
@@ -435,6 +447,7 @@ function RideOptionsScreenContent() {
               strokeWidth={0}
               strokeColor="transparent"
               onReady={onReadyDirections}
+              onError={(err: any) => console.warn('[RideOptions] Directions API error:', err?.message ?? err)}
               optimizeWaypoints
             />
           )}

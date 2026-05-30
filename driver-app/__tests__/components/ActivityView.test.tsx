@@ -103,6 +103,9 @@ describe('ActivityView', () => {
     const { getByText } = render(<ActivityView />);
 
     await waitFor(() => expect(getByText('123 Main St')).toBeTruthy());
+    fireEvent.press(getByText('All Time'));
+
+    await waitFor(() => expect(getByText('Load more rides')).toBeTruthy());
     fireEvent.press(getByText('Load more rides'));
 
     await waitFor(() => expect(mockStore.fetchRideHistory).toHaveBeenCalledWith(50, 1, true));
@@ -118,6 +121,27 @@ describe('ActivityView', () => {
     const { getByText, queryByText } = render(<ActivityView />);
 
     await waitFor(() => expect(getByText('No Rides Found')).toBeTruthy());
+    expect(queryByText('Load more rides')).toBeNull();
+  });
+
+  it('hides load more when the active period already filtered the loaded page', async () => {
+    const thisWeek = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+    mockStore = makeStore({
+      historyTotal: 20,
+      rideHistory: [
+        makeRide({ id: 'ride-this-week', ride_completed_at: thisWeek, pickup_address: 'Weekly Pickup' }),
+        makeRide({ id: 'ride-old', ride_completed_at: '2024-01-01T12:00:00.000Z', pickup_address: 'Old Pickup' }),
+      ],
+    });
+    mockUseDriverStore.mockReturnValue(mockStore);
+
+    const { getByText, queryByText } = render(<ActivityView />);
+
+    await waitFor(() => expect(getByText('No Rides Found')).toBeTruthy());
+    fireEvent.press(getByText('This Week'));
+
+    await waitFor(() => expect(getByText('Weekly Pickup')).toBeTruthy());
+    expect(queryByText('Old Pickup')).toBeNull();
     expect(queryByText('Load more rides')).toBeNull();
   });
 

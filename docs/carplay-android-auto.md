@@ -28,8 +28,17 @@ a custom Expo config plugin* (keep all ride logic in shared TS/Zustand).
   clean `yarn add`. Do the spike first.
 - The single biggest blast-radius item is the **iOS `UIScene` lifecycle migration** CarPlay
   forces on the *existing phone app*. Android Auto is purely additive.
-- Two hard external gates with weeks of lead time: **Apple CarPlay "Driving Task" entitlement**
-  and **Google Play car-app review**. Start both early.
+- **iOS CarPlay caveat (discovered in review):** this fork's iOS bridge exposes only the
+  *windowed* connect (`connectWithInterfaceController:window:`) — the **navigation/maps**
+  entitlement path. CarPlay's **driving-task** category is *windowless*, and the fork has no
+  windowless connect, so **driving-task on iOS is not supported by the fork as-is**. iOS CarPlay
+  therefore needs either the hard-to-get **navigation entitlement** (windowed, fork-supported) or
+  **custom native** work for driving-task. **Android Auto** (navigation category, no entitlement)
+  is the tractable, fork-supported path → lead with Android Auto. Because of this (and the
+  phone-scene risk), the **entire iOS CarPlay wiring is gated OFF by default** in
+  `withCarIntegration.js` (opt in with `SPINR_CARPLAY_IOS=1`).
+- Two hard external gates with weeks of lead time: **Apple CarPlay entitlement** (driving-task
+  *or* navigation — see caveat) and **Google Play car-app review**. Start both early.
 
 ---
 
@@ -181,23 +190,25 @@ resolves, jest 4/4, tsc/eslint clean on the new files). Steps 3–6 require an E
 
 1. ✅ **DONE** — `@g4rb4g3/react-native-carplay` added (New Arch left disabled). `expo-speech`
    deferred to the feature build — not needed to prove the native link.
-2. ✅ **DONE** — `plugins/withCarIntegration.js` (CarPlay-only scene manifest + `CarSceneDelegate`;
-   gated CarPlay entitlement; Android car-app + FGS-location perms — the fork ships its own
-   `CarAppService`, which AGP merges in). Plus `car/carSpike.ts` smoke test mounted in
-   `RootLayout`. Run `npx expo prebuild --clean` and confirm it generates without error.
+2. ✅ **DONE** — `plugins/withCarIntegration.js` (Android car-app + FGS-location perms always-on;
+   **all iOS CarPlay wiring gated behind `SPINR_CARPLAY_IOS=1`, OFF by default** — the fork ships
+   its own `CarAppService`, which AGP merges in). Plus `car/carSpike.ts` smoke test and
+   `car/androidAutoEntry.tsx` registering the **`AndroidAuto` AppRegistry root** the fork's
+   `CarPlaySession.runApplication("AndroidAuto")` requires (+ the fork's headless task). Run
+   `npx expo prebuild --clean` and confirm it generates without error.
 3. ⏳ **Android build passes** with our Option-C chain (Kotlin 2.2.21 / compileSdk 36 / ksp
    2.2.21-2.0.5) — confirm the fork's `kotlin-stdlib 1.9.25` / `react-android 0.76.9 compileOnly`
    don't break the link, and that the fork's library manifest (`package="org.birkir.carplay"`)
    merges cleanly under AGP 8 (the `package` attr is deprecated in favour of `namespace`). EAS
-   `development` profile. **Android Auto needs no entitlement — this half works by default.**
-4. ⏳ **iOS build passes** with the CarPlay scene manifest; confirm the **phone app still
-   cold-starts, backgrounds/foregrounds, and routes a push-notification tap** (we declare only
-   the CarPlay scene so the phone window stays AppDelegate-based — verify that holds). Watch the
-   `CarSceneDelegate` import: if `RNCarPlay.h` isn't found, the `__has_include` guard should fall
-   to `@import react_native_carplay;`. **The CarPlay entitlement is OFF by default** so this build
-   signs cleanly; to actually connect CarPlay (step 5, iOS) you must first have Apple grant the
-   managed `carplay-driving-task` entitlement + add it to the profile, then build with
-   `SPINR_CARPLAY_ENTITLEMENT=1`.
+   `development` profile. **Android Auto needs no entitlement — this is the primary path.**
+4. ⏳ **iOS build (default) passes with NO CarPlay wiring** — gated off, so the phone app is
+   untouched; this just proves the dependency links on iOS. To exercise CarPlay itself you must
+   build with `SPINR_CARPLAY_IOS=1`, **and first resolve the two open iOS questions on a real
+   build**: (a) the phone app still cold-starts once the scene manifest is added (UIScene
+   migration / phone-scene), and (b) the driving-task category — the fork only does the *windowed*
+   (navigation-entitlement) connect, so iOS CarPlay needs the **navigation entitlement** or custom
+   native for driving-task (see TL;DR caveat). Granting + adding the entitlement to the profile is
+   a prerequisite for `SPINR_CARPLAY_IOS=1` to sign.
 5. ⏳ Connect **CarPlay Simulator** (Xcode → I/O → External Displays) and **Android Auto DHU**;
    `car/carSpike.ts` should render the "Spinr (spike)" list on connect.
 6. ⏳ Tap the list item → `[car-spike] item selected …` appears in Metro logs (JS round-trip OK).

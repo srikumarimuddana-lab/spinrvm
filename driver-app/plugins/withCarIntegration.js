@@ -38,15 +38,22 @@ const path = require('path');
 const CARPLAY_ENTITLEMENT = 'com.apple.developer.carplay-driving-task';
 const CAR_SCENE_DELEGATE = 'CarSceneDelegate';
 
-// The managed CarPlay "Driving Task" entitlement only signs successfully once
-// Apple has GRANTED it AND the App ID / provisioning profile include it. Until
-// then, adding it unconditionally makes every signed iOS build fail code-signing
-// with a profile-entitlement mismatch. So it is OFF by default and opt-in via env
-// once provisioning is ready:  `SPINR_CARPLAY_ENTITLEMENT=1 npx expo prebuild`
-// (or set it in the EAS build profile's `env`). The CarPlay scene manifest +
-// CarSceneDelegate stay unconditional — they compile/sign fine without the
-// entitlement; only the entitlement itself trips signing.
-const ENABLE_CARPLAY_ENTITLEMENT = process.env.SPINR_CARPLAY_ENTITLEMENT === '1';
+// The ENTIRE iOS CarPlay wiring is OFF by default and opt-in via
+//   `SPINR_CARPLAY_IOS=1 npx expo prebuild`  (or set it in the EAS profile `env`).
+// Two reasons it must not touch default iOS builds:
+//   1. Signing — the managed `carplay-driving-task` entitlement fails code-signing
+//      until Apple grants it AND the provisioning profile includes it.
+//   2. Phone scene — turning on UIApplicationSceneManifest opts the app into the
+//      UIScene lifecycle; with only a CarPlay scene declared, a normal phone launch
+//      can fail to build its window. Keeping the manifest out of default builds
+//      leaves the existing AppDelegate window path untouched (zero blast radius).
+// NOTE: the CarSceneDelegate uses the WINDOWED connect (`...didConnect:toWindow:`),
+// which is the CarPlay *navigation/maps* entitlement path the fork actually
+// supports. The fork does NOT expose a windowless connect, so the *driving-task*
+// (template-only, no map window) category is unsupported as-is — see
+// docs/carplay-android-auto.md. Android Auto (below) is the fork-supported,
+// no-entitlement path and stays always-on.
+const ENABLE_IOS_CARPLAY = process.env.SPINR_CARPLAY_IOS === '1';
 
 // Android permissions for the car app. The fork's OWN AndroidManifest already
 // declares the CarAppService + these car-app template permissions + minCarApiLevel,
@@ -103,9 +110,6 @@ didDisconnectInterfaceController:(CPInterfaceController *)interfaceController
 `;
 
 function withCarPlayEntitlement(config) {
-  // Opt-in only — see ENABLE_CARPLAY_ENTITLEMENT above. Skipping it leaves iOS
-  // builds signable before Apple grants the managed entitlement.
-  if (!ENABLE_CARPLAY_ENTITLEMENT) return config;
   return withEntitlementsPlist(config, (cfg) => {
     cfg.modResults[CARPLAY_ENTITLEMENT] = true;
     return cfg;
@@ -181,13 +185,19 @@ function withAndroidAutoPermissions(config) {
 }
 
 const withCarIntegration = (config) => {
-  // iOS — CarPlay
-  config = withCarPlayEntitlement(config);
-  config = withCarPlaySceneManifest(config);
-  config = withCarSceneDelegateFile(config);
-  config = withCarSceneDelegateInXcode(config);
-  // Android — Android Auto (the fork's manifest supplies the CarAppService; we add
-  // the car-app + foreground-service permissions defensively)
+  // iOS — CarPlay. OFF by default (see ENABLE_IOS_CARPLAY): opting the phone app
+  // into the UIScene lifecycle + the managed entitlement must not touch normal
+  // iOS builds. Enable with SPINR_CARPLAY_IOS=1 once provisioning is ready and the
+  // phone-scene/driving-task questions in the doc are resolved on a real build.
+  if (ENABLE_IOS_CARPLAY) {
+    config = withCarPlayEntitlement(config);
+    config = withCarPlaySceneManifest(config);
+    config = withCarSceneDelegateFile(config);
+    config = withCarSceneDelegateInXcode(config);
+  }
+  // Android — Android Auto. Always applied: it needs no entitlement and the fork's
+  // manifest supplies the CarAppService; we add the car-app + foreground-service
+  // permissions defensively.
   config = withAndroidAutoPermissions(config);
   return config;
 };

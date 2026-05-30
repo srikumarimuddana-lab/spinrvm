@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { View, Text, StyleSheet, Platform, Linking, Animated, TouchableOpacity, ActivityIndicator, AppState } from 'react-native';
 import MapView, { Marker, Polyline, Polygon, Heatmap, PROVIDER_GOOGLE } from 'react-native-maps';
-import MapViewDirections from 'react-native-maps-directions';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useDriverStore } from '../../../store/driverStore';
@@ -26,24 +25,10 @@ import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient } from '@shared/api/queryClient';
 
-const GOOGLE_MAPS_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || '';
 
 // Use Google Maps on Android, Apple Maps (native) on iOS
 const MAP_PROVIDER = Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined;
 
-// Distance in metres between two lat/lng pairs. Used by the Directions
-// refresh ticker to decide whether the driver has moved far enough to
-// warrant a new API call.
-function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
-  const R = 6371000;
-  const toRad = (deg: number) => (deg * Math.PI) / 180;
-  const dLat = toRad(lat2 - lat1);
-  const dLng = toRad(lng2 - lng1);
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
-  return 2 * R * Math.asin(Math.sqrt(a));
-}
 
 function DriverDashboard() {
   const { colors, isDark } = useTheme();
@@ -130,11 +115,6 @@ function DriverDashboard() {
 
   // Route polyline coordinates for active rides
   const [routeCoords, setRouteCoords] = useState<{ latitude: number; longitude: number }[]>([]);
-  // True when the Google Directions API call failed (no network, quota,
-  // invalid key, etc.). When set, the offer panel renders a dashed
-  // straight-line polyline from origin to destination so the driver
-  // still sees pickup → dropoff geometry instead of an empty map.
-  const [directionsFailed, setDirectionsFailed] = useState(false);
 
   // MapView remount key. Bumped when a ride ends so Android's Google Maps
   // native layer fully drops leftover polyline overlays and the CarMarker
@@ -155,37 +135,6 @@ function DriverDashboard() {
   const [routeEtaMinutes, setRouteEtaMinutes] = useState<number | null>(null);
   const [routeDistanceKm, setRouteDistanceKm] = useState<number | null>(null);
 
-  // Last origin actually fetched + a mirror of the live driver location, both
-  // held in refs so the interval callback sees fresh values without
-  // re-subscribing on every render.
-  const lastDirectionsFetchRef = useRef<{ lat: number; lng: number; ts: number } | null>(null);
-  const currentLocationRef = useRef<{ lat: number; lng: number } | null>(null);
-  useEffect(() => {
-    if (location?.coords?.latitude != null && location?.coords?.longitude != null) {
-      currentLocationRef.current = { lat: location.coords.latitude, lng: location.coords.longitude };
-    }
-  }, [location]);
-
-  // Force MapViewDirections to re-compute by changing a key prop. Only
-  // runs for navigating_to_pickup (driver → pickup needs live Directions).
-  // ride_offered and trip_in_progress use the saved planned_route_polyline
-  // instead — zero Directions API calls for those phases.
-  const [directionsKey, setDirectionsKey] = useState(0);
-  useEffect(() => {
-    if (rideState !== 'navigating_to_pickup') return;
-    const interval = setInterval(() => {
-      const now = Date.now();
-      const last = lastDirectionsFetchRef.current;
-      const cur = currentLocationRef.current;
-      if (last && cur) {
-        const movedMeters = haversineMeters(last.lat, last.lng, cur.lat, cur.lng);
-        const elapsedMs = now - last.ts;
-        if (movedMeters < 100 && elapsedMs < 5 * 60_000) return;
-      }
-      setDirectionsKey((k) => k + 1);
-    }, 60000);
-    return () => clearInterval(interval);
-  }, [rideState]);
 
   // Demand heatmap — controlled by admin per service area
   const [heatmapPoints, setHeatmapPoints] = useState<{ latitude: number; longitude: number; weight: number }[]>([]);
@@ -274,14 +223,11 @@ function DriverDashboard() {
   // stays framed on the pickup/dropoff bounding box from the previous ride
   // and the driver marker ends up off-screen.
   useEffect(() => {
-    setDirectionsFailed(false);
     setRouteEtaMinutes(null);
     setRouteDistanceKm(null);
-    setDirectionsKey(0);
 
     const savedPoly = (ride as any)?.planned_route_polyline || (ride as any)?.route_polyline;
-    const canUseSaved = (rideState === 'ride_offered' || rideState === 'trip_in_progress')
-      && Array.isArray(savedPoly) && savedPoly.length >= 2;
+    const canUseSaved = Array.isArray(savedPoly) && savedPoly.length >= 2;
 
     if (canUseSaved) {
       const coords = savedPoly
@@ -597,92 +543,11 @@ function DriverDashboard() {
         )}
         {mapMarkers}
 
-        {/* Route polyline.
-            - ride_offered / trip_in_progress: reuse planned_route_polyline
-              saved at ride creation (pickup → dropoff). Zero API calls.
-            - navigating_to_pickup / arrived_at_pickup: driver → pickup,
-              needs a live Directions call (not in saved polyline).
-            Snap the driver's GPS to a 3-decimal grid (~110 m) so small
-            jitter doesn't refetch the Directions API. */}
+        {/* Route polyline — reuses planned_route_polyline stored on the
+            ride at creation time for all phases. Zero client-side API calls. */}
         {ride && (rideState === 'ride_offered' || rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup' || rideState === 'trip_in_progress') && (() => {
-          const savedPoly = (ride as any)?.planned_route_polyline || (ride as any)?.route_polyline;
-          const hasSavedRoute = Array.isArray(savedPoly) && savedPoly.length >= 2;
-          const useSavedRoute = hasSavedRoute && (rideState === 'ride_offered' || rideState === 'trip_in_progress');
-          const needsDirections = GOOGLE_MAPS_API_KEY && !useSavedRoute;
-
-          const driverLat = location?.coords?.latitude != null ? Math.round(location.coords.latitude * 1000) / 1000 : null;
-          const driverLng = location?.coords?.longitude != null ? Math.round(location.coords.longitude * 1000) / 1000 : null;
-
-          let origin: { latitude: number; longitude: number };
-          let destination: { latitude: number; longitude: number };
-          if (rideState === 'ride_offered') {
-            origin = { latitude: ride.pickup_lat, longitude: ride.pickup_lng };
-            destination = { latitude: ride.dropoff_lat, longitude: ride.dropoff_lng };
-          } else if (rideState === 'trip_in_progress') {
-            origin = driverLat != null && driverLng != null
-              ? { latitude: driverLat, longitude: driverLng }
-              : { latitude: ride.pickup_lat, longitude: ride.pickup_lng };
-            destination = { latitude: ride.dropoff_lat, longitude: ride.dropoff_lng };
-          } else {
-            origin = driverLat != null && driverLng != null
-              ? { latitude: driverLat, longitude: driverLng }
-              : { latitude: ride.pickup_lat, longitude: ride.pickup_lng };
-            destination = { latitude: ride.pickup_lat, longitude: ride.pickup_lng };
-          }
-
           return (
             <React.Fragment key={`route-${rideState}`}>
-              {needsDirections && (
-              <MapViewDirections
-                key={directionsKey}
-                origin={origin}
-                destination={destination}
-                apikey={GOOGLE_MAPS_API_KEY}
-                strokeWidth={0}
-                strokeColor="transparent"
-                onReady={(result) => {
-                  setRouteCoords(result.coordinates);
-                  setDirectionsFailed(false);
-                  if (result.duration != null) setRouteEtaMinutes(Math.round(result.duration));
-                  if (result.distance != null) setRouteDistanceKm(Math.round(result.distance * 10) / 10);
-                  lastDirectionsFetchRef.current = {
-                    lat: origin.latitude,
-                    lng: origin.longitude,
-                    ts: Date.now(),
-                  };
-                  if (directionsKey === 0 && mapRef.current && result.coordinates?.length > 1) {
-                    mapRef.current.fitToCoordinates(result.coordinates, {
-                      edgePadding: { top: 100, right: 60, bottom: 300, left: 60 },
-                      animated: true,
-                    });
-                  }
-                }}
-                onError={(err) => {
-                  console.warn('Directions error — falling back to straight line:', err);
-                  setDirectionsFailed(true);
-                  if (mapRef.current) {
-                    mapRef.current.fitToCoordinates([origin, destination], {
-                      edgePadding: { top: 100, right: 60, bottom: 300, left: 60 },
-                      animated: true,
-                    });
-                  }
-                }}
-              />
-              )}
-              {/* Fallback polyline: a dashed straight line drawn when the
-                  Directions API can't return a route (no network, quota
-                  exceeded, invalid key). Better than a blank map — the
-                  driver can still see roughly where they're being asked
-                  to go. */}
-              {directionsFailed && routeCoords.length === 0 && (
-                <Polyline
-                  coordinates={[origin, destination]}
-                  strokeWidth={4}
-                  strokeColor="#FF9500"
-                  lineDashPattern={[6, 6]}
-                  lineCap="round"
-                />
-              )}
               {routeCoords.length > 1 && (() => {
                 const total = routeCoords.length;
                 const SEGS = 20;

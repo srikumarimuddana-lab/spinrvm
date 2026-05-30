@@ -49,7 +49,7 @@ export default function ActivityView() {
   const styles = useMemo(() => createStyles(colors), [colors]);
   const { earnings, fetchEarnings, fetchDriverBalance } = useDriverStore();
 
-  const [period, setPeriod] = useState<Period>('today');
+  const [period, setPeriod] = useState<Period>('all');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);

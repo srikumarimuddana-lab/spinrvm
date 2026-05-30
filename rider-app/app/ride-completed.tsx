@@ -4,7 +4,7 @@ import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput, Modal,
   Platform, ActivityIndicator, BackHandler, KeyboardAvoidingView, Animated, Image,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
@@ -46,6 +46,7 @@ function RideCompletedScreenContent() {
 
   const { colors, isDark } = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
+  const insets = useSafeAreaInsets();
 
   const [rating, setRating] = useState(5);
   const [comment, setComment] = useState('');
@@ -682,45 +683,59 @@ function RideCompletedScreenContent() {
         </TouchableOpacity>
       </View>
       <Modal visible={lostItemVisible} transparent animationType="fade" onRequestClose={() => setLostItemVisible(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeader}>
-              <View style={[styles.actionIcon, { backgroundColor: '#FEF2F2' }]}>
-                <Ionicons name="bag-handle" size={22} color="#EF4444" />
+        <KeyboardAvoidingView
+          style={styles.modalKeyboardAvoider}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top : 0}
+        >
+          <View style={[styles.modalOverlay, { paddingBottom: Math.max(insets.bottom, 24) }]}>
+            <ScrollView
+              style={styles.modalScroll}
+              contentContainerStyle={styles.modalScrollContent}
+              keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              <View style={styles.modalCard}>
+                <View style={styles.modalHeader}>
+                  <View style={[styles.actionIcon, { backgroundColor: '#FEF2F2' }]}>
+                    <Ionicons name="bag-handle" size={22} color="#EF4444" />
+                  </View>
+                  <Text style={styles.modalTitle}>Report Lost Item</Text>
+                </View>
+                <Text style={styles.modalDesc}>
+                  Describe what you left behind. Your driver will be notified and can contact you through the app.
+                </Text>
+                <TextInput
+                  style={styles.modalInput}
+                  placeholder="e.g. Black backpack with laptop inside"
+                  placeholderTextColor={colors.textDim}
+                  value={lostItemText}
+                  onChangeText={setLostItemText}
+                  multiline
+                  maxLength={500}
+                  autoFocus
+                />
+                <View style={styles.modalBtnRow}>
+                  <TouchableOpacity style={styles.modalCancelBtn} onPress={() => { setLostItemVisible(false); setLostItemText(''); }}>
+                    <Text style={styles.modalCancelText}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.modalSubmitBtn, !lostItemText.trim() && { opacity: 0.5 }]}
+                    onPress={submitLostItem}
+                    disabled={!lostItemText.trim() || lostItemSending}
+                  >
+                    {lostItemSending ? (
+                      <ActivityIndicator size="small" color="#FFF" />
+                    ) : (
+                      <Text style={styles.modalSubmitText}>Submit Report</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
               </View>
-              <Text style={styles.modalTitle}>Report Lost Item</Text>
-            </View>
-            <Text style={styles.modalDesc}>
-              Describe what you left behind. Your driver will be notified and can contact you through the app.
-            </Text>
-            <TextInput
-              style={styles.modalInput}
-              placeholder="e.g. Black backpack with laptop inside"
-              placeholderTextColor={colors.textDim}
-              value={lostItemText}
-              onChangeText={setLostItemText}
-              multiline
-              maxLength={500}
-              autoFocus
-            />
-            <View style={styles.modalBtnRow}>
-              <TouchableOpacity style={styles.modalCancelBtn} onPress={() => { setLostItemVisible(false); setLostItemText(''); }}>
-                <Text style={styles.modalCancelText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalSubmitBtn, !lostItemText.trim() && { opacity: 0.5 }]}
-                onPress={submitLostItem}
-                disabled={!lostItemText.trim() || lostItemSending}
-              >
-                {lostItemSending ? (
-                  <ActivityIndicator size="small" color="#FFF" />
-                ) : (
-                  <Text style={styles.modalSubmitText}>Submit Report</Text>
-                )}
-              </TouchableOpacity>
-            </View>
+            </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
       <ConfirmSheet
         visible={confirmSheet.visible}
@@ -996,9 +1011,18 @@ function createStyles(colors: ThemeColors) {
     },
 
     // ── Lost item modal ──
+    modalKeyboardAvoider: {
+      flex: 1,
+    },
     modalOverlay: {
       flex: 1, backgroundColor: 'rgba(0,0,0,0.5)',
-      justifyContent: 'center', alignItems: 'center', padding: 24,
+      paddingHorizontal: 24, paddingTop: 24,
+    },
+    modalScroll: {
+      flex: 1, width: '100%',
+    },
+    modalScrollContent: {
+      flexGrow: 1, justifyContent: 'center', alignItems: 'center',
     },
     modalCard: {
       backgroundColor: colors.surface, borderRadius: 20, padding: 24,

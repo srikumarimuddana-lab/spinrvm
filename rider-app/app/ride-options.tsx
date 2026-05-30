@@ -19,7 +19,7 @@ import CustomToggle from '../components/CustomToggle';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import MapView, { Marker, Circle, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
+import MapView, { Marker, Circle, Polyline, Polygon, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 
 import { useRideStore } from '../store/rideStore';
@@ -123,6 +123,19 @@ function RideOptionsScreenContent() {
   const snapPoints = useMemo(() => ['40%', '68%'], []);
   const fareChevronAnim = useRef(new Animated.Value(0)).current;
   const { scheduleReminder } = useScheduledRideReminder();
+
+  // Service area boundary polygons — fetched once per mount and shown as a
+  // translucent zone overlay on the map so riders can see the coverage area.
+  const [serviceAreaPolygons, setServiceAreaPolygons] = useState<Array<Array<{ latitude: number; longitude: number }>>>([]);
+  useEffect(() => {
+    api.get('/service-areas').then((res: any) => {
+      const areas: any[] = res.data || [];
+      const polys = areas
+        .filter((a: any) => Array.isArray(a.polygon) && a.polygon.length >= 3)
+        .map((a: any) => a.polygon.map((p: any) => ({ latitude: p.lat, longitude: p.lng })));
+      setServiceAreaPolygons(polys);
+    }).catch(() => {});
+  }, []);
 
   // ── Derived values ──
   const selectedEstimate = estimates.length > selectedIndex ? estimates[selectedIndex] : null;
@@ -467,6 +480,15 @@ function RideOptionsScreenContent() {
             <CarMarker key={driver.id} identifier={driver.id}
               coordinate={{ latitude: driver.lat, longitude: driver.lng }}
               heading={(driver as any).heading ?? Math.random() * 360} size={36} zIndex={101} />
+          ))}
+          {serviceAreaPolygons.map((coords, idx) => (
+            <Polygon
+              key={`sa-poly-${idx}`}
+              coordinates={coords}
+              strokeColor="rgba(0,212,170,0.65)"
+              fillColor="rgba(0,212,170,0.07)"
+              strokeWidth={2}
+            />
           ))}
         </MapView>
         </View>

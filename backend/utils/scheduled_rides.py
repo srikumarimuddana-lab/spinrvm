@@ -24,53 +24,154 @@ except ImportError:
 try:
     from ..db import db
     from ..features import send_push_notification
+    from ..socket_manager import manager
     from .datetime_utils import parse_iso_utc
     from .redis_client import redis_set_nx
 except ImportError:
     from db import db
     from features import send_push_notification
+    from socket_manager import manager  # type: ignore[no-redef]
     from utils.datetime_utils import parse_iso_utc
     from utils.redis_client import redis_set_nx  # type: ignore[no-redef]
 
 logger = logging.getLogger(__name__)
 
 
-async def _dispatch_scheduled_ride(ride: dict):
-    """Transition a scheduled ride from 'scheduled' to 'searching' and start driver matching."""
-    ride_id = ride["id"]
+async def _notify_schedule_delayed(ride_id: str, rider_id, ride: dict) -> None:
+    """Tell the rider their scheduled ride is waiting on their current trip.
+
+    De-duped via a Redis NX key (1h TTL) so a rider on a long trip isn't pinged
+    every 60-second dispatcher tick. Best-effort — a notification failure must
+    never break the retry loop.
+    """
+    if not rider_id:
+        return
     try:
-        # Only dispatch if still in scheduled state
-        current = await db.find_one("rides", {"id": ride_id})
-        if not current or current.get("status") != "searching":
-            # Already dispatched, cancelled, or status changed
-            if current and current.get("is_scheduled") and current.get("status") == "searching":
-                pass  # Already searching — proceed to match
-            else:
-                return
-
-        # Mark as dispatched so we don't process it again
-        await db.update_one(
-            "rides",
-            {"id": ride_id},
-            {
-                "$set": {
-                    "scheduled_dispatched": True,
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                }
-            },
+        # redis_set_nx returns True only for the first caller within the TTL.
+        if not await redis_set_nx(f"spinr:sched_delay_notified:{ride_id}", "1", ttl=3600):
+            return
+    except Exception as dedup_err:
+        # Redis unavailable — fall through and notify (worst case: a duplicate
+        # push), rather than swallow the alert entirely.
+        logger.debug(f"scheduled dispatch: delay-notice dedup check failed for {ride_id}: {dedup_err}")
+    try:
+        await send_push_notification(
+            rider_id,
+            "Your scheduled ride is waiting",
+            "We'll start finding a driver as soon as your current trip ends.",
+            data={"type": "scheduled_ride_delayed", "ride_id": ride_id},
         )
+    except Exception as e:
+        logger.warning(f"scheduled dispatch: delayed-notice push failed for {ride_id}: {e}")
 
-        # Import and run driver matching
+
+async def _dispatch_scheduled_ride(ride: dict):
+    """Transition a scheduled ride from 'scheduled' to 'searching' and start driver matching.
+
+    The scheduled→searching transition is an atomic DB claim: the update filters
+    on ``status='scheduled'`` so exactly one caller (across replicas and loop
+    ticks) wins. A claim returning no row means the ride was already dispatched,
+    cancelled, or otherwise moved on — we return without acting. This satisfies
+    the Background Loop Recipe replay-safety contract (atomic DB claim) without
+    relying on the Redis leader lock, which may be unavailable in dev fallback.
+    """
+    ride_id = ride["id"]
+    rider_id = ride.get("rider_id")
+    try:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        # Atomic claim: only the caller that flips scheduled→searching proceeds.
         try:
-            from routes.rides import match_driver_to_ride
+            claimed = await db.update_one(
+                "rides",
+                {"id": ride_id, "status": "scheduled"},
+                {
+                    "$set": {
+                        "status": "searching",
+                        "scheduled_dispatched": True,
+                        # Mark the moment dispatch actually began so downstream
+                        # latency metrics measure from real request time, not booking.
+                        "ride_requested_at": now_iso,
+                        "updated_at": now_iso,
+                    }
+                },
+            )
+        except Exception as claim_exc:
+            # rides_one_active_per_rider (migration 53) is a partial unique
+            # index over the active statuses. 'scheduled' sits outside that set,
+            # so if the rider already has a live trip when their scheduled
+            # pickup time arrives, flipping to 'searching' collides with it and
+            # the UPDATE raises. That is an expected, recoverable conflict — not
+            # a dispatch failure: leave the ride in 'scheduled' so a later tick
+            # retries once the rider is free, and tell the rider once (Redis-
+            # deduped) so the delay isn't silent. Any other error bubbles up.
+            msg = str(claim_exc).lower()
+            if "rides_one_active_per_rider" in msg or "23505" in msg or "duplicate" in msg or "unique" in msg:
+                logger.warning(
+                    "scheduled dispatch deferred: rider has an active ride; "
+                    f"ride {ride_id} stays 'scheduled' for retry"
+                )
+                await _notify_schedule_delayed(ride_id, rider_id, ride)
+                return
+            raise
+        if not claimed:
+            # Another replica/tick won the claim, or the ride was cancelled or
+            # already dispatched. Nothing to do.
+            return
+
+        logger.info(f"Dispatched scheduled ride {ride_id}: scheduled → searching")
+
+        # Mandatory state-change WS event (rider + admins). Drives the rider
+        # app's status update and patches any admin dashboard that already has
+        # this ride in its map.
+        try:
+            await manager.broadcast_ride_status(
+                ride_id,
+                "searching",
+                rider_id=rider_id,
+                is_scheduled=True,
+            )
+        except Exception as ws_err:
+            logger.warning(f"scheduled dispatch: WS broadcast failed for {ride_id}: {ws_err}")
+
+        # Surface the now-live ride to admin monitoring as a NEW row. The
+        # dashboard's ride_status_changed handler only patches an existing
+        # entry; ride_requested is the path that calls applyRide() to add a
+        # row. The create_ride path skips ride_requested for deferred rides,
+        # so without this a scheduled ride going live is invisible to an
+        # already-open dashboard until the next snapshot refresh. Payload must
+        # match the MonitoringRide contract (nested ``ride`` object).
+        try:
+            try:
+                from ..routes.admin.monitoring import build_monitoring_ride
+            except ImportError:
+                from routes.admin.monitoring import build_monitoring_ride
+            rider = None
+            if rider_id:
+                rider = await db.get_user_by_id(rider_id)
+            await manager.broadcast_to_admins(
+                {
+                    "type": "ride_requested",
+                    "ride": build_monitoring_ride(claimed, rider=rider),
+                }
+            )
+        except Exception as admin_err:
+            logger.warning(f"scheduled dispatch: admin ride_requested broadcast failed for {ride_id}: {admin_err}")
+
+        # Import and run driver matching. We do NOT pass ride= so the dispatch
+        # path re-fetches the freshly-claimed 'searching' row.
+        try:
+            from routes.rides import match_driver_to_ride, ride_search_timeout
         except ImportError:
-            from ..routes.rides import match_driver_to_ride
+            from ..routes.rides import match_driver_to_ride, ride_search_timeout
 
         await match_driver_to_ride(ride_id)
-        logger.info(f"Dispatched scheduled ride {ride_id}")
+
+        # Arm the no-drivers-found timeout exactly as the live booking path does,
+        # so a scheduled ride that finds no driver auto-cancels instead of
+        # hanging in 'searching' indefinitely.
+        asyncio.create_task(ride_search_timeout(ride_id))
 
         # Notify rider
-        rider_id = ride.get("rider_id")
         if rider_id:
             await send_push_notification(
                 rider_id,
@@ -124,12 +225,15 @@ async def check_scheduled_rides():
     ten_min_from_now = now + timedelta(minutes=10)
 
     try:
-        # Get all pending scheduled rides
+        # Get all pending scheduled rides. These sit in status 'scheduled'
+        # (set by create_ride for deferred bookings) until their scheduled_time
+        # arrives — querying 'searching' here meant the loop never saw a
+        # correctly-stored scheduled ride (CR-2).
         scheduled = await db.get_rows(
             "rides",
             {
                 "is_scheduled": True,
-                "status": "searching",
+                "status": "scheduled",
             },
             limit=100,
             order="scheduled_time",

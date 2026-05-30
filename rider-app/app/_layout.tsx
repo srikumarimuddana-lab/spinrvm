@@ -49,26 +49,36 @@ import Toast from '../components/Toast';
 
 
 function routeFromNotificationData(data: Record<string, string> | undefined) {
-  if (!data?.type || !data?.ride_id) return;
-  const { type, ride_id } = data;
+  if (!data?.type) return;
+  const { type, ride_id, case_id } = data;
   switch (type) {
     case 'driver_accepted':
     case 'driver_arrived':
+      if (ride_id) router.push({ pathname: '/driver-arriving', params: { rideId: ride_id } } as any);
+      break;
+    case 'scheduled_ride_dispatched':
+      // A scheduled ride just went live: the dispatcher flipped it
+      // scheduled→searching and is now finding a driver. The rider app cleared
+      // its currentRide once /(tabs) reloaded (/rides/active excludes
+      // 'scheduled'), so route to the finding-driver screen, which fetches the
+      // ride by id and re-establishes the live connection.
       router.push({ pathname: '/driver-arriving', params: { rideId: ride_id } } as any);
       break;
     case 'ride_started':
-      router.push({ pathname: '/ride-in-progress', params: { rideId: ride_id } } as any);
+      if (ride_id) router.push({ pathname: '/ride-in-progress', params: { rideId: ride_id } } as any);
       break;
     case 'ride_completed':
-      router.push({ pathname: '/ride-completed', params: { rideId: ride_id } } as any);
+      if (ride_id) router.push({ pathname: '/ride-completed', params: { rideId: ride_id } } as any);
       break;
     case 'ride_cancelled':
       router.replace('/(tabs)' as any);
       break;
     case 'chat_message':
-      if (data?.ride_id) {
-        router.push({ pathname: '/chat-driver', params: { rideId: ride_id } } as any);
-      }
+      if (ride_id) router.push({ pathname: '/chat-driver', params: { rideId: ride_id } } as any);
+      break;
+    case 'lost_and_found':
+    case 'lost_and_found_message':
+      if (case_id) router.push({ pathname: '/lost-and-found-chat', params: { caseId: case_id } } as any);
       break;
     default:
       break;
@@ -311,6 +321,21 @@ export default function RootLayout() {
             },
             trigger: null,
           }).catch(() => {});
+        }
+        return;
+      }
+
+      // Scheduled ride going live while the app is foregrounded. The rider's
+      // currentRide was cleared after booking (/rides/active excludes
+      // 'scheduled'), so proactively reload it and route to the finding-driver
+      // screen instead of leaving the rider stranded on home with only a banner.
+      if (remoteMessage?.data?.type === 'scheduled_ride_dispatched') {
+        const dispatchedRideId = remoteMessage?.data?.ride_id as string | undefined;
+        if (dispatchedRideId) {
+          useRideStore.getState().fetchRide(dispatchedRideId).catch((e) =>
+            console.warn('[Layout] fetchRide on scheduled dispatch failed:', e?.message ?? e),
+          );
+          router.push({ pathname: '/driver-arriving', params: { rideId: dispatchedRideId } } as any);
         }
         return;
       }
@@ -609,6 +634,8 @@ function RootLayoutInner({
             <Stack.Screen name="work-profile" />
             <Stack.Screen name="work-allowance-request" />
             <Stack.Screen name="become-driver" />
+            <Stack.Screen name="lost-and-found" />
+            <Stack.Screen name="lost-and-found-chat" />
           </Stack>
           </MaybeStripeProvider>
           </TrackBaseUrlContext.Provider>

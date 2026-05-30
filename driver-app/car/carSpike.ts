@@ -86,6 +86,13 @@ export function initCarSpike(): () => void {
   try {
     CarPlay.registerOnConnect(onConnect);
     CarPlay.registerOnDisconnect(onDisconnect);
+    // Cold-start while a head unit is ALREADY connected: the connect event fired
+    // during native-module init (before these handlers existed), and
+    // registerOnConnect does not replay past events — so the root template would
+    // never get set until a disconnect/reconnect. Set it now. (Codex P2)
+    if (CarPlay.connected) {
+      onConnect();
+    }
   } catch (e) {
     log('handler registration failed:', e);
     return noop;

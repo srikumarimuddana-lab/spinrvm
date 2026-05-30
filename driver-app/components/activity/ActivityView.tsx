@@ -67,10 +67,12 @@ export default function ActivityView() {
       period,
     });
     if (statusFilter !== 'all') params.set('status', statusFilter);
-    const res = await api.get<RideHistoryResponse>(
-      `/drivers/rides/history?${params.toString()}`
-    );
-    return normalizeRideHistory(res.data);
+    const url = `/drivers/rides/history?${params.toString()}`;
+    if (__DEV__) console.log('[Activity] fetchPage →', url);
+    const res = await api.get<RideHistoryResponse>(url);
+    const page = normalizeRideHistory(res.data);
+    if (__DEV__) console.log('[Activity] result:', page.total, 'total,', page.rides.length, 'rides');
+    return page;
   }, [period, statusFilter]);
 
   const loadData = useCallback(async () => {
@@ -78,11 +80,14 @@ export default function ActivityView() {
     setLoadMoreError(null);
     setHistoryError(null);
 
-    const [historyResult] = await Promise.allSettled([
+    const results = await Promise.allSettled([
       fetchPage(0),
       fetchEarnings(period),
       fetchDriverBalance(),
     ]);
+
+    const historyResult = results[0];
+    if (__DEV__) console.log('[Activity] history status:', historyResult.status);
 
     if (historyResult.status === 'fulfilled') {
       const pageResult = historyResult.value;

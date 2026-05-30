@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -61,11 +61,17 @@ export default function ActivityView() {
   const [historyError, setHistoryError] = useState<string | null>(null);
 
   const fetchPage = useCallback(async (offset: number) => {
+    const params = new URLSearchParams({
+      limit: String(PAGE_SIZE),
+      offset: String(offset),
+      period,
+    });
+    if (statusFilter !== 'all') params.set('status', statusFilter);
     const res = await api.get<RideHistoryResponse>(
-      `/drivers/rides/history?limit=${PAGE_SIZE}&offset=${offset}`
+      `/drivers/rides/history?${params.toString()}`
     );
     return normalizeRideHistory(res.data);
-  }, []);
+  }, [period, statusFilter]);
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -90,6 +96,7 @@ export default function ActivityView() {
   }, [period, fetchPage, fetchEarnings, fetchDriverBalance]);
 
   const lastFetchedAt = useRef(0);
+  const isFirstRender = useRef(true);
 
   useFocusEffect(
     useCallback(() => {
@@ -100,6 +107,15 @@ export default function ActivityView() {
       }
     }, [loadData])
   );
+
+  useEffect(() => {
+    if (isFirstRender.current) {
+      isFirstRender.current = false;
+      return;
+    }
+    lastFetchedAt.current = Date.now();
+    loadData();
+  }, [period, statusFilter]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -144,29 +160,9 @@ export default function ActivityView() {
   const totalTax = parseMoney(earnings?.total_tax);
   const fareEarnings = Math.max(totalEarnings - totalTips - totalIncentives - totalTax, 0);
 
-  const filteredRides = useMemo(() => {
-    return rides.filter((r) => {
-      if (statusFilter !== 'all') {
-        if (statusFilter === 'scheduled' && r.status !== 'scheduled') return false;
-        if (statusFilter !== 'scheduled' && r.status !== statusFilter) return false;
-      }
-      if (period !== 'all') {
-        const dateStr = r.ride_completed_at || (r as any).cancelled_at || r.created_at;
-        if (!dateStr) return false;
-        const date = new Date(dateStr);
-        const today = new Date();
-        if (period === 'today') {
-          if (date.getDate() !== today.getDate() || date.getMonth() !== today.getMonth() || date.getFullYear() !== today.getFullYear()) return false;
-        } else if (period === 'week') {
-          const diffDays = (today.getTime() - date.getTime()) / (1000 * 3600 * 24);
-          if (diffDays > 7 || diffDays < 0) return false;
-        } else if (period === 'month') {
-          if (date.getMonth() !== today.getMonth() || date.getFullYear() !== today.getFullYear()) return false;
-        }
-      }
-      return true;
-    });
-  }, [rides, statusFilter, period]);
+  // Filtering is now server-side — rides from fetchPage already match the
+  // selected period and status filter, so no client-side filtering needed.
+  const filteredRides = rides;
 
   const renderRideCard = useCallback(({ item: ride }: { item: RideHistoryItem }) => {
     const isCompleted = ride.status === 'completed';
@@ -375,7 +371,7 @@ export default function ActivityView() {
           <View style={styles.ridesSection}>
             <View style={styles.ridesSectionHeader}>
               <Text style={styles.sectionTitle}>Your Rides</Text>
-              <Text style={styles.rideCount}>{filteredRides.length} rides</Text>
+              <Text style={styles.rideCount}>{totalRides} rides</Text>
             </View>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.statusPillRow}>
               {(['all', 'completed', 'scheduled', 'cancelled'] as StatusFilter[]).map((item) => (
@@ -394,7 +390,7 @@ export default function ActivityView() {
         </>
       )}
     </>
-  ), [period, statusFilter, loading, totalEarnings, fareEarnings, totalTips, totalIncentives, totalTax, earnings, filteredRides.length, colors, styles]);
+  ), [period, statusFilter, loading, totalEarnings, fareEarnings, totalTips, totalIncentives, totalTax, earnings, totalRides, colors, styles]);
 
   const ListFooter = useMemo(() => {
     if (loadingMore) {
@@ -413,13 +409,13 @@ export default function ActivityView() {
         </TouchableOpacity>
       );
     }
-    if (!loading && filteredRides.length > 0 && rides.length >= totalRides) {
+    if (!loading && rides.length > 0 && rides.length >= totalRides) {
       return (
         <Text style={styles.footerEnd}>You have reached the end</Text>
       );
     }
     return null;
-  }, [loadingMore, loadMoreError, loading, filteredRides.length, rides.length, totalRides, colors, styles, loadMore]);
+  }, [loadingMore, loadMoreError, loading, rides.length, totalRides, colors, styles, loadMore]);
 
   const ListEmpty = useMemo(() => {
     if (loading) return null;

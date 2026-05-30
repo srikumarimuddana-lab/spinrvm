@@ -2643,9 +2643,11 @@ async def get_active_ride(current_user: dict = Depends(get_current_user)):
 async def get_ride_history(
     limit: int = Query(20),
     offset: int = Query(0),
+    status: Optional[str] = Query(None),
+    period: Optional[str] = Query(None),
     current_user: dict = Depends(get_current_user),
 ):
-    """Get driver's ride history."""
+    """Get driver's ride history with optional status/period filtering."""
     driver = (lambda _r: _r[0] if _r else None)(
         await db_supabase.get_rows("drivers", {"user_id": current_user["id"]}, limit=1)
     )
@@ -2653,10 +2655,31 @@ async def get_ride_history(
         raise HTTPException(status_code=404, detail="Driver not found")
 
     try:
-        history_filter = {
+        if status and status in ("completed", "cancelled", "scheduled"):
+            status_filter = status
+        else:
+            status_filter = {"$in": list(RideStatus.terminal_statuses())}
+
+        history_filter: Dict[str, Any] = {
             "driver_id": driver["id"],
-            "status": {"$in": list(RideStatus.terminal_statuses())},
+            "status": status_filter,
         }
+
+        if period and period != "all":
+            from datetime import datetime, timedelta, timezone
+
+            now = datetime.now(timezone.utc)
+            if period == "today":
+                start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            elif period == "week":
+                start = now - timedelta(days=7)
+            elif period == "month":
+                start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            else:
+                start = None
+            if start:
+                history_filter["created_at"] = {"$gte": start.isoformat()}
+
         total = await db_supabase.count_documents("rides", history_filter)
         rides = await db_supabase.get_rows(
             "rides",

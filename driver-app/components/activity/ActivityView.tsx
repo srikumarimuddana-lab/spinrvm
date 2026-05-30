@@ -84,14 +84,10 @@ export default function ActivityView() {
     setLoadMoreError(null);
     setHistoryError(null);
 
-    const results = await Promise.allSettled([
+    const [historyResult] = await Promise.allSettled([
       fetchPage(),
-      fetchEarnings(period),
       fetchDriverBalance(),
     ]);
-
-    const historyResult = results[0];
-    if (__DEV__) console.log('[Activity] history status:', historyResult.status);
 
     if (historyResult.status === 'fulfilled') {
       const pageResult = historyResult.value;
@@ -103,10 +99,14 @@ export default function ActivityView() {
     }
 
     setLoading(false);
-  }, [period, fetchPage, fetchEarnings, fetchDriverBalance]);
+  }, [fetchPage, fetchDriverBalance]);
 
   const lastFetchedAt = useRef(0);
   const isFirstRender = useRef(true);
+
+  // Period pills only update the earnings card — ride list is always all-time.
+  // Mirrors the rider app pattern exactly.
+  useEffect(() => { fetchEarnings(period); }, [period, fetchEarnings]);
 
   useFocusEffect(
     useCallback(() => {
@@ -114,10 +114,12 @@ export default function ActivityView() {
       if (now - lastFetchedAt.current > 30_000) {
         lastFetchedAt.current = now;
         loadData();
+        fetchEarnings(period);
       }
-    }, [loadData])
+    }, [loadData, fetchEarnings, period])
   );
 
+  // Only reload the ride list when the status filter changes.
   useEffect(() => {
     if (isFirstRender.current) {
       isFirstRender.current = false;
@@ -126,7 +128,7 @@ export default function ActivityView() {
     lastFetchedAt.current = Date.now();
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [period, statusFilter]);
+  }, [statusFilter]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -135,8 +137,8 @@ export default function ActivityView() {
 
     const [historyResult] = await Promise.allSettled([
       fetchPage(),
-      fetchEarnings(period),
       fetchDriverBalance(),
+      fetchEarnings(period),
     ]);
 
     if (historyResult.status === 'fulfilled') {

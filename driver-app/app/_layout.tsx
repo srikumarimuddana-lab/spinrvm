@@ -26,6 +26,10 @@ import { useAuthStore } from '@shared/store/authStore';
 import { useLocationStore } from '@shared/store/locationStore';
 import { useDriverStore } from '../store/driverStore';
 import { initCarSpike } from '../car/carSpike';
+// Side-effect: registers the separate "AndroidAuto" AppRegistry root the fork's
+// CarPlaySession launches (no-op on iOS). Must run at module load, before native
+// calls runApplication — same pattern as the backgroundLocation import above.
+import '../car/androidAutoEntry';
 import SpinrConfig from '@shared/config/spinr.config';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { OfflineBanner } from '@shared/components/OfflineBanner';
@@ -354,11 +358,14 @@ export default function RootLayout() {
     }
   }, []);
 
-  // ── CarPlay / Android Auto smoke-test (SPIKE) ──
-  // Renders one template on the head unit when a car connects; no-op without a
-  // connected car or the native module (e.g. Expo Go). Remove once the real
-  // car-UI layer lands. See docs/carplay-android-auto.md.
+  // ── CarPlay smoke-test (SPIKE), iOS only ──
+  // iOS CarPlay shares the phone app's JS context, so it's driven from here.
+  // Android Auto runs in its OWN JS root and is handled by car/androidAutoEntry
+  // (imported above) — calling initCarSpike here too would double-register on
+  // Android. No-op unless the native module is present (CarPlay wiring is gated
+  // off by default — see plugins/withCarIntegration.js). See docs/carplay-android-auto.md.
   useEffect(() => {
+    if (Platform.OS !== 'ios') return;
     const cleanup = initCarSpike();
     return cleanup;
   }, []);

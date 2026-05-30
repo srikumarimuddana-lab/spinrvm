@@ -21,12 +21,14 @@ const parseMoney = (s: string | number | null | undefined): number =>
 
 type Period = 'today' | 'week' | 'month' | 'all';
 type StatusFilter = 'all' | 'completed' | 'cancelled' | 'scheduled';
+const PAGE_SIZE = 50;
 
 export default function ActivityView() {
   const router = useRouter();
   const {
     earnings,
     rideHistory,
+    historyTotal,
     fetchEarnings,
     fetchRideHistory,
     fetchDriverBalance,
@@ -35,18 +37,19 @@ export default function ActivityView() {
   const [period, setPeriod] = useState<Period>('today');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
       await Promise.allSettled([
         fetchEarnings(period),
-        fetchRideHistory(50, 0),
+        fetchRideHistory(PAGE_SIZE, 0, false),
         fetchDriverBalance(),
       ]);
     } catch {}
     setLoading(false);
-  }, [period]);
+  }, [period, fetchEarnings, fetchRideHistory, fetchDriverBalance]);
 
   useFocusEffect(
     useCallback(() => {
@@ -59,6 +62,17 @@ export default function ActivityView() {
   const totalIncentives = parseMoney(earnings?.total_incentives);
   const totalTax = parseMoney(earnings?.total_tax);
   const fareEarnings = Math.max(totalEarnings - totalTips - totalIncentives - totalTax, 0);
+  const hasMoreHistory = rideHistory.length < historyTotal;
+
+  const loadMoreHistory = useCallback(async () => {
+    if (loading || loadingMore || !hasMoreHistory) return;
+    setLoadingMore(true);
+    try {
+      await fetchRideHistory(PAGE_SIZE, rideHistory.length, true);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [loading, loadingMore, hasMoreHistory, fetchRideHistory, rideHistory.length]);
 
   const filteredRides = useMemo(() => {
     return rideHistory.filter((r) => {
@@ -320,6 +334,21 @@ export default function ActivityView() {
                   </TouchableOpacity>
                 );
               })
+            )}
+
+            {filteredRides.length > 0 && hasMoreHistory && (
+              <TouchableOpacity
+                style={[styles.loadMoreButton, loadingMore && styles.loadMoreButtonDisabled]}
+                activeOpacity={0.8}
+                disabled={loadingMore}
+                onPress={loadMoreHistory}
+              >
+                {loadingMore ? (
+                  <ActivityIndicator color="#ef4444" />
+                ) : (
+                  <Text style={styles.loadMoreText}>Load more rides</Text>
+                )}
+              </TouchableOpacity>
             )}
           </View>
         </>
@@ -645,5 +674,22 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#9ca3af',
     textAlign: 'center',
+  },
+  loadMoreButton: {
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: '#ef4444',
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+    backgroundColor: '#fff',
+  },
+  loadMoreButtonDisabled: {
+    opacity: 0.7,
+  },
+  loadMoreText: {
+    color: '#ef4444',
+    fontSize: 14,
+    fontWeight: '700',
   },
 });

@@ -24,6 +24,18 @@ def client():
     return TestClient(app)
 
 
+_PLAIN_POLYGON = [
+    {"lat": 52.1, "lng": -106.6},
+    {"lat": 52.2, "lng": -106.6},
+    {"lat": 52.2, "lng": -106.5},
+    {"lat": 52.1, "lng": -106.5},
+]
+
+_GEOJSON_POLYGON = {
+    "type": "Polygon",
+    "coordinates": [[[-106.6, 52.1], [-106.6, 52.2], [-106.5, 52.2], [-106.5, 52.1]]],
+}
+
 _AREA_ROW = {
     "id": "area-001",
     "name": "Saskatoon",
@@ -31,6 +43,7 @@ _AREA_ROW = {
     "is_active": True,
     "is_airport": False,
     "search_radius_km": 10.0,
+    "polygon": _PLAIN_POLYGON,
     # surge_multiplier + surge_active are intentionally public (rider/driver
     # surge badge; surge must be visible before booking per regulatory rules).
     # surge_enabled is the per-area admin master gate — only when it is on does
@@ -114,3 +127,38 @@ class TestPublicServiceAreas:
 
         assert r.status_code == 200
         assert r.json() == []
+
+    def test_polygon_returned_as_lat_lng_array(self, client):
+        from backend.routes import service_areas as mod
+
+        with patch.object(mod.db_supabase, "get_rows", AsyncMock(return_value=[_AREA_ROW])):
+            r = client.get("/api/v1/service-areas")
+
+        poly = r.json()[0]["polygon"]
+        assert isinstance(poly, list)
+        assert len(poly) == 4
+        assert all("lat" in p and "lng" in p for p in poly)
+
+    def test_geojson_polygon_normalized_to_lat_lng(self, client):
+        """Admin dashboard saves GeoJSON dicts — endpoint must normalize them."""
+        from backend.routes import service_areas as mod
+
+        row = {**_AREA_ROW, "polygon": _GEOJSON_POLYGON}
+        with patch.object(mod.db_supabase, "get_rows", AsyncMock(return_value=[row])):
+            r = client.get("/api/v1/service-areas")
+
+        poly = r.json()[0]["polygon"]
+        assert isinstance(poly, list)
+        assert len(poly) == 4
+        assert all("lat" in p and "lng" in p for p in poly)
+        assert poly[0]["lat"] == pytest.approx(52.1)
+        assert poly[0]["lng"] == pytest.approx(-106.6)
+
+    def test_missing_polygon_returns_empty_list(self, client):
+        from backend.routes import service_areas as mod
+
+        row = {k: v for k, v in _AREA_ROW.items() if k != "polygon"}
+        with patch.object(mod.db_supabase, "get_rows", AsyncMock(return_value=[row])):
+            r = client.get("/api/v1/service-areas")
+
+        assert r.json()[0]["polygon"] == []

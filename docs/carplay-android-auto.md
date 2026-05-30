@@ -181,18 +181,23 @@ resolves, jest 4/4, tsc/eslint clean on the new files). Steps 3–6 require an E
 
 1. ✅ **DONE** — `@g4rb4g3/react-native-carplay` added (New Arch left disabled). `expo-speech`
    deferred to the feature build — not needed to prove the native link.
-2. ✅ **DONE** — `plugins/withCarIntegration.js` (iOS entitlement + CarPlay-only scene manifest +
-   `CarSceneDelegate`; Android FGS-location perms — the fork ships its own `CarAppService`).
-   Plus `car/carSpike.ts` smoke test mounted in `RootLayout`. Run `npx expo prebuild --clean`
-   and confirm it generates without error.
+2. ✅ **DONE** — `plugins/withCarIntegration.js` (CarPlay-only scene manifest + `CarSceneDelegate`;
+   gated CarPlay entitlement; Android car-app + FGS-location perms — the fork ships its own
+   `CarAppService`, which AGP merges in). Plus `car/carSpike.ts` smoke test mounted in
+   `RootLayout`. Run `npx expo prebuild --clean` and confirm it generates without error.
 3. ⏳ **Android build passes** with our Option-C chain (Kotlin 2.2.21 / compileSdk 36 / ksp
    2.2.21-2.0.5) — confirm the fork's `kotlin-stdlib 1.9.25` / `react-android 0.76.9 compileOnly`
-   don't break the link. EAS `development` profile.
+   don't break the link, and that the fork's library manifest (`package="org.birkir.carplay"`)
+   merges cleanly under AGP 8 (the `package` attr is deprecated in favour of `namespace`). EAS
+   `development` profile. **Android Auto needs no entitlement — this half works by default.**
 4. ⏳ **iOS build passes** with the CarPlay scene manifest; confirm the **phone app still
    cold-starts, backgrounds/foregrounds, and routes a push-notification tap** (we declare only
    the CarPlay scene so the phone window stays AppDelegate-based — verify that holds). Watch the
    `CarSceneDelegate` import: if `RNCarPlay.h` isn't found, the `__has_include` guard should fall
-   to `@import react_native_carplay;`.
+   to `@import react_native_carplay;`. **The CarPlay entitlement is OFF by default** so this build
+   signs cleanly; to actually connect CarPlay (step 5, iOS) you must first have Apple grant the
+   managed `carplay-driving-task` entitlement + add it to the profile, then build with
+   `SPINR_CARPLAY_ENTITLEMENT=1`.
 5. ⏳ Connect **CarPlay Simulator** (Xcode → I/O → External Displays) and **Android Auto DHU**;
    `car/carSpike.ts` should render the "Spinr (spike)" list on connect.
 6. ⏳ Tap the list item → `[car-spike] item selected …` appears in Metro logs (JS round-trip OK).

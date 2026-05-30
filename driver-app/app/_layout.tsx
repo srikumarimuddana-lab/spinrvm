@@ -25,6 +25,7 @@ import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { useAuthStore } from '@shared/store/authStore';
 import { useLocationStore } from '@shared/store/locationStore';
 import { useDriverStore } from '../store/driverStore';
+import { initCarSpike } from '../car/carSpike';
 import SpinrConfig from '@shared/config/spinr.config';
 import { ErrorBoundary } from '@shared/components/ErrorBoundary';
 import { OfflineBanner } from '@shared/components/OfflineBanner';
@@ -351,6 +352,15 @@ export default function RootLayout() {
     } catch (e) {
       console.log('[LogRocket] init failed:', e);
     }
+  }, []);
+
+  // ── CarPlay / Android Auto smoke-test (SPIKE) ──
+  // Renders one template on the head unit when a car connects; no-op without a
+  // connected car or the native module (e.g. Expo Go). Remove once the real
+  // car-UI layer lands. See docs/carplay-android-auto.md.
+  useEffect(() => {
+    const cleanup = initCarSpike();
+    return cleanup;
   }, []);
 
   // ── Cold-start init: auth, location, Firebase native modules, Android channel ──

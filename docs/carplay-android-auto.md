@@ -1,8 +1,10 @@
 # CarPlay & Android Auto — integration strategy
 
 **Last verified:** 2026-05-30
-**Status:** Design + spike-first. No native code committed yet — the integration must be
-proven in an EAS-build-capable environment before any plugin/dep lands on a release branch.
+**Status:** Spike scaffold committed on branch `claude/sleepy-dijkstra-nTIqn` — the dependency,
+the `withCarIntegration` config plugin, and a JS smoke test (`car/carSpike.ts`). It must still
+be proven by an **EAS dev build** on a CarPlay Simulator / Android Auto DHU before anything
+relies on it; that build is the gate. No release branch should merge this until the spike passes.
 **Decision inputs:** Scope = *driving-task v1, architected for an in-dash-nav phase later*;
 platforms = *CarPlay + Android Auto in parallel*; approach = *`react-native-carplay` fork +
 a custom Expo config plugin* (keep all ride logic in shared TS/Zustand).
@@ -173,31 +175,43 @@ Android-only: `Message/Navigation/Pane/PlaceListNavigation/RoutePreviewNavigatio
 
 ## Spike checklist (do this FIRST, in an EAS-build-capable env)
 
-Gate the project on this before writing the car-UI layer:
+Gate the project on this before writing the car-UI layer. **Steps 1–2 + the JS smoke test are
+DONE on this branch** (verified at config level: plugin registers all mods, `expo config`
+resolves, jest 4/4, tsc/eslint clean on the new files). Steps 3–6 require an EAS dev build:
 
-1. `npx expo install @g4rb4g3/react-native-carplay` (+ `expo-speech`); keep New Arch disabled.
-2. Write a minimal `withCarIntegration` plugin (iOS scene manifest + entitlement; Android
-   `CarAppService`). `npx expo prebuild` cleanly.
-3. **Android build passes** with our Option-C chain (Kotlin 2.2.21 / compileSdk 36 / ksp
+1. ✅ **DONE** — `@g4rb4g3/react-native-carplay` added (New Arch left disabled). `expo-speech`
+   deferred to the feature build — not needed to prove the native link.
+2. ✅ **DONE** — `plugins/withCarIntegration.js` (iOS entitlement + CarPlay-only scene manifest +
+   `CarSceneDelegate`; Android FGS-location perms — the fork ships its own `CarAppService`).
+   Plus `car/carSpike.ts` smoke test mounted in `RootLayout`. Run `npx expo prebuild --clean`
+   and confirm it generates without error.
+3. ⏳ **Android build passes** with our Option-C chain (Kotlin 2.2.21 / compileSdk 36 / ksp
    2.2.21-2.0.5) — confirm the fork's `kotlin-stdlib 1.9.25` / `react-android 0.76.9 compileOnly`
    don't break the link. EAS `development` profile.
-4. **iOS build passes** with the dual-scene manifest; confirm the **phone app still cold-starts,
-   backgrounds/foregrounds, and routes a push-notification tap** correctly (the scene migration
-   regression).
-5. Connect **CarPlay Simulator** (Xcode → I/O → External Displays) and **Android Auto DHU**;
-   render one hardcoded `ListTemplate`/`InformationTemplate` from a dev build.
-6. Verify `CarPlay.registerOnConnect/Disconnect` fire and a button callback reaches JS.
+4. ⏳ **iOS build passes** with the CarPlay scene manifest; confirm the **phone app still
+   cold-starts, backgrounds/foregrounds, and routes a push-notification tap** (we declare only
+   the CarPlay scene so the phone window stays AppDelegate-based — verify that holds). Watch the
+   `CarSceneDelegate` import: if `RNCarPlay.h` isn't found, the `__has_include` guard should fall
+   to `@import react_native_carplay;`.
+5. ⏳ Connect **CarPlay Simulator** (Xcode → I/O → External Displays) and **Android Auto DHU**;
+   `car/carSpike.ts` should render the "Spinr (spike)" list on connect.
+6. ⏳ Tap the list item → `[car-spike] item selected …` appears in Metro logs (JS round-trip OK).
 
-**Pass = green light** to build the car-UI layer + Jest tests and request the entitlements.
+**Pass = green light** to build the real car-UI layer (`car/useCarInterface.ts` wired to
+`useDriverStore`, replacing `carSpike.ts`) + Jest tests, and request the entitlements.
 **Fail at step 3/4** = native incompatibility on our stack → evaluate forking the gradle/podspec
 or pinning, and re-scope. This is exactly why the spike precedes the feature code.
 
 ---
 
-## Why nothing native is committed yet
+## What's committed vs what the build must validate
 
-This environment cannot run an EAS build, a CarPlay Simulator, an Android Auto DHU, or obtain
-the Apple entitlement, so a native config plugin / scene migration written here would be
-**unverifiable** and could destabilize the carefully-tuned Android build
-(`docs/android-build-strategy.md`). Per the repo's "surface loudly, don't mask" rule, the
-integration is staged as a spike-gated plan rather than speculative native code.
+Committed on this branch (verifiable without a device): the dependency, the `withCarIntegration`
+config plugin, and the `car/carSpike.ts` smoke test + unit test. These were validated at the
+config/JS level (mods register, `expo config` resolves, jest/tsc/eslint clean on the new files).
+
+**Not yet validated** (needs an EAS build + head unit, which this environment can't run): that
+the fork compiles/links on our exact stack, that the iOS scene manifest + `CarSceneDelegate`
+don't disturb the phone app's cold start, and that a template actually renders on a head unit.
+Until the spike passes, treat the scaffold as unproven — do not merge to a release branch. Per
+the repo's "surface loudly, don't mask" rule, the residual risk is stated, not hidden.

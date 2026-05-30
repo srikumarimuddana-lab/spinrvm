@@ -209,9 +209,9 @@ export const DriverIdlePanel: React.FC<IdlePanelProps> = ({
         {/* Status Indicator Pill */}
         <View style={styles.statusPillWrapper}>
             {isOnline ? (
-                <View style={styles.statusPillOnline} accessibilityRole="text" accessibilityLabel={t('dashboard.findingRides')}>
-                    <Ionicons name="pulse" size={14} color={colors.success} />
-                    <Text allowFontScaling={false} style={styles.statusPillTextOnline}>{t('dashboard.findingRides')}</Text>
+                <View style={styles.statusPillOnline} accessibilityRole="text" accessibilityLabel={t('dashboard.youreOnline')}>
+                    <View style={styles.onlineDot} />
+                    <Text allowFontScaling={false} style={styles.statusPillTextOnline}>{t('dashboard.youreOnline')}</Text>
                 </View>
             ) : (
                 <View style={styles.statusPillOffline} accessibilityRole="text" accessibilityLabel={t('home.offline')}>
@@ -372,6 +372,12 @@ function createStyles(colors: ThemeColors) {
       borderWidth: 1,
       borderColor: colors.border,
       gap: 6,
+    },
+    onlineDot: {
+      width: 8,
+      height: 8,
+      borderRadius: 4,
+      backgroundColor: colors.success,
     },
     offlineDot: {
       width: 8,

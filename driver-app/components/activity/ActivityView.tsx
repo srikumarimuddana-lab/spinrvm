@@ -97,6 +97,11 @@ export default function ActivityView() {
       return true;
     });
   }, [rideHistory, statusFilter, period]);
+  const canLoadMoreHistory =
+    hasMoreHistory &&
+    (period === 'all' && statusFilter === 'all'
+      ? rideHistory.length > 0
+      : filteredRides.length >= PAGE_SIZE);
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -336,7 +341,7 @@ export default function ActivityView() {
               })
             )}
 
-            {filteredRides.length > 0 && hasMoreHistory && (
+            {canLoadMoreHistory && (
               <TouchableOpacity
                 style={[styles.loadMoreButton, loadingMore && styles.loadMoreButtonDisabled]}
                 activeOpacity={0.8}

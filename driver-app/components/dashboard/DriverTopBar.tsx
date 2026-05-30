@@ -65,6 +65,29 @@ export const DriverTopBar: React.FC<DriverTopBarProps> = ({
 
   return (
     <View style={[styles.topBarContainer, { top: Math.max(insets.top, statusBarHeight) }]}>
+      <View style={styles.pillRow}>
+        <TouchableOpacity
+          style={styles.earningsPill}
+          onPress={() => router.push('/driver/activity' as never)}
+          activeOpacity={0.7}
+          accessibilityRole="button"
+          accessibilityLabel={`Today's earnings $${todayEarnings}, ${todayTrips} trips. Tap for details.`}
+        >
+          <Text allowFontScaling={false} style={styles.earningsAmount}>${todayEarnings}</Text>
+          <View style={styles.earningsDivider} />
+          <Text allowFontScaling={false} style={styles.earningsTrips}>
+            {todayTrips} {todayTrips === 1 ? 'trip' : 'trips'}
+          </Text>
+        </TouchableOpacity>
+        {isSurgeActive && (
+          <View style={styles.surgeBadge} accessibilityRole="text" accessibilityLabel={`Surge ${surgeMultiplier!.toFixed(1)} times`}>
+            <Ionicons name="flash" size={11} color="#fff" />
+            <Text allowFontScaling={false} style={styles.surgeBadgeText}>
+              {surgeMultiplier!.toFixed(1)}×
+            </Text>
+          </View>
+        )}
+      </View>
       {showBanner && (
         <Animated.View
           style={[
@@ -86,29 +109,6 @@ export const DriverTopBar: React.FC<DriverTopBarProps> = ({
           </Text>
         </Animated.View>
       )}
-      <View style={styles.pillRow}>
-        <TouchableOpacity
-          style={styles.earningsPill}
-          onPress={() => router.push('/driver/earnings' as never)}
-          activeOpacity={0.7}
-          accessibilityRole="button"
-          accessibilityLabel={`Today's earnings $${todayEarnings}, ${todayTrips} trips. Tap for details.`}
-        >
-          <Text allowFontScaling={false} style={styles.earningsAmount}>${todayEarnings}</Text>
-          <View style={styles.earningsDivider} />
-          <Text allowFontScaling={false} style={styles.earningsTrips}>
-            {todayTrips} {todayTrips === 1 ? 'trip' : 'trips'}
-          </Text>
-        </TouchableOpacity>
-        {isSurgeActive && (
-          <View style={styles.surgeBadge} accessibilityRole="text" accessibilityLabel={`Surge ${surgeMultiplier!.toFixed(1)} times`}>
-            <Ionicons name="flash" size={11} color="#fff" />
-            <Text allowFontScaling={false} style={styles.surgeBadgeText}>
-              {surgeMultiplier!.toFixed(1)}×
-            </Text>
-          </View>
-        )}
-      </View>
     </View>
   );
 };
@@ -125,11 +125,12 @@ function createStyles(colors: ThemeColors) {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
+      alignSelf: 'flex-start',
       gap: 5,
       paddingVertical: 5,
       paddingHorizontal: 12,
       borderRadius: 20,
-      marginBottom: 8,
+      marginTop: 8,
     },
     bannerReconnecting: {
       backgroundColor: colors.warningBg,

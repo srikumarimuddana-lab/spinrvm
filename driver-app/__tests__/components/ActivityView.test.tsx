@@ -145,6 +145,35 @@ describe('ActivityView', () => {
     expect(queryByText('Load more rides')).toBeNull();
   });
 
+  it('shows load more for a month when period stats say more rides exist', async () => {
+    const thisMonth = new Date();
+    thisMonth.setDate(Math.max(1, thisMonth.getDate() - 10));
+    mockStore = makeStore({
+      earnings: {
+        ...makeStore().earnings,
+        total_rides: 86,
+      },
+      historyTotal: 120,
+      rideHistory: [
+        makeRide({
+          id: 'ride-this-month',
+          ride_completed_at: thisMonth.toISOString(),
+          pickup_address: 'Monthly Pickup',
+        }),
+        makeRide({ id: 'ride-old', ride_completed_at: '2024-01-01T12:00:00.000Z' }),
+      ],
+    });
+    mockUseDriverStore.mockReturnValue(mockStore);
+
+    const { getByText } = render(<ActivityView />);
+
+    await waitFor(() => expect(getByText('No Rides Found')).toBeTruthy());
+    fireEvent.press(getByText('This Month'));
+
+    await waitFor(() => expect(getByText('Monthly Pickup')).toBeTruthy());
+    expect(getByText('Load more rides')).toBeTruthy();
+  });
+
   it('reloads the first history page when the period changes', async () => {
     const { getByText } = render(<ActivityView />);
 

@@ -280,8 +280,7 @@ function DriverDashboard() {
     setDirectionsKey(0);
 
     const savedPoly = (ride as any)?.planned_route_polyline || (ride as any)?.route_polyline;
-    const canUseSaved = (rideState === 'ride_offered' || rideState === 'trip_in_progress')
-      && Array.isArray(savedPoly) && savedPoly.length >= 2;
+    const canUseSaved = Array.isArray(savedPoly) && savedPoly.length >= 2;
 
     if (canUseSaved) {
       const coords = savedPoly
@@ -607,7 +606,7 @@ function DriverDashboard() {
         {ride && (rideState === 'ride_offered' || rideState === 'navigating_to_pickup' || rideState === 'arrived_at_pickup' || rideState === 'trip_in_progress') && (() => {
           const savedPoly = (ride as any)?.planned_route_polyline || (ride as any)?.route_polyline;
           const hasSavedRoute = Array.isArray(savedPoly) && savedPoly.length >= 2;
-          const useSavedRoute = hasSavedRoute && (rideState === 'ride_offered' || rideState === 'trip_in_progress');
+          const useSavedRoute = hasSavedRoute;
           const needsDirections = GOOGLE_MAPS_API_KEY && !useSavedRoute;
 
           const driverLat = location?.coords?.latitude != null ? Math.round(location.coords.latitude * 1000) / 1000 : null;
